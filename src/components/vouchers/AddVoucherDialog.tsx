@@ -386,21 +386,46 @@ const getVoucherType = (voucher: any, defaultData: any, defaultTab: string): Vou
  * `liveVoucher` Firestore snapshot kabhi `fileUrls` omit / [] bhejta hai (sync lag, partial hydrate).
  * Daybook / Recent row `useVouchers` mirror se poore refs rakhta hai — replace se `local:` / https links gayab ho kar
  * APK pe "Attachment file not found" deta tha; Party jaisi jagah timing se kabhi bachta tha.
+ *
+ * Explicit `fileUrls: []` on live (user remove-all / cache patch) must NOT be revived from stale `row`.
  */
 function mergeAttachmentFieldsFromRowForEffectiveVoucher(live: any, row: any): any {
   if (!live) return live;
   const out = { ...live };
-  const liveUrls = normalizeFileUrlsField(live.fileUrls);
+  const liveHasFileUrlsKey = Object.prototype.hasOwnProperty.call(live, "fileUrls");
+  const liveFileUrlsRaw = live.fileUrls;
+  const liveExplicitEmpty =
+    liveHasFileUrlsKey && Array.isArray(liveFileUrlsRaw) && liveFileUrlsRaw.length === 0;
+  const liveUrls = normalizeFileUrlsField(liveFileUrlsRaw);
   const rowUrls = normalizeFileUrlsField(row?.fileUrls);
-  const mergedUrls = mergeVoucherFileUrlsForEditDialog(liveUrls, rowUrls);
+
+  if (liveExplicitEmpty) {
+    out.fileUrls = [];
+    out.files = Array.isArray(live.files) ? live.files : [];
+    if (Object.prototype.hasOwnProperty.call(live, "unassignedFile")) {
+      out.unassignedFile = live.unassignedFile ?? null;
+    } else {
+      out.unassignedFile = null;
+    }
+    return out;
+  }
+
+  const liveSparseMissingUrls = !liveHasFileUrlsKey || liveFileUrlsRaw == null;
+  const mergedUrls = mergeVoucherFileUrlsForEditDialog(liveUrls, rowUrls, {
+    liveExplicitEmpty: false,
+  });
   if (mergedUrls.length > 0) {
     out.fileUrls = mergedUrls;
-  } else if (liveUrls.length === 0 && rowUrls.length > 0) {
+  } else if (liveSparseMissingUrls && rowUrls.length > 0) {
     out.fileUrls = rowUrls;
   }
+
   const liveUn = live.unassignedFile?.url;
   const rowUn = row?.unassignedFile?.url;
-  if (!liveUn && rowUn) {
+  // When live already carries canonical `fileUrls`, never revive `unassignedFile` from a stale row.
+  if (liveHasFileUrlsKey) {
+    out.unassignedFile = live.unassignedFile ?? null;
+  } else if (!liveUn && rowUn) {
     out.unassignedFile = row.unassignedFile;
   } else if (
     liveUn &&
@@ -409,6 +434,25 @@ function mergeAttachmentFieldsFromRowForEffectiveVoucher(live: any, row: any): a
     !isLocalFileRef(String(rowUn))
   ) {
     out.unassignedFile = row.unassignedFile;
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    const outUrls = normalizeFileUrlsField(out.fileUrls);
+    if (liveUrls.length === 0 && outUrls.length > 0) {
+      void import("@/lib/attachmentDeleteTrace").then((m) =>
+        m.traceAttachmentUrlsChange({
+          source: "AddVoucherDialog.mergeAttachmentFieldsFromRow",
+          voucherId: String(live?.id || row?.id || ""),
+          prevUrls: liveUrls,
+          nextUrls: outUrls,
+          extra: {
+            liveExplicitEmpty,
+            liveSparseMissingUrls,
+            rowCount: rowUrls.length,
+          },
+        })
+      );
+    }
   }
   return out;
 }

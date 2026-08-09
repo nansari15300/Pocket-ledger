@@ -41,7 +41,12 @@ import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import {
   masterDetailTabHref,
+  masterDetailCanonicalHref,
   replaceMasterDetailTabUrl,
+  tabSwitchSelection,
+  pickRememberedListSelection,
+  writeMasterDetailPageState,
+  readMasterDetailLocationQuery,
 } from "@/lib/masterDetailTabChange";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
@@ -122,21 +127,7 @@ function ItemsPageContent() {
     router.replace(masterDetailListHref("items"), { scroll: false });
   }, [setSelected, router]);
   useRegisterMasterDetailHardwareBack("items", onBackToList);
-
-  const handleItemsTabChange = useCallback(
-    (value: string) => {
-      setActiveView(value);
-      if (!isMobile) return;
-      setSelected(null);
-      const href = masterDetailTabHref("items", {
-        tab: value,
-        defaultTab: "items",
-        listOnly: true,
-      });
-      replaceMasterDetailTabUrl(href, router, useQueryNav);
-    },
-    [isMobile, setActiveView, setSelected, router, useQueryNav]
-  );
+  const pendingItemsSelectIdRef = useRef<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [itemListQuickFilter, setItemListQuickFilter] = useState<EntityListQuickFilter>("default");
@@ -257,6 +248,31 @@ function ItemsPageContent() {
     return itemsForItemList.filter((i) => i.name && i.name.toLowerCase().includes(searchLower)).length;
   }, [itemsForItemList, searchTerm]);
 
+  const handleItemsTabChange = useCallback(
+    (value: string) => {
+      const tab = value === "groups" ? "groups" : "items";
+      const items =
+        (tab === "groups" ? processedItemGroups : allItems) as ReadonlyArray<{ id: string }>;
+      const nextSelected = tabSwitchSelection(
+        isMobile,
+        pickRememberedListSelection("itemsPageState", tab, items)
+      );
+      pendingItemsSelectIdRef.current = nextSelected?.id ?? null;
+      setActiveView(tab);
+      setSelected(nextSelected as (typeof allItems)[number] | (typeof processedItemGroups)[number] | null);
+      const href = isMobile
+        ? masterDetailTabHref("items", { tab, defaultTab: "items", listOnly: true })
+        : masterDetailCanonicalHref("items", {
+            tab,
+            defaultTab: "items",
+            selectedId: nextSelected?.id ?? null,
+          });
+      replaceMasterDetailTabUrl(href, router, useQueryNav);
+      writeMasterDetailPageState("itemsPageState", tab, nextSelected?.id);
+    },
+    [isMobile, useQueryNav, processedItemGroups, allItems, setActiveView, setSelected, router]
+  );
+
   usePageMemory(
     "itemsPageState",
     activeView,
@@ -282,33 +298,42 @@ function ItemsPageContent() {
     if (activeView !== "groups") setShowOnlyItemGroupsWithPendingApproval(false);
   }, [activeView]);
 
-  // Restore selection when returning from details (e.g. /items?selected=xyz or /items?view=groups&selected=xyz)
+  // Location-first URL sync (Party jaisa).
   useEffect(() => {
-    if (!selectedIdFromUrl) return;
     if (vouchersLoading) return;
-    const groupItem = processedItemGroups.find((i) => i.id === selectedIdFromUrl);
-    const itemFromList = allItems.find((i) => i.id === selectedIdFromUrl);
-    if (groupItem && itemFromList) {
-      if (viewFromUrl === "groups") setActiveView("groups");
-      else setActiveView("items");
-    } else if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
-    else if (itemFromList) setActiveView("items");
-    else if (groupItem) setActiveView("groups");
+    const { view, selectedId } = readMasterDetailLocationQuery();
+    const pendingId = pendingItemsSelectIdRef.current;
+    if (pendingId) {
+      if (selectedId === pendingId) pendingItemsSelectIdRef.current = null;
+      else if (selected?.id === pendingId) return;
+    }
+    if (!selectedId) {
+      if (view === "groups") {
+        if (activeView !== "groups") setActiveView("groups");
+      } else if (activeView !== "items") {
+        setActiveView("items");
+      }
+      return;
+    }
+    const groupItem = processedItemGroups.find((i) => i.id === selectedId);
+    const itemFromList = allItems.find((i) => i.id === selectedId);
+    if (view === "groups" && groupItem) setActiveView("groups");
+    else if (view === "items" && itemFromList) setActiveView("items");
     const item =
       groupItem && itemFromList
-        ? viewFromUrl === "groups"
+        ? view === "groups"
           ? groupItem
           : itemFromList
         : groupItem || itemFromList;
     if (item) setSelected(item);
     const canonical =
-      viewFromUrl === "groups"
-        ? `/items?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
-        : `/items?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+      view === "groups"
+        ? `/items?view=groups&selected=${encodeURIComponent(selectedId)}`
+        : `/items?selected=${encodeURIComponent(selectedId)}`;
     if (shouldReplaceWithMasterDetailCanonical(canonical)) {
       router.replace(canonical, { scroll: false });
     }
-  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, allItems, processedItemGroups, setSelected, setActiveView, router]);
+  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, allItems, processedItemGroups, selected?.id, activeView, setSelected, setActiveView, router]);
 
   const storageKey = `itemDisplayUnits_${user?.uid}`;
 

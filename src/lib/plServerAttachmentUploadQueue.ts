@@ -109,6 +109,24 @@ export async function shouldEnqueuePlServerAttachmentUpload(companyId: string): 
   return (await resolvePlServerAttachmentUploadTransport(id)) != null;
 }
 
+/**
+ * Party/master rule: stage (`putPendingFile`) ke baad `/__pl_attachment` race-budget flush,
+ * phir SQLite/doc sync — pehle bytes, baad me JSON tip.
+ */
+export async function flushPlServerAttachmentsAfterStagingBudgeted(
+  companyId: string,
+  options?: { localIds?: readonly string[]; budgetMs?: number }
+): Promise<void> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return;
+  if (!(await shouldEnqueuePlServerAttachmentUpload(cid))) return;
+  const budgetMs = Math.max(1_000, Number(options?.budgetMs ?? 20_000) || 20_000);
+  await Promise.race([
+    flushPlServerAttachmentUploadQueueNow(cid, { localIds: options?.localIds }),
+    new Promise<void>((resolve) => setTimeout(resolve, budgetMs)),
+  ]);
+}
+
 function scheduleAttachmentUploadFlush(companyId: string): void {
   const cid = String(companyId || "").trim();
   if (!cid) return;
@@ -342,6 +360,20 @@ export function isPlServerAttachmentUploadPending(companyId: string, localId: st
   return queuedAttachments.has(queueKey(String(companyId || "").trim(), String(localId || "").trim()));
 }
 
+/** Edit-remove: queued host uploads for dropped `local:` ids mat chalao (warna file wapas aa jati hai). */
+export function cancelPlServerAttachmentUploads(
+  companyId: string,
+  localIds: readonly string[]
+): void {
+  const cid = String(companyId || "").trim();
+  if (!cid || !localIds?.length) return;
+  for (const raw of localIds) {
+    const localId = String(raw || "").trim();
+    if (!localId) continue;
+    queuedAttachments.delete(queueKey(cid, localId));
+  }
+}
+
 /** Save path: debounce/retry cancel karke turant server par bytes push. */
 export async function flushPlServerAttachmentUploadQueueNow(
   companyId: string,
@@ -404,16 +436,6 @@ async function localRefHasPendingBytes(localRef: string): Promise<boolean> {
   return Boolean(pending?.blob && pending.blob.size > 0);
 }
 
-async function localRefIsAvailableOnPlServerHost(companyId: string, localRef: string): Promise<boolean> {
-  try {
-    const { fetchPlServerAttachmentBlob } = await import("@/lib/plServerAttachmentFetch");
-    const blob = await fetchPlServerAttachmentBlob(companyId, localRef);
-    return Boolean(blob && blob.size > 0);
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Direct PL/host write guard: record me `local:` refs tabhi authoritative doc me jaane do
  * jab bytes queue/host par confirmed hon. Warna server doc preview corrupt ho jata hai.
@@ -444,29 +466,25 @@ export async function flushPlServerAttachmentsForRecordBeforeAuthoritativeSave(
 
   await ensurePlServerAttachmentsQueuedFromRecord(cid, record);
 
-  const missingLocalBytes: string[] = [];
-  for (const ref of refs) {
-    if (!(await localRefHasPendingBytes(ref))) missingLocalBytes.push(ref);
+  // Device pe jinke bytes nahi + queue me bhi nahi — Host GET (25s) se Save mat atkao.
+  const uploadableIds: string[] = [];
+  for (const id of localIds) {
+    if (await localRefHasPendingBytes(localRefFromPendingId(id))) uploadableIds.push(id);
   }
-  if (missingLocalBytes.length > 0) {
-    for (const ref of missingLocalBytes) {
-      if (await localRefIsAvailableOnPlServerHost(cid, ref)) continue;
-      const result: PlServerAttachmentUploadFlushResult = {
-        ok: false,
-        uploaded: 0,
-        failed: missingLocalBytes.length,
-        missingBytes: missingLocalBytes.length,
-        pending: countQueuedAttachmentsForCompany(cid, localIds),
-        error: "attachment_bytes_missing_on_device_and_host",
-      };
-      if (options?.throwOnFailure) throw buildFlushFailureError(result);
-      return result;
-    }
+  if (uploadableIds.length === 0) {
+    const result: PlServerAttachmentUploadFlushResult = {
+      ok: true,
+      uploaded: 0,
+      failed: 0,
+      missingBytes: localIds.length,
+      pending: 0,
+    };
+    return result;
   }
 
   return flushPlServerAttachmentUploadQueueNow(cid, {
     throwOnFailure: options?.throwOnFailure,
-    localIds,
+    localIds: uploadableIds,
   });
 }
 

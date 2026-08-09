@@ -174,6 +174,15 @@ function normalizeShareableCompanySnapshotRows(raw: unknown): DevShareableCompan
 export function saveDevShareableCompaniesSnapshot(raw: unknown): DevShareableCompanySnapshotRow[] {
   const rows = normalizeShareableCompanySnapshotRows(raw);
   ensureDir();
+  // Same companies + new updatedAt = Turbopack watches .data/ and recompiles forever.
+  try {
+    const existing = loadDevShareableCompaniesSnapshot();
+    if (JSON.stringify(existing) === JSON.stringify(rows)) {
+      return existing;
+    }
+  } catch {
+    /* fall through to write */
+  }
   fs.writeFileSync(
     shareableCompaniesPath(),
     JSON.stringify({ updatedAt: new Date().toISOString(), companies: rows }, null, 2),

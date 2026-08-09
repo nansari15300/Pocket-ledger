@@ -9,9 +9,11 @@
 import {
   doc,
   getDoc,
+  setDoc,
   serverTimestamp,
   Timestamp,
   enableNetwork,
+  deleteField,
 } from "firebase/firestore";
 import { runTransaction } from "@/lib/writeGateway/firestoreMutationsInternal";
 import {
@@ -60,6 +62,137 @@ function isFirestoreAlreadyExistsError(e: unknown): boolean {
   if (!e || typeof e !== "object") return false;
   const code = String((e as { code?: string }).code || "");
   return code === "already-exists" || code === "already_exists";
+}
+
+function attachmentUrlsFingerprint(urls: readonly string[]): string {
+  return urls.map((u) => String(u || "").trim()).filter(Boolean).join("\x1e");
+}
+
+/** Soft-delete outbox flush remirrors; permanent purge must hard-wipe local again. */
+async function applyLocalMirrorAfterOutboxFlush(params: {
+  companyId: string;
+  collectionName: string;
+  docId: string;
+  outboxPayload: unknown;
+  writtenFields?: Record<string, unknown> | null;
+  isPermanentHardPurge: boolean;
+}): Promise<void> {
+  if (params.isPermanentHardPurge) {
+    const { deleteCompanyDocFromBrowserDb } = await import("@/lib/localCompanyDocMirror");
+    await deleteCompanyDocFromBrowserDb(params.companyId, params.collectionName, params.docId, {
+      force: true,
+      notify: true,
+    });
+    return;
+  }
+  await mirrorCompanyDocAfterOutboxFlush(
+    params.companyId,
+    params.collectionName,
+    params.docId,
+    params.outboxPayload,
+    params.writtenFields
+  );
+}
+
+/**
+ * Post-flush: outbox ki intended `fileUrls` enforce karo.
+ * Server/cache kabhi purani HTTPS wapas laata hai (merge miss / unassignedFile leftover) — SQLite + Firestore dubara trim.
+ */
+async function mirrorCompanyDocAfterOutboxFlush(
+  companyId: string,
+  collectionName: string,
+  docId: string,
+  outboxPayload: unknown,
+  writtenFields?: Record<string, unknown> | null
+): Promise<void> {
+  await mirrorCompanyDocToBrowserDb(companyId, collectionName, docId);
+  if (collectionName !== "vouchers") return;
+  const source =
+    writtenFields && Object.prototype.hasOwnProperty.call(writtenFields, "fileUrls")
+      ? writtenFields
+      : outboxPayload && typeof outboxPayload === "object"
+        ? (outboxPayload as Record<string, unknown>)
+        : null;
+  if (!source || !Object.prototype.hasOwnProperty.call(source, "fileUrls")) return;
+
+  const intended = normalizeFileUrlsField(source.fileUrls);
+  const intendedFp = attachmentUrlsFingerprint(intended);
+  const { upsertCompanyDocInBrowserDb, notifyBrowserDbCollectionUpdated } = await import(
+    "@/lib/localCompanyDocMirror"
+  );
+
+  const local = await getCompanyDocFromBrowserDb(companyId, collectionName, docId, { includeDeleted: true });
+  const localFp = attachmentUrlsFingerprint(normalizeFileUrlsField(local?.fileUrls));
+  const localUf =
+    local?.unassignedFile && typeof local.unassignedFile === "object"
+      ? String((local.unassignedFile as { url?: string }).url || "").trim()
+      : "";
+  if (local && (localFp !== intendedFp || (intended.length === 0 && Boolean(localUf)))) {
+    await upsertCompanyDocInBrowserDb(
+      companyId,
+      collectionName,
+      docId,
+      {
+        ...(local as Record<string, unknown>),
+        fileUrls: intended,
+        files: [],
+        unassignedFile: null,
+        id: docId,
+      },
+      { notify: true, force: true, skipPlanMutationGate: true }
+    );
+    notifyBrowserDbCollectionUpdated(companyId, collectionName);
+  }
+
+  // Firestore me abhi bhi purani list / unassignedFile → force patch (delete bounce band).
+  try {
+    const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
+    const fsCompanyId =
+      String((reg as Record<string, unknown> | null)?.authoritativeCompanyId || companyId).trim() || companyId;
+    const ref = doc(firestore, `companies/${fsCompanyId}/vouchers`, docId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    const remote = snap.data() as Record<string, unknown>;
+    const remoteFp = attachmentUrlsFingerprint(normalizeFileUrlsField(remote.fileUrls));
+    const remoteUf =
+      remote.unassignedFile && typeof remote.unassignedFile === "object"
+        ? String((remote.unassignedFile as { url?: string }).url || "").trim()
+        : "";
+    if (process.env.NODE_ENV !== "production") {
+      void import("@/lib/attachmentDeleteTrace").then((m) =>
+        m.traceAttachmentUrlsChange({
+          source: "outbox.postFlush.firestoreReadback",
+          companyId,
+          voucherId: docId,
+          prevUrls: intended,
+          nextUrls: normalizeFileUrlsField(remote.fileUrls),
+          extra: { hadUnassignedFile: Boolean(remoteUf), remoteMatchesIntent: remoteFp === intendedFp && !remoteUf },
+        })
+      );
+    }
+    if (remoteFp === intendedFp && !remoteUf) return;
+    await setDoc(
+      ref,
+      {
+        fileUrls: intended,
+        files: [],
+        unassignedFile: deleteField(),
+        id: docId,
+      },
+      { merge: true }
+    );
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[QUEUE_FLUSH] attachment enforce after bounce", {
+        companyId,
+        docId,
+        intendedCount: intended.length,
+        remoteCount: normalizeFileUrlsField(remote.fileUrls).length,
+        hadUnassignedFile: Boolean(remoteUf),
+      });
+    }
+  } catch (e) {
+    console.warn("[localVoucherOutbox] post-flush attachment enforce failed", e);
+  }
 }
 
 /**
@@ -364,23 +497,28 @@ export type FlushVoucherOutboxOptions = {
   };
 };
 
+/** Parallel enqueue → double flush → REST `already-exists` (409) on `_pl_ledger_idem`. */
+let flushVoucherOutboxInFlight: Promise<{ ok: number; failed: number }> | null = null;
+
 export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): Promise<{ ok: number; failed: number }> {
+  if (flushVoucherOutboxInFlight) {
+    return flushVoucherOutboxInFlight;
+  }
+  flushVoucherOutboxInFlight = flushVoucherOutboxImpl(options).finally(() => {
+    flushVoucherOutboxInFlight = null;
+  });
+  return flushVoucherOutboxInFlight;
+}
+
+async function flushVoucherOutboxImpl(options?: FlushVoucherOutboxOptions): Promise<{ ok: number; failed: number }> {
   // Temporary kill-switch: ledger Firestore upload band (plan sync HTTP alag chalta rahe).
   if (isFirebaseLedgerDataSyncDisabled()) {
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[QUEUE_FLUSH]", "skip:firebase-ledger-data-sync-disabled");
-    }
     return { ok: 0, failed: 0 };
   }
   // Online Firebase SQLite-first outbox bhi flush — pehle sirf local-only/deltaa allow tha.
   if (typeof navigator !== "undefined" && !navigator.onLine) {
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[QUEUE_FLUSH]", "skip:navigator-offline");
-    }
     return { ok: 0, failed: 0 };
   }
-  // Capture for logging before `enableNetwork` may clear the flag below.
-  const hadFirestoreNetworkDisabledByApi = firestoreNetworkDisabledByApi;
   // Only when the app called `disableNetwork` — otherwise repeated `enableNetwork` during flush can hit
   // Firestore 12.8 INTERNAL ASSERTION (da08 / ca9). Clear the flag inside the queued op — parallel flushes share one enable.
   if (firestoreNetworkDisabledByApi) {
@@ -448,11 +586,6 @@ export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): P
     rows = [...rows].sort((a, b) => score(b) - score(a));
   }
 
-  if (process.env.NODE_ENV !== "production") {
-    // Outbox run start — `enableNetwork` may restart Firestore snapshots (refresh-like feel).
-    console.log("[QUEUE_FLUSH]", "start", { pendingRows: rows.length, hadFirestoreNetworkDisabledByApi });
-  }
-
   let ok = 0;
   let failed = 0;
   for (const row of rows) {
@@ -508,6 +641,10 @@ export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): P
       const fsCompanyId =
         String((reg as Record<string, unknown>).authoritativeCompanyId || row.company_id).trim() || row.company_id;
       let docFieldsToWrite = docFields as Record<string, unknown>;
+      const outboxHadExplicitFileUrls = Object.prototype.hasOwnProperty.call(docFieldsToWrite, "fileUrls");
+      // Recycle-bin "Delete Permanently" — hard remove. Soft delete (`op:delete` alone) stays a tombstone.
+      const isPermanentHardPurge =
+        row.op === "delete" && docFieldsToWrite.plPermanentlyPurged === true;
       if (row.collection_name === "vouchers") {
         try {
           const mirrorRow = await getCompanyDocFromBrowserDb(row.company_id, "vouchers", row.doc_id, {
@@ -515,7 +652,15 @@ export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): P
           });
           const mirrorUrls = normalizeFileUrlsField(mirrorRow?.fileUrls);
           const payloadUrls = normalizeFileUrlsField(docFieldsToWrite.fileUrls);
-          if (
+          // Explicit empty / trimmed list from save must stay — do not revive from mirror HTTPS.
+          if (outboxHadExplicitFileUrls && payloadUrls.length === 0) {
+            docFieldsToWrite = {
+              ...docFieldsToWrite,
+              fileUrls: [],
+              files: [],
+              unassignedFile: null,
+            };
+          } else if (
             mirrorUrls.length > 0 &&
             payloadUrls.some((u) => isLocalFileRef(u)) &&
             mirrorUrls.some((u) => typeof u === "string" && u.startsWith("http"))
@@ -530,6 +675,17 @@ export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): P
         } catch {
           /* mirror merge best-effort */
         }
+        if (outboxHadExplicitFileUrls) {
+          const urls = normalizeFileUrlsField(docFieldsToWrite.fileUrls);
+          void import("@/lib/attachmentDeleteTrace").then((m) => {
+            m.markAttachmentDeleteIntent({
+              companyId: row.company_id,
+              voucherId: row.doc_id,
+              intendedUrls: urls,
+              source: "localVoucherOutbox.flush",
+            });
+          });
+        }
       }
       const localFirebaseReconcile = await canReconcileLocalDocViaFirebase(
         reg,
@@ -539,7 +695,9 @@ export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): P
         docFieldsToWrite
       );
       // Invited-ledger reconcile: data-only — attachments Firebase par nahi.
-      if (localFirebaseReconcile) {
+      if (isPermanentHardPurge) {
+        // Permanent purge hard-deletes the doc — skip attach hydrate / reconcile rewrite.
+      } else if (localFirebaseReconcile) {
         docFieldsToWrite = stripAttachmentFieldsForInvitedLedgerReconcile(
           row.collection_name,
           docFieldsToWrite
@@ -578,9 +736,13 @@ export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): P
       let txnPayload:
         | { mode: "enc"; doc: Record<string, unknown> }
         | { mode: "set"; doc: Record<string, unknown>; merge: boolean }
-        | { mode: "merge"; doc: Record<string, unknown> };
+        | { mode: "merge"; doc: Record<string, unknown> }
+        | { mode: "hardDelete" };
 
-      if (encFlag && encSalt && encPhrase) {
+      if (isPermanentHardPurge) {
+        // Permanent recycle purge: hard delete — never re-merge `isDeleted:true` (bin bounce).
+        txnPayload = { mode: "hardDelete" };
+      } else if (encFlag && encSalt && encPhrase) {
         const mergeOp = row.op === "delete" ? "update" : row.op;
         const inner = await mergeForEncryptedFlush(
           fsCompanyId,
@@ -614,7 +776,7 @@ export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): P
           },
         };
       } else if (row.op === "delete") {
-        // Tombstone: merge server row — never hard `deleteDoc` inside flush.
+        // Soft delete / recycle bin: tombstone merge — do not hard-delete (bin list needs the doc).
         txnPayload = {
           mode: "merge",
           doc: {
@@ -639,14 +801,21 @@ export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): P
         };
       } else if (row.op === "update") {
         const { createdAt: _c, ...rest } = docFieldsToWrite;
+        const updateDoc: Record<string, unknown> = {
+          ...rest,
+          companyId: fsCompanyId,
+          lastEditedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+        // merge:true + missing `fileUrls` / leftover `unassignedFile` = delete undo on server.
+        if (outboxHadExplicitFileUrls || Object.prototype.hasOwnProperty.call(docFieldsToWrite, "fileUrls")) {
+          updateDoc.fileUrls = normalizeFileUrlsField(docFieldsToWrite.fileUrls);
+          updateDoc.files = [];
+          updateDoc.unassignedFile = deleteField();
+        }
         txnPayload = {
           mode: "merge",
-          doc: {
-            ...rest,
-            companyId: fsCompanyId,
-            lastEditedAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          },
+          doc: updateDoc,
         };
       } else {
         failed++;
@@ -686,6 +855,8 @@ export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): P
           }
           if (txnPayload.mode === "enc") {
             tx.set(ref, txnPayload.doc, { merge: false });
+          } else if (txnPayload.mode === "hardDelete") {
+            tx.delete(ref);
           } else if (txnPayload.mode === "set") {
             tx.set(ref, txnPayload.doc, { merge: txnPayload.merge });
           } else {
@@ -718,7 +889,14 @@ export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): P
               if (p.applied === true && p.payloadHash === payloadHash) {
                 await deleteOutboxRow(row.outbox_id, row.company_id);
                 ok++;
-                await mirrorCompanyDocToBrowserDb(row.company_id, row.collection_name, row.doc_id);
+                await applyLocalMirrorAfterOutboxFlush({
+                  companyId: row.company_id,
+                  collectionName: row.collection_name,
+                  docId: row.doc_id,
+                  outboxPayload: data,
+                  writtenFields: docFieldsToWrite,
+                  isPermanentHardPurge,
+                });
                 continue;
               }
             }
@@ -736,14 +914,28 @@ export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): P
         await deleteOutboxRow(row.outbox_id, row.company_id);
         ok++;
         // Idempotent replay: align local SQLite with the server doc (same as a fresh apply).
-        await mirrorCompanyDocToBrowserDb(row.company_id, row.collection_name, row.doc_id);
+        await applyLocalMirrorAfterOutboxFlush({
+          companyId: row.company_id,
+          collectionName: row.collection_name,
+          docId: row.doc_id,
+          outboxPayload: data,
+          writtenFields: docFieldsToWrite,
+          isPermanentHardPurge,
+        });
         continue;
       }
 
       await deleteOutboxRow(row.outbox_id, row.company_id);
       ok++;
       // Every collection: align SQLite with server timestamps + hydrated URLs (previously only vouchers were mirrored post-flush).
-      await mirrorCompanyDocToBrowserDb(row.company_id, row.collection_name, row.doc_id);
+      await applyLocalMirrorAfterOutboxFlush({
+        companyId: row.company_id,
+        collectionName: row.collection_name,
+        docId: row.doc_id,
+        outboxPayload: data,
+        writtenFields: docFieldsToWrite,
+        isPermanentHardPurge,
+      });
     } catch (e) {
       if (isCompanyNotFoundError(e)) {
         try {
@@ -769,9 +961,6 @@ export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): P
       // One bad row should not block the entire outbox forever; keep flushing remaining rows.
       continue;
     }
-  }
-  if (process.env.NODE_ENV !== "production") {
-    console.log("[SYNC_COMPLETE]", "flushVoucherOutbox", { ok, failed, pendingRowsStart: rows.length });
   }
   return { ok, failed };
 }

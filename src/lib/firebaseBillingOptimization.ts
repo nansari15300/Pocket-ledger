@@ -47,7 +47,22 @@ export function companyAttachmentRegistryEnabled(): boolean {
   return true;
 }
 
-/** Voucher forms: pick an attachment already used on another voucher (no re-upload). */
+/** Voucher forms: Reuse file button / hold-paste (feature on unless REUSE_OFF=1). */
+/**
+ * Voucher attachment reuse: copy bytes → new upload/File on the target place
+ * (no shared HTTPS URL / no green-blue count badges).
+ * Set `NEXT_PUBLIC_VOUCHER_ATTACHMENT_REUSE_SHARE_URL=1` only to restore old link behavior.
+ */
+export function attachmentReuseCopyAsNewEnabled(): boolean {
+  if (typeof process === "undefined") return true;
+  return String(process.env.NEXT_PUBLIC_VOUCHER_ATTACHMENT_REUSE_SHARE_URL || "").trim() !== "1";
+}
+
+/** Green/blue reuse count UI — off while copy-as-new is the model. */
+export function attachmentReuseShareUrlBadgesEnabled(): boolean {
+  return !attachmentReuseCopyAsNewEnabled();
+}
+
 export function voucherAttachmentReuseEnabled(): boolean {
   if (
     typeof process !== "undefined" &&

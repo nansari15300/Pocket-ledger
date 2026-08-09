@@ -41,6 +41,7 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { FilePreview } from "../vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 
@@ -145,7 +146,7 @@ export function CommissionPayoutDialog({
           continue;
         }
       if (files.length < 3) {
-        const compressedFile = await compressFile(file);
+        const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(file, null);
         setFiles(prev => [...prev, compressedFile]);
       } else {
         toast({ variant: "destructive", title: "Limit Reached", description: "You can only upload up to 3 files."});

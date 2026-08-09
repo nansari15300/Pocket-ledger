@@ -130,9 +130,58 @@ function attachmentLabelFromUrl(url: string): string {
 /** Max distinct attachment URLs in reuse picker (full company scan in memory). */
 export const COMPANY_ATTACHMENT_CATALOG_MAX = 5000;
 
-/** Distinct attachment refs already on company vouchers — in-memory scan (no extra Firestore read). */
+type CatalogSourceRow = {
+  fileUrls?: unknown;
+  documentFileUrls?: unknown;
+  fileUrl?: unknown;
+  logoUrl?: unknown;
+  avatarUrl?: unknown;
+  unassignedFile?: unknown;
+  voucherNumber?: unknown;
+  type?: unknown;
+  name?: unknown;
+  label?: unknown;
+};
+
+function pushUrlUsage(
+  byUrl: Map<string, { numbers: Set<string> }>,
+  urlRaw: unknown,
+  placeLabel: string,
+  exclude: ReadonlySet<string>
+): void {
+  const visit = (value: unknown) => {
+    if (typeof value === "string") {
+      const url = value.trim();
+      if (!url || exclude.has(url)) return;
+      if (
+        !(
+          url.startsWith("http://") ||
+          url.startsWith("https://") ||
+          isLocalFileRef(url) ||
+          isDriveFileRef(url)
+        )
+      ) {
+        return;
+      }
+      const row = byUrl.get(url) ?? { numbers: new Set<string>() };
+      row.numbers.add(placeLabel);
+      byUrl.set(url, row);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (value && typeof value === "object" && "url" in (value as object)) {
+      visit((value as { url?: unknown }).url);
+    }
+  };
+  visit(urlRaw);
+}
+
+/** Distinct attachment refs already on company (vouchers + masters) — in-memory scan. */
 export function buildCompanyAttachmentCatalogFromVouchers(
-  vouchers: ReadonlyArray<{ fileUrls?: unknown; voucherNumber?: unknown; type?: unknown }>,
+  vouchers: ReadonlyArray<CatalogSourceRow>,
   options?: { excludeUrls?: ReadonlySet<string>; limit?: number }
 ): CompanyAttachmentCatalogEntry[] {
   const exclude = options?.excludeUrls ?? new Set<string>();
@@ -140,17 +189,14 @@ export function buildCompanyAttachmentCatalogFromVouchers(
   const byUrl = new Map<string, { numbers: Set<string> }>();
 
   for (const v of vouchers) {
-    const urls = v.fileUrls;
-    if (!Array.isArray(urls)) continue;
-    const vn = String(v.voucherNumber || v.type || "Voucher").trim() || "Voucher";
-    for (const raw of urls) {
-      if (typeof raw !== "string") continue;
-      const url = raw.trim();
-      if (!url || exclude.has(url)) continue;
-      const row = byUrl.get(url) ?? { numbers: new Set<string>() };
-      row.numbers.add(vn);
-      byUrl.set(url, row);
-    }
+    const vn =
+      String(v.voucherNumber || v.name || v.label || v.type || "Item").trim() || "Item";
+    pushUrlUsage(byUrl, v.fileUrls, vn, exclude);
+    pushUrlUsage(byUrl, v.documentFileUrls, vn, exclude);
+    pushUrlUsage(byUrl, v.fileUrl, vn, exclude);
+    pushUrlUsage(byUrl, v.logoUrl, vn, exclude);
+    pushUrlUsage(byUrl, v.avatarUrl, vn, exclude);
+    pushUrlUsage(byUrl, v.unassignedFile, vn, exclude);
   }
 
   const entries: CompanyAttachmentCatalogEntry[] = [];
@@ -172,26 +218,38 @@ export function buildCompanyAttachmentCatalogFromVouchers(
   return entries.slice(0, limit);
 }
 
-export type CompanyVoucherAttachmentSourceRow = {
-  fileUrls?: unknown;
-  voucherNumber?: unknown;
-  type?: unknown;
-};
+export type CompanyVoucherAttachmentSourceRow = CatalogSourceRow;
 
-/** Reuse picker: kisi bhi accessible company ke vouchers — SQLite pehle, phir Firestore fallback. */
+/** Reuse picker: company-wide (vouchers + masters) — SQLite pehle, phir Firestore vouchers fallback. */
 export async function loadCompanyVoucherAttachmentSources(
   companyId: string
 ): Promise<CompanyVoucherAttachmentSourceRow[]> {
   const cid = String(companyId || "").trim();
   if (!cid) return [];
 
-  const fromSqlite = await listCompanyDocsFromBrowserDb(cid, "vouchers");
-  if (fromSqlite.length > 0) {
-    return fromSqlite.map((row) => ({
-      fileUrls: row.fileUrls,
-      voucherNumber: row.voucherNumber,
-      type: row.type,
-    }));
+  try {
+    const { COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS } = await import("@/lib/firestoreToLocalCompanyPull");
+    const rows: CompanyVoucherAttachmentSourceRow[] = [];
+    for (const coll of COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS) {
+      const docs = await listCompanyDocsFromBrowserDb(cid, coll);
+      for (const row of docs) {
+        rows.push({
+          fileUrls: row.fileUrls,
+          documentFileUrls: row.documentFileUrls,
+          fileUrl: row.fileUrl,
+          logoUrl: row.logoUrl,
+          avatarUrl: row.avatarUrl,
+          unassignedFile: row.unassignedFile,
+          voucherNumber: row.voucherNumber,
+          type: row.type || coll,
+          name: row.name || row.accountName,
+          label: coll,
+        });
+      }
+    }
+    if (rows.length > 0) return rows;
+  } catch {
+    /* Firestore try below */
   }
 
   try {

@@ -10,12 +10,17 @@ import {
   ATTACHMENT_HOLD_CLIPBOARD_PREFIX,
   parseAttachmentHoldClipboardText,
 } from "@/lib/attachmentHoldClipboard";
+import {
+  buildVoucherAttachmentStoragePath,
+  resolveCompanyUsesPocketLedgerStorage,
+} from "@/lib/firebaseStoragePaths";
 import { storage } from "@/lib/firebase";
 import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import {
   dedupeVoucherAttachmentUrlList,
   getVoucherAttachmentUrlsForUi,
 } from "@/lib/voucherAttachmentNormalize";
+import { resolveFormAttachmentUrlsForEditSave } from "@/lib/formAttachmentEditHelper";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 import {
   isFirebaseLedgerCompanyAttachmentSyncEnabled,
@@ -56,6 +61,26 @@ async function shouldSkipWebFirebaseMaterializeForCompany(companyId: string): Pr
   return false;
 }
 
+/** SQLite/outbox pipeline — inline web upload mat karo; outbox `hydrateVoucherLocalAttachmentsForServer` ek hi bytes upload kare. */
+async function shouldDeferInlineFirebaseAttachmentUpload(companyId: string): Promise<boolean> {
+  if (await shouldSkipWebFirebaseMaterializeForCompany(companyId)) return true;
+  const cid = String(companyId || "").trim();
+  if (!cid) return true;
+  try {
+    const { apkEmbeddedSqliteFirstWritesPreferred } = await import("@/lib/apkOnlineFirestoreWritePolicy");
+    if (apkEmbeddedSqliteFirstWritesPreferred()) return true;
+    const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
+    const { isOnlineCompanyLedgerCloudSyncAllowed } = await import("@/lib/onlineCompanySelectorSyncPolicy");
+    const row = await getLocalCompanyById(cid, { includeDeleted: true });
+    if (!isOnlineCompanyLedgerCloudSyncAllowed(cid, row)) {
+      return true;
+    }
+  } catch {
+    /* defer if unsure — duplicate Storage object se better missing inline */
+  }
+  return false;
+}
+
 /**
  * `saveVoucher` Firestore path: form se aaye `local:` / `PL_ATTACH_V1:` ko save se pehle HTTPS me badlo.
  * Har voucher type par kaam kare (sirf Payment In/Out forms par depend na ho).
@@ -64,6 +89,9 @@ export async function materializeVoucherAttachmentsInSavePayload(params: {
   companyId: string;
   voucherId?: string | null;
   data: Record<string, unknown>;
+  /** Edit: form open / pre-save doc URLs — kept `local:` dubara upload na ho. */
+  editBaselineUrls?: readonly string[];
+  editOldDocRemoteUrls?: readonly string[];
 }): Promise<void> {
   if (isFirebaseLedgerDataSyncDisabled()) return;
   const cid = String(params.companyId || "").trim();
@@ -81,6 +109,8 @@ export async function materializeVoucherAttachmentsInSavePayload(params: {
     voucherIdHint: params.voucherId ?? null,
     storageFolder,
     rawUrls: normalizeFormFileUrlsForSave(rawUrls),
+    editBaselineUrls: params.editBaselineUrls,
+    editOldDocRemoteUrls: params.editOldDocRemoteUrls,
   });
 }
 
@@ -93,6 +123,8 @@ export async function materializeVoucherFileUrlsForWebSave(params: {
   voucherIdHint?: string | null;
   storageFolder: string;
   rawUrls: string[];
+  editBaselineUrls?: readonly string[];
+  editOldDocRemoteUrls?: readonly string[];
 }): Promise<string[]> {
   const cid = String(params.companyId || "").trim();
   const storageFolder = String(params.storageFolder || "attachments").trim() || "attachments";
@@ -104,6 +136,23 @@ export async function materializeVoucherFileUrlsForWebSave(params: {
   if (typeof navigator !== "undefined" && !navigator.onLine) return normalized;
   if (await shouldSkipWebFirebaseMaterializeForCompany(cid)) return normalized;
 
+  const hasEditBaseline =
+    (params.editBaselineUrls?.length ?? 0) > 0 || (params.editOldDocRemoteUrls?.length ?? 0) > 0;
+  if (hasEditBaseline) {
+    return resolveFormAttachmentUrlsForEditSave({
+      baselineUrls: params.editBaselineUrls,
+      oldDocRemoteUrls: params.editOldDocRemoteUrls,
+      finalUrls: normalized,
+      uploadLocal: (localUrl) =>
+        uploadLocalRefToFirebaseIfWebOnline(cid, voucherIdHint, localUrl, storageFolder),
+      tryResolveStaleLocal:
+        voucherIdHint && voucherIdHint !== "web"
+          ? (localUrl, clientUrls) =>
+              tryResolveRemoteUrlForStaleLocalAttachment(cid, voucherIdHint, localUrl, clientUrls)
+          : undefined,
+    });
+  }
+
   const out: string[] = [];
   for (const raw of normalized) {
     const u = String(raw || "").trim();
@@ -112,7 +161,6 @@ export async function materializeVoucherFileUrlsForWebSave(params: {
       out.push(u);
       continue;
     }
-    // Web online: `local:` ref ke bytes read karke save se pehle direct HTTPS URL banao.
     const uploaded = await uploadLocalRefToFirebaseIfWebOnline(cid, voucherIdHint, u, storageFolder);
     out.push(uploaded || u);
   }
@@ -132,8 +180,29 @@ export function voucherAttachmentFieldsForSave(fileUrls: string[]): {
   };
 }
 
+/** Web online: nayi File → Firebase Storage (pocket-ledger ya legacy prefix). */
+export async function uploadVoucherAttachmentFileToFirebase(params: {
+  companyId: string;
+  voucherType: string;
+  file: File;
+  voucherId?: string;
+}): Promise<string> {
+  const cid = String(params.companyId || "").trim();
+  const voucherType = String(params.voucherType || "journal").trim() || "journal";
+  const usePocketLedger = await resolveCompanyUsesPocketLedgerStorage(cid);
+  const path = buildVoucherAttachmentStoragePath({
+    companyId: cid,
+    usePocketLedger,
+    voucherType,
+    fileName: params.file.name,
+    voucherId: params.voucherId,
+  });
+  const sRef = storageRef(storage, path);
+  const snap = await uploadBytes(sRef, params.file);
+  return getDownloadURL(snap.ref);
+}
+
 /**
- * Web online par `local:uuid` → IndexedDB se blob read karke Firebase Storage pe directly upload karo.
  * EXE/APK/static par skip (syncPendingFiles background me karta hai).
  */
 async function uploadLocalRefToFirebaseIfWebOnline(
@@ -145,6 +214,7 @@ async function uploadLocalRefToFirebaseIfWebOnline(
   if (isFirebaseLedgerDataSyncDisabled()) return null;
   if (isElectronDesktopApp() || isCapacitorNativeApp() || isStaticAppBuild()) return null;
   if (typeof navigator !== "undefined" && !navigator.onLine) return null;
+  if (await shouldDeferInlineFirebaseAttachmentUpload(companyId)) return null;
   try {
     const blob = await getBlobFromLocalFileRef(localUrl);
     if (!blob) return null;
@@ -152,7 +222,14 @@ async function uploadLocalRefToFirebaseIfWebOnline(
     const uuidPart = localUrl.replace("local:", "").replace(/[^a-z0-9-]/gi, "");
     const ext = blob.type ? `.${blob.type.split("/")[1] || "bin"}` : "";
     const fileName = `${uuidPart}${ext}`;
-    const path = `voucher-files/${companyId}/${storageFolder}/${voucherId}_${Date.now()}_${fileName}`;
+    const usePocketLedger = await resolveCompanyUsesPocketLedgerStorage(companyId);
+    const path = buildVoucherAttachmentStoragePath({
+      companyId,
+      usePocketLedger,
+      voucherType: storageFolder,
+      fileName,
+      voucherId,
+    });
     const sRef = storageRef(storage, path);
     const snap = await uploadBytes(sRef, blob);
     return await getDownloadURL(snap.ref);
@@ -171,25 +248,22 @@ export async function resolvePersistedVoucherFileUrlsAfterSave(
   const cid = String(companyId || "").trim();
   const vid = String(voucherId || "").trim();
   if (!cid || !vid) return [...urls];
-  const out: string[] = [];
-  for (const raw of urls) {
-    const u = String(raw || "").trim();
-    if (!u) continue;
-    if (isLocalFileRef(u)) {
-      // Web online: blob seedha Firebase pe upload karo taaki HTTPS turant mile
-      const uploaded = await uploadLocalRefToFirebaseIfWebOnline(cid, vid, u, storageFolder);
-      if (uploaded) {
-        out.push(uploaded);
-        continue;
-      }
-      // Fallback: Firestore me already sync hua HTTPS URL check karo
-      const remote = await tryResolveRemoteUrlForStaleLocalAttachment(cid, vid, u, urls);
-      out.push(remote && !isLocalFileRef(remote) ? remote : u);
-    } else {
-      out.push(u);
-    }
-  }
-  return out;
+  const row = (await getCompanyDocFromBrowserDb(cid, "vouchers", vid).catch(() => null)) as Record<
+    string,
+    unknown
+  > | null;
+  const { baselineUrls, remoteUrls } = (await import("@/lib/formAttachmentEditHelper")).readVoucherAttachmentBaselineFromRow(
+    row
+  );
+
+  return resolveFormAttachmentUrlsForEditSave({
+    baselineUrls,
+    oldDocRemoteUrls: remoteUrls.length > 0 ? remoteUrls : undefined,
+    finalUrls: urls,
+    uploadLocal: (localUrl) => uploadLocalRefToFirebaseIfWebOnline(cid, vid, localUrl, storageFolder),
+    tryResolveStaleLocal: (localUrl, clientUrls) =>
+      tryResolveRemoteUrlForStaleLocalAttachment(cid, vid, localUrl, clientUrls),
+  });
 }
 
 /** Parent `voucher.fileUrls` outbox/Firestore lag se purani list bheje to form state mat overwrite karo. */
@@ -251,6 +325,25 @@ export function dispatchVoucherAttachmentSaved(
   voucherId: string,
   fileUrls: readonly string[]
 ): void {
+  const urls = fileUrls.filter((u): u is string => typeof u === "string" && Boolean(String(u).trim()));
+  void import("@/lib/attachmentDeleteTrace").then((m) => {
+    // Empty + partial trim (3→2) dono intent — warna stale Firestore HTTPS list wapas aa jati hai.
+    m.markAttachmentDeleteIntent({
+      companyId,
+      voucherId,
+      intendedUrls: urls,
+      source: "dispatchVoucherAttachmentSaved",
+    });
+    if (process.env.NODE_ENV !== "production") {
+      m.traceAttachmentUrlsChange({
+        source: "dispatchVoucherAttachmentSaved",
+        companyId,
+        voucherId,
+        prevUrls: null,
+        nextUrls: fileUrls,
+      });
+    }
+  });
   dispatchVoucherLivePatch(companyId, voucherId, buildVoucherAttachmentLivePatch(fileUrls));
 }
 
@@ -271,27 +364,17 @@ export async function applyVoucherAttachmentsAfterFormSave(params: {
   );
   if (!cid || !vid) return dedupeVoucherAttachmentUrlList(raw);
 
-  // Local / Drive / EXE / APK — Firebase duplicate upload mat; mirror + background sync source of truth.
-  if (
-    isElectronDesktopApp() ||
-    isCapacitorNativeApp() ||
-    isStaticAppBuild() ||
-    (await shouldSkipWebFirebaseMaterializeForCompany(cid))
-  ) {
-    let urls = dedupeVoucherAttachmentUrlList(raw);
-    try {
-      const row = (await getCompanyDocFromBrowserDb(cid, "vouchers", vid)) as Record<string, unknown> | null;
-      const fromDb = getVoucherAttachmentUrlsForUi(row);
-      if (fromDb.length > 0) urls = dedupeVoucherAttachmentUrlList(fromDb);
-    } catch {
-      /* mirror miss — form raw */
-    }
-    dispatchVoucherAttachmentSaved(cid, vid, urls);
-    return urls;
-  }
-
+  // Form save list authoritative — remove/empty ke baad stale DB list se files wapas mat lao.
+  // `local:` → HTTPS upgrade only in-place for the same slot; never grow vs raw.
+  const resolved = await resolvePersistedVoucherFileUrlsAfterSave(cid, vid, raw, params.storageFolder);
   const persisted = dedupeVoucherAttachmentUrlList(
-    await resolvePersistedVoucherFileUrlsAfterSave(cid, vid, raw, params.storageFolder)
+    raw.map((u, i) => {
+      const r = resolved[i];
+      if (!r) return u;
+      if (r === u) return r;
+      if (isLocalFileRef(u) && !isLocalFileRef(r)) return r;
+      return u;
+    })
   );
   dispatchVoucherAttachmentSaved(cid, vid, persisted);
   return persisted;
@@ -310,6 +393,8 @@ export function incomingVoucherFileUrlsLookStaleVersusSaved(
   if (snap.length === 0 && inc.length === 0) return false;
   if (JSON.stringify(snap) === JSON.stringify(inc)) return false;
   if (isLocalToRemoteAttachmentUpgrade(snap, inc)) return false;
+  // User ne saari files hata di — parent/Firestore lag se non-empty list stale hai (empty.every() pe bharosa mat).
+  if (snap.length === 0 && inc.length > 0) return true;
   // User ne file hata kar nayi add ki: parent ab bhi purani URLs ke saath aata hai.
   if (snap.length > 0 && inc.length > snap.length && snap.every((u) => inc.includes(u))) return true;
   if (snap.length > 0 && inc.length > 0) {

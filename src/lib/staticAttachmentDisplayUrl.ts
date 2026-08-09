@@ -6,6 +6,8 @@ import {
   shouldReadLedgerFromSqliteOnly,
 } from "@/lib/companyStorageKind";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
+import { isFirebaseLedgerCompanyAttachmentSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { localCompanyAttachmentStrategy } from "@/lib/companyAttachmentStrategies/localCompanyAttachmentStrategy";
 import { onlineCompanyAttachmentStrategy } from "@/lib/companyAttachmentStrategies/onlineCompanyAttachmentStrategy";
 import { serverCompanyAttachmentStrategy } from "@/lib/companyAttachmentStrategies/serverCompanyAttachmentStrategy";
@@ -34,8 +36,11 @@ export function companyAttachmentMode(
 ): CompanyAttachmentMode {
   if (options?.companyMode) return options.companyMode;
   if (company && isServerGateCompany(company)) return "server";
-  if (company && shouldReadLedgerFromSqliteOnly(company)) return "local";
+  // Files OFF / explicit cache-only — before cloud/sqlite classification.
   if (options?.localLedgerOnly === true) return "local";
+  // Online cloud company: ledger SQLite-first ho sakta hai; attachment strategy online rahe (Files tick network gate).
+  if (company && isCloudBackedCompanyShape(company as never)) return "online";
+  if (company && shouldReadLedgerFromSqliteOnly(company)) return "local";
   return "online";
 }
 
@@ -52,12 +57,24 @@ export function companyRequiresLocalAttachmentUrlsOnly(
   return strategyForMode(companyAttachmentMode(company)).requiresLocalAttachmentUrlsOnly;
 }
 
-/** Gallery / local company: attachment bytes sirf device cache + `local:` — Firebase Storage mat chhedo. */
+/**
+ * Gallery / list thumbs: kab device-cache-only (Firebase Storage network mat).
+ * Online + Files tick ON: SQLite-first ledger ke bawajood network lazy load allow.
+ * Online + Files OFF / Local / PL: device cache + `local:` only.
+ */
 export function companyUsesLocalAttachmentSourcesOnly(
   company: CompanyStrategyRow
 ): boolean {
   if (isLocalOnlyMode()) return true;
   if (!company) return false;
+
+  // Online Firebase company: SQLite-first ledger ≠ Files block.
+  if (isCloudBackedCompanyShape(company as never)) {
+    const cid = String(company.id || "").trim();
+    if (!cid) return true;
+    return !isFirebaseLedgerCompanyAttachmentSyncEnabled(cid);
+  }
+
   return (
     shouldReadLedgerFromSqliteOnly(company) ||
     companyRowUsesSqliteLedgerWrites(company) ||

@@ -1,11 +1,16 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { masterListRowUnselectedCn } from "@/lib/masterListChrome";
-import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import {
+  masterListOrderKey,
+  useMasterListDisplayRows,
+  useMasterListRowMotion,
+} from "@/hooks/useMasterListRowMotion";
 import type { RpDialogSection } from "@/lib/receivablesPayablesDialogUi";
 
 export type RpDialogListMotion = ReturnType<typeof useMasterListRowMotion>;
@@ -35,8 +40,23 @@ export function ReceivablesPayablesDialogEntityList({
   listMotion: listMotionProp,
 }: ReceivablesPayablesDialogEntityListProps) {
   const internalMotion = useMasterListRowMotion();
-  const { animatePresenceMode, rowMotionProps } = listMotionProp ?? internalMotion;
+  const listMotion = listMotionProp ?? internalMotion;
+  const { animatePresenceMode, rowMotionProps, isRowAnimationEnabled, layoutHoldMs } = listMotion;
   const amountClass = side === "receivables" ? "text-green-600 dark:text-green-500" : "text-red-600 dark:text-red-500";
+  const listOrderKey = useMemo(
+    () =>
+      masterListOrderKey(
+        sections.flatMap((section) =>
+          section.rows.map((row) => `${section.kind}-${row.entityId || row.party}`)
+        )
+      ),
+    [sections]
+  );
+  const { displayRows: displaySections, displayOrderKey } = useMasterListDisplayRows(
+    sections,
+    listOrderKey,
+    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
+  );
 
   return (
     <div
@@ -44,7 +64,7 @@ export function ReceivablesPayablesDialogEntityList({
       data-theme-list="account-list"
       className="min-w-0 space-y-3 px-0.5 pb-1"
     >
-      {sections.map((section) =>
+      {displaySections.map((section) =>
         section.rows.length > 0 ? (
           <div
             key={section.kind}
@@ -62,7 +82,7 @@ export function ReceivablesPayablesDialogEntityList({
                 {section.rows.map((row) => {
                   const rowKey = `${section.kind}-${row.entityId || row.party}`;
                   return (
-                    <motion.li key={rowKey} className="min-w-0" {...rowMotionProps}>
+                    <motion.li key={rowKey} className="min-w-0" layoutDependency={displayOrderKey} {...rowMotionProps}>
                       <MasterListRow className={masterListRowUnselectedCn(false)}>
                         <div className="pl-master-list-row">
                           <p

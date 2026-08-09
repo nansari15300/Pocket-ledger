@@ -44,9 +44,6 @@ export function VoucherOutboxFlushManager() {
       void flushVoucherOutbox();
     };
     const onOnline = () => {
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[ONLINE_EVENT]", "VoucherOutboxFlushManager:debounced-online→flush");
-      }
       if (onlineTimer != null) clearTimeout(onlineTimer);
       onlineTimer = window.setTimeout(() => {
         onlineTimer = null;

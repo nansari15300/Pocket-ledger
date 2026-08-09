@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
-import { ArrowLeftRight, ChevronLeft, ChevronRight, RotateCcw, Trash2, Users } from "lucide-react";
+import { ArrowLeftRight, ChevronLeft, ChevronRight, Users } from "lucide-react";
 
-export type InterCompanyRibbonTab = "voucher" | "revert_requests" | "delete_requests" | "join";
+export type InterCompanyRibbonTab = "voucher" | "join";
 
 const ITEMS: {
   id: InterCompanyRibbonTab;
@@ -12,8 +12,6 @@ const ITEMS: {
   icon: typeof ArrowLeftRight;
 }[] = [
   { id: "voucher", title: "Voucher", icon: ArrowLeftRight },
-  { id: "revert_requests", title: "Revert request", icon: RotateCcw },
-  { id: "delete_requests", title: "Delete request", icon: Trash2 },
   { id: "join", title: "Inter Com System", icon: Users },
 ];
 
@@ -23,20 +21,14 @@ const RIBBON_COLLAPSED_STORAGE_KEY = "interCompanyRibbonCollapsed";
 type Props = {
   active: InterCompanyRibbonTab;
   onChange: (tab: InterCompanyRibbonTab) => void;
-  /** Target company — pending reverse inbox count */
-  pendingRevertCount?: number;
-  /** Pending delete requests for this company */
-  pendingDeleteCount?: number;
   /** Inter Com System — pending join requests for this company */
   pendingSystemJoinCount?: number;
 };
 
-/** Left ribbon — Voucher / Revert / Inter Com System; collapse par sirf icon */
+/** Left ribbon — Voucher / Inter Com System; collapse par sirf icon */
 export function InterCompanyRibbonNav({
   active,
   onChange,
-  pendingRevertCount = 0,
-  pendingDeleteCount = 0,
   pendingSystemJoinCount = 0,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
@@ -92,14 +84,7 @@ export function InterCompanyRibbonNav({
 
       {ITEMS.map(({ id, title, icon: Icon }) => {
         const isActive = active === id;
-        const badge =
-          id === "revert_requests" && pendingRevertCount > 0
-            ? pendingRevertCount
-            : id === "delete_requests" && pendingDeleteCount > 0
-              ? pendingDeleteCount
-            : id === "join" && pendingSystemJoinCount > 0
-              ? pendingSystemJoinCount
-              : null;
+        const badge = id === "join" && pendingSystemJoinCount > 0 ? pendingSystemJoinCount : null;
         return (
           <button
             key={id}
@@ -120,16 +105,13 @@ export function InterCompanyRibbonNav({
               <>
                 <span className="min-w-0 flex-1 truncate">{title}</span>
                 {badge != null ? (
-                  <span className="flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground">
+                  <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-destructive px-1.5 text-[10px] font-bold text-destructive-foreground">
                     {badge > 99 ? "99+" : badge}
                   </span>
                 ) : null}
               </>
             ) : badge != null ? (
-              <span
-                className="absolute right-1 top-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-destructive px-0.5 text-[9px] font-bold leading-none text-destructive-foreground"
-                aria-hidden
-              >
+              <span className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">
                 {badge > 9 ? "9+" : badge}
               </span>
             ) : null}

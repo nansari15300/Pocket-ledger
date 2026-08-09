@@ -47,7 +47,8 @@ export async function devHostBridgeReadAttachment(payload: Record<string, unknow
 export async function devHostBridgeWriteAttachment(payload: Record<string, unknown>) {
   const companyId = String(payload.companyId || "").trim();
   const body = payload.body && typeof payload.body === "object" ? (payload.body as Record<string, unknown>) : {};
-  if (!companyId || !body.id || !body.base64) return { ok: false, error: "missing_fields" };
+  const isDelete = String(body.action || "").trim().toLowerCase() === "delete";
+  if (!companyId || !body.id || (!isDelete && !body.base64)) return { ok: false, error: "missing_fields" };
   if (
     typeof window !== "undefined" &&
     typeof (window as unknown as { __plPutPendingAttachmentFromRemote?: unknown })

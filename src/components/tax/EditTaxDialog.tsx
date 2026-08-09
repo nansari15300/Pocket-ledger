@@ -14,6 +14,10 @@ import {
   isProfileAvatarImageFile,
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
+import {
+  captureEntityFormAttachmentBaseline,
+  finalizeFormAttachmentEditAfterSave,
+} from "@/lib/formAttachmentEditHelper";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { useAuth } from "@/hooks/useAuth";
@@ -61,6 +65,7 @@ import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { CreateTaxGroupDialog } from "./CreateTaxGroupDialog";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
 import { isSystemParentGroup } from "@/lib/system-groups";
@@ -93,6 +98,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
   hasTransactions: boolean;
 }) {
   const [isLoading, setIsLoading] = useState(false);
+  const isCompressing = useImageCompressionProcessing();
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
@@ -249,6 +255,10 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const taxRefSnap = tax;
+    const attachmentBaselineSnap = captureEntityFormAttachmentBaseline({
+      fileUrl: initialFileRef.current,
+      documentFileUrls: initialDocUrlsRef.current,
+    });
 
     setIsOpen(false); // Dialog instant close; uploads + Firestore in background chunk below
 
@@ -259,11 +269,20 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
       const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
       setIsLoading(true);
       try {
-        let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
-        const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
-        const keptDocUrls = docSlotsSnap.filter((x): x is string => typeof x === "string");
+        const { prepareMasterEditAttachmentsForSave } = await import(
+          "@/lib/attachmentRecompressOnSave"
+        );
+        const prepared = await prepareMasterEditAttachmentsForSave({
+          companyId,
+          avatar: fileSnap,
+          documents: docSlotsSnap,
+        });
+        let fileUrl: string | null = typeof prepared.avatar === "string" ? prepared.avatar : null;
+        const newDocFiles = prepared.newDocFiles;
+        const keptDocUrls = prepared.keptDocUrls;
         const totalBytes =
-          (fileSnap instanceof File ? fileSnap.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+          (prepared.avatar instanceof File ? prepared.avatar.size : 0) +
+          newDocFiles.reduce((s, f) => s + f.size, 0);
         if (totalBytes > 0 && companyId) {
           const limitCheck = await checkStorageLimit(
             companyId,
@@ -277,7 +296,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           }
         }
 
-        const needAvatarUpload = fileSnap instanceof File && canAddAvatar;
+        const needAvatarUpload = prepared.avatar instanceof File && canAddAvatar;
         const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
         let documentFileUrls = [...keptDocUrls];
         if (companyId && (needAvatarUpload || needNewDocsUpload)) {
@@ -285,7 +304,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
             companyId,
             collectionSeg: "taxes",
             entityId: taxRefSnap.id,
-            avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+            avatarFile: needAvatarUpload ? (prepared.avatar as File) : null,
             documentFiles: needNewDocsUpload ? newDocFiles : [],
           });
           if (st.fileUrl) fileUrl = st.fileUrl;
@@ -333,6 +352,12 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           });
           initialFileRef.current = fileUrl || null;
           initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
+          finalizeFormAttachmentEditAfterSave({
+            companyId,
+            baselineUrls: attachmentBaselineSnap,
+            finalUrls: captureEntityFormAttachmentBaseline({ fileUrl, documentFileUrls }),
+            oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
+          });
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Tax Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
@@ -365,6 +390,12 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
         });
         initialFileRef.current = fileUrl || null;
         initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
+        finalizeFormAttachmentEditAfterSave({
+          companyId,
+          baselineUrls: attachmentBaselineSnap,
+          finalUrls: captureEntityFormAttachmentBaseline({ fileUrl, documentFileUrls }),
+          oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
+        });
         sonnerToast.success("Tax Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating tax:", error);
@@ -488,16 +519,8 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
       return;
     }
     try {
-      const compressedFile = await compressFile(inputFile);
-      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-        toast({
-          variant: "destructive",
-          title: "File Too Large After Compression",
-          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-        });
-        e.target.value = "";
-        return;
-      }
+      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, companyId);
+      
       setFile(compressedFile);
     } catch (err) {
       console.error("File compression error:", err);
@@ -661,15 +684,19 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                   onRemoveAvatar={removeAvatar}
                   canAddAvatar={canAddAvatar}
                   inputId="edit-tax-avatar"
+                  attachmentCompanyId={companyId ?? undefined}
+                  attachmentReusePlaceKey={tax.id ? `taxes/${tax.id}` : null}
                 />
                 <EntityDocumentsBlock
                   docSlots={docSlots}
+                  setDocSlots={setDocSlots}
                   onRemoveDoc={removeDocAt}
                   onAddClick={() => docsInputRef.current?.click()}
                   docsInputRef={docsInputRef}
                   onDocsChange={handleDocsChange}
                   canAttachDocuments={canAttachDocuments}
                   attachmentCompanyId={companyId ?? undefined}
+                  attachmentReusePlaceKey={tax.id ? `taxes/${tax.id}` : null}
                   entityStatementLabel="tax"
                   inputId="edit-tax-docs"
                 />
@@ -714,7 +741,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
+                <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>

@@ -65,6 +65,44 @@ export function clearPlServerAttachmentMissCache(ref?: string | null): void {
   }
 }
 
+/**
+ * Live voucher/entity delta ke baad missing `local:` bytes host se laao (online Storage URL jaisa).
+ * Doc sync ≠ byte sync — isliye change apply ke baad explicit hydrate.
+ */
+export async function hydratePlServerLocalAttachmentsFromDocs(
+  companyId: string,
+  docs: ReadonlyArray<Record<string, unknown>>,
+  signal?: AbortSignal
+): Promise<void> {
+  const cid = String(companyId || "").trim();
+  if (!cid || !docs.length || signal?.aborted) return;
+  const { listLocalAttachmentIdsInRecord } = await import("@/lib/plServerAttachmentUploadQueue");
+  const { isOfflineCachedAttachmentOnDevice } = await import("@/lib/offlineAttachmentUrlCache");
+  const refs = new Set<string>();
+  for (const doc of docs) {
+    if (!doc || typeof doc !== "object") continue;
+    for (const id of await listLocalAttachmentIdsInRecord(doc as Record<string, unknown>)) {
+      refs.add(`${LOCAL_FILE_PREFIX}${id}`);
+    }
+  }
+  if (!refs.size) return;
+  for (const ref of refs) {
+    if (signal?.aborted) return;
+    clearPlServerAttachmentMissCache(ref);
+    try {
+      if (await isOfflineCachedAttachmentOnDevice(ref)) continue;
+    } catch {
+      /* fetch anyway */
+    }
+    try {
+      const blob = await fetchPlServerAttachmentBlob(cid, ref, signal);
+      if (blob?.size) await seedPlServerAttachmentUiCaches(ref, blob);
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
 function runWithPlServerAttachmentFetchSlot<T>(task: () => Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const run = () => {

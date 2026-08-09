@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 /**
  * Inter-company voucher � ribbon: Voucher | Invite | Join; linked save on both companies.
@@ -19,6 +19,8 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
@@ -35,10 +37,9 @@ import { toast } from "sonner";
 import { formatVoucherNumber, parseVoucherNumberPart } from "@/lib/voucherNumberFormat";
 import {
   deleteInterCompanyVoucherLocalCopyOnly,
-  deleteInterCompanyVoucherPair,
-  patchInterCompanyShareAttachmentsWithPeer,
   saveInterCompanyVoucherPair,
 } from "@/lib/interCompany/saveInterCompanyVoucherPair";
+import { reconcileAndPatchInterCompanyAttachmentSharing } from "@/lib/interCompany/interCompanySharedAttachments";
 import { approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
 import { buildSourceInterCompanyLegsApproved } from "@/lib/interCompany/interCompanyPostingLegs";
 import {
@@ -50,7 +51,6 @@ import {
   resolveInterCompanyBankIdsForEdit,
   resolveInterCompanyEditCompanyIds,
   interCompanyVoucherViewerSide,
-  isInterCompanyVoucherEditDeleteBlocked,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { fetchInterCompanyBankEntityDetail } from "@/lib/interCompany/fetchInterCompanyEntities";
 import { getNextInterCompanyVoucherNumber } from "@/lib/interCompany/nextInterCompanyVoucherNumber";
@@ -87,7 +87,7 @@ import {
 } from "@/lib/interCompany/interCompanyVoucherChrome";
 import { InterCompanyVoucherAttachments } from "@/components/inter-company/InterCompanyVoucherAttachments";
 import { InterCompanyAmountDualFields } from "@/components/inter-company/InterCompanyAmountDualFields";
-import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
+import { uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
 import { storage } from "@/lib/firebase";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import {
@@ -109,24 +109,7 @@ import {
 } from "@/components/inter-company/InterCompanyRibbonNav";
 import { InterCompanyJoinSettingsPanel } from "@/components/inter-company/InterCompanyJoinSettingsPanel";
 import { InterCompanyVoucherFooter } from "@/components/inter-company/InterCompanyVoucherFooter";
-import { InterCompanyRequestReverseDialog } from "@/components/inter-company/InterCompanyRequestReverseDialog";
-import { InterCompanyReverseRequestsPanel } from "@/components/inter-company/InterCompanyReverseRequestsPanel";
-import { InterCompanyRequestDeleteDialog } from "@/components/inter-company/InterCompanyRequestDeleteDialog";
-import { InterCompanyDeleteRequestsPanel } from "@/components/inter-company/InterCompanyDeleteRequestsPanel";
-import { readEntityAcNoField } from "@/lib/interCompany/interCompanyEntityLookup";
 import {
-  countPendingDeleteInbox,
-  cancelInterCompanyDeleteRequest,
-  findPendingDeleteInboxForVoucher,
-  findPendingDeleteOutboxForLinkedVoucher,
-  IC_DELETE_REQUESTS_CHANGED,
-  isLinkedVoucherDeletePendingOrDone,
-  updateInterCompanyDeleteRequestStatus,
-  type InterCompanyDeleteRequest,
-} from "@/lib/interCompany/interCompanyDeleteRequests";
-import { applyInterCompanyDeleteAccept } from "@/lib/interCompany/applyInterCompanyDeleteAccept";
-import {
-  countPendingReverseInbox,
   IC_REVERSE_REQUESTS_CHANGED,
   isSourceVoucherReversePendingOrDone,
 } from "@/lib/interCompany/interCompanyReverseRequests";
@@ -358,7 +341,7 @@ export function InterCompanyVoucherForm({
   initialRibbonTab,
 }: InterCompanyVoucherFormProps) {
   const { user, customUser } = useAuth();
-  const { can, canEditRecord, canPerformBackdatedAction, fileAttachmentLimits, allowAttachments, role } =
+  const { can, canEditRecord, canPerformBackdatedAction, canDeleteVoucher, fileAttachmentLimits, allowAttachments, role } =
     usePermissions();
   const { company, companyId, allCompanies } = useCompany();
   const { formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint, dateSystem } = useDate();
@@ -383,16 +366,19 @@ export function InterCompanyVoucherForm({
   const [isLoading, setIsLoading] = useState(false);
   const [savedSourceId, setSavedSourceId] = useState<string | null>(null);
   const [peerTargetVoucherId, setPeerTargetVoucherId] = useState<string | null>(null);
-  /** Linked target copy — source approve tab tak approved? */
-  const [peerVoucherRow, setPeerVoucherRow] = useState<Record<string, unknown> | null>(null);
   const [linkId, setLinkId] = useState<string | null>(null);
-  const [files, setFiles] = useState<(File | string)[]>([]);
-  const [shareAttachmentsWithPeer, setShareAttachmentsWithPeer] = useState(false);
-  const [savedShareAttachmentsWithPeer, setSavedShareAttachmentsWithPeer] = useState(false);
-  const [reverseDialogOpen, setReverseDialogOpen] = useState(false);
+  /** Source ki apni attachments (own side); target ki apni attachments alag box me */
+  const [sourceFiles, setSourceFiles] = useState<(File | string)[]>([]);
+  const [targetFiles, setTargetFiles] = useState<(File | string)[]>([]);
+  /** ON = source ki attachments target copy par bhi dikhengi */
+  const [shareSourceAttachmentsWithPeer, setShareSourceAttachmentsWithPeer] = useState(false);
+  const [savedShareSourceAttachmentsWithPeer, setSavedShareSourceAttachmentsWithPeer] = useState(false);
+  /** ON = target ki attachments source copy par bhi dikhengi */
+  const [shareTargetAttachmentsWithSource, setShareTargetAttachmentsWithSource] = useState(false);
+  const [savedShareTargetAttachmentsWithSource, setSavedShareTargetAttachmentsWithSource] = useState(false);
+  /** Tick: doosri company ki account side bhi edit + save pe apply (jab peer company exist) */
+  const [applyAccountChangesToOtherSide, setApplyAccountChangesToOtherSide] = useState(false);
   const [reverseTick, setReverseTick] = useState(0);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [deleteTick, setDeleteTick] = useState(0);
   const [voucherOverride, setVoucherOverride] = useState<Record<string, unknown> | null>(null);
   const lastHydratedVoucherIdRef = useRef<string | null>(null);
   /** Async next-no fetch � hydrate ke baad overwrite na ho */
@@ -402,16 +388,47 @@ export function InterCompanyVoucherForm({
 
   useEffect(() => {
     setVoucherOverride(null);
+    setApplyAccountChangesToOtherSide(false);
   }, [voucher?.id]);
 
   const hasPersistedIc = !!(displayVoucher?.id || savedSourceId);
-  const voucherRowForLock = (displayVoucher || seed) as Record<string, unknown> | null;
-  // Target: hamesha read-only; source: sirf unapproved par edit/delete; source approve ke baad dono side lock
-  const isInterCompanyEditLocked =
-    hasPersistedIc && isInterCompanyVoucherEditDeleteBlocked(voucherRowForLock);
+  // IC edit independent — global approve/target view-lock hata diya; sirf permission `editingDisabled`.
+  const isInterCompanyEditLocked = false;
   const isCompanyAdmin =
     role === "owner" || customUser?.role === "CompanyAdmin" || customUser?.role === "SuperAdmin";
   const fieldsDisabled = editingDisabled || isInterCompanyEditLocked;
+
+  const buildIcExtrasSig = useCallback(
+    (args: {
+      sourcePayeeKind: string;
+      sourcePayeeId: string;
+      targetPayeeKind: string;
+      targetPayeeId: string;
+      sourceCompanyBankId: string;
+      targetCompanyBankId: string;
+      sourceFiles: (File | string)[];
+      targetFiles: (File | string)[];
+    }) => {
+      const fileSig = (files: (File | string)[]) =>
+        files
+          .map((f) =>
+            typeof f === "string" ? f : `pending:${f.name}:${f.size}:${f.lastModified}`
+          )
+          .join("\n");
+      return [
+        args.sourcePayeeKind,
+        args.sourcePayeeId,
+        args.targetPayeeKind,
+        args.targetPayeeId,
+        args.sourceCompanyBankId,
+        args.targetCompanyBankId,
+        fileSig(args.sourceFiles),
+        fileSig(args.targetFiles),
+      ].join("|");
+    },
+    []
+  );
+  const [icExtrasBaseline, setIcExtrasBaseline] = useState("");
 
   const form = useForm<InterCompanyFormValues>({
     resolver: zodResolver(interCompanySchema) as import("react-hook-form").Resolver<InterCompanyFormValues>,
@@ -442,36 +459,43 @@ export function InterCompanyVoucherForm({
     }
   }, [company, companyId, form, isAutoVoucherEnabled, savedSourceId, displayVoucher?.id]);
 
-  /** Attachments upload — save se pehle URL list + in-memory blobs peer copy ke liye */
+  /**
+   * Attachments upload — save se pehle URL list + in-memory blobs peer copy ke liye.
+   * `uploadCompanyId` — source ki files source company me, target ki files target company me.
+   */
   const resolveFileUrlsForSave = useCallback(
     async (
-      existingVoucherId: string | null
+      filesList: (File | string)[],
+      uploadCompanyId: string | null,
+      existingVoucherId: string | null,
+      planContext?: { planId?: string; storageOption?: string }
     ): Promise<{ fileUrls: string[]; attachmentBlobByRef: Map<string, Blob> }> => {
       const attachmentBlobByRef = new Map<string, Blob>();
-      if (!companyId || !allowAttachments) {
+      const cid = String(uploadCompanyId || "").trim();
+      if (!cid || !allowAttachments) {
         return {
-          fileUrls: files.filter((f): f is string => typeof f === "string"),
+          fileUrls: filesList.filter((f): f is string => typeof f === "string"),
           attachmentBlobByRef,
         };
       }
-      let fileUrls = files.filter((f): f is string => typeof f === "string");
-      const newFiles = files.filter((f): f is File => f instanceof File);
+      let fileUrls = filesList.filter((f): f is string => typeof f === "string");
+      const newFiles = filesList.filter((f): f is File => f instanceof File);
       if (newFiles.length === 0) return { fileUrls, attachmentBlobByRef };
 
       const totalNewBytes = newFiles.reduce((sum, f) => sum + (f.size || 0), 0);
       const limitCheck = await checkStorageLimit(
-        companyId,
-        company?.planId,
+        cid,
+        planContext?.planId ?? company?.planId,
         { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes },
-        company?.storageOption
+        planContext?.storageOption ?? company?.storageOption
       );
       if (!limitCheck.allowed) {
         throw new Error(limitCheck.message || "Storage limit reached");
       }
 
-      if (await shouldStageNewVoucherFilesAsLocalPending(companyId)) {
+      if (await shouldStageNewVoucherFilesAsLocalPending(cid)) {
         const { fileUrls: merged } = await appendLocalOnlyVoucherFilesToUrls({
-          companyId,
+          companyId: cid,
           storageFolder: "inter_company",
           existingFileUrls: fileUrls,
           newFiles,
@@ -486,7 +510,7 @@ export function InterCompanyVoucherForm({
         });
         if (!shouldDeferStorageIncrementUntilPendingUpload()) {
           try {
-            await incrementCompanyStorage(companyId, {
+            await incrementCompanyStorage(cid, {
               attachmentsBytes: totalNewBytes,
               storageBytes: totalNewBytes,
             });
@@ -497,15 +521,14 @@ export function InterCompanyVoucherForm({
       } else {
         for (const file of newFiles) {
           if (fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
-          const sRef = storageRef(
-            storage,
-            `voucher-files/${companyId}/inter_company/${Date.now()}_${file.name}`
-          );
-          const snapshot = await uploadBytes(sRef, file);
-          const url = await getDownloadURL(snapshot.ref);
+          const url = await uploadVoucherAttachmentFileToFirebase({
+            companyId: cid,
+            voucherType: "inter_company",
+            file,
+          });
           fileUrls.push(url);
           attachmentBlobByRef.set(url, file);
-          await incrementCompanyStorage(companyId, {
+          await incrementCompanyStorage(cid, {
             attachmentsBytes: file.size,
             storageBytes: file.size,
           });
@@ -513,7 +536,7 @@ export function InterCompanyVoucherForm({
       }
       return { fileUrls, attachmentBlobByRef };
     },
-    [allowAttachments, company, companyId, fileAttachmentLimits.maxFileCount, files]
+    [allowAttachments, company, fileAttachmentLimits.maxFileCount]
   );
 
   const lastNewVoucherBankResetKeyRef = useRef("");
@@ -579,99 +602,116 @@ export function InterCompanyVoucherForm({
     }
     if (link) setLinkId(link.linkId || null);
 
-    // Edit: company bank — pehle is doc par denormalized ids; phir peer se missing side
+    const isTargetDoc = link?.role === "target";
+    const dedupeStrings = (list: string[]): string[] => {
+      const seen = new Set<string>();
+      return list.filter((u) => {
+        const s = String(u || "").trim();
+        if (!s || seen.has(s)) return false;
+        seen.add(s);
+        return true;
+      });
+    };
+    const readOwnFileUrls = (r: Record<string, unknown>): string[] => {
+      const ownRaw = r.interCompanyOwnFileUrls;
+      const legacyRaw = r.fileUrls;
+      return dedupeStrings(
+        Array.isArray(ownRaw) ? (ownRaw as string[]) : Array.isArray(legacyRaw) ? (legacyRaw as string[]) : []
+      );
+    };
+
+    // Own side attachments — is doc ka apna fileUrls; reversal attachments (agar hain) bhi jode
+    const rev = row.interCompanyReversal as { attachmentUrls?: string[] } | undefined;
+    const ownFiles = dedupeStrings([
+      ...readOwnFileUrls(row),
+      ...(Array.isArray(rev?.attachmentUrls) ? rev!.attachmentUrls! : []),
+    ]);
+    if (isTargetDoc) {
+      setTargetFiles(ownFiles);
+      setSourceFiles([]);
+    } else {
+      setSourceFiles(ownFiles);
+      setTargetFiles([]);
+    }
+
+    const shareSourceRaw = row.interCompanyShareAttachmentsWithPeer;
+    let shareSource = shareSourceRaw === true;
+    if (typeof shareSourceRaw !== "boolean") {
+      // Legacy vouchers (field never saved) — purana single-checkbox behaviour: source files hone par ON maana
+      shareSource = !isTargetDoc && ownFiles.length > 0;
+    }
+    setShareSourceAttachmentsWithPeer(shareSource);
+    setSavedShareSourceAttachmentsWithPeer(shareSource);
+
+    const shareTarget = row.interCompanySharePeerAttachmentsToSource === true;
+    setShareTargetAttachmentsWithSource(shareTarget);
+    setSavedShareTargetAttachmentsWithSource(shareTarget);
+
+    // Edit: company bank — pehle is doc par denormalized ids; phir peer se missing side + peer ki apni attachments
     let bankHydrateCancelled = false;
     void (async () => {
       const denorm = resolveInterCompanyBankIdsForEdit(row);
       let srcBank = denorm.sourceCompanyBankAccountId;
       let tgtBank = denorm.targetCompanyBankAccountId;
-      if ((!srcBank || !tgtBank) && link?.peerCompanyId && link?.peerVoucherId) {
+      let peer: Record<string, unknown> | null = null;
+      if (link?.peerCompanyId && link?.peerVoucherId) {
         try {
           const snap = await getDoc(
             doc(firestore, `companies/${link.peerCompanyId}/vouchers`, link.peerVoucherId),
           );
-          if (snap.exists()) {
-            const peer = snap.data() as Record<string, unknown>;
-            const peerDenorm = resolveInterCompanyBankIdsForEdit(peer);
-            if (!srcBank) {
-              srcBank =
-                peerDenorm.sourceCompanyBankAccountId ||
-                (link.role === "target" ? readInterCompanyCompanyBankId(peer) : "");
-            }
-            if (!tgtBank) {
-              tgtBank =
-                peerDenorm.targetCompanyBankAccountId ||
-                (link.role === "source" ? readInterCompanyCompanyBankId(peer) : "");
-            }
-          }
+          if (snap.exists()) peer = snap.data() as Record<string, unknown>;
         } catch {
           /* offline */
+        }
+      }
+      if (peer) {
+        const peerDenorm = resolveInterCompanyBankIdsForEdit(peer);
+        if (!srcBank) {
+          srcBank =
+            peerDenorm.sourceCompanyBankAccountId ||
+            (link!.role === "target" ? readInterCompanyCompanyBankId(peer) : "");
+        }
+        if (!tgtBank) {
+          tgtBank =
+            peerDenorm.targetCompanyBankAccountId ||
+            (link!.role === "source" ? readInterCompanyCompanyBankId(peer) : "");
         }
       }
       if (!srcBank && !link) srcBank = readInterCompanyCompanyBankId(row);
       if (!bankHydrateCancelled) {
         if (srcBank) setSourceCompanyBankId(srcBank);
         if (tgtBank) setTargetCompanyBankId(tgtBank);
+        let sourceFilesNext = isTargetDoc ? ([] as string[]) : ownFiles;
+        let targetFilesNext = isTargetDoc ? ownFiles : ([] as string[]);
+        if (peer) {
+          const peerOwnFiles = readOwnFileUrls(peer);
+          if (isTargetDoc) {
+            setSourceFiles(peerOwnFiles);
+            sourceFilesNext = peerOwnFiles;
+          } else {
+            setTargetFiles(peerOwnFiles);
+            targetFilesNext = peerOwnFiles;
+          }
+        }
+        setIcExtrasBaseline(
+          buildIcExtrasSig({
+            sourcePayeeKind: sourceEntity?.kind || "party",
+            sourcePayeeId: sourceEntity?.id || "",
+            targetPayeeKind: targetEntity?.kind || "party",
+            targetPayeeId: targetEntity?.id || "",
+            sourceCompanyBankId: srcBank || "",
+            targetCompanyBankId: tgtBank || "",
+            sourceFiles: sourceFilesNext,
+            targetFiles: targetFilesNext,
+          })
+        );
       }
     })();
-
-    const urls = row.fileUrls;
-    const rev = row.interCompanyReversal as { attachmentUrls?: string[] } | undefined;
-    const merged = [
-      ...(Array.isArray(urls) ? (urls as string[]) : []),
-      ...(Array.isArray(rev?.attachmentUrls) ? rev!.attachmentUrls! : []),
-    ];
-    const seen = new Set<string>();
-    const localFiles = merged.filter((u) => {
-      const s = String(u);
-      if (!s || seen.has(s)) return false;
-      seen.add(s);
-      return true;
-    });
-    setFiles(localFiles);
-
-    const shareRaw = row.interCompanyShareAttachmentsWithPeer;
-    let share = shareRaw === true;
-    if (typeof shareRaw !== "boolean") {
-      share = localFiles.length > 0;
-    }
-    setShareAttachmentsWithPeer(share);
-    setSavedShareAttachmentsWithPeer(share);
-
-    if (
-      link?.role === "target" &&
-      share === true &&
-      localFiles.length === 0 &&
-      link.peerCompanyId &&
-      link.peerVoucherId
-    ) {
-      void (async () => {
-        try {
-          const snap = await getDoc(
-            doc(firestore, `companies/${link.peerCompanyId}/vouchers`, link.peerVoucherId)
-          );
-          if (!snap.exists()) return;
-          const peerRow = snap.data() as Record<string, unknown>;
-          const peerUrls = peerRow.fileUrls;
-          const peerMerged = Array.isArray(peerUrls) ? (peerUrls as string[]) : [];
-          const peerSeen = new Set<string>();
-          const peerFiles = peerMerged.filter((u) => {
-            const s = String(u);
-            if (!s || peerSeen.has(s)) return false;
-            peerSeen.add(s);
-            return true;
-          });
-          if (peerFiles.length > 0) setFiles(peerFiles);
-        } catch {
-          /* offline */
-        }
-      })();
-    }
 
     return () => {
       bankHydrateCancelled = true;
     };
-  }, [displayVoucher, form, savedSourceId, companyId]);
+  }, [displayVoucher, form, savedSourceId, companyId, buildIcExtrasSig]);
 
   // Live snapshot / table row baad me bank fields laaye — `lastHydratedVoucherIdRef` dubara hydrate nahi karta
   useEffect(() => {
@@ -733,14 +773,14 @@ export function InterCompanyVoucherForm({
     return () => window.removeEventListener(IC_REVERSE_REQUESTS_CHANGED, onRev);
   }, []);
 
-  // Target dropdown — sirf joined partners; doosre user ki company public profile se
+  // Target dropdown — my / shared / local + Firebase Code/A/c/PAN resolve
   const {
     joinedPartners: targetJoinedPartners,
     comboboxOptionsIncluding: targetComboboxOptionsIncluding,
-    resolveCompanyIdByAcNo: resolveJoinedCompanyIdByAcNo,
-    resolveCompanyIdByCompanyCode: resolveJoinedCompanyIdByCompanyCode,
+    resolveCompanyIdByAcNoAsync: resolveJoinedCompanyIdByAcNo,
+    resolveCompanyIdByCompanyCodeAsync: resolveJoinedCompanyIdByCompanyCode,
     resolveCompaniesByMobile: resolveJoinedCompaniesByMobile,
-    resolveCompaniesByPan: resolveJoinedCompaniesByPan,
+    resolveCompaniesByPanAsync: resolveJoinedCompaniesByPan,
     acNoForAnyCompanyId: joinedAcNoForAnyCompanyId,
     companyCodeForAnyCompanyId: joinedCompanyCodeForAnyCompanyId,
     mobileForAnyCompanyId: joinedMobileForAnyCompanyId,
@@ -797,10 +837,10 @@ export function InterCompanyVoucherForm({
     [displayVoucher, companyId]
   );
 
-  const sourceEntitiesCompanyId = isInterCompanyEditLocked
+  const sourceEntitiesCompanyId = hasPersistedIc
     ? editEntityCompanyIds.sourceEntitiesCompanyId
     : companyId || "";
-  const targetEntitiesCompanyId = isInterCompanyEditLocked
+  const targetEntitiesCompanyId = hasPersistedIc
     ? editEntityCompanyIds.targetEntitiesCompanyId
     : targetCompanyId;
 
@@ -884,14 +924,14 @@ export function InterCompanyVoucherForm({
     [allCompanies, displayTargetCompanyId]
   );
 
-  // Edit: source column � peer company ka real row (target-copy se kholo to current company source nahi)
+  // Edit: source column — peer company ka real row (target-copy se kholo to current company source nahi)
   const sourceCompanyForDisplay = useMemo(() => {
-    const sid = isInterCompanyEditLocked
+    const sid = hasPersistedIc
       ? editEntityCompanyIds.sourceEntitiesCompanyId
       : companyId || "";
     return (allCompanies || []).find((c) => c.id === sid) ?? company ?? null;
   }, [
-    isInterCompanyEditLocked,
+    hasPersistedIc,
     editEntityCompanyIds.sourceEntitiesCompanyId,
     companyId,
     allCompanies,
@@ -899,7 +939,7 @@ export function InterCompanyVoucherForm({
   ]);
 
   const isPeerSourceCompany =
-    isInterCompanyEditLocked &&
+    hasPersistedIc &&
     !!editEntityCompanyIds.sourceEntitiesCompanyId &&
     editEntityCompanyIds.sourceEntitiesCompanyId !== companyId;
 
@@ -912,14 +952,40 @@ export function InterCompanyVoucherForm({
   const showTargetPaymentInBadge = hasPersistedIc && icViewerSide === "target";
   const icLink = readInterCompanyLink(voucherRow);
 
-  const pendingRevertCount = useMemo(
-    () => (companyId ? countPendingReverseInbox(companyId) : 0),
-    [companyId, reverseTick]
+  /**
+   * Target apni copy khud kholta hai — apni taraf (entity/bank/attachment/share) ab editable,
+   * source approve karne tak. `fieldsDisabled` (company-select row, shared amount/narration/etc.)
+   * purane jaisa hi rehta hai — sirf target ki apni account rows ke liye ye alag flag.
+   */
+  const isTargetOwnSideApprovedLock = false;
+  /**
+   * Create: dono sides editable.
+   * Edit: apni side editable; dusri side RO jab tak “Also apply on other side” tick na ho (+ peer company exist).
+   * Attachments: sirf apni side editable (tick sirf account fields).
+   */
+  const peerCompanyExists = Boolean(
+    String(targetCompanyId || displayTargetCompanyId || icLink?.peerCompanyId || "").trim()
   );
-  const pendingDeleteCount = useMemo(
-    () => (companyId ? countPendingDeleteInbox(companyId) : 0),
-    [companyId, deleteTick]
-  );
+  const canEditOtherSideAccounts = applyAccountChangesToOtherSide && peerCompanyExists;
+  const sourceSideDisabled = !hasPersistedIc
+    ? fieldsDisabled
+    : icViewerSide === "source"
+      ? fieldsDisabled
+      : !canEditOtherSideAccounts;
+  const targetSideDisabled = !hasPersistedIc
+    ? fieldsDisabled
+    : icViewerSide === "target"
+      ? fieldsDisabled
+      : !canEditOtherSideAccounts;
+  const sourceAttachDisabled = !hasPersistedIc
+    ? fieldsDisabled
+    : icViewerSide !== "source" || fieldsDisabled;
+  const targetAttachDisabled = !hasPersistedIc
+    ? fieldsDisabled
+    : icViewerSide !== "target" || fieldsDisabled;
+  /** Footer — IC ab Edit Trxn; lock nahi */
+  const isIcFooterViewOnly = false;
+
   const pendingSystemJoinCount = usePendingInterCompanySystemJoinCount({
     ownerUserId: user?.uid,
     companyId,
@@ -951,57 +1017,6 @@ export function InterCompanyVoucherForm({
     return String(displayVoucher?.id || savedSourceId || "").trim();
   }, [icViewerSide, displayVoucher?.id, peerTargetVoucherId, savedSourceId]);
 
-  const linkedDeleteIds = useMemo(() => {
-    const isSource = icViewerSide === "source";
-    const sourceVoucherId = isSource
-      ? currentLinkedVoucherId
-      : String(savedSourceId || icLink?.peerVoucherId || "").trim();
-    const targetVoucherId = isSource
-      ? String(peerTargetVoucherId || icLink?.peerVoucherId || "").trim()
-      : currentLinkedVoucherId;
-    return {
-      linkId: String(icLink?.linkId || linkId || "").trim(),
-      sourceVoucherId,
-      targetVoucherId,
-    };
-  }, [
-    icViewerSide,
-    currentLinkedVoucherId,
-    savedSourceId,
-    icLink?.peerVoucherId,
-    icLink?.linkId,
-    linkId,
-    peerTargetVoucherId,
-  ]);
-
-  const deleteFlowState = useMemo(() => {
-    if (!companyId || !currentLinkedVoucherId || !icViewerSide) {
-      return { pending: false, accepted: false, outgoing: null as InterCompanyDeleteRequest | null };
-    }
-    const outgoing = findPendingDeleteOutboxForLinkedVoucher({
-      companyId,
-      side: icViewerSide,
-      voucherId: currentLinkedVoucherId,
-      ...linkedDeleteIds,
-    });
-    const state = isLinkedVoucherDeletePendingOrDone({
-      companyId,
-      side: icViewerSide,
-      voucherId: currentLinkedVoucherId,
-      ...linkedDeleteIds,
-    });
-    return { ...state, outgoing };
-  }, [companyId, currentLinkedVoucherId, icViewerSide, linkedDeleteIds, deleteTick]);
-
-  const incomingDeleteRequest = useMemo(() => {
-    if (!companyId || !currentLinkedVoucherId) return null;
-    return findPendingDeleteInboxForVoucher({
-      companyId,
-      voucherId: currentLinkedVoucherId,
-      ...linkedDeleteIds,
-    });
-  }, [companyId, currentLinkedVoucherId, linkedDeleteIds, deleteTick]);
-
   /** Source create — Save & Approve (admin / approve permission) */
   const icSaveAndApproveOnCreate =
     icViewerSide !== "target" &&
@@ -1018,6 +1033,12 @@ export function InterCompanyVoucherForm({
   const showIcRevertedBadge =
     !!(voucherRow as { interCompanyReversed?: boolean })?.interCompanyReversed ||
     reverseFlowState.accepted;
+
+  /** Attachment box storage caps — jis company ki apni file hai us company ke plan/storage se */
+  const sourceCompanyIdForAttachBox =
+    icViewerSide === "target" ? String(icLink?.peerCompanyId || "").trim() || null : companyId;
+  const targetCompanyIdForAttachBox =
+    icViewerSide === "target" ? companyId : displayTargetCompanyId || icLink?.peerCompanyId || null;
 
   /** Target dropdown — joined partners; edit par saved target id missing ho to option add */
   const targetComboboxOptions = useMemo(
@@ -1038,9 +1059,9 @@ export function InterCompanyVoucherForm({
     joinedPartnerRowById.get(displayTargetCompanyId)?.name ||
     "";
 
-  // Edit: peer source / target company ka Inter Co. A/c � real company row se display
+  // Edit: peer source / target company ka Inter Co. A/c — real company row se display
   useEffect(() => {
-    if (!isInterCompanyEditLocked) return;
+    if (!hasPersistedIc) return;
     const ids = new Set(
       [editEntityCompanyIds.sourceEntitiesCompanyId, displayTargetCompanyId].filter(Boolean)
     );
@@ -1049,7 +1070,7 @@ export function InterCompanyVoucherForm({
       if (row && !readCompanyInterCompanyAcNo(row)) void ensureCompanyInterCompanyAcNo(cid);
     }
   }, [
-    isInterCompanyEditLocked,
+    hasPersistedIc,
     editEntityCompanyIds.sourceEntitiesCompanyId,
     displayTargetCompanyId,
     allCompanies,
@@ -1071,117 +1092,6 @@ export function InterCompanyVoucherForm({
     [targetEntities, targetPayeeKind, targetPayeeId]
   );
 
-  const reverseRequestDraft = useMemo(() => {
-    if (!companyId || !sourceVoucherIdForReverse || !icLink) return null;
-    const peerId = icLink.peerCompanyId;
-    const peerVoucherId = icLink.peerVoucherId;
-    const peerCo = (allCompanies || []).find((c) => c.id === peerId);
-    const vals = form.getValues();
-    return {
-      amount: Number(vals.amount) || 0,
-      linkId: icLink.linkId || linkId || "",
-      sourceCompanyId: companyId,
-      sourceCompanyName: company?.name || "",
-      sourceVoucherId: sourceVoucherIdForReverse,
-      sourceVoucherNumber: String(vals.voucherNumber || ""),
-      sourceEntityKind: sourcePayeeKind,
-      sourceEntityId: sourcePayeeId,
-      sourceEntityLabel: readInterCompanyEntityLabelSnapshot(voucherRow, "source") || sourceSelected?.label || "",
-      sourceEntityAcNo: sourceSelected ? readEntityAcNoField(sourceSelected) : "",
-      targetCompanyId: displayTargetCompanyId || peerId,
-      targetCompanyName: targetCompany?.name || peerCo?.name || "",
-      targetVoucherId: peerVoucherId || peerTargetVoucherId || "",
-      targetVoucherNumber: String(voucherRow?.voucherNumber || ""),
-      targetEntityKind: targetPayeeKind,
-      targetEntityId: targetPayeeId,
-      targetEntityLabel: readInterCompanyEntityLabelSnapshot(voucherRow, "target") || targetSelected?.label || "",
-      targetEntityAcNo: targetSelected ? readEntityAcNoField(targetSelected) : "",
-    };
-  }, [
-    companyId,
-    sourceVoucherIdForReverse,
-    voucherRow,
-    icLink,
-    linkId,
-    allCompanies,
-    company?.name,
-    form,
-    sourcePayeeKind,
-    sourcePayeeId,
-    sourceSelected,
-    displayTargetCompanyId,
-    targetCompany?.name,
-    peerTargetVoucherId,
-    targetPayeeKind,
-    targetPayeeId,
-    targetSelected,
-  ]);
-
-  const deleteRequestDraft = useMemo(() => {
-    if (!companyId || !hasPersistedIc || !icLink || !icViewerSide) return null;
-    const isSource = icViewerSide === "source";
-    const sourceCid = isSource ? companyId : icLink.peerCompanyId;
-    const targetCid = isSource ? displayTargetCompanyId || icLink.peerCompanyId : companyId;
-    const sourceVid = isSource
-      ? String(voucher?.id || savedSourceId || "").trim()
-      : String(icLink.peerVoucherId || "").trim();
-    const targetVid = isSource
-      ? String(peerTargetVoucherId || icLink.peerVoucherId || "").trim()
-      : String(voucher?.id || "").trim();
-    if (!sourceCid || !targetCid || !sourceVid || !targetVid) return null;
-    const sourceCo = (allCompanies || []).find((c) => c.id === sourceCid);
-    const targetCo = (allCompanies || []).find((c) => c.id === targetCid);
-    const vals = form.getValues();
-    return {
-      requestedBySide: icViewerSide,
-      amount: Number(vals.amount) || 0,
-      linkId: icLink.linkId || linkId || "",
-      sourceCompanyId: sourceCid,
-      sourceCompanyName: (isSource ? company?.name : sourceCo?.name) || "",
-      sourceVoucherId: sourceVid,
-      sourceVoucherNumber: isSource ? String(vals.voucherNumber || "") : String(voucherRow?.voucherNumber || ""),
-      sourceEntityKind: sourcePayeeKind,
-      sourceEntityId: sourcePayeeId,
-      sourceEntityLabel:
-        readInterCompanyEntityLabelSnapshot(voucherRow, "source") || sourceSelected?.label || "",
-      targetCompanyId: targetCid,
-      targetCompanyName: (isSource ? targetCompany?.name : company?.name) || targetCo?.name || "",
-      targetVoucherId: targetVid,
-      targetVoucherNumber: isSource ? String(voucherRow?.voucherNumber || "") : String(vals.voucherNumber || ""),
-      targetEntityKind: targetPayeeKind,
-      targetEntityId: targetPayeeId,
-      targetEntityLabel:
-        readInterCompanyEntityLabelSnapshot(voucherRow, "target") || targetSelected?.label || "",
-    };
-  }, [
-    companyId,
-    hasPersistedIc,
-    icLink,
-    icViewerSide,
-    voucher?.id,
-    savedSourceId,
-    displayTargetCompanyId,
-    allCompanies,
-    company?.name,
-    form,
-    linkId,
-    voucherRow,
-    sourcePayeeKind,
-    sourcePayeeId,
-    sourceSelected,
-    targetCompany?.name,
-    peerTargetVoucherId,
-    targetPayeeKind,
-    targetPayeeId,
-    targetSelected,
-  ]);
-
-  useEffect(() => {
-    const onDeleteChange = () => setDeleteTick((n) => n + 1);
-    window.addEventListener(IC_DELETE_REQUESTS_CHANGED, onDeleteChange);
-    return () => window.removeEventListener(IC_DELETE_REQUESTS_CHANGED, onDeleteChange);
-  }, []);
-
   const validateEntities = () => {
     if (!targetCompanyId) {
       toast.error("Select target company");
@@ -1195,20 +1105,65 @@ export function InterCompanyVoucherForm({
       toast.error("Target: select clearing account");
       return false;
     }
+    if (!String(sourcePayeeId || "").trim()) {
+      toast.error("Source: select account");
+      return false;
+    }
+    if (!String(targetPayeeId || "").trim()) {
+      toast.error("Target: select account");
+      return false;
+    }
+    if (
+      sourcePayeeKind === "bank" &&
+      String(sourcePayeeId) === String(sourceCompanyBankId || "").trim()
+    ) {
+      toast.error("Source account must be different from clearing account");
+      return false;
+    }
+    if (
+      targetPayeeKind === "bank" &&
+      String(targetPayeeId) === String(targetCompanyBankId || "").trim()
+    ) {
+      toast.error("Target account must be different from clearing account");
+      return false;
+    }
     return true;
   };
+
+  const icExtrasDirty =
+    !!savedSourceId &&
+    buildIcExtrasSig({
+      sourcePayeeKind,
+      sourcePayeeId,
+      targetPayeeKind,
+      targetPayeeId,
+      sourceCompanyBankId,
+      targetCompanyBankId,
+      sourceFiles,
+      targetFiles,
+    }) !== icExtrasBaseline;
 
   const icFooterDirty =
     isFormDirty ||
     !savedSourceId ||
-    shareAttachmentsWithPeer !== savedShareAttachmentsWithPeer;
+    icExtrasDirty ||
+    shareSourceAttachmentsWithPeer !== savedShareSourceAttachmentsWithPeer ||
+    shareTargetAttachmentsWithSource !== savedShareTargetAttachmentsWithSource;
+
+  const ownSideSaveBlocked =
+    hasPersistedIc
+      ? icViewerSide === "target"
+        ? targetSideDisabled
+        : sourceSideDisabled
+      : fieldsDisabled;
 
   const processAndSave = async (opts?: {
     saveAndNew?: boolean;
     approveAfterSave?: boolean;
     saveAndPrint?: boolean;
   }) => {
-    if (isInterCompanyEditLocked || editingDisabled || isLoading) return;
+    // Apni side editable hona zaroori — bina tick ke source-view par target RO tha to purana guard Save rok deta tha
+    if (ownSideSaveBlocked || isLoading) return;
     if (!user?.uid || !companyId) {
       toast.error("Sign in and select a company");
       return;
@@ -1249,11 +1204,33 @@ export function InterCompanyVoucherForm({
 
       const link = readInterCompanyLink(voucher as Record<string, unknown> | undefined);
       const peerVoucherId = peerTargetVoucherId || link?.peerVoucherId || null;
-      const { fileUrls, attachmentBlobByRef } = await resolveFileUrlsForSave(savedSourceId);
+      // Target apni copy se save kare to "source" = peer (asli source company), "target" = current company
+      const resolvedSourceCompanyId =
+        icViewerSide === "target"
+          ? String(icLink?.peerCompanyId || link?.peerCompanyId || "").trim() || companyId
+          : companyId;
+      const resolvedTargetCompanyId =
+        icViewerSide === "target" ? companyId : String(values.targetCompanyId || "").trim();
+      const sourcePlanContext =
+        icViewerSide === "target"
+          ? { planId: sourceCompanyForDisplay?.planId, storageOption: sourceCompanyForDisplay?.storageOption }
+          : { planId: company?.planId, storageOption: company?.storageOption };
+      const targetPlanContext =
+        icViewerSide === "target"
+          ? { planId: company?.planId, storageOption: company?.storageOption }
+          : { planId: targetCompany?.planId, storageOption: targetCompany?.storageOption };
+
+      const [
+        { fileUrls: sourceFileUrls, attachmentBlobByRef: sourceAttachmentBlobByRef },
+        { fileUrls: targetFileUrls, attachmentBlobByRef: targetAttachmentBlobByRef },
+      ] = await Promise.all([
+        resolveFileUrlsForSave(sourceFiles, resolvedSourceCompanyId, savedSourceId, sourcePlanContext),
+        resolveFileUrlsForSave(targetFiles, resolvedTargetCompanyId, peerVoucherId, targetPlanContext),
+      ]);
 
       const result = await saveInterCompanyVoucherPair({
-        sourceCompanyId: companyId,
-        targetCompanyId: values.targetCompanyId,
+        sourceCompanyId: resolvedSourceCompanyId,
+        targetCompanyId: resolvedTargetCompanyId,
         userId: user.uid,
         approverName: customUser?.displayName || user.displayName || user.email || user.uid,
         voucherNumber: values.voucherNumber,
@@ -1274,22 +1251,39 @@ export function InterCompanyVoucherForm({
           readInterCompanyBankLabelSnapshot(voucherRow, "target"),
         sourceEntityLabel: sourceSelected?.label,
         targetEntityLabel: targetSelected?.label,
-        sourceCompanyName: company?.name,
+        sourceCompanyName: sourceCompanyForDisplay?.name || company?.name,
         targetCompanyName: targetCompany?.name,
         existingSourceVoucherId: savedSourceId,
         existingTargetVoucherId: peerVoucherId,
         existingLinkId: linkId || link?.linkId,
         approveSourceAfterSave: opts?.approveAfterSave,
-        fileUrls,
-        attachmentBlobByRef,
-        shareAttachmentsWithPeer,
+        sourceFileUrls,
+        targetFileUrls,
+        sourceAttachmentBlobByRef,
+        targetAttachmentBlobByRef,
+        shareSourceAttachmentsWithPeer,
+        shareTargetAttachmentsWithSource,
       });
 
       setSavedSourceId(result.sourceId);
       setPeerTargetVoucherId(result.targetId);
       setLinkId(result.linkId);
-      setFiles(fileUrls);
-      setSavedShareAttachmentsWithPeer(shareAttachmentsWithPeer);
+      setSourceFiles(sourceFileUrls);
+      setTargetFiles(targetFileUrls);
+      setSavedShareSourceAttachmentsWithPeer(shareSourceAttachmentsWithPeer);
+      setSavedShareTargetAttachmentsWithSource(shareTargetAttachmentsWithSource);
+      setIcExtrasBaseline(
+        buildIcExtrasSig({
+          sourcePayeeKind,
+          sourcePayeeId,
+          targetPayeeKind,
+          targetPayeeId,
+          sourceCompanyBankId,
+          targetCompanyBankId,
+          sourceFiles: sourceFileUrls,
+          targetFiles: targetFileUrls,
+        })
+      );
       if (!isEdit) {
         lastHydratedVoucherIdRef.current = result.sourceId;
         ++voucherNumberFetchGenRef.current;
@@ -1355,7 +1349,14 @@ export function InterCompanyVoucherForm({
         setSavedSourceId(null);
         setPeerTargetVoucherId(null);
         setLinkId(null);
-        setFiles([]);
+        setSourceFiles([]);
+        setTargetFiles([]);
+        setShareSourceAttachmentsWithPeer(false);
+        setSavedShareSourceAttachmentsWithPeer(false);
+        setShareTargetAttachmentsWithSource(false);
+        setSavedShareTargetAttachmentsWithSource(false);
+        setApplyAccountChangesToOtherSide(false);
+        setIcExtrasBaseline("");
         lastHydratedVoucherIdRef.current = null;
         await fetchVoucherNumber();
       }
@@ -1422,42 +1423,6 @@ export function InterCompanyVoucherForm({
   };
 
   const handleDelete = async () => {
-    if (
-      !savedSourceId ||
-      !companyId ||
-      !user?.uid ||
-      editingDisabled ||
-      isInterCompanyEditLocked
-    ) {
-      return;
-    }
-    if (interCompanyVoucherViewerSide(voucherRow) !== "source") {
-      toast.error("Delete from source company", {
-        description: "Inter Company delete is only allowed on the source company copy.",
-      });
-      return;
-    }
-    const toastId = toast.loading("Deleting…");
-    setIsLoading(true);
-    try {
-      await deleteInterCompanyVoucherPair({
-        sourceCompanyId: companyId,
-        sourceVoucherId: String(voucher?.id || savedSourceId),
-        peerCompanyId: targetCompanyId || readInterCompanyLink(voucher as Record<string, unknown>)?.peerCompanyId,
-        peerVoucherId: peerTargetVoucherId,
-        deletedByUid: user.uid,
-      });
-      toast.success("Moved to recycle bin", { id: toastId });
-      onVoucherAction?.("cancelled");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Delete failed";
-      toast.error("Delete failed", { id: toastId, description: message });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleFinalDeleteLocalCopy = async () => {
     const voucherId = String(
       voucher?.id || savedSourceId || currentLinkedVoucherId || displayVoucher?.id || ""
     ).trim();
@@ -1471,6 +1436,16 @@ export function InterCompanyVoucherForm({
     }
     if (!user?.uid) {
       toast.error("Sign in to delete this voucher");
+      return;
+    }
+    const rowForPerm = (displayVoucher || voucher || { id: voucherId, type: "inter_company" }) as {
+      id?: string;
+      type?: string;
+      userId?: string;
+      isApproved?: boolean;
+    };
+    if (!canDeleteVoucher(rowForPerm as never)) {
+      toast.error("You do not have permission to delete this voucher");
       return;
     }
     const toastId = toast.loading("Deleting…");
@@ -1491,40 +1466,52 @@ export function InterCompanyVoucherForm({
     }
   };
 
-  const saveShareAttachmentsOnly = async () => {
-    if (editingDisabled || isLoading || icViewerSide !== "source") return;
-    if (shareAttachmentsWithPeer === savedShareAttachmentsWithPeer) return;
-    if (!user?.uid || !companyId) {
-      toast.error("Sign in and select a company");
-      return;
-    }
-    const sourceVoucherId = String(voucher?.id || savedSourceId || "").trim();
-    if (!sourceVoucherId) return;
-    const link = readInterCompanyLink(voucher as Record<string, unknown> | undefined);
+  /**
+   * Share checkbox toggle — jab is side ke pay fields already locked (approved) hon to bhi
+   * checkbox interactive rehta hai; is case me poora form save karne ke bajay sirf share
+   * pref + attachments turant reconcile/patch kar do (dono voucher docs par).
+   */
+  const persistAttachmentShareToggle = async (side: "source" | "target", nextValue: boolean) => {
+    if (isLoading || !user?.uid || !companyId || !hasPersistedIc) return;
+    const link = readInterCompanyLink((displayVoucher || voucher) as Record<string, unknown> | undefined);
+    const sourceCompanyIdForShare =
+      icViewerSide === "target" ? String(icLink?.peerCompanyId || link?.peerCompanyId || "").trim() : companyId;
+    const sourceVoucherIdForShare = String(savedSourceId || "").trim();
     const targetCompanyIdForShare =
-      String(form.getValues("targetCompanyId") || displayTargetCompanyId || link?.peerCompanyId || "").trim();
+      icViewerSide === "target"
+        ? companyId
+        : String(form.getValues("targetCompanyId") || displayTargetCompanyId || link?.peerCompanyId || "").trim();
     const targetVoucherIdForShare = String(peerTargetVoucherId || link?.peerVoucherId || "").trim();
-    if (!targetCompanyIdForShare || !targetVoucherIdForShare) {
-      toast.error("Linked target voucher not found");
+    if (!sourceCompanyIdForShare || !sourceVoucherIdForShare || !targetCompanyIdForShare || !targetVoucherIdForShare) {
+      toast.error("Linked voucher not found");
       return;
     }
+    const nextShareSource = side === "source" ? nextValue : shareSourceAttachmentsWithPeer;
+    const nextShareTarget = side === "target" ? nextValue : shareTargetAttachmentsWithSource;
     const toastId = toast.loading("Saving attachment share…");
     setIsLoading(true);
     try {
-      const fileUrls = files.filter((f): f is string => typeof f === "string");
-      const shareResult = await patchInterCompanyShareAttachmentsWithPeer({
-        sourceCompanyId: companyId,
-        sourceVoucherId,
+      const sourceOwnFileUrls = sourceFiles.filter((f): f is string => typeof f === "string");
+      const targetOwnFileUrls = targetFiles.filter((f): f is string => typeof f === "string");
+      const shareResult = await reconcileAndPatchInterCompanyAttachmentSharing({
+        sourceCompanyId: sourceCompanyIdForShare,
+        sourceVoucherId: sourceVoucherIdForShare,
+        sourceOwnFileUrls,
+        shareSourceToTarget: nextShareSource,
         targetCompanyId: targetCompanyIdForShare,
         targetVoucherId: targetVoucherIdForShare,
-        shareAttachmentsWithPeer,
-        sourceFileUrls: fileUrls,
+        targetOwnFileUrls,
+        shareTargetToSource: nextShareTarget,
       });
-      setSavedShareAttachmentsWithPeer(shareAttachmentsWithPeer);
+      if (side === "source") {
+        setShareSourceAttachmentsWithPeer(nextValue);
+        setSavedShareSourceAttachmentsWithPeer(nextValue);
+      } else {
+        setShareTargetAttachmentsWithSource(nextValue);
+        setSavedShareTargetAttachmentsWithSource(nextValue);
+      }
       toast.success(
-        shareAttachmentsWithPeer
-          ? "Attachment will show on other company's copy"
-          : "Attachment hidden from other company's copy",
+        nextValue ? "Attachment will show on other company's copy" : "Attachment hidden from other company's copy",
         { id: toastId }
       );
       if (shareResult.attachmentReplicationWarning) {
@@ -1537,76 +1524,6 @@ export function InterCompanyVoucherForm({
       toast.error("Save failed", { id: toastId, description: message });
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const handleConfirmIncomingDelete = async () => {
-    const req = incomingDeleteRequest;
-    if (!user?.uid || !req || req.status !== "pending" || !companyId) return;
-    const toastId = toast.loading("Deleting…");
-    setIsLoading(true);
-    try {
-      await applyInterCompanyDeleteAccept({
-        request: req,
-        acceptedByUid: user.uid,
-      });
-      const requesterCompanyId =
-        req.requestedBySide === "source" ? req.sourceCompanyId : req.targetCompanyId;
-      updateInterCompanyDeleteRequestStatus(req.id, companyId, requesterCompanyId, {
-        status: "accepted",
-        acceptedAt: Date.now(),
-        acceptedByUid: user.uid,
-        acceptedByName: customUser?.displayName || user.displayName || user.email,
-      });
-      toast.success("Inter Company voucher deleted on both companies", { id: toastId });
-      setDeleteTick((n) => n + 1);
-      onVoucherAction?.("cancelled");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Delete failed";
-      toast.error("Delete failed", { id: toastId, description: message });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleCancelDeleteRequest = () => {
-    const req = deleteFlowState.outgoing;
-    if (!req || !companyId) return;
-    const responderCompanyId =
-      req.requestedBySide === "source" ? req.targetCompanyId : req.sourceCompanyId;
-    cancelInterCompanyDeleteRequest({
-      requestId: req.id,
-      requesterCompanyId: companyId,
-      responderCompanyId,
-    });
-    toast.success("Delete request cancelled");
-    setDeleteTick((n) => n + 1);
-  };
-
-  const handleOpenVoucherFromDeleteRequest = async (req: InterCompanyDeleteRequest) => {
-    if (!companyId) return;
-    const localVoucherId =
-      req.targetCompanyId === companyId
-        ? String(req.targetVoucherId || "").trim()
-        : String(req.sourceVoucherId || "").trim();
-    if (!localVoucherId) return;
-
-    if (localVoucherId === currentLinkedVoucherId) {
-      setRibbonTab("voucher");
-      return;
-    }
-
-    try {
-      const snap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, localVoucherId));
-      if (!snap.exists()) {
-        toast.error("Voucher not found");
-        return;
-      }
-      lastHydratedVoucherIdRef.current = null;
-      setVoucherOverride({ id: snap.id, ...snap.data() });
-      setRibbonTab("voucher");
-    } catch {
-      toast.error("Could not open voucher");
     }
   };
 
@@ -1676,14 +1593,36 @@ export function InterCompanyVoucherForm({
                 <InterCompanyTargetConnectSection
                   targetCompanyId={field.value}
                   onTargetCompanyChange={(id) => {
-                    if (isInterCompanyEditLocked) return;
+                    if (hasPersistedIc) return;
                     const nextId = String(id || "").trim();
                     if (!nextId || field.value === nextId) return;
                     field.onChange(nextId);
                     setTargetPayeeId("");
                     setTargetCompanyBankId("");
                   }}
-                  fieldsDisabled={fieldsDisabled}
+                  fieldsDisabled={hasPersistedIc || fieldsDisabled}
+                  accountFieldsDisabled={targetSideDisabled}
+                  headerTrailing={
+                    peerCompanyExists ? (
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <Checkbox
+                          id="ic-apply-account-changes-other-side"
+                          checked={applyAccountChangesToOtherSide}
+                          disabled={fieldsDisabled}
+                          onCheckedChange={(v) => setApplyAccountChangesToOtherSide(v === true)}
+                        />
+                        <Label
+                          htmlFor="ic-apply-account-changes-other-side"
+                          className={cn(
+                            "whitespace-nowrap text-[10px] font-normal leading-tight",
+                            fieldsDisabled ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer"
+                          )}
+                        >
+                          Also apply on other side
+                        </Label>
+                      </div>
+                    ) : null
+                  }
                   comboboxOptions={targetComboboxOptions}
                   resolveCompanyIdByAcNo={resolveJoinedCompanyIdByAcNo}
                   resolveCompanyIdByCompanyCode={resolveJoinedCompanyIdByCompanyCode}
@@ -1700,12 +1639,12 @@ export function InterCompanyVoucherForm({
                   entitiesLoading={targetEntitiesLoading}
                   payeeKind={targetPayeeKind}
                   onPayeeKindChange={(k) => {
-                    if (isInterCompanyEditLocked) return;
+                    if (targetSideDisabled) return;
                     setTargetPayeeKind(k);
                   }}
                   payeeId={targetPayeeId}
                   onPayeeIdChange={(id) => {
-                    if (isInterCompanyEditLocked) return;
+                    if (targetSideDisabled) return;
                     setTargetPayeeId(id);
                   }}
                   targetCompanyDisplayName={targetCompanyDisplayName}
@@ -1713,7 +1652,7 @@ export function InterCompanyVoucherForm({
                   showRevertedBadge={showIcRevertedBadge}
                   companyBankAccountId={targetCompanyBankId}
                   onCompanyBankAccountIdChange={(id) => {
-                    if (isInterCompanyEditLocked) return;
+                    if (targetSideDisabled) return;
                     setTargetCompanyBankId(id);
                   }}
                   formMessage={<FormMessage />}
@@ -1729,24 +1668,21 @@ export function InterCompanyVoucherForm({
             entitiesLoading={sourceEntitiesLoading}
             payeeKind={sourcePayeeKind}
             onPayeeKindChange={(k) => {
-              if (isInterCompanyEditLocked) return;
+              if (sourceSideDisabled) return;
               setSourcePayeeKind(k);
             }}
             payeeId={sourcePayeeId}
             onPayeeIdChange={(id) => {
-              if (isInterCompanyEditLocked) return;
+              if (sourceSideDisabled) return;
               setSourcePayeeId(id);
             }}
-            fieldsDisabled={fieldsDisabled}
+            fieldsDisabled={sourceSideDisabled}
             isPeerSourceCompany={isPeerSourceCompany}
             showPaymentOutBadge={showSourcePaymentOutBadge}
-            onRequestReverse={() => setReverseDialogOpen(true)}
-            reverseRequestPending={reverseFlowState.pending}
-            reverseRequestDone={showIcRevertedBadge}
             showRevertedBadge={showIcRevertedBadge}
             companyBankAccountId={sourceCompanyBankId}
             onCompanyBankAccountIdChange={(id) => {
-              if (isInterCompanyEditLocked) return;
+              if (sourceSideDisabled) return;
               setSourceCompanyBankId(id);
             }}
           />
@@ -1784,17 +1720,24 @@ export function InterCompanyVoucherForm({
         editLocked={isInterCompanyEditLocked}
       />
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:items-stretch">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3 md:items-stretch">
         <InterCompanyVoucherAttachments
-          files={files}
-          onFilesChange={setFiles}
-          disabled={fieldsDisabled}
+          title="Source Attach"
+          files={sourceFiles}
+          onFilesChange={setSourceFiles}
+          disabled={sourceAttachDisabled}
           allowPreviewWhenDisabled
           className="h-full"
-          shareWithPeer={shareAttachmentsWithPeer}
-          onShareWithPeerChange={setShareAttachmentsWithPeer}
-          showShareCheckbox={icViewerSide !== "target"}
-          shareCheckboxDisabled={icViewerSide === "target"}
+          shareWithPeer={shareSourceAttachmentsWithPeer}
+          onShareWithPeerChange={(v) => {
+            setShareSourceAttachmentsWithPeer(v);
+            if (hasPersistedIc) void persistAttachmentShareToggle("source", v);
+          }}
+          showShareCheckbox
+          shareCheckboxDisabled={sourceAttachDisabled}
+          checkboxLabel="Show my attachment on other side"
+          checkboxId="ic-share-source-attachments-with-peer"
+          companyId={sourceCompanyIdForAttachBox}
         />
         <div className={cn(interCompanyNarrationCardClass, "min-w-0")}>
           <FormField
@@ -1806,13 +1749,10 @@ export function InterCompanyVoucherForm({
                 <FormControl className="min-h-0 flex-1">
                   <Textarea
                     {...field}
-                    readOnly={isInterCompanyEditLocked}
+                    readOnly={false}
                     disabled={editingDisabled}
                     rows={3}
-                    className={cn(
-                      interCompanyNarrationTextareaInCardClass,
-                      isInterCompanyEditLocked && interCompanyReadOnlyCopyInputClass
-                    )}
+                    className={cn(interCompanyNarrationTextareaInCardClass)}
                     placeholder="Same on both companies + auto inter-company line"
                   />
                 </FormControl>
@@ -1821,11 +1761,30 @@ export function InterCompanyVoucherForm({
             )}
           />
         </div>
+        <InterCompanyVoucherAttachments
+          title="Target Attach"
+          files={targetFiles}
+          onFilesChange={setTargetFiles}
+          disabled={targetAttachDisabled}
+          allowPreviewWhenDisabled
+          className="h-full"
+          shareWithPeer={shareTargetAttachmentsWithSource}
+          onShareWithPeerChange={(v) => {
+            setShareTargetAttachmentsWithSource(v);
+            if (hasPersistedIc) void persistAttachmentShareToggle("target", v);
+          }}
+          showShareCheckbox
+          shareCheckboxDisabled={targetAttachDisabled}
+          checkboxLabel="Show my attachment on other side"
+          checkboxId="ic-share-target-attachments-with-peer"
+          companyId={targetCompanyIdForAttachBox}
+        />
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Clearing account required on both sides. Party account optional — leave blank for bank-to-bank; if selected,
-        target confirms in account as before.
+        Clearing account and Source/Target account are required on both sides. Unapproved: amount stays on
+        clearing (Payment Out = Cr, Payment In = Dr). After approve: clearing is intermediary (Dr+Cr) and
+        amount moves to the account.
       </p>
     </div>
   );
@@ -1860,31 +1819,6 @@ export function InterCompanyVoucherForm({
                 onSettingsChange={() => setIcSettingsTick((n) => n + 1)}
               />
             ) : null}
-            {ribbonTab === "delete_requests" && companyId ? (
-              <InterCompanyDeleteRequestsPanel
-                companyId={companyId}
-                highlightVoucherId={currentLinkedVoucherId || undefined}
-                onOpenVoucher={(req) => void handleOpenVoucherFromDeleteRequest(req)}
-                onConfirmed={() => {
-                  setDeleteTick((n) => n + 1);
-                  onVoucherAction?.("cancelled");
-                }}
-              />
-            ) : null}
-            {ribbonTab === "revert_requests" && companyId ? (
-              <InterCompanyReverseRequestsPanel
-                companyId={companyId}
-                highlightTargetVoucherId={
-                  icViewerSide === "target"
-                    ? String(peerTargetVoucherId || voucher?.id || "").trim() || undefined
-                    : undefined
-                }
-                onAccepted={() => {
-                  setReverseTick((n) => n + 1);
-                  onVoucherAction?.("saved");
-                }}
-              />
-            ) : null}
           </div>
         </ScrollArea>
 
@@ -1899,8 +1833,8 @@ export function InterCompanyVoucherForm({
                   }
                 : (displayVoucher as { id?: string; isApproved?: boolean } | undefined)
             }
-            editingDisabled={fieldsDisabled}
-            isEditViewOnly={isInterCompanyEditLocked}
+            editingDisabled={icViewerSide === "target" ? targetSideDisabled : sourceSideDisabled}
+            isEditViewOnly={isIcFooterViewOnly}
             isCompanyAdmin={isCompanyAdmin && !isInterCompanyEditLocked}
             deleteDisabledWhenLinked={deleteDisabledWhenLinked}
             showHistoryButton={showHistoryButton}
@@ -1913,20 +1847,6 @@ export function InterCompanyVoucherForm({
             isFormDirty={icFooterDirty}
             onCancel={() => onVoucherAction?.("cancelled")}
             onDelete={() => void handleDelete()}
-            onRequestDelete={() => setDeleteDialogOpen(true)}
-            onFinalDeleteLocal={() => void handleFinalDeleteLocalCopy()}
-            deleteRequestPending={deleteFlowState.pending && !incomingDeleteRequest}
-            canConfirmDelete={!!incomingDeleteRequest}
-            onConfirmDelete={() => void handleConfirmIncomingDelete()}
-            onCancelDeleteRequest={
-              deleteFlowState.outgoing ? () => handleCancelDeleteRequest() : undefined
-            }
-            shareSettingsDirty={
-              isInterCompanyEditLocked &&
-              icViewerSide === "source" &&
-              shareAttachmentsWithPeer !== savedShareAttachmentsWithPeer
-            }
-            onSaveShareSettings={() => void saveShareAttachmentsOnly()}
             onPrint={handlePrint}
           />
         ) : null}
@@ -1934,39 +1854,12 @@ export function InterCompanyVoucherForm({
     </Form>
   );
 
-  const deleteDialog =
-    deleteRequestDraft && user?.uid ? (
-      <InterCompanyRequestDeleteDialog
-        open={deleteDialogOpen}
-        onOpenChange={setDeleteDialogOpen}
-        userId={user.uid}
-        userName={customUser?.displayName || user.displayName || user.email || undefined}
-        draft={deleteRequestDraft}
-        onSent={() => setDeleteTick((n) => n + 1)}
-      />
-    ) : null;
-
-  const reverseDialog =
-    reverseRequestDraft && companyId && user?.uid ? (
-      <InterCompanyRequestReverseDialog
-        open={reverseDialogOpen}
-        onOpenChange={setReverseDialogOpen}
-        companyId={companyId}
-        userId={user.uid}
-        userName={customUser?.displayName || user.displayName || user.email || undefined}
-        draft={reverseRequestDraft}
-        onSent={() => setReverseTick((n) => n + 1)}
-      />
-    ) : null;
-
   // auto column = ribbon collapse par icon-only width; content column baaki width le
   const ribbonLayout = (
     <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[auto_1fr] md:gap-4">
       <InterCompanyRibbonNav
         active={ribbonTab}
         onChange={setRibbonTab}
-        pendingRevertCount={pendingRevertCount}
-        pendingDeleteCount={pendingDeleteCount}
         pendingSystemJoinCount={pendingSystemJoinCount}
       />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">{formInner}</div>
@@ -1975,11 +1868,7 @@ export function InterCompanyVoucherForm({
 
   if (inDialog) {
     return (
-      <>
-        <div className="flex min-h-0 flex-col gap-3 px-1 pb-2 md:px-0">{ribbonLayout}</div>
-        {reverseDialog}
-        {deleteDialog}
-      </>
+      <div className="flex min-h-0 flex-col gap-3 px-1 pb-2 md:px-0">{ribbonLayout}</div>
     );
   }
 
@@ -1995,8 +1884,6 @@ export function InterCompanyVoucherForm({
         </div>
       </div>
       <div className="min-h-0 flex-1 px-4 py-3">{ribbonLayout}</div>
-      {reverseDialog}
-      {deleteDialog}
     </div>
   );
 }

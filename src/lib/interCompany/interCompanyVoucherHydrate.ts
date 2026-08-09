@@ -41,18 +41,14 @@ export function interCompanyVoucherViewerSide(
 }
 
 /**
- * IC edit/delete global lock — ledger menu, dialog, save/delete guard.
- * Unapproved: sirf source copy par edit/delete; target copy hamesha band.
- * Source approve (`isApproved`) ke baad source + target dono par band.
+ * IC global view-only lock — ab independent edit: hamesha false.
+ * (Apni side form se editable; delete role-based local copy. Pehle: target / source-approved par lock.)
  */
 export function isInterCompanyVoucherEditDeleteBlocked(
   voucher: Record<string, unknown> | null | undefined
 ): boolean {
-  if (!voucher || String(voucher.type || "") !== "inter_company") return false;
-  const side = interCompanyVoucherViewerSide(voucher);
-  if (side === "target") return true;
-  if (side === "source") return voucher.isApproved === true;
-  return true;
+  void voucher;
+  return false;
 }
 
 /** Payee fields se entity — is doc ka primary account (role ke hisaab se source ya target) */

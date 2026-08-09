@@ -24,6 +24,8 @@ import { patchVoucherFields, softDeleteVoucherMoveToRecycleBin } from "@/lib/wri
 import { purgeInterCompanyCounterpartyPartyIfUnused } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
 import { collectDriveAttachmentRefsFromDoc, deleteDriveAttachmentRef } from "@/lib/localCloudSync/driveAttachmentDelete";
 import { shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
+import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
+import { getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
 
 /** Drive/cloud_sync permanent delete marker — remote device SQLite row hard-remove kare. */
 export const PL_PERMANENT_PURGE_KEY = "plPermanentlyPurged";
@@ -88,9 +90,20 @@ export async function listDeletedSubdocsFromSqlite(
               : rawDate
                 ? new Date(rawDate as string | number)
                 : null;
+        item.voucherType = data.type as string | undefined;
         item.accountId = data.accountId as string | undefined;
         item.fromAccountId = data.fromAccountId as string | undefined;
         item.toAccountId = data.toAccountId as string | undefined;
+        item.bankAccountId = data.bankAccountId as string | undefined;
+        item.partyId = data.partyId as string | undefined;
+        item.staffId = data.staffId as string | undefined;
+        item.taxAccountId = data.taxAccountId as string | undefined;
+        item.incomeAccountId = data.incomeAccountId as string | undefined;
+        item.expenseAccountId = data.expenseAccountId as string | undefined;
+        item.salesAccountId = data.salesAccountId as string | undefined;
+        item.purchaseAccountId = data.purchaseAccountId as string | undefined;
+        item.payeeName = data.payeeName as string | undefined;
+        item.partyName = data.partyName as string | undefined;
         item.userId = data.userId as string | undefined;
         item.deletedBy = (data.deletedBy as string | undefined) || (data.userId as string | undefined);
       }
@@ -161,57 +174,127 @@ export async function restoreCompanySubdocFromRecycleBin(
 }
 
 function collectFirebaseStoragePaths(data: Record<string, unknown>): string[] {
-  const paths: string[] = [];
-  if (Array.isArray(data.filePaths)) paths.push(...(data.filePaths as string[]));
-  if (typeof data.storagePath === "string") paths.push(data.storagePath);
-  if (typeof data.path === "string") paths.push(data.path);
-  if (Array.isArray(data.fileUrls)) {
-    for (const u of data.fileUrls as unknown[]) {
-      if (typeof u === "string" && (u.startsWith("http://") || u.startsWith("https://"))) paths.push(u);
+  const paths = new Set<string>();
+  const push = (raw: unknown) => {
+    if (typeof raw !== "string") return;
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    paths.add(trimmed);
+  };
+
+  if (Array.isArray(data.filePaths)) {
+    for (const p of data.filePaths) push(p);
+  }
+  push(data.storagePath);
+  push(data.path);
+  push(data.fileUrl);
+  push(data.avatarUrl);
+  push(data.logoUrl);
+
+  if (Array.isArray(data.documentFileUrls)) {
+    for (const u of data.documentFileUrls) push(u);
+  }
+
+  for (const u of getVoucherAttachmentUrlsForUi(data)) push(u);
+
+  const uf = data.unassignedFile;
+  if (uf && typeof uf === "object" && uf !== null) {
+    push((uf as { url?: string }).url);
+    push((uf as { path?: string }).path);
+  }
+
+  if (Array.isArray(data.files)) {
+    for (const entry of data.files) {
+      if (!entry || typeof entry !== "object") continue;
+      const row = entry as { url?: string; storagePath?: string; path?: string };
+      push(row.url);
+      push(row.storagePath);
+      push(row.path);
     }
   }
-  return paths;
+
+  return [...paths];
 }
 
 function resolveFirebaseStoragePath(filePath: string): string | null {
   const trimmed = filePath.trim();
   if (!trimmed) return null;
-  try {
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-      const url = new URL(trimmed);
-      const encoded = url.pathname.split("/o/")[1];
-      if (encoded) return decodeURIComponent(encoded.split("?")[0]);
-    }
-    if (trimmed.startsWith("companies/")) return trimmed;
-    return trimmed;
-  } catch {
-    return null;
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return tryGetStoragePathFromFirebaseDownloadUrl(trimmed);
   }
+  if (
+    trimmed.startsWith("companies/") ||
+    trimmed.startsWith("voucher-files/") ||
+    trimmed.startsWith("pocket-ledger/")
+  ) {
+    return trimmed;
+  }
+  return tryGetStoragePathFromFirebaseDownloadUrl(trimmed) || trimmed;
 }
 
 /** Firebase Storage attachments (online companies) — ref-count aware when registry enabled. */
 export async function deleteFirebaseStorageFilesForDoc(
   data: Record<string, unknown>,
-  companyId?: string
+  companyId?: string,
+  opts?: { entityId?: string }
 ): Promise<void> {
   const urls: string[] = [];
+  const directPaths: string[] = [];
   for (const filePath of collectFirebaseStoragePaths(data)) {
     const trimmed = filePath.trim();
     if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
       urls.push(trimmed);
+      continue;
     }
+    const storagePath = resolveFirebaseStoragePath(trimmed);
+    if (storagePath) directPaths.push(storagePath);
   }
   const cid = String(companyId || "").trim();
+  const entityId = String(opts?.entityId || "").trim() || undefined;
+
+  // HTTPS: registry unlink — refCount>0 / SQLite me reuse → Storage skip; sirf orphan delete.
   if (cid && urls.length > 0) {
     const { deleteFirebaseStorageUrlsWithRegistry } = await import("@/lib/companyAttachmentRegistry");
-    await deleteFirebaseStorageUrlsWithRegistry(cid, urls);
-    return;
+    await deleteFirebaseStorageUrlsWithRegistry(cid, urls, { traceEntityId: entityId });
+  } else if (urls.length > 0) {
+    // No company id — best-effort delete (no reuse scan).
+    const { ref, deleteObject } = await import("firebase/storage");
+    const { storage } = await import("@/lib/firebase");
+    for (const filePath of urls) {
+      const storagePath = resolveFirebaseStoragePath(filePath);
+      if (!storagePath) continue;
+      try {
+        await deleteObject(ref(storage, storagePath));
+      } catch {
+        /* already gone */
+      }
+    }
   }
+
+  // Non-URL legacy paths only — never re-force-delete HTTPS objects already handled above
+  // (warna reused source file delete ho jati).
+  if (directPaths.length === 0) return;
   const { ref, deleteObject } = await import("firebase/storage");
   const { storage } = await import("@/lib/firebase");
-  for (const filePath of collectFirebaseStoragePaths(data)) {
-    const storagePath = resolveFirebaseStoragePath(filePath);
-    if (!storagePath) continue;
+  const { tryGetStoragePathFromFirebaseDownloadUrl: pathFromHttps } = await import(
+    "@/lib/firebaseStorageDownloadUrl"
+  );
+  const httpsPaths = new Set(
+    urls
+      .map((u) => resolveFirebaseStoragePath(u) || pathFromHttps(u) || "")
+      .filter(Boolean)
+  );
+  for (const storagePath of [...new Set(directPaths)]) {
+    if (httpsPaths.has(storagePath)) continue;
+    if (cid) {
+      try {
+        const live = await countLiveStoragePathRefsInCompany(cid, storagePath);
+        if (live > 0) continue;
+      } catch {
+        /* if scan fails, do not wipe shared bytes */
+        continue;
+      }
+    }
     try {
       await deleteObject(ref(storage, storagePath));
     } catch {
@@ -279,6 +362,11 @@ export async function permanentDeleteCompanySubdocFromRecycleBin(
   const id = String(docId || "").trim();
   if (!cid || !id) throw new Error("Missing company or document id");
 
+  // Pending outbox upsert/flush pehle hatao — warna permanent delete ke baad soft-deleted
+  // voucher recycle bin me wapas aa jata hai (INTENT flush / pull race).
+  const { removeOutboxRowsForCompanyDoc } = await import("@/lib/localVoucherOutbox");
+  await removeOutboxRowsForCompanyDoc(cid, collectionPath, id);
+
   const localRow = (await getCompanyDocFromBrowserDb(cid, collectionPath, id)) as Record<string, unknown> | null;
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   const fsId = String((reg as { authoritativeCompanyId?: string } | null)?.authoritativeCompanyId || cid).trim();
@@ -292,9 +380,30 @@ export async function permanentDeleteCompanySubdocFromRecycleBin(
 
   await removeLocalPendingRefsFromDoc(data);
   await deleteDriveAttachmentRefsForDoc(cid, data);
-  await deleteFirebaseStorageFilesForDoc(data, cid);
+  // HTTPS attachments: unused → Storage delete; reused elsewhere → skip (refcount).
+  await deleteFirebaseStorageFilesForDoc(data, cid, { entityId: id });
+
+  if (collectionPath === "vouchers") {
+    try {
+      // Orphan `{voucherId}_*` objects only — shared HTTPS URLs pehle registry path se handle.
+      // Reuse-safe: object still referenced in company → skip deleteObject.
+      // Never default missing type → "journal" (warna payment_in delete journal folder scan karta).
+      const vt = String(data.type || "").trim();
+      await deleteVoucherFirebaseStorageObjectsReuseSafe({
+        companyId: cid,
+        voucherId: id,
+        voucherType: vt || undefined,
+      });
+    } catch (e) {
+      console.warn("[permanentDelete] voucher storage folder sweep failed", id, e);
+    }
+  }
 
   await deleteCompanyDocFromBrowserDb(cid, collectionPath, id, { force: true, notify: true });
+
+  // Again: wipe any upsert enqueued by notify/side-effects during attachment cleanup.
+  await removeOutboxRowsForCompanyDoc(cid, collectionPath, id);
+
   await enqueueCompanyDocOutbox(cid, collectionPath, "delete", id, {
     ...data,
     id,
@@ -302,7 +411,11 @@ export async function permanentDeleteCompanySubdocFromRecycleBin(
     isDeleted: true,
   }).catch(() => {});
 
-  void deleteDoc(doc(firestore, `companies/${fsId}/${collectionPath}`, id)).catch(() => {});
+  try {
+    await deleteDoc(doc(firestore, `companies/${fsId}/${collectionPath}`, id));
+  } catch (e) {
+    console.warn("[permanentDelete] Firestore deleteDoc failed", collectionPath, id, e);
+  }
 
   if (collectionPath === "vouchers" && String(data.type || "") === "inter_company") {
     const partyId = String(data.interCompanyCounterpartyPartyId || "").trim();
@@ -316,5 +429,121 @@ export async function permanentDeleteCompanySubdocFromRecycleBin(
         console.warn("[IC] counterparty party cleanup after permanent delete:", err);
       }
     }
+  }
+}
+
+/** Voucher-folder orphan sweep with live reuse check (shared bytes mat mitao). */
+async function deleteVoucherFirebaseStorageObjectsReuseSafe(input: {
+  companyId: string;
+  voucherId: string;
+  voucherType?: string;
+}): Promise<number> {
+  const cid = String(input.companyId || "").trim();
+  const vid = String(input.voucherId || "").trim();
+  if (!cid || !vid) return 0;
+  const { buildVoucherStorageScanPrefixes } = await import("@/lib/companyStorageWipePrefixes");
+  const { ref, list, deleteObject } = await import("firebase/storage");
+  const { storage } = await import("@/lib/firebase");
+  const typeHint = String(input.voucherType || "").trim();
+  // Missing type → sirf us voucherId ke orphans dhoondo, saare type folders me — bilkul journal pe force default mat.
+  const types = typeHint
+    ? [typeHint]
+    : [
+        "sale",
+        "purchase",
+        "journal",
+        "payment_in",
+        "payment_out",
+        "contra",
+        "direct_income",
+        "direct_expense",
+        "note",
+        "adjustment",
+      ];
+  const prefixes = [
+    ...new Set(types.flatMap((voucherType) => buildVoucherStorageScanPrefixes({ companyId: cid, voucherType }))),
+  ];
+  const needle = `${vid}_`;
+  let deleted = 0;
+
+  async function walk(r: ReturnType<typeof ref>): Promise<void> {
+    let pageToken: string | undefined;
+    do {
+      const page = await list(r, {
+        maxResults: 200,
+        ...(pageToken ? { pageToken } : {}),
+      });
+      for (const item of page.items) {
+        const leaf = item.fullPath.split("/").pop() || "";
+        if (!leaf.startsWith(needle)) continue;
+        try {
+          const live = await countLiveStoragePathRefsInCompany(cid, item.fullPath);
+          if (live > 0) continue;
+          await deleteObject(item);
+          deleted += 1;
+        } catch {
+          /* already gone / permission */
+        }
+      }
+      for (const prefix of page.prefixes) {
+        await walk(prefix);
+      }
+      pageToken = page.nextPageToken;
+    } while (pageToken);
+  }
+
+  for (const prefix of prefixes) {
+    try {
+      await walk(ref(storage, prefix));
+    } catch (e) {
+      console.warn("[deleteVoucherStorage] reuse-safe prefix skipped", prefix, e);
+    }
+  }
+  return deleted;
+}
+
+async function countLiveStoragePathRefsInCompany(companyId: string, storagePath: string): Promise<number> {
+  const path = String(storagePath || "").trim();
+  if (!path) return 0;
+  try {
+    const { COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS } = await import("@/lib/firestoreToLocalCompanyPull");
+    const { listCompanyDocsFromBrowserDb } = await import("@/lib/localCompanyDocMirror");
+    const { tryGetStoragePathFromFirebaseDownloadUrl } = await import(
+      "@/lib/firebaseStorageDownloadUrl"
+    );
+    let n = 0;
+    const hasPath = (value: unknown): boolean => {
+      if (typeof value === "string") {
+        const s = value.trim();
+        if (!s) return false;
+        if (s === path || s.includes(path)) return true;
+        const p = tryGetStoragePathFromFirebaseDownloadUrl(s);
+        return Boolean(p && p === path);
+      }
+      if (Array.isArray(value)) return value.some(hasPath);
+      if (value && typeof value === "object") {
+        return Object.values(value as Record<string, unknown>).some(hasPath);
+      }
+      return false;
+    };
+    for (const coll of COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS) {
+      const rows = await listCompanyDocsFromBrowserDb(companyId, coll);
+      for (const row of rows) {
+        if ((row as { isDeleted?: unknown }).isDeleted === true) continue;
+        if (
+          hasPath(row.fileUrls) ||
+          hasPath(row.documentFileUrls) ||
+          hasPath(row.fileUrl) ||
+          hasPath(row.logoUrl) ||
+          hasPath(row.avatarUrl) ||
+          hasPath(row.unassignedFile)
+        ) {
+          n += 1;
+        }
+      }
+    }
+    return n;
+  } catch {
+    return 0;
   }
 }

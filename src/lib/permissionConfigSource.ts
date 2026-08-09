@@ -7,8 +7,9 @@ import {
   isServerGateCompany,
   isServerSelectorCompanyRow,
 } from "@/lib/companyStorageKind";
+import { isCloudLinkedCompanyStorage, isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { isLocalServerShareableCompany } from "@/lib/localServerShareableCompanies";
-import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
 import { getPlServerAccessLabel, getPlServerContextGateId } from "@/lib/plServerAccessContext";
 import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
@@ -32,7 +33,20 @@ type CompanyLike = {
   syncedFromCloud?: boolean;
   authoritativeCompanyId?: string;
   plServerHostCompanyId?: string;
+  driveSharedJoin?: boolean;
+  cloudSyncEnabled?: boolean;
+  cloudSyncProvider?: string | null;
+  cloudSyncDriveFolderId?: string | null;
 } | null | undefined;
+
+/** Google Drive cloud-sync / shared-join — roles via Drive sync, not Firebase sharedWith. */
+function isDriveCloudSyncRoleAuthority(company: CompanyLike): boolean {
+  if (!company) return false;
+  if (company.driveSharedJoin === true) return true;
+  const folderId = String(company.cloudSyncDriveFolderId ?? "").trim();
+  if (!folderId || company.cloudSyncEnabled !== true) return false;
+  return String(company.cloudSyncProvider ?? "").toLowerCase().trim() === "google_drive";
+}
 
 /**
  * Strict rule: local + PL-server/gate companies never use Firebase for role permissions.
@@ -52,8 +66,39 @@ export function companyUsesDeviceOrPlPermissionConfig(company: CompanyLike): boo
   return false;
 }
 
+/**
+ * Role authority root by company context:
+ * - Online → Firebase
+ * - PL Server / local device → SQLite / PL host URL (never Firebase sharedWith)
+ * - Drive sync → Drive (never Firebase sharedWith)
+ * Same company id in Online + PL tabs: PL context still excludes Firebase roles.
+ */
+export function companyRolesAuthorityExcludesFirebase(company: CompanyLike): boolean {
+  if (companyUsesDeviceOrPlPermissionConfig(company)) return true;
+  if (isDriveCloudSyncRoleAuthority(company)) return true;
+  return false;
+}
+
 export function resolvePermissionConfigSource(company: CompanyLike): PermissionConfigSourceInfo {
   const cid = String(company?.id || "").trim();
+
+  // Online company + global sync OFF → SQLite cache (not PL Server); avoid misleading plserver logs.
+  if (
+    company &&
+    isCloudLinkedCompanyStorage(company) &&
+    !isServerGateCompany(company) &&
+    company.plServerShared !== true &&
+    isFirebaseLedgerDataSyncDisabled()
+  ) {
+    return {
+      kind: "firebase",
+      label: "Firebase (sync paused)",
+      url: cid ? `sqlite://online_cache/${cid}` : "sqlite://online_cache",
+      detail:
+        "Online company on this device — Cloud data sync is OFF; enable it to read/write Firestore permissions and ledger.",
+    };
+  }
+
   const deviceOrPl = companyUsesDeviceOrPlPermissionConfig(company);
 
   if (deviceOrPl) {
@@ -96,6 +141,15 @@ export function resolvePermissionConfigSource(company: CompanyLike): PermissionC
     };
   }
 
+  if (isDriveCloudSyncRoleAuthority(company)) {
+    return {
+      kind: "local-sqlite",
+      label: "Google Drive",
+      url: cid ? `drive://company/${cid}` : "drive://company",
+      detail: "Drive-synced company — roles from Drive share / local SQLite (not Firebase).",
+    };
+  }
+
   return {
     kind: "firebase",
     label: "Firebase",
@@ -106,13 +160,15 @@ export function resolvePermissionConfigSource(company: CompanyLike): PermissionC
   };
 }
 
+/** Module-level dedupe: usePermissions runs in many trees; per-hook refs still flood HMR. */
+const plPermLastByTag = new Map<string, string>();
+
 /** Always-on trace for host→client permission delivery (DevTools filter: PL-PERM). */
 export function logPlPerm(tag: string, payload: Record<string, unknown>): void {
-  try {
-    console.warn(`[PL-PERM] ${tag}`, payload);
-  } catch {
-    /* ignore */
-  }
+  // Console flood off — re-enable when diagnosing permission delivery.
+  void tag;
+  void payload;
+  void plPermLastByTag;
 }
 
 export function summarizePermissionDateLimits(

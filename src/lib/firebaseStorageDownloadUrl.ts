@@ -238,9 +238,9 @@ export function looksLikeFirebaseStorageObjectPath(
   const v = String(value || "").trim();
   if (!v) return false;
   if (/^(https?:|data:|blob:|local:|capacitor:|file:|drive:)/i.test(v)) return false;
-  if (/^voucher-files\//i.test(v) || /^companies\//i.test(v) || /^entity-files\//i.test(v)) return true;
+  if (/^voucher-files\//i.test(v) || /^companies\//i.test(v) || /^entity-files\//i.test(v) || /^pocket-ledger\//i.test(v)) return true;
   const norm = normalizeFirebaseStorageObjectPathForSdk(v, opts);
   return (
-    /^voucher-files\//i.test(norm) || /^companies\//i.test(norm) || /^entity-files\//i.test(norm)
+    /^voucher-files\//i.test(norm) || /^companies\//i.test(norm) || /^entity-files\//i.test(norm) || /^pocket-ledger\//i.test(norm)
   );
 }

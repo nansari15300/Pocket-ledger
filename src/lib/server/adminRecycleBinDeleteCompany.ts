@@ -2,6 +2,7 @@ import "server-only";
 
 import admin from "firebase-admin";
 import { getAdminDb } from "@/lib/firebaseAdmin";
+import { adminDeleteCompanyFirebaseStorageFolder } from "@/lib/server/adminDeleteCompanyStorageFolder";
 
 const BATCH = 400;
 
@@ -37,6 +38,13 @@ export async function adminServerHardDeleteDeletedCompany(companyId: string): Pr
     const data = snap.data() || {};
     if (data.isDeleted !== true) {
         throw new Error("Company is not soft-deleted; hard delete refused.");
+    }
+
+    const companyName = typeof data.name === "string" ? data.name : undefined;
+    try {
+        await adminDeleteCompanyFirebaseStorageFolder({ companyId: cid, companyName });
+    } catch (e) {
+        console.warn("[adminServerHardDeleteDeletedCompany] storage wipe failed", cid, e);
     }
 
     await deleteDocumentRecursive(ref);

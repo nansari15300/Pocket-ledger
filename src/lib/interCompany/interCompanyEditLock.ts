@@ -6,12 +6,8 @@ import { firestore } from "@/lib/firebase";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import {
   interCompanyVoucherViewerSide,
-  isInterCompanyVoucherEditDeleteBlocked,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { isPureLocalInterCompanyCompany } from "@/lib/interCompany/localInterCompanyPolicy";
-
-const IC_EDIT_DELETE_BLOCKED_MSG =
-  "Inter Company voucher cannot be edited or deleted after source approval.";
 
 const IC_DELETE_SOURCE_ONLY_MSG = "Delete this Inter Company voucher from the source company only.";
 
@@ -35,23 +31,17 @@ async function readInterCompanyVoucherForLock(
   }
 }
 
-/** Update/delete: source copy approved ho to pair mutate na ho. */
+/** Update — independent per-company edit; global approve lock nahi. */
 export async function assertInterCompanyPairEditDeleteAllowed(
   sourceCompanyId: string,
   sourceVoucherId: string | null | undefined
 ): Promise<void> {
-  const vid = String(sourceVoucherId || "").trim();
-  const cid = String(sourceCompanyId || "").trim();
-  if (!vid || !cid) return;
-
-  const row = await readInterCompanyVoucherForLock(cid, vid);
-  if (!row) return;
-  if (isInterCompanyVoucherEditDeleteBlocked(row)) {
-    throw new Error(IC_EDIT_DELETE_BLOCKED_MSG);
-  }
+  void sourceCompanyId;
+  void sourceVoucherId;
+  // Previously blocked after source approve — ab dono companies apni copy edit kar sakti hain.
 }
 
-/** Recycle bin: delete sirf source company + unapproved source copy se. */
+/** Recycle bin pair delete — sirf source company copy se (legacy). Local-only delete alag path. */
 export async function assertInterCompanyDeleteAllowed(
   sourceCompanyId: string,
   sourceVoucherId: string
@@ -66,8 +56,5 @@ export async function assertInterCompanyDeleteAllowed(
   if (!row) return;
   if (interCompanyVoucherViewerSide(row) !== "source") {
     throw new Error(IC_DELETE_SOURCE_ONLY_MSG);
-  }
-  if (isInterCompanyVoucherEditDeleteBlocked(row)) {
-    throw new Error(IC_EDIT_DELETE_BLOCKED_MSG);
   }
 }

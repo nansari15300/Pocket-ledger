@@ -79,6 +79,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { FilePreview } from "../vouchers/FilePreview";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
@@ -162,7 +163,9 @@ export function CreateBankAccountDialog({
   const [avatarToUpload, setAvatarToUpload] = useState<{ file: File; preview: string } | null>(null);
   const [documentFiles, setDocumentFiles] = useState<File[]>([]);
   const [compressionResult, setCompressionResult] = useState<{originalSize: number, compressedSize: number} | null>(null);
-  const [isCompressing, setIsCompressing] = useState(false);
+  const [isCompressingLocal, setIsCompressing] = useState(false);
+  const isImageCompressing = useImageCompressionProcessing();
+  const isCompressing = isCompressingLocal || isImageCompressing;
   const isMobile = useIsMobile();
 
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : internalIsOpen;
@@ -346,17 +349,9 @@ export function CreateBankAccountDialog({
     }
     setIsCompressing(true);
     try {
-      const compressedFile = await compressFile(inputFile);
+      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, companyId);
       setCompressionResult({ originalSize: inputFile.size, compressedSize: compressedFile.size });
-      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-        toast({
-          variant: "destructive",
-          title: "File Too Large After Compression",
-          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-        });
-        setAvatarToUpload(null);
-        return;
-      }
+      
       const preview = URL.createObjectURL(compressedFile);
       setAvatarToUpload({ file: compressedFile, preview });
     } catch (err) {
@@ -426,7 +421,7 @@ export function CreateBankAccountDialog({
         try {
           const raw = await fetchRemoteUrlAsFile(remoteAvatarUrl, "bank-avatar.jpg");
           if (raw) {
-            const compressed = await compressFile(raw);
+            const { file: compressed, maxBytes, maxKb } = await compressImageForCompany(raw, companyId);
             setCompressionResult({ originalSize: raw.size, compressedSize: compressed.size });
             const preview = URL.createObjectURL(compressed);
             setAvatarToUpload({ file: compressed, preview });
@@ -861,7 +856,7 @@ export function CreateBankAccountDialog({
                                 }}
                                 placeholder="Select or search a group"
                                 addNewLabel="Create New Group"
-                                disabled={isLoading}
+                                disabled={isLoading || isCompressing}
                                 />
                         </FormControl>
                         <FormMessage />
@@ -1030,7 +1025,9 @@ export function CreateBankAccountDialog({
                             onRemove={removeAvatar}
                             isCompressing={isCompressing}
                             compressionResult={compressionResult}
-                          />
+                          
+                          attachmentReusePlaceKey={null}
+                        />
                         )}
                         {!avatarToUpload && (
                           <FormControl>
@@ -1135,13 +1132,13 @@ export function CreateBankAccountDialog({
                       variant="ghost"
                       className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                       onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                      disabled={isLoading || apkOfflineViewOnly}
+                      disabled={isLoading || isCompressing || apkOfflineViewOnly}
                     >
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & New
                     </Button>
                   </div>
-                  <Button type="submit" disabled={isLoading || !companyId || apkOfflineViewOnly} className="shrink-0">
+                  <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly} className="shrink-0">
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Create Account
                   </Button>

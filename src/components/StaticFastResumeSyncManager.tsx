@@ -30,9 +30,6 @@ export function StaticFastResumeSyncManager() {
     let removeAppStateListener: (() => void) | undefined;
 
     const runBackgroundRefresh = (reason: string) => {
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[ONLINE_EVENT]", "StaticFastResumeSyncManager:runBackgroundRefresh", { reason });
-      }
       const now = Date.now();
       const hiddenMs = hiddenAtRef.current != null ? now - hiddenAtRef.current : 0;
       const electronForegroundResume =
@@ -82,13 +79,6 @@ export function StaticFastResumeSyncManager() {
           skipHeavyMountWhileOnlineSession ||
           (embeddedQuietBackgroundOnly && !electronForegroundResume);
 
-        if (process.env.NODE_ENV !== "production") {
-          // `flushVoucherOutbox` andar `enableNetwork` chala sakta — yehi Firestore listener churn se "refresh" correlate hota hai.
-          console.log("[QUEUE_FLUSH]", "StaticFastResume→flushVoucherOutbox", {
-            reason,
-            skipRegistryAndToken,
-          });
-        }
         void flushVoucherOutbox();
 
         if (skipRegistryAndToken) {
@@ -96,24 +86,14 @@ export function StaticFastResumeSyncManager() {
             clearTimeout(deferredRegistryTimerRef.current);
             deferredRegistryTimerRef.current = null;
           }
-          if (process.env.NODE_ENV !== "production") {
-            console.debug("[StaticFastResumeSyncManager] quiet resume — outbox only / no registry tick", reason);
-            console.log("[SYNC_COMPLETE]", "StaticFastResume:quiet-resume-outbox-only", { reason });
-          }
           return;
         }
 
         void auth.currentUser?.getIdToken(false).catch(() => {
           // Offline startup: token fail ignore — next online `quiet` path bhi token force nahi karta.
         });
-        if (process.env.NODE_ENV !== "production") {
-          console.debug("[StaticFastResumeSyncManager] background refresh", reason);
-        }
 
         // Sirf zarurat par: listener + deferred SQLite mirror bump.
-        if (process.env.NODE_ENV !== "production") {
-          console.log("[RELOAD_TRIGGER]", "StaticFastResume→triggerSync (non-quiet path)");
-        }
         triggerSync();
         if (deferredRegistryTimerRef.current != null) {
           clearTimeout(deferredRegistryTimerRef.current);

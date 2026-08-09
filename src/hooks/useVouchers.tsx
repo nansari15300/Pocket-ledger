@@ -1,7 +1,7 @@
 
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo, useRef, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo, useRef, useCallback, startTransition } from "react";
 import { usePathname } from "next/navigation";
 // Full collection queries: web cloud bhi pura voucher list (no orderBy/limit window).
 import { collectionGroup, query, where, onSnapshot, collection, getDoc, getDocs, getDocFromServer, doc } from "firebase/firestore";
@@ -57,6 +57,7 @@ import {
   voucherAttachmentUiFingerprint,
 } from "@/lib/voucherFormAttachmentSave";
 import { normalizeVoucherRowAttachmentsForUi, getVoucherAttachmentUrlsForUi, stripTransientVoucherAttachmentFields } from "@/lib/voucherAttachmentNormalize";
+import { protectClearedAttachmentsFromStalePatch, resolveUrlsAgainstAttachmentIntent, shouldPreserveIntendedVoucherAttachments, logAttachWipe } from "@/lib/attachmentDeleteTrace";
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { getBillWiseAllocatedToTarget, getPaymentStatus as getPaymentStatusResult, isSaleOrPurchaseBillVoucherType } from "@/lib/payment-allocation-utils";
@@ -307,6 +308,25 @@ function rowMissingProfileFields(prevRow: any, mergedRow: any): boolean {
 /** Voucher `fileUrls` delete/replace par purani row na rakho. */
 function rowMissingVoucherAttachmentFields(prevRow: any, mergedRow: any): boolean {
   if (!prevRow || !mergedRow) return false;
+  // Explicit empty on cache = intentional remove — stale SQLite/snapshot HTTPS is NOT an "upgrade".
+  const prevExplicitEmpty =
+    Object.prototype.hasOwnProperty.call(prevRow, "fileUrls") &&
+    Array.isArray(prevRow.fileUrls) &&
+    prevRow.fileUrls.length === 0;
+  const prevUrls = getVoucherAttachmentUrlsForUi(prevRow);
+  const nextUrls = getVoucherAttachmentUrlsForUi(mergedRow);
+  if (prevExplicitEmpty && nextUrls.length > 0) {
+    return false;
+  }
+  // Partial trim (3→2): fuller incoming list is NOT a missing-field upgrade.
+  if (
+    Object.prototype.hasOwnProperty.call(prevRow, "fileUrls") &&
+    Array.isArray(prevRow.fileUrls) &&
+    prevUrls.length > 0 &&
+    nextUrls.length > prevUrls.length
+  ) {
+    return false;
+  }
   return voucherAttachmentUiFingerprint(prevRow) !== voucherAttachmentUiFingerprint(mergedRow);
 }
 
@@ -351,25 +371,161 @@ function entityListUiFingerprint(rows: readonly any[]): string {
   return `${alive}|${parts}`;
 }
 
+/** Snapshot/mirror full replace: keep intentional cleared avatar / voucher attachments against stale HTTPS. */
+function masterAvatarIsIntentionallyCleared(row: Record<string, unknown> | null | undefined): boolean {
+  if (!row || typeof row !== "object") return false;
+  // Edit save patches `fileUrl: ""` — stale snapshot HTTPS revive mat hone do.
+  if (!Object.prototype.hasOwnProperty.call(row, "fileUrl")) return false;
+  const u = String((row as { fileUrl?: unknown }).fileUrl ?? "").trim();
+  if (!u) return true;
+  const low = u.toLowerCase();
+  return low === "null" || low === "undefined" || low === "none" || low === "n/a";
+}
+
+function masterAvatarUrlNonEmpty(row: Record<string, unknown> | null | undefined): boolean {
+  if (!row || typeof row !== "object") return false;
+  const u = String((row as { fileUrl?: unknown }).fileUrl ?? "").trim();
+  if (!u) return false;
+  const low = u.toLowerCase();
+  return low !== "null" && low !== "undefined" && low !== "none" && low !== "n/a";
+}
+
+function preserveClearedAttachmentsInList(prev: any[], next: any[], companyId?: string): any[] {
+  if (!Array.isArray(prev) || !Array.isArray(next) || !prev.length || !next.length) return next;
+  const prevById = new Map(prev.filter(isAliveDoc).map((v: any) => [String(v.id), v]));
+  const cid = String(companyId || "").trim();
+  let changed = false;
+  const out = next.map((row: any) => {
+    if (!row?.id) return row;
+    const old = prevById.get(String(row.id));
+    if (!old) return row;
+    let nextRow = row;
+    const vid = String(row.id);
+    const nextUrls = getVoucherAttachmentUrlsForUi(nextRow);
+    const oldUrls = getVoucherAttachmentUrlsForUi(old);
+
+    const oldExplicitEmptyFileUrls =
+      Object.prototype.hasOwnProperty.call(old, "fileUrls") &&
+      Array.isArray(old.fileUrls) &&
+      old.fileUrls.length === 0;
+    // Empty → add is valid (paste/reuse). Only block when durable clear-intent says so.
+    if (
+      oldExplicitEmptyFileUrls &&
+      nextUrls.length > 0 &&
+      cid &&
+      shouldPreserveIntendedVoucherAttachments(cid, vid, nextUrls)
+    ) {
+      changed = true;
+      logAttachWipe({
+        source: "useVouchers.preserveClearedAttachmentsInList",
+        reason: "blocked_empty_to_add_by_clear_intent",
+        companyId: cid,
+        voucherId: vid,
+        beforeUrls: nextUrls,
+        afterUrls: [],
+        extra: { oldUrls },
+      });
+      nextRow = { ...nextRow, fileUrls: [], files: [], unassignedFile: null };
+    } else if (cid && shouldPreserveIntendedVoucherAttachments(cid, vid, nextUrls)) {
+      const keep =
+        resolveUrlsAgainstAttachmentIntent(cid, vid, nextUrls) ??
+        (Array.isArray(old.fileUrls) ? (old.fileUrls as string[]) : oldUrls);
+      if (nextUrls.length !== keep.length || nextUrls.some((u, i) => u !== keep[i])) {
+        changed = true;
+        logAttachWipe({
+          source: "useVouchers.preserveClearedAttachmentsInList",
+          reason: "forced_intended_urls",
+          companyId: cid,
+          voucherId: vid,
+          beforeUrls: nextUrls,
+          afterUrls: keep,
+        });
+        nextRow = {
+          ...nextRow,
+          fileUrls: keep,
+          files: [],
+          unassignedFile: keep.length === 0 ? null : (nextRow.unassignedFile ?? old.unassignedFile ?? null),
+        };
+      }
+    }
+
+    // Masters avatar only — documents/array fields yahan touch mat karo.
+    if (masterAvatarIsIntentionallyCleared(old) && masterAvatarUrlNonEmpty(nextRow)) {
+      changed = true;
+      nextRow = { ...nextRow, fileUrl: "" };
+    }
+
+    return nextRow;
+  });
+  return changed ? out : next;
+}
+
+/** `commitEntityListSetter` module helper — current company for trim intent. */
+let commitEntityListCompanyId = "";
+
 function commitEntityListSetter<T>(setter: StateSetter<T>, next: T[]): void {
-  setter((prev) =>
-    entityListUiFingerprint(prev as any[]) === entityListUiFingerprint(next) ? prev : next
-  );
+  // PL rematch ke baad masters update low priority — sort row FLIP ke saath compete na kare.
+  startTransition(() => {
+    setter((prev) => {
+      const preserved = preserveClearedAttachmentsInList(
+        prev as any[],
+        next as any[],
+        commitEntityListCompanyId
+      ) as T[];
+      return entityListUiFingerprint(prev as any[]) === entityListUiFingerprint(preserved as any[])
+        ? prev
+        : preserved;
+    });
+  });
+}
+
+function commitVouchersSetter(setter: StateSetter<any>, next: any[]): void {
+  setter((prev) => {
+    const preserved = preserveClearedAttachmentsInList(
+      prev as any[],
+      next as any[],
+      commitEntityListCompanyId
+    );
+    return entityListUiFingerprint(prev as any[]) === entityListUiFingerprint(preserved as any[])
+      ? prev
+      : preserved;
+  });
 }
 
 function mergeEntityListsByIdOrKeepPrev(prev: any[], cached: any[], orderByField?: string): any[] {
   const merged = mergeEntityListsById(prev, cached, orderByField).filter(isAliveDoc);
   if (entityListUiFingerprint(prev) !== entityListUiFingerprint(merged)) return merged;
   const prevById = new Map(prev.filter(isAliveDoc).map((v: any) => [String(v.id), v]));
+  const cid = String(commitEntityListCompanyId || "").trim();
   let needsUpgrade = false;
   const upgraded = merged.map((row) => {
     const old = prevById.get(String(row.id));
     if (!old) return row;
+    const oldExplicitEmpty =
+      Object.prototype.hasOwnProperty.call(old, "fileUrls") &&
+      Array.isArray(old.fileUrls) &&
+      old.fileUrls.length === 0;
+    const nextUrls = getVoucherAttachmentUrlsForUi(row);
+    // Never revive cleared attachments from a fuller incoming row (mirror/snapshot race)
+    // — but allow genuine empty→add when no clear-intent is active.
+    if (
+      oldExplicitEmpty &&
+      nextUrls.length > 0 &&
+      cid &&
+      shouldPreserveIntendedVoucherAttachments(cid, String(row.id), nextUrls)
+    ) {
+      return old;
+    }
+    if (masterAvatarIsIntentionallyCleared(old) && masterAvatarUrlNonEmpty(row)) {
+      return { ...row, fileUrl: "" };
+    }
     if (
       rowMissingResolvedTimestamp(old, row) ||
       rowMissingProfileFields(old, row) ||
       rowMissingVoucherAttachmentFields(old, row) ||
-      (getVoucherAttachmentUrlsForUi(old).length === 0 && getVoucherAttachmentUrlsForUi(row).length > 0)
+      (!oldExplicitEmpty &&
+        getVoucherAttachmentUrlsForUi(old).length === 0 &&
+        nextUrls.length > 0)
     ) {
       needsUpgrade = true;
       return row;
@@ -572,6 +728,7 @@ export const VoucherProvider = ({
   voucherFormMasterScope?: boolean;
 }) => {
   const { companyId, company, clearCompanyId } = useCompany();
+  commitEntityListCompanyId = String(companyId || "").trim();
   const pathname = usePathname() || "";
   const { user, customUser, loading: authLoading } = useAuth();
   const { can } = usePermissions();
@@ -854,14 +1011,47 @@ export const VoucherProvider = ({
       const idx = prev.findIndex((v) => String(v?.id) === String(voucherId));
       if (idx < 0) {
         // Naya create: SQLite bump se pehle attachment patch — pehle `idx < 0` par skip se fileUrls list me nahi dikhte the.
+        if (process.env.NODE_ENV !== "production") {
+          void import("@/lib/attachmentDeleteTrace").then((m) =>
+            m.traceAttachmentRowChange({
+              source: "useVouchers.patchVoucherInCache.append",
+              companyId,
+              voucherId,
+              prevRow: null,
+              nextRow: { ...patch, id: voucherId },
+            })
+          );
+        }
         return [{ ...patch, id: voucherId }, ...prev];
       }
-      const merged = { ...prev[idx], ...patch, id: voucherId };
+      // Mirror full-doc patch stale HTTPS revive block; attachment-only form save patch allow.
+      let safePatch = patch;
+      try {
+        const existing = prev[idx] as Record<string, unknown>;
+        safePatch = protectClearedAttachmentsFromStalePatch(existing, patch, {
+          companyId: companyId ?? undefined,
+          voucherId,
+        });
+      } catch {
+        safePatch = patch;
+      }
+      const merged = { ...prev[idx], ...safePatch, id: voucherId };
+      if (process.env.NODE_ENV !== "production") {
+        void import("@/lib/attachmentDeleteTrace").then((m) =>
+          m.traceAttachmentRowChange({
+            source: "useVouchers.patchVoucherInCache",
+            companyId,
+            voucherId,
+            prevRow: prev[idx] as Record<string, unknown>,
+            nextRow: merged as Record<string, unknown>,
+          })
+        );
+      }
       const next = prev.slice();
       next[idx] = merged;
       return next;
     });
-  }, []);
+  }, [companyId]);
 
   // Voucher form save: attachment patch event — ledger/dialog bina refresh update.
   useEffect(() => {
@@ -885,17 +1075,27 @@ export const VoucherProvider = ({
   const patchMasterEntity = useCallback(
     (collection: MasterEntityPatchCollection, id: string, patch: Record<string, unknown>) => {
       if (!id?.trim()) return;
+      // Avatar clear: `null`/`undefined` → `""` taaki snapshot revive detect ho sake.
+      const safePatch = { ...patch };
+      if (Object.prototype.hasOwnProperty.call(safePatch, "fileUrl")) {
+        const raw = safePatch.fileUrl;
+        const u = String(raw ?? "").trim();
+        const low = u.toLowerCase();
+        if (!u || low === "null" || low === "undefined" || low === "none" || low === "n/a") {
+          safePatch.fileUrl = "";
+        }
+      }
       const applyPatch = <T extends { id: string }>(setter: StateSetter<T>) => {
         setter((prev) => {
           const idx = prev.findIndex((row) => String(row.id) === String(id));
           if (idx < 0) {
-            if (isServerGateCompanyContext && collection === "bank_accounts" && patch.accountName) {
-              const inserted = { ...patch, id } as T;
+            if (isServerGateCompanyContext && collection === "bank_accounts" && safePatch.accountName) {
+              const inserted = { ...safePatch, id } as T;
               return [...prev, inserted];
             }
             return prev;
           }
-          const merged = { ...prev[idx], ...patch, id } as T;
+          const merged = { ...prev[idx], ...safePatch, id } as T;
           const next = prev.slice();
           next[idx] = merged;
           return next;
@@ -1571,8 +1771,18 @@ export const VoucherProvider = ({
             if (!isGroup) {
               const preferLocal =
                 String(companyRef.current?.storageOption || "").toLowerCase() === "local";
+              let skipOrphanSqliteDelete = false;
+              try {
+                const { isCompanyPendingRestoreCloudPush } = await import(
+                  "@/lib/restoreCloudBackgroundSync"
+                );
+                skipOrphanSqliteDelete = isCompanyPendingRestoreCloudPush(companyId);
+              } catch {
+                /* optional */
+              }
               dataForUi = await mergeRemoteSnapshotWithLocalOnlyDocs(companyId, path, data, orderByField, {
-                preferLocalSqliteWhenIdsConflict: preferLocal,
+                preferLocalSqliteWhenIdsConflict: preferLocal || skipOrphanSqliteDelete,
+                skipOrphanSqliteDelete,
               });
             }
             const rowsForSetter = Array.isArray(dataForUi)
@@ -1862,7 +2072,7 @@ export const VoucherProvider = ({
       if (shouldSkipHeavyVoucherBootstrap(pathname)) return;
     if (!shouldListenSqliteBump) return;
 
-    const mergeCollectionFromSqliteBump = (coll: string, opts?: { remoteIncoming?: boolean }) => {
+    const mergeCollectionFromSqliteBump = (coll: string, opts?: { remoteIncoming?: boolean; reloadFromIdb?: boolean }) => {
       livePullDevLog("react_refresh", {
         companyId,
         collection: coll,
@@ -1873,9 +2083,11 @@ export const VoucherProvider = ({
       const bumpEpoch = companyDataLoadEpochRef.current;
       void (async () => {
         try {
-          if (opts?.remoteIncoming) {
-            const { reloadBrowserDbFromIndexedDB } = await import("@/lib/localSqlite");
-            await reloadBrowserDbFromIndexedDB();
+          // Same-tab PL pull already wrote sql.js — full IDB export/reload freezes EXE (30–50s menu lag).
+          // Cross-renderer host IPC clears cache before bump; listCompanyDocs reopens lazily.
+          if (opts?.reloadFromIdb) {
+            const { clearBrowserDbCache } = await import("@/lib/localSqlite");
+            clearBrowserDbCache();
           }
           if (
             !bumpCompanyId ||
@@ -1913,57 +2125,79 @@ export const VoucherProvider = ({
             case "vouchers":
               if (opts?.remoteIncoming) allowEmptyVoucherWipeRef.current = true;
               try {
-                setVouchers(
-                  replaceRows(
-                    aliveCached.map((r) =>
-                      normalizeVoucherRowAttachmentsForUi(r, voucherAttachmentUiNormalizeOptions())
-                    ),
-                    "date"
-                  )
+                const normalizedRows = replaceRows(
+                  aliveCached.map((r) =>
+                    normalizeVoucherRowAttachmentsForUi(r, voucherAttachmentUiNormalizeOptions())
+                  ),
+                  "date"
                 );
+                if (process.env.NODE_ENV !== "production") {
+                  void import("@/lib/attachmentDeleteTrace").then((m) => {
+                    for (const row of normalizedRows) {
+                      const id = String((row as { id?: string })?.id || "").trim();
+                      if (!id) continue;
+                      const urls = Array.isArray((row as { fileUrls?: unknown }).fileUrls)
+                        ? ((row as { fileUrls: string[] }).fileUrls || [])
+                        : [];
+                      if (urls.length === 0) continue;
+                      m.traceAttachmentUrlsChange({
+                        source: opts?.remoteIncoming
+                          ? "useVouchers.sqliteBump.remoteIncoming"
+                          : "useVouchers.sqliteBump",
+                        companyId: bumpCompanyId,
+                        voucherId: id,
+                        prevUrls: [],
+                        nextUrls: urls,
+                        extra: { note: "non-empty fileUrls after sqlite bump (check REVIVE if intent was empty)" },
+                      });
+                    }
+                  });
+                }
+                commitVouchersSetter(setVouchers, normalizedRows);
               } finally {
                 if (opts?.remoteIncoming) allowEmptyVoucherWipeRef.current = false;
               }
               break;
             case "parties":
-              setParties(replaceRows(aliveCached));
+              commitEntityListSetter(setParties, replaceRows(aliveCached));
               break;
             case "staff":
-              setStaff(replaceRows(aliveCached));
+              commitEntityListSetter(setStaff, replaceRows(aliveCached));
               break;
             case "bank_accounts":
-              setAccounts(
+              commitEntityListSetter(
+                setAccounts,
                 replaceRows(
                   aliveCached.map((row) => normalizeBankAccountRow(row as Record<string, unknown>))
                 )
               );
               break;
             case "taxes":
-              setTaxes(replaceRows(aliveCached));
+              commitEntityListSetter(setTaxes, replaceRows(aliveCached));
               break;
             case "expense_accounts":
-              setUnprocessedExpenseAccounts(replaceRows(aliveCached));
+              commitEntityListSetter(setUnprocessedExpenseAccounts, replaceRows(aliveCached));
               break;
             case "items":
-              setItems(replaceRows(aliveCached));
+              commitEntityListSetter(setItems, replaceRows(aliveCached));
               break;
             case "item_groups":
-              setItemGroups(replaceRows(aliveCached));
+              commitEntityListSetter(setItemGroups, replaceRows(aliveCached));
               break;
             case "groups":
-              setGroups(replaceRows(aliveCached));
+              commitEntityListSetter(setGroups, replaceRows(aliveCached));
               break;
             case "account_groups":
-              setAccountGroups(replaceRows(aliveCached));
+              commitEntityListSetter(setAccountGroups, replaceRows(aliveCached));
               break;
             case "staff_groups":
-              setStaffGroups(replaceRows(aliveCached));
+              commitEntityListSetter(setStaffGroups, replaceRows(aliveCached));
               break;
             case "tax_groups":
-              setTaxGroups(replaceRows(aliveCached));
+              commitEntityListSetter(setTaxGroups, replaceRows(aliveCached));
               break;
             case "expense_groups":
-              setExpenseGroups(replaceRows(aliveCached));
+              commitEntityListSetter(setExpenseGroups, replaceRows(aliveCached));
               break;
             default:
               break;
@@ -1988,22 +2222,41 @@ export const VoucherProvider = ({
       if (!d || d.companyId !== companyId || !d.collection) return;
       const coll = d.collection;
       const remoteHostWrite = d.source === "pl_host_remote_write";
+      const plServerPull = d.source === "pl_server_pull";
       const firebaseDeltaPull = d.source === "firebase_delta_pull";
-      if (remoteHostWrite) {
+      const remoteIncoming = remoteHostWrite || plServerPull || firebaseDeltaPull;
+      if (remoteHostWrite || plServerPull) {
         void import("@/lib/plServerLiveChangeTrace")
           .then(({ plServerLiveChangeTrace }) =>
             plServerLiveChangeTrace("ui_merge_remote_bump", {
               companyId,
               collection: coll,
+              source: d.source,
             })
           )
           .catch(() => undefined);
       }
-      if (isServerGateCompanyContext || d.immediate === true || remoteHostWrite || firebaseDeltaPull) {
-        mergeCollectionFromSqliteBump(coll, { remoteIncoming: remoteHostWrite || firebaseDeltaPull });
+      if (isServerGateCompanyContext || remoteIncoming) {
+        const key = `${companyId}::${coll}`;
+        const prevTimer = sqliteBumpMergeTimersRef.current[key];
+        if (prevTimer) clearTimeout(prevTimer);
+        sqliteBumpMergeTimersRef.current[key] = setTimeout(() => {
+          delete sqliteBumpMergeTimersRef.current[key];
+          mergeCollectionFromSqliteBump(coll, {
+            remoteIncoming,
+            reloadFromIdb: remoteHostWrite,
+          });
+        }, 80);
         return;
       }
       // Active page ke bahar collection bump ignore — unnecessary background merge avoid.
+      if (d.immediate === true) {
+        mergeCollectionFromSqliteBump(coll, {
+          remoteIncoming,
+          reloadFromIdb: remoteHostWrite,
+        });
+        return;
+      }
       if (!activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope).has(coll)) return;
       if (
         embeddedClientPrefersQuietBackgroundSync() &&
@@ -2033,8 +2286,16 @@ export const VoucherProvider = ({
       const d = (ev as CustomEvent<PlServerClientDeltaEventDetail>).detail;
       if (!d?.companyIds?.includes(companyId)) return;
       const refreshPlServerLive = () => {
-        mergeCollectionFromSqliteBump("vouchers");
-        mergeActiveCollectionsFromServerDelta();
+        const paths = new Set<string>(["vouchers", ...activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope)]);
+        for (const coll of paths) {
+          const key = `${companyId}::${coll}`;
+          const prevTimer = sqliteBumpMergeTimersRef.current[key];
+          if (prevTimer) clearTimeout(prevTimer);
+          sqliteBumpMergeTimersRef.current[key] = setTimeout(() => {
+            delete sqliteBumpMergeTimersRef.current[key];
+            mergeCollectionFromSqliteBump(coll, { remoteIncoming: true });
+          }, 80);
+        }
       };
       if (isServerGateCompanyContext) {
         refreshPlServerLive();
@@ -2075,7 +2336,7 @@ export const VoucherProvider = ({
           if (voucherUiStripTransientAttachments) {
             maybeQueueTransientAttachmentCleanup(restoreCompanyId, aliveCached);
           }
-          setVouchers(sortDocsByDateField(aliveCached, "date").map(stripMirrorMetaForEntityListRow));
+          commitVouchersSetter(setVouchers, sortDocsByDateField(aliveCached, "date").map(stripMirrorMetaForEntityListRow));
         })
         .catch(() => {});
     };
@@ -2419,7 +2680,21 @@ export const VoucherProvider = ({
             }
             if (legs.length > 0) {
                 legs.forEach((leg) => {
-                    if (leg.kind === "bank" || leg.kind === "party") return;
+                    if (leg.kind === "party") return;
+                    // Clearing bank upar already; destination bank / staff / tax / expense
+                    if (leg.kind === "bank") {
+                        if (bankId && String(leg.accountId) === bankId) return;
+                        const icDestBank = getInterCompanyLedgerAmounts(
+                            icVoucher,
+                            "account",
+                            leg.accountId,
+                            amount
+                        );
+                        if (!icDestBank.touched) return;
+                        if (icDestBank.debit > 0) addVal(accountMap, leg.accountId, "debit", icDestBank.debit);
+                        if (icDestBank.credit > 0) addVal(accountMap, leg.accountId, "credit", icDestBank.credit);
+                        return;
+                    }
                     const context =
                         leg.kind === "staff"
                               ? ("staff" as const)

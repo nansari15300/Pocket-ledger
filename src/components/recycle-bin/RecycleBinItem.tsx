@@ -32,11 +32,26 @@ export type DeletedItem = {
     isRootCollection?: boolean; // New prop for companies
     // Voucher-specific fields
     voucherNumber?: string;
+    /** voucher.type — payment_in / payment_out / contra / … */
+    voucherType?: string;
     date?: any;
     accountId?: string;
     fromAccountId?: string;
     toAccountId?: string;
+    bankAccountId?: string;
+    partyId?: string;
+    staffId?: string;
+    taxAccountId?: string;
+    incomeAccountId?: string;
+    expenseAccountId?: string;
+    salesAccountId?: string;
+    purchaseAccountId?: string;
+    payeeName?: string;
+    partyName?: string;
     accountName?: string;
+    /** Payment/Receipt style: From → To on the title row. */
+    fromAccountName?: string;
+    toAccountName?: string;
     userId?: string;
     deletedBy?: string;
     deletedByUserName?: string;
@@ -45,6 +60,75 @@ export type DeletedItem = {
     /** User recycle bin: deleted company row — local SQLite vs Firestore mirror. */
     companyStorageSource?: "local" | "online";
 };
+
+/** Recycle-bin title row: From → To (party/bank etc.). */
+export function resolveDeletedVoucherAccountSides(
+  item: Pick<
+    DeletedItem,
+    | "voucherType"
+    | "accountId"
+    | "fromAccountId"
+    | "toAccountId"
+    | "bankAccountId"
+    | "partyId"
+    | "staffId"
+    | "taxAccountId"
+    | "incomeAccountId"
+    | "expenseAccountId"
+    | "salesAccountId"
+    | "purchaseAccountId"
+    | "payeeName"
+    | "partyName"
+  >,
+  names: Record<string, string>
+): { from: string; to: string } {
+  const n = (id?: string | null) => {
+    const key = String(id || "").trim();
+    if (!key) return "";
+    return String(names[key] || "").trim();
+  };
+  const type = String(item.voucherType || "").trim();
+  const payee =
+    n(item.partyId) ||
+    n(item.staffId) ||
+    n(item.taxAccountId) ||
+    n(item.incomeAccountId) ||
+    n(item.expenseAccountId) ||
+    String(item.partyName || item.payeeName || "").trim();
+
+  if (type === "payment_in" || type === "direct_income") {
+    // Money in: payee → bank/cash
+    return {
+      from: payee || n(item.fromAccountId),
+      to: n(item.accountId) || n(item.toAccountId) || n(item.bankAccountId),
+    };
+  }
+  if (type === "payment_out" || type === "direct_expense") {
+    // Money out: bank/cash → payee
+    return {
+      from: n(item.accountId) || n(item.fromAccountId) || n(item.bankAccountId),
+      to: payee || n(item.toAccountId) || n(item.expenseAccountId),
+    };
+  }
+  if (type === "contra") {
+    return { from: n(item.fromAccountId), to: n(item.toAccountId) || n(item.accountId) };
+  }
+  if (type === "sale" || type === "credit_note" || type === "sales_return") {
+    return {
+      from: payee,
+      to: n(item.salesAccountId) || n(item.accountId) || "Sales",
+    };
+  }
+  if (type === "purchase" || type === "debit_note" || type === "purchase_return") {
+    return {
+      from: n(item.purchaseAccountId) || n(item.accountId) || "Purchase",
+      to: payee,
+    };
+  }
+  const from = n(item.fromAccountId) || payee;
+  const to = n(item.toAccountId) || n(item.accountId) || n(item.bankAccountId);
+  return { from, to };
+}
 
 interface RecycleBinItemProps {
     item: DeletedItem;
@@ -103,7 +187,7 @@ export function RecycleBinItem({
         >
             {/* Content – always on top */}
             <div className="flex-1 min-w-0 space-y-1.5">
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap min-w-0">
                     <p className="font-medium text-sm sm:text-base truncate">{item.name}</p>
                     {isCompanyCard && item.companyStorageSource && (
                         <Badge
@@ -113,25 +197,34 @@ export function RecycleBinItem({
                             {item.companyStorageSource === "local" ? "Local" : "Online"}
                         </Badge>
                     )}
-                    {item.voucherNumber && (
-                        <span className="text-xs font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded flex-shrink-0">
-                            {item.voucherNumber}
-                        </span>
-                    )}
+                    {/* name already = voucherNumber — badge mat dobara; right me From → To. */}
+                    {item.type === "Voucher" &&
+                        (() => {
+                            const from = String(item.fromAccountName || "").trim();
+                            const to = String(item.toAccountName || "").trim();
+                            const single = String(item.accountName || "").trim();
+                            if (from && to) {
+                                return (
+                                    <span className="text-xs text-muted-foreground truncate inline-flex items-center gap-1 min-w-0 max-w-full">
+                                        <span className="font-medium text-foreground/80 truncate">{from}</span>
+                                        <ArrowRight className="h-3 w-3 shrink-0 opacity-60" />
+                                        <span className="font-medium text-foreground/80 truncate">{to}</span>
+                                    </span>
+                                );
+                            }
+                            const one = from || to || single;
+                            if (!one) return null;
+                            return (
+                                <span className="text-xs text-muted-foreground truncate font-medium text-foreground/80">
+                                    {one}
+                                </span>
+                            );
+                        })()}
                 </div>
-                {!compactView && item.type === 'Voucher' && (
-                    <>
-                        {item.accountName && (
-                            <p className="text-xs text-muted-foreground whitespace-nowrap truncate">
-                                Account: <span className="font-medium">{item.accountName}</span>
-                            </p>
-                        )}
-                        {item.date && (
-                            <p className="text-xs text-muted-foreground whitespace-nowrap">
-                                Voucher Date: <span className="font-medium">{item.date instanceof Date ? item.date.toLocaleDateString() : new Date(item.date).toLocaleDateString()}</span>
-                            </p>
-                        )}
-                    </>
+                {!compactView && item.type === 'Voucher' && item.date && (
+                    <p className="text-xs text-muted-foreground whitespace-nowrap">
+                        Voucher Date: <span className="font-medium">{item.date instanceof Date ? item.date.toLocaleDateString() : new Date(item.date).toLocaleDateString()}</span>
+                    </p>
                 )}
                 {/* compactView bhi: company recycle bin me "Deleted by" dikhna chahiye */}
                 {item.deletedByUserName && (

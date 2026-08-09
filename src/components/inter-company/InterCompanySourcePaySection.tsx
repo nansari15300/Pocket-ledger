@@ -1,10 +1,9 @@
 "use client";
 
 /**
- * Source column — Source company (auto: current) + Company bank + Source account (optional).
+ * Source column — Source company (auto: current) + Company bank + Source account (must).
  */
 import { InterCompanySectionTitle } from "@/components/inter-company/InterCompanySectionTitle";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { InterCompanyAccountLookupSection } from "@/components/inter-company/InterCompanyAccountLookupSection";
@@ -44,9 +43,6 @@ type Props = {
   isPeerSourceCompany?: boolean;
   /** Edit: is copy role=source — sender ne khola → Payment Out badge */
   showPaymentOutBadge?: boolean;
-  onRequestReverse?: () => void;
-  reverseRequestPending?: boolean;
-  reverseRequestDone?: boolean;
   /** Revert accept — header par blue Reverted pill (Payment Out ke left) */
   showRevertedBadge?: boolean;
   companyBankAccountId?: string;
@@ -64,9 +60,6 @@ export function InterCompanySourcePaySection({
   fieldsDisabled = false,
   isPeerSourceCompany = false,
   showPaymentOutBadge = false,
-  onRequestReverse,
-  reverseRequestPending = false,
-  reverseRequestDone = false,
   showRevertedBadge = false,
   companyBankAccountId = "",
   onCompanyBankAccountIdChange,
@@ -78,7 +71,7 @@ export function InterCompanySourcePaySection({
     () => filterInterCompanyClearingBankEntities(entities, companyBankAccountId),
     [entities, companyBankAccountId]
   );
-  // Optional source account row: clearing bank ko hide rakho (sirf clearing row me dikhna chahiye).
+  // Source account row: clearing bank ko hide (sirf clearing row me)
   const optionalSourceEntities = useMemo(
     () => entities.filter((e) => !(e.kind === "bank" && e.isClearing === true)),
     [entities]
@@ -98,23 +91,7 @@ export function InterCompanySourcePaySection({
           title="Source company"
           flowBadge={showPaymentOutBadge ? "payment_out" : null}
           showRevertedBadge={showRevertedBadge}
-          trailingAction={
-            showPaymentOutBadge && onRequestReverse && !showRevertedBadge ? (
-              reverseRequestPending ? (
-                <span className="text-[10px] font-medium text-amber-700">Request pending</span>
-              ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 shrink-0 border-amber-600/60 text-xs"
-                  onClick={onRequestReverse}
-                >
-                  Request for reverse
-                </Button>
-              )
-            ) : null
-          }
+          trailingAction={null}
         />
         <p className="text-[11px] text-muted-foreground">
           {isPeerSourceCompany ? "Linked source company" : "Auto — current logged-in company"}
@@ -188,7 +165,7 @@ export function InterCompanySourcePaySection({
 
       <div className={interCompanyVoucherRowAccountClass}>
         <InterCompanyAccountLookupSection
-          sectionTitle="Source account (optional)"
+          sectionTitle="Source account"
           entities={optionalSourceEntities}
           entitiesLoading={entitiesLoading}
           activeCompanyId={company?.id ?? ""}

@@ -224,89 +224,16 @@ export function logCompanyOnlinePlFlip(
     extra?: Record<string, unknown>;
   }
 ): void {
-  if (typeof window === "undefined") return;
-  const activeGate = getActiveGate();
-  if (activeGate.type !== "local_server") return;
-  const beforeKind = flipKind(detail.before);
-  const afterKind = flipKind(detail.after);
-  const kindChanged = beforeKind !== afterKind;
-  const changedKeys = companyFlipChangedKeys(detail.before, detail.after);
-  const nullFlip = !detail.before !== !detail.after;
-  const featureFlip =
-    Boolean(detail.before?.enableCrossCompanyLedgerCopy) !==
-      Boolean(detail.after?.enableCrossCompanyLedgerCopy) ||
-    Boolean(detail.before?.enableShareForReconciliation) !==
-      Boolean(detail.after?.enableShareForReconciliation);
-
-  const idBefore = String(detail.before?.id || "").trim();
-  const idAfter = String(detail.after?.id || "").trim();
-  const source = detail.source || "unknown";
-  const gateType = activeGate.type;
-  const gateId = activeGate.id;
-  const pathname = detail.pathname || (typeof location !== "undefined" ? location.pathname : null);
-
-  // Pulse: har setCompany attempt (same-ref skip caller pe). Filter: CompanySetPulse
-  setPulseSeq += 1;
-  const sig = `${source}|${beforeKind}|${afterKind}|${changedKeys.join(",")}|${idBefore}|${idAfter}`;
-  const now = Date.now();
-  if (sig === lastPulseSig && now - lastPulseAt < 400) {
-    pulseSuppressed += 1;
-  } else {
-    if (pulseSuppressed > 0) {
-      console.warn(
-        `${PULSE_TAG} suppressed_repeat x${pulseSuppressed} last=${lastPulseSig}`
-      );
-      pulseSuppressed = 0;
-    }
-    lastPulseSig = sig;
-    lastPulseAt = now;
-    console.warn(
-      `${PULSE_TAG} #${setPulseSeq} ${beforeKind}→${afterKind} src=${source} keys=[${changedKeys.join(",") || "none"}]`,
-      {
-        at: new Date(now).toISOString(),
-        reason,
-        source,
-        beforeKind,
-        afterKind,
-        changedKeys,
-        nullFlip,
-        companyId: idAfter || idBefore || null,
-        gateType,
-        gateId,
-        pathname,
-        before: companyFlipSnapshot(detail.before),
-        after: companyFlipSnapshot(detail.after),
-        ...(detail.extra || {}),
-      }
-    );
-  }
-
-  // Full flip warn: sirf jab kind/null/feature/watch-keys badlen
-  if (!kindChanged && !featureFlip && !nullFlip && changedKeys.length === 0) return;
-
-  const msg = `${FLIP_TAG} ${reason} ${beforeKind}→${afterKind} src=${source} keys=[${changedKeys.join(",") || "none"}]`;
-  console.warn(msg, {
-    at: new Date().toISOString(),
-    beforeKind,
-    afterKind,
-    kindChanged,
-    featureFlip,
-    nullFlip,
-    changedKeys,
-    changedDetail: changedKeys.map((k) => ({
-      key: k,
-      from: k === "null→row" || k === "row→null" ? k : watchVal(detail.before, k),
-      to: k === "null→row" || k === "row→null" ? k : watchVal(detail.after, k),
-    })),
-    gateType,
-    gateId,
-    pathname,
-    source,
-    before: companyFlipSnapshot(detail.before),
-    after: companyFlipSnapshot(detail.after),
-    sticky: isStickyPlServerCompanyId(idAfter || idBefore),
-    ...(detail.extra || {}),
-  });
+  // Console flood off.
+  void reason;
+  void detail;
+  void FLIP_TAG;
+  void PULSE_TAG;
+  void setPulseSeq;
+  void lastPulseAt;
+  void lastPulseSig;
+  void pulseSuppressed;
+  void gateMeta;
 }
 
 export function logHeaderFeatureButtonFlip(
@@ -321,21 +248,5 @@ export function logHeaderFeatureButtonFlip(
     syncedFromCloud?: boolean;
   }
 ): void {
-  if (typeof window === "undefined") return;
-  const kind = flipKind({
-    id: detail.companyId || undefined,
-    storageOption: detail.storageOption,
-    syncedFromCloud: detail.syncedFromCloud,
-    plServerShared: detail.plServerShared,
-    enableCrossCompanyLedgerCopy: detail.enableCrossCompanyLedgerCopy,
-    enableShareForReconciliation: detail.enableShareForReconciliation,
-  });
-  console.warn(
-    `[HeaderFeatureButtonFlip] sync=${detail.syncLedgerVisible} recon=${detail.shareReconVisible} kind=${kind}`,
-    {
-      at: new Date().toISOString(),
-      ...detail,
-      kind,
-    }
-  );
+  void detail;
 }

@@ -6,6 +6,10 @@ import { ref, uploadBytes, getDownloadURL, deleteObject, getBlob } from "firebas
 import { storage } from "./firebase";
 import { format } from "date-fns";
 import { shouldStageEntityProfileFilesLocally } from "@/lib/entityProfileLocalFiles";
+import {
+  buildCompanyLogoStorageObjectPath,
+  resolveCompanyUsesPocketLedgerStorage,
+} from "@/lib/firebaseStoragePaths";
 
 type ActionState = {
   returnPath: string;
@@ -105,13 +109,19 @@ export function buildCompanyLogoStoragePath(
 export async function uploadCompanyLogo(
   companyId: string,
   companyName: string | undefined,
-  file: File
+  file: File,
+  options?: { usePocketLedger?: boolean }
 ): Promise<string> {
   if (!companyId) throw new Error("Company ID is missing");
   if (await shouldStageEntityProfileFilesLocally(companyId)) {
     throw new Error("local_company_storage");
   }
-  const fullPath = buildCompanyLogoStoragePath(companyId, companyName, file.name);
+  const usePocketLedger =
+    options?.usePocketLedger === true ||
+    (options?.usePocketLedger !== false && (await resolveCompanyUsesPocketLedgerStorage(companyId)));
+  const fullPath = usePocketLedger
+    ? buildCompanyLogoStorageObjectPath(companyId, true, file.name)
+    : buildCompanyLogoStoragePath(companyId, companyName, file.name);
   const fileRef = ref(storage, fullPath);
   const body =
     typeof Buffer !== "undefined"

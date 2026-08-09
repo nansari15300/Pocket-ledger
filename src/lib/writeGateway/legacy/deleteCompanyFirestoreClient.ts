@@ -9,6 +9,7 @@ import {
   deleteDoc,
   deleteField,
   doc,
+  getDoc,
   getDocs,
   limit,
   query,
@@ -16,6 +17,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
+import { deleteCompanyFirebaseStorageFolder } from "@/lib/deleteCompanyStorageFolder";
 
 /** `companies/{id}` ke neeche jo subcollections app me use hoti hain — root delete se pehle khali karo. */
 const COMPANY_SUBCOLLECTIONS = [
@@ -58,6 +60,22 @@ export async function deleteCompanyComplete(
   if (!cid) return { success: false, error: "Invalid company id" };
 
   try {
+    let companyName = "";
+    try {
+      const snap = await getDoc(doc(firestore, "companies", cid));
+      if (snap.exists()) {
+        companyName = String((snap.data() as { name?: string } | undefined)?.name || "");
+      }
+    } catch {
+      /* optional */
+    }
+
+    try {
+      await deleteCompanyFirebaseStorageFolder({ companyId: cid, companyName });
+    } catch (e) {
+      console.warn("[deleteCompanyComplete] storage folder wipe failed", cid, e);
+    }
+
     for (const sub of COMPANY_SUBCOLLECTIONS) {
       await deleteAllDocumentsInCollection(`companies/${cid}/${sub}`);
     }

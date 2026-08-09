@@ -43,6 +43,7 @@ import {
   formatQuantity,
   getOppositeAccountLabel,
   getParticularsText,
+  getDisplayType,
   getStatusLabel,
   getStatusDetail,
   getStatusDetailVouchers,
@@ -92,8 +93,10 @@ import {
   isOnlineCompanyAttachmentFilesTickEnabled,
   setVisiblePageAttachmentUrls,
 } from "@/lib/attachmentNetworkGate";
+import { FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { shouldSkipVisibleRowFullIdlePrewarmOnWeb } from "@/lib/webAttachmentLazyLoadPolicy";
 import { getVoucherAttachmentUrlsForUi, voucherAttachmentUiOptionsForCompany } from "@/lib/voucherAttachmentNormalize";
+import { publishVoucherAttachmentListReuseIndex } from "@/lib/voucherAttachmentListReuseIndex";
 import { statementCheckTxnId } from "@/lib/statementCheckModeStorage";
 import { stripSpendWiseSyntheticOpeningMaster } from "@/lib/ledgerPagePrint";
 import {
@@ -349,6 +352,13 @@ export function TransactionsTable({
 }: TransactionsTableProps) {
   const { company, companyId } = useCompany();
   const voucherAttachmentUiOpts = useMemo(() => voucherAttachmentUiOptionsForCompany(company), [company]);
+  const [filesTickEpoch, setFilesTickEpoch] = useState(0);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPrefs = () => setFilesTickEpoch((n) => n + 1);
+    window.addEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, onPrefs);
+    return () => window.removeEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, onPrefs);
+  }, []);
   const [syncingVoucherIds, setSyncingVoucherIds] = useState<Set<string>>(() => new Set());
   const [pendingOutboxVoucherIds, setPendingOutboxVoucherIds] = useState<Set<string>>(() => new Set());
   const [dataSyncEpoch, setDataSyncEpoch] = useState(0);
@@ -435,6 +445,9 @@ export function TransactionsTable({
       return row?.__plSyncStatus === nextStatus ? row : { ...row, __plSyncStatus: nextStatus };
     }) as typeof list;
   }, [transactions, fiscalPartitionOpts.at, fiscalMergeBannerLabel, pendingOutboxVoucherIds]);
+  useEffect(() => {
+    publishVoucherAttachmentListReuseIndex(tableTransactions as any[], voucherAttachmentUiOpts);
+  }, [tableTransactions, voucherAttachmentUiOpts]);
   /** OB narration row blue tint — openingBalanceNarrationRow `useSpendWiseOpeningBalanceCard` se pehle chahiye */
   useEffect(() => {
     const cid = String(companyId || "").trim();
@@ -871,16 +884,10 @@ export function TransactionsTable({
     return formatCurrency(value, {noSuffix: true, context: 'transaction'});
   }, [getDisplayValueProp, formatCurrency]);
 
-  const rowTextSearchHighlight = useMemo(() => {
-    const filterText = Object.values(filters || {})
-      .map((v) => String(v || "").trim())
-      .filter(Boolean)
-      .join(" ");
-    return [transactionCardSearchHighlight, filterText]
-      .map((v) => String(v || "").trim())
-      .filter(Boolean)
-      .join(" ");
-  }, [filters, transactionCardSearchHighlight]);
+  const rowTextSearchHighlight = useMemo(
+    () => String(transactionCardSearchHighlight || "").trim(),
+    [transactionCardSearchHighlight]
+  );
 
 
   // Header filter: `modal` true — input pe pehla click dismiss na ho (non-modal me DismissableLayer kabhi filter box ko "outside" maan leta hai)
@@ -1309,7 +1316,7 @@ export function TransactionsTable({
       }
       if (timeoutHandle != null) globalThis.clearTimeout(timeoutHandle);
     };
-  }, [visibleAttachmentUrls, companyId]);
+  }, [visibleAttachmentUrls, companyId, filesTickEpoch]);
   const dateCols = dateSystem === "Both" ? 2 : 1;
   const userCol = context === 'note' ? 0 : 1;
   const fileCol = showFileBySelection ? 1 : 0;
@@ -1877,8 +1884,13 @@ export function TransactionsTable({
   );
 
   if (useMobileCardView) {
-    const highlightQ = (rowTextSearchHighlight ?? "").trim();
-    const hl = (s: string) => highlightQueryInText(s, highlightQ);
+    const globalHlQ = (rowTextSearchHighlight ?? "").trim();
+    const hlForColumn = (columnKey: string) => {
+      const colQ = String((filters && filters[columnKey]) || "").trim();
+      const q = [globalHlQ, colQ].filter(Boolean).join(" ");
+      return (s: string) => highlightQueryInText(s, q);
+    };
+    const hl = hlForColumn("");
     const renderMobileCard = (t: any, key: string, insideGroup: boolean) => {
       if (t.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
         const label =
@@ -1964,9 +1976,17 @@ export function TransactionsTable({
         return typeof rendered === "string" || typeof rendered === "number" ? hl(String(rendered)) : rendered;
       };
       const oppositeLabel = getOppositeAccountLabel(t, names, context, contextId, groupEntityType);
-      const titleLabel = (context === "daybook" || context === "item" || (context === "group" && (t.type === "sale" || t.type === "purchase")))
-        ? `${t.voucherNumber} - ${oppositeLabel}`
-        : `${t.voucherNumber || t.type || ""}${oppositeLabel ? ` - ${oppositeLabel}` : ""}`.trim() || "Transaction";
+      const displayType = getDisplayType(t);
+      const oppositeClean = (() => {
+        const text = String(oppositeLabel || "").trim();
+        if (!text || text === "—" || text === "N/A" || text === "-") return "";
+        return text;
+      })();
+      // APK/mobile: voucher type + opposite name (Payment In / party / bank) always show on entity ledgers.
+      const titleLabel = [t.voucherNumber || t.type || "", displayType, oppositeClean]
+        .map((p) => String(p || "").trim())
+        .filter(Boolean)
+        .join(" · ") || "Transaction";
       const getGroupAccountName = () => {
         const getName = (id: string | undefined) => (id ? (names[id] || "—") : "");
         const id = t.type === "direct_expense" ? (t.toAccountId || t.expenseAccountId) :
@@ -2028,7 +2048,10 @@ export function TransactionsTable({
             <div className={cn("relative flex shrink-0 items-center justify-end font-bold text-sm", showFileBySelection && "pl-8", mainAmountClass)}>
               {showFileBySelection ? (
                 <div className="absolute left-0 top-1/2 -translate-y-1/2">
-                  <MobileTransactionFilePreview transaction={t} />
+                  <MobileTransactionFilePreview
+                    transaction={t}
+                    showAll={fileShowAll && fileDisplayMode === "preview"}
+                  />
                 </div>
               ) : null}
               <span>{amount > 0 ? renderHighlightedMobileAmountOrQty(amount) : "-"}</span>
@@ -2726,6 +2749,7 @@ export function TransactionsTable({
                                           syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
                                           onSyncNow={handleSyncVoucherNow}
                                           textSearchHighlight={rowTextSearchHighlight}
+                                          columnFilters={filters}
                                           {...getSpendWiseRowMenuProps(t)}
                                         />
                                         {/* Card ke andar txn ke beech — alag sep row (zoom-stable border-top) */}
@@ -2798,6 +2822,7 @@ export function TransactionsTable({
                           syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
                           onSyncNow={handleSyncVoucherNow}
                           textSearchHighlight={rowTextSearchHighlight}
+                          columnFilters={filters}
                           {...getSpendWiseRowMenuProps(t)}
                         />
                       </React.Fragment>
@@ -2874,6 +2899,7 @@ export function TransactionsTable({
                         syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
                         onSyncNow={handleSyncVoucherNow}
                         textSearchHighlight={rowTextSearchHighlight}
+                        columnFilters={filters}
                         {...getSpendWiseRowMenuProps(t)}
                       />
                     );

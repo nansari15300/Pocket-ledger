@@ -1,4 +1,4 @@
-﻿
+
 
 "use client";
 
@@ -21,7 +21,6 @@ import {
 import {
   Edit,
   Printer,
-  Wand2,
   Calendar as CalendarIcon,
   ChevronsLeft,
   ChevronLeft,
@@ -159,9 +158,13 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 // Shared header pill height — Party + sab ledger detail/report headers
 import {
+  LEDGER_HEADER_OUTER_ROW_CN,
+  LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
+  LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 
 const getInitials = (name: string) => {
@@ -209,8 +212,14 @@ function filterByStatus(txns: any[], statusFilter: StatusFilter): any[] {
   return txns.filter((t) => {
     // Notes have no payment status; always show them regardless of status filter
     if (t.type === "note") return true;
-    // Journal/Contra/Inter Company — bill-wise status nahi; filter se hide na hon
-    if (t.type === "journal" || t.type === "contra" || t.type === "inter_company") return true;
+    // Journal/Adjustment/Contra/Inter Company — bill-wise status nahi; filter se hide na hon
+    if (
+      t.type === "journal" ||
+      t.type === "adjustment" ||
+      t.type === "contra" ||
+      t.type === "inter_company"
+    )
+      return true;
     if (statusFilter.paid && t.paymentStatus === "paid") return true;
     if (statusFilter.unpaid && t.paymentStatus === "unpaid") return true;
     if (statusFilter.partial && t.paymentStatus === "partially_paid") return true;
@@ -1375,11 +1384,11 @@ export function PartyDetails({
     <>
       {party?.id && <EntityAlarmPopup context="Party" entityId={party.id} />}
       <div className="h-full min-h-full flex flex-col overflow-hidden">
-        {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            {/* Part 1: account name through balance — single line, no wrap */}
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
+        {/* Header: identity + pills ek hi gap (pill gap); Party name chhoti width pe max 2 line (avatar h-12), pattika height nahi badhe */}
+        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+          <div className={LEDGER_HEADER_OUTER_ROW_CN}>
+            {/* Cluster: avatar + name + edit + balance */}
+            <div className={LEDGER_HEADER_IDENTITY_CN}>
               {isMobile && onBack && (
                 <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
                   <ArrowLeft className="h-5 w-5" />
@@ -1396,54 +1405,50 @@ export function PartyDetails({
                   }
                 />
               </EntityFileAttachmentHover>
-              <div className="flex flex-col min-w-0 gap-0.5">
-                <div className="flex items-center gap-2 flex-nowrap min-w-0">
-                  <h2 className="text-xl font-semibold truncate">{party.name}</h2>
-                  {party.id !== 'all' && !(party as any).isSystemAccount && (
-                    <EditPartyDialog
-                      party={party}
-                      onPartyUpdated={handlePartyUpdated}
-                      onPartyDeleted={() => onPartyDeleted(party.id)}
-                      hasTransactions={processedTransactions.length > 0}
-                    >
-                      <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                    </EditPartyDialog>
-                  )}
-                  <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                    {formatCurrency(headerClosingBalance, { showDrCr: true })}
-                  </div>
-                  {party.id !== "all" && !(party as any).isSystemAccount ? (
-                    <AddVoucherDialog
-                      defaultTab="adjustment"
-                      allowedTabs={["adjustment"]}
-                      defaultVoucherData={{
-                        defaultTab: "adjustment",
-                        adjustmentTarget: { id: party.id, entityType: "party", name: party.name },
-                      }}
-                    >
-                      <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
-                        <Wand2 className="mr-2 h-3.5 w-3.5" />
-                        Adjust Balance
-                      </Button>
-                    </AddVoucherDialog>
-                  ) : null}
-                  {/* Linked reconciliation — balance ke baad, related account compare */}
-                  {party.id !== "all" && !(party as any).isSystemAccount ? (
-                    <ReconciliationAccountButton accountId={party.id} />
-                  ) : null}
-                </div>
+              <h2 className={LEDGER_HEADER_TITLE_CN} title={party.name}>
+                {party.name}
+              </h2>
+              {party.id !== 'all' && !(party as any).isSystemAccount && (
+                <EditPartyDialog
+                  party={party}
+                  onPartyUpdated={handlePartyUpdated}
+                  onPartyDeleted={() => onPartyDeleted(party.id)}
+                  hasTransactions={processedTransactions.length > 0}
+                >
+                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                </EditPartyDialog>
+              )}
+              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                {formatCurrency(headerClosingBalance, { showDrCr: true })}
               </div>
             </div>
-            {/* Part 2: date range, Add Note, print — single line, no wrap; on small screens this row is below */}
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            {/* Cluster: action pills — same gap-1.5 as identity cluster */}
+            <div className={LEDGER_HEADER_PILL_ROW_CN}>
+              {party.id !== "all" && !(party as any).isSystemAccount ? (
+                <AddVoucherDialog
+                  defaultTab="adjustment"
+                  allowedTabs={["adjustment"]}
+                  defaultVoucherData={{
+                    defaultTab: "adjustment",
+                    adjustmentTarget: { id: party.id, entityType: "party", name: party.name },
+                  }}
+                >
+                  <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
+                    Adjust Balance
+                  </Button>
+                </AddVoucherDialog>
+              ) : null}
+              {party.id !== "all" && !(party as any).isSystemAccount ? (
+                <ReconciliationAccountButton accountId={party.id} />
+              ) : null}
               <LedgerUnapprovedFilterButton
                 active={unapprovedOnly}
                 onClick={toggleUnapprovedOnly}
               />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                <div className="flex items-center gap-1 flex-shrink-0">
+                <div className="flex items-center gap-1.5 flex-shrink-0">
                   <BsDatePicker
                     isRange
                     valueAD={dateRange}
@@ -1454,7 +1459,7 @@ export function PartyDetails({
                 </div>
               )}
               {(dateSystem === 'AD' || dateSystem === 'Both') && (
-                <div className="flex items-center gap-1 flex-shrink-0">
+                <div className="flex items-center gap-1.5 flex-shrink-0">
                   <Popover open={isDesktopCalendarOpen} onOpenChange={setIsDesktopCalendarOpen}>
                     <PopoverTrigger asChild>
                       <Button

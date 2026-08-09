@@ -167,6 +167,15 @@ async function upsertCloudCompanyDoc(
   ) {
     return;
   }
+  // PL / local / Drive role authority — even when same id exists as Online Firebase company.
+  try {
+    const { companyRolesAuthorityExcludesFirebase } = await import("@/lib/permissionConfigSource");
+    if (existing && companyRolesAuthorityExcludesFirebase(existing as any)) {
+      return;
+    }
+  } catch {
+    /* optional gate */
+  }
   const localMs =
     typeof (existing as unknown as { updatedAt?: unknown })?.updatedAt === "number"
       ? (existing as unknown as { updatedAt: number }).updatedAt

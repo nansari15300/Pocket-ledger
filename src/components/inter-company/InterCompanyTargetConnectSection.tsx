@@ -68,11 +68,11 @@ type Props = {
   targetCompanyId: string;
   onTargetCompanyChange: (id: string) => void;
   comboboxOptions: { value: string; label: string }[];
-  resolveCompanyIdByCompanyCode: (code: string) => string | null;
-  /** Entity Inter Co. A/c se company track (C-prefix) */
-  resolveCompanyIdByAcNo: (ac: string) => string | null;
+  resolveCompanyIdByCompanyCode: (code: string) => Promise<string | null>;
+  /** Entity Inter Co. A/c se company track (C-prefix) — Firebase company lookup */
+  resolveCompanyIdByAcNo: (ac: string) => Promise<string | null>;
   resolveCompaniesByMobile: (mob: string) => InterCompanyPartnerRow[];
-  resolveCompaniesByPan: (pan: string) => InterCompanyPartnerRow[];
+  resolveCompaniesByPan: (pan: string) => Promise<InterCompanyPartnerRow[]>;
   companyCodeForCompanyId: (id: string) => string;
   acNoForCompanyId: (id: string) => string;
   panForCompanyId: (id: string) => string;
@@ -93,12 +93,16 @@ type Props = {
   targetPartnerPrivacy?: InterCompanyPartnerPrivacy | null;
   formMessage?: ReactNode;
   fieldsDisabled?: boolean;
+  /** Target apni taraf (clearing + target account) — company-select row se alag lock (default: fieldsDisabled) */
+  accountFieldsDisabled?: boolean;
   /** Edit read-only: company naam combobox ke bajay Input */
   targetCompanyDisplayName?: string;
   /** Edit: is copy role=target — receiver ne khola → Payment In badge */
   showPaymentInBadge?: boolean;
   /** Revert accept — header par blue Reverted pill (Payment In ke left) */
   showRevertedBadge?: boolean;
+  /** Target header trailing — e.g. “Also apply on other side” tick */
+  headerTrailing?: ReactNode;
   companyBankAccountId?: string;
   onCompanyBankAccountIdChange?: (id: string) => void;
 };
@@ -127,9 +131,11 @@ export function InterCompanyTargetConnectSection({
   targetPartnerPrivacy = null,
   formMessage,
   fieldsDisabled = false,
+  accountFieldsDisabled,
   targetCompanyDisplayName = "",
   showPaymentInBadge = false,
   showRevertedBadge = false,
+  headerTrailing = null,
   companyBankAccountId = "",
   onCompanyBankAccountIdChange,
 }: Props) {
@@ -246,8 +252,15 @@ export function InterCompanyTargetConnectSection({
     (raw: string) => {
       const norm = normalizeInterCompanyCompanyCode(raw);
       if (!isValidInterCompanyCompanyCode(norm)) return;
-      const id = resolveCompanyIdByCompanyCode(norm);
-      if (id) applyCompany(id);
+      void (async () => {
+        setCompanyRowSearching(true);
+        try {
+          const id = await resolveCompanyIdByCompanyCode(norm);
+          if (id) applyCompany(id);
+        } finally {
+          setCompanyRowSearching(false);
+        }
+      })();
     },
     [applyCompany, resolveCompanyIdByCompanyCode]
   );
@@ -255,24 +268,29 @@ export function InterCompanyTargetConnectSection({
   const tryAutoApplyCompanyAc = useCallback(
     (raw: string) => {
       void (async () => {
-        if (!fieldsDisabled && lookupPartners.length > 0) {
-          const kind = classifyAccountAcInput(raw);
-          if (kind === "entity_inter_co") {
-            const hit = await findEntityHitByInterCoAcNo(raw, lookupPartners);
-            if (hit) {
-              applyCompany(hit.companyId, hit);
-              return;
+        setCompanyRowSearching(true);
+        try {
+          if (!fieldsDisabled && lookupPartners.length > 0) {
+            const kind = classifyAccountAcInput(raw);
+            if (kind === "entity_inter_co") {
+              const hit = await findEntityHitByInterCoAcNo(raw, lookupPartners);
+              if (hit) {
+                applyCompany(hit.companyId, hit);
+                return;
+              }
+            }
+            if (kind === "entity_bank_ac") {
+              const hits = await searchEntityHitsByBankAcNo(raw, lookupPartners);
+              if (finishCompanyRowEntityHits(hits)) return;
             }
           }
-          if (kind === "entity_bank_ac") {
-            const hits = await searchEntityHitsByBankAcNo(raw, lookupPartners);
-            if (finishCompanyRowEntityHits(hits)) return;
-          }
+          const norm = normalizeInterCompanyAcNo(raw);
+          if (!isValidInterCompanyAcNo(norm)) return;
+          const id = await resolveCompanyIdByAcNo(norm);
+          if (id) applyCompany(id);
+        } finally {
+          setCompanyRowSearching(false);
         }
-        const norm = normalizeInterCompanyAcNo(raw);
-        if (!isValidInterCompanyAcNo(norm)) return;
-        const id = resolveCompanyIdByAcNo(norm);
-        if (id) applyCompany(id);
       })();
     },
     [applyCompany, fieldsDisabled, finishCompanyRowEntityHits, lookupPartners, resolveCompanyIdByAcNo]
@@ -283,16 +301,21 @@ export function InterCompanyTargetConnectSection({
       const pan = normalizeInterCompanyPan(raw);
       if (pan.length < 10) return;
       void (async () => {
-        if (!fieldsDisabled && lookupPartners.length > 0) {
-          const entityHits = await searchEntityHitsByPan(pan, lookupPartners);
-          if (finishCompanyRowEntityHits(entityHits)) return;
+        setCompanyRowSearching(true);
+        try {
+          if (!fieldsDisabled && lookupPartners.length > 0) {
+            const entityHits = await searchEntityHitsByPan(pan, lookupPartners);
+            if (finishCompanyRowEntityHits(entityHits)) return;
+          }
+          const hits = await resolveCompaniesByPan(pan);
+          if (hits.length === 1) {
+            applyCompany(hits[0]!.id);
+            return;
+          }
+          if (hits.length > 1) openCompanyPick(hits);
+        } finally {
+          setCompanyRowSearching(false);
         }
-        const hits = resolveCompaniesByPan(pan);
-        if (hits.length === 1) {
-          applyCompany(hits[0]!.id);
-          return;
-        }
-        if (hits.length > 1) openCompanyPick(hits);
       })();
     },
     [
@@ -332,58 +355,65 @@ export function InterCompanyTargetConnectSection({
     ]
   );
 
-  const commitCompanyCode = useCallback(() => {
+  const commitCompanyCode = useCallback(async () => {
     if (!isValidInterCompanyCompanyCode(companyCodeInput)) {
       if (companyCodeInput.length > 0) {
         toast.error("Company Code must be 12 characters (letters A–Z and digits 0–9, both required)");
       }
       return;
     }
-    const id = resolveCompanyIdByCompanyCode(companyCodeInput);
-    if (!id) {
-      toast.error("No linked company found for this Company Code");
-      return;
+    setCompanyRowSearching(true);
+    try {
+      const id = await resolveCompanyIdByCompanyCode(companyCodeInput);
+      if (!id) {
+        toast.error("No company found for this Company Code");
+        return;
+      }
+      applyCompany(id);
+    } finally {
+      setCompanyRowSearching(false);
     }
-    applyCompany(id);
   }, [applyCompany, companyCodeInput, resolveCompanyIdByCompanyCode]);
 
   const commitCompanyAc = useCallback(async () => {
     const raw = companyAcInput.trim();
     if (!raw) return;
 
-    if (!fieldsDisabled && lookupPartners.length > 0) {
-      setCompanyRowSearching(true);
-      try {
-        const kind = classifyAccountAcInput(raw);
-        if (kind === "entity_inter_co") {
-          const hit = await findEntityHitByInterCoAcNo(raw, lookupPartners);
-          if (hit) {
-            applyCompany(hit.companyId, hit);
-            return;
+    setCompanyRowSearching(true);
+    try {
+      if (!fieldsDisabled && lookupPartners.length > 0) {
+        try {
+          const kind = classifyAccountAcInput(raw);
+          if (kind === "entity_inter_co") {
+            const hit = await findEntityHitByInterCoAcNo(raw, lookupPartners);
+            if (hit) {
+              applyCompany(hit.companyId, hit);
+              return;
+            }
           }
+          if (kind === "entity_bank_ac") {
+            const hits = await searchEntityHitsByBankAcNo(raw, lookupPartners);
+            if (finishCompanyRowEntityHits(hits)) return;
+          }
+        } catch (err) {
+          console.warn("[IC company row] entity A/c search:", err);
         }
-        if (kind === "entity_bank_ac") {
-          const hits = await searchEntityHitsByBankAcNo(raw, lookupPartners);
-          if (finishCompanyRowEntityHits(hits)) return;
-        }
-      } catch (err) {
-        console.warn("[IC company row] entity A/c search:", err);
-      } finally {
-        setCompanyRowSearching(false);
       }
-    }
 
-    const norm = normalizeInterCompanyAcNo(raw);
-    if (!isValidInterCompanyAcNo(norm)) {
-      toast.error("Use company A/c (C + 14 digits) or party/bank Inter Co. A/c");
-      return;
+      const norm = normalizeInterCompanyAcNo(raw);
+      if (!isValidInterCompanyAcNo(norm)) {
+        toast.error("Use company A/c (C + 14 digits) or party/bank Inter Co. A/c");
+        return;
+      }
+      const id = await resolveCompanyIdByAcNo(norm);
+      if (!id) {
+        toast.error("No company found for this A/c No");
+        return;
+      }
+      applyCompany(id);
+    } finally {
+      setCompanyRowSearching(false);
     }
-    const id = resolveCompanyIdByAcNo(norm);
-    if (!id) {
-      toast.error("No linked company found for this A/c No");
-      return;
-    }
-    applyCompany(id);
   }, [
     applyCompany,
     companyAcInput,
@@ -439,28 +469,30 @@ export function InterCompanyTargetConnectSection({
       return;
     }
 
-    if (!fieldsDisabled && lookupPartners.length > 0) {
-      setCompanyRowSearching(true);
-      try {
-        const entityHits = await searchEntityHitsByPan(pan, lookupPartners);
-        if (finishCompanyRowEntityHits(entityHits)) return;
-      } catch (err) {
-        console.warn("[IC company row] entity PAN search:", err);
-      } finally {
-        setCompanyRowSearching(false);
+    setCompanyRowSearching(true);
+    try {
+      if (!fieldsDisabled && lookupPartners.length > 0) {
+        try {
+          const entityHits = await searchEntityHitsByPan(pan, lookupPartners);
+          if (finishCompanyRowEntityHits(entityHits)) return;
+        } catch (err) {
+          console.warn("[IC company row] entity PAN search:", err);
+        }
       }
-    }
 
-    const hits = resolveCompaniesByPan(pan);
-    if (hits.length === 0) {
-      toast.error("No linked company found for this PAN");
-      return;
+      const hits = await resolveCompaniesByPan(pan);
+      if (hits.length === 0) {
+        toast.error("No company found for this PAN");
+        return;
+      }
+      if (hits.length === 1) {
+        applyCompany(hits[0]!.id);
+        return;
+      }
+      openCompanyPick(hits);
+    } finally {
+      setCompanyRowSearching(false);
     }
-    if (hits.length === 1) {
-      applyCompany(hits[0]!.id);
-      return;
-    }
-    openCompanyPick(hits);
   }, [
     applyCompany,
     companyPanInput,
@@ -471,9 +503,9 @@ export function InterCompanyTargetConnectSection({
     resolveCompaniesByPan,
   ]);
 
-  /** Target account se company track — entity Inter Co. A/c (C-prefix company A/c) */
-  const trackCompanyByAcNo = (acNo: string): boolean => {
-    const id = resolveCompanyIdByAcNo(acNo);
+  /** Target account se company track — company A/c via Firebase */
+  const trackCompanyByAcNo = async (acNo: string): Promise<boolean> => {
+    const id = await resolveCompanyIdByAcNo(acNo);
     if (!id) return false;
     applyCompany(id);
     return true;
@@ -492,11 +524,11 @@ export function InterCompanyTargetConnectSection({
     return true;
   };
 
-  /** Target account se company track — company PAN */
-  const trackCompanyByPan = (pan: string): boolean => {
+  /** Target account se company track — company PAN via Firebase */
+  const trackCompanyByPan = async (pan: string): Promise<boolean> => {
     const normalized = normalizeInterCompanyPan(pan);
     if (normalized.length < 4) return false;
-    const hits = resolveCompaniesByPan(normalized);
+    const hits = await resolveCompaniesByPan(normalized);
     if (hits.length === 0) return false;
     if (hits.length === 1) {
       applyCompany(hits[0]!.id);
@@ -521,7 +553,8 @@ export function InterCompanyTargetConnectSection({
     () => entities.filter((e) => !(e.kind === "bank" && e.isClearing === true)),
     [entities]
   );
-  const showReadOnlyAccounts = fieldsDisabled && !entitiesLoading;
+  const accountsDisabled = accountFieldsDisabled ?? fieldsDisabled;
+  const showReadOnlyAccounts = accountsDisabled && !entitiesLoading;
   const companyNameDisplay =
     targetCompanyDisplayName ||
     comboboxOptions.find((o) => o.value === targetCompanyId)?.label ||
@@ -539,6 +572,7 @@ export function InterCompanyTargetConnectSection({
           title="Target company"
           flowBadge={showPaymentInBadge ? "payment_in" : null}
           showRevertedBadge={showRevertedBadge}
+          trailingAction={headerTrailing}
         />
         <div className={interCompanyCompanyFieldsRowClass}>
           <div className={cn(interCompanyFieldColClass, "min-w-[8.5rem]")}>
@@ -728,8 +762,8 @@ export function InterCompanyTargetConnectSection({
           companyAcNo={companyAcForEntity}
           companyMobile={companyMobDisplay}
           companyPan={companyPanDisplay}
-          voucherCreateLookup={!fieldsDisabled}
-          disabled={fieldsDisabled || !onCompanyBankAccountIdChange}
+          voucherCreateLookup={!accountsDisabled}
+          disabled={accountsDisabled || !onCompanyBankAccountIdChange}
           allowLookupWithoutCompany={showReadOnlyAccounts}
           showDetails={false}
           disabledHint={
@@ -742,7 +776,7 @@ export function InterCompanyTargetConnectSection({
 
       <div className={interCompanyVoucherRowAccountClass}>
         <InterCompanyAccountLookupSection
-          sectionTitle="Target account (optional)"
+          sectionTitle="Target account"
           entities={optionalTargetEntities}
           entitiesLoading={!!targetCompanyId && entitiesLoading}
           enableCrossCompanyLookup={lookupPartners.length > 0}
@@ -752,7 +786,7 @@ export function InterCompanyTargetConnectSection({
           autoEnsureInterCoAcNo
           showAvatarsInPicker={showAvatarsInPicker}
           partnerSearchBy={targetPartnerPrivacy?.searchBy}
-          voucherCreateLookup={!fieldsDisabled}
+          voucherCreateLookup={!accountsDisabled}
           partnerViewPrivacy={targetPartnerPrivacy}
           entityKind={payeeKind}
           onEntityKindChange={onPayeeKindChange}
@@ -764,7 +798,7 @@ export function InterCompanyTargetConnectSection({
           onTrackCompanyByAcNo={trackCompanyByAcNo}
           onTrackCompanyByMobile={trackCompanyByMobile}
           onTrackCompanyByPan={trackCompanyByPan}
-          disabled={fieldsDisabled}
+          disabled={accountsDisabled}
           allowLookupWithoutCompany={showReadOnlyAccounts}
           seedEntityHit={seedEntityHit}
           onSeedEntityHitHandled={() => setSeedEntityHit(null)}

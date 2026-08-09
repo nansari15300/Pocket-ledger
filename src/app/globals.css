@@ -796,6 +796,16 @@ body[class*="theme-"] [data-pl-header-preview-switch][data-preview-mode="click"]
   border-color: rgb(74 222 128) !important;
   background-color: rgb(220 252 231) !important;
 }
+/* Bank list Company|Bank switch — light green track + green border (theme black mat) */
+body[class*="theme-"] [data-pl-bank-drcr-perspective-switch] {
+  border-width: 2px !important;
+  border-color: rgb(74 222 128) !important; /* green-400, bg se thoda darker */
+  background-color: rgb(220 252 231) !important; /* green-100 */
+  background-image: none !important;
+}
+body[class*="theme-"] [data-pl-bank-drcr-perspective-switch] > span[aria-hidden="true"]:not(.sr-only) {
+  background-color: rgb(74 222 128) !important; /* green-400 knob */
+}
 /* i icon — light blue, koi black circle/border nahi */
 body[class*="theme-"] [data-pl-header-preview-info] {
   border: none !important;
@@ -806,6 +816,16 @@ body[class*="theme-"] [data-pl-header-preview-info] {
 body[class*="theme-"] [data-pl-header-preview-info]:hover {
   color: rgb(14 165 233) !important;
   background-color: rgb(224 242 254) !important;
+}
+body[class*="theme-"] [data-pl-bank-drcr-perspective-info] {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  color: rgb(56 189 248) !important;
+}
+body[class*="theme-"] [data-pl-bank-drcr-perspective-info]:hover {
+  color: rgb(14 165 233) !important;
+  background-color: rgb(224 242 254 / 0.5) !important;
 }
 
 /* PC ledger footer — parent pill + rows select (black box mat) */
@@ -2276,6 +2296,14 @@ button.day_selected.is-today.has-transactions {
     border-width: 2px !important;
     border-color: rgb(134 239 172) !important;
     background-color: rgb(240 253 244) !important;
+  }
+  body[class*="theme-"] [data-pl-bank-drcr-perspective-switch] {
+    border-width: 2px !important;
+    border-color: rgb(74 222 128) !important;
+    background-color: rgb(220 252 231) !important;
+  }
+  body[class*="theme-"] [data-pl-bank-drcr-perspective-switch] > span[aria-hidden="true"]:not(.sr-only) {
+    background-color: rgb(74 222 128) !important;
   }
   body[class*="theme-"] [data-pl-header-preview-info] {
     border: none !important;

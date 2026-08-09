@@ -1,7 +1,5 @@
 "use client";
 
-import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
-
 type PlElectronTraceBridge = {
   log?: (tag: string, event: string, detail?: unknown) => void;
   getRecentLogs?: (limit?: number) => Promise<Array<{ ts: string; tag: string; event: string; detail: string }>>;
@@ -11,36 +9,22 @@ type PlElectronTraceBridge = {
 const TRACE_ENABLED_KEY = "pl_trace";
 const DEFAULT_TAG = "PL-GATE-TRACE";
 
-function traceEnabled(): boolean {
-  if (typeof window === "undefined") return false;
-  if (isElectronDesktopApp()) return true;
-  try {
-    if (localStorage.getItem(TRACE_ENABLED_KEY) === "1") return true;
-    if (sessionStorage.getItem(TRACE_ENABLED_KEY) === "1") return true;
-  } catch {
-    /* ignore */
-  }
-  return process.env.NODE_ENV === "development";
-}
+/** Console flood off. Re-enable only via explicit call + `pl_trace=1` later if needed. */
+const PL_GATE_TRACE_CONSOLE = false;
 
 function getTraceBridge(): PlElectronTraceBridge | null {
   if (typeof window === "undefined") return null;
   return (window as Window & { plElectronTrace?: PlElectronTraceBridge }).plElectronTrace ?? null;
 }
 
-/** Gate Test / Open gate flow — user DevTools console + EXE file log. */
+/** Gate / live-change traces — console silenced (flood). */
 export function plGateTrace(event: string, detail?: unknown, tag = DEFAULT_TAG): void {
-  if (!traceEnabled()) return;
-  try {
-    console.log(`[${tag}]`, event, detail ?? "");
-  } catch {
-    /* ignore */
-  }
-  try {
-    getTraceBridge()?.log?.(tag, event, detail);
-  } catch {
-    /* ignore */
-  }
+  if (!PL_GATE_TRACE_CONSOLE) return;
+  void event;
+  void detail;
+  void tag;
+  void TRACE_ENABLED_KEY;
+  void getTraceBridge;
 }
 
 export function enablePlGateTrace(persist = true): void {

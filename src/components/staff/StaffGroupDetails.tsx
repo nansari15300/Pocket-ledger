@@ -48,9 +48,13 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_OUTER_ROW_CN,
+  LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
+  LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { useCompany } from "@/hooks/useCompany";
 import { EditStaffGroupDialog } from "@/components/staff/EditStaffGroupDialog";
@@ -899,9 +903,9 @@ export function StaffGroupDetails({
   return (
     <>
       <div className="h-full flex flex-col overflow-hidden">
-        <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
+        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+          <div className={LEDGER_HEADER_OUTER_ROW_CN}>
+            <div className={LEDGER_HEADER_IDENTITY_CN}>
               {onBack && (
                 <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
                   <ArrowLeft className="h-3 w-3" />
@@ -910,31 +914,29 @@ export function StaffGroupDetails({
               <Avatar className="h-12 w-12 text-lg flex-shrink-0">
                 <AvatarFallback className="bg-muted text-muted-foreground">{getInitials(group.name)}</AvatarFallback>
               </Avatar>
-              <div className="flex items-center gap-2 flex-nowrap min-w-0">
-                <h2 className="text-xl font-semibold truncate">{group.name}</h2>
-                <EditStaffGroupDialog
-                  group={group}
-                  allGroups={allGroups}
-                  onGroupUpdated={onGroupUpdated}
-                  onGroupDeleted={onGroupDeleted}
-                  hasAccounts={staffInGroup.length > 0 || childGroups.length > 0}
-                >
-                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditStaffGroupDialog>
-                <div
-                  className={cn(
-                    "text-lg font-bold whitespace-nowrap flex-shrink-0 flex items-baseline justify-end gap-px",
-                    balanceColorClass
-                  )}
-                >
-                  <span>{formatCurrency(Math.abs(closingBalance), { showDrCr: false })}</span>
-                  <span className="text-sm">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
-                </div>
+              <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
+              <EditStaffGroupDialog
+                group={group}
+                allGroups={allGroups}
+                onGroupUpdated={onGroupUpdated}
+                onGroupDeleted={onGroupDeleted}
+                hasAccounts={staffInGroup.length > 0 || childGroups.length > 0}
+              >
+                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                  <Edit className="h-4 w-4" />
+                </Button>
+              </EditStaffGroupDialog>
+              <div
+                className={cn(
+                  "text-lg font-bold whitespace-nowrap flex-shrink-0 flex items-baseline justify-end gap-px",
+                  balanceColorClass
+                )}
+              >
+                <span>{formatCurrency(Math.abs(closingBalance), { showDrCr: false })}</span>
+                <span className="text-sm">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
               </div>
             </div>
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className={LEDGER_HEADER_PILL_ROW_CN}>
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker

@@ -16,11 +16,11 @@ import { Timestamp } from "firebase/firestore";
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
-
-function safeStorageFileName(name: string | undefined): string {
-  const n = (name || "file").replace(/[/\\?%*:|"<>]/g, "_").trim();
-  return (n.slice(0, 200) || "file");
-}
+import {
+  buildPendingAttachmentStorageObjectPath,
+  buildVoucherAttachmentStoragePath,
+  resolveCompanyUsesPocketLedgerStorage,
+} from "@/lib/firebaseStoragePaths";
 
 export async function hydrateVoucherLocalAttachmentsForServer(
   fsCompanyId: string,
@@ -29,6 +29,7 @@ export async function hydrateVoucherLocalAttachmentsForServer(
   const cid = String(fsCompanyId || "").trim();
   if (!cid) return docFields;
   if (isFirebaseLedgerDataSyncDisabled()) return docFields;
+  // Edit during restore: pehle is file ko upload karke HTTPS banao, phir save (background batch keep running).
 
   const typeRaw = docFields.type;
   const voucherType =
@@ -38,6 +39,7 @@ export async function hydrateVoucherLocalAttachmentsForServer(
     // Local Google Drive company: bytes ka owner cloud-sync cycle hai; yahan Firebase Storage URL mat banao.
     return docFields;
   }
+  const usePocketLedger = await resolveCompanyUsesPocketLedgerStorage(cid);
 
   // APK/native: `getPendingFiles()` sab rows ek saath read karta hai — koi row read fail / skip ho to
   // `find` miss ho kar flush throw → `local:` server tak kabhi nahi pahunchta. Preview jaisa per-id path use karo.
@@ -68,7 +70,13 @@ export async function hydrateVoucherLocalAttachmentsForServer(
         );
         continue;
       }
-      const objectPath = `voucher-files/${cid}/${voucherType}/${Date.now()}_${safeStorageFileName(item.fileName)}`;
+      const objectPath = buildVoucherAttachmentStoragePath({
+        companyId: cid,
+        usePocketLedger,
+        voucherType,
+        fileName: item.fileName || "file",
+        voucherId,
+      });
       const storageRef = ref(storage, objectPath);
       await uploadBytes(storageRef, item.blob, {
         contentType: item.contentType || "application/octet-stream",
@@ -103,7 +111,13 @@ export async function hydrateVoucherLocalAttachmentsForServer(
         delete rest.unassignedFile;
         return rest;
       }
-      const objectPath = `voucher-files/${cid}/${voucherType}/${Date.now()}_${safeStorageFileName(item.fileName)}`;
+      const objectPath = buildVoucherAttachmentStoragePath({
+        companyId: cid,
+        usePocketLedger,
+        voucherType,
+        fileName: item.fileName || "file",
+        voucherId: String(out.id ?? "").trim() || undefined,
+      });
       const storageRef = ref(storage, objectPath);
       await uploadBytes(storageRef, item.blob, {
         contentType: item.contentType || "application/octet-stream",
@@ -160,8 +174,14 @@ async function uploadOnePendingLocalRefToHttps(fsCompanyId: string, entry: strin
     );
     return null;
   }
+  // Same object path as `syncOnePendingFile` — duplicate `Date.now()` leafs se bachao.
+  // Pehle `getDownloadURL` mat await karo (auth/network hang se company enter block ho sakta hai).
   const prefix = String(item.storagePathPrefix || "").trim() || `orphan-files/${cid}`;
-  const objectPath = `${prefix}/${Date.now()}_${safeStorageFileName(item.fileName)}`;
+  const objectPath = buildPendingAttachmentStorageObjectPath({
+    storagePathPrefix: prefix,
+    pendingFileId: item.id,
+    fileName: item.fileName || "file",
+  });
   const storageRef = ref(storage, objectPath);
   await uploadBytes(storageRef, item.blob, {
     contentType: item.contentType || "application/octet-stream",

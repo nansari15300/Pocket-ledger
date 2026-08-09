@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { collection, doc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
-import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
+import { uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
 import { toast } from "sonner";
 import { ArrowDown, ArrowUp, CheckCircle, History, Loader2, PlusCircle, Printer, Trash2 } from "lucide-react";
 
@@ -64,11 +64,10 @@ import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImage
 import {
   appendCompressedVoucherAttachmentsToState,
   handleVoucherAttachmentInputChange,
+  useVoucherAttachmentProcessing,
 } from "@/lib/appendCompressedVoucherAttachments";
-import {
-  convertPdfAttachmentsToJpegIfEnabled,
-  shouldSuggestPdfAsImage,
-} from "@/lib/voucherAttachmentPdfAsImage";
+import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
+import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 
 type AdjustmentTarget = {
@@ -182,6 +181,7 @@ export function CreateAdjustmentForm({
   } = useVouchers();
   const isMobile = useIsMobile();
   const [isLoading, setIsLoading] = useState(false);
+  const isAttachmentProcessing = useVoucherAttachmentProcessing();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [files, setFiles] = useState<(File | string)[]>(() =>
@@ -363,13 +363,19 @@ export function CreateAdjustmentForm({
             { accountId: selectedTarget.id, debit: 0, credit: amount },
           ];
       const approverName = customUser?.displayName || user.displayName || user.email || user.uid;
-      const filesForSave = savePdfAsImage ? await convertPdfAttachmentsToJpegIfEnabled(files, true) : files;
+      const filesForSave = await prepareVoucherAttachmentsForSave(files, {
+        companyId,
+        savePdfAsImage,
+      });
       const fileUrls = filesForSave.filter((f): f is string => typeof f === "string");
       const newFiles = filesForSave.filter((f): f is File => f instanceof File);
       for (const file of newFiles) {
-        const storageRef = ref(storage, `voucher-files/${companyId}/adjustment/${Date.now()}_${file.name}`);
-        const snapshot = await uploadBytes(storageRef, file);
-        fileUrls.push(await getDownloadURL(snapshot.ref));
+        const url = await uploadVoucherAttachmentFileToFirebase({
+          companyId,
+          voucherType: "adjustment",
+          file,
+        });
+        fileUrls.push(url);
       }
       const saved = await saveVoucher(
         companyId,
@@ -476,6 +482,7 @@ export function CreateAdjustmentForm({
   const attachFileInputId = React.useId();
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     await handleVoucherAttachmentInputChange(e, {
+      companyId,
       currentFiles: files,
       maxFiles: fileAttachmentLimits.maxFileCount || 0,
       allowImage: fileAttachmentLimits.allowImage,
@@ -606,6 +613,7 @@ export function CreateAdjustmentForm({
                       key={`${typeof file === "string" ? file : file.name}-${index}`}
                       file={file}
                       attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
+                        attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                       onRemove={
                         allowAttachments && fileAttachmentLimits.allowDelete
                           ? () => setFiles((prev) => prev.filter((_, i) => i !== index))
@@ -621,6 +629,7 @@ export function CreateAdjustmentForm({
                         onShortActivate={() => fileInputRef.current?.click()}
                         onPastedFiles={(incoming) =>
                           void appendCompressedVoucherAttachmentsToState({
+                            companyId,
                             incomingFiles: incoming,
                             currentFiles: files,
                             maxFiles: fileAttachmentLimits.maxFileCount || 0,
@@ -703,7 +712,7 @@ export function CreateAdjustmentForm({
               </Button>
               <Button
                 type="button"
-                disabled={isLoading || !canSaveAdjustment || editingDisabled}
+                disabled={isLoading || isAttachmentProcessing || !canSaveAdjustment || editingDisabled}
                 className={cn("w-full", BTN_PRINT_CLASS)}
                 onClick={(e) => handleFormSubmit(e, { print: true })}
               >
@@ -714,7 +723,7 @@ export function CreateAdjustmentForm({
               </Button>
               <Button
                 type="submit"
-                disabled={isLoading || !canSaveAdjustment || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)}
+                disabled={isLoading || isAttachmentProcessing || !canSaveAdjustment || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)}
                 className={cn("w-full", BTN_SAVE_CLASS)}
               >
                 {isLoading ? "..." : "Save"}
@@ -741,7 +750,7 @@ export function CreateAdjustmentForm({
               ) : showSaveAndApproveOnCreate ? (
                 <Button
                   type="button"
-                  disabled={isLoading || !canSaveAdjustment || editingDisabled}
+                  disabled={isLoading || isAttachmentProcessing || !canSaveAdjustment || editingDisabled}
                   className={cn("w-full", BTN_APPROVE_CLASS)}
                   onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })}
                 >
@@ -806,7 +815,7 @@ export function CreateAdjustmentForm({
                 </Button>
                 <Button
                   type="button"
-                  disabled={isLoading || !canSaveAdjustment || editingDisabled}
+                  disabled={isLoading || isAttachmentProcessing || !canSaveAdjustment || editingDisabled}
                   className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}
                   onClick={(e) => handleFormSubmit(e, { print: true })}
                 >
@@ -815,7 +824,7 @@ export function CreateAdjustmentForm({
                 </Button>
                 <Button
                   type="submit"
-                  disabled={isLoading || !canSaveAdjustment || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)}
+                  disabled={isLoading || isAttachmentProcessing || !canSaveAdjustment || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)}
                   className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}
                 >
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

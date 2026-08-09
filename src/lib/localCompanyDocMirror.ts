@@ -20,6 +20,7 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { companyRowUsesSqliteLedgerWrites } from "@/lib/companyStorageKind";
+import { companyStrategyUsesSqliteFirstLedgerWrites } from "@/lib/staticAttachmentDisplayUrl";
 import { isOnlineCompanyLedgerCloudSyncAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
 import { decryptFirestoreCompanyDocIfNeeded, isEncryptedServerBackupDoc } from "@/lib/serverBackupEncryption";
 import { PL_CLIENT_OFFLINE_FIRST_PERSIST_MS, stampLocalMirrorBackedByFirestore } from "@/lib/localMirrorServerMeta";
@@ -108,6 +109,10 @@ async function shouldPersistCompanyDocToBrowserDb(
   if (!cid) return false;
   try {
     const row = await getLocalCompanyById(cid, { includeDeleted: true });
+    // `writeEntity` local-first se align — strategy SQLite-first ho to persist skip mat karo
+    if (row && companyStrategyUsesSqliteFirstLedgerWrites(row as Parameters<typeof companyStrategyUsesSqliteFirstLedgerWrites>[0])) {
+      return true;
+    }
     if (row && companyRowUsesSqliteLedgerWrites(row)) return true;
     if (!isOnlineCompanyLedgerCloudSyncAllowed(cid, row ?? null)) return true;
   } catch {
@@ -902,7 +907,21 @@ async function commitCompanyDocOnRenderer(
   if (shouldNotify) {
     if (!sideEffectOpts?.skipNotify) {
       notifyBrowserDbCollectionUpdated(companyId, collectionName, { immediate: true });
-      void maybeQueuePlServerDeltaAfterDocWrite(companyId, collectionName, docId, syncData);
+      // Voucher `local:` — attachment flush first (flushOrQueue…), then delta tip. Avoid empty-file race.
+      let skipImmediatePlDelta = false;
+      if (collectionName === "vouchers") {
+        const urls = Array.isArray(syncData.fileUrls) ? syncData.fileUrls : [];
+        const hasLocalUrl = urls.some(
+          (u) => typeof u === "string" && String(u).trim().startsWith("local:")
+        );
+        const uf = syncData.unassignedFile;
+        const ufUrl =
+          uf && typeof uf === "object" ? String((uf as { url?: unknown }).url || "").trim() : "";
+        skipImmediatePlDelta = hasLocalUrl || ufUrl.startsWith("local:");
+      }
+      if (!skipImmediatePlDelta) {
+        void maybeQueuePlServerDeltaAfterDocWrite(companyId, collectionName, docId, syncData);
+      }
       plPhase1bVerifyHook("onMirrorQueue");
     }
   }

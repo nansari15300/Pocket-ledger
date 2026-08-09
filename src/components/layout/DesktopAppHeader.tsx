@@ -1837,10 +1837,17 @@ function serverHostLabel(serverUrl: string): string {
 function PlServerCompanyConnectionStatus() {
   const { company } = useCompany();
   const isMobile = useIsMobile();
+  const pathname = usePathname();
+  // APK/mobile: ping chip sirf Dashboard. Desktop/EXE/web PC: PL company pe always.
+  const onDashboard = pathRoot(pathname, "dashboard");
   const serverUrl = String(
     (company as (Company & { plServerGateServerUrl?: string }) | null | undefined)?.plServerGateServerUrl || ""
-  ).trim().replace(/\/$/, "");
-  const show = Boolean(company && serverUrl && isServerGateCompany(company));
+  )
+    .trim()
+    .replace(/\/$/, "");
+  const show = Boolean(
+    company && serverUrl && isServerGateCompany(company) && (!isMobile || onDashboard)
+  );
   const hostLabel = serverHostLabel(serverUrl);
   const [pingMs, setPingMs] = useState<number | null>(null);
   const lastPingMsRef = useRef<number | null>(null);

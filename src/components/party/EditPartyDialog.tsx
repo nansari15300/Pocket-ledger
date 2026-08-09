@@ -14,6 +14,10 @@ import {
   isProfileAvatarImageFile,
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
+import {
+  captureEntityFormAttachmentBaseline,
+  finalizeFormAttachmentEditAfterSave,
+} from "@/lib/formAttachmentEditHelper";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import type { Party, Group } from "@/components/party/types";
 import { Button } from "@/components/ui/button";
@@ -49,6 +53,7 @@ import { FilePreview } from "../vouchers/FilePreview";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { balanceOpeningBalanceWithCapital } from "@/lib/voucherActionsClient";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -133,6 +138,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
   const isMobile = useIsMobile();
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const isCompressing = useImageCompressionProcessing();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
@@ -316,6 +322,10 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const partyRefSnap = party;
+    const attachmentBaselineSnap = captureEntityFormAttachmentBaseline({
+      fileUrl: initialFileRef.current,
+      documentFileUrls: initialDocUrlsRef.current,
+    });
 
     // PC/mobile/APK: form turant band; storage/Firestore ka kaam niche async (`void` block) — user block nahi
     setIsOpen(false);
@@ -323,11 +333,20 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     void (async () => {
       setIsLoading(true);
       try {
-        let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
-        const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
-        const keptDocUrls = docSlotsSnap.filter((x): x is string => typeof x === "string");
+        const { prepareMasterEditAttachmentsForSave } = await import(
+          "@/lib/attachmentRecompressOnSave"
+        );
+        const prepared = await prepareMasterEditAttachmentsForSave({
+          companyId,
+          avatar: fileSnap,
+          documents: docSlotsSnap,
+        });
+        let fileUrl: string | null = typeof prepared.avatar === "string" ? prepared.avatar : null;
+        const newDocFiles = prepared.newDocFiles;
+        const keptDocUrls = prepared.keptDocUrls;
         const totalBytes =
-          (fileSnap instanceof File ? fileSnap.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+          (prepared.avatar instanceof File ? prepared.avatar.size : 0) +
+          newDocFiles.reduce((s, f) => s + f.size, 0);
         if (totalBytes > 0 && companyId) {
           const limitCheck = await checkStorageLimit(
             companyId,
@@ -341,7 +360,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           }
         }
 
-        const needAvatarUpload = fileSnap instanceof File && canAddAvatar;
+        const needAvatarUpload = prepared.avatar instanceof File && canAddAvatar;
         const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
         let documentFileUrls = [...keptDocUrls];
         if (companyId && (needAvatarUpload || needNewDocsUpload)) {
@@ -349,7 +368,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             companyId,
             collectionSeg: "parties",
             entityId: partyRefSnap.id,
-            avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+            avatarFile: needAvatarUpload ? (prepared.avatar as File) : null,
             documentFiles: needNewDocsUpload ? newDocFiles : [],
             company,
           });
@@ -415,6 +434,15 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             duration: PARTY_TOAST_OK_MS,
             description: showSyncHint ? "Background sync" : values.name,
           });
+          finalizeFormAttachmentEditAfterSave({
+            companyId,
+            baselineUrls: attachmentBaselineSnap,
+            finalUrls: captureEntityFormAttachmentBaseline({
+              fileUrl,
+              documentFileUrls,
+            }),
+            oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
+          });
           return;
         }
 
@@ -442,6 +470,15 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         });
         initialFileRef.current = fileUrl || null;
         initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
+        finalizeFormAttachmentEditAfterSave({
+          companyId,
+          baselineUrls: attachmentBaselineSnap,
+          finalUrls: captureEntityFormAttachmentBaseline({
+            fileUrl,
+            documentFileUrls,
+          }),
+          oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
+        });
         sonnerToast.success("Updated", { duration: PARTY_TOAST_OK_MS, description: values.name });
       } catch (error) {
         console.error("Error updating party:", error);
@@ -551,16 +588,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     }
 
     try {
-      const compressedFile = await compressFile(inputFile);
-      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-        toast({
-          variant: "destructive",
-          title: "File Too Large After Compression",
-          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-        });
-        e.target.value = "";
-        return;
-      }
+      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, companyId);
+      
       setFile(compressedFile);
     } catch (err) {
       console.error("File compression error:", err);
@@ -773,7 +802,9 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                   ) : (
                     <div className="flex items-center gap-4 flex-wrap">
                       {file ? (
-                        <FilePreview file={file} attachmentCompanyId={companyId ?? undefined} onRemove={removeAvatar} />
+                        <FilePreview isCompressing={isCompressing} file={file} attachmentCompanyId={companyId ?? undefined} onRemove={removeAvatar} 
+                          attachmentReusePlaceKey={(party.id ? `parties/${party.id}` : null)}
+                        />
                       ) : null}
                       {!file ? (
                         <FormControl>
@@ -829,6 +860,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                             key={typeof slot === "string" ? `${slot}-${idx}` : `${slot.name}-${idx}-${slot.size}`}
                             file={slot}
                             attachmentCompanyId={companyId ?? undefined}
+                            attachmentReusePlaceKey={party.id ? `parties/${party.id}` : null}
                             onRemove={() => removeDocAt(idx)}
                             size={96}
                           />
@@ -920,7 +952,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                   </TooltipProvider>
                 </div>
                 {/* APK cloud offline par submit band — sirf Cancel/close chalu */}
-                <Button type="submit" className="shrink-0" disabled={isLoading || apkOfflineViewOnly}>
+                <Button type="submit" className="shrink-0" disabled={isLoading || isCompressing || apkOfflineViewOnly}>
                   {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Save Changes
                 </Button>

@@ -46,7 +46,13 @@ async function applyDeltaCollectionDocsToStaffStore(
   companyId: string,
   collection: string,
   docs: Array<Record<string, unknown>>,
-  options?: { incomingWins?: boolean; /** Full ledger pull only — focus/incremental must stay false. */ authoritativeSnapshot?: boolean }
+  options?: {
+    incomingWins?: boolean;
+    /** Full ledger pull only — focus/incremental must stay false. */
+    authoritativeSnapshot?: boolean;
+    /** Multi-collection pull: flush once at end (avoid N× sql.js export). */
+    deferDurableFlush?: boolean;
+  }
 ): Promise<{ upserted: number; skipped: number }> {
   let voucherBefore: Array<{ id?: unknown }> | null = null;
   if (collection === "vouchers") {
@@ -92,7 +98,7 @@ async function applyDeltaCollectionDocsToStaffStore(
         }
       : {}),
   });
-  if (result.upserted > 0) {
+  if (result.upserted > 0 && !options?.deferDurableFlush) {
     // Masters bhi vouchers jitne durable hain: server band/restart ke baad forms ko complete SQLite chahiye.
     const { flushPendingBrowserDbSave } = await import("@/lib/localSqlite");
     await flushPendingBrowserDbSave();
@@ -152,7 +158,15 @@ export async function applyPlServerLiveDeltaDocs(
   if (!id || !(COLLECTIONS_TO_BACKUP as readonly string[]).includes(collection) || !docs.length) {
     return { upserted: 0, skipped: 0 };
   }
-  return applyDeltaCollectionDocsToStaffStore(id, collection, docs, { incomingWins: true });
+  const stats = await applyDeltaCollectionDocsToStaffStore(id, collection, docs, { incomingWins: true });
+  if (stats.upserted > 0) {
+    void import("@/lib/plServerAttachmentFetch")
+      .then(({ hydratePlServerLocalAttachmentsFromDocs }) =>
+        hydratePlServerLocalAttachmentsFromDocs(id, docs)
+      )
+      .catch(() => undefined);
+  }
+  return stats;
 }
 
 /** Server company row se cloud mirror fields hatao — client par Firestore pull na chale. */
@@ -294,9 +308,16 @@ async function syncLedgerCollectionsFromServer(
   let voucherCount = 0;
   let vouchersFetchedOk = false;
   let staleAbort = false;
+  let anyUpsert = false;
+  const flushIfNeeded = async () => {
+    if (!anyUpsert) return;
+    const { flushPendingBrowserDbSave } = await import("@/lib/localSqlite");
+    await flushPendingBrowserDbSave();
+  };
   for (const col of P2P_LEDGER_COLLECTIONS) {
     if (pullGeneration != null && isPlServerPullGenerationStale(companyId, pullGeneration)) {
       staleAbort = true;
+      await flushIfNeeded();
       return { wrote, voucherCount, vouchersFetchedOk, staleAbort };
     }
     let docs = await fetchCompanyDeltaCollection(baseUrl, companyId, col, accessToken, {
@@ -322,9 +343,16 @@ async function syncLedgerCollectionsFromServer(
       // The client SQLite ledger is durable. A periodic server response must never
       // prune local vouchers; remote deletes arrive as tombstone documents.
       authoritativeSnapshot: false,
+      deferDurableFlush: true,
     });
     if (deltaStats.upserted > 0) {
-      notifyBrowserDbCollectionUpdated(companyId, col, { immediate: true, source: "pl_host_remote_write" });
+      anyUpsert = true;
+      notifyBrowserDbCollectionUpdated(companyId, col, { immediate: true, source: "pl_server_pull" });
+      void import("@/lib/plServerAttachmentFetch")
+        .then(({ hydratePlServerLocalAttachmentsFromDocs }) =>
+          hydratePlServerLocalAttachmentsFromDocs(companyId, docs)
+        )
+        .catch(() => undefined);
     }
     livePullDevLog("browser_db_updated", {
       companyId,
@@ -335,6 +363,7 @@ async function syncLedgerCollectionsFromServer(
     });
     if (docs.length > 0) wrote = true;
   }
+  await flushIfNeeded();
   return { wrote, voucherCount, vouchersFetchedOk, staleAbort };
 }
 
@@ -349,6 +378,7 @@ async function syncFocusCollectionsFromServer(
   let staleAbort = false;
   const changedCollections: CompanyBackupCollection[] = [];
   const unique = [...new Set(collections)];
+  let anyUpsert = false;
   for (const col of unique) {
     if (pullGeneration != null && isPlServerPullGenerationStale(companyId, pullGeneration)) {
       staleAbort = true;
@@ -361,10 +391,17 @@ async function syncFocusCollectionsFromServer(
     fetched += 1;
     const deltaStats = await applyDeltaCollectionDocsToStaffStore(companyId, col, docs, {
       incomingWins: true,
+      deferDurableFlush: true,
     });
     if (deltaStats.upserted > 0) {
-      notifyBrowserDbCollectionUpdated(companyId, col, { immediate: true, source: "pl_host_remote_write" });
+      anyUpsert = true;
+      notifyBrowserDbCollectionUpdated(companyId, col, { immediate: true, source: "pl_server_pull" });
       changedCollections.push(col);
+      void import("@/lib/plServerAttachmentFetch")
+        .then(({ hydratePlServerLocalAttachmentsFromDocs }) =>
+          hydratePlServerLocalAttachmentsFromDocs(companyId, docs)
+        )
+        .catch(() => undefined);
     }
     livePullDevLog("focus_collection_updated", {
       companyId,
@@ -373,6 +410,10 @@ async function syncFocusCollectionsFromServer(
       upserted: deltaStats.upserted,
       skipped: deltaStats.skipped,
     });
+  }
+  if (anyUpsert) {
+    const { flushPendingBrowserDbSave } = await import("@/lib/localSqlite");
+    await flushPendingBrowserDbSave();
   }
   return { fetched, changedCollections, staleAbort };
 }
@@ -430,7 +471,12 @@ async function syncSharedCompanyRows(
     focusCollections?: CompanyBackupCollection[];
     serverGate?: GateRecord | null;
   }
-): Promise<{ synced: number; fullPull: number; changedCollections: CompanyBackupCollection[] }> {
+): Promise<{
+  synced: number;
+  fullPull: number;
+  changedCollections: CompanyBackupCollection[];
+  focusFetched: number;
+}> {
   const filterIds = (options?.companyIds || []).map((x) => String(x || "").trim()).filter(Boolean);
   const rows = filterIds.length ? await resolvePullTargetRows(shared, filterIds) : shared;
   if (!rows.length) {
@@ -450,11 +496,12 @@ async function syncSharedCompanyRows(
         sharedCount: 0,
       });
     }
-    return { synced: 0, fullPull: 0, changedCollections: [] };
+    return { synced: 0, fullPull: 0, changedCollections: [], focusFetched: 0 };
   }
 
   let synced = 0;
   let fullPull = 0;
+  let focusFetched = 0;
   const changedCollections = new Set<CompanyBackupCollection>();
   const pullFull = options?.pullFullLedger !== false;
   const fullPulledIds: string[] = [];
@@ -489,20 +536,29 @@ async function syncSharedCompanyRows(
       );
       synced += 1;
     } else {
-      // Still refresh gate stamps without wiping meta.
-      await upsertLocalCompany(
-        plServerClientLocalCompanyRow(
-          id,
-          String(existingLocal.name || row.name || id),
-          row.ownerEmail ?? existingLocal.ownerEmail ?? null,
-          existingLocal as unknown as Record<string, unknown>,
-          {
-            gate: options?.serverGate ?? null,
-            hostCompanyId: id,
-          }
-        )
+      // Refresh gate stamps only when they actually change — noop upsert was idle SQLite churn.
+      const nextRow = plServerClientLocalCompanyRow(
+        id,
+        String(existingLocal.name || row.name || id),
+        row.ownerEmail ?? existingLocal.ownerEmail ?? null,
+        existingLocal as unknown as Record<string, unknown>,
+        {
+          gate: options?.serverGate ?? null,
+          hostCompanyId: id,
+        }
       );
-      synced += 1;
+      const ex = existingLocal as unknown as Record<string, unknown>;
+      const gateUnchanged =
+        String(ex.plServerGateId || "") === String((nextRow as { plServerGateId?: string }).plServerGateId || "") &&
+        String(ex.plServerGateServerUrl || "") ===
+          String((nextRow as { plServerGateServerUrl?: string }).plServerGateServerUrl || "") &&
+        String(ex.plServerHostCompanyId || "") ===
+          String((nextRow as { plServerHostCompanyId?: string }).plServerHostCompanyId || "") &&
+        String(ex.name || "") === String(nextRow.name || "");
+      if (!gateUnchanged) {
+        await upsertLocalCompany(nextRow);
+        synced += 1;
+      }
     }
 
     if (focusCollections.length > 0 && baseUrl) {
@@ -513,6 +569,7 @@ async function syncSharedCompanyRows(
         focusCollections,
         pullGeneration
       );
+      focusFetched += focus.fetched;
       for (const col of focus.changedCollections) changedCollections.add(col);
       if (focus.staleAbort) break;
     }
@@ -561,7 +618,7 @@ async function syncSharedCompanyRows(
         incomingWins: true,
       });
       if (deltaStats.upserted > 0) {
-        notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_host_remote_write" });
+        notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_server_pull" });
         changedCollections.add(col);
       }
     }
@@ -591,7 +648,7 @@ async function syncSharedCompanyRows(
       })
     );
   }
-  return { synced, fullPull, changedCollections: [...changedCollections] };
+  return { synced, fullPull, changedCollections: [...changedCollections], focusFetched };
 }
 
 /** Server gate add/Test: active gate switch kiye bina saari allowed companies SQLite me. */
@@ -697,7 +754,7 @@ export async function syncPlServerSharedCompaniesToLocalSqlite(options?: {
   pullGeneration?: number;
   focusCollections?: CompanyBackupCollection[];
   serverGate?: GateRecord | null;
-}): Promise<{ synced: number; fullPull: number; changedCollections?: CompanyBackupCollection[] }> {
+}): Promise<{ synced: number; fullPull: number; changedCollections?: CompanyBackupCollection[]; focusFetched?: number }> {
   // Staff and legacy share the same SQLite delta pull (EXE/APK/iOS).
   return syncPlServerSharedCompaniesToLocalSqliteLegacy(options);
 }
@@ -709,12 +766,12 @@ export async function syncPlServerSharedCompaniesToLocalSqliteLegacy(options?: {
   pullGeneration?: number;
   focusCollections?: CompanyBackupCollection[];
   serverGate?: GateRecord | null;
-}): Promise<{ synced: number; fullPull: number; changedCollections?: CompanyBackupCollection[] }> {
+}): Promise<{ synced: number; fullPull: number; changedCollections?: CompanyBackupCollection[]; focusFetched?: number }> {
   const primaryCompanyId = String(options?.companyIds?.[0] || "").trim();
   const baseUrl = resolvePlServerDeltaBaseUrl(primaryCompanyId);
   const accessContextReady = shouldFetchPlServerAccessContext();
   if (!accessContextReady && !baseUrl) {
-    return { synced: 0, fullPull: 0, changedCollections: [] };
+    return { synced: 0, fullPull: 0, changedCollections: [], focusFetched: 0 };
   }
   const filterIds = (options?.companyIds || []).map((x) => String(x || "").trim()).filter(Boolean);
   let sharedAll = getPlServerSharedCompanies();

@@ -46,6 +46,7 @@ import { useCompany } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
 import { firestore } from "@/lib/firebase";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import {
   MAX_IMAGE_BYTES_BEFORE_COMPRESS,
   MAX_IMAGE_BYTES_AFTER_COMPRESS,
@@ -115,6 +116,7 @@ export function CreateStaffForm({
   defaultName?: string;
 }) {
   const [isLoading, setIsLoading] = useState(false);
+  const isCompressing = useImageCompressionProcessing();
   const { toast } = useToast();
   const { user } = useAuth();
   const { companyId, company } = useCompany();
@@ -143,7 +145,7 @@ export function CreateStaffForm({
   const docsInputRef = useRef<HTMLInputElement>(null);
   /** Profile — image only; docs alag `documentFiles` (Firebase: local: staging pehle) */
   const [avatarToUpload, setAvatarToUpload] = useState<{ file: File; preview: string } | null>(null);
-  const [documentFiles, setDocumentFiles] = useState<File[]>([]);
+  const [documentFiles, setDocumentFiles] = useState<Array<File | string>>([]);
 
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
@@ -313,17 +315,8 @@ export function CreateStaffForm({
       return;
     }
     try {
-      const compressedFile = await compressFile(inputFile);
-      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-        toast({
-          variant: "destructive",
-          title: "File Too Large After Compression",
-          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-        });
-        setAvatarToUpload(null);
-        e.target.value = "";
-        return;
-      }
+      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, companyId);
+      
       const preview = URL.createObjectURL(compressedFile);
       setAvatarToUpload({ file: compressedFile, preview });
     } catch (err) {
@@ -389,12 +382,15 @@ export function CreateStaffForm({
           const raw = await fetchRemoteUrlAsFile(remoteAvatarUrl, "staff-avatar.jpg");
           if (raw) {
             let f = raw;
+            let capBytes = Number.POSITIVE_INFINITY;
             try {
-              f = await compressFile(raw);
+              const _img = await compressImageForCompany(raw, companyId);
+              f = _img.file;
+              capBytes = _img.maxBytes;
             } catch {
               /* raw hi use karo */
             }
-            if (f.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+            if (f.size > capBytes) {
               toast({
                 variant: "destructive",
                 title: "Avatar too large",
@@ -470,7 +466,7 @@ export function CreateStaffForm({
       if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         // Local-only: IndexedDB pending files + SQLite — turant Storage upload nahi
         const totalAttachBytesLocal =
-          (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+          (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + (f instanceof File ? f.size : 0), 0);
         if (totalAttachBytesLocal > 0) {
           const limitCheck = await checkStorageLimit(
             companyId,
@@ -491,7 +487,7 @@ export function CreateStaffForm({
           collectionSeg: "staff",
           entityId: localId,
           avatarFile: avatarToUpload?.file ?? null,
-          documentFiles,
+          documentFiles: documentFiles.filter((f): f is File => f instanceof File),
         });
         const payload = {
           id: localId,
@@ -563,7 +559,7 @@ export function CreateStaffForm({
       }
 
       const totalAttachBytes =
-        (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+        (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + (f instanceof File ? f.size : 0), 0);
       if (totalAttachBytes > 0) {
         const limitCheck = await checkStorageLimit(
           companyId,
@@ -589,7 +585,7 @@ export function CreateStaffForm({
         collectionSeg: "staff",
         entityId: newStaffId,
         avatarFile: avatarToUpload?.file ?? null,
-        documentFiles,
+        documentFiles: documentFiles.filter((f): f is File => f instanceof File),
       });
 
       const interCompanyAccountNo = await interCompanyAcNoForNewEntity("staff");
@@ -649,7 +645,7 @@ export function CreateStaffForm({
         try {
           if (!companyId || !user) throw new Error("Missing company or user.");
           const totalCatch =
-            (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+            (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + (f instanceof File ? f.size : 0), 0);
           if (totalCatch > 0) {
             const lim = await checkStorageLimit(
               companyId,
@@ -665,7 +661,7 @@ export function CreateStaffForm({
             collectionSeg: "staff",
             entityId: localId,
             avatarFile: avatarToUpload?.file ?? null,
-            documentFiles,
+            documentFiles: documentFiles.filter((f): f is File => f instanceof File),
           });
           const nowTs = Timestamp.now();
           const payload: Record<string, unknown> = {
@@ -931,6 +927,7 @@ export function CreateStaffForm({
             />
             <EntityDocumentsBlock
               docSlots={documentFiles}
+              setDocSlots={setDocumentFiles}
               onRemoveDoc={removeDocAt}
               onAddClick={() => docsInputRef.current?.click()}
               docsInputRef={docsInputRef}
@@ -955,7 +952,7 @@ export function CreateStaffForm({
               variant="ghost"
               className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}
               onClick={() => (onCloseDialogRequest ?? onClose)?.()}
-              disabled={isLoading}
+              disabled={isLoading || isCompressing}
             >
               Cancel
             </Button>
@@ -965,13 +962,13 @@ export function CreateStaffForm({
                 variant="ghost"
                 className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                 onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                disabled={isLoading || apkOfflineViewOnly}
+                disabled={isLoading || isCompressing || apkOfflineViewOnly}
               >
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save & New
               </Button>
             </div>
-            <Button type="submit" disabled={isLoading || !companyId || apkOfflineViewOnly} className="shrink-0">
+            <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly} className="shrink-0">
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Add Staff Member
             </Button>

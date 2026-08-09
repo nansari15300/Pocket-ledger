@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { useDate } from "@/hooks/useDate";
-import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Briefcase } from "lucide-react";
@@ -63,7 +63,7 @@ export function StaffList({
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
-  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
+  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } = useMasterListRowMotion();
   const highlightSearch = searchTerm.trim();
   const filteredAndSortedStaff = useMemo(() => {
     const toDateMs = (raw: unknown): number => {
@@ -104,6 +104,16 @@ export function StaffList({
   );
   usePrewarmVisibleAttachments(visibleStaffAttachmentUrls, company?.id);
 
+  const listOrderKey = useMemo(
+    () => masterListOrderKey(filteredAndSortedStaff.map((s) => s.id)),
+    [filteredAndSortedStaff]
+  );
+
+  const { displayRows: displayListRows, displayOrderKey } = useMasterListDisplayRows(
+    filteredAndSortedStaff,
+    listOrderKey,
+    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
+  );
 
   return (
     <div className={masterListShellCn}>
@@ -115,7 +125,7 @@ export function StaffList({
       >
         <ul className="pl-master-list-ul">
           <AnimatePresence mode={animatePresenceMode}>
-            {filteredAndSortedStaff.map((staffMember) => {
+            {displayListRows.map((staffMember) => {
               const isSelected = selectedStaff?.id === staffMember.id;
               const href = getItemHref?.(staffMember);
               /** List hover + avatar: stale `"null"` string par PDF spinner na kholo — `trimEntityFileUrlForPreview` */
@@ -175,7 +185,7 @@ export function StaffList({
                 </div>
               );
               return (
-                <motion.li key={staffMember.id} {...rowMotionProps}>
+                <motion.li key={staffMember.id} layoutDependency={displayOrderKey} {...rowMotionProps}>
                   {href ? (
                     // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                     <Link
@@ -195,7 +205,7 @@ export function StaffList({
               );
             })}
           </AnimatePresence>
-          {filteredAndSortedStaff.length === 0 && (
+          {displayListRows.length === 0 && (
             <div className="text-center text-muted-foreground p-8">
               No staff members found.
             </div>

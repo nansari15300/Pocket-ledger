@@ -33,6 +33,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 
 
@@ -96,7 +97,7 @@ export function CreateDistributorForm({ application, onApplicationUpdated, onApp
         continue;
       }
       if (documentFiles.length < 3) {
-        const compressed = await compressFile(file);
+        const { file: compressed, maxBytes, maxKb } = await compressImageForCompany(file, null);
         setDocumentFiles(prev => [...prev, compressed]);
       } else {
         toast({ variant: "destructive", title: "Limit Reached", description: "You can upload a maximum of 3 documents."});

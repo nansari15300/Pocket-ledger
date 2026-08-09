@@ -1,4 +1,4 @@
-﻿
+
 
 "use client";
 
@@ -31,9 +31,13 @@ import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_OUTER_ROW_CN,
+  LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
+  LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { ScrollArea } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
@@ -255,34 +259,32 @@ export function AccountGroupDetails({
     <div className="h-full flex flex-col">
       <Card className="flex-1 flex flex-col min-h-0">
            <CardHeader className="space-y-4 overflow-auto min-h-0 scrollbar-slim-dim print:hidden p-0">
-              {/* Row 1: Part 1 (nameâ†’balance) and Part 2 (Add Note, Print) side by side; Part 2 wraps to bottom on small; parts never wrap internally */}
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-                <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
+              {/* Row 1: identity + note/print — same cluster/pill gap */}
+              <div className={LEDGER_HEADER_OUTER_ROW_CN}>
+                <div className={LEDGER_HEADER_IDENTITY_CN}>
                   <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-muted text-muted-foreground flex-shrink-0">
                     <Users className="h-6 w-6" />
                   </div>
-                  <div className="flex items-center gap-2 flex-nowrap min-w-0">
-                    <h2 className="text-2xl font-bold font-headline truncate">{group.name}</h2>
-                    <EditAccountGroupDialog
-                      group={group}
-                      allGroups={allGroups}
-                      onGroupUpdated={onGroupUpdated}
-                      onGroupDeleted={onGroupDeleted}
-                      hasAccounts={accounts.length > 0 || allGroups.some((g) => (g as any).parentId === group.id)}
-                    >
-                      <Button variant="ghost" size="icon" className="h-6 w-6 flex-shrink-0">
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                    </EditAccountGroupDialog>
-                  </div>
-                  <div className="flex items-center gap-2 flex-nowrap text-sm ml-2 flex-shrink-0">
+                  <h2 className={cn(LEDGER_HEADER_TITLE_CN, "text-2xl font-bold font-headline")} title={group.name}>{group.name}</h2>
+                  <EditAccountGroupDialog
+                    group={group}
+                    allGroups={allGroups}
+                    onGroupUpdated={onGroupUpdated}
+                    onGroupDeleted={onGroupDeleted}
+                    hasAccounts={accounts.length > 0 || allGroups.some((g) => (g as any).parentId === group.id)}
+                  >
+                    <Button variant="ghost" size="icon" className="h-6 w-6 flex-shrink-0">
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                  </EditAccountGroupDialog>
+                  <div className="flex items-center gap-1.5 flex-nowrap text-sm flex-shrink-0">
                     <div className="border rounded-md p-2 whitespace-nowrap"><span className="text-muted-foreground">Opening: </span><span className="font-semibold text-blue-600">{formatCurrency(group.openingBalance || 0, { noSuffix: true })}</span></div>
                     <div className="border rounded-md p-2 whitespace-nowrap"><span className="text-muted-foreground">Debit: </span><span className="font-semibold text-green-600">{formatCurrency(filteredTotals.debit, {noSuffix: true})}</span></div>
                     <div className="border rounded-md p-2 whitespace-nowrap"><span className="text-muted-foreground">Credit: </span><span className="font-semibold text-red-600">{formatCurrency(filteredTotals.credit, {noSuffix: true})}</span></div>
                     <div className="border rounded-md p-2 whitespace-nowrap"><span className="text-muted-foreground">Balance: </span><span className={cn("font-semibold", filteredBalance >= 0 ? "text-green-600" : "text-red-600")}>{formatCurrency(filteredBalance, {showDrCr: true})}</span></div>
                   </div>
                 </div>
-                <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+                <div className={LEDGER_HEADER_PILL_ROW_CN}>
                   <Button variant="outline" size="sm" onClick={() => handleOpenNoteDialog()} className={LEDGER_HEADER_PILL_CN}>
                     <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
                   </Button>
@@ -291,10 +293,10 @@ export function AccountGroupDetails({
                   </Button>
                 </div>
               </div>
-              {/* Row 2: Part 1 (date, filter) and Part 2 (Vouchers, Rows) side by side; Part 2 wraps to bottom on small; parts never wrap internally */}
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-                <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
-                  <div className="flex items-center gap-2 flex-nowrap flex-shrink-0">
+              {/* Row 2: date/filter + voucher count — same gap */}
+              <div className={LEDGER_HEADER_OUTER_ROW_CN}>
+                <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-slim-dim">
+                  <div className="flex items-center gap-1.5 flex-nowrap flex-shrink-0">
                     {(dateSystem === 'BS' || dateSystem === 'Both') && (
                       <BsDatePicker isRange valueAD={dateRange} onChangeAD={(range) => onDateRangeChange(range as DateRange | undefined)} />
                     )}
@@ -340,7 +342,7 @@ export function AccountGroupDetails({
                     onSelectionChange={setSelectedAccountIds}
                   />
                 </div>
-                <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+                <div className={LEDGER_HEADER_PILL_ROW_CN}>
                   <span className="text-sm font-medium flex-shrink-0">Vouchers: {filteredTransactions.length}</span>
                   <p className="text-sm font-medium flex-shrink-0">Rows</p>
                   <Select
@@ -378,7 +380,7 @@ export function AccountGroupDetails({
            </CardContent>
            {/* Footer: Part 1 (count) and Part 2 (pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
            <div className="py-2 px-4 sm:px-6 md:px-8 border-t overflow-auto min-h-0 scrollbar-slim-dim">
-             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
+             <div className={LEDGER_HEADER_OUTER_ROW_CN}>
                <div className="flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
                  <LedgerFooterColumnsMenu>
                 <DropdownMenuContent align="start" className="w-52 p-2">
@@ -408,7 +410,7 @@ export function AccountGroupDetails({
                 hiddenCount={statementCheck.hiddenCount}
               />
                </div>
-               <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+               <div className={LEDGER_HEADER_PILL_ROW_CN}>
                  <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
                  <div className="flex items-center space-x-1 flex-shrink-0">
                    <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"

@@ -75,6 +75,10 @@ export default function TaxPage() {
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     if (userNames[userId]) return userNames[userId];
+    const plLocalLedger =
+      (company as { plServerShared?: boolean } | null)?.plServerShared === true ||
+      ((company as { storageOption?: string } | null)?.storageOption || "").toLowerCase() === "local";
+    if (plLocalLedger) return "N/A";
     try {
         const userDoc = await getDoc(doc(firestore, 'users', userId));
         if (userDoc.exists()) {
@@ -82,9 +86,13 @@ export default function TaxPage() {
         }
     } catch (e) {}
     return "Unknown";
-  }, [userNames]);
+  }, [userNames, company]);
 
   useEffect(() => {
+    const plLocalLedger =
+      (company as { plServerShared?: boolean } | null)?.plServerShared === true ||
+      ((company as { storageOption?: string } | null)?.storageOption || "").toLowerCase() === "local";
+    if (plLocalLedger) return;
     const uids = new Set(vouchers.map((t) => t.userId).filter(Boolean));
     uids.forEach(async (uid) => {
         if (!userNames[uid as any]) {
@@ -92,7 +100,7 @@ export default function TaxPage() {
             setUserNames((prev) => ({ ...prev, [uid as any]: name }));
         }
     });
-  }, [vouchers, userNames, fetchUserName]);
+  }, [vouchers, userNames, fetchUserName, company]);
 
   useEffect(() => {
     const savedView = localStorage.getItem("taxActiveView");

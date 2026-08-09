@@ -11,13 +11,14 @@ import { fetchAttachmentRefBlob } from "@/lib/attachmentRefBlobFetch";
 import { interCompanyLinkAttachmentsWithoutCopy } from "@/lib/firebaseBillingOptimization";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
-import { touchRegistryAfterStorageUpload } from "@/lib/companyAttachmentRegistry";
+import { linkFirebaseAttachmentRefs, touchRegistryAfterStorageUpload } from "@/lib/companyAttachmentRegistry";
 import {
   appendLocalOnlyVoucherFilesToUrls,
   blobFromAttachmentRefForCopy,
   fileNameFromInterCompanyAttachmentRef,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
+import { patchVoucherFields } from "@/lib/voucherActionsClient";
 
 function attachmentRefsCanLinkWithoutCopy(urls: string[]): boolean {
   if (!interCompanyLinkAttachmentsWithoutCopy()) return false;
@@ -129,4 +130,104 @@ export async function replicateInterCompanySharedAttachmentsToPeer(args: {
     }
   }
   return out;
+}
+
+async function copyOwnFilesToPeerIfShared(args: {
+  share: boolean;
+  ownFileUrls: string[];
+  peerCompanyId: string;
+  peerVoucherId: string;
+  attachmentBlobByRef?: ReadonlyMap<string, Blob>;
+}): Promise<{ copies: string[]; warning?: string }> {
+  if (!args.share || args.ownFileUrls.length === 0) return { copies: [] };
+  try {
+    const copies = await resolveInterCompanyPeerAttachmentUrls({
+      targetCompanyId: args.peerCompanyId,
+      sourceFileUrls: args.ownFileUrls,
+      targetVoucherId: args.peerVoucherId,
+      attachmentBlobByRef: args.attachmentBlobByRef,
+    });
+    if (copies.length > 0) {
+      const linkedSameUrls =
+        copies.length === args.ownFileUrls.length &&
+        copies.every((u, i) => u.trim() === args.ownFileUrls[i]!.trim());
+      if (linkedSameUrls) {
+        await linkFirebaseAttachmentRefs(args.peerCompanyId, copies);
+      }
+    }
+    return { copies };
+  } catch (err) {
+    const message =
+      err instanceof Error
+        ? err.message
+        : "Could not copy attachment for the other company's own storage.";
+    console.warn("[IC] attachment share copy:", err);
+    return { copies: [], warning: message };
+  }
+}
+
+/**
+ * Dono taraf ka "apna" file set + har taraf ka share toggle — final combined `fileUrls`
+ * (apna + jo peer ne share kiya) dono vouchers par patch. `interCompanyOwnFileUrls` se
+ * agli baar edit khulne par sirf apna box hi apni files dikhaye (peer copy repeat na ho).
+ */
+export async function reconcileAndPatchInterCompanyAttachmentSharing(args: {
+  sourceCompanyId: string;
+  sourceVoucherId: string;
+  sourceOwnFileUrls: string[];
+  shareSourceToTarget: boolean;
+  targetCompanyId: string;
+  targetVoucherId: string;
+  targetOwnFileUrls: string[];
+  shareTargetToSource: boolean;
+  sourceAttachmentBlobByRef?: ReadonlyMap<string, Blob>;
+  targetAttachmentBlobByRef?: ReadonlyMap<string, Blob>;
+}): Promise<{ attachmentReplicationWarning?: string }> {
+  const sourceCompanyId = String(args.sourceCompanyId || "").trim();
+  const sourceVoucherId = String(args.sourceVoucherId || "").trim();
+  const targetCompanyId = String(args.targetCompanyId || "").trim();
+  const targetVoucherId = String(args.targetVoucherId || "").trim();
+  if (!sourceCompanyId || !sourceVoucherId || !targetCompanyId || !targetVoucherId) {
+    throw new Error("Linked Inter Company voucher not found.");
+  }
+
+  const sourceOwnFileUrls = (args.sourceOwnFileUrls || []).filter(
+    (u): u is string => typeof u === "string" && u.trim().length > 0
+  );
+  const targetOwnFileUrls = (args.targetOwnFileUrls || []).filter(
+    (u): u is string => typeof u === "string" && u.trim().length > 0
+  );
+
+  const [toTarget, toSource] = await Promise.all([
+    copyOwnFilesToPeerIfShared({
+      share: args.shareSourceToTarget === true,
+      ownFileUrls: sourceOwnFileUrls,
+      peerCompanyId: targetCompanyId,
+      peerVoucherId: targetVoucherId,
+      attachmentBlobByRef: args.sourceAttachmentBlobByRef,
+    }),
+    copyOwnFilesToPeerIfShared({
+      share: args.shareTargetToSource === true,
+      ownFileUrls: targetOwnFileUrls,
+      peerCompanyId: sourceCompanyId,
+      peerVoucherId: sourceVoucherId,
+      attachmentBlobByRef: args.targetAttachmentBlobByRef,
+    }),
+  ]);
+
+  await patchVoucherFields(sourceCompanyId, sourceVoucherId, {
+    interCompanyOwnFileUrls: sourceOwnFileUrls,
+    interCompanyShareAttachmentsWithPeer: args.shareSourceToTarget === true,
+    interCompanySharePeerAttachmentsToSource: args.shareTargetToSource === true,
+    fileUrls: [...sourceOwnFileUrls, ...toSource.copies],
+  });
+  await patchVoucherFields(targetCompanyId, targetVoucherId, {
+    interCompanyOwnFileUrls: targetOwnFileUrls,
+    interCompanyShareAttachmentsWithPeer: args.shareSourceToTarget === true,
+    interCompanySharePeerAttachmentsToSource: args.shareTargetToSource === true,
+    fileUrls: [...targetOwnFileUrls, ...toTarget.copies],
+  });
+
+  const warning = toTarget.warning || toSource.warning;
+  return warning ? { attachmentReplicationWarning: warning } : {};
 }

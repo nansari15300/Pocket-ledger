@@ -62,8 +62,11 @@ export function getVoucherAttachmentUrlsForUi(
   options?: VoucherAttachmentNormalizeOptions
 ): string[] {
   if (!row) return [];
+  const hasExplicitFileUrls = Object.prototype.hasOwnProperty.call(row, "fileUrls");
   let urls = normalizeFileUrlsField(row.fileUrls);
-  if (urls.length === 0) {
+  // Explicit `fileUrls: []` = intentional remove-all. Do NOT revive from legacy `unassignedFile`
+  // (that was the post-outbox UI bounce: empty flush → normalize copies uf.url back into fileUrls).
+  if (urls.length === 0 && !(hasExplicitFileUrls && Array.isArray(row.fileUrls))) {
     const uf = row.unassignedFile;
     if (uf && typeof uf === "object" && uf !== null) {
       const url = String((uf as { url?: string }).url || "").trim();
@@ -74,6 +77,25 @@ export function getVoucherAttachmentUrlsForUi(
     return withoutTransientVoucherAttachmentUrls(urls);
   }
   return urls;
+}
+
+/**
+ * Edit-save storage cleanup baseline — legacy `unassignedFile.url` bhi count karo.
+ * UI (`getVoucherAttachmentUrlsForUi`) intentional `fileUrls: []` par unassigned revive nahi karta;
+ * cleanup ko delete list ke liye purani file URL chahiye hoti hai.
+ */
+export function getVoucherAttachmentUrlsForEditCleanup(
+  row: { fileUrls?: unknown; unassignedFile?: unknown } | null | undefined
+): string[] {
+  if (!row) return [];
+  const urls = normalizeFileUrlsField(row.fileUrls);
+  if (urls.length > 0) return urls;
+  const uf = row.unassignedFile;
+  if (uf && typeof uf === "object" && uf !== null) {
+    const url = String((uf as { url?: string }).url || "").trim();
+    if (url) return [url];
+  }
+  return [];
 }
 
 /** Duplicate `fileUrls` / double-upload race se bachne ke liye stable unique list. */
@@ -97,6 +119,8 @@ export function voucherAttachmentUrlsForFormState(
   if (!row) return [];
   const mixed: (File | string)[] = [];
   if (Array.isArray(row.fileUrls)) {
+    // Explicit empty array — form must stay empty (no unassignedFile fallback).
+    if (row.fileUrls.length === 0) return [];
     for (const u of row.fileUrls) {
       if (typeof File !== "undefined" && u instanceof File) {
         mixed.push(u);
@@ -173,8 +197,28 @@ export function normalizeVoucherRowAttachmentsForUi<T extends Record<string, unk
   let next: Record<string, unknown> = row;
   let changed = false;
 
-  const urls = getVoucherAttachmentUrlsForUi(row, options);
+  const hasExplicitFileUrls = Object.prototype.hasOwnProperty.call(row, "fileUrls");
   const prevUrls = normalizeFileUrlsField(row.fileUrls);
+  // Explicit empty: clear legacy unassignedFile so list/UI cannot resurrect the deleted HTTPS.
+  if (hasExplicitFileUrls && Array.isArray(row.fileUrls) && prevUrls.length === 0) {
+    if (row.unassignedFile != null) {
+      next = { ...next, fileUrls: [], unassignedFile: null };
+      changed = true;
+      if (process.env.NODE_ENV !== "production") {
+        void import("@/lib/attachmentDeleteTrace").then((m) =>
+          m.traceAttachmentUrlsChange({
+            source: "normalizeVoucherRowAttachmentsForUi.clearUnassignedOnEmptyFileUrls",
+            voucherId: String(row.id || ""),
+            prevUrls: getVoucherAttachmentUrlsForUi({ ...row, fileUrls: undefined }),
+            nextUrls: [],
+            extra: { note: "blocked unassignedFile revive into empty fileUrls" },
+          })
+        );
+      }
+    }
+  }
+
+  const urls = getVoucherAttachmentUrlsForUi(changed ? next : row, options);
   const urlsSame =
     urls.length === prevUrls.length && urls.every((u, i) => u === prevUrls[i]) && Array.isArray(row.fileUrls);
   if (!urlsSame && (urls.length > 0 || row.fileUrls != null)) {

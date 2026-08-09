@@ -39,6 +39,7 @@ import { Button } from "@/components/ui/button";
 import { CreateTaxGroupDialog } from "./CreateTaxGroupDialog";
 import { Combobox } from "../ui/combobox";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import {
   MAX_IMAGE_BYTES_BEFORE_COMPRESS,
   MAX_IMAGE_BYTES_AFTER_COMPRESS,
@@ -108,6 +109,7 @@ export function CreateTaxForm({
   prefillName?: string;
 }) {
   const [isLoading, setIsLoading] = useState(false);
+  const isCompressing = useImageCompressionProcessing();
   const { toast } = useToast();
   const { user } = useAuth();
   const { companyId, company } = useCompany();
@@ -118,7 +120,7 @@ export function CreateTaxForm({
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const docsInputRef = useRef<HTMLInputElement>(null);
   const [avatarToUpload, setAvatarToUpload] = useState<{ file: File; preview: string } | null>(null);
-  const [documentFiles, setDocumentFiles] = useState<File[]>([]);
+  const [documentFiles, setDocumentFiles] = useState<Array<File | string>>([]);
   const { dateSystem } = useDate();
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [groupSearchQuery, setGroupSearchQuery] = useState("");
@@ -200,16 +202,8 @@ export function CreateTaxForm({
       return;
     }
     try {
-      const compressedFile = await compressFile(inputFile);
-      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-        toast({
-          variant: "destructive",
-          title: "File Too Large After Compression",
-          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-        });
-        e.target.value = "";
-        return;
-      }
+      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, companyId);
+      
       const preview = URL.createObjectURL(compressedFile);
       setAvatarToUpload({ file: compressedFile, preview });
     } catch (err) {
@@ -273,12 +267,15 @@ export function CreateTaxForm({
           const raw = await fetchRemoteUrlAsFile(remoteAvatarUrl, "tax-avatar.jpg");
           if (raw) {
             let f = raw;
+            let capBytes = Number.POSITIVE_INFINITY;
             try {
-              f = await compressFile(raw);
+              const _img = await compressImageForCompany(raw, companyId);
+              f = _img.file;
+              capBytes = _img.maxBytes;
             } catch {
               /* raw */
             }
-            if (f.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+            if (f.size > capBytes) {
               toast({
                 variant: "destructive",
                 title: "Avatar too large",
@@ -346,7 +343,7 @@ export function CreateTaxForm({
     try {
       if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         const totalAttachBytesLocal =
-          (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+          (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + (f instanceof File ? f.size : 0), 0);
         if (totalAttachBytesLocal > 0) {
           const limitCheck = await checkStorageLimit(
             companyId,
@@ -367,7 +364,7 @@ export function CreateTaxForm({
           collectionSeg: "taxes",
           entityId: localId,
           avatarFile: avatarToUpload?.file ?? null,
-          documentFiles,
+          documentFiles: documentFiles.filter((f): f is File => f instanceof File),
         });
         const payload = {
           id: localId,
@@ -453,7 +450,7 @@ export function CreateTaxForm({
       }
       
       const totalAttachBytes =
-        (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+        (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + (f instanceof File ? f.size : 0), 0);
       if (totalAttachBytes > 0) {
         const limitCheck = await checkStorageLimit(
           companyId,
@@ -477,7 +474,7 @@ export function CreateTaxForm({
         collectionSeg: "taxes",
         entityId: newTaxId,
         avatarFile: avatarToUpload?.file ?? null,
-        documentFiles,
+        documentFiles: documentFiles.filter((f): f is File => f instanceof File),
       });
 
       const interCompanyAccountNo = await interCompanyAcNoForNewEntity("tax");
@@ -543,7 +540,7 @@ export function CreateTaxForm({
         try {
           if (!companyId || !user) throw new Error("Missing company or user.");
           const totalCatch =
-            (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+            (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + (f instanceof File ? f.size : 0), 0);
           if (totalCatch > 0) {
             const lim = await checkStorageLimit(
               companyId,
@@ -560,7 +557,7 @@ export function CreateTaxForm({
             collectionSeg: "taxes",
             entityId: localId,
             avatarFile: avatarToUpload?.file ?? null,
-            documentFiles,
+            documentFiles: documentFiles.filter((f): f is File => f instanceof File),
           });
           const nowTs = Timestamp.now();
           const payload: Record<string, unknown> = {
@@ -781,6 +778,7 @@ export function CreateTaxForm({
             />
             <EntityDocumentsBlock
               docSlots={documentFiles}
+              setDocSlots={setDocumentFiles}
               onRemoveDoc={removeDocAt}
               onAddClick={() => docsInputRef.current?.click()}
               docsInputRef={docsInputRef}
@@ -804,7 +802,7 @@ export function CreateTaxForm({
             variant="ghost"
             className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}
             onClick={() => onCloseDialogRequest?.()}
-            disabled={isLoading}
+            disabled={isLoading || isCompressing}
           >
             Cancel
           </Button>
@@ -814,13 +812,13 @@ export function CreateTaxForm({
               variant="ghost"
               className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
               onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-              disabled={isLoading || apkOfflineViewOnly}
+              disabled={isLoading || isCompressing || apkOfflineViewOnly}
             >
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save & New
             </Button>
           </div>
-          <Button type="submit" disabled={isLoading || !companyId || apkOfflineViewOnly} className="shrink-0">
+          <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly} className="shrink-0">
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create Tax
           </Button>

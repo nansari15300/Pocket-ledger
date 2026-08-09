@@ -46,9 +46,8 @@ import usePermissions, {
   type UserRole,
   initialPermissionConfig,
   normalizePermissionConfig,
-  roleCanPermission,
 } from "@/hooks/usePermissions";
-import { resolvePermissionConfigSource, companyUsesDeviceOrPlPermissionConfig, logPlPerm, summarizePermissionDateLimits } from "@/lib/permissionConfigSource";
+import { companyUsesDeviceOrPlPermissionConfig, logPlPerm, summarizePermissionDateLimits } from "@/lib/permissionConfigSource";
 import { cn } from "@/lib/utils";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
@@ -152,16 +151,7 @@ export function ManageShare() {
   const { company: companyData, companyId, allCompanies, allCompaniesRegistry, reloadLocalCompanyRegistry, triggerSync, localCompanyRegistryEpoch } = useCompany();
   const { user } = useAuth();
   const { toast } = useToast();
-  const {
-    can,
-    role: myAssignedRole,
-    dateLimits: myDateLimits,
-    fileAttachmentLimits: myFileLimits,
-    allowAttachments: myAllowAttachments,
-    permissionConfig: livePermissionConfig,
-    permissionConfigSource,
-    permissionConfigSourceKey,
-  } = usePermissions();
+  const { can } = usePermissions();
   const livePlans = useLivePlans();
   const [loading, setLoading] = useState(true);
   const [isUpdating, setIsUpdating] = useState<string | null>(null);
@@ -169,7 +159,6 @@ export function ManageShare() {
   const [userToEdit, setUserToEdit] = useState<SharedUser | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [myRoleOpen, setMyRoleOpen] = useState(false);
   
   const [firestorePermissionConfig, setFirestorePermissionConfig] = useState<PermissionConfig>(initialPermissionConfig);
   const [editablePermissionConfig, setEditablePermissionConfig] = useState<PermissionConfig>(initialPermissionConfig);
@@ -1157,107 +1146,6 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         </Card>
         )}
         
-        <Dialog open={myRoleOpen} onOpenChange={setMyRoleOpen}>
-          <DialogContent className="max-h-[85vh] w-[min(100vw-1.5rem,80vw)] max-w-5xl overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>My Role (read-only)</DialogTitle>
-              <DialogDescription>
-                Permissions this login actually uses for vouchers — not the dropdown you are editing above.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 text-sm">
-              <div className="rounded-lg border p-3 space-y-1">
-                <p>
-                  <span className="font-semibold">Assigned role:</span>{" "}
-                  {companyShareRoleLabel(myAssignedRole)}
-                </p>
-                <p>
-                  <span className="font-semibold">Provider:</span>{" "}
-                  {permissionConfigSource?.label || resolvePermissionConfigSource(companyData).label}
-                </p>
-                <p className="break-all">
-                  <span className="font-semibold">Source URL:</span>{" "}
-                  {permissionConfigSource?.url || resolvePermissionConfigSource(companyData).url}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Config load path: {permissionConfigSourceKey || "—"}
-                  {permissionConfigSourceKey === "initial-default"
-                    ? " (host permissionConfig missing on client — defaults like manager editDays=7)"
-                    : ""}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {permissionConfigSource?.detail || resolvePermissionConfigSource(companyData).detail}
-                </p>
-              </div>
-              <div className="space-y-2">
-                <h4 className="font-semibold border-b pb-1">Date Control</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  {(
-                    [
-                      ["Entry", myDateLimits?.entryDays],
-                      ["Edit", myDateLimits?.editDays],
-                      ["Delete", myDateLimits?.deleteDays],
-                    ] as const
-                  ).map(([label, days]) => (
-                    <div key={label} className="rounded border p-2">
-                      <div className="text-xs text-muted-foreground">Back Date {label}</div>
-                      <div className="font-semibold">{days ?? 0}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="space-y-2">
-                <h4 className="font-semibold border-b pb-1">File Attachments</h4>
-                <p>Allow attachments: {myAllowAttachments ? "ON" : "OFF"}</p>
-                <p>Max files: {myFileLimits?.maxFileCount ?? 0}</p>
-                <p>
-                  Image: {myFileLimits?.allowImage ? "ON" : "OFF"} · PDF:{" "}
-                  {myFileLimits?.allowPDF ? "ON" : "OFF"} · Delete:{" "}
-                  {myFileLimits?.allowDelete ? "ON" : "OFF"}
-                </p>
-              </div>
-              <div className="space-y-3">
-                <h4 className="font-semibold border-b pb-1">Permissions</h4>
-                {PermissionGroups.map((group) => (
-                  <div key={group.title} className="space-y-1">
-                    <p className="text-xs font-semibold text-muted-foreground">{group.title}</p>
-                    <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-x-3 gap-y-1">
-                      {group.permissions.map((perm) => {
-                        const on = roleCanPermission(
-                          myAssignedRole,
-                          perm.key,
-                          livePermissionConfig || editablePermissionConfig
-                        );
-                        return (
-                          <li key={perm.key} className="flex items-center gap-2 min-w-0">
-                            <Checkbox checked={on} disabled />
-                            <span className={cn("truncate", on ? "" : "text-muted-foreground")}>{perm.label}</span>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="secondary" onClick={() => setMyRoleOpen(false)}>
-                Close
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setSelectedRoleForPermissions(myAssignedRole);
-                  setMyRoleOpen(false);
-                }}
-              >
-                Jump editor to my role
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
         <Dialog open={!!userToEdit} onOpenChange={(open) => !open && setUserToEdit(null)}>
              <DialogContent>
                 <DialogHeader>
@@ -1288,17 +1176,9 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                 <div className="flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <CardTitle>Role Permissions</CardTitle>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setMyRoleOpen(true)}
-                      >
-                        My Role
-                      </Button>
                     </div>
                     <CardDescription>
-                      Select a role to view and edit its permissions. Use <strong>My Role</strong> to see what this login actually enforces.
+                      Select a role to view and edit its permissions. Open <strong>My Role</strong> next to Settings to see what this login actually enforces.
                     </CardDescription>
                 </div>
                  <div className="flex items-center text-base font-bold" style={{gap: '10mm'}}>

@@ -6,7 +6,6 @@
  */
 import { toast as sonnerToast } from "sonner";
 import { compressFile } from "@/lib/compression";
-import { attachmentMaxBytes } from "@/lib/attachmentCompressionUi";
 import { sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
 import { convertPdfToStitchedJpegFile } from "@/lib/pdfToImageExport";
 import { getBlobFromLocalFileRef, isLocalFileRef } from "@/lib/localPendingFiles";
@@ -44,12 +43,16 @@ function isPdfFile(f: File): boolean {
  */
 export async function convertPdfAttachmentsToJpegIfEnabled(
   items: (File | string)[],
-  enabled: boolean
+  enabled: boolean,
+  opts?: { companyId?: string | null }
 ): Promise<(File | string)[]> {
   if (!enabled) return items;
-  const maxB = attachmentMaxBytes();
+  const { resolveAttachmentImageMaxBytes, IMAGE_SOFT_MIN_KB } = await import(
+    "@/lib/attachmentCompressionUi"
+  );
+  const maxB = await resolveAttachmentImageMaxBytes(opts?.companyId);
   const maxKB = Math.max(24, Math.floor(maxB / 1024));
-  const minKB = Math.min(50, Math.floor(maxKB * 0.4));
+  const minKB = Math.min(IMAGE_SOFT_MIN_KB, Math.floor(maxKB * 0.5));
   const out: (File | string)[] = [];
 
   for (const item of items) {

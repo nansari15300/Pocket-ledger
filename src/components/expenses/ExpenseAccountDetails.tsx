@@ -28,7 +28,6 @@ import {
   Lock,
   Columns3,
   ChevronDown,
-  Wand2,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -75,9 +74,13 @@ import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { EditExpenseAccountDialog } from "./EditExpenseAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_OUTER_ROW_CN,
+  LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
+  LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
@@ -142,6 +145,7 @@ import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { useVouchers } from "@/hooks/useVouchers";
+import { useMasterEntityLivePatch } from "@/hooks/useMasterEntityLivePatch";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import usePermissions from "@/hooks/usePermissions";
 
@@ -231,6 +235,12 @@ export function ExpenseAccountDetails({
     if (!allAccounts) return initialAccount;
     return allAccounts.find(a => a.id === initialAccount.id) || initialAccount;
   }, [allAccounts, initialAccount]);
+
+  const handleAccountUpdated = useMasterEntityLivePatch<ExpenseAccount>({
+    collection: "expense_accounts",
+    entityId: initialAccount.id,
+    onUpdated: () => onAccountUpdated(),
+  });
 
   const accountHeaderAttachmentUrl = useMemo(
     () => trimEntityFileUrlForPreview(account.fileUrl),
@@ -689,10 +699,10 @@ export function ExpenseAccountDetails({
 
     return (
      <div className="flex h-full min-h-0 flex-col overflow-hidden">
-        {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="flex-shrink-0 border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
+        {/* Header: identity + pills — Party-style single row */}
+        <div className="flex-shrink-0 border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+          <div className={LEDGER_HEADER_OUTER_ROW_CN}>
+            <div className={LEDGER_HEADER_IDENTITY_CN}>
               {isMobile && onBack && (
                 <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
                   <ArrowLeft className="h-5 w-5" />
@@ -713,46 +723,39 @@ export function ExpenseAccountDetails({
                   }
                 />
               </EntityFileAttachmentHover>
-              <div className="flex flex-col min-w-0 gap-0.5">
-                <div className="flex items-center gap-2 flex-nowrap min-w-0">
-                  <h2 className="text-xl font-semibold truncate flex items-center gap-2">
-                    {(account as any).isSystemReserved && <Lock className="h-4 w-4 text-muted-foreground flex-shrink-0" />}
-                    {account.name}
-                  </h2>
-                  {account.id !== 'all' && account.id !== 'sales_account' && account.id !== 'purchase_account' && (
-                    <EditExpenseAccountDialog
-                      account={account}
-                      onAccountUpdated={onAccountUpdated}
-                      onAccountDeleted={() => onAccountDeleted(account.id)}
-                      hasTransactions={processedTransactions.length > 0}
-                    >
-                      <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                    </EditExpenseAccountDialog>
-                  )}
-                  <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                    {formatCurrency(closingBalance, { showDrCr: true })}
-                  </div>
-                  {account.id !== "all" && account.id !== "sales_account" && account.id !== "purchase_account" ? (
-                    <AddVoucherDialog
-                      defaultTab="adjustment"
-                      allowedTabs={["adjustment"]}
-                      defaultVoucherData={{
-                        defaultTab: "adjustment",
-                        adjustmentTarget: { id: account.id, entityType: "expense", name: account.name },
-                      }}
-                    >
-                      <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
-                        <Wand2 className="mr-2 h-3.5 w-3.5" />
-                        Adjust Balance
-                      </Button>
-                    </AddVoucherDialog>
-                  ) : null}
-                </div>
+              {(account as any).isSystemReserved && <Lock className="h-4 w-4 text-muted-foreground flex-shrink-0" />}
+              <h2 className={LEDGER_HEADER_TITLE_CN} title={account.name}>{account.name}</h2>
+              {account.id !== 'all' && account.id !== 'sales_account' && account.id !== 'purchase_account' && (
+                <EditExpenseAccountDialog
+                  account={account}
+                  onAccountUpdated={handleAccountUpdated}
+                  onAccountDeleted={() => onAccountDeleted(account.id)}
+                  hasTransactions={processedTransactions.length > 0}
+                >
+                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                </EditExpenseAccountDialog>
+              )}
+              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                {formatCurrency(closingBalance, { showDrCr: true })}
               </div>
             </div>
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className={LEDGER_HEADER_PILL_ROW_CN}>
+              {account.id !== "all" && account.id !== "sales_account" && account.id !== "purchase_account" ? (
+                <AddVoucherDialog
+                  defaultTab="adjustment"
+                  allowedTabs={["adjustment"]}
+                  defaultVoucherData={{
+                    defaultTab: "adjustment",
+                    adjustmentTarget: { id: account.id, entityType: "expense", name: account.name },
+                  }}
+                >
+                  <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
+                    Adjust Balance
+                  </Button>
+                </AddVoucherDialog>
+              ) : null}
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
@@ -1075,7 +1078,7 @@ export function ExpenseAccountDetails({
               {account.id !== "all" && (
                 <EditExpenseAccountDialog
                   account={account}
-                  onAccountUpdated={onAccountUpdated}
+                  onAccountUpdated={handleAccountUpdated}
                   onAccountDeleted={() => onAccountDeleted(account.id)}
                   hasTransactions={processedTransactions.length > 0}
                 >

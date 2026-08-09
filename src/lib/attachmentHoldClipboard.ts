@@ -25,6 +25,10 @@ export type AttachmentHoldPayloadV1 = {
   t?: string;
   /** Same-tab only: in-memory blob entry id */
   sid?: string;
+  /** Source company id — paste par same-company reuse vs cross-company copy. */
+  c?: string;
+  /** Source place key (`vouchers/id`) — reuse badge green origin. */
+  o?: string;
 };
 
 const SESSION_BACKUP_KEY = "pl_attach_hold_clip_backup";
@@ -259,13 +263,19 @@ export function voucherFormFilesIncludePersistableRef(
 ): boolean {
   const target = String(ref || "").trim();
   if (!target) return false;
+  const targetPath = tryGetStoragePathFromFirebaseDownloadUrl(target);
   return currentFiles.some((f) => {
     if (typeof f !== "string") return false;
     const s = String(f).trim();
     if (!s) return false;
     if (s === target) return true;
     const norm = normalizeAttachmentUrlForDevicePreview(s);
-    return norm === target;
+    if (norm === target) return true;
+    if (!targetPath) return false;
+    const sp =
+      tryGetStoragePathFromFirebaseDownloadUrl(s) ||
+      tryGetStoragePathFromFirebaseDownloadUrl(norm);
+    return Boolean(sp && sp === targetPath);
   });
 }
 
@@ -428,8 +438,14 @@ export function persistableAttachmentRefFromHoldPayload(
 export function buildHoldPayloadFromPreviewSource(params: {
   file: File | string;
   storagePath?: string;
+  /** Owning company — paste same-company link vs cross-company copy. */
+  companyId?: string;
+  /** Source voucher/master place — green origin for reuse badge. */
+  placeKey?: string | null;
 }): AttachmentHoldPayloadV1 | null {
-  const { file, storagePath } = params;
+  const { file, storagePath, companyId, placeKey } = params;
+  const c = String(companyId || "").trim() || undefined;
+  const o = String(placeKey || "").trim() || undefined;
   if (typeof file === "string") {
     const src = file.trim();
     if (!src) return null;
@@ -448,6 +464,8 @@ export function buildHoldPayloadFromPreviewSource(params: {
       src,
       p: p || undefined,
       n: n || undefined,
+      c,
+      o,
     };
   }
   // Unsaved File: same-tab sid + clipboard (clipboard text still works cross-action same tab)
@@ -457,5 +475,63 @@ export function buildHoldPayloadFromPreviewSource(params: {
     sid,
     n: file.name,
     t: file.type || undefined,
+    c,
+    o,
   };
+}
+
+/** Source company from hold payload / storage path / URL. */
+export function companyIdFromAttachmentHoldPayload(
+  payload: AttachmentHoldPayloadV1 | null | undefined
+): string | null {
+  if (!payload) return null;
+  const direct = String(payload.c || "").trim();
+  if (direct) return direct;
+  const path = String(payload.p || "").trim();
+  if (path) {
+    const fromPath = companyIdFromStorageObjectPath(path);
+    if (fromPath) return fromPath;
+  }
+  const src = String(payload.src || "").trim();
+  if (src.startsWith("http://") || src.startsWith("https://")) {
+    const sp = tryGetStoragePathFromFirebaseDownloadUrl(src);
+    if (sp) return companyIdFromStorageObjectPath(sp);
+  }
+  return null;
+}
+
+function companyIdFromStorageObjectPath(path: string): string | null {
+  const p = String(path || "").replace(/^\/+/, "").trim();
+  if (!p) return null;
+  const m = /^(?:pocket-ledger|voucher-files|companies|parties-files|staff-files|items-files)\/([^/]+)\//i.exec(
+    p
+  );
+  return m?.[1]?.trim() || null;
+}
+
+/**
+ * Local registry id vs Storage/Firestore path id — same company often looks different.
+ * Missing source → prefer same-company URL reuse (no re-upload).
+ */
+export async function attachmentHoldCompaniesMatch(
+  sourceCompanyId: string | null | undefined,
+  targetCompanyId: string | null | undefined
+): Promise<boolean> {
+  const src = String(sourceCompanyId || "").trim();
+  const tgt = String(targetCompanyId || "").trim();
+  if (!src || !tgt) return true;
+  if (src === tgt) return true;
+  try {
+    const { resolveAuthoritativeFirestoreCompanyId } = await import(
+      "@/lib/resolveAuthoritativeFirestoreCompanyId"
+    );
+    const a = String((await resolveAuthoritativeFirestoreCompanyId(src)) || "").trim();
+    const b = String((await resolveAuthoritativeFirestoreCompanyId(tgt)) || "").trim();
+    if (a && b && a === b) return true;
+    if (a && (a === tgt || a === src)) return true;
+    if (b && (b === tgt || b === src)) return true;
+  } catch {
+    /* prefer reuse over accidental re-upload */
+  }
+  return false;
 }

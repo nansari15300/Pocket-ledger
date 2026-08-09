@@ -17,6 +17,10 @@ import { postDriveJsonViaClient } from "@/lib/localCloudSync/driveApiClient";
 import { getFirebaseAuthUserForApi, hasRealFirebaseAuthSession } from "@/lib/firebaseAuthForApi";
 import { warnLocalCloudSync } from "@/lib/localCloudSync/logger";
 import type { LocalCompanyDoc } from "@/lib/localCompanyStore";
+import {
+  buildStoragePathPrefix,
+  companyUsesPocketLedgerStorage,
+} from "@/lib/firebaseStoragePaths";
 
 export type DriveFullReuploadPrepResult = {
   prepared: boolean;
@@ -118,17 +122,22 @@ async function resolveLocalBytesForDriveReupload(ref: string, companyId: string)
   return null;
 }
 
-function inferStoragePathPrefix(collection: string, doc: Record<string, unknown>, companyId: string, field: string): string {
-  if (collection === "vouchers") {
-    const voucherType = String(doc.voucherType ?? doc.type ?? "journal").trim() || "journal";
-    return `voucher-files/${companyId}/${voucherType}`;
-  }
-  if (["parties", "bank_accounts", "staff", "taxes", "expense_accounts", "items"].includes(collection)) {
-    const seg = collection.replace(/_/g, "-");
-    const sub = field === "fileUrl" || field === "avatarUrl" ? "avatar" : "documents";
-    return `companies/${companyId}/${seg}-files/${sub}`;
-  }
-  return `companies/${companyId}/attachments`;
+function inferStoragePathPrefix(
+  collection: string,
+  doc: Record<string, unknown>,
+  companyId: string,
+  field: string,
+  usePocketLedger: boolean
+): string {
+  const voucherType =
+    collection === "vouchers" ? String(doc.voucherType ?? doc.type ?? "journal").trim() || "journal" : undefined;
+  return buildStoragePathPrefix({
+    companyId,
+    usePocketLedger,
+    collectionName: collection,
+    fieldKey: field,
+    voucherType,
+  });
 }
 
 function collectRefFieldPaths(
@@ -210,6 +219,7 @@ export async function rehydrateLocalAttachmentRefsForDrive(
   }
   const pending = await getPendingFiles();
   const pendingIds = new Set(pending.map((p) => p.id));
+  const usePocketLedger = companyUsesPocketLedgerStorage(reg);
   let requeuedLocalFiles = 0;
   let reuploadedDriveRefs = 0;
 
@@ -240,7 +250,7 @@ export async function rehydrateLocalAttachmentRefsForDrive(
             contentType: blob.type || "application/octet-stream",
             docPath: `companies/${cid}/${collection}/${docId}`,
             field,
-            storagePathPrefix: inferStoragePathPrefix(collection, row, cid, field),
+            storagePathPrefix: inferStoragePathPrefix(collection, row, cid, field, usePocketLedger),
           });
           pendingIds.add(localId);
           requeuedLocalFiles += 1;

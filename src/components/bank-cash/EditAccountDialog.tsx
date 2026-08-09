@@ -14,6 +14,10 @@ import {
   isProfileAvatarImageFile,
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
+import {
+  captureEntityFormAttachmentBaseline,
+  finalizeFormAttachmentEditAfterSave,
+} from "@/lib/formAttachmentEditHelper";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 
 import { Button } from "@/components/ui/button";
@@ -68,6 +72,7 @@ import { FilePreview } from "../vouchers/FilePreview";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
@@ -153,6 +158,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   }, [controlledIsOpen, onOpenChange]);
 
   const [isLoading, setIsLoading] = useState(false);
+  const isCompressing = useImageCompressionProcessing();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [groups, setGroups] = useState<AccountGroup[]>([]);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
@@ -371,6 +377,10 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const accountRefSnap = account;
+    const attachmentBaselineSnap = captureEntityFormAttachmentBaseline({
+      fileUrl: initialFileRef.current,
+      documentFileUrls: initialDocUrlsRef.current,
+    });
 
     setIsOpen(false); // Bank/cash edit band turant; static/APK shield + writes async
 
@@ -385,11 +395,20 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
       const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
       setIsLoading(true);
       try {
-        let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
-        const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
-        const keptDocUrls = docSlotsSnap.filter((x): x is string => typeof x === "string");
+        const { prepareMasterEditAttachmentsForSave } = await import(
+          "@/lib/attachmentRecompressOnSave"
+        );
+        const prepared = await prepareMasterEditAttachmentsForSave({
+          companyId,
+          avatar: fileSnap,
+          documents: docSlotsSnap,
+        });
+        let fileUrl: string | null = typeof prepared.avatar === "string" ? prepared.avatar : null;
+        const newDocFiles = prepared.newDocFiles;
+        const keptDocUrls = prepared.keptDocUrls;
         const totalBytes =
-          (fileSnap instanceof File ? fileSnap.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+          (prepared.avatar instanceof File ? prepared.avatar.size : 0) +
+          newDocFiles.reduce((s, f) => s + f.size, 0);
         if (totalBytes > 0 && companyId) {
           const limitCheck = await checkStorageLimit(
             companyId,
@@ -403,7 +422,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           }
         }
 
-        const needAvatarUpload = fileSnap instanceof File && canAddAvatar;
+        const needAvatarUpload = prepared.avatar instanceof File && canAddAvatar;
         const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
         let documentFileUrls = [...keptDocUrls];
         if (companyId && (needAvatarUpload || needNewDocsUpload)) {
@@ -411,7 +430,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
             companyId,
             collectionSeg: "bank_accounts",
             entityId: accountRefSnap.id,
-            avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+            avatarFile: needAvatarUpload ? (prepared.avatar as File) : null,
             documentFiles: needNewDocsUpload ? newDocFiles : [],
           });
           if (st.fileUrl) fileUrl = st.fileUrl;
@@ -473,6 +492,12 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           });
           initialFileRef.current = fileUrl || null;
           initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
+          finalizeFormAttachmentEditAfterSave({
+            companyId,
+            baselineUrls: attachmentBaselineSnap,
+            finalUrls: captureEntityFormAttachmentBaseline({ fileUrl, documentFileUrls }),
+            oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
+          });
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.accountName}" saved locally.` : `"${values.accountName}" has been successfully updated.`,
@@ -510,6 +535,12 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         });
         initialFileRef.current = fileUrl || null;
         initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
+        finalizeFormAttachmentEditAfterSave({
+          companyId,
+          baselineUrls: attachmentBaselineSnap,
+          finalUrls: captureEntityFormAttachmentBaseline({ fileUrl, documentFileUrls }),
+          oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
+        });
         sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.accountName}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating account:", error);
@@ -613,16 +644,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     }
 
     try {
-      const compressedFile = await compressFile(inputFile);
-      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-        toast({
-          variant: "destructive",
-          title: "File Too Large After Compression",
-          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-        });
-        e.target.value = "";
-        return;
-      }
+      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, companyId);
+      
       setFile(compressedFile);
     } catch (err) {
       console.error("File compression error:", err);
@@ -926,7 +949,9 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                   ) : (
                     <div className="flex items-center gap-4 flex-wrap">
                       {file ? (
-                        <FilePreview file={file} attachmentCompanyId={companyId ?? undefined} onRemove={removeAvatar} />
+                        <FilePreview isCompressing={isCompressing} file={file} attachmentCompanyId={companyId ?? undefined} onRemove={removeAvatar} 
+                          attachmentReusePlaceKey={(account.id ? `bank_accounts/${account.id}` : null)}
+                        />
                       ) : null}
                       {!file ? (
                         <FormControl>
@@ -981,6 +1006,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                             key={typeof slot === "string" ? `${slot}-${idx}` : `${slot.name}-${idx}-${slot.size}`}
                             file={slot}
                             attachmentCompanyId={companyId ?? undefined}
+                            attachmentReusePlaceKey={account.id ? `bank_accounts/${account.id}` : null}
                             onRemove={() => removeDocAt(idx)}
                             size={96}
                           />
@@ -1053,7 +1079,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
+                <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>

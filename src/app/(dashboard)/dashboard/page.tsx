@@ -211,6 +211,67 @@ function getTransactionAmounts(transaction: any) {
   return { debit, credit };
 }
 
+/**
+ * Recent Search: voucher/narration/accounts/user/amounts — kahin se bhi token match.
+ * Narration + note title included (Show Narration toggle se independent).
+ */
+function transactionMatchesRecentQuickSearch(
+  tx: any,
+  qLower: string,
+  journalAccountNames: Record<string, string>,
+  userNames: Record<string, string>
+): boolean {
+  if (!qLower) return true;
+  const tokens = qLower
+    .split(/\s+/)
+    .map((t) => t.replace(/,/g, "").trim().toLowerCase())
+    .filter(Boolean);
+  if (tokens.length === 0) return true;
+
+  const names = { ...journalAccountNames, ...userNames };
+  const pieces: string[] = [];
+
+  pieces.push(getTransactionQuickSearchHaystack(tx, names));
+  pieces.push(getOppositeAccountLabel(tx, names, "daybook", undefined, undefined) || "");
+  if (typeof tx?.title === "string" && tx.type === "note") pieces.push(tx.title);
+
+  const uid = tx?.userId;
+  if (uid && userNames[uid]) pieces.push(userNames[uid]);
+
+  for (const key of ["debit", "credit", "total", "amount", "balance", "runningBalance", "outstanding"] as const) {
+    const v = tx[key];
+    if (v == null || v === "") continue;
+    const n = Number(v);
+    if (Number.isFinite(n)) {
+      pieces.push(String(n), n.toFixed(2), n.toLocaleString("en-IN"));
+      pieces.push(n.toLocaleString());
+    }
+  }
+
+  const d =
+    tx?.date && (typeof tx.date.toDate === "function" ? tx.date.toDate() : new Date(tx.date));
+  if (d && !isNaN(d.getTime())) {
+    pieces.push(d.toISOString(), d.toLocaleDateString(), d.toLocaleString());
+  }
+
+  const hay = pieces.join(" ").toLowerCase().replace(/,/g, " ");
+
+  const numericFields = ["debit", "credit", "total", "amount", "balance", "runningBalance", "outstanding"].map(
+    (k) => Number(tx[k])
+  );
+
+  for (const tok of tokens) {
+    if (!tok) continue;
+    if (hay.includes(tok)) continue;
+    const qNum = Number(tok.replace(/,/g, ""));
+    if (Number.isFinite(qNum) && numericFields.some((n) => Number.isFinite(n) && Math.abs(n - qNum) < 0.000001)) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 const statCardData = [
   { title: 'Sales', icon: ShoppingBag, type: 'sale', link: '/sale', isCredit: true },
   { title: 'Purchases', icon: ShoppingCart, type: 'purchase', link: '/purchase', isCredit: false },
@@ -526,68 +587,6 @@ const BankCashSummary = () => {
         </Card>
     )
 };
-
-/**
- * Recent search: sirf card/table dikhane wale text + amounts/dates — poori object walk nahi
- * (warna "rcpt" jaise substring kisi hidden field me lag kar Sale row bhi aa jata tha).
- * Space = alag words; har word ko AND (sab kahi na kahi match hone chahiye).
- */
-function transactionMatchesRecentQuickSearch(
-  tx: any,
-  qLower: string,
-  journalAccountNames: Record<string, string>,
-  userNames: Record<string, string>
-): boolean {
-  if (!qLower) return true;
-  const tokens = qLower
-    .split(/\s+/)
-    .map((t) => t.replace(/,/g, "").trim().toLowerCase())
-    .filter(Boolean);
-  if (tokens.length === 0) return true;
-
-  const names = { ...journalAccountNames, ...userNames };
-  const pieces: string[] = [];
-
-  pieces.push(getTransactionQuickSearchHaystack(tx, names));
-  pieces.push(getOppositeAccountLabel(tx, names, "daybook", undefined, undefined) || "");
-  if (typeof tx?.title === "string" && tx.type === "note") pieces.push(tx.title);
-
-  const uid = tx?.userId;
-  if (uid && userNames[uid]) pieces.push(userNames[uid]);
-
-  for (const key of ["debit", "credit", "total", "amount", "balance", "runningBalance", "outstanding"] as const) {
-    const v = tx[key];
-    if (v == null || v === "") continue;
-    const n = Number(v);
-    if (Number.isFinite(n)) {
-      pieces.push(String(n), n.toFixed(2), n.toLocaleString("en-IN"));
-      pieces.push(n.toLocaleString());
-    }
-  }
-
-  const d =
-    tx?.date && (typeof tx.date.toDate === "function" ? tx.date.toDate() : new Date(tx.date));
-  if (d && !isNaN(d.getTime())) {
-    pieces.push(d.toISOString(), d.toLocaleDateString(), d.toLocaleString());
-  }
-
-  const hay = pieces.join(" ").toLowerCase().replace(/,/g, " ");
-
-  const numericFields = ["debit", "credit", "total", "amount", "balance", "runningBalance", "outstanding"].map(
-    (k) => Number(tx[k])
-  );
-
-  for (const tok of tokens) {
-    if (!tok) continue;
-    if (hay.includes(tok)) continue;
-    const qNum = Number(tok.replace(/,/g, ""));
-    if (Number.isFinite(qNum) && numericFields.some((n) => Number.isFinite(n) && Math.abs(n - qNum) < 0.000001)) {
-      continue;
-    }
-    return false;
-  }
-  return true;
-}
 
 function DashboardPageContent() {
   const { company, companyId, setCompanyId } = useCompany();

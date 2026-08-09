@@ -11,8 +11,13 @@ import {
 } from "@/lib/interCompany/interCompanyVoucherHistory";
 import { ensureInterCompanyCounterpartyParty } from "@/lib/interCompany/ensureInterCompanyCounterpartyParty";
 import {
+  ensureInterCompanyMirroredEntity,
+  isInterCompanyMirroredEntityKindSupported,
+} from "@/lib/interCompany/ensureInterCompanyMirroredEntity";
+import {
   buildSourceInterCompanyLegs,
   buildSourceInterCompanyLegsApproved,
+  buildTargetInterCompanyLegsApproved,
   buildTargetInterCompanyLegsPending,
 } from "@/lib/interCompany/interCompanyPostingLegs";
 import { getNextInterCompanyVoucherNumber } from "@/lib/interCompany/nextInterCompanyVoucherNumber";
@@ -20,8 +25,8 @@ import {
   purgeInterCompanyCounterpartyPartyIfUnused,
   reconcileUnusedInterCompanyCounterpartyParties,
 } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
-import { linkFirebaseAttachmentRefs } from "@/lib/companyAttachmentRegistry";
-import { resolveInterCompanyPeerAttachmentUrls } from "@/lib/interCompany/interCompanySharedAttachments";
+import { reconcileAndPatchInterCompanyAttachmentSharing } from "@/lib/interCompany/interCompanySharedAttachments";
+import { readCompanyInterCompanyCode, ensureCompanyInterCompanyCode } from "@/lib/interCompany/interCompanyCompanyCode";
 import {
   assertInterCompanyDeleteAllowed,
   assertInterCompanyPairEditDeleteAllowed,
@@ -85,12 +90,17 @@ export type SaveInterCompanyPairInput = {
   existingTargetVoucherId?: string | null;
   existingLinkId?: string | null;
   approveSourceAfterSave?: boolean;
-  /** Source voucher attachments */
-  fileUrls?: string[];
+  /** Source voucher — apni taraf ki attachments (own; target box alag) */
+  sourceFileUrls?: string[];
+  /** Target voucher — apni taraf ki attachments (own; source box alag) */
+  targetFileUrls?: string[];
   /** Save/upload ke waqt in-memory blobs — peer copy ke liye dubara read na karna pade */
-  attachmentBlobByRef?: ReadonlyMap<string, Blob>;
-  /** ON = target copy par bhi same fileUrls save */
-  shareAttachmentsWithPeer?: boolean;
+  sourceAttachmentBlobByRef?: ReadonlyMap<string, Blob>;
+  targetAttachmentBlobByRef?: ReadonlyMap<string, Blob>;
+  /** ON = source ki attachments bhi target copy par dikhengi */
+  shareSourceAttachmentsWithPeer?: boolean;
+  /** ON = target ki attachments bhi source copy par dikhengi */
+  shareTargetAttachmentsWithSource?: boolean;
 };
 
 export type SaveInterCompanyPairResult = {
@@ -149,7 +159,8 @@ function buildVoucherPayload(args: {
   link: InterCompanyLinkDoc;
   entityKind: InterCompanyEntityKind;
   entityId: string;
-  fileUrls: string[];
+  /** Is doc ki apni attachments (own side) — peer se share hui copies baad me merge hoti hain */
+  ownFileUrls: string[];
   companyBankAccountId: string;
   interCompanyCounterpartyPartyId: string;
   interCompanyLegs: ReturnType<typeof buildSourceInterCompanyLegs>;
@@ -158,7 +169,8 @@ function buildVoucherPayload(args: {
   targetCompanyBankAccountId?: string;
   sourceCompanyBankLabel?: string;
   targetCompanyBankLabel?: string;
-  shareAttachmentsWithPeer?: boolean;
+  shareSourceAttachmentsWithPeer?: boolean;
+  shareTargetAttachmentsWithSource?: boolean;
 }): Record<string, unknown> {
   return {
     type: "inter_company",
@@ -167,8 +179,10 @@ function buildVoucherPayload(args: {
     amount: args.amount,
     total: args.amount,
     narration: args.narration,
-    fileUrls: args.fileUrls,
-    interCompanyShareAttachmentsWithPeer: args.shareAttachmentsWithPeer === true,
+    fileUrls: args.ownFileUrls,
+    interCompanyOwnFileUrls: args.ownFileUrls,
+    interCompanyShareAttachmentsWithPeer: args.shareSourceAttachmentsWithPeer === true,
+    interCompanySharePeerAttachmentsToSource: args.shareTargetAttachmentsWithSource === true,
     allocations: [],
     linkedPaymentInIds: [],
     targetCompanyId: args.targetCompanyId,
@@ -314,8 +328,10 @@ export async function saveInterCompanyVoucherPair(
     : input.date;
   const dateIso = dateForSave.toISOString();
   const amount = Number(input.amount) || 0;
-  const fileUrls = input.fileUrls ?? [];
-  const shareAttachmentsWithPeer = input.shareAttachmentsWithPeer === true;
+  const sourceOwnFileUrls = input.sourceFileUrls ?? [];
+  const targetOwnFileUrls = input.targetFileUrls ?? [];
+  const shareSourceAttachmentsWithPeer = input.shareSourceAttachmentsWithPeer === true;
+  const shareTargetAttachmentsWithSource = input.shareTargetAttachmentsWithSource === true;
 
   // Har company ka apna inter_company serial — create par alag number; update par purana rakho
   const [sourceCompanyDoc, targetCompanyDoc] = await Promise.all([
@@ -325,6 +341,8 @@ export async function saveInterCompanyVoucherPair(
 
   let sourceVoucherNumber = String(input.voucherNumber || "").trim();
   let targetVoucherNumber = sourceVoucherNumber;
+  let existingSourceApproved = false;
+  let existingTargetApproved = false;
 
   if (input.existingSourceVoucherId) {
     const existing = await readInterCompanyVoucherRow(
@@ -333,6 +351,7 @@ export async function saveInterCompanyVoucherPair(
     );
     if (existing) {
       sourceVoucherNumber = String(existing.voucherNumber || sourceVoucherNumber);
+      existingSourceApproved = existing.isApproved === true;
     }
     if (input.existingTargetVoucherId) {
       const existingTarget = await readInterCompanyVoucherRow(
@@ -341,6 +360,7 @@ export async function saveInterCompanyVoucherPair(
       );
       if (existingTarget) {
         targetVoucherNumber = String(existingTarget.voucherNumber || targetVoucherNumber);
+        existingTargetApproved = existingTarget.isApproved === true;
       }
     }
   } else {
@@ -377,23 +397,78 @@ export async function saveInterCompanyVoucherPair(
     }),
   ]);
 
-  const sourceLegs = buildSourceInterCompanyLegs({
-    amount,
-    entityKind: input.sourceEntityKind,
-    entityId: input.sourceEntityId,
-    companyBankAccountId: input.sourceCompanyBankAccountId,
-    interCompanyCounterpartyPartyId: sourceIcPartyId,
-    useIcConduit,
-  });
+  // Optional entity (party/staff/tax/expense) — jab select ho to peer company me mirror
+  // (naam "IC {code} {full name}"), taaki peer bhi apne ledger me isi entity ko track kar sake.
+  try {
+    const [sourceCode, targetCode] = await Promise.all([
+      readCompanyInterCompanyCode(sourceCompanyDoc as { interCompanyCompanyCode?: string } | null) ||
+        ensureCompanyInterCompanyCode(input.sourceCompanyId, input.sourceCompanyName),
+      readCompanyInterCompanyCode(targetCompanyDoc as { interCompanyCompanyCode?: string } | null) ||
+        ensureCompanyInterCompanyCode(input.targetCompanyId, input.targetCompanyName),
+    ]);
+    await Promise.all([
+      isInterCompanyMirroredEntityKindSupported(input.sourceEntityKind) && sourceEntityId
+        ? ensureInterCompanyMirroredEntity({
+            peerCompanyId: input.targetCompanyId,
+            originCompanyId: input.sourceCompanyId,
+            originCompanyCode: sourceCode,
+            originEntityId: sourceEntityId,
+            entityKind: input.sourceEntityKind,
+            entityFullName: input.sourceEntityLabel || "",
+            ownerId,
+          })
+        : Promise.resolve(null),
+      isInterCompanyMirroredEntityKindSupported(input.targetEntityKind) && targetEntityId
+        ? ensureInterCompanyMirroredEntity({
+            peerCompanyId: input.sourceCompanyId,
+            originCompanyId: input.targetCompanyId,
+            originCompanyCode: targetCode,
+            originEntityId: targetEntityId,
+            entityKind: input.targetEntityKind,
+            entityFullName: input.targetEntityLabel || "",
+            ownerId,
+          })
+        : Promise.resolve(null),
+    ]);
+  } catch (err) {
+    console.warn("[IC] optional entity mirror sync:", err);
+  }
 
-  const targetLegs = buildTargetInterCompanyLegsPending({
-    amount,
-    entityKind: input.targetEntityKind,
-    entityId: input.targetEntityId,
-    companyBankAccountId: input.targetCompanyBankAccountId,
-    interCompanyCounterpartyPartyId: targetIcPartyId,
-    useIcConduit,
-  });
+  const sourceLegs = existingSourceApproved
+    ? buildSourceInterCompanyLegsApproved({
+        amount,
+        entityKind: input.sourceEntityKind,
+        entityId: input.sourceEntityId,
+        companyBankAccountId: input.sourceCompanyBankAccountId,
+        interCompanyCounterpartyPartyId: sourceIcPartyId,
+        useIcConduit,
+      })
+    : buildSourceInterCompanyLegs({
+        amount,
+        entityKind: input.sourceEntityKind,
+        entityId: input.sourceEntityId,
+        companyBankAccountId: input.sourceCompanyBankAccountId,
+        interCompanyCounterpartyPartyId: sourceIcPartyId,
+        useIcConduit,
+      });
+
+  const targetLegs = existingTargetApproved
+    ? buildTargetInterCompanyLegsApproved({
+        amount,
+        entityKind: input.targetEntityKind,
+        entityId: input.targetEntityId,
+        companyBankAccountId: input.targetCompanyBankAccountId,
+        interCompanyCounterpartyPartyId: targetIcPartyId,
+        useIcConduit,
+      })
+    : buildTargetInterCompanyLegsPending({
+        amount,
+        entityKind: input.targetEntityKind,
+        entityId: input.targetEntityId,
+        companyBankAccountId: input.targetCompanyBankAccountId,
+        interCompanyCounterpartyPartyId: targetIcPartyId,
+        useIcConduit,
+      });
 
   const sourceLink: InterCompanyLinkDoc = {
     linkId,
@@ -454,7 +529,7 @@ export async function saveInterCompanyVoucherPair(
     link: sourceLink,
     entityKind: input.sourceEntityKind,
     entityId: input.sourceEntityId,
-    fileUrls,
+    ownFileUrls: sourceOwnFileUrls,
     companyBankAccountId: input.sourceCompanyBankAccountId,
     sourceCompanyBankAccountId: input.sourceCompanyBankAccountId,
     targetCompanyBankAccountId: input.targetCompanyBankAccountId,
@@ -462,7 +537,8 @@ export async function saveInterCompanyVoucherPair(
     targetCompanyBankLabel: input.targetCompanyBankLabel,
     interCompanyCounterpartyPartyId: sourceIcPartyId,
     interCompanyLegs: sourceLegs,
-    shareAttachmentsWithPeer: shareAttachmentsWithPeer,
+    shareSourceAttachmentsWithPeer,
+    shareTargetAttachmentsWithSource,
   });
 
   const sourceSaved = await saveVoucher(
@@ -499,7 +575,7 @@ export async function saveInterCompanyVoucherPair(
       link: targetLink,
       entityKind: input.targetEntityKind,
       entityId: input.targetEntityId,
-      fileUrls: [],
+      ownFileUrls: targetOwnFileUrls,
       companyBankAccountId: input.targetCompanyBankAccountId,
       sourceCompanyBankAccountId: input.sourceCompanyBankAccountId,
       targetCompanyBankAccountId: input.targetCompanyBankAccountId,
@@ -507,11 +583,16 @@ export async function saveInterCompanyVoucherPair(
       targetCompanyBankLabel: input.targetCompanyBankLabel,
       interCompanyCounterpartyPartyId: targetIcPartyId,
       interCompanyLegs: targetLegs,
-      shareAttachmentsWithPeer: shareAttachmentsWithPeer,
+      shareSourceAttachmentsWithPeer,
+      shareTargetAttachmentsWithSource,
     }),
-    // Target = incoming copy — unapproved; source approve ke baad target par dikhega
-    isApproved: false,
-    interCompanySourceApproved: false,
+    // Target = incoming copy — unapproved unless already approved (edit recalc)
+    ...(existingTargetApproved
+      ? {}
+      : {
+          isApproved: false,
+          interCompanySourceApproved: existingSourceApproved || false,
+        }),
   };
 
   const targetSaved = await saveVoucher(
@@ -524,32 +605,24 @@ export async function saveInterCompanyVoucherPair(
   );
 
   let attachmentReplicationWarning: string | undefined;
-  if (shareAttachmentsWithPeer && fileUrls.length > 0) {
-    try {
-      const peerFileUrls = await resolveInterCompanyPeerAttachmentUrls({
-        targetCompanyId: input.targetCompanyId,
-        sourceFileUrls: fileUrls,
-        targetVoucherId: targetSaved.id,
-        attachmentBlobByRef: input.attachmentBlobByRef,
-      });
-      if (peerFileUrls.length > 0) {
-        const linkedSameUrls =
-          peerFileUrls.length === fileUrls.length &&
-          peerFileUrls.every((u, i) => u.trim() === fileUrls[i]!.trim());
-        if (linkedSameUrls) {
-          await linkFirebaseAttachmentRefs(input.targetCompanyId, peerFileUrls);
-        }
-        await patchVoucherFields(input.targetCompanyId, targetSaved.id, { fileUrls: peerFileUrls });
-      }
-    } catch (err) {
-      attachmentReplicationWarning =
-        err instanceof Error
-          ? err.message
-          : "Could not copy attachment for the other company's own storage.";
-      console.warn("[IC] peer attachment replication:", err);
-    }
-  } else if (input.existingTargetVoucherId) {
-    await patchVoucherFields(input.targetCompanyId, targetSaved.id, { fileUrls: [] });
+  try {
+    const shareResult = await reconcileAndPatchInterCompanyAttachmentSharing({
+      sourceCompanyId: input.sourceCompanyId,
+      sourceVoucherId: sourceSaved.id,
+      sourceOwnFileUrls,
+      shareSourceToTarget: shareSourceAttachmentsWithPeer,
+      targetCompanyId: input.targetCompanyId,
+      targetVoucherId: targetSaved.id,
+      targetOwnFileUrls,
+      shareTargetToSource: shareTargetAttachmentsWithSource,
+      sourceAttachmentBlobByRef: input.sourceAttachmentBlobByRef,
+      targetAttachmentBlobByRef: input.targetAttachmentBlobByRef,
+    });
+    attachmentReplicationWarning = shareResult.attachmentReplicationWarning;
+  } catch (err) {
+    attachmentReplicationWarning =
+      err instanceof Error ? err.message : "Could not sync Inter Company attachments.";
+    console.warn("[IC] attachment share reconcile:", err);
   }
 
   await patchVoucherFields(input.sourceCompanyId, sourceSaved.id, {
@@ -605,65 +678,6 @@ export async function saveInterCompanyVoucherPair(
     linkId,
     ...(attachmentReplicationWarning ? { attachmentReplicationWarning } : {}),
   };
-}
-
-/** Locked view — sirf share tick update (source side); edit lock bypass. */
-export async function patchInterCompanyShareAttachmentsWithPeer(args: {
-  sourceCompanyId: string;
-  sourceVoucherId: string;
-  targetCompanyId: string;
-  targetVoucherId: string;
-  shareAttachmentsWithPeer: boolean;
-  sourceFileUrls: string[];
-  attachmentBlobByRef?: ReadonlyMap<string, Blob>;
-}): Promise<{ attachmentReplicationWarning?: string }> {
-  const sourceCompanyId = String(args.sourceCompanyId || "").trim();
-  const sourceVoucherId = String(args.sourceVoucherId || "").trim();
-  const targetCompanyId = String(args.targetCompanyId || "").trim();
-  const targetVoucherId = String(args.targetVoucherId || "").trim();
-  if (!sourceCompanyId || !sourceVoucherId || !targetCompanyId || !targetVoucherId) {
-    throw new Error("Linked Inter Company voucher not found.");
-  }
-
-  const share = args.shareAttachmentsWithPeer === true;
-  const sourceFileUrls = (args.sourceFileUrls || []).filter(
-    (u): u is string => typeof u === "string" && u.trim().length > 0
-  );
-
-  await patchVoucherFields(sourceCompanyId, sourceVoucherId, {
-    interCompanyShareAttachmentsWithPeer: share,
-  });
-
-  if (share && sourceFileUrls.length > 0) {
-    try {
-      const peerFileUrls = await resolveInterCompanyPeerAttachmentUrls({
-        targetCompanyId,
-        sourceFileUrls,
-        targetVoucherId,
-        attachmentBlobByRef: args.attachmentBlobByRef,
-      });
-      await patchVoucherFields(targetCompanyId, targetVoucherId, {
-        fileUrls: peerFileUrls.length > 0 ? peerFileUrls : [],
-      });
-      const linkedSameUrls =
-        peerFileUrls.length > 0 &&
-        peerFileUrls.length === sourceFileUrls.length &&
-        peerFileUrls.every((u, i) => u.trim() === sourceFileUrls[i]!.trim());
-      if (linkedSameUrls) {
-        await linkFirebaseAttachmentRefs(targetCompanyId, peerFileUrls);
-      }
-    } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : "Could not copy attachment for the other company's own storage.";
-      console.warn("[IC] peer attachment replication (share patch):", err);
-      return { attachmentReplicationWarning: message };
-    }
-  } else {
-    await patchVoucherFields(targetCompanyId, targetVoucherId, { fileUrls: [] });
-  }
-  return {};
 }
 
 /** Sirf is company ki IC copy recycle bin — peer copy safe (locked / approved IC). */

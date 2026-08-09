@@ -94,6 +94,7 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 import {
@@ -119,6 +120,10 @@ import {
   stageItemAvatarAndAttachments,
   uploadItemAvatarAndAttachmentsRemote,
 } from "@/lib/entityProfileLocalFiles";
+import {
+  captureFormAttachmentBaseline,
+  finalizeFormAttachmentEditAfterSave,
+} from "@/lib/formAttachmentEditHelper";
 import {
   Tooltip,
   TooltipContent,
@@ -263,6 +268,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   hasTransactions?: boolean;
 }) {
   const [isLoading, setIsLoading] = useState(false);
+  const isCompressing = useImageCompressionProcessing();
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -503,6 +509,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
 
     const filesSnap = files;
     const itemRefSnap = item;
+    const attachmentBaselineSnap = captureFormAttachmentBaseline(initialFileUrlsRef.current);
 
     setIsOpen(false); // Item edit sheet/dialog band turant; uploads + updateDoc background
 
@@ -510,8 +517,12 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
       const toastId = sonnerToast.loading("Updating item...");
       setIsLoading(true);
       try {
-        const existingFileUrls = filesSnap.filter((f): f is string => typeof f === "string");
-        const newFilesToUpload = filesSnap.filter((f): f is File => f instanceof File);
+        const { prepareMasterDocumentSlotsForSave } = await import(
+          "@/lib/attachmentRecompressOnSave"
+        );
+        const preparedFiles = await prepareMasterDocumentSlotsForSave(filesSnap, { companyId });
+        const existingFileUrls = preparedFiles.filter((f): f is string => typeof f === "string");
+        const newFilesToUpload = preparedFiles.filter((f): f is File => f instanceof File);
 
         let fileUrls: string[] = [];
 
@@ -636,11 +647,24 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
               ? `"${values.name}" saved locally.`
               : `"${values.name}" has been successfully updated.`,
           });
+          finalizeFormAttachmentEditAfterSave({
+            companyId,
+            baselineUrls: attachmentBaselineSnap,
+            finalUrls: fileUrls,
+            oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
+          });
           return;
         }
 
         const itemRef = doc(firestore, `companies/${companyId}/items`, itemRefSnap.id);
         await updateDoc(itemRef, updatePayload);
+
+        finalizeFormAttachmentEditAfterSave({
+          companyId,
+          baselineUrls: attachmentBaselineSnap,
+          finalUrls: fileUrls,
+          oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
+        });
 
         setFiles(fileUrls);
         initialFileUrlsRef.current = fileUrls;
@@ -744,15 +768,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         continue;
       }
       try {
-        const compressedFile = await compressFile(file);
-        if (compressedFile.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
-          toast({
-            variant: "destructive",
-            title: "File Too Large After Compression",
-            description: `After compression the image is still over ${MAX_IMAGE_MB_AFTER_COMPRESS} MB.`,
-          });
-          continue;
-        }
+        const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(file, companyId);
+        
         accumulated = [...accumulated, compressedFile];
       } catch (err) {
         console.error("File compression error:", err);
@@ -1244,10 +1261,11 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                         <MasterPdfAsImageToggle id="edit-item-pdf-as-image" />
                         <div className="flex flex-wrap gap-4">
                           {files.map((file, index) => (
-                            <FilePreview
+                            <FilePreview isCompressing={isCompressing}
                               key={index}
                               file={file}
                               attachmentCompanyId={companyId ?? undefined}
+                              attachmentReusePlaceKey={item.id ? `items/${item.id}` : null}
                               onRemove={() => removeFile(index)}
                             />
                           ))}
@@ -1334,7 +1352,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
+                <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>

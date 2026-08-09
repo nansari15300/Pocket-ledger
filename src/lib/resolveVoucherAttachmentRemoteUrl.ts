@@ -30,6 +30,22 @@ function staleLocalResolveForensicEnabled(): boolean {
   return typeof process !== "undefined" && process.env.NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG === "1";
 }
 
+/** Pending upload leaf is `{localId}_filename` — only that remote twin is a safe resolve. */
+function remoteUrlEmbedsLocalFileId(remoteUrl: string, localId: string): boolean {
+  const id = String(localId || "").trim();
+  if (!id || id.length < 8) return false;
+  const raw = String(remoteUrl || "");
+  if (!raw) return false;
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    /* keep raw */
+  }
+  const needle = `${id}_`;
+  return decoded.includes(needle) || raw.includes(needle) || decoded.includes(`/${id}.`) || raw.includes(`/${id}.`);
+}
+
 /** Registry / device `companyId` → Firestore `companies/{id}` (Storage + voucher doc same id) — read-only, voucherActionsClient jaisa. */
 async function resolveAuthoritativeFirestoreCompanyIdForAttachmentRead(companyId: string): Promise<string> {
   try {
@@ -166,24 +182,23 @@ export async function tryResolveRemoteUrlForStaleLocalAttachment(
   let fallbackPath: string = "none";
   let resolved: string | null = null;
 
-  if (idx >= 0 && fileUrls[idx] && isRemoteAttachmentUrl(fileUrls[idx])) {
-    fallbackPath = "direct_index_match_client_stale_at_idx";
-    resolved = fileUrls[idx]!;
-  } else if (client.length === fileUrls.length) {
-    for (let i = 0; i < client.length; i++) {
-      if (client[i] === staleUrl && fileUrls[i] && isRemoteAttachmentUrl(fileUrls[i]!)) {
-        fallbackPath = "parallel_scan_same_length_arrays";
-        resolved = fileUrls[i]!;
-        break;
-      }
+  // Only accept a remote twin that embeds this pending local id in the storage path/URL.
+  // Index / "single remote" fallbacks resurrect removed attachments after replace/remove+save.
+  const localId = isLocalFileRef(staleUrl)
+    ? staleUrl.slice(LOCAL_FILE_PREFIX.length).trim()
+    : "";
+  if (localId) {
+    for (const u of fileUrls) {
+      if (!isRemoteAttachmentUrl(u)) continue;
+      if (!remoteUrlEmbedsLocalFileId(u, localId)) continue;
+      fallbackPath = "remote_url_embeds_local_id";
+      resolved = u;
+      break;
     }
   }
-  if (!resolved && isLocalFileRef(staleUrl)) {
-    const remotes = fileUrls.filter(isRemoteAttachmentUrl);
-    if (remotes.length === 1) {
-      fallbackPath = "single_remote_in_fileUrls_while_stale_local";
-      resolved = remotes[0]!;
-    }
+  // Same local: still present on the row (not yet upgraded) — nothing to resolve.
+  if (!resolved && fileUrls.includes(staleUrl)) {
+    fallbackPath = "row_still_has_same_local_ref";
   }
 
   if (staleLocalResolveForensicEnabled()) {
@@ -211,27 +226,36 @@ export async function tryResolveRemoteUrlForStaleLocalAttachment(
 /**
  * Edit dialog: `liveVoucher` (onSnapshot) kabhi stale `local:` rakhe, table row / mirror pehle HTTPS patch kar chuka ho.
  * Sirf empty-live merge pehle tha — isliye tick preview chalta tha, form `local:` + missing pending par FILE icon.
+ *
+ * `liveExplicitEmpty`: live doc/cache ne `fileUrls: []` intentionally likha (user remove-all) —
+ * stale daybook/table row se HTTPS wapas mat lao.
  */
 export function mergeVoucherFileUrlsForEditDialog(
   liveUrls: readonly string[],
-  rowUrls: readonly string[]
+  rowUrls: readonly string[],
+  opts?: { liveExplicitEmpty?: boolean }
 ): string[] {
   const live = liveUrls.map((u) => String(u || "").trim()).filter(Boolean);
   const row = rowUrls.map((u) => String(u || "").trim()).filter(Boolean);
-  if (live.length === 0) return row;
+  if (opts?.liveExplicitEmpty) return live;
+  // Empty live stays empty — do not revive HTTPS from a stale daybook/table row after remove-all.
+  if (live.length === 0) return live;
   if (row.length === 0) return live;
   if (live.length === row.length) {
     return live.map((liveRef, i) => {
       const rowRef = row[i]!;
-      if (isLocalFileRef(liveRef) && isRemoteAttachmentUrl(rowRef)) return rowRef;
+      if (
+        isLocalFileRef(liveRef) &&
+        isRemoteAttachmentUrl(rowRef) &&
+        remoteUrlEmbedsLocalFileId(rowRef, liveRef.slice(LOCAL_FILE_PREFIX.length).trim())
+      ) {
+        return rowRef;
+      }
       if (isRemoteAttachmentUrl(liveRef)) return liveRef;
       return liveRef || rowRef;
     });
   }
-  const liveAllLocal = live.every((u) => isLocalFileRef(u));
-  const rowRemotes = row.filter((u) => isRemoteAttachmentUrl(u));
-  if (liveAllLocal && rowRemotes.length === live.length) return row;
-  if (liveAllLocal && rowRemotes.length === 1 && live.length === 1) return rowRemotes;
+  // Length mismatch (remove/replace) — live list is authoritative; never expand from row remotes.
   return live;
 }
 
@@ -256,7 +280,12 @@ export function mergeVoucherMirrorPullAttachments(
     merged.fileUrls = existingUrls;
     return merged;
   }
-  if (incomingUrls.length === 0 && existingMs >= incomingMs) {
+  // Explicit empty on newer/equal incoming = intentional remove — purani HTTPS mat wapas lao.
+  if (incomingUrls.length === 0) {
+    if (incomingMs >= existingMs) {
+      merged.fileUrls = [];
+      return merged;
+    }
     merged.fileUrls = existingUrls;
     return merged;
   }

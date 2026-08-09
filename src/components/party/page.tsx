@@ -97,19 +97,20 @@ export default function PartyPage() {
     // Check both vouchersUserNames and localUserNames
     const existingName = vouchersUserNames?.[userId] || localUserNames[userId];
     if (existingName && existingName !== "Unknown" && existingName !== "N/A") return existingName;
-    if (isLocalOnlyMode() && companyId) {
-        // Local mode user resolution: map common local ids to logged-in local user/admin display name.
-        const localUser = getLocalAuthUser(companyId);
+    const plLocalLedger =
+      (company as { plServerShared?: boolean } | null)?.plServerShared === true ||
+      (company != null &&
+        ((company as { storageOption?: string }).storageOption || "").toLowerCase() === "local");
+    if (isLocalOnlyMode() || plLocalLedger) {
+        // Local / PL company: Firestore users skip — offline Group/Party tab crash avoid.
+        const localUser = companyId ? getLocalAuthUser(companyId) : null;
         const localDisplayName = (localUser?.displayName || localUser?.username || ((company as any)?.adminUsername as string) || "Admin").trim();
         if (userId === "local" || userId === "local_guest_user" || userId === localUser?.id || userId === localUser?.username) {
           return localDisplayName || "Admin";
         }
+        return "N/A";
     }
     try {
-        if (isLocalOnlyMode()) {
-            // Local-only mode me Firestore user reads skip karo to avoid permission errors/noise.
-            return "N/A";
-        }
         // User doc ID may be name_uid format (e.g. manishshah46_AaCbiR708nhGe28Ltf2I7YZzpNv1), so query by uid field first
         const q = query(collection(firestore, "users"), where("uid", "==", userId));
         const snap = await getDocs(q);
@@ -142,14 +143,15 @@ export default function PartyPage() {
 
   // Always fetch locally if not in vouchersUserNames or if vouchersUserNames is empty
   useEffect(() => {
-    console.log('[PartyPage] useEffect triggered, vouchers:', vouchers?.length, 'vouchersUserNames:', vouchersUserNames);
+    const plLocalLedger =
+      (company as { plServerShared?: boolean } | null)?.plServerShared === true ||
+      (company != null &&
+        ((company as { storageOption?: string }).storageOption || "").toLowerCase() === "local");
+    if (isLocalOnlyMode() || plLocalLedger) return;
     if (!vouchers || vouchers.length === 0) {
-      console.log('[PartyPage] No vouchers, returning early');
       return;
     }
     const uids = new Set(vouchers.map((t) => t.userId).filter(Boolean) as string[]);
-    console.log('[PartyPage] All userIds in vouchers:', Array.from(uids));
-    console.log('[PartyPage] vouchersUserNames:', vouchersUserNames);
     // Fetch if not in vouchersUserNames (including if vouchersUserNames is empty/undefined)
     const uidsToFetch = Array.from(uids).filter(uid => {
       const vouchersName = vouchersUserNames?.[uid];
@@ -157,7 +159,6 @@ export default function PartyPage() {
       return !vouchersName || vouchersName === "Unknown" || vouchersName === "N/A" || !vouchersUserNames || Object.keys(vouchersUserNames).length === 0;
     });
     
-    console.log('[PartyPage] userIds to fetch:', uidsToFetch);
     if (uidsToFetch.length === 0) return;
     
     // Fetch all user names in parallel
@@ -178,7 +179,7 @@ export default function PartyPage() {
         setLocalUserNames((prev) => ({ ...prev, ...newUserNames }));
       }
     });
-  }, [vouchers, fetchUserName, vouchersUserNames]);
+  }, [vouchers, fetchUserName, vouchersUserNames, company]);
 
   useEffect(() => {
     const savedView = localStorage.getItem("partyActiveView");

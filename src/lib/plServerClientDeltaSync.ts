@@ -796,9 +796,12 @@ export async function syncPlServerSharedCompanyLive(
       const ledgerPullComplete = result.fullPull > 0;
       const partialDeltaOk = result.synced > 0;
       const focusPullOk = Boolean(
-      focusCollections?.length &&
-        ((result.changedCollections?.length ?? 0) > 0 || result.synced > 0 || result.fullPull > 0)
-    );
+        focusCollections?.length &&
+          ((result.changedCollections?.length ?? 0) > 0 ||
+            result.synced > 0 ||
+            result.fullPull > 0 ||
+            (result.focusFetched ?? 0) > 0)
+      );
       const pullResult = {
         ok: ledgerPullComplete || partialDeltaOk || focusPullOk,
         fullPull: ledgerPullComplete,
@@ -858,7 +861,10 @@ export async function syncPlServerSharedCompanyLive(
     const partialDeltaOk = result.synced > 0;
     const focusPullOk = Boolean(
       focusCollections?.length &&
-        ((result.changedCollections?.length ?? 0) > 0 || result.synced > 0 || result.fullPull > 0)
+        ((result.changedCollections?.length ?? 0) > 0 ||
+          result.synced > 0 ||
+          result.fullPull > 0 ||
+          (result.focusFetched ?? 0) > 0)
     );
     livePullDevLog("pull_finished", {
       companyId: id,

@@ -16,6 +16,10 @@ import {
   stripOnlineLinkFieldsFromCompanyRow,
 } from "@/lib/localBackupRestoreCompany";
 import { looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
+import {
+  buildRestoreOrphanStoragePathPrefix,
+  buildStoragePathPrefix,
+} from "@/lib/firebaseStoragePaths";
 import { backupPrefersLocalSnapshot } from "@/lib/backupLocalFirst";
 import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
@@ -539,20 +543,18 @@ function inferRestoreStoragePathPrefix(
   collectionName: string,
   doc: Record<string, unknown>,
   companyId: string,
-  fieldKey: string
+  fieldKey: string,
+  usePocketLedger: boolean
 ): string {
-  if (collectionName === "vouchers") {
-    const voucherType = String(doc.type || "journal").trim() || "journal";
-    return `voucher-files/${companyId}/${voucherType}`;
-  }
-  if (["parties", "bank_accounts", "staff", "taxes", "expense_accounts", "items"].includes(collectionName)) {
-    const seg = collectionName.replace(/_/g, "-");
-    const sub =
-      fieldKey === "fileUrl" || fieldKey === "avatarUrl" || fieldKey === "logoUrl" ? "avatar" : "documents";
-    return `companies/${companyId}/${seg}-files/${sub}`;
-  }
-  if (fieldKey === "logoUrl") return `companies/${companyId}/logo`;
-  return `companies/${companyId}/attachments`;
+  const voucherType =
+    collectionName === "vouchers" ? String(doc.type || "journal").trim() || "journal" : undefined;
+  return buildStoragePathPrefix({
+    companyId,
+    usePocketLedger,
+    collectionName,
+    fieldKey,
+    voucherType,
+  });
 }
 
 function registerAttachmentRefTarget(
@@ -568,7 +570,8 @@ function scanRecordForAttachmentTargets(
   docPath: string,
   collectionName: string,
   companyId: string,
-  out: Map<string, AttachmentRefRestoreTarget>
+  out: Map<string, AttachmentRefRestoreTarget>,
+  usePocketLedger: boolean
 ): void {
   for (const key of ["fileUrls", "documentFileUrls"] as const) {
     const arr = record[key];
@@ -580,7 +583,7 @@ function scanRecordForAttachmentTargets(
         {
           docPath,
           field: key,
-          storagePathPrefix: inferRestoreStoragePathPrefix(collectionName, record, companyId, key),
+          storagePathPrefix: inferRestoreStoragePathPrefix(collectionName, record, companyId, key, usePocketLedger),
         },
         out
       );
@@ -594,7 +597,7 @@ function scanRecordForAttachmentTargets(
       {
         docPath,
         field: key,
-        storagePathPrefix: inferRestoreStoragePathPrefix(collectionName, record, companyId, key),
+        storagePathPrefix: inferRestoreStoragePathPrefix(collectionName, record, companyId, key, usePocketLedger),
       },
       out
     );
@@ -608,7 +611,13 @@ function scanRecordForAttachmentTargets(
         {
           docPath,
           field: "unassignedFile",
-          storagePathPrefix: inferRestoreStoragePathPrefix(collectionName, record, companyId, "fileUrls"),
+          storagePathPrefix: inferRestoreStoragePathPrefix(
+            collectionName,
+            record,
+            companyId,
+            "unassignedFile",
+            usePocketLedger
+          ),
         },
         out
       );
@@ -619,11 +628,13 @@ function scanRecordForAttachmentTargets(
 /** Backup JSON scan — har attachment ref ka asli docPath/field (pending upload + cloud patch ke liye). */
 export function collectAttachmentRefTargetsFromBackupData(
   backupData: Record<string, unknown>,
-  targetCompanyId: string
+  targetCompanyId: string,
+  options?: { usePocketLedgerStorage?: boolean }
 ): Map<string, AttachmentRefRestoreTarget> {
   const out = new Map<string, AttachmentRefRestoreTarget>();
   const cid = String(targetCompanyId || "").trim();
   if (!cid) return out;
+  const usePocketLedger = options?.usePocketLedgerStorage === true;
 
   for (const [colName, val] of Object.entries(backupData)) {
     if (BACKUP_META_KEYS.has(colName) || !Array.isArray(val)) continue;
@@ -636,7 +647,8 @@ export function collectAttachmentRefTargetsFromBackupData(
         `companies/${cid}/${colName}/${docId}`,
         colName,
         cid,
-        out
+        out,
+        usePocketLedger
       );
     }
   }
@@ -646,7 +658,8 @@ export function collectAttachmentRefTargetsFromBackupData(
 function resolveRestoreTargetForEntry(
   entryKey: string,
   targetCompanyId: string,
-  targets: Map<string, AttachmentRefRestoreTarget>
+  targets: Map<string, AttachmentRefRestoreTarget>,
+  usePocketLedger: boolean
 ): AttachmentRefRestoreTarget {
   const hit = targets.get(entryKey);
   if (hit) return hit;
@@ -658,7 +671,7 @@ function resolveRestoreTargetForEntry(
   return {
     docPath: `companies/${targetCompanyId}/vouchers/restored-orphan`,
     field: "fileUrls",
-    storagePathPrefix: `companies/${targetCompanyId}/restored-files`,
+    storagePathPrefix: buildRestoreOrphanStoragePathPrefix(targetCompanyId, usePocketLedger),
   };
 }
 
@@ -750,10 +763,11 @@ async function persistRestoredAttachmentEntry(
   fileName: string | undefined,
   targetCompanyId: string,
   targets: Map<string, AttachmentRefRestoreTarget>,
-  map: Map<string, string>
+  map: Map<string, string>,
+  usePocketLedger: boolean
 ): Promise<void> {
   const id = generateLocalFileId();
-  const target = resolveRestoreTargetForEntry(entryKey, targetCompanyId, targets);
+  const target = resolveRestoreTargetForEntry(entryKey, targetCompanyId, targets, usePocketLedger);
   const payload: PendingFilePayload = {
     id,
     blob,
@@ -773,7 +787,8 @@ export async function restoreAttachmentBundleToLocalRefs(
   targetCompanyId: string,
   onProgress?: (done: number, total: number, bytesAdded: number) => void,
   signal?: AbortSignal,
-  refTargets?: Map<string, AttachmentRefRestoreTarget>
+  refTargets?: Map<string, AttachmentRefRestoreTarget>,
+  usePocketLedger = false
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   const targets = refTargets ?? new Map<string, AttachmentRefRestoreTarget>();
@@ -791,7 +806,8 @@ export async function restoreAttachmentBundleToLocalRefs(
         entry.fileName,
         targetCompanyId,
         targets,
-        map
+        map,
+        usePocketLedger
       );
       done += 1;
       onProgress?.(done, total, entry.size ?? blob.size);
@@ -811,7 +827,8 @@ export async function restoreAttachmentZipToLocalRefs(
   targetCompanyId: string,
   onProgress?: (done: number, total: number, bytesAdded: number) => void,
   signal?: AbortSignal,
-  refTargets?: Map<string, AttachmentRefRestoreTarget>
+  refTargets?: Map<string, AttachmentRefRestoreTarget>,
+  usePocketLedger = false
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   const targets = refTargets ?? new Map<string, AttachmentRefRestoreTarget>();
@@ -831,7 +848,8 @@ export async function restoreAttachmentZipToLocalRefs(
         typed.fileName,
         targetCompanyId,
         targets,
-        map
+        map,
+        usePocketLedger
       );
       done += 1;
       onProgress?.(done, total, entry.size ?? typed.blob.size);
@@ -850,9 +868,13 @@ export async function restoreAttachmentsFromBackupData(
   zipFilesByPath: Map<string, Uint8Array> | null | undefined,
   targetCompanyId: string,
   onProgress?: (done: number, total: number, bytesAdded: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: { usePocketLedgerStorage?: boolean }
 ): Promise<Map<string, string>> {
-  const refTargets = collectAttachmentRefTargetsFromBackupData(backupData, targetCompanyId);
+  const usePocketLedger = options?.usePocketLedgerStorage === true;
+  const refTargets = collectAttachmentRefTargetsFromBackupData(backupData, targetCompanyId, {
+    usePocketLedgerStorage: usePocketLedger,
+  });
   const zipMan = backupData.attachmentZipManifest as AttachmentZipManifest | undefined;
   const hasZipBytes = Boolean(zipFilesByPath && zipFilesByPath.size > 0);
   if (Array.isArray(zipMan?.entries) && zipMan.entries.length > 0 && hasZipBytes) {
@@ -862,12 +884,20 @@ export async function restoreAttachmentsFromBackupData(
       targetCompanyId,
       onProgress,
       signal,
-      refTargets
+      refTargets,
+      usePocketLedger
     );
   }
   const bundle = backupData.attachmentBundle as AttachmentBundle | undefined;
   if (Array.isArray(bundle?.entries) && bundle.entries.length > 0) {
-    return restoreAttachmentBundleToLocalRefs(bundle, targetCompanyId, onProgress, signal, refTargets);
+    return restoreAttachmentBundleToLocalRefs(
+      bundle,
+      targetCompanyId,
+      onProgress,
+      signal,
+      refTargets,
+      usePocketLedger
+    );
   }
   if (Array.isArray(zipMan?.entries) && zipMan.entries.length > 0) {
     console.warn(

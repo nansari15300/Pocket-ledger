@@ -41,6 +41,7 @@ import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Calendar } from "@/components/ui/calendar";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { MasterFormNameAcNoRow, MasterMobileNoField, MasterFormTwoColGrid } from "@/components/inter-company/MasterFormLayout";
 import { interCompanyAcNoForNewEntity } from "@/lib/interCompany/interCompanyAccountNo";
 import {
@@ -149,7 +150,9 @@ export function CreatePartyForm({
   const docsInputRef = useRef<HTMLInputElement>(null);
   const [avatarToUpload, setAvatarToUpload] = useState<{ file: File; preview: string } | null>(null);
   const [documentFiles, setDocumentFiles] = useState<File[]>([]);
-  const [isCompressing, setIsCompressing] = useState(false);
+  const [isCompressingLocal, setIsCompressing] = useState(false);
+  const isImageCompressing = useImageCompressionProcessing();
+  const isCompressing = isCompressingLocal || isImageCompressing;
   const [compressionResult, setCompressionResult] = useState<{originalSize: number, compressedSize: number} | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
@@ -241,20 +244,9 @@ export function CreatePartyForm({
     setIsCompressing(true);
     try {
       // Pehle normal ~150KB target; fail / zyada bada ho to doosri pass (party/item jaisa cap MAX_IMAGE_MB_AFTER_COMPRESS)
-      let compressedFile = await compressFile(inputFile);
-      if (compressedFile.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
-        compressedFile = await compressFile(inputFile, { maxKB: 420, minKB: 40 });
-      }
+      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, companyId);
       setCompressionResult({ originalSize: inputFile.size, compressedSize: compressedFile.size });
-      if (compressedFile.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
-        toast({
-          variant: "destructive",
-          title: "File Too Large After Compression",
-          description: `Even after compression, the file is larger than ${MAX_IMAGE_MB_AFTER_COMPRESS} MB.`,
-        });
-        setAvatarToUpload(null);
-        return;
-      }
+      
       const preview = URL.createObjectURL(compressedFile);
       setAvatarToUpload({ file: compressedFile, preview });
     } catch (err) {
@@ -388,12 +380,15 @@ export function CreatePartyForm({
           const raw = await fetchRemoteUrlAsFile(remoteAvatarUrl, "party-avatar.jpg");
           if (raw) {
             let f = raw;
+            let capBytes = Number.POSITIVE_INFINITY;
             try {
-              f = await compressFile(raw);
+              const _img = await compressImageForCompany(raw, companyId);
+              f = _img.file;
+              capBytes = _img.maxBytes;
             } catch {
               /* raw hi use karo */
             }
-            if (f.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+            if (f.size > capBytes) {
               toast({ variant: "destructive", title: "Avatar too large", description: "Fetched image could not be compressed enough." });
             } else {
               const preview = URL.createObjectURL(f);
@@ -909,7 +904,9 @@ export function CreatePartyForm({
                     onRemove={removeAvatar}
                     isCompressing={isCompressing}
                     compressionResult={compressionResult}
-                  />
+                  
+                          attachmentReusePlaceKey={null}
+                        />
                 )}
                 {!avatarToUpload && (
                   <FormControl>
@@ -1031,7 +1028,7 @@ export function CreatePartyForm({
             variant="ghost"
             className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}
             onClick={() => onCloseDialogRequest?.()}
-            disabled={isLoading}
+            disabled={isLoading || isCompressing}
           >
             Cancel
           </Button>
@@ -1042,14 +1039,14 @@ export function CreatePartyForm({
                 variant="ghost"
                 className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                 onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                disabled={isLoading || apkOfflineViewOnly}
+                disabled={isLoading || isCompressing || apkOfflineViewOnly}
               >
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save & New
               </Button>
             ) : null}
           </div>
-          <Button type="submit" className="shrink-0" disabled={isLoading || apkOfflineViewOnly}>
+          <Button type="submit" className="shrink-0" disabled={isLoading || isCompressing || apkOfflineViewOnly}>
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create Party
           </Button>

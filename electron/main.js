@@ -1465,6 +1465,8 @@ function shouldHideMainWindowToTrayOnClose() {
   if (!app.isPackaged || app.__plQuitting) return false;
   const cfg = localAppServer.loadConfig(userDataPath());
   if (!localAppServer.shouldHostLocalServer(cfg)) return false;
+  // Window close → tray jab user sharing ON rakhna chahta hai (status flicker pe full quit mat karo).
+  if (cfg.userWantsRunning === true) return true;
   const st = localAppServer.getStatus(userDataPath());
   return !!st.sharingActive;
 }
@@ -1483,7 +1485,11 @@ function stopServerPowerSaveBlocker(reason) {
 }
 
 function syncServerPowerSaveBlocker(st) {
-  const active = app.isPackaged && st?.sharingActive === true;
+  const cfg = localAppServer.loadConfig(userDataPath());
+  const active =
+    app.isPackaged &&
+    (st?.sharingActive === true || cfg.userWantsRunning === true) &&
+    localAppServer.shouldHostLocalServer(cfg);
   if (!active) {
     stopServerPowerSaveBlocker("sharing_inactive");
     return;
@@ -1492,15 +1498,27 @@ function syncServerPowerSaveBlocker(st) {
     if (serverPowerSaveBlockerId != null && powerSaveBlocker.isStarted(serverPowerSaveBlockerId)) {
       return;
     }
-    serverPowerSaveBlockerId = powerSaveBlocker.start("prevent-app-suspension");
+    // Prevent OS sleep / background throttle while PL sharing should stay reachable for staff.
+    serverPowerSaveBlockerId = powerSaveBlocker.start("prevent-display-sleep");
     plTraceLog.traceLog("PL-MAIN", "server_power_save_blocker_started", {
       id: serverPowerSaveBlockerId,
-      sharingPort: st.sharingPort || st.port || null,
+      mode: "prevent-display-sleep",
+      sharingPort: st?.sharingPort || st?.port || null,
+      userWantsRunning: cfg.userWantsRunning === true,
     });
   } catch (e) {
-    plTraceLog.traceLog("PL-MAIN", "server_power_save_blocker_failed", {
-      error: e && e.message ? e.message : String(e || "unknown"),
-    });
+    try {
+      serverPowerSaveBlockerId = powerSaveBlocker.start("prevent-app-suspension");
+      plTraceLog.traceLog("PL-MAIN", "server_power_save_blocker_started", {
+        id: serverPowerSaveBlockerId,
+        mode: "prevent-app-suspension_fallback",
+        sharingPort: st?.sharingPort || st?.port || null,
+      });
+    } catch (e2) {
+      plTraceLog.traceLog("PL-MAIN", "server_power_save_blocker_failed", {
+        error: e2 && e2.message ? e2.message : String(e2 || e || "unknown"),
+      });
+    }
   }
 }
 
@@ -1550,10 +1568,33 @@ function attachPackagedCloseToTrayBehavior(win) {
     if (shouldHideMainWindowToTrayOnClose()) {
       event.preventDefault();
       hideAllMainWindowsToTray();
-      syncLocalServerTray();
-      const st = localAppServer.getStatus(userDataPath());
+      const cfg = localAppServer.loadConfig(userDataPath());
+      let st = localAppServer.getStatus(userDataPath());
+      // Sharing intent ON but process down — tray pe rahe + server dubara start try.
+      if (cfg.userWantsRunning && !st.sharingActive) {
+        plTraceLog.traceLog("PL-MAIN", "window_close_restart_sharing", {
+          userWantsRunning: true,
+          sharingActive: false,
+        });
+        void startStaticServer()
+          .then(() => {
+            syncLocalServerTray();
+            syncServerPowerSaveBlocker(localAppServer.getStatus(userDataPath()));
+          })
+          .catch((e) => {
+            plTraceLog.traceLog("PL-MAIN", "window_close_restart_sharing_failed", {
+              error: e && e.message ? e.message : String(e || "unknown"),
+            });
+            syncLocalServerTray();
+          });
+      } else {
+        syncLocalServerTray();
+        syncServerPowerSaveBlocker(st);
+      }
+      st = localAppServer.getStatus(userDataPath());
       plTraceLog.traceLog("PL-MAIN", "window_hidden_server_running", {
         sharingActive: st.sharingActive === true,
+        userWantsRunning: cfg.userWantsRunning === true,
         sharingPort: st.sharingPort || st.port || null,
       });
       notifyServerStillRunningInTray(st);
@@ -1567,7 +1608,7 @@ function attachPackagedCloseToTrayBehavior(win) {
   });
 }
 
-/** Tray rule: sharing ON → tray icon; sharing OFF → no tray. Window open/closed does not matter. */
+/** Tray rule: sharing ON or user wants running → tray. Window open/closed does not matter. */
 function syncLocalServerTray() {
   if (!app.isPackaged) {
     stopServerPowerSaveBlocker("not_packaged");
@@ -1581,7 +1622,8 @@ function syncLocalServerTray() {
     return;
   }
   const st = localAppServer.getStatus(userDataPath());
-  if (!st.sharingActive) {
+  const keepTray = st.sharingActive === true || cfg.userWantsRunning === true;
+  if (!keepTray) {
     syncServerPowerSaveBlocker(st);
     destroyServerTray();
     return;
@@ -1589,7 +1631,9 @@ function syncLocalServerTray() {
   syncServerPowerSaveBlocker(st);
 
   const portLabel = st.port != null ? `port ${st.port}` : "running";
-  const statusLine = `Sharing on for others (${portLabel})`;
+  const statusLine = st.sharingActive
+    ? `Sharing on for others (${portLabel})`
+    : "Starting sharing… (keep PC awake)";
 
   const template = [
     { label: statusLine, enabled: false },
@@ -1606,6 +1650,15 @@ function syncLocalServerTray() {
       label: "Stop sharing (keep app open)",
       click: () => {
         void stopLocalServerAndPersist();
+      },
+    });
+  } else if (cfg.userWantsRunning) {
+    template.push({
+      label: "Retry start sharing",
+      click: () => {
+        void startStaticServer()
+          .then(() => syncLocalServerTray())
+          .catch(() => syncLocalServerTray());
       },
     });
   }
@@ -1639,17 +1692,22 @@ function syncLocalServerTray() {
   serverTray.setContextMenu(menu);
   if (st.port != null) {
     serverTray.setToolTip(`Pocket Ledger — sharing on port ${st.port}`);
+  } else if (cfg.userWantsRunning) {
+    serverTray.setToolTip("Pocket Ledger — sharing starting…");
   }
 }
 
 function notifyServerStillRunningInTray(st) {
-  if (!serverTray || !st?.running) return;
+  if (!serverTray) return;
   try {
     if (typeof serverTray.displayBalloon === "function") {
+      const port = st?.port || st?.sharingPort;
       serverTray.displayBalloon({
         iconType: "info",
         title: "Pocket Ledger server",
-        content: `Still running on port ${st.port}. Right-click the tray icon → Stop server.`,
+        content: port
+          ? `Still running on port ${port}. Right-click tray → Quit to stop.`
+          : "Still running in tray. Right-click tray → Quit to stop.",
       });
     }
   } catch (_) {}

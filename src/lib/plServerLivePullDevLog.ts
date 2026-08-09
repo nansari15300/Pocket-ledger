@@ -10,14 +10,11 @@ import {
 } from "@/lib/plServerAccessContext";
 import { isCompanyAllowedOnActiveServerGate } from "@/lib/plServerRemoteCompanyLogin";
 import { isPlServerSharedCompanyRow } from "@/lib/plServerAccessContext";
-import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
-import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { plServerVoucherForensicTrace } from "@/lib/plServerLiveChangeTrace";
 
-/** Live pull tracing — dev + packaged EXE/APK (public web production me band). */
+/** Live pull tracing — temporarily off (console flood). Opt-in: set true + refresh. */
 function livePullLoggingEnabled(): boolean {
-  if (process.env.NODE_ENV === "development") return true;
-  return isElectronDesktopApp() || isCapacitorNativeApp();
+  return false;
 }
 
 /** Routine OK path — quiet in EXE/dev so real bugs stay visible. */
@@ -77,12 +74,24 @@ export function plServerVoucherFlowLog(message: string, detail?: Record<string, 
   console.log(`[PlServerVoucherFlow] ${message}`);
 }
 
-/** Operator / dev bug catch — failures with actionable root-cause codes (EXE + dev). */
+/**
+ * Sidebar / route SQLite-first checks — filter: `PL-NAV`
+ * Menu click pe network ya full voucher remmerge nahi hona chahiye.
+ */
+export function plNavLog(message: string, detail?: Record<string, unknown>): void {
+  if (!livePullLoggingEnabled()) return;
+  if (detail && Object.keys(detail).length > 0) {
+    console.log(`[PL-NAV] ${message}`, detail);
+    return;
+  }
+  console.log(`[PL-NAV] ${message}`);
+}
+
+/** Operator / dev bug catch — failures only (non-error flood off). */
 export function livePullBugCatch(
   code: string,
   detail: Record<string, unknown> & { companyId?: string }
 ): void {
-  if (!livePullLoggingEnabled()) return;
   console.warn(`[LivePullBug] ${code}`, {
     at: new Date().toISOString(),
     ...detail,

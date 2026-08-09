@@ -28,6 +28,8 @@ type Props = {
   className?: string;
   /** Reverse-request dialog — auto height; `h-full` se footer overlap na ho */
   compact?: boolean;
+  /** Box heading — Source Attach / Target Attach jaisa customizable */
+  title?: string;
   /** IC voucher — peer company copy par attachments dikhao */
   shareWithPeer?: boolean;
   onShareWithPeerChange?: (checked: boolean) => void;
@@ -35,8 +37,14 @@ type Props = {
   showShareCheckbox?: boolean;
   /** View-only par bhi share tick allow (source save alag se) */
   shareCheckboxDisabled?: boolean;
+  /** Checkbox label — har side "Show my attachment on other side" */
+  checkboxLabel?: string;
+  /** Checkbox id/htmlFor — dono boxes ek saath render hone par unique */
+  checkboxId?: string;
   /** IC voucher — peer company copy par bhi preview open */
   allowPreviewWhenDisabled?: boolean;
+  /** Image compress cap: online 100KB vs local/PL/Drive 150KB */
+  companyId?: string | null;
 };
 
 export function InterCompanyVoucherAttachments({
@@ -45,11 +53,15 @@ export function InterCompanyVoucherAttachments({
   disabled = false,
   className,
   compact = false,
+  title = "Attachments (optional)",
   shareWithPeer = false,
   onShareWithPeerChange,
   showShareCheckbox = false,
   shareCheckboxDisabled = false,
+  checkboxLabel = "Show my attachment on other side",
+  checkboxId = "ic-share-attachments-with-peer",
   allowPreviewWhenDisabled = true,
+  companyId = null,
 }: Props) {
   const stringFileUrls = files.filter((f): f is string => typeof f === "string");
   const { toast } = useToast();
@@ -69,23 +81,23 @@ export function InterCompanyVoucherAttachments({
       )}
     >
       {/* Label — FormLabel nahi: reverse dialog bhi yahi use karta hai (FormProvider ke bina). */}
-      <Label>Attachments (optional)</Label>
+      <Label>{title}</Label>
       {showShareCheckbox && onShareWithPeerChange ? (
         <div className="flex items-start gap-2">
           <Checkbox
-            id="ic-share-attachments-with-peer"
+            id={checkboxId}
             checked={shareWithPeer}
             disabled={shareCheckboxDisabled}
             onCheckedChange={(v) => onShareWithPeerChange(v === true)}
           />
           <Label
-            htmlFor="ic-share-attachments-with-peer"
+            htmlFor={checkboxId}
             className={cn(
               "text-xs font-normal leading-snug",
               shareCheckboxDisabled ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer"
             )}
           >
-            Show file on other company&apos;s copy too
+            {checkboxLabel}
           </Label>
         </div>
       ) : null}
@@ -122,6 +134,7 @@ export function InterCompanyVoucherAttachments({
                 onShortActivate={() => fileInputRef.current?.click()}
                 onPastedFiles={(incoming) =>
                   void appendCompressedVoucherAttachmentsToState({
+                    companyId,
                     incomingFiles: incoming,
                     currentFiles: files,
                     maxFiles: fileAttachmentLimits.maxFileCount,
@@ -155,6 +168,7 @@ export function InterCompanyVoucherAttachments({
                   const picked = e.target.files;
                   if (!picked?.length) return;
                   void appendCompressedVoucherAttachmentsToState({
+                    companyId,
                     incomingFiles: Array.from(picked),
                     currentFiles: files,
                     maxFiles: fileAttachmentLimits.maxFileCount,

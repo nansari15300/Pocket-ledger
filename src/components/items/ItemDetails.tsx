@@ -72,9 +72,13 @@ import type { Item } from "./types";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_OUTER_ROW_CN,
+  LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
+  LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdCalendar from "@/components/ui/ad-calendar";
@@ -1057,47 +1061,45 @@ export default function ItemDetails({
 
   const renderDesktopView = () => (
      <div className="h-full flex flex-col">
-      {/* Header: Part 1 (name→balance/unit) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-      <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-          <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
+      {/* Header: identity + pills — Party-style single row */}
+      <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+        <div className={LEDGER_HEADER_OUTER_ROW_CN}>
+          <div className={LEDGER_HEADER_IDENTITY_CN}>
             <div className="p-3 bg-muted rounded-full flex-shrink-0">
               <Package className="w-6 h-6 text-muted-foreground" />
             </div>
-            <div className="flex items-center gap-2 flex-nowrap min-w-0">
-              <h1 className="text-xl font-semibold truncate">{currentItem.name}</h1>
-              {currentItem.id !== 'all' && (
-                <EditItemDialog
-                  item={currentItem}
-                  onItemUpdated={handleItemUpdated}
-                  onItemDeleted={() => onItemDeleted(currentItem.id)}
-                  hasTransactions={processedTransactions.length > 0}
-                >
-                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                    <FilePenLine className="w-4 h-4" />
-                  </Button>
-                </EditItemDialog>
-              )}
-              <span className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", headerStockValue >= 0 ? "text-green-600" : "text-red-600")}>
-                {stockView === 'qty' ? formatQtyValue(headerStockValue) : formatMoney(Math.abs(headerStockValue), { noSuffix: true, noAnimation: true })}
-              </span>
-              {stockView === 'qty' && unitOptions.length > 0 && setItemDisplayUnit && (
-                <Select value={displayUnitSelectValue} onValueChange={handleUnitChange}>
-                  <SelectTrigger className="h-8 px-2 w-fit gap-1 text-xs bg-muted/50 border border-transparent flex-shrink-0 focus:ring-1 focus:ring-inset focus:ring-ring focus:ring-offset-0">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {unitOptions.map((u) => (
-                      <SelectItem key={u} value={u}>
-                        {u}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </div>
+            <h1 className={LEDGER_HEADER_TITLE_CN} title={currentItem.name}>{currentItem.name}</h1>
+            {currentItem.id !== 'all' && (
+              <EditItemDialog
+                item={currentItem}
+                onItemUpdated={handleItemUpdated}
+                onItemDeleted={() => onItemDeleted(currentItem.id)}
+                hasTransactions={processedTransactions.length > 0}
+              >
+                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                  <FilePenLine className="w-4 h-4" />
+                </Button>
+              </EditItemDialog>
+            )}
+            <span className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", headerStockValue >= 0 ? "text-green-600" : "text-red-600")}>
+              {stockView === 'qty' ? formatQtyValue(headerStockValue) : formatMoney(Math.abs(headerStockValue), { noSuffix: true, noAnimation: true })}
+            </span>
+            {stockView === 'qty' && unitOptions.length > 0 && setItemDisplayUnit && (
+              <Select value={displayUnitSelectValue} onValueChange={handleUnitChange}>
+                <SelectTrigger className="h-8 px-2 w-fit gap-1 text-xs bg-muted/50 border border-transparent flex-shrink-0 focus:ring-1 focus:ring-inset focus:ring-ring focus:ring-offset-0">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {unitOptions.map((u) => (
+                    <SelectItem key={u} value={u}>
+                      {u}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
-          <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+          <div className={LEDGER_HEADER_PILL_ROW_CN}>
             <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
               <BsDatePicker

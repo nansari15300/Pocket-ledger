@@ -38,5 +38,7 @@ export const config = {
     "/api/company/repair-stripe-plan-expiry",
     "/api/company/billing-auto-renew",
     "/api/company/billing-payments-statement",
+    "/api/company/recycle-bin-finalize",
+    "/api/admin/recycle-bin/delete-company",
   ],
 };

@@ -61,7 +61,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_MOBILE_ATTACH_TILE_SLOT, VOUCHER_MOBILE_ATTACH_PREVIEW_CLASS, VOUCHER_MOBILE_ATTACH_ADD_SURFACE_CLASS, VOUCHER_DESKTOP_ATTACH_TILE_SLOT, VOUCHER_DESKTOP_ATTACH_PREVIEW_CLASS, VOUCHER_DESKTOP_ATTACH_ADD_SURFACE_CLASS } from "@/components/vouchers/voucherButtonStyles";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
@@ -72,7 +72,11 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
+import {
+  applyVoucherAttachmentsAfterFormSave,
+  uploadVoucherAttachmentFileToFirebase,
+  voucherAttachmentFieldsForSave,
+} from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { LinkAdvancesToVoucherDialog, applyAdvancesAllocationsToServer } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
@@ -119,10 +123,8 @@ import {
 } from "@/components/ui/tooltip";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
-import {
-  convertPdfAttachmentsToJpegIfEnabled,
-  shouldSuggestPdfAsImage,
-} from "@/lib/voucherAttachmentPdfAsImage";
+import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
+import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
 import { CreateBankAccountDialog } from "../bank-cash/CreateBankAccountDialog";
 import { AddVoucherDialog } from "./AddVoucherDialog";
 import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDialog";
@@ -1041,15 +1043,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           type: "purchase",
         };
 
-        let filesForSave = files;
-        if (savePdfAsImage) {
-          const convToast = sonnerToast.loading("Converting PDF attachments to image…");
-          try {
-            filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
-          } finally {
-            sonnerToast.dismiss(convToast);
-          }
-        }
+        const filesForSave = await prepareVoucherAttachmentsForSave(files, {
+          companyId,
+          savePdfAsImage,
+        });
 
         const originalVoucherIdToDelete: string | null =
           isEditingAndConverting && voucher?.id ? String(voucher.id) : null;
@@ -1063,10 +1060,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         );
         let preGeneratedVoucherId: string | undefined;
 
-        // If an unassignedFile is present, add its URL
-        if(data.unassignedFile?.url && !existingFileUrls.includes(data.unassignedFile.url)) {
-            existingFileUrls.push(data.unassignedFile.url);
-        }
+        // `files` UI list is canonical — do not re-inject `unassignedFile` (resurrects removed attachments).
 
         const newFilesToUpload = filesForSave.filter(
           (f): f is File => f instanceof File
@@ -1109,12 +1103,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           } else {
             for (const file of newFilesToUpload) {
               if (existingFileUrls.length >= fileAttachmentLimits.maxFileCount) break;
-              const storageRef = ref(
-                storage,
-                `voucher-files/${companyId}/purchase/${Date.now()}_${file.name}`
-              );
-              const snapshot = await uploadBytes(storageRef, file);
-              const url = await getDownloadURL(snapshot.ref);
+              const voucherIdForUpload =
+                idArgForFirestore ?? savedVoucherId ?? voucher?.id ?? undefined;
+              const url = await uploadVoucherAttachmentFileToFirebase({
+                companyId,
+                voucherType: "purchase",
+                file,
+                voucherId: voucherIdForUpload ? String(voucherIdForUpload) : undefined,
+              });
               existingFileUrls.push(url);
               await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
             }
@@ -1123,8 +1119,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
         let finalData = {
           ...submissionData,
-          fileUrls: existingFileUrls,
-          unassignedFile: data.unassignedFile || voucher?.unassignedFile || null,
+          ...voucherAttachmentFieldsForSave(existingFileUrls),
           isApproved: isCompanyAdmin ? true : (data.isApproved ?? voucher?.isApproved ?? false),
         };
         // Keep opening balance link from current voucher (set by Link to Txns); copy-draft pehli save par purani row na uthao
@@ -1184,17 +1179,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           const rawUrls = (finalData.fileUrls as string[]).filter(
             (u): u is string => typeof u === "string" && Boolean(String(u).trim())
           );
-          void applyVoucherAttachmentsAfterFormSave({
-            companyId,
-            voucherId: docId,
-            rawFileUrls: rawUrls,
-            storageFolder: "purchase",
-          }).then((persistedUrls) => {
-            if (!isMounted.current) return;
-            savedFileUrlsSnapshotRef.current = [...persistedUrls];
-            setFiles(persistedUrls);
-            initialFilesRef.current = persistedUrls;
-          });
+          try {
+            const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+              companyId,
+              voucherId: docId,
+              rawFileUrls: rawUrls,
+              storageFolder: "purchase",
+            });
+            if (isMounted.current) {
+              savedFileUrlsSnapshotRef.current = [...persistedUrls];
+              setFiles(persistedUrls);
+              initialFilesRef.current = persistedUrls;
+            }
+          } catch {
+            /* non-fatal — outbox flush will resolve attachments */
+          }
         }
 
         const postSaveTail = async () => {
@@ -1221,11 +1220,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               }
             }
           }
-          if (approveAfterSave && savedDoc?.id) {
-            if (!isEditForApprove) {
-              await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
-            }
-          }
+          // New create: saveVoucher(approveAfterSave) already set isApproved — skip second approve lookup.
           if (companyId && company) {
             const isEditHist = !!voucher?.id;
             const amount = Number((finalData as any).total) || 0;
@@ -1390,6 +1385,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!allowAttachments) return;
     await handleVoucherAttachmentInputChange(e, {
+      companyId,
       currentFiles: files,
       maxFiles: fileAttachmentLimits.maxFileCount || 0,
       allowImage: fileAttachmentLimits.allowImage,
@@ -2955,6 +2951,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               key={typeof file === "string" ? file : `file-${index}`} 
                               file={file} 
                               attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
+                        attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
                               className={cn(
                                 !allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : "",
@@ -2979,6 +2976,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 }}
                                 onPastedFiles={(incoming) =>
                                   void appendCompressedVoucherAttachmentsToState({
+                                    companyId,
                                     incomingFiles: incoming,
                                     currentFiles: files,
                                     maxFiles: fileAttachmentLimits.maxFileCount || 0,
@@ -3253,6 +3251,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               key={typeof file === "string" ? file : `file-${index}`} 
                               file={file} 
                               attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
+                        attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
                               className={cn(
                                 !allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : "",
@@ -3277,6 +3276,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 }}
                                 onPastedFiles={(incoming) =>
                                   void appendCompressedVoucherAttachmentsToState({
+                                    companyId,
                                     incomingFiles: incoming,
                                     currentFiles: files,
                                     maxFiles: fileAttachmentLimits.maxFileCount || 0,

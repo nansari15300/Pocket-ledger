@@ -7,21 +7,25 @@ import {
 } from "@/lib/pdfjsWorkerSrc";
 
 /**
- * Images: A4 @150 DPI max, JPEG out, <= maxKB (default ~150KB band).
- * PDFs (reference app): pdf-lib copy+save, phir zarurat par pdf.js → JPEG per page → pdf-lib embed (0.5MB tak).
+ * Images: A4 @150 DPI max, JPEG out; progressive re-compress until ≤ maxKB.
+ * Defaults: Online band max 100KB / soft floor 50KB (callers pass 150KB for Local/PL/Drive).
+ * PDFs: pdf-lib shrink, zarurat par pdf.js → JPEG → pdf-lib embed (~0.5MB).
  * Mobile: bade image par createImageBitmap se max side 4096.
  */
 
-const MAX_KB_DEFAULT = 150;
-const MIN_KB_DEFAULT = 75;
+const MAX_KB_DEFAULT = 100;
+const MIN_KB_DEFAULT = 50;
 
-/** Default post-compress ceiling — voucher forms ke 0.5MB check par align */
+/** Default post-compress ceiling — voucher PDF / Drive PDF band */
 const DEFAULT_MAX_PDF_BYTES_AFTER = 512 * 1024;
 
 const A4_PORTRAIT = { w: 1240, h: 1754 };
 const A4_LANDSCAPE = { w: 1754, h: 1240 };
 
 const MAX_DECODE_DIMENSION = 4096;
+const QUALITY_FLOOR = 0.26;
+const MIN_SCALE = 0.03;
+const MAX_IMAGE_PASSES = 40;
 
 /** Bahut zyada pages par raster skip (reference: 50) */
 const MAX_PDF_PAGES_FOR_RASTER = 50;
@@ -33,13 +37,43 @@ function isPdfLike(file: File): boolean {
   );
 }
 
+/**
+ * Pass size cut: ~101KB → ~10%; ~10000KB → ~50%; mid sizes lerp.
+ * Matches: just-over = light; huge = half then re-compress until under max.
+ */
+function passSizeKeepFactor(currentKb: number, maxKb: number): number {
+  if (currentKb <= maxKb * 1.2 || currentKb <= 200) return 0.88;
+  if (currentKb >= 10_000) return 0.5;
+  const t = Math.min(1, Math.max(0, (currentKb - 200) / (10_000 - 200)));
+  return 0.88 - t * 0.38;
+}
+
+async function encodeJpegAt(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  width: number,
+  height: number,
+  quality: number
+): Promise<Blob> {
+  canvas.width = width;
+  canvas.height = height;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(source, 0, 0, width, height);
+  return canvasToBlob(canvas, "image/jpeg", quality);
+}
+
 export async function compressFile(
   file: File,
   options?: { maxKB?: number; minKB?: number; maxPdfBytesAfter?: number }
 ): Promise<File> {
   const MAX_KB = options?.maxKB ?? MAX_KB_DEFAULT;
-  const MIN_KB = options?.minKB ?? MIN_KB_DEFAULT;
+  const MIN_KB = Math.min(options?.minKB ?? MIN_KB_DEFAULT, Math.floor(MAX_KB * 0.85));
   const maxPdfBytes = options?.maxPdfBytesAfter ?? DEFAULT_MAX_PDF_BYTES_AFTER;
+  const maxBytes = MAX_KB * 1024;
 
   if (isPdfLike(file)) {
     return compressPdfFile(file, maxPdfBytes);
@@ -47,7 +81,8 @@ export async function compressFile(
 
   if (!file.type.startsWith("image/")) return file;
 
-  if (file.size <= MAX_KB * 1024) return file;
+  // At/under cap — no compression (quality preserve).
+  if (file.size <= maxBytes) return file;
 
   let imageBitmapToClose: ImageBitmap | null = null;
 
@@ -61,24 +96,81 @@ export async function compressFile(
     const maxW = isPortrait ? A4_PORTRAIT.w : A4_LANDSCAPE.w;
     const maxH = isPortrait ? A4_PORTRAIT.h : A4_LANDSCAPE.h;
 
-    let width = srcW;
-    let height = srcH;
-    if (width > maxW || height > maxH) {
-      const ratio = Math.min(maxW / width, maxH / height);
-      width = Math.max(1, Math.round(width * ratio));
-      height = Math.max(1, Math.round(height * ratio));
+    let baseW = srcW;
+    let baseH = srcH;
+    if (baseW > maxW || baseH > maxH) {
+      const ratio = Math.min(maxW / baseW, maxH / baseH);
+      baseW = Math.max(1, Math.round(baseW * ratio));
+      baseH = Math.max(1, Math.round(baseH * ratio));
+    }
+
+    // Huge inputs: start smaller so first passes land near the band faster.
+    const sizeKb = file.size / 1024;
+    if (sizeKb >= 4000) {
+      baseW = Math.max(1, Math.round(baseW * 0.55));
+      baseH = Math.max(1, Math.round(baseH * 0.55));
+    } else if (sizeKb >= 1500) {
+      baseW = Math.max(1, Math.round(baseW * 0.75));
+      baseH = Math.max(1, Math.round(baseH * 0.75));
     }
 
     const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-
     const ctx = canvas.getContext("2d");
     if (!ctx) return file;
 
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(source as CanvasImageSource, 0, 0, width, height);
+    const outType = "image/jpeg";
+    let quality = sizeKb >= 10_000 ? 0.68 : sizeKb >= 1000 ? 0.8 : 0.9;
+    let scale = 1;
+    let bestBlob: Blob | null = null;
+
+    for (let pass = 0; pass < MAX_IMAGE_PASSES; pass++) {
+      const width = Math.max(1, Math.round(baseW * scale));
+      const height = Math.max(1, Math.round(baseH * scale));
+      const blob = await encodeJpegAt(canvas, ctx, source as CanvasImageSource, width, height, quality);
+      if (!bestBlob || blob.size < bestBlob.size) bestBlob = blob;
+
+      const kb = blob.size / 1024;
+      if (kb <= MAX_KB) {
+        if (kb < MIN_KB && quality < 0.92) {
+          const bumped = await encodeJpegAt(
+            canvas,
+            ctx,
+            source as CanvasImageSource,
+            width,
+            height,
+            Math.min(0.94, quality + 0.08)
+          );
+          if (bumped.size <= maxBytes && bumped.size >= blob.size) bestBlob = bumped;
+        }
+        break;
+      }
+
+      const keep = passSizeKeepFactor(kb, MAX_KB);
+      if (quality > QUALITY_FLOOR + 0.03) {
+        quality = Math.max(QUALITY_FLOOR, quality * Math.sqrt(keep));
+      } else {
+        scale *= Math.sqrt(keep);
+        quality = Math.min(0.72, Math.max(QUALITY_FLOOR, quality + 0.04));
+      }
+
+      if (scale < MIN_SCALE) break;
+    }
+
+    // Hard guarantee: never hand back an oversize image when encode worked.
+    let emergency = 0;
+    while (bestBlob && bestBlob.size > maxBytes && scale > 0.012 && emergency < 24) {
+      emergency += 1;
+      scale *= 0.62;
+      quality = Math.max(0.2, quality * 0.88);
+      const width = Math.max(1, Math.round(baseW * scale));
+      const height = Math.max(1, Math.round(baseH * scale));
+      const blob = await encodeJpegAt(canvas, ctx, source as CanvasImageSource, width, height, quality);
+      if (!bestBlob || blob.size < bestBlob.size) bestBlob = blob;
+      if (blob.size <= maxBytes) {
+        bestBlob = blob;
+        break;
+      }
+    }
 
     if (imageBitmapToClose) {
       try {
@@ -87,28 +179,6 @@ export async function compressFile(
         /* ignore */
       }
       imageBitmapToClose = null;
-    }
-
-    const outType = "image/jpeg";
-    let quality = 0.9;
-    let bestBlob: Blob | null = null;
-
-    for (let i = 0; i < 14; i++) {
-      const blob = await canvasToBlob(canvas, outType, quality);
-      if (!bestBlob || blob.size < bestBlob.size) bestBlob = blob;
-
-      const kb = blob.size / 1024;
-
-      if (kb <= MAX_KB) {
-        if (kb < MIN_KB) {
-          const bumped = await canvasToBlob(canvas, outType, Math.min(0.95, quality + 0.08));
-          if (bumped.size / 1024 <= MAX_KB) bestBlob = bumped;
-        }
-        break;
-      }
-
-      quality -= 0.05;
-      if (quality < 0.35) break;
     }
 
     if (!bestBlob) return file;
@@ -385,15 +455,17 @@ export async function compressPdfForAttachment(file: File, maxBytes: number): Pr
   });
 }
 
-/** Drive attachment upload ceiling — voucher forms ke 0.5MB check par align. */
+/** Drive attachment PDF / non-image ceiling. */
 export const DRIVE_ATTACHMENT_MAX_BYTES = 512 * 1024;
+
+/** Drive / local-like image ceiling (Local / PL Server / Drive). */
+export const DRIVE_IMAGE_ATTACHMENT_MAX_BYTES = 150 * 1024;
 
 /** Blob → File → voucher-grade compress; masters / items / vouchers sab Drive par same size band. */
 export async function compressAttachmentBlobForDriveUpload(
   blob: Blob,
   opts?: { fileName?: string; contentType?: string; maxBytes?: number }
 ): Promise<Blob> {
-  const maxBytes = opts?.maxBytes ?? DRIVE_ATTACHMENT_MAX_BYTES;
   const contentType = opts?.contentType || blob.type || "";
   const t = contentType.toLowerCase();
   const fileName = opts?.fileName || "file";
@@ -401,6 +473,9 @@ export async function compressAttachmentBlobForDriveUpload(
   const isImage = t.startsWith("image/");
   if (!isPdf && !isImage) return blob;
   const file = new File([blob], fileName, { type: contentType || "application/octet-stream" });
+  const maxBytes =
+    opts?.maxBytes ??
+    (isImage ? DRIVE_IMAGE_ATTACHMENT_MAX_BYTES : DRIVE_ATTACHMENT_MAX_BYTES);
   return compressVoucherAttachment(file, maxBytes);
 }
 
@@ -409,8 +484,18 @@ export async function compressVoucherAttachment(file: File, maxBytes: number): P
   const t = (file.type || "").toLowerCase();
   if (t.startsWith("image/")) {
     const maxKB = Math.max(24, Math.floor(maxBytes / 1024));
-    const minKB = Math.min(50, Math.floor(maxKB * 0.45));
-    return compressFile(file, { maxKB, minKB, maxPdfBytesAfter: maxBytes });
+    // Soft floor ~50KB, but never above ~85% of max (online 100 → 50; local 150 → 50 by default).
+    const minKB = Math.min(50, Math.floor(maxKB * 0.5));
+    let out = await compressFile(file, { maxKB, minKB, maxPdfBytesAfter: maxBytes });
+    // Never leave an oversize image — second pass with a tighter ceiling.
+    if (out.size > maxBytes) {
+      out = await compressFile(out.size < file.size ? out : file, {
+        maxKB: Math.max(18, maxKB - 12),
+        minKB: 12,
+        maxPdfBytesAfter: maxBytes,
+      });
+    }
+    return out;
   }
   if (t === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
     return compressPdfForAttachment(file, maxBytes);

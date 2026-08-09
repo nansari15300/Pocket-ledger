@@ -18,8 +18,13 @@ import {
   shouldUseLocalCloudSync,
 } from "@/lib/localCloudSync/companyConfig";
 import { uploadPendingAttachmentPayloadToDrive } from "@/lib/localCloudSync/driveCloudSyncClient";
-import { compressVoucherAttachment, DRIVE_ATTACHMENT_MAX_BYTES } from "@/lib/compression";
+import { compressMasterAttachmentForCompany } from "@/lib/attachmentCompressionUi";
 import { convertPdfAttachmentsToJpegIfEnabled } from "@/lib/voucherAttachmentPdfAsImage";
+import {
+  buildStorageObjectPath,
+  buildStoragePathPrefix,
+  resolveCompanyUsesPocketLedgerStorage,
+} from "@/lib/firebaseStoragePaths";
 
 export const MASTER_SAVE_PDF_AS_IMAGE_STORAGE_KEY = "pocket-ledger-master-save-pdf-as-image";
 
@@ -37,20 +42,24 @@ export function readMasterSavePdfAsImagePreference(defaultValue = false): boolea
 
 async function maybeConvertMasterDocumentPdfsToImages(
   files: File[],
-  savePdfAsImage?: boolean
+  savePdfAsImage?: boolean,
+  companyId?: string | null
 ): Promise<File[]> {
   const enabled = savePdfAsImage ?? readMasterSavePdfAsImagePreference(false);
   if (!enabled || files.length === 0) return files;
-  const converted = await convertPdfAttachmentsToJpegIfEnabled(files, true);
+  const converted = await convertPdfAttachmentsToJpegIfEnabled(files, true, { companyId });
   return converted.filter((item): item is File => item instanceof File);
 }
 
-async function compressEntityProfileFileForPending(file: File): Promise<{
+async function compressEntityProfileFileForPending(
+  file: File,
+  companyId?: string | null
+): Promise<{
   blob: Blob;
   contentType: string;
   fileName: string;
 }> {
-  const compressed = await compressVoucherAttachment(file, DRIVE_ATTACHMENT_MAX_BYTES);
+  const { file: compressed } = await compressMasterAttachmentForCompany(file, companyId);
   return {
     blob: compressed,
     contentType: compressed.type || file.type || "application/octet-stream",
@@ -144,19 +153,17 @@ export function listLocalAttachmentRefsInEntityRecord(obj: Record<string, unknow
 
 const PL_SERVER_ENTITY_ATTACHMENT_FLUSH_BUDGET_MS = 20_000;
 
-/** Stage ke baad `/__pl_attachment` upload — host loopback + staff gate. */
+/** Stage ke baad `/__pl_attachment` upload — host loopback + staff gate (party/master rule). */
 async function flushPlServerAttachmentsAfterEntityStaging(companyId: string): Promise<void> {
   const cid = String(companyId || "").trim();
   if (!cid) return;
   try {
-    const { shouldEnqueuePlServerAttachmentUpload, flushPlServerAttachmentUploadQueueNow } = await import(
+    const { flushPlServerAttachmentsAfterStagingBudgeted } = await import(
       "@/lib/plServerAttachmentUploadQueue"
     );
-    if (!(await shouldEnqueuePlServerAttachmentUpload(cid))) return;
-    await Promise.race([
-      flushPlServerAttachmentUploadQueueNow(cid),
-      new Promise<void>((resolve) => setTimeout(resolve, PL_SERVER_ENTITY_ATTACHMENT_FLUSH_BUDGET_MS)),
-    ]);
+    await flushPlServerAttachmentsAfterStagingBudgeted(cid, {
+      budgetMs: PL_SERVER_ENTITY_ATTACHMENT_FLUSH_BUDGET_MS,
+    });
   } catch {
     /* best-effort */
   }
@@ -177,18 +184,22 @@ export type EntityProfileCollection = "parties" | "bank_accounts" | "staff" | "t
 const DEFAULT_MAX_ENTITY_DOCS = 5;
 
 /** Profile photo — sirf image (ppic). */
-export function isProfileAvatarImageFile(file: File): boolean {
-  const t = (file.type || "").toLowerCase();
+export function isProfileAvatarImageFile(file: File | null | undefined): boolean {
+  if (!file || typeof file !== "object") return false;
+  const t = String(file.type || "").toLowerCase();
   if (t.startsWith("image/")) return true;
-  const n = file.name.toLowerCase();
+  const n = String(file.name || "").toLowerCase();
+  if (!n) return false;
   return /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/.test(n);
 }
 
 /** Dusra section — image ya PDF. */
-export function isProfileDocumentFile(file: File): boolean {
-  const t = (file.type || "").toLowerCase();
+export function isProfileDocumentFile(file: File | null | undefined): boolean {
+  if (!file || typeof file !== "object") return false;
+  const t = String(file.type || "").toLowerCase();
   if (t.startsWith("image/") || t === "application/pdf") return true;
-  const n = file.name.toLowerCase();
+  const n = String(file.name || "").toLowerCase();
+  if (!n) return false;
   return /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif|avif|tiff?|pdf)$/.test(n);
 }
 
@@ -203,25 +214,41 @@ export async function stageEntityAvatarAndDocuments(params: {
 }): Promise<{ fileUrl: string | null; documentFileUrls: string[] }> {
   const { companyId, collectionSeg, entityId, avatarFile, documentFiles } = params;
   const maxDocuments = params.maxDocuments ?? DEFAULT_MAX_ENTITY_DOCS;
-  const filesForSave = await maybeConvertMasterDocumentPdfsToImages(documentFiles, params.savePdfAsImage);
+  const filesForSave = await maybeConvertMasterDocumentPdfsToImages(
+    documentFiles,
+    params.savePdfAsImage,
+    companyId
+  );
   const documentFileUrls: string[] = [];
   const stageLocally = await shouldStageEntityProfileFilesLocally(companyId);
   const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
   const docCompanyId = stageLocally ? String(companyId || "").trim() : fsCompanyId;
   const basePath = `companies/${docCompanyId}/${collectionSeg}/${entityId}`;
-  const prefix = `companies/${fsCompanyId}/${collectionSeg.replace(/_/g, "-")}-files`;
+  const usePocketLedger = await resolveCompanyUsesPocketLedgerStorage(companyId);
+  const avatarPrefix = buildStoragePathPrefix({
+    companyId: fsCompanyId,
+    usePocketLedger,
+    collectionName: collectionSeg,
+    fieldKey: "fileUrl",
+  });
+  const documentsPrefix = buildStoragePathPrefix({
+    companyId: fsCompanyId,
+    usePocketLedger,
+    collectionName: collectionSeg,
+    fieldKey: "documentFileUrls",
+  });
 
   let fileUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {
     const id = generateLocalFileId();
-    const staged = await compressEntityProfileFileForPending(avatarFile);
+    const staged = await compressEntityProfileFileForPending(avatarFile, companyId);
     await putPendingFile({
       id,
       blob: staged.blob,
       contentType: staged.contentType,
       docPath: basePath,
       field: "fileUrl",
-      storagePathPrefix: `${prefix}/avatar`,
+      storagePathPrefix: avatarPrefix,
       fileName: staged.fileName,
     });
     const driveRef = await tryImmediateDriveUploadForStagedEntityFile({
@@ -241,14 +268,14 @@ export async function stageEntityAvatarAndDocuments(params: {
     if (documentFileUrls.length >= maxDocuments) break;
     if (!isProfileDocumentFile(f)) continue;
     const id = generateLocalFileId();
-    const staged = await compressEntityProfileFileForPending(f);
+    const staged = await compressEntityProfileFileForPending(f, companyId);
     await putPendingFile({
       id,
       blob: staged.blob,
       contentType: staged.contentType,
       docPath: basePath,
       field: "documentFileUrls",
-      storagePathPrefix: `${prefix}/documents`,
+      storagePathPrefix: documentsPrefix,
       fileName: staged.fileName,
     });
     const driveRef = await tryImmediateDriveUploadForStagedEntityFile({
@@ -284,14 +311,33 @@ export async function uploadEntityAvatarAndDocumentsRemote(params: {
   }
   const { companyId, collectionSeg, avatarFile, documentFiles } = params;
   const maxDocuments = params.maxDocuments ?? DEFAULT_MAX_ENTITY_DOCS;
-  const filesForSave = await maybeConvertMasterDocumentPdfsToImages(documentFiles, params.savePdfAsImage);
+  const filesForSave = await maybeConvertMasterDocumentPdfsToImages(
+    documentFiles,
+    params.savePdfAsImage,
+    companyId
+  );
   const documentFileUrls: string[] = [];
   const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
-  const prefix = `companies/${fsCompanyId}/${collectionSeg.replace(/_/g, "-")}-files`;
+  const usePocketLedger = await resolveCompanyUsesPocketLedgerStorage(companyId);
+  const avatarPrefix = buildStoragePathPrefix({
+    companyId: fsCompanyId,
+    usePocketLedger,
+    collectionName: collectionSeg,
+    fieldKey: "fileUrl",
+  });
+  const documentsPrefix = buildStoragePathPrefix({
+    companyId: fsCompanyId,
+    usePocketLedger,
+    collectionName: collectionSeg,
+    fieldKey: "documentFileUrls",
+  });
 
   let fileUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {
-    const storagePath = `${prefix}/avatar/${Date.now()}_${safeEntityFileName(avatarFile.name)}`;
+    const storagePath = buildStorageObjectPath({
+      prefix: avatarPrefix,
+      fileName: avatarFile.name,
+    });
     const storageRef = ref(storage, storagePath);
     await uploadBytes(storageRef, avatarFile, { contentType: avatarFile.type || "image/jpeg" });
     fileUrl = await getDownloadURL(storageRef);
@@ -300,7 +346,10 @@ export async function uploadEntityAvatarAndDocumentsRemote(params: {
   for (const f of filesForSave) {
     if (documentFileUrls.length >= maxDocuments) break;
     if (!isProfileDocumentFile(f)) continue;
-    const storagePath = `${prefix}/documents/${Date.now()}_${safeEntityFileName(f.name)}`;
+    const storagePath = buildStorageObjectPath({
+      prefix: documentsPrefix,
+      fileName: f.name,
+    });
     const storageRef = ref(storage, storagePath);
     await uploadBytes(storageRef, f, { contentType: f.type || "application/octet-stream" });
     documentFileUrls.push(await getDownloadURL(storageRef));
@@ -318,21 +367,37 @@ export async function stageItemAvatarAndAttachments(params: {
   savePdfAsImage?: boolean;
 }): Promise<{ avatarUrl: string | null; newAttachmentUrls: string[] }> {
   const { companyId, itemId, avatarFile, attachmentFiles } = params;
-  const filesForSave = await maybeConvertMasterDocumentPdfsToImages(attachmentFiles, params.savePdfAsImage);
+  const filesForSave = await maybeConvertMasterDocumentPdfsToImages(
+    attachmentFiles,
+    params.savePdfAsImage,
+    companyId
+  );
   const basePath = `companies/${companyId}/items/${itemId}`;
-  const prefix = `companies/${companyId}/item-files`;
+  const usePocketLedger = await resolveCompanyUsesPocketLedgerStorage(companyId);
+  const avatarPrefix = buildStoragePathPrefix({
+    companyId,
+    usePocketLedger,
+    collectionName: "items",
+    fieldKey: "avatarUrl",
+  });
+  const attachmentsPrefix = buildStoragePathPrefix({
+    companyId,
+    usePocketLedger,
+    collectionName: "items",
+    fieldKey: "fileUrls",
+  });
 
   let avatarUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {
     const id = generateLocalFileId();
-    const staged = await compressEntityProfileFileForPending(avatarFile);
+    const staged = await compressEntityProfileFileForPending(avatarFile, companyId);
     await putPendingFile({
       id,
       blob: staged.blob,
       contentType: staged.contentType,
       docPath: basePath,
       field: "avatarUrl",
-      storagePathPrefix: `${prefix}/avatar`,
+      storagePathPrefix: avatarPrefix,
       fileName: staged.fileName,
     });
     const driveRef = await tryImmediateDriveUploadForStagedEntityFile({
@@ -353,14 +418,14 @@ export async function stageItemAvatarAndAttachments(params: {
     if (newAttachmentUrls.length >= params.maxAttachments) break;
     if (!isProfileDocumentFile(f)) continue;
     const id = generateLocalFileId();
-    const staged = await compressEntityProfileFileForPending(f);
+    const staged = await compressEntityProfileFileForPending(f, companyId);
     await putPendingFile({
       id,
       blob: staged.blob,
       contentType: staged.contentType,
       docPath: basePath,
       field: "fileUrls",
-      storagePathPrefix: `${prefix}/attachments`,
+      storagePathPrefix: attachmentsPrefix,
       fileName: staged.fileName,
     });
     const driveRef = await tryImmediateDriveUploadForStagedEntityFile({
@@ -392,11 +457,30 @@ export async function uploadItemAvatarAndAttachmentsRemote(params: {
     return stageItemAvatarAndAttachments(params);
   }
   const { companyId, avatarFile, attachmentFiles, maxAttachments } = params;
-  const filesForSave = await maybeConvertMasterDocumentPdfsToImages(attachmentFiles, params.savePdfAsImage);
-  const prefix = `companies/${companyId}/item-files`;
+  const filesForSave = await maybeConvertMasterDocumentPdfsToImages(
+    attachmentFiles,
+    params.savePdfAsImage,
+    companyId
+  );
+  const usePocketLedger = await resolveCompanyUsesPocketLedgerStorage(companyId);
+  const avatarPrefix = buildStoragePathPrefix({
+    companyId,
+    usePocketLedger,
+    collectionName: "items",
+    fieldKey: "avatarUrl",
+  });
+  const attachmentsPrefix = buildStoragePathPrefix({
+    companyId,
+    usePocketLedger,
+    collectionName: "items",
+    fieldKey: "fileUrls",
+  });
   let avatarUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {
-    const storagePath = `${prefix}/avatar/${Date.now()}_${safeEntityFileName(avatarFile.name)}`;
+    const storagePath = buildStorageObjectPath({
+      prefix: avatarPrefix,
+      fileName: avatarFile.name,
+    });
     const storageRef = ref(storage, storagePath);
     await uploadBytes(storageRef, avatarFile, { contentType: avatarFile.type || "image/jpeg" });
     avatarUrl = await getDownloadURL(storageRef);
@@ -405,7 +489,10 @@ export async function uploadItemAvatarAndAttachmentsRemote(params: {
   for (const f of filesForSave) {
     if (newAttachmentUrls.length >= maxAttachments) break;
     if (!isProfileDocumentFile(f)) continue;
-    const storagePath = `${prefix}/attachments/${Date.now()}_${safeEntityFileName(f.name)}`;
+    const storagePath = buildStorageObjectPath({
+      prefix: attachmentsPrefix,
+      fileName: f.name,
+    });
     const storageRef = ref(storage, storagePath);
     await uploadBytes(storageRef, f, { contentType: f.type || "application/octet-stream" });
     newAttachmentUrls.push(await getDownloadURL(storageRef));
@@ -426,14 +513,12 @@ async function syncEntityAttachmentsAfterSaveAsync(companyId: string): Promise<v
   const cid = String(companyId || "").trim();
   if (!cid) return;
   try {
-    const { shouldEnqueuePlServerAttachmentUpload, flushPlServerAttachmentUploadQueueNow } = await import(
-      "@/lib/plServerAttachmentUploadQueue"
-    );
+    const { shouldEnqueuePlServerAttachmentUpload, flushPlServerAttachmentsAfterStagingBudgeted } =
+      await import("@/lib/plServerAttachmentUploadQueue");
     if (await shouldEnqueuePlServerAttachmentUpload(cid)) {
-      await Promise.race([
-        flushPlServerAttachmentUploadQueueNow(cid),
-        new Promise<void>((resolve) => setTimeout(resolve, PL_SERVER_ENTITY_ATTACHMENT_FLUSH_BUDGET_MS)),
-      ]);
+      await flushPlServerAttachmentsAfterStagingBudgeted(cid, {
+        budgetMs: PL_SERVER_ENTITY_ATTACHMENT_FLUSH_BUDGET_MS,
+      });
       return;
     }
     if (await shouldUseLocalCloudSync(cid)) {

@@ -63,15 +63,13 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
+import { applyVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
-import {
-  convertPdfAttachmentsToJpegIfEnabled,
-  shouldSuggestPdfAsImage,
-} from "@/lib/voucherAttachmentPdfAsImage";
+import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
+import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
 
 
 const fileSchema = z.object({
@@ -379,15 +377,10 @@ export function CreatePaymentInForm({
       let docId = savedVoucherId;
       const { files: formFiles, date, ...restOfData } = data;
 
-      let filesForSave = files;
-      if (savePdfAsImage) {
-        const convToast = sonnerToast.loading("Converting PDF attachments to image…");
-        try {
-          filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
-        } finally {
-          sonnerToast.dismiss(convToast);
-        }
-      }
+      const filesForSave = await prepareVoucherAttachmentsForSave(files, {
+        companyId,
+        savePdfAsImage,
+      });
 
       const submissionData: any = {
         ...restOfData,
@@ -442,9 +435,11 @@ export function CreatePaymentInForm({
         } else {
           for (const file of newFilesToUpload) {
             if (submissionData.fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
-            const storageRef = ref(storage, `voucher-files/${companyId}/${voucherType}/${Date.now()}_${file.name}`);
-            const snapshot = await uploadBytes(storageRef, file);
-            const url = await getDownloadURL(snapshot.ref);
+            const url = await uploadVoucherAttachmentFileToFirebase({
+              companyId,
+              voucherType,
+              file,
+            });
             submissionData.fileUrls.push(url);
             await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
           }
@@ -605,6 +600,7 @@ export function CreatePaymentInForm({
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!allowAttachments) return;
     await handleVoucherAttachmentInputChange(e, {
+      companyId,
       currentFiles: files,
       maxFiles: fileAttachmentLimits.maxFileCount || 0,
       allowImage: fileAttachmentLimits.allowImage,
@@ -916,6 +912,7 @@ export function CreatePaymentInForm({
                       key={index} 
                       file={file} 
                       attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
+                        attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                       onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                       className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                     />
@@ -931,6 +928,7 @@ export function CreatePaymentInForm({
                         }}
                         onPastedFiles={(incoming) =>
                           void appendCompressedVoucherAttachmentsToState({
+                            companyId,
                             incomingFiles: incoming,
                             currentFiles: files,
                             maxFiles: fileAttachmentLimits.maxFileCount || 0,

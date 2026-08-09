@@ -32,7 +32,12 @@ import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import {
   masterDetailTabHref,
+  masterDetailCanonicalHref,
   replaceMasterDetailTabUrl,
+  tabSwitchSelection,
+  pickRememberedListSelection,
+  writeMasterDetailPageState,
+  readMasterDetailLocationQuery,
 } from "@/lib/masterDetailTabChange";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
@@ -115,22 +120,8 @@ function StaffPageContent() {
   }, [setSelected, router]);
   useRegisterMasterDetailHardwareBack("staff", onBackToList);
   const useQueryNav = useMasterDetailQueryNav();
+  const pendingStaffSelectIdRef = useRef<string | null>(null);
 
-  const handleStaffTabChange = useCallback(
-    (value: string) => {
-      setActiveView(value);
-      if (!isMobile) return;
-      setSelected(null);
-      const href = masterDetailTabHref("staff", {
-        tab: value,
-        defaultTab: "staff",
-        listOnly: true,
-      });
-      replaceMasterDetailTabUrl(href, router, useQueryNav);
-    },
-    [isMobile, setActiveView, setSelected, router, useQueryNav]
-  );
-  
   const [searchTerm, setSearchTerm] = useState("");
   const [staffListQuickFilter, setStaffListQuickFilter] = useState<EntityListQuickFilter>("default");
   const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
@@ -232,6 +223,32 @@ function StaffPageContent() {
     return baseGroups;
   }, [processedStaff, initialProcessedStaffGroups, companyId]);
 
+  /** Party-style tab switch — EXE/APK stale ?selected= snap-back band. */
+  const handleStaffTabChange = useCallback(
+    (value: string) => {
+      const tab = value === "groups" ? "groups" : "staff";
+      const items =
+        (tab === "groups" ? processedStaffGroups : processedStaff) as ReadonlyArray<{ id: string }>;
+      const nextSelected = tabSwitchSelection(
+        isMobile,
+        pickRememberedListSelection("staffPageState", tab, items)
+      );
+      pendingStaffSelectIdRef.current = nextSelected?.id ?? null;
+      setActiveView(tab);
+      setSelected(nextSelected as (typeof processedStaff)[number] | (typeof processedStaffGroups)[number] | null);
+      const href = isMobile
+        ? masterDetailTabHref("staff", { tab, defaultTab: "staff", listOnly: true })
+        : masterDetailCanonicalHref("staff", {
+            tab,
+            defaultTab: "staff",
+            selectedId: nextSelected?.id ?? null,
+          });
+      replaceMasterDetailTabUrl(href, router, useQueryNav);
+      writeMasterDetailPageState("staffPageState", tab, nextSelected?.id);
+    },
+    [isMobile, useQueryNav, processedStaff, processedStaffGroups, setActiveView, setSelected, router]
+  );
+
   // ========== MEMORY LOGIC ==========
   usePageMemory(
     "staffPageState", 
@@ -268,33 +285,42 @@ function StaffPageContent() {
     return staffForStaffList.filter((s) => s.name && s.name.toLowerCase().includes(searchLower)).length;
   }, [staffForStaffList, searchTerm]);
 
-  // Restore selection when returning from details (e.g. /staff?selected=xyz or /staff?view=groups&selected=xyz)
+  // Location-first URL sync (Party jaisa).
   useEffect(() => {
-    if (!selectedIdFromUrl) return;
     if (vouchersLoading) return;
-    const groupItem = processedStaffGroups.find((i) => i.id === selectedIdFromUrl);
-    const staffItem = processedStaff.find((i) => i.id === selectedIdFromUrl);
-    if (groupItem && staffItem) {
-      if (viewFromUrl === "groups") setActiveView("groups");
-      else setActiveView("staff");
-    } else if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
-    else if (staffItem) setActiveView("staff");
-    else if (groupItem) setActiveView("groups");
+    const { view, selectedId } = readMasterDetailLocationQuery();
+    const pendingId = pendingStaffSelectIdRef.current;
+    if (pendingId) {
+      if (selectedId === pendingId) pendingStaffSelectIdRef.current = null;
+      else if (selected?.id === pendingId) return;
+    }
+    if (!selectedId) {
+      if (view === "groups") {
+        if (activeView !== "groups") setActiveView("groups");
+      } else if (activeView !== "staff") {
+        setActiveView("staff");
+      }
+      return;
+    }
+    const groupItem = processedStaffGroups.find((i) => i.id === selectedId);
+    const staffItem = processedStaff.find((i) => i.id === selectedId);
+    if (view === "groups" && groupItem) setActiveView("groups");
+    else if (view === "staff" && staffItem) setActiveView("staff");
     const item =
       groupItem && staffItem
-        ? viewFromUrl === "groups"
+        ? view === "groups"
           ? groupItem
           : staffItem
         : groupItem || staffItem;
     if (item) setSelected(item);
     const canonical =
-      viewFromUrl === "groups"
-        ? `/staff?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
-        : `/staff?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+      view === "groups"
+        ? `/staff?view=groups&selected=${encodeURIComponent(selectedId)}`
+        : `/staff?selected=${encodeURIComponent(selectedId)}`;
     if (shouldReplaceWithMasterDetailCanonical(canonical)) {
       router.replace(canonical, { scroll: false });
     }
-  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedStaff, processedStaffGroups, setSelected, setActiveView, router]);
+  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedStaff, processedStaffGroups, selected?.id, activeView, setSelected, setActiveView, router]);
 
   const openVoucherDialog = (mode: 'add_salary' | 'payment_out') => {
     setVoucherDefaultTab(mode);

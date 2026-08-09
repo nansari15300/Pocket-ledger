@@ -86,7 +86,7 @@ import { usePathname } from "next/navigation";
 import { useGate } from "@/contexts/GateContext";
 import { pickGateAwareAutoSelectCompanyId } from "@/lib/gates/gateRuntime";
 import { useRestoreCloudUploadLock } from "@/hooks/useRestoreCloudUploadLock";
-import { isRestoreCloudUploadLocked, readPendingRestoreCloudPush } from "@/lib/restoreCloudBackgroundSync";
+import { isRestoreCloudFileUploadLocked, readPendingRestoreCloudPush } from "@/lib/restoreCloudBackgroundSync";
 import {
   partitionCompaniesForSelector,
   partitionCompaniesForUnlockDialog,
@@ -135,7 +135,7 @@ function isCompanyVisibleInSelector(c: CompanyData): boolean {
 function companySelectorStorageKey(c: CompanyData): string {
   const id = String(c?.id ?? "").trim();
   if (!id) return "";
-  const gate = String(c.plServerGateId ?? "").trim();
+  const gate = String((c as CompanyData & { plServerGateId?: string }).plServerGateId ?? "").trim();
   const gateSuffix = gate ? `@${gate}` : "";
   if (isServerSelectorCompanyRow(c)) return `server:${id}${gateSuffix}`;
   if (isLocalSelectorCompanyRow(c)) return `local:${id}${gateSuffix}`;
@@ -220,6 +220,43 @@ function activateGateForServerCompanyIfNeeded(company: CompanyData): void {
   }
   const gateId = getPlServerContextGateId();
   if (gateId) activateGate(gateId);
+}
+
+function schedulePlServerCompanyWarmupAfterSelect(
+  companyId: string,
+  gate: GateRecord | null,
+  logPrefix: string
+): void {
+  if (typeof window === "undefined") return;
+  window.setTimeout(() => {
+    void warmPlServerCompanyLedgerAfterSelect(companyId, gate, logPrefix);
+  }, 0);
+}
+
+async function warmPlServerCompanyLedgerAfterSelect(
+  companyId: string,
+  gate: GateRecord | null,
+  logPrefix: string
+): Promise<void> {
+  const id = String(companyId || "").trim();
+  if (!id) return;
+  try {
+    const { plServerCompanyLedgerNeedsFullPull } = await import("@/lib/plServerLedgerDeltaGate");
+    if (!(await plServerCompanyLedgerNeedsFullPull(id))) return;
+
+    const { preparePlServerStaffCompanyConnect } = await import("@/lib/plServerStaffCompanyConnect");
+    const pulled = await preparePlServerStaffCompanyConnect(id, {
+      pullFullLedger: true,
+      timeoutMs: 120_000,
+      plServerGate: gate,
+      background: true,
+    });
+    if (!pulled.ok) {
+      console.warn(`[${logPrefix}] PLServer warmup sync failed`, { companyId: id });
+    }
+  } catch (error) {
+    console.warn(`[${logPrefix}] PLServer warmup failed`, error);
+  }
 }
 
 async function unlockServerGateCompanyFromSelector(
@@ -832,12 +869,12 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         return;
       }
     }
-    if (isRestoreCloudUploadLocked()) {
+    if (isRestoreCloudFileUploadLocked()) {
       const job = readPendingRestoreCloudPush();
       if (job && job.companyId !== company.id) {
         toast({
           variant: "destructive",
-          title: "Cloud upload in progress",
+          title: "Attachment upload in progress",
           description: "Wait until the header upload bar reaches 100% before switching to another company.",
         });
         return;
@@ -853,31 +890,12 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           const gate = resolveServerGateForCompany(
             company as CompanyData & { plServerGateId?: string; plServerGateServerUrl?: string }
           );
-          const { ensurePlServerHubGateReadyForStaffConnect, preparePlServerStaffCompanyConnect } = await import(
-            "@/lib/plServerStaffCompanyConnect"
-          );
-          const { plServerCompanyLedgerNeedsFullPull } = await import("@/lib/plServerLedgerDeltaGate");
-          await ensurePlServerHubGateReadyForStaffConnect(gate);
-          if (await plServerCompanyLedgerNeedsFullPull(company.id)) {
-            const pulled = await preparePlServerStaffCompanyConnect(company.id, {
-              pullFullLedger: true,
-              timeoutMs: 120_000,
-              plServerGate: gate,
-            });
-            if (!pulled.ok) {
-              toast({
-                variant: "destructive",
-                title: "Could not load company data",
-                description: "Server ledger sync failed. Try Gate → Test, then open the company again.",
-              });
-              return;
-            }
-          }
-        }
-        setCompanyId(company.id);
-        router.push("/dashboard");
-        return;
+          setCompanyId(company.id);
+          router.push("/dashboard");
+          schedulePlServerCompanyWarmupAfterSelect(company.id, gate, "CompanySelector");
+          return;
       }
+    }
     }
     // Online company: pehle se valid "remember company password" window — dialog skip
     if (isServerGateCompany(company)) {
@@ -885,28 +903,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         const gate = resolveServerGateForCompany(
           company as CompanyData & { plServerGateId?: string; plServerGateServerUrl?: string }
         );
-        const { ensurePlServerHubGateReadyForStaffConnect, preparePlServerStaffCompanyConnect } = await import(
-          "@/lib/plServerStaffCompanyConnect"
-        );
-        const { plServerCompanyLedgerNeedsFullPull } = await import("@/lib/plServerLedgerDeltaGate");
-        await ensurePlServerHubGateReadyForStaffConnect(gate);
-        if (await plServerCompanyLedgerNeedsFullPull(company.id)) {
-          const pulled = await preparePlServerStaffCompanyConnect(company.id, {
-            pullFullLedger: true,
-            timeoutMs: 120_000,
-            plServerGate: gate,
-          });
-          if (!pulled.ok) {
-            toast({
-              variant: "destructive",
-              title: "Could not load company data",
-              description: "Server ledger sync failed. Try Gate → Test, then open the company again.",
-            });
-            return;
-          }
-        }
         setCompanyId(company.id);
         router.push("/dashboard");
+        schedulePlServerCompanyWarmupAfterSelect(company.id, gate, "CompanySelector");
         return;
       }
       if (
@@ -920,28 +919,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         const gate = resolveServerGateForCompany(
           company as CompanyData & { plServerGateId?: string; plServerGateServerUrl?: string }
         );
-        const { ensurePlServerHubGateReadyForStaffConnect, preparePlServerStaffCompanyConnect } = await import(
-          "@/lib/plServerStaffCompanyConnect"
-        );
-        const { plServerCompanyLedgerNeedsFullPull } = await import("@/lib/plServerLedgerDeltaGate");
-        await ensurePlServerHubGateReadyForStaffConnect(gate);
-        if (await plServerCompanyLedgerNeedsFullPull(company.id)) {
-          const pulled = await preparePlServerStaffCompanyConnect(company.id, {
-            pullFullLedger: true,
-            timeoutMs: 120_000,
-            plServerGate: gate,
-          });
-          if (!pulled.ok) {
-            toast({
-              variant: "destructive",
-              title: "Could not load company data",
-              description: "Server ledger sync failed. Try Gate → Test, then open the company again.",
-            });
-            return;
-          }
-        }
         setCompanyId(company.id);
         router.push("/dashboard");
+        schedulePlServerCompanyWarmupAfterSelect(company.id, gate, "CompanySelector");
         return;
       }
       setCompanyToUnlock(company);
@@ -2140,57 +2120,19 @@ export function CompanyActions({
           const gate = resolveServerGateForCompany(
             selectedCompany as CompanyData & { plServerGateId?: string; plServerGateServerUrl?: string }
           );
-          const { ensurePlServerHubGateReadyForStaffConnect, preparePlServerStaffCompanyConnect } = await import(
-            "@/lib/plServerStaffCompanyConnect"
-          );
-          const { plServerCompanyLedgerNeedsFullPull } = await import("@/lib/plServerLedgerDeltaGate");
-          await ensurePlServerHubGateReadyForStaffConnect(gate);
-          if (await plServerCompanyLedgerNeedsFullPull(selectedCompany.id)) {
-            const pulled = await preparePlServerStaffCompanyConnect(selectedCompany.id, {
-              pullFullLedger: true,
-              timeoutMs: 120_000,
-              plServerGate: gate,
-            });
-            if (!pulled.ok) {
-              toast({
-                variant: "destructive",
-                title: "Could not load company data",
-                description: "Server ledger sync failed. Try Gate → Test, then open the company again.",
-              });
-              return;
-            }
-          }
-        }
-        setCompanyId(selectedCompany.id);
-        return;
+          setCompanyId(selectedCompany.id);
+          schedulePlServerCompanyWarmupAfterSelect(selectedCompany.id, gate, "CompanyActions");
+          return;
       }
+    }
     }
     if (isServerGateCompany(selectedCompany)) {
       if (getLocalAuthToken(selectedCompany.id)) {
         const gate = resolveServerGateForCompany(
           selectedCompany as CompanyData & { plServerGateId?: string; plServerGateServerUrl?: string }
         );
-        const { ensurePlServerHubGateReadyForStaffConnect, preparePlServerStaffCompanyConnect } = await import(
-          "@/lib/plServerStaffCompanyConnect"
-        );
-        const { plServerCompanyLedgerNeedsFullPull } = await import("@/lib/plServerLedgerDeltaGate");
-        await ensurePlServerHubGateReadyForStaffConnect(gate);
-        if (await plServerCompanyLedgerNeedsFullPull(selectedCompany.id)) {
-          const pulled = await preparePlServerStaffCompanyConnect(selectedCompany.id, {
-            pullFullLedger: true,
-            timeoutMs: 120_000,
-            plServerGate: gate,
-          });
-          if (!pulled.ok) {
-            toast({
-              variant: "destructive",
-              title: "Could not load company data",
-              description: "Server ledger sync failed. Try Gate → Test, then open the company again.",
-            });
-            return;
-          }
-        }
         setCompanyId(selectedCompany.id);
+        schedulePlServerCompanyWarmupAfterSelect(selectedCompany.id, gate, "CompanyActions");
         return;
       }
       if (!(await shouldPromptCompanyUnlockAsync(selectedCompany, user?.email, user?.uid, false))) {
@@ -2200,27 +2142,8 @@ export function CompanyActions({
         const gate = resolveServerGateForCompany(
           selectedCompany as CompanyData & { plServerGateId?: string; plServerGateServerUrl?: string }
         );
-        const { ensurePlServerHubGateReadyForStaffConnect, preparePlServerStaffCompanyConnect } = await import(
-          "@/lib/plServerStaffCompanyConnect"
-        );
-        const { plServerCompanyLedgerNeedsFullPull } = await import("@/lib/plServerLedgerDeltaGate");
-        await ensurePlServerHubGateReadyForStaffConnect(gate);
-        if (await plServerCompanyLedgerNeedsFullPull(selectedCompany.id)) {
-          const pulled = await preparePlServerStaffCompanyConnect(selectedCompany.id, {
-            pullFullLedger: true,
-            timeoutMs: 120_000,
-            plServerGate: gate,
-          });
-          if (!pulled.ok) {
-            toast({
-              variant: "destructive",
-              title: "Could not load company data",
-              description: "Server ledger sync failed. Try Gate → Test, then open the company again.",
-            });
-            return;
-          }
-        }
         setCompanyId(selectedCompany.id);
+        schedulePlServerCompanyWarmupAfterSelect(selectedCompany.id, gate, "CompanyActions");
         return;
       }
       setCompanyToUnlock(selectedCompany);

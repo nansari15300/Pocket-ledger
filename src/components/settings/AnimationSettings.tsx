@@ -244,12 +244,17 @@ export function AnimationSettings({ localPersistenceOnly }: { localPersistenceOn
                       {demoListItems.map((item) => (
                         <motion.div
                           key={item.id}
-                          layout
+                          layout="position"
+                          layoutDependency={demoListItems.map((d) => d.id).join("|")}
                           initial={false}
                           exit={{ transition: { duration: 0 } }}
-                          transition={{ 
+                          transition={{
                             duration: activeSettings.rows.enabled === true ? activeSettings.rows.duration : 0,
-                            ease: "easeInOut"
+                            ease: "easeInOut",
+                            layout: {
+                              duration: activeSettings.rows.enabled === true ? activeSettings.rows.duration : 0,
+                              ease: "easeInOut",
+                            },
                           }}
                         >
                           <Card className="p-2 border">

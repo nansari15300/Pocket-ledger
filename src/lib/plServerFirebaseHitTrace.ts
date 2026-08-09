@@ -61,6 +61,57 @@ export function looksLikeFirebaseStorageUrlOrPath(raw: string): boolean {
   return false;
 }
 
+/**
+ * Console noise: plan / auth / users / non-ledger Firestore hide.
+ * Company masters + vouchers (+ storage) hits log me dikhao.
+ */
+export function shouldSuppressPlFirebaseHitConsoleLog(urlOrPath: string, kind: PlFirebaseHitKind): boolean {
+  const raw = String(urlOrPath || "");
+  const l = raw.toLowerCase();
+  if (!l) return true;
+
+  // Auth / install / App Check — company ledger nahi
+  if (
+    l.includes("identitytoolkit.googleapis.com") ||
+    l.includes("securetoken.googleapis.com") ||
+    l.includes("firebaseinstallations.googleapis.com") ||
+    l.includes("firebaseappcheck.googleapis.com") ||
+    l.includes("firebaselogging") ||
+    l.includes("firebaseremoteconfig")
+  ) {
+    return true;
+  }
+
+  // Storage company bytes — hamesha dikhao (expected isolation signal)
+  if (kind === "storage_https" || kind === "storage_object_path" || kind === "storage_getDownloadURL") {
+    return false;
+  }
+  if (looksLikeFirebaseStorageUrlOrPath(raw)) return false;
+
+  if (l.includes("firestore.googleapis.com") || kind === "firestore_companies" || kind === "firestore_other") {
+    // Plan / users / billing — hide
+    if (
+      l.includes("plans") ||
+      l.includes("billing") ||
+      l.includes("stripe") ||
+      l.includes("%2fusers%2f") ||
+      l.includes("/users/") ||
+      l.includes("collectionid%3dusers") ||
+      l.includes("collectionid=users")
+    ) {
+      return true;
+    }
+    // Only company ledger subcollections (masters / vouchers)
+    const ledgerish =
+      /(vouchers|parties|groups|taxes|staff|accounts|bank_accounts|expense|items|journals|recurring)/i.test(
+        l
+      );
+    return !ledgerish;
+  }
+
+  return false;
+}
+
 export function tracePlServerFirebaseHit(
   kind: PlFirebaseHitKind,
   detail: {
@@ -70,25 +121,9 @@ export function tracePlServerFirebaseHit(
     action?: "blocked" | "logged" | "allowed_sidechannel";
   }
 ): void {
-  if (!shouldLogFirebaseHitsOnPlServerGate()) return;
-  const action = detail.action ?? "logged";
-  const tag = action === "blocked" ? "[PL_BLOCK_FIREBASE]" : "[PL_FIREBASE_HIT]";
-  let gateType = "?";
-  try {
-    gateType = getActiveGate().type;
-  } catch {
-    /* ignore */
-  }
-  console.warn(tag, {
-    kind,
-    source: detail.source,
-    action,
-    url: detail.url ? String(detail.url).slice(0, 220) : undefined,
-    path: detail.path ? String(detail.path).slice(0, 220) : undefined,
-    gate: gateType,
-    thinStaff: isPlServerThinStaffClient(),
-    href: typeof window !== "undefined" ? window.location.href : "",
-  });
+  // Console flood off — callers still use shouldBlock* for real blocking.
+  void kind;
+  void detail;
 }
 
 /**

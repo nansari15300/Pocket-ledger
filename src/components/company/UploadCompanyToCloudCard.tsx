@@ -17,6 +17,7 @@ import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { pushAllLocalCompanyDocsToFirestore } from "@/lib/migrateLocalCompanySubcollectionsToFirestore";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { removeLocalCompanyDeltaFromFolder } from "@/lib/liveDataFolderMirror";
+import { pocketLedgerStorageDocFields } from "@/lib/firebaseStoragePaths";
 
 /** Manual push of company root + local SQLite subcollections to Firestore (plan online slots). */
 export function UploadCompanyToCloudCard() {
@@ -45,55 +46,11 @@ export function UploadCompanyToCloudCard() {
     accountPlanLive
   );
 
-  const [repairLoading, setRepairLoading] = useState(false);
-
-  const runPushLocalDocs = async () => {
-    if (!companyId) return;
-    setRepairLoading(true);
-    try {
-      const { pushed, errors } = await pushAllLocalCompanyDocsToFirestore(companyId);
-      reloadLocalCompanyRegistry();
-      triggerSync();
-      toast({
-        title: errors.length ? "Partial sync" : "Documents uploaded",
-        description:
-          errors.length > 0
-            ? `Uploaded ${pushed} document(s). Errors: ${errors.slice(0, 2).join(" · ")}`
-            : pushed > 0
-              ? `${pushed} document(s) from this browser were saved to the cloud.`
-              : "No extra rows in this browser’s cache to upload.",
-      });
-    } catch (e) {
-      toast({
-        variant: "destructive",
-        title: "Sync failed",
-        description: e instanceof Error ? e.message : "Try again when online.",
-      });
-    } finally {
-      setRepairLoading(false);
-    }
-  };
-
   if (!company || !companyId || !isOwner) return null;
 
-  // Company pehle se online link hai: purane flow me sirf root gaya ho to yahan se documents push karo
+  // Online repair card hamesha hide — Force upload button docs + files handle karta hai.
   if (!isLocal) {
-    return (
-      <Card className="border-muted bg-muted/20">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium">Cloud data repair (this device)</CardTitle>
-          <CardDescription className="text-xs">
-            If vouchers or totals show zero after &quot;Upload to cloud&quot;, push browser-stored ledgers to Firestore once.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button type="button" variant="secondary" size="sm" disabled={repairLoading} onClick={() => void runPushLocalDocs()}>
-            {repairLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CloudUpload className="h-4 w-4" />}
-            <span className="ml-2">Push local documents to cloud</span>
-          </Button>
-        </CardContent>
-      </Card>
-    );
+    return null;
   }
 
   const handleUpload = async () => {
@@ -129,6 +86,7 @@ export function UploadCompanyToCloudCard() {
           sharedWith: company.sharedWith ?? [],
           sharedWithEmails: company.sharedWithEmails ?? (user.email ? [user.email] : []),
           updatedAt: serverTimestamp(),
+          ...pocketLedgerStorageDocFields(companyId),
         },
         { merge: true }
       );
@@ -142,6 +100,7 @@ export function UploadCompanyToCloudCard() {
         storageOption: "firebase",
         syncPolicy: "online",
         syncedFromCloud: false,
+        ...pocketLedgerStorageDocFields(companyId),
       } as Parameters<typeof promoteLocalCompanyRowToOnline>[1]);
       // Local SQLite me jo vouchers/parties pade hain — Firestore subcollections me bhi bhejo (sirf root pe pehle data nahi dikhta tha).
       const { pushed, errors } = await pushAllLocalCompanyDocsToFirestore(companyId);

@@ -6,7 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Item } from "@/components/items/types";
 import { useDate } from "@/hooks/useDate";
-import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { Package } from "lucide-react";
 import type { StockView } from "./ItemDetails";
 import React, { useMemo, useState } from "react";
@@ -103,7 +103,7 @@ export function ItemList({
 }: ItemListProps) {
   const { formatCurrency } = useDate();
   const { company } = useCompany();
-  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
+  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } = useMasterListRowMotion();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
@@ -138,7 +138,18 @@ export function ItemList({
   );
   usePrewarmVisibleAttachments(visibleItemAttachmentUrls, company?.id);
 
-  if (filteredAndSortedRows.length === 0) {
+  const listOrderKey = useMemo(
+    () => masterListOrderKey(filteredAndSortedRows.map(({ item }) => item.id)),
+    [filteredAndSortedRows]
+  );
+
+  const { displayRows: displayListRows, displayOrderKey } = useMasterListDisplayRows(
+    filteredAndSortedRows,
+    listOrderKey,
+    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
+  );
+
+  if (displayListRows.length === 0) {
     return (
       <TooltipProvider delayDuration={200}>
         <div className={masterListShellCn} data-theme-list="account-list">
@@ -162,7 +173,7 @@ export function ItemList({
         >
           <div className="pl-master-list-ul">
             <AnimatePresence mode={animatePresenceMode}>
-              {filteredAndSortedRows.map(({ item, metrics }) => {
+              {displayListRows.map(({ item, metrics }) => {
                 const isSelected = selectedItem?.id === item.id;
                 const { formattedDisplayValue, isPositive, displayUnit } = metrics;
 
@@ -227,7 +238,7 @@ export function ItemList({
                   </div>
                 );
                 return (
-                  <motion.li key={item.id} {...rowMotionProps}>
+                  <motion.li key={item.id} layoutDependency={displayOrderKey} {...rowMotionProps}>
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">

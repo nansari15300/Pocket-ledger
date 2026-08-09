@@ -20,16 +20,14 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Loader2, Trash2, CalendarIcon, PlusCircle, CheckCircle, History, Printer } from "lucide-react";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
 import { FilePreview } from "./FilePreview";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
-import {
-  convertPdfAttachmentsToJpegIfEnabled,
-  shouldSuggestPdfAsImage,
-} from "@/lib/voucherAttachmentPdfAsImage";
+import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
+import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -48,7 +46,7 @@ import { Calendar } from "../ui/calendar";
 import { format, startOfDay } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
@@ -58,7 +56,7 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
+import { applyVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
 import { toast as sonnerToast } from "sonner";
 import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -167,6 +165,7 @@ export function CreateNoteForm({
   const { can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const isMobile = useIsMobile();
   const [isLoading, setIsLoading] = useState(false);
+  const isAttachmentProcessing = useVoucherAttachmentProcessing();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [parties, setParties] = useState<Party[]>([]);
@@ -459,6 +458,7 @@ export function CreateNoteForm({
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!allowAttachments) return;
     await handleVoucherAttachmentInputChange(e, {
+      companyId,
       currentFiles: files,
       maxFiles: fileAttachmentLimits.maxFileCount || 0,
       allowImage: fileAttachmentLimits.allowImage,
@@ -483,6 +483,10 @@ export function CreateNoteForm({
 
   async function processAndSave(values: NoteFormValues, saveAndNew: boolean = false, onSuccess?: () => void, approveAfterSave?: boolean, saveAndPrint?: boolean) {
     if (!user || !companyId) return;
+    if (isAttachmentProcessing) {
+      sonnerToast.message("Please wait", { description: "File compression is still running." });
+      return;
+    }
     
     try {
       // Permission check: create or edit
@@ -531,15 +535,10 @@ export function CreateNoteForm({
     setIsLoading(true);
 
     try {
-        let filesForSave = files;
-        if (savePdfAsImage) {
-          const convToast = sonnerToast.loading("Converting PDF attachments to image…");
-          try {
-            filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
-          } finally {
-            sonnerToast.dismiss(convToast);
-          }
-        }
+        const filesForSave = await prepareVoucherAttachmentsForSave(files, {
+          companyId,
+          savePdfAsImage,
+        });
 
         let fileUrls = [...filesForSave.filter(f => typeof f === 'string')];
         let preGeneratedVoucherId: string | undefined;
@@ -577,9 +576,11 @@ export function CreateNoteForm({
             }
           } else {
             for (const file of toUpload) {
-              const storageRef = ref(storage, `voucher-files/${companyId}/note/${Date.now()}_${file.name}`);
-              const snapshot = await uploadBytes(storageRef, file);
-              const url = await getDownloadURL(snapshot.ref);
+              const url = await uploadVoucherAttachmentFileToFirebase({
+                companyId,
+                voucherType: "note",
+                file,
+              });
               fileUrls.push(url);
               await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
             }
@@ -646,9 +647,8 @@ export function CreateNoteForm({
         }
 
         const postSaveTail = async () => {
-          if (approveBanner && !isEdit) {
-            await approveVoucherWithHistory(companyId, docId!, user.uid, approverName);
-          }
+          // New create: saveVoucher(approveAfterSave) already wrote isApproved — do not
+          // call approveVoucherWithHistory (Firestore lookup races "Voucher not found").
           if (saveAndNew) {
             form.reset(getInitialFormValues(initialContext, initialEntityId));
             setFiles([]);
@@ -1007,6 +1007,7 @@ export function CreateNoteForm({
                           key={idx} 
                           file={file} 
                           attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
+                        attachmentReusePlaceKey={voucher?.id ? `vouchers/${voucher.id}` : null}
                           onRemove={
                             allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete
                               ? () => setFiles((prev) => prev.filter((_, i) => i !== idx))
@@ -1027,6 +1028,7 @@ export function CreateNoteForm({
                             }}
                             onPastedFiles={(incoming) =>
                               void appendCompressedVoucherAttachmentsToState({
+                                companyId,
                                 incomingFiles: incoming,
                                 currentFiles: files,
                                 maxFiles: fileAttachmentLimits.maxFileCount || 0,
@@ -1103,17 +1105,17 @@ export function CreateNoteForm({
                       </AlertDialogContent>
                     </AlertDialog>
                     <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS, (!voucher || !showHistoryButton || !onOpenHistory) && "opacity-60")}>History</Button>
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_PRINT_CLASS)}>Save & Print</Button>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("w-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("w-full", BTN_PRINT_CLASS)}>Save & Print</Button>
                   </>
                 )}
                 {/* Mobile row: Cancel | Save | Approve — approve daayen (baaki forms jaisa) */}
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>Cancel</Button>
-                <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>{isLoading ? "..." : "Save"}</Button>
+                <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>{isLoading ? "..." : "Save"}</Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>{isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}</Button>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || isAttachmentProcessing || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>{isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}</Button>
                 ) : canShowCreateApproveButton ? (
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!canApproveTransactions || isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_APPROVE_CLASS)}>{isLoading ? "..." : "Save & Approve"}</Button>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!canApproveTransactions || isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("w-full", BTN_APPROVE_CLASS)}>{isLoading ? "..." : "Save & Approve"}</Button>
                 ) : (
                   <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">—</Button>
                 )}
@@ -1146,16 +1148,16 @@ export function CreateNoteForm({
                 )}
                 <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>Cancel</Button>
-                  {!useCompactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>}
-                  {!useCompactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}><Printer className="mr-2 h-4 w-4" /> Save & Print</Button>}
-                  <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>{isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save</Button>
+                  {!useCompactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>}
+                  {!useCompactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}><Printer className="mr-2 h-4 w-4" /> Save & Print</Button>}
+                  <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>{isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save</Button>
                   {voucher?.id ? (
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || isAttachmentProcessing || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                       {isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                   ) : (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!canShowCreateApproveButton || !canApproveTransactions || isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!canShowCreateApproveButton || !canApproveTransactions || isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & Approve
                     </Button>

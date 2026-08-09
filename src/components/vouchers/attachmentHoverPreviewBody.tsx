@@ -754,6 +754,20 @@ export function LocalFileRefTooltipPreview({
             signal: ac.signal,
           });
         }
+        if (
+          !blob?.size &&
+          /^https?:\/\//i.test(effectiveUrl) &&
+          !ac.signal.aborted
+        ) {
+          try {
+            blob = await getRemoteAttachmentBlobPreferOfflineCache(effectiveUrl, ac.signal, {
+              companyId: cid,
+              explicitUserRequest: true,
+            });
+          } catch {
+            /* fall through */
+          }
+        }
         if (cancelled) return;
         if (!blob || blob.size === 0) {
           setState((prev) => (prev.status === "ready" ? prev : { status: "error" }));
@@ -870,8 +884,12 @@ export function LocalFileRefTooltipPreview({
   }
 
   const { objectUrl, mime } = state;
-  const isImage = mime.startsWith("image/");
   const isPdf = mime === "application/pdf" || mime.includes("pdf");
+  // Cell-thumb JPEG / sniff miss pe bhi image dikhao — Open file pe pehle se chal raha tha.
+  const isImage =
+    mime.startsWith("image/") ||
+    Boolean(state.fromCellThumb) ||
+    (!isPdf && (mime === "application/octet-stream" || mime === "binary/octet-stream") && Boolean(objectUrl));
   const cellThumbForPdf =
     isPdf || state.fromCellThumb
       ? peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`)
@@ -1003,12 +1021,11 @@ export function SingleAttachmentHoverPreviewBody({
   const storagePathRaw = !usesDeviceBlobPreview ? tryGetStoragePathFromFirebaseDownloadUrl(u) : null;
   const pathLower = (storagePathRaw || "").toLowerCase();
   const fmt = getAttachmentFormatLabel(effectiveUrl || u);
-  const isImage =
-    !usesDeviceBlobPreview &&
-    (["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG", "HEIC", "HEIF"].includes(fmt) ||
-      u.startsWith("data:image/") ||
-      effectiveUrl.startsWith("data:image/") ||
-      /\.(jpe?g|png|gif|webp|bmp|svg)(\?|$)/i.test(cleanUrl));
+  const cachedCellThumb = peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`);
+  const cachedFullHover = peekHoverCachedBlobUrl(effectiveUrl);
+  const pathLooksImage =
+    /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif|avif|tiff)(\?|$)/i.test(pathLower) ||
+    /\.(jpe?g|png|gif|webp|bmp|svg)(\?|$)/i.test(cleanUrl);
   const isPdf =
     !usesDeviceBlobPreview &&
     (fmt === "PDF" ||
@@ -1017,10 +1034,26 @@ export function SingleAttachmentHoverPreviewBody({
       cleanUrl.endsWith(".pdf") ||
       effectiveUrl.toLowerCase().includes(".pdf") ||
       pathLower.includes(".pdf"));
+  // Firebase signed URLs aksar bina `.jpg` ke aate hain — File column thumb IMAGE dikhata hai, portal FILE sochta tha.
+  const isImage =
+    !usesDeviceBlobPreview &&
+    !isPdf &&
+    (["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG", "HEIC", "HEIF", "IMAGE"].includes(fmt) ||
+      u.startsWith("data:image/") ||
+      effectiveUrl.startsWith("data:image/") ||
+      pathLooksImage ||
+      Boolean(cachedCellThumb) ||
+      Boolean(cachedFullHover));
+  /** Extension-less https — Open file chalega; blob sniff se image/pdf decide. */
+  const tryHttpsBlobPreview =
+    !usesDeviceBlobPreview &&
+    !isImage &&
+    !isPdf &&
+    /^https?:\/\//i.test(effectiveUrl);
   const galleryOpts = gallery;
   const openAtt = () =>
     void openAttachmentInApp(effectiveUrl, {
-      kind: isImage ? "image" : isPdf ? "pdf" : "other",
+      kind: isImage || tryHttpsBlobPreview ? "image" : isPdf ? "pdf" : "other",
       localLedgerOnly,
       gateCompany: company,
       gallery:
@@ -1039,12 +1072,24 @@ export function SingleAttachmentHoverPreviewBody({
             ? { companyId: company.id, voucherId: "" }
             : undefined,
     });
-  const caption = usesDeviceBlobPreview ? (isPdf ? "PDF" : fmt === "FILE" ? "" : fmt) : isPdf ? "PDF" : fmt;
+  const caption = usesDeviceBlobPreview
+    ? isPdf
+      ? "PDF"
+      : fmt === "FILE"
+        ? ""
+        : fmt
+    : isPdf
+      ? "PDF"
+      : isImage || tryHttpsBlobPreview
+        ? fmt === "FILE"
+          ? "IMAGE"
+          : fmt
+        : fmt;
 
   /** Bahar AttachmentHoverPortal — yahi markup FilePreview hoverPanel ke image branch jaisa (taaki zoom/width sahi) */
   return (
     <div className="flex w-max max-w-none flex-col gap-1">
-      {usesDeviceBlobPreview ? (
+      {usesDeviceBlobPreview || tryHttpsBlobPreview ? (
         <LocalFileRefTooltipPreview
           url={u}
           gallery={galleryOpts}

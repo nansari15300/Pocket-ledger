@@ -20,15 +20,21 @@ type ElectronSnapshotBridge = {
   saveShareableCompaniesSnapshot?: (companies: ShareableCompanySnapshotRow[]) => Promise<{ ok?: boolean }>;
 };
 
+let lastPersistedSnapshotJson = "";
+
 /** Dev bridge (Next API) ya EXE IPC — host shareable company cache update. */
 export async function persistShareableCompaniesSnapshot(
   companies: ShareableCompanySnapshotRow[]
 ): Promise<void> {
   if (typeof window === "undefined" || !Array.isArray(companies) || companies.length === 0) return;
 
+  const snapshotJson = JSON.stringify(companies);
+  if (snapshotJson === lastPersistedSnapshotJson) return;
+
   const bridge = (window as Window & { plElectronLocalServer?: ElectronSnapshotBridge }).plElectronLocalServer;
   if (bridge?.saveShareableCompaniesSnapshot) {
     await bridge.saveShareableCompaniesSnapshot(companies).catch(() => undefined);
+    lastPersistedSnapshotJson = snapshotJson;
     return;
   }
 
@@ -39,4 +45,5 @@ export async function persistShareableCompaniesSnapshot(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action: "saveShareableCompaniesSnapshot", companies }),
   }).catch(() => undefined);
+  lastPersistedSnapshotJson = snapshotJson;
 }

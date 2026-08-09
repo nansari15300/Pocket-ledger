@@ -62,6 +62,17 @@ const baseConfig: NextConfig = {
         }),
       };
     }
+    // Dev PL userdata writes under `.data/` must not invalidate the bundle watcher.
+    const prevIgnored = config.watchOptions?.ignored;
+    const extraIgnored = ["**/.data/**", "**/.codex-dev-server*.log"];
+    config.watchOptions = {
+      ...config.watchOptions,
+      ignored: Array.isArray(prevIgnored)
+        ? [...prevIgnored, ...extraIgnored]
+        : prevIgnored
+          ? [prevIgnored, ...extraIgnored]
+          : ["**/node_modules/**", "**/.git/**", "**/.next/**", ...extraIgnored],
+    };
     return config;
   },
 };

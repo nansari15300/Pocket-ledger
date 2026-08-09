@@ -32,6 +32,13 @@ import { openPrintDirect } from "@/lib/printDirect";
 import { resolveLedgerRowToVoucherId } from "@/lib/resolveLedgerVoucherId";
 import { getFiscalMergePartitionDateFromCompany } from "@/lib/fiscalPartitionRows";
 import { buildBankAccountSpendWiseRows } from "@/lib/buildBankAccountSpendWiseRows";
+import { BankLedgerDrCrPerspectiveSwitch } from "@/components/bank-cash/BankLedgerDrCrPerspectiveSwitch";
+import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
+import {
+  applyBankDrCrPerspectiveToTxnRows,
+  flipLedgerDrCr,
+  flipLedgerSignedBalance,
+} from "@/lib/bankLedgerDrCrPerspective";
 import { useSpendWiseBlinkMode } from "@/components/vouchers/transactionColumnVisibility";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
@@ -125,6 +132,8 @@ export default function DesktopBankStatementPage() {
     });
   }, []);
   const { spendWiseBlinkMode } = useSpendWiseBlinkMode();
+  const { perspective: bankDrCrPerspective, setPerspective: setBankDrCrPerspective } =
+    useBankLedgerDrCrPerspective();
 
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<AccountGroup | null>(null);
@@ -329,7 +338,20 @@ export default function DesktopBankStatementPage() {
     });
   }, [tableTransactions, spendWiseBuiltRows, transactionSearch]);
 
-  const bankStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${spendWiseActive ? "sw" : "st"}`;
+  const bankDrCrApplies = !!selectedAccount;
+  const activeBankDrCrPerspective = bankDrCrApplies ? bankDrCrPerspective : "company";
+  const displayTableRowsForPerspective = useMemo(
+    () => applyBankDrCrPerspectiveToTxnRows(displayTableRows as any[], activeBankDrCrPerspective),
+    [displayTableRows, activeBankDrCrPerspective]
+  );
+  const displayOpeningBalanceForPeriod = flipLedgerSignedBalance(
+    openingBalanceForPeriod,
+    activeBankDrCrPerspective
+  );
+  const displayPeriodTotals = flipLedgerDrCr(periodDr, periodCr, activeBankDrCrPerspective);
+  const displayClosingBalance = flipLedgerSignedBalance(closingBalance, activeBankDrCrPerspective);
+
+  const bankStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${spendWiseActive ? "sw" : "st"}|${activeBankDrCrPerspective}`;
   const {
     pagingMeta: bankStatementMobilePaging,
     pagerPage: bankReportPagerPage,
@@ -345,6 +367,28 @@ export default function DesktopBankStatementPage() {
     closingBalance,
     resetKey: bankStatementMobilePagingKey,
   });
+
+  const displayMobilePageTransactions = useMemo(
+    () =>
+      applyBankDrCrPerspectiveToTxnRows(
+        (bankStatementMobilePaging.pageTransactions || []) as any[],
+        activeBankDrCrPerspective
+      ),
+    [bankStatementMobilePaging.pageTransactions, activeBankDrCrPerspective]
+  );
+  const displayMobilePageOpening = flipLedgerSignedBalance(
+    bankStatementMobilePaging.openingForPage,
+    activeBankDrCrPerspective
+  );
+  const displayMobilePagePeriod = flipLedgerDrCr(
+    bankStatementMobilePaging.periodDrForPage,
+    bankStatementMobilePaging.periodCrForPage,
+    activeBankDrCrPerspective
+  );
+  const displayMobilePageClosing = flipLedgerSignedBalance(
+    bankStatementMobilePaging.closingForPage,
+    activeBankDrCrPerspective
+  );
 
   const summaryData = useMemo(() => {
     if (!activeEntity) return { sales: 0, purchases: 0, moneyIn: 0, moneyOut: 0 };
@@ -363,13 +407,32 @@ export default function DesktopBankStatementPage() {
 
   const summaryCards = useMemo(
     () => [
-      { title: "Balance", amount: closingBalance, color: closingBalance >= 0 ? "text-green-600" : "text-red-600" },
+      {
+        title: "Balance",
+        amount: selectedAccount
+          ? flipLedgerSignedBalance(closingBalance, bankDrCrPerspective)
+          : closingBalance,
+        color:
+          (selectedAccount
+            ? flipLedgerSignedBalance(closingBalance, bankDrCrPerspective)
+            : closingBalance) >= 0
+            ? "text-green-600"
+            : "text-red-600",
+      },
       { title: "Sales", amount: summaryData.sales, color: "text-green-600" },
       { title: "Purchases", amount: summaryData.purchases, color: "text-red-600" },
       { title: "Money In", amount: summaryData.moneyIn, color: "text-green-600" },
       { title: "Money Out", amount: summaryData.moneyOut, color: "text-red-600" },
     ],
-    [closingBalance, summaryData.sales, summaryData.purchases, summaryData.moneyIn, summaryData.moneyOut]
+    [
+      closingBalance,
+      summaryData.sales,
+      summaryData.purchases,
+      summaryData.moneyIn,
+      summaryData.moneyOut,
+      selectedAccount,
+      bankDrCrPerspective,
+    ]
   );
 
   const handlePrint = () => {
@@ -692,6 +755,15 @@ export default function DesktopBankStatementPage() {
         ) : (
           <>
             <MobileDetailSummaryCollapsible>
+            {selectedAccount ? (
+              <div className="flex justify-end pb-1">
+                <BankLedgerDrCrPerspectiveSwitch
+                  compact
+                  perspective={bankDrCrPerspective}
+                  onPerspectiveChange={setBankDrCrPerspective}
+                />
+              </div>
+            ) : null}
             <div className="flex flex-nowrap gap-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               {summaryCards.map((card) => (
                 <ReportSummaryCard key={card.title} title={card.title} amount={card.amount} color={card.color} />
@@ -704,12 +776,12 @@ export default function DesktopBankStatementPage() {
               {isMobile ? (
                 <div className="pb-4">
                   <TransactionsTable
-                    key={`bank-report-${activeEntity?.id ?? "none"}-${spendWiseActive ? "sw" : "st"}`}
-                    transactions={bankStatementMobilePaging.pageTransactions}
+                    key={`bank-report-${activeEntity?.id ?? "none"}-${spendWiseActive ? "sw" : "st"}-${activeBankDrCrPerspective}`}
+                    transactions={displayMobilePageTransactions}
                     context={activeContext}
                     contextId={activeEntity?.id}
                     forceBalanceMode="statement"
-                    openingBalance={bankStatementMobilePaging.openingForPage}
+                    openingBalance={displayMobilePageOpening}
                     openingBalanceOutstanding={selectedAccount ? openingBalanceOutstanding : undefined}
                     openingBalanceLinkedVoucherNos={selectedAccount ? openingBalanceLinkedVoucherNos : undefined}
                     blinkMode={spendWiseActive ? spendWiseBlinkMode : undefined}
@@ -717,9 +789,9 @@ export default function DesktopBankStatementPage() {
                     journalAccountNames={journalAccountNames}
                     onRowClick={handleEditVoucher}
                     openingBalanceLabel="Opening"
-                    periodDr={bankStatementMobilePaging.periodDrForPage}
-                    periodCr={bankStatementMobilePaging.periodCrForPage}
-                    closingBalance={bankStatementMobilePaging.closingForPage}
+                    periodDr={displayMobilePagePeriod.debit}
+                    periodCr={displayMobilePagePeriod.credit}
+                    closingBalance={displayMobilePageClosing}
                     openingBalanceSearch={
                       <Input
                         placeholder="Search..."
@@ -732,12 +804,12 @@ export default function DesktopBankStatementPage() {
                 </div>
               ) : (
                 <TransactionsTable
-                  key={`bank-report-${activeEntity?.id ?? "none"}-${spendWiseActive ? "sw" : "st"}`}
-                  transactions={displayTableRows}
+                  key={`bank-report-${activeEntity?.id ?? "none"}-${spendWiseActive ? "sw" : "st"}-${activeBankDrCrPerspective}`}
+                  transactions={displayTableRowsForPerspective}
                   context={activeContext}
                   contextId={activeEntity?.id}
                   forceBalanceMode="statement"
-                  openingBalance={openingBalanceForPeriod}
+                  openingBalance={displayOpeningBalanceForPeriod}
                   openingBalanceOutstanding={selectedAccount ? openingBalanceOutstanding : undefined}
                   openingBalanceLinkedVoucherNos={selectedAccount ? openingBalanceLinkedVoucherNos : undefined}
                   blinkMode={spendWiseActive ? spendWiseBlinkMode : undefined}
@@ -745,6 +817,9 @@ export default function DesktopBankStatementPage() {
                   journalAccountNames={journalAccountNames}
                   onRowClick={handleEditVoucher}
                   openingBalanceLabel="Opening"
+                  periodDr={displayPeriodTotals.debit}
+                  periodCr={displayPeriodTotals.credit}
+                  closingBalance={displayClosingBalance}
                   openingBalanceSearch={
                     <Input
                       placeholder="Search..."

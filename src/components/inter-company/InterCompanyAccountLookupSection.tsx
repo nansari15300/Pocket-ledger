@@ -90,10 +90,10 @@ type Props = {
   companyAcNo?: string;
   companyMobile?: string;
   companyPan?: string;
-  onTrackCompanyByAcNo?: (acNo: string) => boolean;
+  onTrackCompanyByAcNo?: (acNo: string) => boolean | Promise<boolean>;
   onTrackCompanyByMobile?: (mobile: string) => boolean;
   /** Target account — company PAN se linked company track + entity fill */
-  onTrackCompanyByPan?: (pan: string) => boolean;
+  onTrackCompanyByPan?: (pan: string) => boolean | Promise<boolean>;
   disabledHint?: string;
   showDetails?: boolean;
   /** Target: linked companies par mobile / A/c search */
@@ -608,7 +608,7 @@ export function InterCompanyAccountLookupSection({
     if (kind === "company_inter_co") {
       const norm = normalizeInterCompanyAcNo(raw);
       setAccountAcInput(norm);
-      const ok = onTrackCompanyByAcNo?.(norm);
+      const ok = await onTrackCompanyByAcNo?.(norm);
       if (ok === false) toast.error("No company found for this company A/c No");
       // Company select ke baad companyPan/mobile se entity auto-fill effect chalega
       return;
@@ -734,7 +734,7 @@ export function InterCompanyAccountLookupSection({
       pickFromLocalEntities(local);
       return;
     }
-    if (onTrackCompanyByPan?.(pan)) {
+    if (await onTrackCompanyByPan?.(pan)) {
       pendingEntityLookupRef.current = { kind: "pan", value: pan };
       setAccountPanInput(pan);
       return;

@@ -10,6 +10,10 @@ import {
   isProfileAvatarImageFile,
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
+import {
+  captureEntityFormAttachmentBaseline,
+  finalizeFormAttachmentEditAfterSave,
+} from "@/lib/formAttachmentEditHelper";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
@@ -21,6 +25,7 @@ import {
   EntityOpeningBalanceNarrationField,
 } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
@@ -90,12 +95,13 @@ const MAX_FILE_SIZE_MB = 0.5;
 
 export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountDeleted, children, hasTransactions }: {
   account: ExpenseAccount;
-  onAccountUpdated: () => void;
+  onAccountUpdated: (updated?: Partial<ExpenseAccount>) => void;
   onAccountDeleted: (id: string) => void;
   children: React.ReactNode;
   hasTransactions: boolean;
 }) {
   const [isLoading, setIsLoading] = useState(false);
+  const isCompressing = useImageCompressionProcessing();
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
@@ -258,6 +264,10 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const accountRefSnap = account;
+    const attachmentBaselineSnap = captureEntityFormAttachmentBaseline({
+      fileUrl: initialFileRef.current,
+      documentFileUrls: initialDocUrlsRef.current,
+    });
 
     setIsOpen(false); // Master edit: backdrop hat turant; save async
 
@@ -267,11 +277,20 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
       const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
       setIsLoading(true);
       try {
-        let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
-        const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
-        const keptDocUrls = docSlotsSnap.filter((x): x is string => typeof x === "string");
+        const { prepareMasterEditAttachmentsForSave } = await import(
+          "@/lib/attachmentRecompressOnSave"
+        );
+        const prepared = await prepareMasterEditAttachmentsForSave({
+          companyId,
+          avatar: fileSnap,
+          documents: docSlotsSnap,
+        });
+        let fileUrl: string | null = typeof prepared.avatar === "string" ? prepared.avatar : null;
+        const newDocFiles = prepared.newDocFiles;
+        const keptDocUrls = prepared.keptDocUrls;
         const totalBytes =
-          (fileSnap instanceof File ? fileSnap.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+          (prepared.avatar instanceof File ? prepared.avatar.size : 0) +
+          newDocFiles.reduce((s, f) => s + f.size, 0);
         if (totalBytes > 0 && companyId) {
           const limitCheck = await checkStorageLimit(
             companyId,
@@ -285,7 +304,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           }
         }
 
-        const needAvatarUpload = fileSnap instanceof File && canAddAvatar;
+        const needAvatarUpload = prepared.avatar instanceof File && canAddAvatar;
         const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
         let documentFileUrls = [...keptDocUrls];
         if (companyId && (needAvatarUpload || needNewDocsUpload)) {
@@ -293,7 +312,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
             companyId,
             collectionSeg: "expense_accounts",
             entityId: accountRefSnap.id,
-            avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+            avatarFile: needAvatarUpload ? (prepared.avatar as File) : null,
             documentFiles: needNewDocsUpload ? newDocFiles : [],
           });
           if (st.fileUrl) fileUrl = st.fileUrl;
@@ -334,7 +353,17 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           setDocSlots(documentFileUrls);
           initialFileRef.current = fileUrl || null;
           initialDocUrlsRef.current = documentFileUrls;
-          onAccountUpdated();
+          finalizeFormAttachmentEditAfterSave({
+            companyId,
+            baselineUrls: attachmentBaselineSnap,
+            finalUrls: captureEntityFormAttachmentBaseline({ fileUrl, documentFileUrls }),
+            oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
+          });
+          onAccountUpdated({
+            id: accountRefSnap.id,
+            ...values,
+            fileUrl: fileUrl || "",
+          });
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
@@ -362,7 +391,17 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
         setDocSlots(documentFileUrls);
         initialFileRef.current = fileUrl || null;
         initialDocUrlsRef.current = documentFileUrls;
-        onAccountUpdated();
+        finalizeFormAttachmentEditAfterSave({
+          companyId,
+          baselineUrls: attachmentBaselineSnap,
+          finalUrls: captureEntityFormAttachmentBaseline({ fileUrl, documentFileUrls }),
+          oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
+        });
+        onAccountUpdated({
+          id: accountRefSnap.id,
+          ...values,
+          fileUrl: fileUrl || "",
+        });
         sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating account:", error);
@@ -479,16 +518,8 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
       return;
     }
     try {
-      const compressedFile = await compressFile(inputFile);
-      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-        toast({
-          variant: "destructive",
-          title: "File Too Large After Compression",
-          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-        });
-        e.target.value = "";
-        return;
-      }
+      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, companyId);
+      
       setFile(compressedFile);
     } catch (err) {
       console.error(err);
@@ -625,9 +656,13 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                 onRemoveAvatar={removeAvatar}
                 canAddAvatar={canAddAvatar}
                 inputId="edit-expense-avatar"
+                attachmentCompanyId={companyId ?? undefined}
+                attachmentReusePlaceKey={account.id ? `expense_accounts/${account.id}` : null}
               />
               <EntityDocumentsBlock
+                attachmentReusePlaceKey={account.id ? `expense_accounts/${account.id}` : null}
                 docSlots={docSlots}
+                setDocSlots={setDocSlots}
                 onRemoveDoc={removeDocAt}
                 onAddClick={() => docsInputRef.current?.click()}
                 docsInputRef={docsInputRef}
@@ -678,7 +713,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
+                <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>

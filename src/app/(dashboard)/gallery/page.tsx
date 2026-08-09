@@ -79,7 +79,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { firestore } from "@/lib/firebase";
 import { collection, onSnapshot, query, where, serverTimestamp, writeBatch, doc, orderBy, updateDoc, arrayRemove, getDoc, getDocs, deleteDoc, Timestamp } from "firebase/firestore";
 import { toast } from "sonner";
-import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { uploadFileClient, deleteFileFromStorageClient } from "@/lib/storageClient";
 import { checkStorageLimit, incrementCompanyStorage, decrementCompanyStorage } from "@/lib/storageUsageClient";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -95,6 +95,8 @@ import { canSyncCompanyToServer } from "@/lib/localVoucherOutbox";
 import { getPendingFiles, isLocalFileRef, LOCAL_FILE_PREFIX } from "@/lib/localPendingFiles";
 import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import { companyUsesLocalAttachmentSourcesOnly } from "@/lib/staticAttachmentDisplayUrl";
+import { FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT } from "@/lib/firebaseLedgerCompanySyncPrefs";
+import { setVisiblePageAttachmentUrls } from "@/lib/attachmentNetworkGate";
 
 
 const ATTACHABLE_VOUCHER_TYPES = [
@@ -396,9 +398,17 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
   const [pendingLocalLabelsByRef, setPendingLocalLabelsByRef] = useState<Record<string, string>>({});
   const fullPreviewBootstrapDoneRef = useRef(false);
   const { companyId, company } = useCompany();
+  const [filesTickEpoch, setFilesTickEpoch] = useState(0);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPrefs = () => setFilesTickEpoch((n) => n + 1);
+    window.addEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, onPrefs);
+    return () => window.removeEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, onPrefs);
+  }, []);
+  // SQLite-first Online companies: Files tick ON → network lazy load (not device-cache-only).
   const localAttachmentsOnly = React.useMemo(
     () => companyUsesLocalAttachmentSourcesOnly(company),
-    [company]
+    [company, filesTickEpoch]
   );
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const router = useRouter();
@@ -671,6 +681,11 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
     () => paginatedCompanyRows.map(({ url }) => String(url || "").trim()).filter(Boolean),
     [paginatedCompanyRows]
   );
+  // Web Files-tick lazy gate: current Gallery page URLs network-eligible.
+  useEffect(() => {
+    if (!companyId) return;
+    setVisiblePageAttachmentUrls(companyId, paginatedCompanyUrls);
+  }, [companyId, paginatedCompanyUrls, filesTickEpoch, localAttachmentsOnly]);
   // Page flip: warm current tiles (incl. PL-server `local:`) before/while FilePreview mounts.
   usePrewarmVisibleAttachments(paginatedCompanyUrls, companyId);
 
@@ -750,7 +765,9 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
     void (async () => {
       setPdfPrewarmLoading(true);
       try {
-        await prewarmPdfThumbnailsForGallery(entries, ac.signal, localAttachmentsOnly);
+        await prewarmPdfThumbnailsForGallery(entries, ac.signal, localAttachmentsOnly, {
+          companyId,
+        });
       } finally {
         setPdfPrewarmLoading(false);
         if (ac.signal.aborted) return;
@@ -1355,9 +1372,16 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   const isMobile = useIsMobile();
   const { user } = useAuth();
   const { company, companyId } = useCompany();
+  const [filesTickEpoch, setFilesTickEpoch] = useState(0);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPrefs = () => setFilesTickEpoch((n) => n + 1);
+    window.addEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, onPrefs);
+    return () => window.removeEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, onPrefs);
+  }, []);
   const localAttachmentsOnly = React.useMemo(
     () => companyUsesLocalAttachmentSourcesOnly(company),
-    [company]
+    [company, filesTickEpoch]
   );
   // Company users only: owner + shared (for user filter dropdown)
   const companyUserIds = useMemo(() => {
@@ -1585,7 +1609,12 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     let compressedFiles: File[] = [];
     let storeUnassignedOnDeviceOnly = false;
     try {
-      compressedFiles = await Promise.all(acceptedFiles.map(f => compressFile(f)));
+      compressedFiles = await Promise.all(
+        acceptedFiles.map(async (f) => {
+          const r = await compressImageForCompany(f, companyId);
+          return r.file;
+        })
+      );
       const fsIdForLimits = firestoreCompanyIdForGallery(companyId, company);
       storeUnassignedOnDeviceOnly =
         isLocalOnlyMode() && !(await canSyncCompanyToServer(companyId));
@@ -1796,6 +1825,13 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     () => paginatedUnassignedFiles.map((f) => f.url).join("\0"),
     [paginatedUnassignedFiles]
   );
+  const paginatedUnassignedUrls = useMemo(
+    () => paginatedUnassignedFiles.map((f) => String(f.url || "").trim()).filter(Boolean),
+    [paginatedUnassignedFiles]
+  );
+  useEffect(() => {
+    setVisiblePageAttachmentUrls(companyId, paginatedUnassignedUrls);
+  }, [companyId, paginatedUnassignedUrls, filesTickEpoch, localAttachmentsOnly]);
   const hasPdfToPrewarmUnassignedPage = useMemo(
     () =>
       paginatedUnassignedFiles.some((f) => {
@@ -1824,7 +1860,9 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     void (async () => {
       setPdfPrewarmLoading(true);
       try {
-        await prewarmPdfThumbnailsForGallery(entries, ac.signal, localAttachmentsOnly);
+        await prewarmPdfThumbnailsForGallery(entries, ac.signal, localAttachmentsOnly, {
+          companyId,
+        });
       } finally {
         setPdfPrewarmLoading(false);
         if (ac.signal.aborted) return;
@@ -1840,7 +1878,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
       }
     })();
     return () => ac.abort();
-  }, [isHydrated, unassignedPdfPrewarmKey, hasPdfToPrewarmUnassignedPage, localAttachmentsOnly]);
+  }, [isHydrated, unassignedPdfPrewarmKey, hasPdfToPrewarmUnassignedPage, localAttachmentsOnly, companyId]);
 
   useEffect(() => {
     if (unassignedFilesPage !== unassignedPageClamped) setUnassignedFilesPage(unassignedPageClamped);

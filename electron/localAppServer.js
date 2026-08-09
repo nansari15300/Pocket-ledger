@@ -1855,8 +1855,9 @@ function createRequestHandler(userDataPath) {
           }
           const companyId = String(body.companyId || companyIdParam || "").trim();
           const id = String(body.id || refParam || "").trim();
+          const action = String(body.action || "").trim().toLowerCase();
           const base64 = String(body.base64 || body.blob || "").trim();
-          if (!companyId || !id || !base64) {
+          if (!companyId || !id || (action !== "delete" && !base64)) {
             response.statusCode = 400;
             response.setHeader("content-type", "application/json; charset=utf-8");
             response.end(JSON.stringify({ ok: false, error: "missing_fields" }));
@@ -1872,7 +1873,8 @@ function createRequestHandler(userDataPath) {
           try {
             const result = await attachmentBlobWriteProvider(companyId, {
               id,
-              base64,
+              action: action === "delete" ? "delete" : undefined,
+              base64: action === "delete" ? undefined : base64,
               sha256Hex: body.sha256Hex || body.sha256,
               contentType: body.contentType,
               fileName: body.fileName,
@@ -1889,12 +1891,14 @@ function createRequestHandler(userDataPath) {
             }
             response.statusCode = 200;
             response.setHeader("content-type", "application/json; charset=utf-8");
-            recordServerClientTraffic(request, 0, {
-              companyId,
-              countUploadBytes: true,
-              uploadBytes: base64PayloadByteLength(base64),
-            });
-            response.end(JSON.stringify({ ok: true, deduped: out.deduped === true }));
+            if (action !== "delete") {
+              recordServerClientTraffic(request, 0, {
+                companyId,
+                countUploadBytes: true,
+                uploadBytes: base64PayloadByteLength(base64),
+              });
+            }
+            response.end(JSON.stringify({ ok: true, deduped: out.deduped === true, deleted: action === "delete" }));
           } catch (_) {
             response.statusCode = 500;
             response.setHeader("content-type", "application/json; charset=utf-8");

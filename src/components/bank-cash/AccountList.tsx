@@ -11,13 +11,13 @@ import { cn, masterDetailBalanceToneClass } from "@/lib/utils"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { useDate } from "@/hooks/useDate";
-import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { Landmark, Crown } from "lucide-react";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import Link from 'next/link';
+import Link from "next/link";
 import usePermissions from "@/hooks/usePermissions";
 import {
   EntityListQuickFilterBar,
@@ -27,6 +27,8 @@ import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachmen
 import { useCompany } from "@/hooks/useCompany";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
 import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
+import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
+import { flipLedgerSignedBalance } from "@/lib/bankLedgerDrCrPerspective";
 
 export function AccountList({
   accounts,
@@ -54,10 +56,11 @@ export function AccountList({
   const { formatCurrency } = useDate();
   const { company } = useCompany();
   const { can } = usePermissions();
+  const { perspective: bankDrCrPerspective } = useBankLedgerDrCrPerspective();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
-  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
+  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } = useMasterListRowMotion();
   const canViewSpecialAccount = can('view_special_bank_accounts');
   const canViewSpecialBalance = can('view_special_account_balance');
   const highlightSearch = searchTerm.trim();
@@ -105,6 +108,16 @@ export function AccountList({
   );
   usePrewarmVisibleAttachments(visibleAccountAttachmentUrls, company?.id);
 
+  const listOrderKey = useMemo(
+    () => masterListOrderKey(filteredAndSortedAccounts.map((a) => a.id)),
+    [filteredAndSortedAccounts]
+  );
+
+  const { displayRows: displayListRows, displayOrderKey } = useMasterListDisplayRows(
+    filteredAndSortedAccounts,
+    listOrderKey,
+    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
+  );
 
   return (
     <div className={masterListShellCn}>
@@ -116,13 +129,17 @@ export function AccountList({
       >
         <ul className="pl-master-list-ul">
           <AnimatePresence mode={animatePresenceMode}>
-            {filteredAndSortedAccounts.map((account) => {
+            {displayListRows.map((account) => {
               const isSelected = selectedAccount?.id === account.id;
               const isSpecial = account.isSpecial;
               const displayName = bankAccountDisplayName(account);
               const href = getItemHref?.(account);
               const attachmentPreviewUrl = trimEntityFileUrlForPreview(account.fileUrl);
               const cardClassName = masterListRowUnselectedCn(isSelected);
+              const displayBalance = flipLedgerSignedBalance(
+                Number(account.balance) || 0,
+                bankDrCrPerspective
+              );
               const cardContent = (
                 <div className="pl-master-list-row">
                   <div className="pl-master-list-row-leading">
@@ -175,20 +192,20 @@ export function AccountList({
                   </div>
                   {/* data-pl-list-balance: mobile list chrome me Dr/Cr color force (globals.css) */}
                   <p
-                    data-pl-list-balance={account.balance >= 0 ? "dr" : "cr"}
+                    data-pl-list-balance={displayBalance >= 0 ? "dr" : "cr"}
                     className={cn(
                       "pl-master-list-row-amount ml-2",
-                      masterDetailBalanceToneClass(account.balance),
+                      masterDetailBalanceToneClass(displayBalance),
                       isSelected &&
-                        (account.balance >= 0 ? "text-green-700" : "text-red-700")
+                        (displayBalance >= 0 ? "text-green-700" : "text-red-700")
                     )}
                   >
-                    {(isSpecial && !canViewSpecialBalance) ? '*****' : formatCurrency(account.balance, { showDrCr: true })}
+                    {(isSpecial && !canViewSpecialBalance) ? '*****' : formatCurrency(displayBalance, { showDrCr: true })}
                   </p>
                 </div>
               );
               return (
-                <motion.li key={account.id} {...rowMotionProps}>
+                <motion.li key={account.id} layoutDependency={displayOrderKey} {...rowMotionProps}>
                   {href ? (
                     // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                     <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
@@ -203,7 +220,7 @@ export function AccountList({
               );
             })}
           </AnimatePresence>
-          {filteredAndSortedAccounts.length === 0 && (
+          {displayListRows.length === 0 && (
             <div className="text-center text-muted-foreground p-8">
               No accounts found.
             </div>

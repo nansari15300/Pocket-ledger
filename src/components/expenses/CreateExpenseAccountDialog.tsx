@@ -69,6 +69,7 @@ import {
 import usePermissions from "@/hooks/usePermissions";
 import { useVouchers } from "@/hooks/useVouchers";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { expenseAccountPrefillPartsFromRow, fetchRemoteUrlAsFile } from "@/lib/crossCompanyMasterPrefill";
 
@@ -110,6 +111,7 @@ export function CreateExpenseAccountDialog({
   contextNote?: string;
 }) {
   const [isLoading, setIsLoading] = useState(false);
+  const isCompressing = useImageCompressionProcessing();
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
@@ -119,7 +121,7 @@ export function CreateExpenseAccountDialog({
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const docsInputRef = useRef<HTMLInputElement>(null);
   const [avatarToUpload, setAvatarToUpload] = useState<{ file: File; preview: string } | null>(null);
-  const [documentFiles, setDocumentFiles] = useState<File[]>([]);
+  const [documentFiles, setDocumentFiles] = useState<Array<File | string>>([]);
   const [groups, setGroups] = useState<ExpenseGroup[]>([]);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -266,16 +268,8 @@ export function CreateExpenseAccountDialog({
       return;
     }
     try {
-      const compressedFile = await compressFile(inputFile);
-      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-        toast({
-          variant: "destructive",
-          title: "File Too Large After Compression",
-          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-        });
-        e.target.value = "";
-        return;
-      }
+      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, companyId);
+      
       const preview = URL.createObjectURL(compressedFile);
       setAvatarToUpload({ file: compressedFile, preview });
     } catch (err) {
@@ -329,8 +323,8 @@ export function CreateExpenseAccountDialog({
         try {
           const raw = await fetchRemoteUrlAsFile(remoteAvatarUrl, "expense-avatar.jpg");
           if (raw) {
-            const compressed = await compressFile(raw);
-            if (compressed.size <= MAX_FILE_SIZE_MB * 1024 * 1024) {
+            const { file: compressed, maxBytes, maxKb } = await compressImageForCompany(raw, companyId);
+            if (compressed.size <= maxBytes) {
               setAvatarToUpload({
                 file: compressed,
                 preview: URL.createObjectURL(compressed),
@@ -403,7 +397,7 @@ export function CreateExpenseAccountDialog({
             : "Expense");
         const createdId = createLocalEntityId("expense_account");
         const totalAttachBytesLocal =
-          (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+          (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + (f instanceof File ? f.size : 0), 0);
         if (totalAttachBytesLocal > 0) {
           const limitCheck = await checkStorageLimit(
             companyId,
@@ -422,7 +416,7 @@ export function CreateExpenseAccountDialog({
           collectionSeg: "expense_accounts",
           entityId: createdId,
           avatarFile: avatarToUpload?.file ?? null,
-          documentFiles,
+          documentFiles: documentFiles.filter((f): f is File => f instanceof File),
         });
         const interCompanyAccountNo = await interCompanyAcNoForNewEntity("expense");
         const payload = {
@@ -497,7 +491,7 @@ export function CreateExpenseAccountDialog({
           : "Expense");
 
       const totalAttachBytes =
-        (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+        (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + (f instanceof File ? f.size : 0), 0);
       if (totalAttachBytes > 0) {
         const limitCheck = await checkStorageLimit(
           companyId,
@@ -519,7 +513,7 @@ export function CreateExpenseAccountDialog({
         collectionSeg: "expense_accounts",
         entityId: createdId,
         avatarFile: avatarToUpload?.file ?? null,
-        documentFiles,
+        documentFiles: documentFiles.filter((f): f is File => f instanceof File),
       });
 
       const interCompanyAccountNo = await interCompanyAcNoForNewEntity("expense");
@@ -577,7 +571,7 @@ export function CreateExpenseAccountDialog({
       if (isLikelyOfflineFirestoreError(error) && companyId && user && apkEntityWriteUsesLocalSqliteMirror(company)) {
         try {
           const totalCatch =
-            (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+            (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + (f instanceof File ? f.size : 0), 0);
           if (totalCatch > 0) {
             const lim = await checkStorageLimit(
               companyId,
@@ -602,7 +596,7 @@ export function CreateExpenseAccountDialog({
             collectionSeg: "expense_accounts",
             entityId: localId,
             avatarFile: avatarToUpload?.file ?? null,
-            documentFiles,
+            documentFiles: documentFiles.filter((f): f is File => f instanceof File),
           });
           const v = form.getValues();
           const payload: Record<string, unknown> = {
@@ -836,6 +830,7 @@ export function CreateExpenseAccountDialog({
             />
             <EntityDocumentsBlock
               docSlots={documentFiles}
+              setDocSlots={setDocumentFiles}
               onRemoveDoc={removeDocAt}
               onAddClick={() => docsInputRef.current?.click()}
               docsInputRef={docsInputRef}
@@ -863,13 +858,13 @@ export function CreateExpenseAccountDialog({
                   variant="ghost"
                   className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                   onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                  disabled={isLoading || apkOfflineViewOnly}
+                  disabled={isLoading || isCompressing || apkOfflineViewOnly}
                 >
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save & New
                 </Button>
               </div>
-              <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
+              <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Create
               </Button>

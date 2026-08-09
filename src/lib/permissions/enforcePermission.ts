@@ -94,10 +94,14 @@ export function evaluateBackdatePermission(
   }
 
   let allowed: boolean;
-  if (limit === 0) {
+  if (ageInDays < 0) {
+    // Future-dated vouchers (admin mistake / advance date): backdate window nahi — full allow.
+    // Backdate limit sirf today → past pe apply (entry/edit/delete days).
+    allowed = true;
+  } else if (limit === 0) {
     allowed = ageInDays === 0;
   } else {
-    allowed = ageInDays >= 0 && ageInDays <= limit;
+    allowed = ageInDays <= limit;
   }
 
   return {

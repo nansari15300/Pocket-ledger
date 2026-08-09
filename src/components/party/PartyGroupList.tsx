@@ -6,7 +6,7 @@ import { Users, Lock, Building2, CreditCard, Receipt, Package, FileText, Chevron
 import type { Group } from "@/components/party/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
-import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/tooltip";
 import { useMemo, useState } from "react";
@@ -61,7 +61,8 @@ export function PartyGroupList({
   hideCategoryHeaders?: boolean;
 }) {
   const { formatCurrency } = useDate();
-  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
+  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } =
+    useMasterListRowMotion();
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['party group']));
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
@@ -110,6 +111,16 @@ export function PartyGroupList({
     ].filter((cat) => cat.groups.length > 0);
   }, [groups, searchTerm, quickFilter]);
 
+  const listOrderKey = useMemo(
+    () => masterListOrderKey(categories.flatMap((c) => c.groups.map((g) => g.id))),
+    [categories]
+  );
+  const { displayRows: displayCategories, displayOrderKey } = useMasterListDisplayRows(
+    categories,
+    listOrderKey,
+    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
+  );
+
   const toggleCategory = (categoryName: string) => {
     const key = categoryName.toLowerCase();
     setExpandedCategories(prev => {
@@ -132,10 +143,10 @@ export function PartyGroupList({
           onViewportTouchMove={markListScrolling}
         >
           <div className={masterListScrollBodyCn}>
-          {categories.length === 0 ? (
+          {displayCategories.length === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">No groups found.</div>
           ) : null}
-          {categories.map((category) => {
+          {displayCategories.map((category) => {
               const categoryKey = category.name.toLowerCase();
               const isExpanded = collapsible ? expandedCategories.has(categoryKey) : true;
               const hasGroups = category.groups.length > 0;
@@ -172,7 +183,7 @@ export function PartyGroupList({
                         const isSelected = selectedGroup?.id === group.id;
                         const isSystem = (group as any).isSystemReserved;
                         return (
-                          <motion.li key={group.id} className="w-full" {...rowMotionProps}>
+                          <motion.li key={group.id} className="w-full" layoutDependency={displayOrderKey} {...rowMotionProps}>
                             {(() => {
                               const href = getItemHref?.(group);
                               const cardClassName = masterListRowUnselectedCn(isSelected);

@@ -46,7 +46,9 @@ export function isPocketLedgerBillingApiCorsPath(pathname: string): boolean {
     pathname === "/api/company/downgrade-plan" ||
     pathname === "/api/company/repair-stripe-plan-expiry" ||
     pathname === "/api/company/billing-auto-renew" ||
-    pathname === "/api/company/billing-payments-statement"
+    pathname === "/api/company/billing-payments-statement" ||
+    pathname === "/api/company/recycle-bin-finalize" ||
+    pathname === "/api/admin/recycle-bin/delete-company"
   );
 }
 

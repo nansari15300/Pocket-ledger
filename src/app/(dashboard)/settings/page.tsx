@@ -34,8 +34,10 @@ import {
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { LocalCloudSyncSettingsPage } from "@/components/settings/LocalCloudSyncSettingsPage";
 import { LocalAppServerSettings } from "@/components/settings/LocalAppServerSettings";
+import { MyRoleButton } from "@/components/settings/MyRoleButton";
 import { isLocalAppServerSettingsNavVisible } from "@/lib/localAppServerDevPreview";
 import { settingsViewHref } from "@/lib/appNavHref";
+import type { UserRole } from "@/hooks/usePermissions";
 
 /** Settings list horizontal inset — scroll shell par ek hi layer taake left/right dono 4px barabar (ul par duble na ho) */
 const SETTINGS_NAV_INSET_X = "px-[4px]";
@@ -379,6 +381,31 @@ function SettingsPageContent() {
         [pathname, router, searchParams]
     );
 
+    const jumpMyRoleToEditor = useCallback(
+        (role: UserRole) => {
+            try {
+                localStorage.setItem("selectedRoleForPermissions", role);
+            } catch {
+                /* ignore */
+            }
+            if (can("manage_users_roles")) {
+                setActiveViewWithUrl("sharing");
+                setSettingsListOpen(false);
+            }
+        },
+        [can, setActiveViewWithUrl, setSettingsListOpen]
+    );
+
+    const renderSettingsListHeader = () => (
+        <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+                <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
+                <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
+            </div>
+            <MyRoleButton onJumpToEditor={jumpMyRoleToEditor} />
+        </div>
+    );
+
     const backToSettingsListOnly = useCallback(() => {
         setActiveView("");
         setSettingsListOpen(false);
@@ -592,8 +619,7 @@ function SettingsPageContent() {
                 // Ek hi shell — pehle baahar grey `px-2` tha; ab poora mobile list sky card jaisa desktop aside
                 <div className={cn("flex h-full min-h-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
                     <div className={cn("flex-shrink-0 py-3", SETTINGS_LIST_HEADER_RULE, SETTINGS_NAV_INSET_X)}>
-                        <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
-                        <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
+                        {renderSettingsListHeader()}
                     </div>
                     <div className={cn("min-h-0 flex-1 overflow-y-auto overflow-x-hidden", SETTINGS_NAV_INSET_X)}>
                         {renderSettingsNavArea()}
@@ -671,8 +697,13 @@ function SettingsPageContent() {
                     >
                         <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
                             <SheetHeader className={cn("flex-shrink-0 space-y-1 py-3", SETTINGS_LIST_HEADER_RULE, SETTINGS_NAV_INSET_X)}>
-                                <SheetTitle className="text-left text-lg font-semibold tracking-tight">Settings</SheetTitle>
-                                <p className="text-left text-sm text-muted-foreground">Manage your app preferences.</p>
+                                <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0">
+                                        <SheetTitle className="text-left text-lg font-semibold tracking-tight">Settings</SheetTitle>
+                                        <p className="text-left text-sm text-muted-foreground">Manage your app preferences.</p>
+                                    </div>
+                                    <MyRoleButton onJumpToEditor={jumpMyRoleToEditor} />
+                                </div>
                             </SheetHeader>
                             <div
                                 className={cn(
@@ -696,8 +727,7 @@ function SettingsPageContent() {
           <aside className="flex min-h-0 w-full min-w-0 flex-col overflow-hidden">
             <div className={cn("flex min-h-0 h-full min-w-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
               <div className={cn("flex-shrink-0 pb-3 pt-1", SETTINGS_LIST_HEADER_RULE, SETTINGS_NAV_INSET_X)}>
-                <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
-                <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
+                {renderSettingsListHeader()}
               </div>
               {/* `scrollbar-gutter:stable` yahan mat — hamesha daen taraf ~scrollbar jitni khali strip (list chhoti ho tab bhi); main pane par stable rakha shake ke liye */}
               <div className={cn("min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto", SETTINGS_NAV_INSET_X)}>

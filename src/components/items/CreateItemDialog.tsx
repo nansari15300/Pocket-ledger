@@ -86,6 +86,7 @@ import type { Tax, TaxGroup } from "@/components/tax/types";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import {
   MAX_IMAGE_BYTES_BEFORE_COMPRESS,
   MAX_IMAGE_BYTES_AFTER_COMPRESS,
@@ -201,6 +202,7 @@ export function CreateItemDialog({
   defaultType?: 'item' | 'service' | 'finished_good',
 }) {
   const [isLoading, setIsLoading] = useState(false);
+  const isCompressing = useImageCompressionProcessing();
   const { toast } = useToast();
   const { user } = useAuth();
   const { companyId, company } = useCompany();
@@ -483,16 +485,9 @@ export function CreateItemDialog({
       return;
     }
     try {
-      const compressedFile = await compressFile(inputFile);
+      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, companyId);
       // compressFile fail par original; PDF yahan nahi — sirf image
-      if (compressedFile.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
-        toast({
-          variant: "destructive",
-          title: "File Too Large After Compression",
-          description: `Even after compression, the image is larger than ${MAX_IMAGE_MB_AFTER_COMPRESS} MB.`,
-        });
-        return;
-      }
+      
       setProfileFile(compressedFile);
     } catch (err) {
       console.error("Avatar compression error:", err);
@@ -544,15 +539,8 @@ export function CreateItemDialog({
         continue;
       }
       try {
-        const compressedFile = await compressFile(file);
-        if (compressedFile.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
-          toast({
-            variant: "destructive",
-            title: "File Too Large After Compression",
-            description: `After compression the image is still over ${MAX_IMAGE_MB_AFTER_COMPRESS} MB.`,
-          });
-          continue;
-        }
+        const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(file, companyId);
+        
         accumulated = [...accumulated, compressedFile];
       } catch (err) {
         console.error("Document compression error:", err);
@@ -1340,6 +1328,7 @@ const capitalizeFirstLetter = (str: string) => {
                   />
                   <EntityDocumentsBlock
                     docSlots={docSlots}
+                    setDocSlots={setDocSlots}
                     onRemoveDoc={removeDocSlot}
                     onAddClick={() => docsInputRef.current?.click()}
                     docsInputRef={docsInputRef}
@@ -1371,13 +1360,13 @@ const capitalizeFirstLetter = (str: string) => {
                     variant="ghost"
                     className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                     onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                    disabled={isLoading || apkOfflineViewOnly}
+                    disabled={isLoading || isCompressing || apkOfflineViewOnly}
                   >
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save &amp; New
                   </Button>
                 </div>
-                <Button type="submit" disabled={isLoading || !companyId || apkOfflineViewOnly} className="shrink-0">
+                <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly} className="shrink-0">
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Create Item
                 </Button>

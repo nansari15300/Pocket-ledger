@@ -18,9 +18,11 @@ export function usePendingVoucherSync({ enabled = true }: UsePendingVoucherSyncO
   const { user } = useAuth();
   const [isSyncing, setIsSyncing] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<{ synced: number; failed: number } | null>(null);
+  const syncingRef = React.useRef(false);
 
   const runSync = React.useCallback(async () => {
-    if (!enabled || !isOnline || isSyncing) return { synced: 0, failed: 0 };
+    if (!enabled || !isOnline || syncingRef.current) return { synced: 0, failed: 0 };
+    syncingRef.current = true;
     setIsSyncing(true);
     try {
       const masterResult = await syncPendingMasterMutations();
@@ -37,9 +39,10 @@ export function usePendingVoucherSync({ enabled = true }: UsePendingVoucherSyncO
       setLastResult(result);
       return result;
     } finally {
+      syncingRef.current = false;
       setIsSyncing(false);
     }
-  }, [enabled, isOnline, isSyncing, user?.uid]);
+  }, [enabled, isOnline, user?.uid]);
 
   React.useEffect(() => {
     if (!enabled || !isOnline) return;

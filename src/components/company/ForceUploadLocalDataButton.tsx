@@ -16,15 +16,31 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useCompany } from "@/hooks/useCompany";
 import { canSyncCompanyToServer } from "@/lib/localVoucherOutbox";
-import { forceUploadLocalCompanyToServer } from "@/lib/forceUploadLocalCompanyToServer";
 import {
-  completeVoucherBackgroundProgress,
-  showVoucherBackgroundProgress,
-} from "@/lib/voucherSaveUi";
+  forceUploadLocalCompanyToServer,
+  type ForceUploadProgress,
+} from "@/lib/forceUploadLocalCompanyToServer";
+import { useToast } from "@/hooks/use-toast";
 import { yieldToMain } from "@/lib/yieldToMain";
 
-export function ForceUploadLocalDataButton() {
+export type ForceUploadInlineProgress = {
+  phase: string;
+  done: number;
+  total: number;
+  percent: number;
+  detail?: string;
+  status: "running" | "complete" | "failed";
+  message?: string;
+};
+
+type Props = {
+  /** Company Profile main area top pe progress strip. */
+  onInlineProgress?: (state: ForceUploadInlineProgress | null) => void;
+};
+
+export function ForceUploadLocalDataButton({ onInlineProgress }: Props = {}) {
   const { companyId, triggerSync } = useCompany();
+  const { toast } = useToast();
   const [canSync, setCanSync] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [open, setOpen] = useState(false);
@@ -44,17 +60,65 @@ export function ForceUploadLocalDataButton() {
     };
   }, [companyId]);
 
+  const publishProgress = useCallback(
+    (state: ForceUploadInlineProgress | null) => {
+      onInlineProgress?.(state);
+    },
+    [onInlineProgress]
+  );
+
   const runForceUpload = useCallback(async () => {
     if (!companyId || isRunning) return;
     setIsRunning(true);
     setOpen(false);
-    const progressId = showVoucherBackgroundProgress("Scanning local data…");
+    publishProgress({
+      phase: "Scanning local data",
+      done: 0,
+      total: 1,
+      percent: 0,
+      status: "running",
+      message: "Scanning SQLite + pending attachments…",
+    });
     await yieldToMain();
     try {
-      const result = await forceUploadLocalCompanyToServer(companyId);
-      if (!result.ok && result.message) {
-        completeVoucherBackgroundProgress(progressId, {
-          ok: false,
+      const result = await forceUploadLocalCompanyToServer(companyId, {
+        forceRestorePendingUpload: true,
+        onProgress: (p: ForceUploadProgress) => {
+          const total = Math.max(1, p.total);
+          const done = Math.max(0, p.done);
+          const percent = Math.min(99, Math.floor((done / total) * 100));
+          publishProgress({
+            phase: p.phase || "Uploading",
+            done,
+            total,
+            percent,
+            detail: p.detail,
+            status: "running",
+            message: p.detail || p.phase,
+          });
+        },
+      });
+
+      try {
+        const { patchSqliteHttpsAttachmentsToFirestore } = await import(
+          "@/lib/restoreCloudBackgroundSync"
+        );
+        await patchSqliteHttpsAttachmentsToFirestore(companyId);
+      } catch {
+        /* best-effort */
+      }
+
+      if (!result.ok && result.message && result.docsPushed === 0 && result.filesSynced === 0 && result.localRefsRelinked === 0) {
+        publishProgress({
+          phase: "Failed",
+          done: 0,
+          total: 1,
+          percent: 0,
+          status: "failed",
+          message: result.message,
+        });
+        toast({
+          variant: "destructive",
           title: "Force upload failed",
           description: result.message,
         });
@@ -64,6 +128,9 @@ export function ForceUploadLocalDataButton() {
       const parts: string[] = [];
       if (result.docsPushed > 0) parts.push(`${result.docsPushed} record(s) pushed`);
       if (result.filesSynced > 0) parts.push(`${result.filesSynced} file(s) uploaded`);
+      if (result.localRefsRelinked > 0) {
+        parts.push(`${result.localRefsRelinked} file URL(s) recovered from Storage`);
+      }
       if (result.outboxFlushed > 0) parts.push(`${result.outboxFlushed} queue item(s) synced`);
       if (result.localRefsRequeued > 0) {
         parts.push(`${result.localRefsRequeued} local file ref(s) re-queued`);
@@ -77,8 +144,14 @@ export function ForceUploadLocalDataButton() {
 
       const warnParts: string[] = [];
       if (result.filesFailed > 0) warnParts.push(`${result.filesFailed} file(s) failed`);
-      if (result.localRefsMissingBytes > 0) {
-        warnParts.push(`${result.localRefsMissingBytes} local file(s) missing on this device`);
+      const stuck = result.localRefsStillStuck;
+      if (stuck > 0) {
+        warnParts.push(
+          `${stuck} local file(s) have no bytes on this device (console: [FORCE_UPLOAD_TRACE])`
+        );
+        if (result.missingSample?.length) {
+          console.warn("[FORCE_UPLOAD_TRACE] STUCK_SAMPLE", result.missingSample);
+        }
       }
       if (result.errors.length) warnParts.push(result.errors.slice(0, 2).join(" · "));
 
@@ -87,23 +160,42 @@ export function ForceUploadLocalDataButton() {
           ? `${parts.join(" · ")}.${warnParts.length ? ` ${warnParts.join(" · ")}.` : ""}`
           : warnParts.join(" · ") || "Scan finished — everything already looked synced.";
 
-      completeVoucherBackgroundProgress(progressId, {
-        ok: warnParts.length === 0,
-        title: warnParts.length ? "Force upload completed with issues" : "Force upload complete",
+      publishProgress({
+        phase: stuck > 0 ? "Completed with issues" : "Complete",
+        done: 1,
+        total: 1,
+        percent: 100,
+        status: stuck > 0 ? "failed" : "complete",
+        message: description,
+      });
+
+      toast({
+        variant: stuck > 0 ? "destructive" : "default",
+        title: stuck > 0 ? "Force upload completed with issues" : "Force upload complete",
         description,
       });
 
       triggerSync();
+      window.setTimeout(() => publishProgress(null), 8_000);
     } catch (e) {
-      completeVoucherBackgroundProgress(progressId, {
-        ok: false,
+      const msg = e instanceof Error ? e.message : String(e);
+      publishProgress({
+        phase: "Failed",
+        done: 0,
+        total: 1,
+        percent: 0,
+        status: "failed",
+        message: msg,
+      });
+      toast({
+        variant: "destructive",
         title: "Force upload failed",
-        description: e instanceof Error ? e.message : String(e),
+        description: msg,
       });
     } finally {
       setIsRunning(false);
     }
-  }, [companyId, isRunning, triggerSync]);
+  }, [companyId, isRunning, publishProgress, toast, triggerSync]);
 
   if (!companyId || !canSync) return null;
 
@@ -116,7 +208,7 @@ export function ForceUploadLocalDataButton() {
           size="sm"
           className="shrink-0 rounded-md border border-black whitespace-normal h-auto min-h-9 py-1.5 text-left leading-tight sm:max-w-xs"
           disabled={isRunning || (typeof navigator !== "undefined" && !navigator.onLine)}
-          title="Scan local SQLite + files and upload anything missing on server"
+          title="Scan local SQLite + files, upload to cloud, and write HTTPS URLs"
         >
           {isRunning ? (
             <Loader2 className="mr-1.5 h-4 w-4 shrink-0 animate-spin" />
@@ -130,9 +222,9 @@ export function ForceUploadLocalDataButton() {
         <AlertDialogHeader>
           <AlertDialogTitle>Force upload to server?</AlertDialogTitle>
           <AlertDialogDescription>
-            This will scan all local SQLite records and pending attachments for this company, then upload
-            anything that is not on the server yet. Use this if files or vouchers show on this device but not
-            on another PC.
+            This will scan all local SQLite records and pending attachments for this company, upload
+            documents and files to the server, and write HTTPS URLs on vouchers/masters. Progress will
+            show at the top of Company Profile until finished.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

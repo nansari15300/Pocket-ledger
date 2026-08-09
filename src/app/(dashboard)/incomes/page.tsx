@@ -37,7 +37,12 @@ import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import {
   masterDetailTabHref,
+  masterDetailCanonicalHref,
   replaceMasterDetailTabUrl,
+  tabSwitchSelection,
+  pickRememberedListSelection,
+  writeMasterDetailPageState,
+  readMasterDetailLocationQuery,
 } from "@/lib/masterDetailTabChange";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { isLocalOnlyMode } from "@/lib/localMode";
@@ -139,6 +144,7 @@ function IncomeExpensePageContent() {
   const selectedIdFromUrl = searchParams.get("selected");
   const viewFromUrl = searchParams.get("view");
   const isInitialMount = useRef(true);
+  const pendingIncomesSelectIdRef = useRef<string | null>(null);
   
   const [activeView, setActiveView] = useState("accounts");
   const { isMobile, selected, setSelected } = useResponsiveListLayout<ExpenseAccount | ExpenseGroup>(`expense_view_${activeView}`);
@@ -231,33 +237,6 @@ function IncomeExpensePageContent() {
   const listDisabled = !incomesListEnabled || !isActiveTabEnabled;
   const detailsDisabled = activeView === "accounts" ? !accountDetailsEnabled : !groupDetailsEnabled;
 
-  const handleIncomesTabChange = useCallback(
-    (value: string) => {
-      if (!incomesListEnabled) return;
-      if (value === "accounts" && !accountsTabEnabled) return;
-      if (value === "groups" && !groupsTabEnabled) return;
-      setActiveView(value);
-      if (!isMobile) return;
-      setSelected(null);
-      const href = masterDetailTabHref("incomes", {
-        tab: value,
-        defaultTab: "accounts",
-        listOnly: true,
-      });
-      replaceMasterDetailTabUrl(href, router, useQueryNav);
-    },
-    [
-      incomesListEnabled,
-      accountsTabEnabled,
-      groupsTabEnabled,
-      isMobile,
-      setActiveView,
-      setSelected,
-      router,
-      useQueryNav,
-    ]
-  );
-  
   const processedExpenseGroups = useMemo(() => {
     const normalizeGroup = (g: ExpenseGroup): ExpenseGroup => {
       if (CORE_EXPENSE_GROUP_IDS.has(g.id)) {
@@ -374,33 +353,92 @@ function IncomeExpensePageContent() {
     ).length;
   }, [expenseGroupsForList, searchTerm]);
 
-  // Restore selection when returning from details (e.g. /incomes?selected=xyz or /incomes?view=groups&selected=xyz)
+  /** Party-style tab switch — set view + row + URL together (EXE/APK stale ?selected= snap-back band). */
+  const handleIncomesTabChange = useCallback(
+    (value: string) => {
+      if (!incomesListEnabled) return;
+      if (value === "accounts" && !accountsTabEnabled) return;
+      if (value === "groups" && !groupsTabEnabled) return;
+      const tab = value === "groups" ? "groups" : "accounts";
+      const items = tab === "groups" ? expenseGroupsForList : expenseAccountsForList;
+      const nextSelected = tabSwitchSelection(
+        isMobile,
+        pickRememberedListSelection("incomeExpensePageState", tab, items)
+      );
+      pendingIncomesSelectIdRef.current = nextSelected?.id ?? null;
+      setActiveView(tab);
+      setSelected(nextSelected);
+      const href = isMobile
+        ? masterDetailTabHref("incomes", { tab, defaultTab: "accounts", listOnly: true })
+        : masterDetailCanonicalHref("incomes", {
+            tab,
+            defaultTab: "accounts",
+            selectedId: nextSelected?.id ?? null,
+          });
+      replaceMasterDetailTabUrl(href, router, useQueryNav);
+      writeMasterDetailPageState("incomeExpensePageState", tab, nextSelected?.id);
+    },
+    [
+      incomesListEnabled,
+      accountsTabEnabled,
+      groupsTabEnabled,
+      isMobile,
+      useQueryNav,
+      expenseGroupsForList,
+      expenseAccountsForList,
+      setActiveView,
+      setSelected,
+      router,
+    ]
+  );
+
+  // Location-first URL sync (Party jaisa).
   useEffect(() => {
-    if (!selectedIdFromUrl) return;
     if (vouchersLoading) return;
-    const groupItem = processedExpenseGroups.find((i) => i.id === selectedIdFromUrl);
-    const accountItem = processedExpenseAccounts.find((i) => i.id === selectedIdFromUrl);
-    if (groupItem && accountItem) {
-      if (viewFromUrl === "groups") setActiveView("groups");
-      else setActiveView("accounts");
-    } else if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
-    else if (accountItem) setActiveView("accounts");
-    else if (groupItem) setActiveView("groups");
+    const { view, selectedId } = readMasterDetailLocationQuery();
+    const pendingId = pendingIncomesSelectIdRef.current;
+    if (pendingId) {
+      if (selectedId === pendingId) pendingIncomesSelectIdRef.current = null;
+      else if (selected?.id === pendingId) return;
+    }
+    if (!selectedId) {
+      if (view === "groups") {
+        if (activeView !== "groups") setActiveView("groups");
+      } else if (activeView !== "accounts") {
+        setActiveView("accounts");
+      }
+      return;
+    }
+    const groupItem = processedExpenseGroups.find((i) => i.id === selectedId);
+    const accountItem = processedExpenseAccounts.find((i) => i.id === selectedId);
+    if (view === "groups" && groupItem) setActiveView("groups");
+    else if (view === "accounts" && accountItem) setActiveView("accounts");
     const item =
       groupItem && accountItem
-        ? viewFromUrl === "groups"
+        ? view === "groups"
           ? groupItem
           : accountItem
         : groupItem || accountItem;
-    if (item) setSelected(item);
+    if (item && selected?.id !== item.id) setSelected(item);
     const canonical =
-      viewFromUrl === "groups"
-        ? `/incomes?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
-        : `/incomes?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+      view === "groups"
+        ? `/incomes?view=groups&selected=${encodeURIComponent(selectedId)}`
+        : `/incomes?selected=${encodeURIComponent(selectedId)}`;
     if (shouldReplaceWithMasterDetailCanonical(canonical)) {
       router.replace(canonical, { scroll: false });
     }
-  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedExpenseAccounts, processedExpenseGroups, setSelected, setActiveView, router]);
+  }, [
+    selectedIdFromUrl,
+    viewFromUrl,
+    vouchersLoading,
+    processedExpenseAccounts,
+    processedExpenseGroups,
+    selected?.id,
+    activeView,
+    setSelected,
+    setActiveView,
+    router,
+  ]);
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     if (userNames[userId] && userNames[userId] !== "Unknown") return userNames[userId];

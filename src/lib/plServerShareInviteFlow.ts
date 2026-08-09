@@ -8,6 +8,7 @@ import {
   getLocalCompanyUsersRecords,
   parseLocalCompanyUserRows,
   upsertUserInList,
+  withLocalCompanyUsersWriteLock,
 } from "@/lib/localCompanyUsers";
 import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
 import { sendLocalServerShareInviteAlert, localServerShareAlertUrlOptions } from "@/lib/plServerShareInvite";
@@ -91,30 +92,39 @@ export async function backfillLocalCompanyUserShareMeta(
   const shareEmail = String(meta.shareEmail || "")
     .trim()
     .toLowerCase();
+  const nextUid = meta.uid ? String(meta.uid).trim() : "";
   if (!cid || !userId || !shareEmail.includes("@")) return;
-  const doc = await getLocalCompanyById(cid, { includeDeleted: true });
-  if (!doc) return;
-  const rows = parseLocalCompanyUserRows((doc as { localCompanyUsers?: unknown }).localCompanyUsers);
-  const idx = rows.findIndex((r) => r.id === userId);
-  if (idx < 0) return;
-  const row = rows[idx]!;
-  if (row.shareEmail === shareEmail && row.uid) return;
-  rows[idx] = {
-    ...row,
-    shareEmail: row.shareEmail || shareEmail,
-    uid: row.uid || (meta.uid ? String(meta.uid).trim() : null),
-  };
-  await upsertLocalCompany({
-    ...(doc as LocalCompanyDoc),
-    id: cid,
-    localCompanyUsers: rows,
-    updatedAt: Date.now(),
+
+  await withLocalCompanyUsersWriteLock(cid, async () => {
+    // Inside lock + fresh read — concurrent Manage Sharing role saves won't be stomped.
+    const fresh = await getLocalCompanyById(cid, { includeDeleted: true });
+    if (!fresh) return;
+    const rows = parseLocalCompanyUserRows((fresh as { localCompanyUsers?: unknown }).localCompanyUsers);
+    const idx = rows.findIndex((r) => r.id === userId);
+    if (idx < 0) return;
+    const row = rows[idx]!;
+    if (row.shareEmail === shareEmail && row.uid) return;
+    const patched = {
+      ...row,
+      shareEmail: row.shareEmail || shareEmail,
+      uid: row.uid || (nextUid || null),
+    };
+    if (patched.shareEmail === row.shareEmail && patched.uid === row.uid) return;
+
+    const nextRows = [...rows];
+    nextRows[idx] = patched;
+    await upsertLocalCompany({
+      ...(fresh as LocalCompanyDoc),
+      id: cid,
+      localCompanyUsers: nextRows,
+      updatedAt: Date.now(),
+    });
+    await flushPendingBrowserDbSave();
+    bumpLocalCompanyRegistry();
+    void import("@/lib/plServerCompanyMetaSync").then(({ notifyPlServerHostCompanyMetaSaved }) =>
+      notifyPlServerHostCompanyMetaSaved(cid, { localCompanyUsers: nextRows })
+    );
   });
-  await flushPendingBrowserDbSave();
-  bumpLocalCompanyRegistry();
-  void import("@/lib/plServerCompanyMetaSync").then(({ notifyPlServerHostCompanyMetaSaved }) =>
-    notifyPlServerHostCompanyMetaSaved(cid)
-  );
 }
 
 async function resolveRecipientUidByEmail(email: string): Promise<string | null> {
@@ -366,7 +376,7 @@ export async function listPlServerShareUserRowsFromCompany(
         loginUsername: username,
         uid: u.uid ?? null,
         name: u.displayName?.trim() || username,
-        role: u.role || "manager",
+        role: normalizeLocalCompanyAppRole(u.role),
         allowedCompanyIds: [cid],
         createdAt: null,
         lastUsedAt: null,

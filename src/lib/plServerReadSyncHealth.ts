@@ -101,6 +101,19 @@ export function markPlServerReadSyncReconnecting(companyId: string): void {
   }
 }
 
+/** Host unreachable — staff UI local SQLite use kar rahi hai (menu/offline feel). */
+export function markPlServerReadUsingLocalCache(companyId: string): void {
+  const id = companyKey(companyId);
+  if (!id || typeof window === "undefined") return;
+  const row = getOrCreate(id);
+  if (row.consecutiveFailures < 1 && row.state !== "sharing_unavailable" && row.state !== "offline") {
+    return;
+  }
+  row.state = "synced";
+  row.lastError = "offline_cached_view";
+  emitHealthChanged();
+}
+
 /** Live pull aborted before mirror (offline, transport, pause). */
 export function recordPlServerReadPullAborted(
   companyId: string,
@@ -149,28 +162,28 @@ export function recordPlServerReadPullOutcome(
     emitHealthChanged();
     return;
   }
+  // Host pull failed — local SQLite/cache usable ho to bhi failure count mat zero karo.
+  // (Pehle yahan reset → Offline pe bhi focus/route pull + green strip chalta tha.)
+  const err = detail?.error || "pull_incomplete";
+  const serverUrl = resolveReadSyncServerUrl(id, detail?.serverUrl);
+  const state: PlServerReadSyncState =
+    err === "transport_unavailable" || err === "sharing_unavailable"
+      ? "sharing_unavailable"
+      : "pull_failed";
+  bumpFailure(row, state, err, serverUrl);
   void (async () => {
     try {
       const { plServerDisplayCacheHasUsableLedger } = await import("@/lib/plServerDisplayCache");
       if (plServerDisplayCacheHasUsableLedger(id)) {
-        row.lastSuccessAtMs = row.lastSuccessAtMs ?? now;
-        row.consecutiveFailures = 0;
+        // Local feel: UI “synced” cache label, lekin consecutiveFailures host unreachable rakhe.
         row.state = "synced";
-        row.lastError = detail?.error ?? "background_refresh_failed";
-        row.lastAttemptServerUrl = null;
-        row.protocolMismatch = false;
+        row.lastError = "offline_cached_view";
         emitHealthChanged();
         return;
       }
     } catch {
-      /* fall through */
+      /* already bumped */
     }
-    const err = detail?.error || "pull_incomplete";
-    const state =
-      err === "transport_unavailable" || err === "sharing_unavailable"
-        ? "sharing_unavailable"
-        : "pull_failed";
-    bumpFailure(row, state, err, resolveReadSyncServerUrl(id, detail?.serverUrl));
     emitHealthChanged();
   })();
 }

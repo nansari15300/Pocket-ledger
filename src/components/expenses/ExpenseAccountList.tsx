@@ -8,7 +8,7 @@ import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachm
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { DollarSign, Lock } from "lucide-react";
 import { useDate } from "@/hooks/useDate";
-import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -53,7 +53,7 @@ export function ExpenseAccountList({
 }: ExpenseAccountListProps) {
   const { formatCurrency } = useDate();
   const { company } = useCompany();
-  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
+  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } = useMasterListRowMotion();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
@@ -75,7 +75,18 @@ export function ExpenseAccountList({
   );
   usePrewarmVisibleAttachments(visibleAccountAttachmentUrls, company?.id);
 
-  if (filteredAndSortedAccounts.length === 0) {
+  const listOrderKey = useMemo(
+    () => masterListOrderKey(filteredAndSortedAccounts.map((a) => a.id)),
+    [filteredAndSortedAccounts]
+  );
+
+  const { displayRows: displayListRows, displayOrderKey } = useMasterListDisplayRows(
+    filteredAndSortedAccounts,
+    listOrderKey,
+    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
+  );
+
+  if (displayListRows.length === 0) {
     return (
       <TooltipProvider delayDuration={200}>
         <div
@@ -105,7 +116,7 @@ export function ExpenseAccountList({
         >
           <ul className="pl-master-list-ul">
             <AnimatePresence mode={animatePresenceMode}>
-              {filteredAndSortedAccounts.map((account) => {
+              {displayListRows.map((account) => {
                 const isSelected = selectedAccount?.id === account.id;
                 const isSystem = (account as any).isSystemReserved;
                 const href = getItemHref?.(account);
@@ -179,7 +190,7 @@ export function ExpenseAccountList({
                       </div>
                 );
                 return (
-                  <motion.li key={account.id} {...rowMotionProps}>
+                  <motion.li key={account.id} layoutDependency={displayOrderKey} {...rowMotionProps}>
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">

@@ -75,9 +75,13 @@ import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { EditAccountDialog } from "../bank-cash/EditAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_OUTER_ROW_CN,
+  LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
+  LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
@@ -1039,10 +1043,10 @@ export function AccountDetails({
 
     return (
      <div className="h-full flex flex-col">
-        {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
+        {/* Header: identity + pills — Party-style single row */}
+        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+          <div className={LEDGER_HEADER_OUTER_ROW_CN}>
+            <div className={LEDGER_HEADER_IDENTITY_CN}>
               <EntityFileAttachmentHover
                 fileUrl={trimEntityFileUrlForPreview(account.fileUrl)}
                 triggerClassName="inline-flex shrink-0 rounded-full"
@@ -1056,27 +1060,25 @@ export function AccountDetails({
                   }
                 />
               </EntityFileAttachmentHover>
-              <div className="flex items-center gap-2 flex-nowrap min-w-0">
-                <h2 className="text-xl font-semibold truncate">{account.accountName}</h2>
-                {account.id !== 'all' && (
-                  <EditAccountDialog
-                    account={account}
-                    allAccounts={allAccounts}
-                    onAccountUpdated={onAccountUpdated}
-                    onAccountDeleted={onAccountDeleted}
-                    hasTransactions={processedTransactions.length > 0}
-                  >
-                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                  </EditAccountDialog>
-                )}
-                <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                  {formatCurrency(closingBalance, { showDrCr: true })}
-                </div>
+              <h2 className={LEDGER_HEADER_TITLE_CN} title={account.accountName}>{account.accountName}</h2>
+              {account.id !== 'all' && (
+                <EditAccountDialog
+                  account={account}
+                  allAccounts={allAccounts}
+                  onAccountUpdated={onAccountUpdated}
+                  onAccountDeleted={onAccountDeleted}
+                  hasTransactions={processedTransactions.length > 0}
+                >
+                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                </EditAccountDialog>
+              )}
+              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                {formatCurrency(closingBalance, { showDrCr: true })}
               </div>
             </div>
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className={LEDGER_HEADER_PILL_ROW_CN}>
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
                   isRange
@@ -1186,7 +1188,7 @@ export function AccountDetails({
         </ScrollArea>
         {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
+          <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
               <span className="whitespace-nowrap flex-shrink-0">{processedTransactions.length} transaction(s).</span>
               <LedgerFooterCheckboxPill
@@ -1223,7 +1225,7 @@ export function AccountDetails({
                 hiddenCount={statementCheck.hiddenCount}
               />
             </div>
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className={LEDGER_HEADER_PILL_ROW_CN}>
               <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
               <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(1)}

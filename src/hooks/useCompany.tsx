@@ -26,6 +26,7 @@ import {
   upsertLocalCompany,
 } from "@/lib/localCompanyStore";
 import { mergeSharedWithIntoLocalCompanyUsers, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
+import { companyRolesAuthorityExcludesFirebase } from "@/lib/permissionConfigSource";
 import { isLocalCompanyVisibleToAppAccount } from "@/lib/localCompanyMembership";
 import { higherPlanByTier, normalizePlanIdForClient, planTierIndex, type PlanId } from "@/config/plans";
 import type { BillingFrozenPlanSnapshot } from "@/lib/billingFrozenPlanSnapshots";
@@ -57,7 +58,7 @@ import {
 import { overlayOwnerAccountPlanOnLocalCompany } from "@/lib/accountPlanForOwner";
 import { readDriveOAuthReturnGrace } from "@/lib/driveOAuthReturnGrace";
 import { BUMP_LOCAL_COMPANY_REGISTRY_EVENT } from "@/lib/applyStripePlanToLocalCompany";
-import { isRestoreCloudUploadLocked, readPendingRestoreCloudPush } from "@/lib/restoreCloudBackgroundSync";
+import { isRestoreCloudFileUploadLocked, readPendingRestoreCloudPush } from "@/lib/restoreCloudBackgroundSync";
 import { clearCompanyPlanLocalCache, readCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
 import {
   syncCompanyPlanFromServer,
@@ -225,6 +226,10 @@ export type Company = {
     billingAutoRenew?: boolean;
     billingAutoRenewFailureNoticeEn?: string;
     billingAutoRenewFailureNoticeUntilMs?: number;
+    /** Pure device-local company (no cloud ledger sync). */
+    localOnly?: boolean;
+    /** Firestore ledger sync intentionally off for this company. */
+    firestoreSyncDisabled?: boolean;
     /**
      * Paid expiry ke baad renew na ho to Basic — default ON; owner billing se `false` kar sakta hai.
      * Server `sync-plan` par `applyExpiredPaidPlanAutoDowngrade` is flag ko dekhta hai.
@@ -533,17 +538,24 @@ function keepCompanyRefIfLedgerUnchanged(prev: Company | null, next: Company | n
   // Dual Firebase+PL same id: cloud stamp se PL row overwrite = header Sync/Recon + voucher blink.
   if (shouldRetainPlServerCompanyShape(prev, next)) {
     const merged = mergePlHostCompanyMetaFields(prev, next);
-    // Cloud stamp must never replace device/PL permissionConfig (defaults editDays=7 wipe).
-    if ((prev as { permissionConfig?: unknown }).permissionConfig != null) {
+    // Only block Firebase/cloud stamps from wiping host SQLite roles.
+    // Host Manage Sharing / meta pull brings next.localCompanyUsers from SQLite — keep those.
+    const nextIsCloudStamp =
+      isCloudLinkedCompanyStorage(next) && !companyRolesAuthorityExcludesFirebase(next);
+    if (nextIsCloudStamp) {
       (merged as { permissionConfig?: unknown }).permissionConfig = (
         prev as { permissionConfig?: unknown }
       ).permissionConfig;
+      (merged as { localCompanyUsers?: unknown }).localCompanyUsers = (
+        prev as { localCompanyUsers?: unknown }
+      ).localCompanyUsers;
+      (merged as { sharedWith?: unknown }).sharedWith = (prev as { sharedWith?: unknown }).sharedWith;
     }
     logCompanyOnlinePlFlip("keepRef_retain_pl_block_cloud", {
       before: prev,
       after: next,
       source: "keepCompanyRefIfLedgerUnchanged",
-      extra: { metaMerged: merged !== prev },
+      extra: { metaMerged: merged !== prev, nextIsCloudStamp },
     });
     return merged;
   }
@@ -714,12 +726,15 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       let next = typeof action === "function" ? action(prev) : action;
       if (prev === next) return prev;
       if (shouldRetainPlServerCompanyShape(prev, next)) {
+        // Merge host meta (roles/permissions) — do not drop SQLite saves by returning raw prev.
+        const kept = keepCompanyRefIfLedgerUnchanged(prev, next);
         logCompanyOnlinePlFlip("retain_pl_block_cloud", {
           before: prev,
           after: next,
           source,
+          extra: { keptSameRef: kept === prev },
         });
-        return prev;
+        return kept;
       }
       if (
         next &&
@@ -788,19 +803,33 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     const onMeta = (event: Event) => {
       const detail = (event as CustomEvent<{ companyId?: string }>).detail;
-      const cid = String(detail?.companyId || companyIdLiveRef.current || "").trim();
-      if (!cid || companyIdLiveRef.current !== cid) return;
+      const eventCid = String(detail?.companyId || "").trim();
+      const liveCid = String(companyIdLiveRef.current || "").trim();
+      if (!eventCid && !liveCid) return;
+      const loadId = liveCid || eventCid;
+      // Staff: event host id, selected client slug — dono allow.
+      if (liveCid && eventCid && liveCid !== eventCid) {
+        const rowHint =
+          allCompaniesRegistryLiveRef.current.find((c) => c.id === liveCid) ||
+          allCompaniesUnfilteredLiveRef.current.find((c) => c.id === liveCid);
+        const hostAlias = String(
+          (rowHint as { plServerHostCompanyId?: string } | undefined)?.plServerHostCompanyId ||
+            (rowHint as { authoritativeCompanyId?: string } | undefined)?.authoritativeCompanyId ||
+            ""
+        ).trim();
+        if (eventCid !== hostAlias && liveCid !== hostAlias) return;
+      }
       void (async () => {
         try {
-          const row = await getLocalCompanyById(cid, { includeDeleted: true });
-          if (!row || companyIdLiveRef.current !== cid) return;
+          const row = await getLocalCompanyById(loadId, { includeDeleted: true });
+          if (!row || companyIdLiveRef.current !== loadId) return;
           const patch = {
             ...(row as unknown as Company),
-            id: cid,
-            name: typeof row.name === "string" ? row.name : cid,
+            id: loadId,
+            name: typeof row.name === "string" ? row.name : loadId,
           } as Company;
           setCompanyFrom("plServerCompanyMeta:sqlite:keepRef", (prev) =>
-            prev?.id === cid ? keepCompanyRefIfLedgerUnchanged(prev, patch) : prev
+            prev?.id === loadId ? keepCompanyRefIfLedgerUnchanged(prev, patch) : prev
           );
         } catch {
           /* ignore */
@@ -876,15 +905,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
   const triggerSync = useCallback(() => {
     // Offline→online: ye bump `useCompany` + `useVouchers` listeners re-bind karta — full reload nahi, lekin "refresh" jaisa.
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[RELOAD_TRIGGER]", "triggerSync → registryVersion++ (Firestore company queries re-subscribe)");
-    }
     setRegistryVersion((v) => v + 1);
   }, []);
   const reloadLocalCompanyRegistry = useCallback(() => {
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[RELOAD_TRIGGER]", "reloadLocalCompanyRegistry → localRegistryEpoch++ (SQLite mirror bump)");
-    }
     setLocalRegistryEpoch((v) => v + 1);
   }, []);
   const scheduleCompanyFirestoreListenerRetry = useCallback((source: string) => {
@@ -1219,7 +1242,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   }, [companyId, gateEpoch, clearCompanyId, loading, allCompaniesForUi]);
 
   const setCompanyId = useCallback((newCompanyId: string) => {
-    if (isRestoreCloudUploadLocked()) {
+    if (isRestoreCloudFileUploadLocked()) {
       const job = readPendingRestoreCloudPush();
       const nextId = String(newCompanyId || "").trim();
       if (job && job.companyId !== nextId) return;
@@ -1468,17 +1491,17 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   type LocalRegistryMirrorMode = "deferred" | "immediate-empty" | "registry-bump";
   const performLocalRegistryFirestoreMirror = useCallback(
     async (opts: { mode: LocalRegistryMirrorMode }) => {
-      // Staff PL gate: Firestore companies mirror mat chalao — PL share + SQLite only.
-      if (shouldSkipFirestoreCompanyRegistryOnPlStaff()) {
-        tracePlServerFirebaseHit("firestore_companies", {
-          source: `performLocalRegistryFirestoreMirror:${opts.mode}`,
-          action: "blocked",
-        });
-        return;
-      }
+      // Thin staff: live Firestore listeners skip — lekin one-shot Online registry mirror
+      // chalne do (warna Online tab kabhi SQLite cache / kabhi khali).
       const touchLoading = opts.mode === "immediate-empty";
       if (touchLoading) setLoading(true);
       try {
+        if (shouldSkipFirestoreCompanyRegistryOnPlStaff()) {
+          tracePlServerFirebaseHit("firestore_companies", {
+            source: `performLocalRegistryFirestoreMirror:${opts.mode}`,
+            action: "allowed_sidechannel",
+          });
+        }
         const mirrorEmail = resolveMirrorUserEmail(user, customUser);
         // Owned pull sirf uid se chal sakta hai; shared ke liye email baad me retry — pehle email na hone par poora mirror skip hota tha.
         const mirrorUser = user?.uid ? { uid: user.uid, email: mirrorEmail || "" } : null;
@@ -2533,11 +2556,17 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         const sw = Array.isArray((c as { sharedWith?: unknown }).sharedWith)
           ? ((c as { sharedWith: unknown[] }).sharedWith as any[])
           : [];
-        const mergedLocalUsers = mergeSharedWithIntoLocalCompanyUsers(prevUsers, sw);
+        // Same id Online + PL/local/Drive: SQLite role root is NOT Firebase sharedWith.
+        const excludeFirebaseRoles =
+          !!existing && companyRolesAuthorityExcludesFirebase(existing as Company);
+        const mergedLocalUsers = excludeFirebaseRoles
+          ? prevUsers
+          : mergeSharedWithIntoLocalCompanyUsers(prevUsers, sw);
         // Device-local / Drive-sync / PL-server row — Firestore mirror se storageOption mat overwrite karo.
         if (
           existing &&
-          (isStructuralSqliteOnlyLedgerCompany(existing as Company) ||
+          (excludeFirebaseRoles ||
+            isStructuralSqliteOnlyLedgerCompany(existing as Company) ||
             (existing as { plServerShared?: unknown }).plServerShared === true ||
             isListedPlServerSharedCompany(existing as Company))
         ) {
@@ -2552,7 +2581,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
                   plServerShared: true,
                 }
               : {}),
-            localCompanyUsers: mergedLocalUsers,
+            // Keep device/PL/Drive roles — do not stamp Firebase sharedWith.role
+            localCompanyUsers:
+              (existing as { localCompanyUsers?: unknown }).localCompanyUsers ?? mergedLocalUsers,
           } as import("@/lib/localCompanyStore").LocalCompanyDoc);
           return;
         }
@@ -2575,38 +2606,19 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     if (!isLiveFirestoreCompanyRegistry(isBrowserOnline)) {
       return;
     }
-    // PL thin staff / remote client: company filter PL share list + SQLite se —
-    // Firestore `companies` owned/shared listeners mat chalao (email→firebase share doc race).
+    // PL thin staff / remote client: live `companies` onSnapshot mat chalao.
+    // Online tab ke liye one-shot SQLite+Firestore mirror (listeners nahi).
     if (shouldSkipFirestoreCompanyRegistryOnPlStaff()) {
       tracePlServerFirebaseHit("firestore_companies", {
         source: "useCompany.liveCompanyRegistry",
         action: "blocked",
       });
       let cancelled = false;
-      void (async () => {
-        try {
-          const rawLocals = await listLocalCompanies();
-          if (cancelled) return;
-          const normalizedLocalCompanies = rawLocals
-            .filter((c) => isLocalCompanyVisibleToAppAccount(c, user))
-            .map((c) => normalizeLocalCompany(c as unknown as Company))
-            .filter(isCompanyVisibleInMainApp);
-          latestLocalNormalizedCompaniesRef.current = normalizedLocalCompanies;
-          setAllCompaniesRegistry(normalizedLocalCompanies);
-          setAllCompanies(
-            filterSharedOnlyCompaniesForSuperAdminInMainApp(
-              normalizedLocalCompanies,
-              user,
-              isSuperAdminUser,
-              pathnameRef.current
-            )
-          );
-        } catch {
-          /* SQLite optional */
-        } finally {
+      void performLocalRegistryFirestoreMirror({ mode: "registry-bump" })
+        .catch(() => {})
+        .finally(() => {
           if (!cancelled) setLoading(false);
-        }
-      })();
+        });
       return () => {
         cancelled = true;
       };
@@ -2828,7 +2840,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         ownedByEmailSnapRef.current = null;
         ownedByEmailSnapByVariantRef.current.clear();
     }
-}, [user?.uid, user?.email, customUser?.userDocId, authLoading, isSuperAdmin, handleSnapshotUpdate, registryVersion, companyFirestoreListenerRetryEpoch, scheduleCompanyFirestoreListenerRetry, isBrowserOnline, gateEpoch, user, normalizeLocalCompany, isSuperAdminUser]);
+}, [user?.uid, user?.email, customUser?.userDocId, authLoading, isSuperAdmin, handleSnapshotUpdate, registryVersion, companyFirestoreListenerRetryEpoch, scheduleCompanyFirestoreListenerRetry, isBrowserOnline, gateEpoch, user, normalizeLocalCompany, isSuperAdminUser, performLocalRegistryFirestoreMirror]);
 
   // Cloud data sync toggle: registry dubara merge — online companies Local tab me mat leak hon.
   useEffect(() => {
@@ -2951,9 +2963,6 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         }
         plDbgCompanyRecovery("reconcileOnline:selectedRemoved:clear+pushCompany", { selectedAtStart });
         plNavDbgCritical("useCompany.router.push./company [reconcileOnlineMirrors]", { selectedAtStart });
-        if (process.env.NODE_ENV !== "production") {
-          console.log("[RELOAD_TRIGGER]", "useCompany:router.push(/company) after reconcileOnlineMirrorsWithServer");
-        }
         clearCompanyId({ reason: "company_deleted" });
         router.push("/company");
       }

@@ -3,7 +3,11 @@
 import type { ChangeEvent, Dispatch, SetStateAction } from "react";
 import { useSyncExternalStore } from "react";
 import { compressVoucherAttachment } from "@/lib/compression";
-import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
+import {
+  attachmentMaxBytes,
+  attachmentStillTooLargeToastFields,
+  resolveAttachmentImageMaxBytes,
+} from "@/lib/attachmentCompressionUi";
 
 export type VoucherAttachmentToastFn = (opts: {
   variant?: "default" | "destructive";
@@ -58,10 +62,21 @@ export async function appendCompressedVoucherAttachmentsToState(opts: {
   allowPDF: boolean;
   setFiles: Dispatch<SetStateAction<(File | string)[]>>;
   toast: VoucherAttachmentToastFn;
+  /** Online 100KB vs Local/PL/Drive 150KB image cap. */
+  companyId?: string | null;
 }): Promise<void> {
   const endProcessing = beginAttachmentProcessing();
   try {
-    const { incomingFiles, currentFiles, maxFiles, allowImage, allowPDF, setFiles, toast } = opts;
+    const {
+      incomingFiles,
+      currentFiles,
+      maxFiles,
+      allowImage,
+      allowPDF,
+      setFiles,
+      toast,
+      companyId,
+    } = opts;
     if (maxFiles <= 0) {
       toast({
         variant: "destructive",
@@ -82,7 +97,8 @@ export async function appendCompressedVoucherAttachmentsToState(opts: {
     }
 
     const filesToProcess = incomingFiles.slice(0, remainingSlots);
-    const maxBytes = attachmentMaxBytes();
+    const pdfMaxBytes = attachmentMaxBytes();
+    const imageMaxBytes = await resolveAttachmentImageMaxBytes(companyId);
 
     const processedFiles: File[] = [];
     for (const file of filesToProcess) {
@@ -115,8 +131,11 @@ export async function appendCompressedVoucherAttachmentsToState(opts: {
       }
 
       try {
+        const maxBytes = isImage ? imageMaxBytes : pdfMaxBytes;
         const processedFile = await compressVoucherAttachment(file, maxBytes);
-        if (processedFile.size > maxBytes) {
+        // Images: never reject for size — always attach best compression.
+        // PDFs keep soft 0.5MB reject (raster quality).
+        if (!isImage && processedFile.size > maxBytes) {
           toast({
             variant: "destructive",
             ...attachmentStillTooLargeToastFields(),

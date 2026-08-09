@@ -28,9 +28,10 @@ export function InterCompanySectionTitle({
   trailingAction,
 }: Props) {
   return (
-    <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-[5ch] gap-y-1">
       <FormLabel className="!mt-0 shrink-0">{title}</FormLabel>
-      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+      {/* Title ke just ~5 spaces baad — far-right nahi, chhoti screen pe full dikhe */}
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         {showRevertedBadge ? (
           <Badge variant="outline" className={cn(revertedPillClass)}>
             Reverted

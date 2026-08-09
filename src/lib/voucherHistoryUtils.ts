@@ -33,6 +33,13 @@ export async function getEffectiveHistorySettings(companyId: string): Promise<{ 
     if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
       return localDefaults;
     }
+    // PL Server staff/host — Firestore company/plans read mat (Save 30s hang).
+    if (reg) {
+      const { isServerGateCompany } = await import("@/lib/companyStorageKind");
+      if (isServerGateCompany(reg as { plServerShared?: boolean })) return localDefaults;
+      const { isLocalServerShareableCompany } = await import("@/lib/localServerShareableCompanies");
+      if (isLocalServerShareableCompany(reg)) return localDefaults;
+    }
   } catch {
     /* registry miss */
   }

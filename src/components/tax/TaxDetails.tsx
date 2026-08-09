@@ -30,7 +30,6 @@ import {
   Columns3,
   ChevronDown,
   Search,
-  Wand2,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -60,9 +59,13 @@ import {
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_OUTER_ROW_CN,
+  LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
+  LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
@@ -1130,10 +1133,10 @@ export function TaxDetails({
     <>
       <div className="h-full">
         <div className="h-full flex flex-col overflow-hidden">
-        {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
+        {/* Header: identity + pills — Party-style single row */}
+        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+          <div className={LEDGER_HEADER_OUTER_ROW_CN}>
+            <div className={LEDGER_HEADER_IDENTITY_CN}>
               {onBack && (
                 <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
                   <ArrowLeft className="h-5 w-5" />
@@ -1148,40 +1151,23 @@ export function TaxDetails({
                   fallbackSlot={<Receipt className="h-6 w-6 text-muted-foreground" />}
                 />
               </EntityFileAttachmentHover>
-              <div className="flex flex-col min-w-0 gap-0.5">
-                <div className="flex items-center gap-2 flex-nowrap min-w-0">
-                  <h2 className="text-xl font-semibold truncate">{tax.name}</h2>
-                  <EditTaxDialog
-                    tax={tax}
-                    allTaxes={allTaxes}
-                    onTaxUpdated={handleTaxUpdated}
-                    onTaxDeleted={() => onTaxDeleted(tax.id)}
-                    hasTransactions={processedTransactions.length > 0}
-                  >
-                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                  </EditTaxDialog>
-                  <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                    {formatCurrency(closingBalance, {showDrCr: true})}
-                  </div>
-                  <AddVoucherDialog
-                    defaultTab="adjustment"
-                    allowedTabs={["adjustment"]}
-                    defaultVoucherData={{
-                      defaultTab: "adjustment",
-                      adjustmentTarget: { id: tax.id, entityType: "tax", name: tax.name },
-                    }}
-                  >
-                    <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
-                      <Wand2 className="mr-2 h-3.5 w-3.5" />
-                      Adjust Balance
-                    </Button>
-                  </AddVoucherDialog>
-                </div>
+              <h2 className={LEDGER_HEADER_TITLE_CN} title={tax.name}>{tax.name}</h2>
+              <EditTaxDialog
+                tax={tax}
+                allTaxes={allTaxes}
+                onTaxUpdated={handleTaxUpdated}
+                onTaxDeleted={() => onTaxDeleted(tax.id)}
+                hasTransactions={processedTransactions.length > 0}
+              >
+                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                  <Edit className="h-4 w-4" />
+                </Button>
+              </EditTaxDialog>
+              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                {formatCurrency(closingBalance, {showDrCr: true})}
               </div>
             </div>
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className={LEDGER_HEADER_PILL_ROW_CN}>
             {oppositeAccountFilterOptions.length > 0 && (
               <div className="w-[200px] shrink-0 min-h-7 overflow-visible py-px">
                 <Combobox
@@ -1196,6 +1182,18 @@ export function TaxDetails({
                 />
               </div>
             )}
+                  <AddVoucherDialog
+                    defaultTab="adjustment"
+                    allowedTabs={["adjustment"]}
+                    defaultVoucherData={{
+                      defaultTab: "adjustment",
+                      adjustmentTarget: { id: tax.id, entityType: "tax", name: tax.name },
+                    }}
+                  >
+                    <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
+                      Adjust Balance
+                    </Button>
+                  </AddVoucherDialog>
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker

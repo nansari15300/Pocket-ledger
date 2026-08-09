@@ -12,6 +12,33 @@ import type { GateRecord } from "@/lib/gates/gateTypes";
 import { setBackupEncryptionSessionFromLogin } from "@/lib/serverBackupEncryption";
 import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
 
+/** Serialize `localCompanyUsers` root writes per company — profile backfill vs role save race. */
+const localCompanyUsersWriteChain = new Map<string, Promise<unknown>>();
+
+export async function withLocalCompanyUsersWriteLock<T>(
+  companyId: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return fn();
+  const prev = localCompanyUsersWriteChain.get(cid) || Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tracked = prev.catch(() => undefined).then(() => gate);
+  localCompanyUsersWriteChain.set(cid, tracked);
+  await prev.catch(() => undefined);
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (localCompanyUsersWriteChain.get(cid) === tracked) {
+      localCompanyUsersWriteChain.delete(cid);
+    }
+  }
+}
+
 /** Company user row — password local blob me (device pe hi), server jaisa trust model. */
 export type LocalCompanyUserRecord = {
   id: string;
@@ -58,7 +85,15 @@ export function parseLocalCompanyUserRows(raw: unknown): LocalCompanyUserRecord[
           : "";
     const shareEmail = rawShareEmail ? rawShareEmail.trim().toLowerCase() : null;
     if (!id || !username) continue;
-    out.push({ id, username, displayName, role, password, uid, shareEmail });
+    out.push({
+      id,
+      username,
+      displayName,
+      role: normalizeLocalCompanyAppRole(role),
+      password,
+      uid,
+      shareEmail,
+    });
   }
   return out;
 }

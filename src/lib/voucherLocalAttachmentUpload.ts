@@ -23,6 +23,10 @@ import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
+import {
+  buildStoragePathPrefix,
+  resolveCompanyUsesPocketLedgerStorage,
+} from "@/lib/firebaseStoragePaths";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 
 /**
@@ -90,6 +94,14 @@ export async function appendLocalOnlyVoucherFilesToUrls(params: {
   }
   const voucherIdForDoc = existingVoucherId || generateLocalVoucherIdForCreate();
   const preGeneratedVoucherId = existingVoucherId ? undefined : voucherIdForDoc;
+  const usePocketLedger = await resolveCompanyUsesPocketLedgerStorage(companyId);
+  const storagePathPrefix = buildStoragePathPrefix({
+    companyId,
+    usePocketLedger,
+    collectionName: "vouchers",
+    fieldKey: "fileUrls",
+    voucherType: storageFolder,
+  });
 
   for (const file of newFiles) {
     if (out.length >= maxFileCount) break;
@@ -100,7 +112,7 @@ export async function appendLocalOnlyVoucherFilesToUrls(params: {
       contentType: file.type || "application/octet-stream",
       docPath: `companies/${docCompanyId}/vouchers/${voucherIdForDoc}`,
       field: "fileUrls",
-      storagePathPrefix: `voucher-files/${companyId}/${storageFolder}`,
+      storagePathPrefix,
       fileName: file.name,
     };
     await putPendingFile(pendingFile);

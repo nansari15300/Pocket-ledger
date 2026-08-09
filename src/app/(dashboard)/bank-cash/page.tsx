@@ -44,7 +44,12 @@ import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import {
   masterDetailTabHref,
+  masterDetailCanonicalHref,
   replaceMasterDetailTabUrl,
+  tabSwitchSelection,
+  pickRememberedListSelection,
+  writeMasterDetailPageState,
+  readMasterDetailLocationQuery,
 } from "@/lib/masterDetailTabChange";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
@@ -56,6 +61,9 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { collectBankAccountIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesBankLedger";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
+import { BankLedgerDrCrPerspectiveSwitch } from "@/components/bank-cash/BankLedgerDrCrPerspectiveSwitch";
+import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
+import { flipLedgerSignedBalance } from "@/lib/bankLedgerDrCrPerspective";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
@@ -69,6 +77,8 @@ function BankCashPageContent() {
   const { user } = useAuth();
   const { company, companyId, effectiveNotificationSettings } = useCompany();
   const { formatCurrency, formatRunning } = useDate();
+  const { perspective: bankDrCrPerspective, setPerspective: setBankDrCrPerspective } =
+    useBankLedgerDrCrPerspective();
   const { vouchers, loading: vouchersLoading, processedAccounts, processedAccountGroups: initialProcessedAccountGroups, userNames } = useVouchers();
   const pageColdLoading = vouchersLoading && processedAccounts.length === 0;
   const router = useRouter();
@@ -76,6 +86,8 @@ function BankCashPageContent() {
   const selectedIdFromUrl = searchParams.get("selected");
   const viewFromUrl = searchParams.get("view");
   const isInitialMount = useRef(true);
+  /** Tab switch — stale `useSearchParams` ignore (Party jaisa). */
+  const pendingBankSelectIdRef = useRef<string | null>(null);
   const { can } = usePermissions();
   const showApproveOnList =
     can("approve_transactions") &&
@@ -138,22 +150,6 @@ function BankCashPageContent() {
     router.replace(href, { scroll: false });
   }, [setSelected, router]);
   useRegisterMasterDetailHardwareBack("bank-cash", onBackToList);
-
-  /** Mobile: tab switch par list; desktop: usePageMemory se last row restore */
-  const handleBankCashTabChange = useCallback(
-    (value: string) => {
-      setActiveView(value);
-      if (!isMobile) return;
-      setSelected(null);
-      const href = masterDetailTabHref("bank-cash", {
-        tab: value,
-        defaultTab: "accounts",
-        listOnly: true,
-      });
-      replaceMasterDetailTabUrl(href, router, useQueryNav);
-    },
-    [isMobile, setActiveView, setSelected, router, useQueryNav]
-  );
 
   const [searchTerm, setSearchTerm] = useState("");
   const [accountListQuickFilter, setAccountListQuickFilter] = useState<EntityListQuickFilter>("default");
@@ -326,6 +322,46 @@ function BankCashPageContent() {
   const clearingAccountsForList = useMemo(() => {
     return processedAccounts.filter((a) => a.isClearing === true);
   }, [processedAccounts]);
+
+  /** Party-style tab switch — set view + row + URL together (EXE/APK stale ?selected= snap-back band). */
+  const handleBankCashTabChange = useCallback(
+    (value: string) => {
+      const tab = value === "groups" || value === "clearing" ? value : "accounts";
+      const items =
+        tab === "groups"
+          ? processedAccountGroups
+          : tab === "clearing"
+            ? clearingAccountsForList
+            : accountsForAccountList;
+      const nextSelected = tabSwitchSelection(
+        isMobile,
+        pickRememberedListSelection("bankCashPageState", tab, items)
+      );
+      pendingBankSelectIdRef.current = nextSelected?.id ?? null;
+      setActiveView(tab);
+      setSelected(nextSelected);
+      const href = isMobile
+        ? masterDetailTabHref("bank-cash", { tab, defaultTab: "accounts", listOnly: true })
+        : masterDetailCanonicalHref("bank-cash", {
+            tab,
+            defaultTab: "accounts",
+            selectedId: nextSelected?.id ?? null,
+          });
+      replaceMasterDetailTabUrl(href, router, useQueryNav);
+      writeMasterDetailPageState("bankCashPageState", tab, nextSelected?.id);
+    },
+    [
+      isMobile,
+      useQueryNav,
+      processedAccountGroups,
+      clearingAccountsForList,
+      accountsForAccountList,
+      setActiveView,
+      setSelected,
+      router,
+    ]
+  );
+
   // Header count: `AccountList` jaisa — search + special-account permission
   const filteredAccountListCount = useMemo(() => {
     const canViewSpecialAccount = can("view_special_bank_accounts");
@@ -344,33 +380,60 @@ function BankCashPageContent() {
     }).length;
   }, [clearingAccountsForList, searchTerm, can]);
 
-  // Restore selection from URL once; tab switch ko force-reset mat karo.
+  // Location-first URL sync (Party jaisa) — stale searchParams.view=groups se Accounts tab mat khicho.
   useEffect(() => {
-    if (!selectedIdFromUrl) return;
     if (vouchersLoading) return;
-    const groupItem = processedAccountGroups.find((i) => i.id === selectedIdFromUrl);
-    const accountItem = processedAccounts.find((i) => i.id === selectedIdFromUrl);
-    // URL me explicit `view` ho tabhi tab change karo; warna user ka current tab preserve.
-    if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
-    else if (viewFromUrl === "accounts" && accountItem) setActiveView("accounts");
-    else if (viewFromUrl === "clearing" && accountItem) setActiveView("clearing");
+    const { view, selectedId } = readMasterDetailLocationQuery();
+    const pendingId = pendingBankSelectIdRef.current;
+    if (pendingId) {
+      if (selectedId === pendingId) pendingBankSelectIdRef.current = null;
+      else if (selected?.id === pendingId) return;
+    }
+
+    if (!selectedId) {
+      if (view === "groups") {
+        if (activeView !== "groups") setActiveView("groups");
+      } else if (view === "clearing") {
+        if (activeView !== "clearing") setActiveView("clearing");
+      } else if (activeView !== "accounts") {
+        setActiveView("accounts");
+      }
+      return;
+    }
+
+    const groupItem = processedAccountGroups.find((i) => i.id === selectedId);
+    const accountItem = processedAccounts.find((i) => i.id === selectedId);
+    if (view === "groups" && groupItem) setActiveView("groups");
+    else if (view === "clearing" && accountItem) setActiveView("clearing");
+    else if (view === "accounts" && accountItem) setActiveView("accounts");
     const item =
       groupItem && accountItem
-        ? viewFromUrl === "groups"
+        ? view === "groups"
           ? groupItem
           : accountItem
         : groupItem || accountItem;
     if (item && selected?.id !== item.id) setSelected(item);
     const canonical =
-      viewFromUrl === "groups"
-        ? `/bank-cash?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
-        : viewFromUrl === "clearing"
-          ? `/bank-cash?view=clearing&selected=${encodeURIComponent(selectedIdFromUrl)}`
-          : `/bank-cash?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+      view === "groups"
+        ? `/bank-cash?view=groups&selected=${encodeURIComponent(selectedId)}`
+        : view === "clearing"
+          ? `/bank-cash?view=clearing&selected=${encodeURIComponent(selectedId)}`
+          : `/bank-cash?selected=${encodeURIComponent(selectedId)}`;
     if (shouldReplaceWithMasterDetailCanonical(canonical)) {
       router.replace(canonical, { scroll: false });
     }
-  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedAccounts, processedAccountGroups, selected?.id, setSelected, setActiveView, router]);
+  }, [
+    selectedIdFromUrl,
+    viewFromUrl,
+    vouchersLoading,
+    processedAccounts,
+    processedAccountGroups,
+    selected?.id,
+    activeView,
+    setSelected,
+    setActiveView,
+    router,
+  ]);
   
   // Initial Mount Safety
   useEffect(() => {
@@ -398,6 +461,10 @@ function BankCashPageContent() {
       .reduce((acc, group) => acc + (group.balance as number), 0);
   }, [activeView, processedAccounts, processedAccountGroups, can]);
 
+  const displayTotalBalance = useMemo(() => {
+    if (activeView === "groups") return totalBalance;
+    return flipLedgerSignedBalance(totalBalance, bankDrCrPerspective);
+  }, [activeView, totalBalance, bankDrCrPerspective]);
 
   const handleSelect = useCallback((item: Account | AccountGroup) => {
     if (useQueryNav) {
@@ -521,16 +588,30 @@ function BankCashPageContent() {
     </div>
   );
 
+  const bankDrCrSwitchEl = (
+    <BankLedgerDrCrPerspectiveSwitch
+      perspective={bankDrCrPerspective}
+      onPerspectiveChange={setBankDrCrPerspective}
+      className="ml-auto shrink-0"
+    />
+  );
+
   const bankSectionLabelEl =
     activeView === "accounts" ? (
-      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
-        <Landmark className={mlc.sectionIcon} />
-        <span>Accounts ({filteredAccountListCount})</span>
+      <div className={cn(mlc.sectionLabelRow, "justify-between", isMobile && "px-[2px]")}>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Landmark className={mlc.sectionIcon} />
+          <span>Accounts ({filteredAccountListCount})</span>
+        </div>
+        {bankDrCrSwitchEl}
       </div>
     ) : activeView === "clearing" ? (
-      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
-        <Landmark className={mlc.sectionIcon} />
-        <span>Clearing A/c ({filteredClearingAccountListCount})</span>
+      <div className={cn(mlc.sectionLabelRow, "justify-between", isMobile && "px-[2px]")}>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Landmark className={mlc.sectionIcon} />
+          <span>Clearing A/c ({filteredClearingAccountListCount})</span>
+        </div>
+        {bankDrCrSwitchEl}
       </div>
     ) : (
       <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
@@ -629,9 +710,9 @@ function BankCashPageContent() {
         <span className={cn(
             "font-semibold",
             // >= 0 (Debit/Bank) Green, < 0 (Credit/Overdraft) Red
-            totalBalance >= 0 ? "text-green-600" : "text-red-600"
+            displayTotalBalance >= 0 ? "text-green-600" : "text-red-600"
         )}>
-            {formatRunning(totalBalance)}
+            {formatRunning(displayTotalBalance)}
         </span>
       }
       tabs={isMobile ? undefined : bankTabsEl}

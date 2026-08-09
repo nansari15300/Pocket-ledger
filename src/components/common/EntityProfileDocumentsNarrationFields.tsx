@@ -77,6 +77,7 @@ export function EntityProfilePhotoBlock({
   canAddAvatar,
   inputId = "entity-avatar-input",
   attachmentCompanyId,
+  attachmentReusePlaceKey,
 }: {
   file: File | string | null;
   onPickClick: () => void;
@@ -86,6 +87,7 @@ export function EntityProfilePhotoBlock({
   canAddAvatar: boolean;
   inputId?: string;
   attachmentCompanyId?: string;
+  attachmentReusePlaceKey?: string | null;
 }) {
   return (
     <FormItem>
@@ -105,6 +107,7 @@ export function EntityProfilePhotoBlock({
               onRemove={onRemoveAvatar}
               size={DOC_SIZE}
               attachmentCompanyId={attachmentCompanyId}
+              attachmentReusePlaceKey={attachmentReusePlaceKey}
             />
           ) : null}
           {!file ? (
@@ -153,6 +156,8 @@ export function EntityDocumentsBlock({
   entityStatementLabel,
   inputId = "entity-docs-input",
   attachmentCompanyId,
+  setDocSlots,
+  attachmentReusePlaceKey,
 }: {
   docSlots: Array<File | string>;
   onRemoveDoc: (idx: number) => void;
@@ -164,6 +169,9 @@ export function EntityDocumentsBlock({
   entityStatementLabel: string;
   inputId?: string;
   attachmentCompanyId?: string;
+  /** Paste/Reuse HTTPS link (same company) — no re-upload. */
+  setDocSlots?: React.Dispatch<React.SetStateAction<Array<File | string>>>;
+  attachmentReusePlaceKey?: string | null;
 }) {
   // Edit mode: saare slots string URL hon to full-screen viewer me ← → / swipe same set
   const galleryUrls =
@@ -195,6 +203,7 @@ export function EntityDocumentsBlock({
                 onRemove={() => onRemoveDoc(idx)}
                 size={DOC_SIZE}
                 attachmentCompanyId={attachmentCompanyId}
+                attachmentReusePlaceKey={attachmentReusePlaceKey}
                 attachmentGallery={galleryUrls ? { urls: galleryUrls, startIndex: idx } : undefined}
               />
             ))}
@@ -207,6 +216,15 @@ export function EntityDocumentsBlock({
                     if (docSlots.length >= 5) return;
                     void onDocsChange(syntheticFileInputChangeEvent(incoming));
                   }}
+                  voucherAttachmentReuse={
+                    setDocSlots
+                      ? {
+                          currentFiles: docSlots,
+                          setFiles: setDocSlots,
+                          maxFiles: 5,
+                        }
+                      : undefined
+                  }
                   className="relative flex h-24 w-24 shrink-0 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed text-muted-foreground transition-colors hover:border-primary"
                 >
                   <Upload className="h-6 w-6" />

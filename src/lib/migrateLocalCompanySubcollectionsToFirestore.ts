@@ -41,23 +41,46 @@ function sanitizeValue(v: unknown): unknown {
   return v;
 }
 
-function stripLocalFileRefsFromDoc(obj: Record<string, unknown>): Record<string, unknown> {
+function isHttpsAttachmentRef(u: string): boolean {
+  return /^https?:\/\//i.test(String(u || "").trim());
+}
+
+/**
+ * `local_only` — data-only restore: HTTPS bakho, `local:` hatao.
+ * `all` — with-files restore: HTTPS + `local:` dono hatao (files phase baad me HTTPS patch).
+ */
+function stripAttachmentRefsFromDoc(
+  obj: Record<string, unknown>,
+  mode: "local_only" | "all"
+): Record<string, unknown> {
   const out = { ...obj };
+  const dropRef = (v: string) => {
+    if (isLocalFileRef(v)) return true;
+    if (mode === "all" && isHttpsAttachmentRef(v)) return true;
+    return false;
+  };
   for (const key of ["fileUrls", "documentFileUrls"] as const) {
     if (!Array.isArray(out[key])) continue;
-    const filtered = (out[key] as unknown[]).filter((v) => !isLocalFileRef(String(v ?? "")));
+    const filtered = (out[key] as unknown[])
+      .map((v) => String(v ?? "").trim())
+      .filter((v) => v && !dropRef(v));
     if (filtered.length === 0) delete out[key];
     else out[key] = filtered;
   }
   for (const key of ["fileUrl", "avatarUrl", "logoUrl"] as const) {
-    if (isLocalFileRef(String(out[key] ?? ""))) delete out[key];
+    const s = String(out[key] ?? "").trim();
+    if (s && dropRef(s)) delete out[key];
   }
   const unassigned = out.unassignedFile;
   if (unassigned && typeof unassigned === "object") {
-    const url = (unassigned as Record<string, unknown>).url;
-    if (isLocalFileRef(String(url ?? ""))) delete out.unassignedFile;
+    const url = String((unassigned as Record<string, unknown>).url ?? "").trim();
+    if (url && dropRef(url)) delete out.unassignedFile;
   }
   return out;
+}
+
+function stripLocalFileRefsFromDoc(obj: Record<string, unknown>): Record<string, unknown> {
+  return stripAttachmentRefsFromDoc(obj, "local_only");
 }
 
 function sanitizeDocForFirestore(obj: Record<string, unknown>): Record<string, unknown> {
@@ -93,6 +116,8 @@ export async function pushAllLocalCompanyDocsToFirestore(
   options?: {
     sqliteCompanyId?: string;
     omitLocalFileRefs?: boolean;
+    /** With-files restore: strip HTTPS + local: from cloud docs (SQLite still has local:). */
+    omitAllAttachmentUrls?: boolean;
     onCollectionProgress?: (collectionName: string, index: number, total: number) => void;
   }
 ): Promise<{
@@ -104,6 +129,11 @@ export async function pushAllLocalCompanyDocsToFirestore(
   const sqliteCompanyId = String(options?.sqliteCompanyId || fsCompanyId).trim() || fsCompanyId;
   const cols = COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS;
   const totalCols = cols.length;
+  const stripMode: false | "local_only" | "all" = options?.omitAllAttachmentUrls
+    ? "all"
+    : options?.omitLocalFileRefs
+      ? "local_only"
+      : false;
 
   for (let colIndex = 0; colIndex < cols.length; colIndex++) {
     const collectionName = cols[colIndex]!;
@@ -122,7 +152,7 @@ export async function pushAllLocalCompanyDocsToFirestore(
         const docId = String((row as { id?: string }).id ?? "");
         if (!docId) continue;
         const { id: _omit, ...rest } = row as Record<string, unknown> & { id: string };
-        const base = options?.omitLocalFileRefs ? stripLocalFileRefsFromDoc(rest) : rest;
+        const base = stripMode ? stripAttachmentRefsFromDoc(rest, stripMode) : rest;
         const data = sanitizeDocForFirestore(base as Record<string, unknown>);
         if (data.companyId == null || String(data.companyId).trim() === "") {
           data.companyId = fsCompanyId;

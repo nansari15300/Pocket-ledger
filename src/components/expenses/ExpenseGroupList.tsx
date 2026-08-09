@@ -6,7 +6,7 @@ import { Users, Lock } from "lucide-react";
 import type { ExpenseGroup } from "@/components/expenses/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
-import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo, useState } from "react";
@@ -49,7 +49,7 @@ export function ExpenseGroupList({
   hideQuickFilterBar?: boolean;
 }) {
   const { formatCurrency } = useDate();
-  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
+  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } = useMasterListRowMotion();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
@@ -80,7 +80,18 @@ export function ExpenseGroupList({
     return list;
   }, [groups, searchTerm, quickFilter]);
 
-  if (filteredAndSortedGroups.length === 0) {
+  const listOrderKey = useMemo(
+    () => masterListOrderKey(filteredAndSortedGroups.map((g) => g.id)),
+    [filteredAndSortedGroups]
+  );
+
+  const { displayRows: displayListRows, displayOrderKey } = useMasterListDisplayRows(
+    filteredAndSortedGroups,
+    listOrderKey,
+    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
+  );
+
+  if (displayListRows.length === 0) {
     return (
       <TooltipProvider delayDuration={200}>
         <div
@@ -106,7 +117,7 @@ export function ExpenseGroupList({
         >
           <ul className="pl-master-list-ul w-full">
             <AnimatePresence mode={animatePresenceMode}>
-              {filteredAndSortedGroups.map((group) => {
+              {displayListRows.map((group) => {
                 const isSelected = selectedGroup?.id === group.id;
                 const isSystem = (group as any).isSystemReserved;
                 const href = getItemHref?.(group);
@@ -167,7 +178,7 @@ export function ExpenseGroupList({
                       </div>
                 );
                 return (
-                  <motion.li key={group.id} className="w-full" {...rowMotionProps}>
+                  <motion.li key={group.id} className="w-full" layoutDependency={displayOrderKey} {...rowMotionProps}>
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">

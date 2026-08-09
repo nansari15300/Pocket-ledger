@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { AttachmentHoverPortal, useTapInteractionMode } from "@/components/vouchers/AttachmentHoverPortal";
 import { storage } from "@/lib/firebase";
-import { ref, getBlob } from "firebase/storage";
+import { ref, getBlob, getMetadata } from "firebase/storage";
 import {
   getAttachmentFormatLabel,
   getAttachmentFormatLabelFromHints,
@@ -60,6 +60,7 @@ import { toast as sonnerToast } from "sonner";
 import { useCrossCompanyAttachmentAccess } from "@/hooks/useCrossCompanyAttachmentAccess";
 import { useCompany } from "@/hooks/useCompany";
 import { isOnlineCompanyAttachmentNetworkAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
+import { FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { grantExplicitAttachmentNetworkFetchBatch } from "@/lib/attachmentNetworkGate";
 import {
   companyAttachmentMode,
@@ -73,6 +74,14 @@ import {
   isCrossCompanyAttachmentVisibleToUser,
 } from "@/lib/crossCompanyAttachmentAccess";
 import { forgetHoverBlobUrl, peekHoverCachedBlobUrl, rememberHoverBlobUrl } from "@/lib/attachmentHoverBlobCache";
+import {
+  ATTACHMENT_REUSE_COUNT_EVENT,
+  attachmentPersistableRefsMatch,
+  noteAttachmentUnlinkedInUi,
+  rememberAttachmentReuseOriginPlace,
+  resolveAttachmentReuseUiMeta,
+} from "@/lib/companyAttachmentRegistry";
+import { useVoucherListReuseHint } from "@/lib/voucherAttachmentListReuseIndex";
 import {
   ensureAttachmentUiRefreshListeners,
   getAttachmentUrlLoadStatus,
@@ -307,7 +316,8 @@ function sharedPdfPortalThumbKey(url: string): string {
 export async function prewarmPdfThumbnailsForGallery(
   entries: ReadonlyArray<{ url: string; storagePath?: string }>,
   signal?: AbortSignal,
-  localAttachmentOnly = false
+  localAttachmentOnly = false,
+  opts?: { companyId?: string | null }
 ): Promise<void> {
   const seen = new Set<string>();
   const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
@@ -363,7 +373,14 @@ export async function prewarmPdfThumbnailsForGallery(
         if (!pdfFileHttp || pdfFileHttp.size === 0) {
           if (localAttachmentOnly) continue;
           const { isRemoteAttachmentNetworkFetchAllowed } = await import("@/lib/attachmentNetworkGate");
-          if (!isRemoteAttachmentNetworkFetchAllowed(u)) continue;
+          if (
+            !isRemoteAttachmentNetworkFetchAllowed(u, {
+              companyId: opts?.companyId,
+              bypassVisiblePageCheck: true,
+            })
+          ) {
+            continue;
+          }
           const res = await fetch(u, { mode: "cors", signal });
           if (!res.ok) continue;
           pdfFileHttp = await res.blob();
@@ -419,6 +436,190 @@ const formatBytes = (bytes: number, decimals = 2) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
 };
 
+/** Thumbnail format badge — compact size (e.g. `86 KB`). */
+function formatBytesForThumbBadge(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${Math.max(0, Math.round(bytes))} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) {
+    const rounded = kb >= 100 ? Math.round(kb) : Math.round(kb * 10) / 10;
+    return `${rounded} KB`;
+  }
+  const mb = kb / 1024;
+  const rounded = mb >= 10 ? Math.round(mb) : Math.round(mb * 10) / 10;
+  return `${rounded} MB`;
+}
+
+/** First positive byte length — parent meta, File.size, or loaded Blob. */
+function pickAttachmentByteSize(
+  ...candidates: Array<number | null | undefined | Blob>
+): number | null {
+  for (const c of candidates) {
+    if (typeof c === "number" && Number.isFinite(c) && c > 0) return c;
+    if (c && typeof c === "object" && "size" in c) {
+      const n = Number((c as Blob).size);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return null;
+}
+
+/** Remount / sibling tiles — once size known, badge instantly. */
+const attachmentByteSizeMemory = new Map<string, number>();
+
+function rememberAttachmentByteSize(url: string | null | undefined, bytes: number | null | undefined): void {
+  const u = String(url || "").trim();
+  const n = pickAttachmentByteSize(bytes);
+  if (!u || n == null) return;
+  attachmentByteSizeMemory.set(u, n);
+}
+
+function recalledAttachmentByteSize(url: string | null | undefined): number | null {
+  const u = String(url || "").trim();
+  if (!u) return null;
+  return pickAttachmentByteSize(attachmentByteSizeMemory.get(u));
+}
+
+/** Browser already downloaded the image — Resource Timing se size (jab Timing-Allow-Origin ho). */
+function byteSizeFromPerformanceResource(url: string | null | undefined): number | null {
+  const u = String(url || "").trim();
+  if (!u || typeof performance === "undefined" || typeof performance.getEntriesByName !== "function") {
+    return null;
+  }
+  try {
+    const entries = performance.getEntriesByName(u) as PerformanceResourceTiming[];
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i];
+      const n = pickAttachmentByteSize(e?.encodedBodySize, e?.transferSize, e?.decodedBodySize);
+      if (n != null) return n;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/**
+ * Web badge size without full download (hang-safe).
+ * 1) offline cache  2) Storage getMetadata (always OK)  3) HEAD/Range only when allowHttpPeek
+ */
+async function peekRemoteAttachmentByteSize(
+  url: string,
+  opts?: {
+    signal?: AbortSignal;
+    storagePath?: string | null;
+    companyId?: string | null;
+    /** false = skip HEAD/Range only; getMetadata + cache still run */
+    allowHttpPeek?: boolean;
+  }
+): Promise<number | null> {
+  const u = String(url || "").trim();
+  if (!u) return null;
+
+  const remembered = recalledAttachmentByteSize(u);
+  if (remembered != null) return remembered;
+
+  if (isLocalFileRef(u)) {
+    try {
+      const meta = getLocalFileRefMetaSync(u);
+      const syncSize = pickAttachmentByteSize(meta?.size);
+      if (syncSize != null) return syncSize;
+      const asyncMeta = await getLocalFileRefMeta(u);
+      return pickAttachmentByteSize(asyncMeta?.size);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!/^https?:\/\//i.test(u)) return null;
+
+  try {
+    const cached = await getOfflineCachedAttachmentBlob(u);
+    const fromCache = pickAttachmentByteSize(cached);
+    if (fromCache != null) return fromCache;
+  } catch {
+    /* miss */
+  }
+
+  if (opts?.signal?.aborted) return null;
+
+  const rawPath =
+    String(opts?.storagePath || "").trim() ||
+    tryGetStoragePathFromFirebaseDownloadUrl(u) ||
+    "";
+  const objectPath =
+    (rawPath &&
+      normalizeFirebaseStorageObjectPathForSdk(rawPath, {
+        companyId: opts?.companyId ?? undefined,
+      })) ||
+    rawPath;
+  if (objectPath) {
+    try {
+      const meta = await getMetadata(ref(storage, objectPath));
+      const n = Number(meta?.size || 0);
+      if (Number.isFinite(n) && n > 0) {
+        rememberAttachmentByteSize(u, n);
+        return n;
+      }
+    } catch {
+      /* path/auth miss */
+    }
+  }
+  if (opts?.signal?.aborted) return null;
+  if (opts?.allowHttpPeek === false) return null;
+
+  try {
+    const head = await fetch(u, { method: "HEAD", mode: "cors", signal: opts?.signal });
+    if (head.ok) {
+      const n = Number(head.headers.get("content-length") || "");
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  } catch {
+    /* CORS / HEAD unsupported */
+  }
+  if (opts?.signal?.aborted) return null;
+
+  try {
+    const ranged = await fetch(u, {
+      method: "GET",
+      mode: "cors",
+      headers: { Range: "bytes=0-0" },
+      signal: opts?.signal,
+    });
+    const cr = ranged.headers.get("content-range") || "";
+    const m = /\/(\d+)\s*$/.exec(cr);
+    if (m) {
+      const n = Number(m[1]);
+      if (Number.isFinite(n) && n > 0) {
+        try {
+          await ranged.body?.cancel();
+        } catch {
+          /* ignore */
+        }
+        return n;
+      }
+    }
+    if (ranged.status === 200) {
+      const n = Number(ranged.headers.get("content-length") || "");
+      try {
+        await ranged.body?.cancel();
+      } catch {
+        /* ignore */
+      }
+      if (Number.isFinite(n) && n > 0) return n;
+    } else {
+      try {
+        await ranged.body?.cancel();
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 interface FilePreviewProps {
   file: File | string;
   onRemove?: () => void;
@@ -460,6 +661,13 @@ interface FilePreviewProps {
   contentType?: string | null;
   /** Gallery grid: once a local cached preview paints, late generic/error passes must not replace it. */
   stableLocalPreviewOnly?: boolean;
+  /** HTTPS reuse badge (2/3/4…) — company-wide how many places use this file. */
+  showReuseCountBadge?: boolean;
+  /**
+   * Current place key (`vouchers/id`, `parties/id`, …).
+   * Origin (earliest linked doc) → green badge; reuse wale pe blue.
+   */
+  attachmentReusePlaceKey?: string | null;
 }
 
 const getCleanName = (name: string) => {
@@ -497,6 +705,8 @@ export function FilePreview({
   sourceFileName = null,
   contentType = null,
   stableLocalPreviewOnly = false,
+  showReuseCountBadge = false,
+  attachmentReusePlaceKey = null,
 }: FilePreviewProps) {
   const voucherAttachmentFb = useVoucherAttachmentFallback();
   const { companyId: shellCompanyId, company } = useCompany();
@@ -521,6 +731,13 @@ export function FilePreview({
   }, []);
   // Edit forms me fallback company id dene se Firebase object-path resolve stable rehta hai.
   const pathCompanyId = attachmentCompanyId ?? voucherAttachmentFb?.companyId ?? shellCompanyId ?? undefined;
+  const [filesTickEpoch, setFilesTickEpoch] = React.useState(0);
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPrefs = () => setFilesTickEpoch((n) => n + 1);
+    window.addEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, onPrefs);
+    return () => window.removeEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, onPrefs);
+  }, []);
   const localLedgerOnly = React.useMemo(() => {
     if (forceLocalAttachmentOnly || companyRequiresLocalAttachmentUrlsOnly(company)) return true;
     if (companyUsesLocalAttachmentSourcesOnly(company)) return true;
@@ -528,7 +745,7 @@ export function FilePreview({
     if (!cid) return false;
     // Files tick OFF → no network fetch; local blob/cache still shows / opens.
     return !isOnlineCompanyAttachmentNetworkAllowed(cid, company);
-  }, [forceLocalAttachmentOnly, company, pathCompanyId]);
+  }, [forceLocalAttachmentOnly, company, pathCompanyId, filesTickEpoch]);
   const attachmentMode = React.useMemo(
     () => companyAttachmentMode(company, { localLedgerOnly }),
     [company, localLedgerOnly]
@@ -703,7 +920,109 @@ export function FilePreview({
       : { url: null, type: "other", name: "loading...", size: null, formatLabel: "" }
   );
 
+  /**
+   * Hang-safe KB badge: warm/early-return paths size skip karte the.
+   * getMetadata/cache hamesha; HEAD/Range sirf jab Files network allow.
+   */
+  React.useEffect(() => {
+    if (typeof File !== "undefined" && file instanceof File && file.size > 0) return;
+    if (typeof fileSize === "number" && Number.isFinite(fileSize) && fileSize > 0) return;
+    if (typeof file !== "string") return;
+    const src = String(file).trim();
+    if (!src) return;
+    if (!/^https?:\/\//i.test(src) && !isLocalFileRef(src)) return;
+    if (pickAttachmentByteSize(fileInfo.size) != null) return;
+
+    const ac = new AbortController();
+    void (async () => {
+      const peeked = await peekRemoteAttachmentByteSize(src, {
+        signal: ac.signal,
+        storagePath: resolvedStoragePath || storagePath,
+        companyId: pathCompanyId,
+        // Files OFF: HTTP Range mat; Storage metadata + cache ab bhi size de sakte hain.
+        allowHttpPeek: !localLedgerOnly,
+      });
+      if (!peeked || ac.signal.aborted) return;
+      rememberAttachmentByteSize(src, peeked);
+      setFileInfo((prev) => {
+        if (pickAttachmentByteSize(prev.size) != null) return prev;
+        return { ...prev, size: peeked };
+      });
+    })();
+    return () => ac.abort();
+  }, [
+    file,
+    fileSize,
+    fileInfo.size,
+    resolvedStoragePath,
+    storagePath,
+    pathCompanyId,
+    localLedgerOnly,
+  ]);
+
   const [isLoading, setIsLoading] = useState(immediateLocalInfo ? false : true);
+
+  /** Recompress/reuse ke baad FILE icon stuck — cached blob se image wapas. */
+  React.useEffect(() => {
+    if (typeof file !== "string") return;
+    const src = String(file).trim();
+    if (!/^https?:\/\//i.test(src)) return;
+    if (fileInfo.type === "image" && fileInfo.url && !isUnresolvedAttachmentPreviewUrl(fileInfo.url)) {
+      return;
+    }
+    const fmt = String(fileInfo.formatLabel || getAttachmentFormatLabel(src) || "").toUpperCase();
+    const looksImage =
+      ["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG", "HEIC", "HEIF", "AVIF", "TIFF", "IMAGE"].includes(
+        fmt
+      ) || /\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(src.split("?")[0] || "");
+    if (!looksImage) return;
+
+    let cancelled = false;
+    void (async () => {
+      const warmed = peekHoverCachedBlobUrl(src);
+      if (warmed && (await isUsableWarmedAttachmentDisplayUrl(warmed))) {
+        if (cancelled) return;
+        setFileInfo((prev) => ({
+          ...prev,
+          url: warmed,
+          type: "image",
+          formatLabel:
+            prev.formatLabel === "FILE" || prev.formatLabel === "OTHER" ? "JPG" : prev.formatLabel || "JPG",
+        }));
+        setIsLoading(false);
+        return;
+      }
+      try {
+        let blob = await getOfflineCachedAttachmentBlob(src);
+        if ((!blob || blob.size === 0) && !localLedgerOnly) {
+          blob = await getRemoteAttachmentBlobPreferOfflineCache(src, undefined, {
+            localOnly: false,
+            companyId: pathCompanyId,
+            explicitUserRequest: true,
+          });
+        }
+        if (cancelled || !blob || blob.size === 0) return;
+        const objectUrl = URL.createObjectURL(blob);
+        rememberHoverBlobUrl(src, objectUrl);
+        rememberAttachmentByteSize(src, blob.size);
+        setFileInfo((prev) => ({
+          ...prev,
+          url: objectUrl,
+          type: "image",
+          formatLabel:
+            prev.formatLabel === "FILE" || prev.formatLabel === "OTHER" ? "JPG" : prev.formatLabel || "JPG",
+          size: pickAttachmentByteSize(prev.size, blob.size),
+        }));
+        setIsLoading(false);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [file, fileInfo.type, fileInfo.url, fileInfo.formatLabel, localLedgerOnly, pathCompanyId]);
+
   const [pdfThumbnail, setPdfThumbnail] = useState<string | null>(null);
   const [isPdfLoading, setIsPdfLoading] = useState(false);
   const [lastGoodLocalPreview, setLastGoodLocalPreview] = useState<{
@@ -900,17 +1219,17 @@ export function FilePreview({
             const response = await fetch(pdfUrl, { signal });
             pdfFile = await response.blob();
           } else if (pdfUrl.startsWith(LOCAL_FILE_PREFIX)) {
-            // Native/local: display path direct hai; thumb cache miss par sync-time generation na ho to icon fallback (bridge read avoid).
-            if (isCapacitorNativeApp()) {
-              setIsPdfLoading(false);
-              return null;
-            }
-            // Web/electron fallback: local ref bytes read करके thumb बना सकते हैं.
+            // APK edit voucher: `local:` PDF thumb — cache miss pe bhi bytes resolve karke raster banao
+            // (pehle Cap early-return → sirf red PDF icon; preview nahi).
             const cid = String(pathCompanyId || voucherAttachmentFb?.companyId || "").trim();
             let blob = await getBlobFromLocalFileRef(pdfUrl, cid ? { companyId: cid } : undefined);
             if ((!blob || blob.size <= 0) && cid) {
-              const { fetchPlServerAttachmentBlob } = await import("@/lib/plServerAttachmentFetch");
-              blob = (await fetchPlServerAttachmentBlob(cid, pdfUrl, signal)) ?? null;
+              try {
+                const { fetchPlServerAttachmentBlob } = await import("@/lib/plServerAttachmentFetch");
+                blob = (await fetchPlServerAttachmentBlob(cid, pdfUrl, signal)) ?? null;
+              } catch {
+                blob = null;
+              }
             }
             if (!blob || blob.size <= 0) {
               setIsPdfLoading(false);
@@ -1090,7 +1409,7 @@ export function FilePreview({
               isLocalFileRef(file) || file.startsWith(LOCAL_FILE_PREFIX)
                 ? "Attachment"
                 : file.split("/").pop()?.split("?")[0] || "file",
-            size: fileSize ?? null,
+            size: pickAttachmentByteSize(fileSize),
             formatLabel: thumbType === "pdf" ? "PDF" : lbl === "FILE" || lbl === "OTHER" ? "IMAGE" : lbl || "IMAGE",
           });
           if (thumbType === "pdf") {
@@ -1133,7 +1452,7 @@ export function FilePreview({
                 isLocalFileRef(file) || file.startsWith(LOCAL_FILE_PREFIX)
                   ? "Attachment"
                   : file.split("/").pop()?.split("?")[0] || "file",
-              size: fileSize ?? null,
+              size: pickAttachmentByteSize(fileSize),
               formatLabel: warmedType === "pdf" ? "PDF" : lbl === "FILE" || lbl === "OTHER" ? "IMAGE" : lbl || "IMAGE",
             });
             setIsLoading(false);
@@ -1163,7 +1482,7 @@ export function FilePreview({
               url: file,
               type: "pdf",
               name: "Attachment",
-              size: fileSize ?? null,
+              size: pickAttachmentByteSize(fileSize, persistedPdfThumb),
               formatLabel: "PDF",
             });
             setIsLoading(false);
@@ -1184,7 +1503,7 @@ export function FilePreview({
                 url: objectUrl,
                 type: "image",
                 name: "Attachment",
-                size: fileSize ?? cachedBlob.size,
+                size: pickAttachmentByteSize(fileSize, cachedBlob),
                 formatLabel: getAttachmentFormatLabel(file) === "FILE" ? "JPEG" : getAttachmentFormatLabel(file),
               });
               setIsLoading(false);
@@ -1201,7 +1520,7 @@ export function FilePreview({
                 url: objectUrl,
                 type: "pdf",
                 name: "Attachment",
-                size: fileSize ?? cachedBlob.size,
+                size: pickAttachmentByteSize(fileSize, cachedBlob),
                 formatLabel: "PDF",
               });
               setIsLoading(false);
@@ -1280,6 +1599,7 @@ export function FilePreview({
             if (resolvedUrl?.startsWith("blob:") || resolvedUrl?.startsWith("data:")) {
               rememberHoverBlobUrl(file, resolvedUrl);
             }
+            resolvedSize = pickAttachmentByteSize(resolvedSize, fileSize, staticResolved.blob);
             setFileInfo({
               url: resolvedUrl,
               type: resolvedType,
@@ -1326,6 +1646,7 @@ export function FilePreview({
                 objectUrl = URL.createObjectURL(remoteBlob);
                 rememberHoverBlobUrl(file, objectUrl);
                 resolvedUrl = objectUrl;
+                resolvedSize = pickAttachmentByteSize(resolvedSize, fileSize, remoteBlob);
                 const kind = await sniffBlobKindForPreview(remoteBlob);
                 if (kind === "pdf") resolvedType = "pdf";
                 else if (kind === "image") resolvedType = "image";
@@ -1431,6 +1752,8 @@ export function FilePreview({
             localLedgerOnly,
           });
 
+          resolvedSize = pickAttachmentByteSize(resolvedSize, fileSize, staticResolved.blob);
+
           setFileInfo({
             url: resolvedUrl,
             type: resolvedType,
@@ -1440,20 +1763,35 @@ export function FilePreview({
           });
           setIsLoading(false);
 
+          // Web: inline peek (dedicated effect bhi chalta hai) — warm path skip cover.
+          if (!resolvedSize && typeof file === "string") {
+            void (async () => {
+              const peeked = await peekRemoteAttachmentByteSize(file, {
+                signal: controller.signal,
+                storagePath: resolvedStoragePath,
+                companyId: pathCompanyId,
+                allowHttpPeek: !localLedgerOnly,
+              });
+              if (!peeked || controller.signal.aborted) return;
+              setFileInfo((prev) => ({
+                ...prev,
+                size: pickAttachmentByteSize(prev.size, peeked),
+              }));
+            })();
+          }
+
           // Sniff/cache later: first paint fast rakho, phir background me disk cache hydrate karke offline-safe blob URL par swap karo.
           void (async () => {
             try {
               // 1) Offline/restart fast fallback: pehle local cache read try.
               let probe = await getOfflineCachedAttachmentBlob(file);
-              // 2) Cache miss + online: network se hydrate karo (is call me putCachedBlob bhi hota hai); offline par fetch mat — hang/spinner.
-              // Web: edit tile pe Firebase full hydrate mat — cache/local only; thumb click / open pe full load.
+              // 2) Cache miss + online: network se hydrate (EXE/APK). Web browser: tile mount pe
+              //    full Firebase download mat — Files tick ON hone se bhi (edit save hang / refresh stall).
               const webLazyNoNetwork = isWebBrowserAttachmentLazyLoad();
-              const editExplicitFetch =
-                !localLedgerOnly && Boolean(pathCompanyId || voucherAttachmentFb?.voucherId);
               if (
                 (!probe || probe.size === 0) &&
                 !localLedgerOnly &&
-                (!webLazyNoNetwork || editExplicitFetch) &&
+                !webLazyNoNetwork &&
                 !controller.signal.aborted &&
                 typeof navigator !== "undefined" &&
                 (navigator.onLine || isCapacitorNativeApp())
@@ -1462,10 +1800,10 @@ export function FilePreview({
                 probe = await getRemoteAttachmentBlobPreferOfflineCache(file, undefined, {
                   localOnly: localLedgerOnly,
                   companyId: pathCompanyId,
-                  explicitUserRequest: editExplicitFetch,
                 });
               }
               if (!probe || probe.size === 0 || controller.signal.aborted) return;
+              const probeSize = pickAttachmentByteSize(fileSize, probe);
               const kind = await sniffBlobKindForPreview(probe);
               if (controller.signal.aborted) return;
               if (kind === "pdf") {
@@ -1473,6 +1811,7 @@ export function FilePreview({
                   ...prev,
                   type: "pdf",
                   formatLabel: "PDF",
+                  size: pickAttachmentByteSize(prev.size, probeSize),
                 }));
                 const PDF_THUMB_DEBOUNCE_MS = 120;
                 pdfThumbDebounceTimer = setTimeout(() => {
@@ -1481,6 +1820,19 @@ export function FilePreview({
                   }
                 }, PDF_THUMB_DEBOUNCE_MS);
               } else if (kind === "image") {
+                // Web: https display URL rakhkar sirf size badge update — full blob URL swap mount storm avoid.
+                if (webLazyNoNetwork) {
+                  setFileInfo((prev) => ({
+                    ...prev,
+                    type: "image",
+                    formatLabel:
+                      prev.formatLabel === "FILE" || prev.formatLabel === "OTHER"
+                        ? "IMAGE"
+                        : prev.formatLabel,
+                    size: pickAttachmentByteSize(prev.size, probeSize),
+                  }));
+                  return;
+                }
                 // Remote URL pe hi atke rehne se offline restart par image टूट सकती है; blob URL swap se stable preview.
                 if (objectUrl) {
                   try {
@@ -1498,6 +1850,12 @@ export function FilePreview({
                       ? "IMAGE"
                       : prev.formatLabel,
                   url: objectUrl,
+                  size: pickAttachmentByteSize(prev.size, probeSize),
+                }));
+              } else if (probeSize != null) {
+                setFileInfo((prev) => ({
+                  ...prev,
+                  size: pickAttachmentByteSize(prev.size, probeSize),
                 }));
               }
             } catch {
@@ -2176,9 +2534,12 @@ export function FilePreview({
 
   /** Long-press + desktop hover par Copy button — ek hi payload/toast path; HTTPS ho to clipboard me link + session me PL paste. */
   const runHoldCopyNow = useCallback(async () => {
+    const placeKey = String(attachmentReusePlaceKey || "").trim() || null;
     const payload = buildHoldPayloadFromPreviewSource({
       file: file as File | string,
       storagePath: resolvedStoragePath,
+      companyId: String(attachmentCompanyId || shellCompanyId || "").trim() || undefined,
+      placeKey,
     });
     if (!payload) return;
     const httpsFromProp =
@@ -2186,17 +2547,125 @@ export function FilePreview({
     const httpsFromResolved =
       viewFileInfo.url && /^https?:\/\//i.test(String(viewFileInfo.url)) ? String(viewFileInfo.url) : undefined;
     const clipboardDisplayUrl = httpsFromProp ?? httpsFromResolved;
+    const persistable =
+      (typeof file === "string" &&
+      (/^https?:\/\//i.test(String(file).trim()) ||
+        String(file).trim().startsWith("local:") ||
+        /^drive:/i.test(String(file).trim()))
+        ? String(file).trim()
+        : "") ||
+      String(payload.src || "").trim();
+    const cid = String(attachmentCompanyId || shellCompanyId || "").trim();
+    if (cid && persistable && placeKey) {
+      rememberAttachmentReuseOriginPlace(cid, persistable, placeKey);
+    }
     const ok = await writeAttachmentHoldClipboard(payload, { clipboardDisplayUrl });
     refreshAttachmentHoldSessionBackup(payload);
     sonnerToast.success(ok ? "Copied" : "Saved for paste in this tab", {
       description: ok
         ? clipboardDisplayUrl
-          ? "Paste on empty slot reuses the same file (no new upload)."
+          ? "Same company paste reuses this file; other company creates a new copy."
           : "Paste reuses saved attachment when possible; unsaved file uploads as new copy."
         : "Clipboard blocked — try Paste on empty slot (uses last copy in this tab).",
     });
     setMobileCopyRevealed(false);
-  }, [file, resolvedStoragePath, viewFileInfo.url]);
+  }, [
+    file,
+    resolvedStoragePath,
+    viewFileInfo.url,
+    attachmentCompanyId,
+    shellCompanyId,
+    attachmentReusePlaceKey,
+  ]);
+
+  const reuseBadgeCompanyId = String(attachmentCompanyId || shellCompanyId || "").trim();
+  const reuseBadgeUrl =
+    typeof file === "string" &&
+    (/^https?:\/\//i.test(String(file).trim()) ||
+      String(file).trim().startsWith("local:") ||
+      /^drive:/i.test(String(file).trim()))
+      ? String(file).trim()
+      : typeof viewFileInfo?.url === "string" &&
+          (/^https?:\/\//i.test(String(viewFileInfo.url)) ||
+            String(viewFileInfo.url).trim().startsWith("local:") ||
+            /^drive:/i.test(String(viewFileInfo.url)))
+        ? String(viewFileInfo.url).trim()
+        : "";
+  const currentReusePlaceKey = String(attachmentReusePlaceKey || "").trim();
+  const listReuseHint = useVoucherListReuseHint(reuseBadgeUrl, currentReusePlaceKey || null);
+  const [reuseCount, setReuseCount] = useState(0);
+  const [reuseOriginPlaceKey, setReuseOriginPlaceKey] = useState<string | null>(null);
+  const [reuseOriginDetached, setReuseOriginDetached] = useState(false);
+  useEffect(() => {
+    if (
+      !showReuseCountBadge ||
+      !reuseBadgeCompanyId ||
+      !reuseBadgeUrl
+    ) {
+      setReuseCount(0);
+      setReuseOriginPlaceKey(null);
+      setReuseOriginDetached(false);
+      return;
+    }
+    let cancelled = false;
+    let badgesOn = true;
+    void import("@/lib/firebaseBillingOptimization").then((m) => {
+      if (cancelled) return;
+      badgesOn = m.attachmentReuseShareUrlBadgesEnabled();
+      if (!badgesOn) {
+        setReuseCount(0);
+        setReuseOriginPlaceKey(null);
+        setReuseOriginDetached(false);
+      }
+    });
+    const refresh = () => {
+      void import("@/lib/firebaseBillingOptimization").then((m) => {
+        if (cancelled || !m.attachmentReuseShareUrlBadgesEnabled()) return;
+        const formPeerCount =
+          Array.isArray(attachmentClientFileUrls) && reuseBadgeUrl
+            ? attachmentClientFileUrls.filter((x) =>
+                attachmentPersistableRefsMatch(String(x || ""), reuseBadgeUrl)
+              ).length
+            : 0;
+        void resolveAttachmentReuseUiMeta(reuseBadgeCompanyId, reuseBadgeUrl, {
+          includeFormBoost: true,
+          formPeerCount,
+        }).then((meta) => {
+          if (cancelled) return;
+          setReuseCount(meta.count);
+          setReuseOriginPlaceKey(meta.originPlaceKey);
+          setReuseOriginDetached(Boolean(meta.originDetached));
+        });
+      });
+    };
+    refresh();
+    const onReuse = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ companyId?: string; url?: string; count?: number }>).detail;
+      if (!detail) return;
+      const detailUrl = String(detail.url || "").trim();
+      if (!detailUrl || !attachmentPersistableRefsMatch(detailUrl, reuseBadgeUrl)) return;
+      refresh();
+    };
+    window.addEventListener(ATTACHMENT_REUSE_COUNT_EVENT, onReuse as EventListener);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(ATTACHMENT_REUSE_COUNT_EVENT, onReuse as EventListener);
+    };
+  }, [showReuseCountBadge, reuseBadgeCompanyId, reuseBadgeUrl, attachmentClientFileUrls]);
+
+  // Meta sticky origin first — list earliest promote mat (source delete pe galat green).
+  const effectiveOriginPlaceKey =
+    reuseOriginPlaceKey || (reuseOriginDetached ? null : listReuseHint.originPlaceKey) || null;
+  const isReuseOriginPlace =
+    !reuseOriginDetached &&
+    Boolean(currentReusePlaceKey) &&
+    Boolean(effectiveOriginPlaceKey) &&
+    currentReusePlaceKey === effectiveOriginPlaceKey;
+  /** Forms: reuse count number. Green = live source; blue = reuse OR source-removed leftover. */
+  const isSharedAcrossPlaces =
+    (Math.max(reuseCount, listReuseHint.count) >= 2 || reuseOriginDetached) &&
+    Boolean(reuseBadgeUrl);
+  const showReuseNumberBadge = showReuseCountBadge && isSharedAcrossPlaces;
 
   const copyAttachmentHold = useAttachmentHoldPointer({
     disabled: !canHoldCopyAttachment,
@@ -2391,6 +2860,90 @@ export function FilePreview({
     !viewIsLoading &&
     (viewFileInfo.type === "image" || viewFileInfo.type === "pdf");
 
+  /** Image already painted (browser downloaded) → KB badge without remount storm. */
+  const applyThumbSizeAfterImagePaint = useCallback(
+    (displayUrl: string | null | undefined) => {
+      if (pickAttachmentByteSize(fileSize, fileInfoRef.current.size) != null) return;
+      const display = String(displayUrl || "").trim();
+      const source = typeof file === "string" ? String(file).trim() : "";
+      const fromPerf = pickAttachmentByteSize(
+        byteSizeFromPerformanceResource(display),
+        byteSizeFromPerformanceResource(source)
+      );
+      if (fromPerf != null) {
+        rememberAttachmentByteSize(source || display, fromPerf);
+        setFileInfo((prev) =>
+          pickAttachmentByteSize(prev.size) != null ? prev : { ...prev, size: fromPerf }
+        );
+        return;
+      }
+
+      void (async () => {
+        if (pickAttachmentByteSize(fileInfoRef.current.size, fileSize) != null) return;
+
+        if (display.startsWith("blob:") || display.startsWith("data:")) {
+          try {
+            const blob = await fetch(display).then((r) => r.blob());
+            const n = pickAttachmentByteSize(blob);
+            if (n != null) {
+              rememberAttachmentByteSize(source || display, n);
+              setFileInfo((prev) =>
+                pickAttachmentByteSize(prev.size) != null ? prev : { ...prev, size: n }
+              );
+              return;
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+
+        if (!source || (!/^https?:\/\//i.test(source) && !isLocalFileRef(source))) return;
+
+        const peeked = await peekRemoteAttachmentByteSize(source, {
+          storagePath: resolvedStoragePath || storagePath,
+          companyId: pathCompanyId,
+          allowHttpPeek: !localLedgerOnly,
+        });
+        if (peeked != null) {
+          rememberAttachmentByteSize(source, peeked);
+          setFileInfo((prev) =>
+            pickAttachmentByteSize(prev.size) != null ? prev : { ...prev, size: peeked }
+          );
+          return;
+        }
+
+        // Gallery grid: full re-fetch mat (hang). Edit attach tiles: one cache/network size read OK.
+        if (stableLocalPreviewOnly || localLedgerOnly) return;
+        if (!/^https?:\/\//i.test(source)) return;
+        try {
+          const blob = await getRemoteAttachmentBlobPreferOfflineCache(source, undefined, {
+            localOnly: false,
+            companyId: pathCompanyId,
+            explicitUserRequest: true,
+          });
+          const n = pickAttachmentByteSize(blob);
+          if (n != null) {
+            rememberAttachmentByteSize(source, n);
+            setFileInfo((prev) =>
+              pickAttachmentByteSize(prev.size) != null ? prev : { ...prev, size: n }
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+      })();
+    },
+    [
+      file,
+      fileSize,
+      resolvedStoragePath,
+      storagePath,
+      pathCompanyId,
+      localLedgerOnly,
+      stableLocalPreviewOnly,
+    ]
+  );
+
   const ThumbnailContent = () => {
     // PDF first-page thumb = progressive; spinner mat — icon dikhao jab tak raster ready.
     if (!previewTimedOut && viewIsLoading && !(viewFileInfo.type === "pdf" && viewFileInfo.url)) {
@@ -2429,6 +2982,7 @@ export function FilePreview({
                 "absolute inset-0 h-full w-full",
                 objectFit === "contain" ? "object-contain" : "object-cover"
               )}
+              onLoad={() => applyThumbSizeAfterImagePaint(viewFileInfo.url)}
               onError={() => {
                 const bad = viewFileInfo.url;
                 if (typeof normalizedPreviewFile === "string" && bad) {
@@ -2456,22 +3010,57 @@ export function FilePreview({
               sizes={`${layoutMaxEdge}px`}
               className={objectFit === "contain" ? "object-contain" : "object-cover"}
               unoptimized
+              onLoad={() => applyThumbSizeAfterImagePaint(viewFileInfo.url)}
               onError={() => {
                 const bad = viewFileInfo.url;
-                if (typeof normalizedPreviewFile === "string" && bad) {
-                  forgetHoverBlobUrl(normalizedPreviewFile, bad);
-                }
-                void recoverPreviewFromLocalCache(bad).then((recovered) => {
-                  if (recovered) return;
+                const source =
+                  typeof normalizedPreviewFile === "string" ? String(normalizedPreviewFile).trim() : "";
+                void (async () => {
+                  if (await recoverPreviewFromLocalCache(bad)) return;
+                  if (source && source !== bad && (await recoverPreviewFromLocalCache(source))) return;
+                  // Recompress/reuse: naya HTTPS cached blob se paint (FILE icon mat).
+                  if (source && /^https?:\/\//i.test(source) && !localLedgerOnly) {
+                    try {
+                      let blob = await getOfflineCachedAttachmentBlob(source);
+                      if (!blob || blob.size === 0) {
+                        blob = await getRemoteAttachmentBlobPreferOfflineCache(source, undefined, {
+                          localOnly: false,
+                          companyId: pathCompanyId,
+                          explicitUserRequest: true,
+                        });
+                      }
+                      if (blob && blob.size > 0) {
+                        const objectUrl = URL.createObjectURL(blob);
+                        rememberHoverBlobUrl(source, objectUrl);
+                        rememberAttachmentByteSize(source, blob.size);
+                        setFileInfo((prev) => ({
+                          ...prev,
+                          url: objectUrl,
+                          type: "image",
+                          formatLabel:
+                            prev.formatLabel === "FILE" || prev.formatLabel === "OTHER"
+                              ? "JPG"
+                              : prev.formatLabel || "JPG",
+                          size: pickAttachmentByteSize(prev.size, blob.size),
+                        }));
+                        setIsLoading(false);
+                        return;
+                      }
+                    } catch {
+                      /* fall through */
+                    }
+                  }
                   if (typeof normalizedPreviewFile === "string" && isLocalFileRef(normalizedPreviewFile)) {
                     setIsLoading(false);
                     return;
                   }
                   setFileInfo((prev) =>
-                    prev.url === bad ? { ...prev, url: null, type: "other" } : prev
+                    prev.url === bad || prev.url == null
+                      ? { ...prev, url: null, type: "other" }
+                      : prev
                   );
                   setIsLoading(false);
-                });
+                })();
               }}
             />
           ))
@@ -2554,6 +3143,18 @@ export function FilePreview({
     
   const showSpinner = isCompressingProp || viewIsLoading;
 
+  /** Unsaved File → exact size; https/local → cache/blob/memory size when known. */
+  const thumbSizeBytes = (() => {
+    if (typeof File !== "undefined" && file instanceof File && file.size > 0) return file.size;
+    if (typeof fileSize === "number" && Number.isFinite(fileSize) && fileSize > 0) return fileSize;
+    const fromInfo = Number(viewFileInfo?.size);
+    if (Number.isFinite(fromInfo) && fromInfo > 0) return fromInfo;
+    if (typeof file === "string") return recalledAttachmentByteSize(file);
+    return null;
+  })();
+  const thumbSizeLabel = thumbSizeBytes != null ? formatBytesForThumbBadge(thumbSizeBytes) : "";
+  const formatBadgeText = [viewFileInfo.formatLabel, thumbSizeLabel].filter(Boolean).join(" · ");
+
   /** Hold handlers thumbnail par — touch target; browser long-press menu band */
   const thumbHoldHandlers = canHoldCopyAttachment
     ? {
@@ -2580,10 +3181,17 @@ export function FilePreview({
   const borderedPreview = (
     <div
       className={cn(
-        "relative w-full h-full border rounded-lg overflow-hidden bg-background shadow-sm flex items-center justify-center touch-manipulation",
+        "relative w-full h-full rounded-lg overflow-hidden bg-background shadow-sm flex items-center justify-center touch-manipulation border-2 border-border",
         disabled && !allowPreviewWhenDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
         disabled && allowPreviewWhenDisabled && "opacity-90"
       )}
+      title={
+        isSharedAcrossPlaces && isReuseOriginPlace
+          ? `Original source — also used in ${reuseCount} places`
+          : isSharedAcrossPlaces
+            ? `Reused file — used in ${reuseCount} places`
+            : undefined
+      }
       onClick={children || (disabled && !allowPreviewWhenDisabled) ? undefined : handlePreviewClick}
       {...thumbHoldHandlers}
     >
@@ -2595,16 +3203,42 @@ export function FilePreview({
         </div>
       )}
       {/* Compression strip ke upar corner label taaki dono dikhein */}
-      {showFormatBadge && viewFileInfo.formatLabel && !showSpinner && (
+      {showFormatBadge && formatBadgeText && !showSpinner && (
         <span
           className={cn(
-            "pointer-events-none absolute z-[12] rounded bg-black/55 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white",
+            "pointer-events-none absolute z-[12] max-w-[92%] truncate rounded bg-black/55 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white",
             compressionResult ? "bottom-5 left-1" : "bottom-1 left-1"
           )}
+          title={
+            thumbSizeBytes != null
+              ? `${viewFileInfo.formatLabel || "FILE"} · ${formatBytes(thumbSizeBytes)}`
+              : viewFileInfo.formatLabel || undefined
+          }
         >
-          {viewFileInfo.formatLabel}
+          {formatBadgeText}
         </span>
       )}
+      {showReuseNumberBadge && !showSpinner ? (
+        <span
+          className={cn(
+            "pointer-events-none absolute z-[13] flex min-h-[18px] min-w-[18px] items-center justify-center rounded px-1 py-0.5 text-[10px] font-bold leading-none text-white shadow-md",
+            isReuseOriginPlace ? "bg-emerald-600" : "bg-blue-600",
+            compressionResult ? "bottom-5 right-1" : "bottom-1 right-1"
+          )}
+          title={
+            isReuseOriginPlace
+              ? `Original source — used in ${Math.max(reuseCount, listReuseHint.count)} places`
+              : reuseOriginDetached
+                ? `Reused file — original source removed; still linked here`
+                : `Reused file — used in ${Math.max(reuseCount, listReuseHint.count)} places`
+          }
+          aria-label={`Used ${Math.max(reuseCount, listReuseHint.count)} times`}
+        >
+          {Math.max(reuseCount, listReuseHint.count) > 99
+            ? "99+"
+            : Math.max(reuseCount, listReuseHint.count)}
+        </span>
+      ) : null}
       {compressionResult && (
         <div className="absolute bottom-0 left-0 right-0 z-10 bg-emerald-600/90 py-0.5 text-center text-[10px] font-medium text-white">
           -{reduction}%
@@ -2718,6 +3352,8 @@ export function FilePreview({
         fileSize={fileSize}
         isAvatar={isAvatar}
         holdAttachmentClipboard={false}
+        attachmentReusePlaceKey={attachmentReusePlaceKey}
+        attachmentCompanyId={attachmentCompanyId}
       />
     );
 
@@ -2768,7 +3404,14 @@ export function FilePreview({
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
+            const cid = reuseBadgeCompanyId;
+            const url = reuseBadgeUrl;
             onRemove();
+            if (cid && url) {
+              window.setTimeout(() => {
+                void noteAttachmentUnlinkedInUi(cid, url);
+              }, 0);
+            }
           }}
           onPointerDown={(e) => e.stopPropagation()}
           className="absolute -right-2 -top-2 z-[100] flex min-h-[28px] min-w-[28px] items-center justify-center rounded-full bg-red-500 p-1.5 text-white opacity-0 shadow-lg transition-opacity pointer-events-auto group-hover:opacity-100"

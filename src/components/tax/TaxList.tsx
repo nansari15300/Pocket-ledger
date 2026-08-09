@@ -6,7 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { Receipt } from "lucide-react";
 import { useDate } from "@/hooks/useDate";
-import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { Tooltip, TooltipProvider, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import React, { useMemo, useState } from "react";
@@ -48,7 +48,7 @@ export function TaxList({
     hideQuickFilterBar?: boolean;
 }) {
   const { formatCurrency } = useDate();
-  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
+  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } = useMasterListRowMotion();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
@@ -61,7 +61,18 @@ export function TaxList({
     return filterAndSortMasterEntityListRows(taxes, searchTerm, quickFilter);
   }, [taxes, searchTerm, quickFilter]);
 
-  if (filteredAndSortedTaxes.length === 0) {
+  const listOrderKey = useMemo(
+    () => masterListOrderKey(filteredAndSortedTaxes.map((t) => t.id)),
+    [filteredAndSortedTaxes]
+  );
+
+  const { displayRows: displayListRows, displayOrderKey } = useMasterListDisplayRows(
+    filteredAndSortedTaxes,
+    listOrderKey,
+    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
+  );
+
+  if (displayListRows.length === 0) {
     return (
       <TooltipProvider delayDuration={200}>
         <div className={masterListShellCn} data-theme-list="account-list">
@@ -85,7 +96,7 @@ export function TaxList({
         >
           <ul className="pl-master-list-ul">
           <AnimatePresence mode={animatePresenceMode}>
-            {filteredAndSortedTaxes.map(tax => {
+            {displayListRows.map(tax => {
                 const isSelected = selectedTax?.id === tax.id;
                 const href = getItemHref?.(tax);
                 const attachmentPreviewUrl = trimEntityFileUrlForPreview(tax.fileUrl);
@@ -150,7 +161,7 @@ export function TaxList({
                         </div>
                 );
                 return (
-                  <motion.li key={tax.id} {...rowMotionProps}>
+                  <motion.li key={tax.id} layoutDependency={displayOrderKey} {...rowMotionProps}>
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">

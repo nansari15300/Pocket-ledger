@@ -30,7 +30,6 @@ import {
   Columns3,
   ChevronDown,
   Info,
-  Wand2,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -84,9 +83,13 @@ import { ScrollArea } from "../ui/scroll-area";
 import { EditAccountDialog } from "../bank-cash/EditAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_OUTER_ROW_CN,
+  LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
+  LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
@@ -162,6 +165,12 @@ import {
   filterSpendWiseUnapprovedOnly,
 } from "@/lib/spendWiseDateRangeGroups";
 import { applySpendWiseStatementRunningBalances } from "@/lib/spendWiseStatementRunningBalance";
+import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
+import {
+  applyBankDrCrPerspectiveToTxnRows,
+  flipLedgerDrCr,
+  flipLedgerSignedBalance,
+} from "@/lib/bankLedgerDrCrPerspective";
 
 interface AccountDetailsProps {
   account: Account;
@@ -243,6 +252,8 @@ export function AccountDetails({
     });
   }, []);
   const ledgerViewMode: LedgerDetailViewMode = spendWiseView ? "spend_wise" : "statement";
+  const { perspective: bankDrCrPerspective, setPerspective: setBankDrCrPerspective } =
+    useBankLedgerDrCrPerspective();
   const openingModalRef = useRef(false);
 
   // Desktop Calendar State
@@ -1078,11 +1089,41 @@ export function AccountDetails({
     return ledgerOpeningForRunning + (Number(periodDr) || 0) - (Number(periodCr) || 0);
   }, [ledgerSortedTransactions, ledgerOpeningForRunning, periodDr, periodCr]);
 
+  const displayHeaderClosingBalance = flipLedgerSignedBalance(
+    headerClosingBalance,
+    bankDrCrPerspective
+  );
+
+  const displayPaginatedTransactions = useMemo(
+    () => applyBankDrCrPerspectiveToTxnRows(paginatedTransactions as any[], bankDrCrPerspective),
+    [paginatedTransactions, bankDrCrPerspective]
+  );
+
+  const displayDesktopPageLedgerStats = useMemo(() => {
+    const period = flipLedgerDrCr(
+      Number(desktopPageLedgerStats.periodDrForPage) || 0,
+      Number(desktopPageLedgerStats.periodCrForPage) || 0,
+      bankDrCrPerspective
+    );
+    return {
+      openingForPage: flipLedgerSignedBalance(
+        Number(desktopPageLedgerStats.openingForPage) || 0,
+        bankDrCrPerspective
+      ),
+      periodDrForPage: period.debit,
+      periodCrForPage: period.credit,
+      closingForPage: flipLedgerSignedBalance(
+        Number(desktopPageLedgerStats.closingForPage) || 0,
+        bankDrCrPerspective
+      ),
+    };
+  }, [desktopPageLedgerStats, bankDrCrPerspective]);
+
   const balanceText = useMemo(() => {
-    if (headerClosingBalance === 0) return "Settled";
-    return headerClosingBalance >= 0 ? "Dr" : "Cr";
-  }, [headerClosingBalance]);
-  
+    if (displayHeaderClosingBalance === 0) return "Settled";
+    return displayHeaderClosingBalance >= 0 ? "Dr" : "Cr";
+  }, [displayHeaderClosingBalance]);
+
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     const range = dateRange;
     if (!onDateRangeChange) return;
@@ -1277,6 +1318,35 @@ export function AccountDetails({
     };
   }, [filteredMobileTransactions, mobileFilterBlocks, spendWiseView, rowsPerPage, currentPage, openingBalanceForPeriod]);
 
+  const displayMobilePageLedgerStats = useMemo(() => {
+    const period = flipLedgerDrCr(
+      Number(mobilePageLedgerStats.periodDrForPage) || 0,
+      Number(mobilePageLedgerStats.periodCrForPage) || 0,
+      bankDrCrPerspective
+    );
+    return {
+      openingForPage: flipLedgerSignedBalance(
+        Number(mobilePageLedgerStats.openingForPage) || 0,
+        bankDrCrPerspective
+      ),
+      periodDrForPage: period.debit,
+      periodCrForPage: period.credit,
+      closingForPage: flipLedgerSignedBalance(
+        Number(mobilePageLedgerStats.closingForPage) || 0,
+        bankDrCrPerspective
+      ),
+    };
+  }, [mobilePageLedgerStats, bankDrCrPerspective]);
+
+  const displayMobileTransactionsToShow = useMemo(
+    () =>
+      applyBankDrCrPerspectiveToTxnRows(
+        (mobileTransactionsToShow || []) as any[],
+        bankDrCrPerspective
+      ),
+    [mobileTransactionsToShow, bankDrCrPerspective]
+  );
+
   /** Book vs dated opening: flatStart===0 par books; warna slice se pehle txn ki date (PartyDetails tail paging). */
   const ledgerOpeningPeriodStartDate = useMemo(() => {
     if (rowsPerPage <= 0) {
@@ -1432,15 +1502,15 @@ export function AccountDetails({
       </div>
       {/* Balance row */}
       <div className="px-3 py-2 border-b flex-shrink-0">
-        <p className={cn("text-2xl font-bold flex justify-center items-baseline gap-px", headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+        <p className={cn("text-2xl font-bold flex justify-center items-baseline gap-px", displayHeaderClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
           {showMaskedBalance ? (
             "*****"
-          ) : headerClosingBalance === 0 ? (
+          ) : displayHeaderClosingBalance === 0 ? (
             "Settled"
           ) : (
             <>
-              <span>{formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}</span>
-              <span className="text-lg">{headerClosingBalance >= 0 ? "Dr" : "Cr"}</span>
+              <span>{formatCurrency(Math.abs(displayHeaderClosingBalance), { noSuffix: true })}</span>
+              <span className="text-lg">{displayHeaderClosingBalance >= 0 ? "Dr" : "Cr"}</span>
             </>
           )}
         </p>
@@ -1515,11 +1585,11 @@ export function AccountDetails({
         <div className="pb-24">
           {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}
           <TransactionsTable
-            transactions={mobileTransactionsToShow}
+            transactions={displayMobileTransactionsToShow}
             context="account"
             contextId={account.id}
             forceBalanceMode="statement"
-            openingBalance={showMaskedBalance ? 0 : mobilePageLedgerStats.openingForPage}
+            openingBalance={showMaskedBalance ? 0 : displayMobilePageLedgerStats.openingForPage}
             booksOpeningBalance={showMaskedBalance ? undefined : masterAccountOpening}
             ledgerDateFilterActive={tableLedgerDateFilterActive}
             ledgerShowBookOpeningRow={rowsPerPage <= 0 || mobileLedgerSliceFlatStart === 0}
@@ -1541,9 +1611,9 @@ export function AccountDetails({
             setFilters={setFilters}
             activeFilter={activeFilter}
             setActiveFilter={setActiveFilter}
-            periodDr={showMaskedBalance ? undefined : mobilePageLedgerStats.periodDrForPage}
-            periodCr={showMaskedBalance ? undefined : mobilePageLedgerStats.periodCrForPage}
-            closingBalance={showMaskedBalance ? undefined : mobilePageLedgerStats.closingForPage}
+            periodDr={showMaskedBalance ? undefined : displayMobilePageLedgerStats.periodDrForPage}
+            periodCr={showMaskedBalance ? undefined : displayMobilePageLedgerStats.periodCrForPage}
+            closingBalance={showMaskedBalance ? undefined : displayMobilePageLedgerStats.closingForPage}
             isBalanceMasked={showMaskedBalance}
             scrollOnlyTransactions
             blinkMode={spendWiseBlinkMode}
@@ -1676,10 +1746,10 @@ export function AccountDetails({
   const renderDesktopView = () => {
     return (
      <div className="h-full flex flex-col">
-        {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
+        {/* Header: identity + pills — Party-style single row */}
+        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+          <div className={LEDGER_HEADER_OUTER_ROW_CN}>
+            <div className={LEDGER_HEADER_IDENTITY_CN}>
               <EntityFileAttachmentHover fileUrl={accountHeaderAttachmentUrl} triggerClassName="inline-flex shrink-0 rounded-full">
                 <ResolvedEntityAvatar
                   className="h-12 w-12 text-lg flex-shrink-0 border"
@@ -1694,54 +1764,49 @@ export function AccountDetails({
                   }
                 />
               </EntityFileAttachmentHover>
-              <div className="flex flex-col min-w-0 gap-0.5">
-                <div className="flex items-center gap-2 flex-nowrap min-w-0">
-                  <h2 className="text-xl font-semibold truncate">{account.accountName}</h2>
-                  {account.id !== 'all' && (!account.isSpecial || can('manage_special_bank_accounts')) && (
-                    <EditAccountDialog
-                      account={account}
-                      allAccounts={allAccounts}
-                      onAccountUpdated={handleAccountUpdated}
-                      onAccountDeleted={onAccountDeleted}
-                      hasTransactions={processedTransactions.length > 0}
-                    >
-                      <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                    </EditAccountDialog>
-                  )}
-                  <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0 flex justify-center items-baseline gap-px", headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                    {showMaskedBalance ? (
-                      "*****"
-                    ) : headerClosingBalance === 0 ? (
-                      "Settled"
-                    ) : (
-                      <>
-                        <span>{formatCurrency(Math.abs(headerClosingBalance), { showDrCr: false })}</span>
-                        <span className="text-sm">{headerClosingBalance >= 0 ? "Dr" : "Cr"}</span>
-                      </>
-                    )}
-                  </div>
-                  {account.id !== "all" ? (
-                    <AddVoucherDialog
-                      defaultTab="adjustment"
-                      allowedTabs={["adjustment"]}
-                      defaultVoucherData={{
-                        defaultTab: "adjustment",
-                        adjustmentTarget: { id: account.id, entityType: "account", name: account.accountName },
-                      }}
-                    >
-                      <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
-                        <Wand2 className="mr-2 h-3.5 w-3.5" />
-                        Adjust Balance
-                      </Button>
-                    </AddVoucherDialog>
-                  ) : null}
-                  <ReconciliationAccountButton accountId={account.id} />
-                </div>
+              <h2 className={LEDGER_HEADER_TITLE_CN} title={account.accountName}>{account.accountName}</h2>
+              {account.id !== 'all' && (!account.isSpecial || can('manage_special_bank_accounts')) && (
+                <EditAccountDialog
+                  account={account}
+                  allAccounts={allAccounts}
+                  onAccountUpdated={handleAccountUpdated}
+                  onAccountDeleted={onAccountDeleted}
+                  hasTransactions={processedTransactions.length > 0}
+                >
+                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                </EditAccountDialog>
+              )}
+              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0 flex justify-center items-baseline gap-px", displayHeaderClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                {showMaskedBalance ? (
+                  "*****"
+                ) : displayHeaderClosingBalance === 0 ? (
+                  "Settled"
+                ) : (
+                  <>
+                    <span>{formatCurrency(Math.abs(displayHeaderClosingBalance), { showDrCr: false })}</span>
+                    <span className="text-sm">{displayHeaderClosingBalance >= 0 ? "Dr" : "Cr"}</span>
+                  </>
+                )}
               </div>
             </div>
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className={LEDGER_HEADER_PILL_ROW_CN}>
+              {account.id !== "all" ? (
+                <AddVoucherDialog
+                  defaultTab="adjustment"
+                  allowedTabs={["adjustment"]}
+                  defaultVoucherData={{
+                    defaultTab: "adjustment",
+                    adjustmentTarget: { id: account.id, entityType: "account", name: account.accountName },
+                  }}
+                >
+                  <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
+                    Adjust Balance
+                  </Button>
+                </AddVoucherDialog>
+              ) : null}
+              <ReconciliationAccountButton accountId={account.id} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
@@ -1841,13 +1906,13 @@ export function AccountDetails({
           <div className={cn("py-4 min-w-0", spendWiseView ? "p-[2px]" : "flex-1 flex flex-col min-h-0")}>
             {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}
             <TransactionsTable
-              key={`account-${account.id}-${effectiveBalanceMode}`}
-              transactions={paginatedTransactions}
+              key={`account-${account.id}-${effectiveBalanceMode}-${bankDrCrPerspective}`}
+              transactions={displayPaginatedTransactions}
               context="account"
               contextId={account.id}
               {...statementCheck.tableProps}
               forceBalanceMode="statement"
-              openingBalance={showMaskedBalance ? 0 : desktopPageLedgerStats.openingForPage}
+              openingBalance={showMaskedBalance ? 0 : displayDesktopPageLedgerStats.openingForPage}
               booksOpeningBalance={showMaskedBalance ? undefined : masterAccountOpening}
               ledgerDateFilterActive={tableLedgerDateFilterActive}
               ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopLedgerSliceFlatStart === 0}
@@ -1883,9 +1948,9 @@ export function AccountDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={showMaskedBalance ? undefined : desktopPageLedgerStats.periodDrForPage}
-              periodCr={showMaskedBalance ? undefined : desktopPageLedgerStats.periodCrForPage}
-              closingBalance={showMaskedBalance ? undefined : desktopPageLedgerStats.closingForPage}
+              periodDr={showMaskedBalance ? undefined : displayDesktopPageLedgerStats.periodDrForPage}
+              periodCr={showMaskedBalance ? undefined : displayDesktopPageLedgerStats.periodCrForPage}
+              closingBalance={showMaskedBalance ? undefined : displayDesktopPageLedgerStats.closingForPage}
               isBalanceMasked={showMaskedBalance}
               scrollOnlyTransactions
               blinkMode={spendWiseBlinkMode}

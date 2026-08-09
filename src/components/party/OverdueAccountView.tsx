@@ -33,9 +33,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { AlertCircle, CheckSquare, Filter, MoreVertical, Pencil, Printer, History, X } from "lucide-react";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import {
+  LEDGER_HEADER_OUTER_ROW_CN,
+  LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
+  LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
@@ -687,15 +691,15 @@ export function OverdueAccountView({
   return (
     <div className="flex h-full min-h-full flex-col overflow-hidden">
       {/* Header: Party Details jaisa — title, balance, print */}
-      <div className="flex-shrink-0 border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
-        <div className="flex min-w-max flex-col gap-y-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-slim-dim">
+      <div className="flex-shrink-0 border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+        <div className={LEDGER_HEADER_OUTER_ROW_CN}>
+          <div className={LEDGER_HEADER_IDENTITY_CN}>
             <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
               <AlertCircle className="h-6 w-6 text-amber-600 dark:text-amber-500" />
             </div>
-            <div className="flex min-w-0 flex-col gap-0.5">
-              <div className="flex min-w-0 flex-nowrap items-center gap-2">
-                <h2 className="truncate text-xl font-semibold">Overdue Vouchers</h2>
+            <div className="flex min-w-0 flex-1 flex-col justify-center gap-0">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <h2 className={LEDGER_HEADER_TITLE_CN} title="Overdue Vouchers">Overdue Vouchers</h2>
                 <div
                   className={cn(
                     "flex-shrink-0 whitespace-nowrap text-lg font-bold",
@@ -705,10 +709,10 @@ export function OverdueAccountView({
                   {formatCurrency(netBalance, { showDrCr: true })}
                 </div>
               </div>
-              <p className="text-sm text-muted-foreground">All overdue vouchers across parties</p>
+              <p className="truncate text-sm text-muted-foreground">All overdue vouchers across parties</p>
             </div>
           </div>
-          <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim">
+          <div className={LEDGER_HEADER_PILL_ROW_CN}>
             {/* Important ke baayein: All / Important / Normal — overdueImportant tick filter */}
             <Button
               type="button"

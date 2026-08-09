@@ -19,7 +19,6 @@ import {
 import {
   Edit,
   Printer,
-  Wand2,
   Calendar as CalendarIcon,
   FilePlus,
   FileText,
@@ -57,9 +56,13 @@ import { useDate } from "@/hooks/useDate";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_OUTER_ROW_CN,
+  LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
+  LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
@@ -430,11 +433,10 @@ export function PayeeDetails({
   return (
     <>
       <div className="h-full flex flex-col overflow-hidden">
-        {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side */}
-        <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            {/* Part 1: account name through balance — single line, no wrap */}
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
+        {/* Header: identity + pills — Party-style single row */}
+        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+          <div className={LEDGER_HEADER_OUTER_ROW_CN}>
+            <div className={LEDGER_HEADER_IDENTITY_CN}>
               {isMobile && onBack && (
                 <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
                   <ArrowLeft className="h-5 w-5" />
@@ -451,27 +453,24 @@ export function PayeeDetails({
                   fallbackSlot={<span className="text-muted-foreground">{getEntityIcon(party.type)}</span>}
                 />
               </EntityFileAttachmentHover>
-              <div className="flex items-center gap-2 flex-nowrap min-w-0">
-                <h2 className="text-xl font-semibold truncate">{party.name}</h2>
-                {party.type === 'Party' && party.id !== 'all' && (
-                  <EditPartyDialog
-                    party={party}
-                    onPartyUpdated={onPartyUpdated}
-                    onPartyDeleted={() => onPartyDeleted(party.id)}
-                    hasTransactions={processedTransactions.length > 0}
-                  >
-                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                  </EditPartyDialog>
-                )}
-                <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                  {formatCurrency(closingBalance, { showDrCr: true })}
-                </div>
+              <h2 className={LEDGER_HEADER_TITLE_CN} title={party.name}>{party.name}</h2>
+              {party.type === 'Party' && party.id !== 'all' && (
+                <EditPartyDialog
+                  party={party}
+                  onPartyUpdated={onPartyUpdated}
+                  onPartyDeleted={() => onPartyDeleted(party.id)}
+                  hasTransactions={processedTransactions.length > 0}
+                >
+                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                </EditPartyDialog>
+              )}
+              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                {formatCurrency(closingBalance, { showDrCr: true })}
               </div>
             </div>
-            {/* Part 2: date range, Add Note, print — single line, no wrap */}
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className={LEDGER_HEADER_PILL_ROW_CN}>
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker

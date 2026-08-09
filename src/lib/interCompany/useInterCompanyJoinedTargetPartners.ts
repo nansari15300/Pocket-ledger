@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * Target company dropdown — saare system cards ke joined partners + public profile resolve.
- * Label: Company Name (System Name).
+ * Target company dropdown — my / shared / local (allCompanies) + system joined remotes.
+ * Code / A/c / PAN resolve via Firebase (global); local-only mode uses device registry.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Company } from "@/hooks/useCompany";
 import { subscribeInterCompanyJoinSettings, loadInterCompanyJoinSettings } from "@/lib/interCompany/interCompanyJoinSettingsSync";
 import {
@@ -14,7 +14,7 @@ import {
 import { normalizeInterCompanyPhone } from "@/lib/interCompany/interCompanyPhone";
 import {
   buildInterCompanyPartnerDirectoryFromRows,
-  interCompanyPartnerRowFromCompanies,
+  mapCompanyToPartnerRow,
   type InterCompanyPartnerRow,
 } from "@/lib/interCompany/useInterCompanyPartnerDirectory";
 import {
@@ -30,6 +30,11 @@ import {
 import {
   collectSystemJoinedTargetEntries,
 } from "@/lib/interCompany/interCompanyTargetPartnersFromSystems";
+import {
+  lookupInterCompaniesByPanFirebase,
+  lookupInterCompanyByAcNoFirebase,
+  lookupInterCompanyByCompanyCodeFirebase,
+} from "@/lib/interCompany/interCompanyFirebaseCompanyLookup";
 import { isPureLocalInterCompanyCompanyFromShape } from "@/lib/interCompany/localInterCompanyPolicy";
 
 /** Public profile → partner row (Inter Co. A/c company doc par hai — yahan sirf code/PAN/phone) */
@@ -66,6 +71,12 @@ function mergeJoinedIds(settings: { joinedCompanyIds: string[]; permanentJoinedC
   return [...new Set([...settings.joinedCompanyIds, ...settings.permanentJoinedCompanyIds].filter(Boolean))];
 }
 
+function partnerKindLabel(c: Company): string[] | undefined {
+  if (c.isOwned === false) return ["Shared"];
+  if (isPureLocalInterCompanyCompanyFromShape(c)) return ["Local"];
+  return ["My company"];
+}
+
 export function useInterCompanyJoinedTargetPartners(
   allCompanies: Company[] | undefined,
   sourceCompanyId: string | null | undefined,
@@ -77,15 +88,10 @@ export function useInterCompanyJoinedTargetPartners(
   const [linkedPublicSystems, setLinkedPublicSystems] = useState<InterCompanyGroupDoc[]>([]);
   const [acceptedLinksForSource, setAcceptedLinksForSource] = useState<AcceptedSystemJoinLink[]>([]);
   const [profileRows, setProfileRows] = useState<InterCompanyPartnerRow[]>([]);
+  const [firebaseExtraRows, setFirebaseExtraRows] = useState<InterCompanyPartnerRow[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(false);
 
   const groupOwnerUid = useMemo(() => resolveInterCompanyGroupOwnerUid(userId), [userId]);
-
-  const sourceIsPureLocal = useMemo(() => {
-    if (!sourceCompanyId) return false;
-    const row = (allCompanies || []).find((c) => c?.id === sourceCompanyId);
-    return row ? isPureLocalInterCompanyCompanyFromShape(row) : false;
-  }, [allCompanies, sourceCompanyId]);
 
   const allSystems = useMemo(() => {
     const byId = new Map<string, InterCompanyGroupDoc>();
@@ -95,7 +101,6 @@ export function useInterCompanyJoinedTargetPartners(
     return [...byId.values()];
   }, [ownedGroups, linkedPublicSystems]);
 
-  // Source company join settings — realtime refresh
   useEffect(() => {
     if (!sourceCompanyId) {
       setSourceJoinedCompanyIds([]);
@@ -115,7 +120,6 @@ export function useInterCompanyJoinedTargetPartners(
     );
   }, [sourceCompanyId]);
 
-  // User ke system cards — owned + linked public
   useEffect(() => {
     if (!groupOwnerUid) {
       setOwnedGroups([]);
@@ -132,7 +136,6 @@ export function useInterCompanyJoinedTargetPartners(
     return subscribeLinkedPublicInterCompanySystems(groupOwnerUid, setLinkedPublicSystems);
   }, [groupOwnerUid]);
 
-  // Accepted joins — system name label ke liye
   useEffect(() => {
     if (!sourceCompanyId) {
       setAcceptedLinksForSource([]);
@@ -141,7 +144,6 @@ export function useInterCompanyJoinedTargetPartners(
     return subscribeAcceptedSystemJoinsForCompany(sourceCompanyId, setAcceptedLinksForSource);
   }, [sourceCompanyId]);
 
-  // Har owned company ke joined ids — har system card se partners collect karne ke liye
   useEffect(() => {
     const ownedIds = (allCompanies || [])
       .filter((c) => c?.id && c.isOwned !== false)
@@ -181,12 +183,11 @@ export function useInterCompanyJoinedTargetPartners(
     [sourceCompanyId, allCompanies, allSystems, joinedIdsByCompanyId, acceptedLinksForSource]
   );
 
-  const targetPartnerIds = useMemo(
+  const systemPartnerIds = useMemo(
     () => systemTargetEntries.map((e) => e.partnerCompanyId),
     [systemTargetEntries]
   );
 
-  // Joined ids jo local registry me nahi — public profile se naam/code load
   useEffect(() => {
     if (!sourceCompanyId) {
       setProfileRows([]);
@@ -194,7 +195,7 @@ export function useInterCompanyJoinedTargetPartners(
     }
 
     const localIds = new Set((allCompanies || []).map((c) => c?.id).filter(Boolean) as string[]);
-    const missingIds = targetPartnerIds.filter((id) => id && id !== sourceCompanyId && !localIds.has(id));
+    const missingIds = systemPartnerIds.filter((id) => id && id !== sourceCompanyId && !localIds.has(id));
     if (missingIds.length === 0) {
       setProfileRows([]);
       return;
@@ -222,66 +223,81 @@ export function useInterCompanyJoinedTargetPartners(
     return () => {
       cancelled = true;
     };
-  }, [allCompanies, targetPartnerIds.join("|"), sourceCompanyId, systemTargetEntries]);
+  }, [allCompanies, systemPartnerIds.join("|"), sourceCompanyId, systemTargetEntries]);
+
+  const rememberFirebaseHit = useCallback((hit: InterCompanyPartnerRow) => {
+    if (!hit?.id) return;
+    setFirebaseExtraRows((prev) => {
+      if (prev.some((r) => r.id === hit.id)) {
+        return prev.map((r) => (r.id === hit.id ? { ...r, ...hit } : r));
+      }
+      return [...prev, hit];
+    });
+  }, []);
 
   const mergedAllRows = useMemo(() => {
     const byId = new Map<string, InterCompanyPartnerRow>();
     for (const c of allCompanies || []) {
       if (!c?.id) continue;
-      const row = interCompanyPartnerRowFromCompanies(allCompanies, c.id);
-      if (row) byId.set(row.id, row);
+      const row = mapCompanyToPartnerRow(c);
+      byId.set(row.id, {
+        ...row,
+        systemNames: partnerKindLabel(c),
+      });
     }
     for (const row of profileRows) {
       if (!byId.has(row.id)) byId.set(row.id, row);
     }
+    for (const row of firebaseExtraRows) {
+      const prev = byId.get(row.id);
+      byId.set(row.id, prev ? { ...prev, ...row } : row);
+    }
     return [...byId.values()];
-  }, [allCompanies, profileRows]);
+  }, [allCompanies, profileRows, firebaseExtraRows]);
 
+  /** Dropdown: my + shared + local + remote joined; source exclude; local↔online allowed */
   const joinedPartners = useMemo(() => {
     const systemNamesByPartner = new Map(
       systemTargetEntries.map((e) => [e.partnerCompanyId, e.systemNames])
     );
+    const byId = new Map<string, InterCompanyPartnerRow>();
 
-    return targetPartnerIds
-      .map((partnerId) => {
-        if (sourceIsPureLocal) {
-          const shape = (allCompanies || []).find((c) => c?.id === partnerId);
-          if (!shape || !isPureLocalInterCompanyCompanyFromShape(shape)) return null;
-        }
-        const local = mergedAllRows.find((r) => r.id === partnerId);
-        const systemNames = systemNamesByPartner.get(partnerId) || [];
-        if (local) {
-          return {
-            ...local,
-            isShared: local.isShared || partnerId !== sourceCompanyId,
-            systemNames: systemNames.length ? systemNames : local.systemNames,
-          };
-        }
-        const accepted = acceptedLinksForSource.find((l) => l.partnerCompanyId === partnerId);
-        if (accepted?.partnerCompanyName) {
-          const row: InterCompanyPartnerRow = {
-            id: partnerId,
-            name: accepted.partnerCompanyName,
-            acNo: "",
-            companyCode: "",
-            pan: "",
-            mobile: "",
-            isShared: true,
-            systemNames: systemNames.length ? systemNames : [accepted.systemName],
-          };
-          return row;
-        }
-        return null;
-      })
-      .filter((r): r is InterCompanyPartnerRow => r != null);
+    for (const row of mergedAllRows) {
+      if (!row.id || row.id === sourceCompanyId) continue;
+      const systemNames = systemNamesByPartner.get(row.id);
+      byId.set(row.id, {
+        ...row,
+        isShared: row.isShared || row.id !== sourceCompanyId,
+        systemNames: systemNames?.length ? systemNames : row.systemNames,
+      });
+    }
+
+    for (const partnerId of systemPartnerIds) {
+      if (!partnerId || partnerId === sourceCompanyId || byId.has(partnerId)) continue;
+      const accepted = acceptedLinksForSource.find((l) => l.partnerCompanyId === partnerId);
+      if (accepted?.partnerCompanyName) {
+        byId.set(partnerId, {
+          id: partnerId,
+          name: accepted.partnerCompanyName,
+          acNo: "",
+          companyCode: "",
+          pan: "",
+          mobile: "",
+          isShared: true,
+          systemNames: systemNamesByPartner.get(partnerId)?.length
+            ? systemNamesByPartner.get(partnerId)!
+            : [accepted.systemName],
+        });
+      }
+    }
+
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [
-    targetPartnerIds,
     mergedAllRows,
+    systemPartnerIds,
     systemTargetEntries,
     acceptedLinksForSource,
     sourceCompanyId,
-    sourceIsPureLocal,
-    allCompanies,
   ]);
 
   const directory = useMemo(
@@ -296,9 +312,77 @@ export function useInterCompanyJoinedTargetPartners(
     return map;
   }, [mergedAllRows, joinedPartners]);
 
+  const optionLabel = useCallback((p: InterCompanyPartnerRow) => {
+    if (p.systemNames?.length) return `${p.name} (${p.systemNames[0]})`;
+    return p.name;
+  }, []);
+
+  const comboboxOptions = useMemo(
+    () => joinedPartners.map((p) => ({ value: p.id, label: optionLabel(p) })),
+    [joinedPartners, optionLabel]
+  );
+
+  const comboboxOptionsIncluding = useCallback(
+    (extraCompanyIds: string[]) => {
+      const opts = [...comboboxOptions];
+      const seen = new Set(opts.map((o) => o.value));
+      for (const id of extraCompanyIds) {
+        if (!id || seen.has(id)) continue;
+        const row = mergedAllRows.find((p) => p.id === id) || partnerRowById.get(id);
+        if (!row) continue;
+        opts.unshift({ value: row.id, label: optionLabel(row) });
+        seen.add(id);
+      }
+      return opts;
+    },
+    [comboboxOptions, mergedAllRows, partnerRowById, optionLabel]
+  );
+
+  const resolveCompanyIdByCompanyCodeAsync = useCallback(
+    async (typed: string): Promise<string | null> => {
+      const hit = await lookupInterCompanyByCompanyCodeFirebase(typed);
+      if (hit && hit.id !== sourceCompanyId) {
+        rememberFirebaseHit(hit);
+        return hit.id;
+      }
+      // Local / shared already on device — Firebase miss par dropdown list se
+      return directory.resolveCompanyIdByCompanyCode(typed);
+    },
+    [directory, rememberFirebaseHit, sourceCompanyId]
+  );
+
+  const resolveCompanyIdByAcNoAsync = useCallback(
+    async (typed: string): Promise<string | null> => {
+      const hit = await lookupInterCompanyByAcNoFirebase(typed);
+      if (hit && hit.id !== sourceCompanyId) {
+        rememberFirebaseHit(hit);
+        return hit.id;
+      }
+      return directory.resolveCompanyIdByAcNo(typed);
+    },
+    [directory, rememberFirebaseHit, sourceCompanyId]
+  );
+
+  const resolveCompaniesByPanAsync = useCallback(
+    async (typed: string): Promise<InterCompanyPartnerRow[]> => {
+      const hits = (await lookupInterCompaniesByPanFirebase(typed)).filter(
+        (h) => h.id && h.id !== sourceCompanyId
+      );
+      for (const hit of hits) rememberFirebaseHit(hit);
+      if (hits.length) return hits;
+      return directory.resolveCompaniesByPan(typed).filter((h) => h.id !== sourceCompanyId);
+    },
+    [directory, rememberFirebaseHit, sourceCompanyId]
+  );
+
   return {
     ...directory,
-    joinedCompanyIds: targetPartnerIds,
+    comboboxOptions,
+    comboboxOptionsIncluding,
+    resolveCompanyIdByCompanyCodeAsync,
+    resolveCompanyIdByAcNoAsync,
+    resolveCompaniesByPanAsync,
+    joinedCompanyIds: joinedPartners.map((p) => p.id),
     joinedPartners,
     profilesLoading,
     partnerRowById,

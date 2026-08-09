@@ -64,15 +64,17 @@ declare global {
       companyId: string,
       body: {
         id: string;
-        base64: string;
+        action?: string;
+        base64?: string;
         sha256Hex?: string;
+        sha256?: string;
         contentType?: string;
         fileName?: string;
         storagePathPrefix?: string;
         docPath?: string;
         field?: string;
       }
-    ) => Promise<{ ok: boolean; deduped?: boolean; error?: string }>;
+    ) => Promise<{ ok: boolean; deduped?: boolean; deleted?: boolean; error?: string }>;
     __plUpsertCompanyDeltaDocs?: (
       companyId: string,
       collection: string,
@@ -113,23 +115,27 @@ export function ServerShareableCompaniesBridge() {
       new URLSearchParams(window.location.search).get("pl_server_data_bridge") === "1";
     if (isPlRemoteServerClientMode() && !isCanonicalServerBridge) return;
     let cancelled = false;
-    void (async () => {
-      const { toPlServerSharedCompanySummaryAsync } = await import(
-        "@/lib/localServerShareableCompanies"
-      );
-      const shareable = await listShareableLocalCompaniesForHost(allCompaniesRegistry);
-      if (cancelled || shareable.length === 0) return;
-      const companies: ShareableCompanyBridgeRow[] = [];
-      for (const row of shareable) {
-        companies.push(await toPlServerSharedCompanySummaryAsync(row));
-      }
-      if (cancelled || companies.length === 0) return;
-      await persistShareableCompaniesSnapshot(companies);
-    })();
+    // Registry identity changes often with cloud sync — debounce disk writes.
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const { toPlServerSharedCompanySummaryAsync } = await import(
+          "@/lib/localServerShareableCompanies"
+        );
+        const shareable = await listShareableLocalCompaniesForHost(allCompaniesRegistry);
+        if (cancelled || shareable.length === 0) return;
+        const companies: ShareableCompanyBridgeRow[] = [];
+        for (const row of shareable) {
+          companies.push(await toPlServerSharedCompanySummaryAsync(row));
+        }
+        if (cancelled || companies.length === 0) return;
+        await persistShareableCompaniesSnapshot(companies);
+      })();
+    }, 2500);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [allCompaniesRegistry]);
+  }, [allCompaniesRegistry, localCompanyRegistryEpoch]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -239,9 +245,8 @@ export function ServerShareableCompaniesBridge() {
       for (const row of shareable) {
         out.push(await toPlServerSharedCompanySummaryAsync(row));
       }
-      if (out.length > 0) {
-        void persistShareableCompaniesSnapshot(out);
-      }
+      // Do not persist on every host-bridge eligibility poll — that rewrites `.data/`
+      // and makes Turbopack recompile until menu/nav stalls. Registry effect below persists.
       return out;
     };
 
@@ -273,11 +278,12 @@ export function ServerShareableCompaniesBridge() {
       const { listCompanyDocsFromBrowserDb } = await import("@/lib/localCompanyDocMirror");
       const { COLLECTIONS_TO_BACKUP } = await import("@/lib/companyBackupCollections");
       const resolvedCompanyId = await resolveDeltaExportCompanyId(companyId);
-      const company = await getLocalCompanyById(resolvedCompanyId);
-      if (!company) return null;
+      // Flush pehle — role Save/change ke turant baad staff pull stale Manager users na paaye.
       const { flushPendingBrowserDbSave, getBrowserDb } = await import("@/lib/localSqlite");
       await flushPendingBrowserDbSave();
       await getBrowserDb();
+      const company = await getLocalCompanyById(resolvedCompanyId);
+      if (!company) return null;
       const { withHostPlanFieldsOnCompanyExport } = await import("@/lib/plServerHostPlanSync");
       const companyWithPlan = await withHostPlanFieldsOnCompanyExport(
         company as unknown as Record<string, unknown>
@@ -385,14 +391,18 @@ export function ServerShareableCompaniesBridge() {
       const cid = String(companyId || "").trim();
       const rawId = String(body?.id || "").trim();
       const id = rawId.startsWith(LOCAL_FILE_PREFIX) ? rawId.slice(LOCAL_FILE_PREFIX.length).trim() : rawId;
+      if (String(body?.action || "").trim().toLowerCase() === "delete") {
+        if (!cid || !id) return { ok: false, error: "missing_fields" };
+        try {
+          const { removePendingFile } = await import("@/lib/localPendingFiles");
+          await removePendingFile(id);
+          return { ok: true, deleted: true };
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : "delete_pending_failed" };
+        }
+      }
       const base64 = String(body?.base64 || "").trim();
       if (!cid || !id || !base64) return { ok: false, error: "missing_fields" };
-      const { getAttachmentFileRef } = await import("@/lib/attachmentFileRefStore");
-      const { attachmentFileExistsInDataDir } = await import("@/lib/capacitorAttachmentFs");
-      const existing = await getAttachmentFileRef("pending_file", id);
-      if (existing?.filePath && (await attachmentFileExistsInDataDir(existing.filePath))) {
-        return { ok: true, deduped: true };
-      }
       let bytes: Uint8Array;
       try {
         const binary = atob(base64);
@@ -400,6 +410,30 @@ export function ServerShareableCompaniesBridge() {
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       } catch {
         return { ok: false, error: "invalid_base64" };
+      }
+      const { computeSha256HexFromBytes } = await import("@/lib/security/sha256Hex");
+      const incomingShaHint = String(body?.sha256Hex || body?.sha256 || "")
+        .trim()
+        .toLowerCase();
+      const bytesSha = (
+        await computeSha256HexFromBytes(
+          bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+        )
+      ).toLowerCase();
+      if (incomingShaHint && incomingShaHint !== bytesSha) {
+        return { ok: false, error: "sha256_mismatch" };
+      }
+      const { getAttachmentFileRef } = await import("@/lib/attachmentFileRefStore");
+      const { attachmentFileExistsInDataDir } = await import("@/lib/capacitorAttachmentFs");
+      const existing = await getAttachmentFileRef("pending_file", id);
+      if (existing?.filePath && (await attachmentFileExistsInDataDir(existing.filePath))) {
+        const existingSha = String(existing.sha256Hex || "")
+          .trim()
+          .toLowerCase();
+        // Skip only when content hash matches — id-only skip blocked replacement bytes.
+        if (existingSha && existingSha === bytesSha) {
+          return { ok: true, deduped: true };
+        }
       }
       const contentType = String(body.contentType || "application/octet-stream");
       const blob = new Blob([new Uint8Array(bytes)], { type: contentType });
@@ -473,7 +507,15 @@ export function ServerShareableCompaniesBridge() {
     };
 
     window.__plInvalidateBrowserDbCache = () => {
+      // Drop memory only — stale bridge flush se pehle IDB clobber na ho.
       clearBrowserDbCache();
+      try {
+        void import("@/lib/plRoleChangeLog").then(({ plRoleLog }) =>
+          plRoleLog("bridge_cache_invalidate", { source: "__plInvalidateBrowserDbCache" })
+        );
+      } catch {
+        /* ignore */
+      }
     };
 
     if (process.env.NODE_ENV === "development") {

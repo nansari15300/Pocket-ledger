@@ -1,12 +1,12 @@
 rules_version = '2';
 // Firebase Storage: allow company-scoped upload/read for voucher files and company assets.
-// Paths used by app: voucher-files/{companyId}/..., companies/{companyId}/... (vouchers, unassigned, avatar, stamp, other)
+// Paths used by app: voucher-files/{companyId}/..., companies/{companyId}/..., pocket-ledger/{companyId}/...
 service firebase.storage {
   match /b/{bucket}/o {
 
     // Helper: allow if user is owner or shared user of the company (companyId is first path segment).
     // We cannot read Firestore from Storage rules, so we allow any signed-in user to read/write
-    // under companies/{companyId}/... and voucher-files/{companyId}/... and rely on app to pass
+    // under companies/{companyId}/... and voucher-files/{companyId}/... and pocket-ledger/{companyId}/...
     // only valid companyId. For stricter security, use Cloud Functions to validate and move files.
     function isSignedIn() {
       return request.auth != null;
@@ -14,6 +14,12 @@ service firebase.storage {
 
     // Voucher attachments: read with download URL / signed-in SDK; write signed-in only.
     match /voucher-files/{companyId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // Pocket Ledger v1: pocket-ledger/{companyId}/** (vouchers, avatar, opening, unassigned, company-logo, legacy parties/…)
+    match /pocket-ledger/{companyId}/{allPaths=**} {
       allow read: if true;
       allow write: if isSignedIn();
     }

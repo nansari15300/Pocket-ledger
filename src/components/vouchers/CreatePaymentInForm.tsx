@@ -57,7 +57,7 @@ import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDial
 import type { ExpenseAccount } from "../expenses/types";
 import { Checkbox } from "../ui/checkbox";
 import type { DateRange } from "@/components/ui/ad-calendar";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, updateVoucherSpendWiseLinks, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, updateVoucherSpendWiseLinks, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
@@ -79,16 +79,16 @@ import {
   materializeVoucherFileUrlsForWebSave,
   normalizeFormFileUrlsForSave,
   applyVoucherAttachmentsAfterFormSave,
+  uploadVoucherAttachmentFileToFirebase,
   voucherAttachmentFieldsForSave,
 } from "@/lib/voucherFormAttachmentSave";
+import { readVoucherEditAttachmentContext } from "@/lib/formAttachmentEditHelper";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useSearchParams } from "next/navigation";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
-import {
-  convertPdfAttachmentsToJpegIfEnabled,
-  shouldSuggestPdfAsImage,
-} from "@/lib/voucherAttachmentPdfAsImage";
+import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
+import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
 import { useAccountBalance } from "@/hooks/useAccountBalance";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
@@ -1270,17 +1270,30 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const snap = savedFileUrlsSnapshotRef.current;
     if (snap) {
       if (incomingVoucherFileUrlsLookStaleVersusSaved(snap, incoming)) return;
-      if (
-        JSON.stringify(incoming) === JSON.stringify(snap) ||
-        isLocalToRemoteAttachmentUpgrade(snap, incoming)
-      ) {
+      // Empty snap mat clear karo — flush/409 mirror purani HTTPS wapas laaye to phir bhi reject ho.
+      if (isLocalToRemoteAttachmentUpgrade(snap, incoming)) {
+        savedFileUrlsSnapshotRef.current = null;
+      } else if (snap.length > 0 && JSON.stringify(incoming) === JSON.stringify(snap)) {
         savedFileUrlsSnapshotRef.current = null;
       }
     }
     if (JSON.stringify(incoming) === JSON.stringify(cur)) return;
+    if (cur.length > incoming.length || (cur.length > 0 && incoming.length === 0)) {
+      void import("@/lib/attachmentDeleteTrace").then((m) =>
+        m.logAttachWipe({
+          source: "CreatePaymentInForm.voucherFileUrlsEffect",
+          reason: "form_sync_shrunk_from_voucher_prop",
+          companyId: companyId ?? undefined,
+          voucherId: voucher?.id,
+          beforeUrls: cur,
+          afterUrls: incoming,
+          extra: { _isFileDirty, snap: snap ?? null },
+        })
+      );
+    }
     setFiles(incoming);
     initialFilesRef.current = [...incoming];
-  }, [voucher?.id, voucher?.fileUrls, savedVoucherId, files, _isFileDirty]);
+  }, [voucher?.id, voucher?.fileUrls, savedVoucherId, files, _isFileDirty, companyId]);
 
   useEffect(() => {
     if ((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled) {
@@ -1447,22 +1460,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         ? parseFloat(String(formAmount).replace(/,/g, '')) || 0
         : Number(formAmount || 0);
 
-      let filesForSave = files;
-      if (savePdfAsImage) {
-        const convToast = sonnerToast.loading("Converting PDF attachments to image…");
-        try {
-          filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
-        } finally {
-          sonnerToast.dismiss(convToast);
-        }
-      }
+      const filesForSave = await prepareVoucherAttachmentsForSave(files, {
+        companyId,
+        savePdfAsImage,
+      });
       
       // Web save: PL/local markers ko payload se pehle HTTPS me promote karo (offline/embedded par as-is rehta hai).
+      const editVoucherId = idArgForFirestore ?? voucher?.id ?? null;
+      const editAttachmentCtx =
+        editVoucherId && companyId
+          ? await readVoucherEditAttachmentContext(companyId, editVoucherId)
+          : null;
       const fileUrlsForSave = await materializeVoucherFileUrlsForWebSave({
         companyId,
-        voucherIdHint: idArgForFirestore ?? voucher?.id ?? null,
+        voucherIdHint: editVoucherId,
         storageFolder: String(voucherType),
         rawUrls: normalizeFormFileUrlsForSave(filesForSave.filter(f => typeof f === "string") as string[]),
+        editBaselineUrls: editAttachmentCtx?.baselineUrls,
+        editOldDocRemoteUrls: editAttachmentCtx?.remoteUrls,
       });
 
       const submissionData: any = {
@@ -1527,9 +1542,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           // Web browser online: direct Firebase HTTPS — Firestore me local/PL URL kabhi nahi.
           for (const file of newFilesToUpload) {
             if (sanitizedData.fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
-            const storageRef = ref(storage, `voucher-files/${companyId}/${voucherType}/${Date.now()}_${file.name}`);
-            const snapshot = await uploadBytes(storageRef, file);
-            const url = await getDownloadURL(snapshot.ref);
+            const url = await uploadVoucherAttachmentFileToFirebase({
+              companyId,
+              voucherType,
+              file,
+            });
             sanitizedData.fileUrls.push(url);
             await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
           }
@@ -1547,6 +1564,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   
       const isEdit = !!voucher?.id && !originalVoucherIdToDelete;
       const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
+      // Save se pehle snapshot — outbox flush / 409 mirror purani fileUrls form me wapas na laaye.
+      savedFileUrlsSnapshotRef.current = (
+        Array.isArray(sanitizedData.fileUrls) ? sanitizedData.fileUrls : []
+      ).filter((u: unknown): u is string => typeof u === "string" && Boolean(String(u).trim()));
       const savedDoc = await saveVoucher(
         companyId,
         user.uid,
@@ -1609,7 +1630,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const postSaveTail = async () => {
           let bgSyncPartialFailure = false;
           try {
-            if (docId && companyId && rawFileUrlsForPostSave.length > 0) {
+            // Empty list bhi apply — warna remove-all ke baad stale parent fileUrls UI me wapas aa jate.
+            if (docId && companyId) {
               const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
                 companyId,
                 voucherId: docId,
@@ -1697,9 +1719,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             throw err;
           }
 
-          if (approveBanner && !isEdit && savedDoc?.id) {
-            await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
-          }
+          // New create: saveVoucher(approveAfterSave) already set isApproved — skip second approve lookup.
           if (companyId && company) {
             const vid = docId ?? voucher?.id;
             if (isEdit) {
@@ -1934,6 +1954,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       return;
     }
     await handleVoucherAttachmentInputChange(e, {
+      companyId,
       currentFiles: files,
       maxFiles: fileAttachmentLimits.maxFileCount || 0,
       allowImage: fileAttachmentLimits.allowImage,
@@ -2737,9 +2758,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         key={index}
                         file={file}
                         attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
+                        attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                         onRemove={
                           allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete
-                            ? () => setFiles((prev) => prev.filter((_, i) => i !== index))
+                            ? () => {
+                                setFiles((prev) => {
+                                  const next = prev.filter((_, i) => i !== index);
+                                  // Parent/live merge se pehle hi authoritative empty/partial list lock.
+                                  savedFileUrlsSnapshotRef.current = next.filter(
+                                    (f): f is string => typeof f === "string" && Boolean(String(f).trim())
+                                  );
+                                  return next;
+                                });
+                              }
                             : undefined
                         }
                         className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
@@ -2762,6 +2793,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           }}
                           onPastedFiles={(incoming) =>
                             void appendCompressedVoucherAttachmentsToState({
+                              companyId,
                               incomingFiles: incoming,
                               currentFiles: files,
                               maxFiles: fileAttachmentLimits.maxFileCount || 0,

@@ -392,18 +392,123 @@ const openPromiseByNs: Partial<Record<SqliteStorageNamespace, Promise<BrowserDbW
 let sqlJsModulePromise: Promise<typeof import("sql.js").default> | null = null;
 let migrateNamespacesPromise: Promise<void> | null = null;
 
+/** Cross-renderer: host tab IDB likhe ke baad bridge/sibling stale sql.js drop kare (bina stale flush). */
+export const SQLITE_SIBLING_IDB_RELOAD_CHANNEL = "pocket-ledger-sqlite-idb-reload";
+const SQLITE_SIBLING_IDB_RELOAD_STORAGE_KEY = "pocket-ledger-sqlite-idb-reload";
+const SQLITE_SIBLING_SENDER_ID =
+  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `sqlite-sender-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+/** Hidden Electron `?pl_server_data_bridge=1` — same IndexedDB, alag in-memory sql.js. */
+export function isServerDataBridgeRenderer(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if ((window as unknown as { __plIsCanonicalServerBridge?: boolean }).__plIsCanonicalServerBridge === true) {
+      return true;
+    }
+    return new URLSearchParams(window.location.search).get("pl_server_data_bridge") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function plRoleSqliteLog(step: string, detail?: Record<string, unknown>): void {
+  void import("@/lib/plRoleChangeLog")
+    .then(({ plRoleLog }) => plRoleLog(step, detail))
+    .catch(() => undefined);
+}
+
+/**
+ * Host company-meta / role save ke baad: sibling renderers (hidden bridge) apni
+ * purani sql.js memory drop karein — warna unka scheduleSave/lifecycle flush
+ * IndexedDB pe purana `localCompanyUsers` wapas likh deta hai (F5 + staff stale role).
+ * Caller window apna cache nahi giraata.
+ */
+export function notifySiblingRenderersReloadBrowserDbFromIndexedDb(
+  detail?: Record<string, unknown>
+): void {
+  if (typeof window === "undefined") return;
+  const payload = {
+    senderId: SQLITE_SIBLING_SENDER_ID,
+    at: Date.now(),
+    ...(detail || {}),
+  };
+  plRoleSqliteLog("sibling_reload_emit", {
+    ...payload,
+    isBridge: isServerDataBridgeRenderer(),
+  });
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      const channel = new BroadcastChannel(SQLITE_SIBLING_IDB_RELOAD_CHANNEL);
+      channel.postMessage(payload);
+      channel.close();
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    window.localStorage.setItem(SQLITE_SIBLING_IDB_RELOAD_STORAGE_KEY, JSON.stringify(payload));
+    window.localStorage.removeItem(SQLITE_SIBLING_IDB_RELOAD_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function applySiblingIdbReloadFromPeer(raw: unknown): void {
+  const senderId =
+    raw && typeof raw === "object" && "senderId" in raw
+      ? String((raw as { senderId?: unknown }).senderId || "")
+      : "";
+  if (senderId && senderId === SQLITE_SIBLING_SENDER_ID) return;
+  plRoleSqliteLog("sibling_reload_recv", {
+    senderId: senderId || null,
+    isBridge: isServerDataBridgeRenderer(),
+  });
+  // Stale memory drop — IDB pe flush mat karo (host already likh chuka).
+  clearBrowserDbCache();
+}
+
 function registerBrowserDbLifecycleFlushOnce(): void {
   if (typeof window === "undefined") return;
-  const w = window as unknown as { __plBrowserDbFlushRegistered?: boolean };
-  if (w.__plBrowserDbFlushRegistered) return;
-  w.__plBrowserDbFlushRegistered = true;
-  const flush = () => {
-    void flushPendingBrowserDbSave();
+  const w = window as unknown as {
+    __plBrowserDbFlushRegistered?: boolean;
+    __plBrowserDbSiblingReloadRegistered?: boolean;
   };
-  window.addEventListener("pagehide", flush);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flush();
-  });
+  if (!w.__plBrowserDbFlushRegistered) {
+    w.__plBrowserDbFlushRegistered = true;
+    const flush = () => {
+      // Bridge auto-flush clobbers host Manage Sharing role writes in shared IndexedDB.
+      if (isServerDataBridgeRenderer()) {
+        plRoleSqliteLog("lifecycle_flush_skip_bridge", { reason: "avoid_stale_idb_clobber" });
+        return;
+      }
+      void flushPendingBrowserDbSave();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") flush();
+    });
+  }
+  if (!w.__plBrowserDbSiblingReloadRegistered) {
+    w.__plBrowserDbSiblingReloadRegistered = true;
+    try {
+      if (typeof BroadcastChannel !== "undefined") {
+        const channel = new BroadcastChannel(SQLITE_SIBLING_IDB_RELOAD_CHANNEL);
+        channel.addEventListener("message", (ev) => applySiblingIdbReloadFromPeer(ev.data));
+      }
+    } catch {
+      /* ignore */
+    }
+    window.addEventListener("storage", (ev) => {
+      if (ev.key !== SQLITE_SIBLING_IDB_RELOAD_STORAGE_KEY || !ev.newValue) return;
+      try {
+        applySiblingIdbReloadFromPeer(JSON.parse(ev.newValue));
+      } catch {
+        applySiblingIdbReloadFromPeer({ at: Date.now() });
+      }
+    });
+  }
 }
 registerBrowserDbLifecycleFlushOnce();
 
@@ -423,6 +528,9 @@ function wrapDb(
   const entry = cachedByNs[ns];
   if (entry) entry.pendingSaveFn = onSave;
   const scheduleSave = () => {
+    // Bridge: sirf explicit `flushPendingBrowserDbSave` (delta apply) IDB likhe.
+    // Debounced auto-save purani company meta se host role overwrite karti thi.
+    if (isServerDataBridgeRenderer()) return;
     const cur = cachedByNs[ns];
     if (!cur) return;
     if (cur.pendingSaveTimer) return;
@@ -1026,6 +1134,7 @@ export async function flushPendingBrowserDbSave(): Promise<void> {
 /** Voucher save hot path — debounced IndexedDB export; Save button / dialog mat roko. */
 export function scheduleBrowserDbPersistAfterWrite(): void {
   if (typeof window === "undefined") return;
+  if (isServerDataBridgeRenderer()) return;
   for (const ns of SQLITE_STORAGE_NAMESPACES) {
     const cur = cachedByNs[ns];
     if (!cur?.pendingSaveFn || cur.pendingSaveTimer != null) continue;

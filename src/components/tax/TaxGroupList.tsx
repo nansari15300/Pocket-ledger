@@ -6,7 +6,7 @@ import { Users } from "lucide-react";
 import type { TaxGroup } from "@/components/tax/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
-import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo, useState } from "react";
@@ -44,7 +44,7 @@ export function TaxGroupList({
   hideQuickFilterBar?: boolean;
 }) {
   const { formatCurrency } = useDate();
-  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
+  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } = useMasterListRowMotion();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
@@ -61,6 +61,17 @@ export function TaxGroupList({
     return filterAndSortEntityGroups(base, searchTerm, quickFilter);
   }, [groups, searchTerm, quickFilter]);
 
+  const listOrderKey = useMemo(
+    () => masterListOrderKey(filteredAndSortedGroups.map((g) => g.id)),
+    [filteredAndSortedGroups]
+  );
+
+  const { displayRows: displayListRows, displayOrderKey } = useMasterListDisplayRows(
+    filteredAndSortedGroups,
+    listOrderKey,
+    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
+  );
+
   return (
     <TooltipProvider delayDuration={200}>
     <motion.div className={masterListShellCn}>
@@ -72,7 +83,7 @@ export function TaxGroupList({
       >
         <ul className="pl-master-list-ul">
           <AnimatePresence mode={animatePresenceMode}>
-            {filteredAndSortedGroups.map((group) => {
+            {displayListRows.map((group) => {
               const isSelected = selectedGroup?.id === group.id;
               const href = getItemHref?.(group);
               const cardClassName = masterListRowUnselectedCn(isSelected);
@@ -130,7 +141,7 @@ export function TaxGroupList({
                       </div>
               );
               return (
-                <motion.li key={group.id} {...rowMotionProps}>
+                <motion.li key={group.id} layoutDependency={displayOrderKey} {...rowMotionProps}>
                     {href ? (
                     // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                     <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
@@ -145,7 +156,7 @@ export function TaxGroupList({
               );
             })}
           </AnimatePresence>
-          {filteredAndSortedGroups.length === 0 && (
+          {displayListRows.length === 0 && (
             <div className="text-center text-muted-foreground p-8">
               No groups found.
             </div>

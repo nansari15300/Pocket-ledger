@@ -91,7 +91,7 @@ async function listFromWebBackupDir(
   for (const row of rows) {
     try {
       const file = await row.readBlob();
-      row.modifiedAt = file.lastModified || Date.now();
+      row.modifiedAt = (file instanceof File ? file.lastModified : 0) || Date.now();
       row.sizeBytes = file.size || 0;
     } catch {
       row.modifiedAt = Date.now();

@@ -20,8 +20,7 @@ import {
   where,
 } from "firebase/firestore";
 import { uploadCompanyLogo, tryDeleteStorageFileByUrl } from "@/lib/storage";
-import { compressVoucherAttachment } from "@/lib/compression";
-import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { FilePreview } from "../vouchers/FilePreview";
 import { CompanyInterCompanyCodeField } from "@/components/inter-company/CompanyInterCompanyCodeField";
 
@@ -214,12 +213,14 @@ export function EditCompanyForm({
 
     setIsFileProcessing(true);
     try {
-      const maxBytes = attachmentMaxBytes();
-      const compressedFile = await compressVoucherAttachment(inputFile, maxBytes);
+      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(
+        inputFile,
+        (company as { id?: string } | null | undefined)?.id ?? null
+      );
       if (compressedFile.size > maxBytes) {
         toast({
           variant: "destructive",
-          ...attachmentStillTooLargeToastFields(),
+          ...attachmentImageStillTooLargeToastFields(maxKb),
         });
         e.target.value = "";
         return;

@@ -119,7 +119,11 @@ export type PlServerAccessContextPayload = {
   clientDataDeleteCommands?: CompanyClientDataDeleteCommand[] | null;
 };
 
-export type CompanyWithPlServerShared = Company & { plServerShared?: boolean };
+export type CompanyWithPlServerShared = Company & {
+  plServerShared?: boolean;
+  plServerGateId?: string;
+  plServerHostCompanyId?: string;
+};
 
 /** Registry / gate filters — null rows se `plServerShared` crash avoid. */
 function compactCompanyList(companies: Company[]): Company[] {

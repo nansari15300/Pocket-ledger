@@ -5,6 +5,12 @@ import type { LocalAppServerConfig } from "@/lib/electronLocalServer";
 import { isBrowserLoopbackDevHost, isLocalAppServerDevPreview } from "@/lib/localAppServerDevPreview";
 import { runDevHostBridgeJob } from "@/lib/devPlHostBridge/handlers";
 
+/** Eligible host: claim jobs quickly. Idle / not hosting: back off so Next/Turbopack can serve page navigations. */
+const POLL_MS_ACTIVE = 900;
+const POLL_MS_IDLE = 5000;
+const ELIGIBLE_CACHE_MS = 12_000;
+const CONFIG_CACHE_MS = 12_000;
+
 /**
  * Web/dev host bridge: the side PL sharing server asks this browser tab for
  * IndexedDB/SQLite data. Only the tab that actually owns shareable host-local
@@ -14,6 +20,7 @@ export function DevPlHostBridgeWorker() {
   const busyRef = useRef(false);
   const eligibleUntilRef = useRef(0);
   const eligibleRef = useRef(false);
+  const configCacheRef = useRef<{ at: number; cfg: LocalAppServerConfig | null } | null>(null);
 
   useEffect(() => {
     if (!isLocalAppServerDevPreview()) return;
@@ -29,15 +36,24 @@ export function DevPlHostBridgeWorker() {
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const loadServerConfig = async (): Promise<LocalAppServerConfig | null> => {
+      const now = Date.now();
+      const cached = configCacheRef.current;
+      if (cached && now - cached.at < CONFIG_CACHE_MS) return cached.cfg;
       try {
         const res = await fetch("/api/dev-pl-local-server", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "getConfig" }),
         });
-        if (!res.ok) return null;
-        return (await res.json()) as LocalAppServerConfig;
+        if (!res.ok) {
+          configCacheRef.current = { at: now, cfg: null };
+          return null;
+        }
+        const cfg = (await res.json()) as LocalAppServerConfig;
+        configCacheRef.current = { at: now, cfg };
+        return cfg;
       } catch {
+        configCacheRef.current = { at: now, cfg: null };
         return null;
       }
     };
@@ -45,7 +61,7 @@ export function DevPlHostBridgeWorker() {
     const canClaimHostBridgeJob = async () => {
       const now = Date.now();
       if (now < eligibleUntilRef.current) return eligibleRef.current;
-      eligibleUntilRef.current = now + 2500;
+      eligibleUntilRef.current = now + ELIGIBLE_CACHE_MS;
       eligibleRef.current = false;
 
       const cfg = await loadServerConfig();
@@ -70,17 +86,17 @@ export function DevPlHostBridgeWorker() {
       return eligibleRef.current;
     };
 
-    const poll = async () => {
-      if (cancelled || busyRef.current) return;
+    const poll = async (): Promise<boolean> => {
+      if (cancelled || busyRef.current) return false;
       try {
-        if (!(await canClaimHostBridgeJob())) return;
+        if (!(await canClaimHostBridgeJob())) return false;
         const res = await fetch("/api/dev-pl-host-bridge?action=claim", { cache: "no-store" });
-        if (!res.ok) return;
+        if (!res.ok) return true;
         const data = (await res.json()) as {
           job?: { id?: string; type?: string; payload?: Record<string, unknown> };
         };
         const job = data.job;
-        if (!job?.id || !job.type) return;
+        if (!job?.id || !job.type) return true;
         busyRef.current = true;
         let result: unknown = null;
         try {
@@ -93,16 +109,19 @@ export function DevPlHostBridgeWorker() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "complete", jobId: job.id, result }),
         });
+        return true;
       } catch {
-        /* ignore transient dev errors */
+        return eligibleRef.current;
       } finally {
         busyRef.current = false;
       }
     };
 
     const tick = () => {
-      void poll().finally(() => {
-        if (!cancelled) timer = setTimeout(tick, 400);
+      void poll().then((active) => {
+        if (cancelled) return;
+        const delay = active ? POLL_MS_ACTIVE : POLL_MS_IDLE;
+        timer = setTimeout(tick, delay);
       });
     };
     tick();

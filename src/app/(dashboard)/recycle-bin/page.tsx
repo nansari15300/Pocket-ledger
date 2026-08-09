@@ -24,7 +24,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { RecycleBinItem, type DeletedItem } from "@/components/recycle-bin/RecycleBinItem";
+import {
+    RecycleBinItem,
+    resolveDeletedVoucherAccountSides,
+    type DeletedItem,
+} from "@/components/recycle-bin/RecycleBinItem";
 import { Input } from "@/components/ui/input";
 import { Search, Trash2, Loader2 } from "lucide-react";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
@@ -70,6 +74,7 @@ import {
 } from "@/lib/recycleBinEntityLifecycle";
 import { LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
 import { ownerFinalizeRecycleBinCompanyOnServer } from "@/lib/ownerRecycleBinApiClient";
+import { deleteCompanyFirebaseStorageFolder } from "@/lib/deleteCompanyStorageFolder";
 import type { User } from "firebase/auth";
 import type { Permission } from "@/lib/permissions";
 
@@ -209,6 +214,7 @@ async function finalizeOwnerDeletedCompanyOnline(
     });
     if (apiRes.ok) return { success: true };
     if (apiRes.ok === false && apiRes.tryClientFallback) {
+        // Fallback when hosted API missing (static EXE/APK): same Super Admin quickDelete rule as server.
         if (clientQuickDelete) {
             return deleteCompanyComplete(companyId, firebaseUser.uid);
         }
@@ -222,6 +228,29 @@ async function finalizeOwnerDeletedCompanyOnline(
         }
     }
     return { success: false, error: apiRes.ok === false ? apiRes.error : "finalize_failed" };
+}
+
+/** Online company finalize ke baad optional SQLite mirror (EXE caches online company locally). */
+async function mirrorLocalCompanyAfterOnlineRecycleFinalize(
+    companyId: string,
+    quickDelete: boolean,
+    firebaseUid: string | null | undefined
+): Promise<void> {
+    try {
+        const localRow = await getLocalCompanyById(companyId, { includeDeleted: true });
+        if (!localRow) return;
+        if (quickDelete) {
+            await permanentDeleteLocalCompanyWithDriveCleanup(companyId, { firebaseUid: firebaseUid ?? null });
+        } else {
+            await upsertLocalCompany({
+                ...localRow,
+                id: companyId,
+                movedToAdminRecycleAt: Date.now(),
+            });
+        }
+    } catch {
+        /* optional mirror */
+    }
 }
 
 const COLLECTIONS_TO_CHECK = [
@@ -581,6 +610,7 @@ function RecycleBinContent() {
 
                                     if (coll.path === "vouchers") {
                                         item.voucherNumber = data.voucherNumber;
+                                        item.voucherType = data.type;
                                         item.date = data.date?.toDate
                                             ? data.date.toDate()
                                             : data.date instanceof Date
@@ -591,13 +621,27 @@ function RecycleBinContent() {
                                         item.accountId = data.accountId;
                                         item.fromAccountId = data.fromAccountId;
                                         item.toAccountId = data.toAccountId;
+                                        item.bankAccountId = data.bankAccountId;
+                                        item.partyId = data.partyId;
+                                        item.staffId = data.staffId;
+                                        item.taxAccountId = data.taxAccountId;
+                                        item.incomeAccountId = data.incomeAccountId;
+                                        item.expenseAccountId = data.expenseAccountId;
+                                        item.salesAccountId = data.salesAccountId;
+                                        item.purchaseAccountId = data.purchaseAccountId;
+                                        item.payeeName = data.payeeName;
+                                        item.partyName = data.partyName;
                                         item.userId = data.userId;
                                         item.deletedBy = data.deletedBy || data.userId;
 
-                                        const accountIdToUse =
-                                            item.accountId || item.fromAccountId || item.toAccountId;
-                                        if (accountIdToUse && journalAccountNames[accountIdToUse]) {
-                                            item.accountName = journalAccountNames[accountIdToUse];
+                                        const sides = resolveDeletedVoucherAccountSides(
+                                            item,
+                                            journalAccountNames
+                                        );
+                                        if (sides.from) item.fromAccountName = sides.from;
+                                        if (sides.to) item.toAccountName = sides.to;
+                                        if (sides.to || sides.from) {
+                                            item.accountName = sides.to || sides.from;
                                         }
                                     }
 
@@ -626,42 +670,69 @@ function RecycleBinContent() {
             };
         }, [companyId, user?.uid, journalAccountNames]);
 
-    // Fetch user names for deleted items
+    // Fetch user names for deleted items — `deletedBy` is Auth UID; users doc often lives at `{slug}_{uid}`.
     useEffect(() => {
         const fetchUserNames = async () => {
             const userIds = new Set<string>();
-            deletedItems.forEach(item => {
-                if (item.deletedBy) userIds.add(item.deletedBy);
-                if (item.userId && !item.deletedBy) userIds.add(item.userId);
+            deletedItems.forEach((item) => {
+                if (item.deletedBy) userIds.add(String(item.deletedBy).trim());
+                if (item.userId && !item.deletedBy) userIds.add(String(item.userId).trim());
             });
+
+            const sessionUid = String(user?.uid || "").trim();
+            const sessionLabel = String(
+                customUser?.displayName ||
+                    user?.displayName ||
+                    customUser?.email ||
+                    user?.email ||
+                    ""
+            ).trim();
 
             const newUserNames: Record<string, string> = {};
             for (const uid of Array.from(userIds)) {
-                if (!userNames[uid]) {
-                    try {
+                if (!uid) continue;
+                const cached = userNames[uid];
+                if (cached && cached !== "Unknown" && cached !== "N/A") continue;
+
+                // Same logged-in user → profile se turant (users/{uid} kabhi miss hota hai).
+                if (sessionUid && uid === sessionUid && sessionLabel) {
+                    newUserNames[uid] = sessionLabel;
+                    continue;
+                }
+
+                try {
+                    let displayName = "";
+                    // Prefer query by `uid` field (slug_uid doc ids).
+                    const qByUid = query(collection(firestore, "users"), where("uid", "==", uid));
+                    const snap = await getDocs(qByUid);
+                    const data = snap.docs[0]?.data();
+                    if (data) {
+                        displayName = String(data.displayName || data.name || data.email || "").trim();
+                    }
+                    if (!displayName) {
                         const userDoc = await getDoc(doc(firestore, "users", uid));
                         if (userDoc.exists()) {
-                            const userData = userDoc.data();
-                            newUserNames[uid] = userData.displayName || userData.email || "Unknown";
-                        } else {
-                            newUserNames[uid] = "Unknown";
+                            const d = userDoc.data();
+                            displayName = String(d.displayName || d.name || d.email || "").trim();
                         }
-                    } catch (e) {
-                        console.error("Error fetching user:", e);
-                        newUserNames[uid] = "Unknown";
                     }
+                    if (displayName) {
+                        newUserNames[uid] = displayName;
+                    }
+                } catch (e) {
+                    console.error("Error fetching user:", e);
                 }
             }
 
             if (Object.keys(newUserNames).length > 0) {
-                setUserNames(prev => ({ ...prev, ...newUserNames }));
+                setUserNames((prev) => ({ ...prev, ...newUserNames }));
             }
         };
 
         if (deletedItems.length > 0) {
-            fetchUserNames();
+            void fetchUserNames();
         }
-    }, [deletedItems, userNames]);
+    }, [deletedItems, userNames, user?.uid, user?.displayName, user?.email, customUser?.displayName, customUser?.email]);
 
     const [accountNames, setAccountNames] = useState<Record<string, string>>({});
 
@@ -671,9 +742,22 @@ function RecycleBinContent() {
             const accountIdsToFetch = new Set<string>();
             deletedItems.forEach(item => {
                 if (item.type === 'Voucher') {
-                    const accountId = item.accountId || item.fromAccountId || item.toAccountId;
-                    if (accountId && !journalAccountNames[accountId] && !accountNames[accountId]) {
-                        accountIdsToFetch.add(accountId);
+                    for (const accountId of [
+                        item.accountId,
+                        item.fromAccountId,
+                        item.toAccountId,
+                        item.bankAccountId,
+                        item.partyId,
+                        item.staffId,
+                        item.taxAccountId,
+                        item.incomeAccountId,
+                        item.expenseAccountId,
+                        item.salesAccountId,
+                        item.purchaseAccountId,
+                    ]) {
+                        if (accountId && !journalAccountNames[accountId] && !accountNames[accountId]) {
+                            accountIdsToFetch.add(accountId);
+                        }
                     }
                 }
             });
@@ -722,21 +806,34 @@ function RecycleBinContent() {
 
             // Add user name
             const userIdToUse = enriched.deletedBy || enriched.userId;
-            if (userIdToUse && userNames[userIdToUse]) {
-                enriched.deletedByUserName = userNames[userIdToUse];
+            if (userIdToUse) {
+                const fromMap = userNames[userIdToUse];
+                if (fromMap && fromMap !== "Unknown" && fromMap !== "N/A") {
+                    enriched.deletedByUserName = fromMap;
+                } else if (user?.uid && userIdToUse === user.uid) {
+                    enriched.deletedByUserName =
+                        customUser?.displayName ||
+                        user.displayName ||
+                        customUser?.email ||
+                        user.email ||
+                        undefined;
+                }
             }
 
-            // Update account name - check journalAccountNames first, then accountNames
-            if (enriched.type === 'Voucher' && !enriched.accountName) {
-                const accountIdToUse = enriched.accountId || enriched.fromAccountId || enriched.toAccountId;
-                if (accountIdToUse) {
-                    enriched.accountName = journalAccountNames[accountIdToUse] || accountNames[accountIdToUse] || undefined;
+            // From → To for voucher title (payment_in: party → bank, not bank alone)
+            if (enriched.type === "Voucher") {
+                const nameMap = { ...journalAccountNames, ...accountNames };
+                const sides = resolveDeletedVoucherAccountSides(enriched, nameMap);
+                if (sides.from) enriched.fromAccountName = sides.from;
+                if (sides.to) enriched.toAccountName = sides.to;
+                if (!enriched.accountName) {
+                    enriched.accountName = sides.to || sides.from || undefined;
                 }
             }
 
             return enriched;
         });
-    }, [deletedItems, userNames, journalAccountNames, accountNames, localPermEpoch]);
+    }, [deletedItems, userNames, journalAccountNames, accountNames, localPermEpoch, user?.uid, user?.displayName, user?.email, customUser?.displayName, customUser?.email]);
     
     /** Deleted voucher Firestore / SQLite se load karke read-only edit dialog. */
     const handleViewVoucher = useCallback(
@@ -992,25 +1089,17 @@ function RecycleBinContent() {
                 if (!user) throw new Error("Please sign in to delete.");
                 const finOnline = await finalizeOwnerDeletedCompanyOnline(resolvedItem.id, user, quickDelete);
                 if (!finOnline.success) throw new Error(finOnline.error || "Permanent delete failed.");
-                // Mirror SQLite soft/permanent markers for online companies that also have a local row.
-                try {
-                    const localRow = await getLocalCompanyById(resolvedItem.id, { includeDeleted: true });
-                    if (localRow) {
-                        if (quickDelete) {
-                            await permanentDeleteLocalCompanyWithDriveCleanup(resolvedItem.id, {
-                                firebaseUid: user?.uid ?? null,
-                            });
-                        } else {
-                            await upsertLocalCompany({
-                                ...localRow,
-                                id: resolvedItem.id,
-                                movedToAdminRecycleAt: Date.now(),
-                            });
-                        }
+                if (quickDelete) {
+                    try {
+                        await deleteCompanyFirebaseStorageFolder({
+                            companyId: resolvedItem.id,
+                            companyName: resolvedItem.name,
+                        });
+                    } catch (e) {
+                        console.warn("[recycle-bin] client storage wipe after company delete", e);
                     }
-                } catch {
-                    /* optional mirror */
                 }
+                await mirrorLocalCompanyAfterOnlineRecycleFinalize(resolvedItem.id, quickDelete, user?.uid);
                 removeDeletedItemFromState(resolvedItem);
                 if (quickDelete) {
                     toast({ title: "Success", description: `"${resolvedItem.name}" deleted permanently.` });
@@ -1098,97 +1187,121 @@ function RecycleBinContent() {
         }
 
         try {
-            if (isLocalOnlyMode()) {
-                // Local-only gate: SQLite (+ Drive) — Firestore companies/{id} mat chhedo (same-id online row).
-                for (const cid of companyIds) {
-                    await permanentDeleteLocalCompanyWithDriveCleanup(cid, { firebaseUid: user?.uid ?? null });
-                }
-                if (companyIds.length > 0) {
-                    reloadLocalCompanyRegistry();
-                    setDeletedItems((prev) => prev.filter((item) => item.collectionPath !== "companies"));
-                }
-                if (nonCompanyItems.length === 0) {
-                    toast({ title: "Deleted permanently", description: "All deleted companies have been removed from your recycle bin." });
-                    setUserNames({});
-                    setIsProcessing(false);
-                    return;
-                }
-            }
-
             if (nonCompanyItems.length > 0 && !companyId) {
                 toast({ variant: "destructive", title: "Error", description: "Select a company to remove these items from the bin." });
                 setIsProcessing(false);
                 return;
             }
 
-            // Local-only me SQLite+Drive cleanup pehle ho chuka — `companies/*` Firestore delete loop dobara mat chalao.
-            const firestoreCompanyIds = isLocalOnlyMode() ? [] : companyIds;
+            // Per company: local/PL → SQLite(+Drive); Online → Super Admin quickDelete finalize (web/EXE/APK same).
+            // Static EXE `isLocalOnlyMode()` mat treat as "all companies are local" — Online rows bina Firestore finalize UI se hat jaati thin.
+            const localOnlyCompanyIds: string[] = [];
+            const onlineCompanyIds: string[] = [];
+            for (const cid of companyIds) {
+                const hint = resolvedBinItems.find(
+                    (i) => i.id === cid && (i.collectionPath === "companies" || i.isRootCollection === true)
+                );
+                const { root } = await resolveCompanyRecycleRootForId(cid, {
+                    companyStorageSource: hint?.companyStorageSource,
+                });
+                if (
+                    companyRecycleMustSkipFirestore(root) ||
+                    (await recycleBinCompanyIdIsLocalStorageOnly(cid, resolvedBinItems))
+                ) {
+                    localOnlyCompanyIds.push(cid);
+                } else {
+                    onlineCompanyIds.push(cid);
+                }
+            }
+
+            for (const cid of localOnlyCompanyIds) {
+                await permanentDeleteLocalCompanyWithDriveCleanup(cid, { firebaseUid: user?.uid ?? null });
+            }
+
+            if (onlineCompanyIds.length > 0) {
+                if (!user) {
+                    toast({ variant: "destructive", title: "Error", description: "Please sign in to empty the bin." });
+                    setIsProcessing(false);
+                    return;
+                }
+                for (const cid of onlineCompanyIds) {
+                    const fin = await finalizeOwnerDeletedCompanyOnline(cid, user, quickDelete);
+                    if (!fin.success) {
+                        toast({
+                            variant: "destructive",
+                            title: "Error",
+                            description: fin.error || (quickDelete ? "Failed to delete company." : "Failed to update company."),
+                        });
+                        setIsProcessing(false);
+                        return;
+                    }
+                    if (quickDelete) {
+                        const nameHint =
+                            resolvedBinItems.find((i) => i.id === cid)?.name || cid;
+                        try {
+                            await deleteCompanyFirebaseStorageFolder({
+                                companyId: cid,
+                                companyName: nameHint,
+                            });
+                        } catch (e) {
+                            console.warn("[recycle-bin] empty-bin client storage wipe", e);
+                        }
+                    }
+                    await mirrorLocalCompanyAfterOnlineRecycleFinalize(cid, quickDelete, user.uid);
+                }
+            }
+
+            if (nonCompanyItems.length > 0) {
+                if (quickDelete || sqliteFullPurge) {
+                    if (!user) {
+                        toast({ variant: "destructive", title: "Error", description: "Please sign in to empty the bin." });
+                        setIsProcessing(false);
+                        return;
+                    }
+                    for (const item of nonCompanyItems) {
+                        if (!companyId) continue;
+                        await permanentDeleteCompanySubdocFromRecycleBin(companyId, item.collectionPath, item.id);
+                        await removeRecycleBinAlerts(companyId, item.id);
+                    }
+                } else if (!isLocalOnlyMode()) {
+                    if (!user) {
+                        toast({ variant: "destructive", title: "Error", description: "Please sign in to empty the bin." });
+                        setIsProcessing(false);
+                        return;
+                    }
+                    const batch = writeBatch(firestore);
+                    for (const item of nonCompanyItems) {
+                        batch.update(doc(firestore, `companies/${companyId}/${item.collectionPath}/${item.id}`), {
+                            movedToAdminRecycleAt: serverTimestamp(),
+                        });
+                    }
+                    await batch.commit();
+                    if (companyId) {
+                        for (const item of nonCompanyItems) {
+                            await removeRecycleBinAlerts(companyId, item.id);
+                        }
+                    }
+                } else {
+                    // Local-only gate: non-company rows SQLite purge (same as quick path for sqlite-backed bins).
+                    for (const item of nonCompanyItems) {
+                        if (!companyId) continue;
+                        await permanentDeleteCompanySubdocFromRecycleBin(companyId, item.collectionPath, item.id);
+                        await removeRecycleBinAlerts(companyId, item.id);
+                    }
+                }
+            }
+
+            for (const cid of companyIds) {
+                await removeRecycleBinAlerts(cid, cid);
+            }
 
             if (quickDelete || sqliteFullPurge) {
-                if (!user) {
-                    toast({ variant: "destructive", title: "Error", description: "Please sign in to empty the bin." });
-                    setIsProcessing(false);
-                    return;
-                }
-                for (const cid of firestoreCompanyIds) {
-                    const { root } = await resolveCompanyRecycleRootForId(cid, {
-                        companyStorageSource: resolvedBinItems.find((i) => i.id === cid)?.companyStorageSource,
-                    });
-                    if (companyRecycleMustSkipFirestore(root) || (await recycleBinCompanyIdIsLocalStorageOnly(cid, resolvedBinItems))) {
-                        await permanentDeleteLocalCompanyWithDriveCleanup(cid, { firebaseUid: user?.uid ?? null });
-                        continue;
-                    }
-                    const fin = await finalizeOwnerDeletedCompanyOnline(cid, user, true);
-                    if (!fin.success) {
-                        toast({ variant: "destructive", title: "Error", description: fin.error || "Failed to delete company." });
-                        setIsProcessing(false);
-                        return;
-                    }
-                }
-                for (const item of nonCompanyItems) {
-                    if (!companyId) continue;
-                    await permanentDeleteCompanySubdocFromRecycleBin(companyId, item.collectionPath, item.id);
-                    await removeRecycleBinAlerts(companyId, item.id);
-                }
-                for (const cid of companyIds) {
-                  await removeRecycleBinAlerts(cid, cid);
-                }
                 toast({ title: "Bin Emptied", description: "All items permanently deleted from server." });
             } else {
-                if (!user) {
-                    toast({ variant: "destructive", title: "Error", description: "Please sign in to empty the bin." });
-                    setIsProcessing(false);
-                    return;
-                }
-                for (const cid of firestoreCompanyIds) {
-                    const { root } = await resolveCompanyRecycleRootForId(cid, {
-                        companyStorageSource: resolvedBinItems.find((i) => i.id === cid)?.companyStorageSource,
-                    });
-                    if (companyRecycleMustSkipFirestore(root) || (await recycleBinCompanyIdIsLocalStorageOnly(cid, resolvedBinItems))) {
-                        await permanentDeleteLocalCompanyWithDriveCleanup(cid, { firebaseUid: user?.uid ?? null });
-                        continue;
-                    }
-                    const fin = await finalizeOwnerDeletedCompanyOnline(cid, user, false);
-                    if (!fin.success) {
-                        toast({ variant: "destructive", title: "Error", description: fin.error || "Failed to update company." });
-                        setIsProcessing(false);
-                        return;
-                    }
-                }
-                const batch = writeBatch(firestore);
-                for (const item of nonCompanyItems) {
-                    batch.update(doc(firestore, `companies/${companyId}/${item.collectionPath}/${item.id}`), { movedToAdminRecycleAt: serverTimestamp() });
-                }
-                await batch.commit();
-                if (companyId) {
-                  for (const item of nonCompanyItems) {
-                    await removeRecycleBinAlerts(companyId, item.id);
-                  }
-                }
-                for (const cid of companyIds) {
-                  await removeRecycleBinAlerts(cid, cid);
-                }
-                toast({ title: "Deleted permanently", description: "All items have been removed from your recycle bin." });
+                toast({
+                    title: "Deleted permanently",
+                    description: "All items have been removed from your recycle bin.",
+                });
             }
             if (companyIds.length > 0) reloadLocalCompanyRegistry();
             setDeletedItems([]);
@@ -1207,7 +1320,9 @@ function RecycleBinContent() {
                 const searchLower = searchTerm.toLowerCase();
                 return item.name.toLowerCase().includes(searchLower) ||
                        item.voucherNumber?.toLowerCase().includes(searchLower) ||
-                       item.accountName?.toLowerCase().includes(searchLower) ||
+                        item.accountName?.toLowerCase().includes(searchLower) ||
+                       item.fromAccountName?.toLowerCase().includes(searchLower) ||
+                       item.toAccountName?.toLowerCase().includes(searchLower) ||
                        item.deletedByUserName?.toLowerCase().includes(searchLower);
             })
             .reduce((acc, item) => {

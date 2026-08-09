@@ -33,7 +33,10 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
+import {
+  applyVoucherAttachmentsAfterFormSave,
+  voucherAttachmentFieldsForSave,
+} from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
 import { firestore } from "@/lib/firebase";
@@ -49,10 +52,8 @@ import { CreateFinishedGoodDialog } from "@/components/items/CreateFinishedGoodD
 import type { Item } from "@/components/items/types";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
-import {
-  convertPdfAttachmentsToJpegIfEnabled,
-  shouldSuggestPdfAsImage,
-} from "@/lib/voucherAttachmentPdfAsImage";
+import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
+import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { Upload } from "lucide-react";
 import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
@@ -465,6 +466,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!allowAttachments) return;
     await handleVoucherAttachmentInputChange(e, {
+      companyId,
       currentFiles: files,
       maxFiles: fileAttachmentLimits.maxFileCount || 0,
       allowImage: fileAttachmentLimits.allowImage,
@@ -490,20 +492,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
       setIsLoading(true);
 
-      let filesForSave = files;
-      if (savePdfAsImage) {
-        const convToast = sonnerToast.loading("Converting PDF attachments to image…");
-        try {
-          filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
-        } finally {
-          sonnerToast.dismiss(convToast);
-        }
-      }
+      const filesForSave = await prepareVoucherAttachmentsForSave(files, {
+        companyId,
+        savePdfAsImage,
+      });
 
       let existingFileUrls = filesForSave.filter((f): f is string => typeof f === 'string');
-      if(data.unassignedFile?.url && !existingFileUrls.includes(data.unassignedFile.url)) {
-        existingFileUrls.push(data.unassignedFile.url);
-      }
+      // `files` UI list is canonical — do not re-inject `unassignedFile` (resurrects removed attachments).
 
       const newFilesToUpload = filesForSave.filter((f): f is File => f instanceof File);
       let preGeneratedVoucherId: string | undefined;
@@ -572,8 +567,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         totalOutput: data.totalOutput,
         total: data.totalOutput,
         amount: data.totalOutput,
-        fileUrls: existingFileUrls,
-        unassignedFile: data.unassignedFile,
+        ...voucherAttachmentFieldsForSave(existingFileUrls),
       };
 
       const result = await saveVoucher(
@@ -1176,6 +1170,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           key={index}
                           file={file}
                           attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
+                        attachmentReusePlaceKey={voucher?.id ? `vouchers/${voucher.id}` : null}
                           onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                           className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                         />
@@ -1192,6 +1187,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             }}
                             onPastedFiles={(incoming) =>
                               void appendCompressedVoucherAttachmentsToState({
+                                companyId,
                                 incomingFiles: incoming,
                                 currentFiles: files,
                                 maxFiles: fileAttachmentLimits.maxFileCount || 0,

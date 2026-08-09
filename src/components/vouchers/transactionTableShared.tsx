@@ -140,7 +140,7 @@ export type Context =
 export type Transaction = Record<string, any>;
 export type FileColumnDisplayMode = "preview" | "tick";
 
-/** Portal preview — stable memo taaki table re-render par fetch/spinner reset na ho. */
+/** Portal preview — stable memo taaki table re-render / reuse-border tick par fetch/spinner reset na ho. */
 function StableAttachmentPortalPreview({
   urls,
   companyId,
@@ -150,12 +150,23 @@ function StableAttachmentPortalPreview({
   companyId?: string | null;
   voucherId?: string | null;
 }) {
-  const urlsKey = React.useMemo(() => urls.join("\x1e"), [urls]);
-  const preview = React.useMemo(
-    () => <MultiAttachmentPortalPreview urls={urls} companyId={companyId} voucherId={voucherId} />,
-    [urlsKey, companyId, voucherId, urls]
+  // Join by content — parent har render pe naya `urls` array deta hai; `urls` ko dep mat banao warna
+  // MultiAttachmentPreview har tick pe remount → fetch cancel → portal spinner forever (origin/green row zyada).
+  const urlsKey = urls.map((u) => String(u || "").trim()).filter(Boolean).join("\x1e");
+  const stableUrls = React.useMemo(
+    () => (urlsKey ? urlsKey.split("\x1e") : []),
+    [urlsKey]
   );
-  return preview;
+  return React.useMemo(
+    () => (
+      <MultiAttachmentPortalPreview
+        urls={stableUrls}
+        companyId={companyId}
+        voucherId={voucherId}
+      />
+    ),
+    [stableUrls, companyId, voucherId]
+  );
 }
 
 /**
@@ -235,15 +246,16 @@ export function OpeningBalanceFileCellContent({
 
 export function MobileTransactionFilePreview({
   transaction,
+  showAll = false,
 }: {
   transaction?: { fileUrls?: unknown; unassignedFile?: unknown; id?: unknown } | null;
+  /** File column "Show all" — ON: har file alag thumb; OFF: ek thumb (mixed source/reuse → 50/50 frame). */
+  showAll?: boolean;
 }) {
   const { company } = useCompany();
   const voucherAttachmentUiOpts = React.useMemo(() => voucherAttachmentUiOptionsForCompany(company), [company]);
   const urls = getVoucherAttachmentUrlsForUi(transaction, voucherAttachmentUiOpts).map((u) => String(u)).filter((s) => s.length > 0);
-  const firstUrl = urls[0];
-  if (!firstUrl) return null;
-  const previewUrls = [firstUrl];
+  if (urls.length === 0) return null;
   const localLedgerOnly = companyRequiresLocalAttachmentUrlsOnly(company);
   const serverFallback =
     company?.id
@@ -253,11 +265,12 @@ export function MobileTransactionFilePreview({
           clientFileUrls: urls,
         }
       : undefined;
+  const portalPreviewUrls = showAll ? urls : [urls[0]!];
   const singlePdfOpen =
-    getAttachmentFormatLabel(firstUrl) === "PDF"
+    !showAll && urls.length === 1 && getAttachmentFormatLabel(urls[0]!) === "PDF"
       ? (e: React.MouseEvent<HTMLDivElement>) => {
           e.stopPropagation();
-          void openAttachmentInApp(firstUrl, {
+          void openAttachmentInApp(urls[0]!, {
             kind: "pdf",
             localLedgerOnly,
             serverFallback,
@@ -265,21 +278,27 @@ export function MobileTransactionFilePreview({
           });
         }
       : undefined;
-  return (
-    <AttachmentHoverPortal
-      triggerClassName="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded border border-border/70 bg-background"
-      onPreviewDoubleClick={singlePdfOpen}
-      galleryUrls={urls.length > 1 ? urls : undefined}
-      preview={
-        <StableAttachmentPortalPreview
-          urls={previewUrls}
-          companyId={company?.id}
-          voucherId={String(transaction?.id || "")}
-        />
-      }
-    >
+
+  const indicator =
+    showAll && urls.length > 1 ? (
+      <span className="inline-flex items-center gap-1">
+        {urls.map((url, index) => (
+          <span key={`${url}:${index}`} data-attachment-index={index}>
+            <VoucherAttachmentFileIndicator
+              urls={[url]}
+              displayMode="preview"
+              size="sm"
+              aria-label={`Attachment ${index + 1}`}
+              companyId={company?.id}
+              voucherId={String(transaction?.id || "")}
+              clientFileUrls={urls}
+            />
+          </span>
+        ))}
+      </span>
+    ) : (
       <VoucherAttachmentFileIndicator
-        urls={previewUrls}
+        urls={urls}
         displayMode="preview"
         size="sm"
         aria-label="Open attachment preview"
@@ -287,6 +306,22 @@ export function MobileTransactionFilePreview({
         voucherId={String(transaction?.id || "")}
         clientFileUrls={urls}
       />
+    );
+
+  return (
+    <AttachmentHoverPortal
+      triggerClassName="inline-flex h-7 shrink-0 cursor-pointer items-center justify-center overflow-visible rounded bg-transparent"
+      onPreviewDoubleClick={singlePdfOpen}
+      galleryUrls={urls.length > 1 ? urls : undefined}
+      preview={
+        <StableAttachmentPortalPreview
+          urls={portalPreviewUrls}
+          companyId={company?.id}
+          voucherId={String(transaction?.id || "")}
+        />
+      }
+    >
+      {indicator}
     </AttachmentHoverPortal>
   );
 }
@@ -327,12 +362,21 @@ export const formatQuantity = (val: number) =>
     maximumFractionDigits: 2,
   });
 
-const getDisplayType = (t: any) => {
+export const getDisplayType = (t: any) => {
   if (!t.type) return "";
   if (t.type === "journal" && t.subType === "add_salary") return "Add Salary";
   if (t.type === "inter_company") return "Inter Company";
   return t.type.replace(/_/g, " ");
 };
+
+/** Journal + Adjustment — multi-leg vouchers using `entries[]` (Recent / ledger opposite labels). */
+function isJournalOrAdjustmentEntries(t: any): boolean {
+  return (t.type === "journal" || t.type === "adjustment") && Array.isArray(t.entries);
+}
+
+function journalLikeEntriesFallbackLabel(t: any): string {
+  return t.type === "adjustment" ? "Adjustment" : "Journal";
+}
 
 function getTransactionSyncStatus(t: any): "synced" | "sync_due" {
   return String(t?.__plSyncStatus || "").trim() === "sync_due" ? "sync_due" : "synced";
@@ -499,7 +543,7 @@ export const getParticularsText = (t: any, names: Record<string, string> = {}) =
     const accountName = getName(t.fromAccountId || t.accountId);
     return accountName && accountName !== "N/A" ? `To: ${toAccountName} (via ${accountName})` : `To: ${toAccountName}`;
   }
-  if (t.type === "journal" && Array.isArray(t.entries)) {
+  if (isJournalOrAdjustmentEntries(t)) {
     const dr = t.entries.filter((e: any) => e.debit > 0).map((e: any) => `Dr: ${getName(e.accountId)}`);
     const cr = t.entries.filter((e: any) => e.credit > 0).map((e: any) => `Cr: ${getName(e.accountId)}`);
     return [...dr, ...cr].join(", ");
@@ -516,7 +560,13 @@ export const getOppositeAccountLabel = (
   contextId?: string,
   groupEntityType?: "party" | "account" | "staff" | "tax" | "expense" | "item"
 ): string => {
-  const getName = (id: string | undefined) => (id ? (names[id] || "—") : "N/A");
+  const getName = (id: string | undefined) => {
+    if (!id) return "";
+    const n = String(names[id] || "").trim();
+    // Missing map → empty so payment_in/out fallbacks (payeeName / labels) run on APK.
+    if (!n || n === "—" || n === "-") return "";
+    return n;
+  };
   // Keep voucher title clean: hide placeholder-only labels like "—, —".
   const sanitizeOpposite = (raw: string): string => {
     const text = String(raw || "").trim();
@@ -545,7 +595,9 @@ export const getOppositeAccountLabel = (
   }
   // Party context: show opposite/counter account (bank, expense, etc.) not the current party
   if (context === "party" && contextId) {
-    const partyInTx = t.partyId === contextId || (t.type === "journal" && Array.isArray(t.entries) && t.entries.some((e: any) => e?.accountId === contextId));
+    const partyInTx =
+      t.partyId === contextId ||
+      (isJournalOrAdjustmentEntries(t) && t.entries.some((e: any) => e?.accountId === contextId));
     if (partyInTx) {
       if (t.type === "sale") return getName(t.salesAccountId || "sales_account") || "Sales Account";
       if (t.type === "purchase") return getName(t.purchaseAccountId || "purchase_account") || "Purchase Account";
@@ -554,14 +606,14 @@ export const getOppositeAccountLabel = (
       if (t.type === "direct_income") return getName(t.accountId) || "Direct Income";
       if (t.type === "direct_expense") return getName(t.fromAccountId) || getName(t.accountId) || "Direct Expense";
       if (t.type === "contra") return getName(t.fromAccountId) || getName(t.toAccountId);
-      if (t.type === "journal" && Array.isArray(t.entries)) {
+      if (isJournalOrAdjustmentEntries(t)) {
         const partyEntry = t.entries.find((e: any) => e?.accountId === contextId);
         const oppositeSide = partyEntry ? ((Number(partyEntry?.debit) || 0) > 0 ? "credit" : "debit") : "debit";
         const oppositeEntry = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId && (Number(e?.[oppositeSide]) || 0) > 0);
         if (oppositeEntry?.accountId) return sanitizeOpposite(labelFromJournalEntry(oppositeEntry));
         const anyOther = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId);
         if (anyOther?.accountId) return sanitizeOpposite(labelFromJournalEntry(anyOther));
-        return "Journal";
+        return journalLikeEntriesFallbackLabel(t);
       }
       if (t.type === "note") return getNoteLinkedEntityLabel(t, names);
     }
@@ -590,16 +642,16 @@ export const getOppositeAccountLabel = (
     if (t.type === "direct_income") return getName(t.incomeAccountId);
     if (t.type === "direct_expense") return getName(t.toAccountId || t.expenseAccountId);
     if (t.type === "contra") return getName(t.fromAccountId) || getName(t.toAccountId);
-    if (t.type === "journal" && Array.isArray(t.entries)) {
+    if (isJournalOrAdjustmentEntries(t)) {
       const parts = t.entries.slice(0, 2).map((e: any) => labelFromJournalEntry(e));
-      return sanitizeOpposite(parts.join(", ")) || "Journal";
+      return sanitizeOpposite(parts.join(", ")) || journalLikeEntriesFallbackLabel(t);
     }
   }
   // Account (bank) context: show opposite account - Sales/Purchase for sale/purchase, party for payments, etc.
   const accountInTx = context === "account" && contextId && (
     t.accountId === contextId ||
     (t.type === "contra" && (t.fromAccountId === contextId || t.toAccountId === contextId)) ||
-    (t.type === "journal" && Array.isArray(t.entries) && t.entries.some((e: any) => e?.accountId === contextId))
+    (isJournalOrAdjustmentEntries(t) && t.entries.some((e: any) => e?.accountId === contextId))
   );
   if (accountInTx) {
     if (t.type === "sale") return getName(t.salesAccountId || "sales_account") || "Sales Account";
@@ -609,14 +661,14 @@ export const getOppositeAccountLabel = (
     if (t.type === "direct_income") return getName(t.incomeAccountId);
     if (t.type === "direct_expense") return getName(t.toAccountId || t.expenseAccountId);
     if (t.type === "contra") return getName(t.fromAccountId === contextId ? t.toAccountId : t.fromAccountId);
-    if (t.type === "journal" && Array.isArray(t.entries)) {
+    if (isJournalOrAdjustmentEntries(t)) {
       const accountEntry = t.entries.find((e: any) => e?.accountId === contextId);
       const oppositeSide = accountEntry ? ((Number(accountEntry?.debit) || 0) > 0 ? "credit" : "debit") : "debit";
       const oppositeEntry = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId && (Number(e?.[oppositeSide]) || 0) > 0);
       if (oppositeEntry?.accountId) return sanitizeOpposite(labelFromJournalEntry(oppositeEntry));
       const anyOther = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId);
       if (anyOther?.accountId) return sanitizeOpposite(labelFromJournalEntry(anyOther));
-      return "Journal";
+      return journalLikeEntriesFallbackLabel(t);
     }
   }
   // Expense ledger rows should also resolve an actual opposite account next to voucher number.
@@ -627,9 +679,7 @@ export const getOppositeAccountLabel = (
       t.incomeAccountId === contextId ||
       t.toAccountId === contextId ||
       t.accountId === contextId ||
-      (t.type === "journal" &&
-        Array.isArray(t.entries) &&
-        t.entries.some((e: any) => e?.accountId === contextId)));
+      (isJournalOrAdjustmentEntries(t) && t.entries.some((e: any) => e?.accountId === contextId)));
   if (expenseInTx) {
     if (t.type === "direct_expense") return sanitizeOpposite(getName(t.fromAccountId || t.accountId));
     if (t.type === "direct_income") return sanitizeOpposite(getName(t.accountId));
@@ -651,14 +701,14 @@ export const getOppositeAccountLabel = (
         getName(t.fromAccountId || t.accountId)
       );
     }
-    if (t.type === "journal" && Array.isArray(t.entries)) {
+    if (isJournalOrAdjustmentEntries(t)) {
       const selectedEntry = t.entries.find((e: any) => e?.accountId === contextId);
       const oppositeSide = selectedEntry ? ((Number(selectedEntry?.debit) || 0) > 0 ? "credit" : "debit") : "debit";
       const oppositeEntry = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId && (Number(e?.[oppositeSide]) || 0) > 0);
       if (oppositeEntry?.accountId) return sanitizeOpposite(labelFromJournalEntry(oppositeEntry));
       const anyOther = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId);
       if (anyOther?.accountId) return sanitizeOpposite(labelFromJournalEntry(anyOther));
-      return "Journal";
+      return journalLikeEntriesFallbackLabel(t);
     }
   }
   const isStaffContext =
@@ -703,7 +753,7 @@ export const getOppositeAccountLabel = (
       return "Add Salary";
     }
 
-    if (t.type === "journal" && Array.isArray(t.entries)) {
+    if (isJournalOrAdjustmentEntries(t)) {
       const selectedEntry = t.entries.find((e: any) => e?.accountId === staffId);
       const preferredSide = (Number(selectedEntry?.credit) || 0) > 0 ? "debit" : "credit";
       const nonStaffEntries = t.entries.filter((e: any) => e?.accountId && e.accountId !== staffId);
@@ -737,17 +787,34 @@ export const getOppositeAccountLabel = (
     if (bankId) return getName(bankId);
   }
   if (t.type === "payment_in") {
-    return names[t.partyId] || names[t.staffId] || names[t.taxAccountId] || names[t.incomeAccountId] || t.payeeName || getName(t.accountId) || "N/A";
+    return (
+      names[t.partyId] ||
+      names[t.staffId] ||
+      names[t.taxAccountId] ||
+      names[t.incomeAccountId] ||
+      t.payeeName ||
+      getName(t.accountId) ||
+      "Payment In"
+    );
   }
   if (t.type === "payment_out") {
-    return names[t.partyId] || names[t.staffId] || names[t.taxAccountId] || names[t.expenseAccountId] || names[t.toAccountId] || t.payeeName || getName(t.accountId) || "N/A";
+    return (
+      names[t.partyId] ||
+      names[t.staffId] ||
+      names[t.taxAccountId] ||
+      names[t.expenseAccountId] ||
+      names[t.toAccountId] ||
+      t.payeeName ||
+      getName(t.accountId) ||
+      "Payment Out"
+    );
   }
   if (t.type === "contra") return getName(t.toAccountId) || getName(t.fromAccountId);
   if (t.type === "direct_income") return getName(t.incomeAccountId);
   if (t.type === "direct_expense") return getName(t.toAccountId || t.expenseAccountId);
-  if (t.type === "journal" && Array.isArray(t.entries)) {
+  if (isJournalOrAdjustmentEntries(t)) {
     const parts = t.entries.slice(0, 2).map((e: any) => labelFromJournalEntry(e));
-    return sanitizeOpposite(parts.join(", ")) || "Journal";
+    return sanitizeOpposite(parts.join(", ")) || journalLikeEntriesFallbackLabel(t);
   }
   if (t.type === "note") return getNoteLinkedEntityLabel(t, names);
   return t.narration || "";
@@ -831,6 +898,7 @@ export const getStatusLabel = (t: any, context?: string) => {
     return "Unpaid";
   }
   if (t.type === "contra") return "Contra";
+  if (t.type === "adjustment") return "Adjustment";
   // Bill-wise journal: use paymentStatus (Paid/Partial/Unpaid) when set by use-transactions, same as sale/purchase.
   if (t.type === "journal" && !isAddSalary) {
     const status = (t as any).paymentStatus;
@@ -1087,8 +1155,10 @@ export const TransactionRow = React.memo(
     highlightPendingApproval = true,
     /** Bill-wise + fiscal divider: full table colspan for banner row. */
     fullRowColSpan,
-    /** Recent search: daybook rows me visible text highlight (mobile/table dono). */
+    /** Recent/top Search: global pink highlight (sirf is query). Column header filters alag — `columnFilters`. */
     textSearchHighlight,
+    /** Column header filter values — highlight sirf usi column cell me. */
+    columnFilters,
     /** List index: main + narration dono rows ko same gray/white stripe (nth-child odd/even se alag nahi). */
     txnStripeIndex,
     /** Check mode: keyboard focus row (scroll-into-view) */
@@ -1283,9 +1353,11 @@ export const TransactionRow = React.memo(
       return formatBalanceCell(value);
     };
 
-    /** Daybook search highlight: string pe `hl`, `AnimatedNumber` jaisa ReactNode seedha (String() se [object Object] na bane) */
-    const renderHlDrCr = (formatted: React.ReactNode) =>
-      typeof formatted === "string" || typeof formatted === "number" ? hl(String(formatted)) : formatted;
+    /** Daybook search highlight: string pe column+global `hl`, `AnimatedNumber` jaisa ReactNode seedha */
+    const renderHlDrCr = (formatted: React.ReactNode, columnKey: "debit" | "credit" | "balance") =>
+      typeof formatted === "string" || typeof formatted === "number"
+        ? hlForColumn(columnKey)(String(formatted))
+        : formatted;
 
     // User column — recurring BS-month = Auto; "Auto" snapshot se IC/payment flicker na ho
     const displayName = resolveLedgerTransactionUserDisplayName(transaction, userNames, {
@@ -1293,10 +1365,15 @@ export const TransactionRow = React.memo(
       currentUserDisplayName,
     });
     const names = { ...journalAccountNames, ...userNames, ...(accountNames || {}) };
-    const hlQ = String(textSearchHighlight ?? "").trim();
-    const hl = (s: string) => (hlQ ? (highlightQueryInText(s, hlQ) as React.ReactNode) : s);
+    const globalHlQ = String(textSearchHighlight ?? "").trim();
+    const hlForColumn = (columnKey: string) => {
+      const colQ = String((columnFilters && columnFilters[columnKey]) || "").trim();
+      const q = [globalHlQ, colQ].filter(Boolean).join(" ");
+      return (s: string) => (q ? (highlightQueryInText(s, q) as React.ReactNode) : s);
+    };
+    const hl = hlForColumn(""); // global only (narration / misc)
     const isItemPartyContext = context === "item" || (context === "group" && groupEntityType === "item");
-    const shouldDisableAmountTextAnimation = (context === "daybook" && hlQ.length > 0) || (context === "item" && stockView === "qty");
+    const shouldDisableAmountTextAnimation = (context === "daybook" && globalHlQ.length > 0) || (context === "item" && stockView === "qty");
 
     const formatAmountCell = (val: number) => {
       const n = toLedgerAmount(val);
@@ -1329,19 +1406,19 @@ export const TransactionRow = React.memo(
         {showCol("date") &&
           (dateSystem === "Both" ? (
             <>
-              <TableCell className={ensureMinGaps ? "min-w-[95px] px-[5px]" : undefined}>{d ? hl(formatDateBS(d)) : ""}</TableCell>
+              <TableCell className={ensureMinGaps ? "min-w-[95px] px-[5px]" : undefined}>{d ? hlForColumn("date_bs")(formatDateBS(d)) : ""}</TableCell>
               <TableCell className={ensureMinGaps ? "min-w-[112px] px-[5px]" : undefined}>
-                {d ? hl(formatDate(d)) : ""}
+                {d ? hlForColumn("date_ad")(formatDate(d)) : ""}
                 {entryClock ? (
-                  <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">• {hl(entryClock)}</span>
+                  <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">• {hlForColumn("date_ad")(entryClock)}</span>
                 ) : null}
               </TableCell>
             </>
           ) : (
             <TableCell className={ensureMinGaps ? "min-w-[112px] px-[5px]" : undefined}>
-              {d ? hl(dateSystem === "AD" ? formatDate(d) : formatDateBS(d)) : ""}
+              {d ? hlForColumn("date")(dateSystem === "AD" ? formatDate(d) : formatDateBS(d)) : ""}
               {entryClock ? (
-                <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">• {hl(entryClock)}</span>
+                <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">• {hlForColumn("date")(entryClock)}</span>
               ) : null}
             </TableCell>
           ))}
@@ -1374,19 +1451,19 @@ export const TransactionRow = React.memo(
                   "max-w-full whitespace-nowrap"
               )}
             >
-              {hl(getDisplayType(transaction))}
+              {hlForColumn("type")(getDisplayType(transaction))}
             </Badge>
           </TableCell>
         )}
         {showCol("voucherNo") && (
           <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined}>
-            {hl(getDisplayVoucherNumber(transaction))}
+            {hlForColumn("voucherNumber")(getDisplayVoucherNumber(transaction))}
           </TableCell>
         )}
         {context === "daybook" && (
           <TableCell className="max-w-[260px] min-w-[210px] overflow-hidden">
             <span className="block truncate" title={getParticularsText(transaction, names)}>
-              {hl(getParticularsText(transaction, names))}
+              {hlForColumn("accounts")(getParticularsText(transaction, names))}
             </span>
           </TableCell>
         )}
@@ -1409,7 +1486,7 @@ export const TransactionRow = React.memo(
                     onClick={(e) => e.stopPropagation()}
                     onPointerDown={(e) => e.stopPropagation()}
                   >
-                    <span className="min-w-0 truncate" title={displayName}>{hl(displayName)}</span>
+                    <span className="min-w-0 truncate" title={displayName}>{hlForColumn("user")(displayName)}</span>
                     <Switch
                       checked
                       disabled
@@ -1419,7 +1496,7 @@ export const TransactionRow = React.memo(
                   </span>
                 );
               }
-              return <span className="block truncate" title={displayName}>{hl(displayName)}</span>;
+              return <span className="block truncate" title={displayName}>{hlForColumn("user")(displayName)}</span>;
             })()}
           </TableCell>
         )}
@@ -1495,12 +1572,12 @@ export const TransactionRow = React.memo(
         )}
         {showCol("dr") && (
           <TableCell className={cn("text-right text-green-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {renderHlDrCr(formatAmountCell(debit))}
+            {renderHlDrCr(formatAmountCell(debit), "debit")}
           </TableCell>
         )}
         {showCol("cr") && (
           <TableCell className={cn("text-right text-red-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {renderHlDrCr(formatAmountCell(credit))}
+            {renderHlDrCr(formatAmountCell(credit), "credit")}
           </TableCell>
         )}
         {showCol("status") && !hideStatusColumn &&
@@ -1543,7 +1620,7 @@ export const TransactionRow = React.memo(
                             : "text-muted-foreground"
                     )}
                   >
-                    {hl(statusLabel || "-")}
+                    {hlForColumn("status")(statusLabel || "-")}
                   </Badge>
                   {showStatusDetailUnderBadge && (
                     // Keep status voucher-detail text pure black as requested.
@@ -1552,7 +1629,7 @@ export const TransactionRow = React.memo(
                   {/* When narration is hidden, keep overdue hint under status badge. */}
                   {!showNarration && !isBillWise && isOverdueRow && overdueDays > 0 && (
                     <span className="text-[10px] text-red-600 font-medium">
-                      {hl(`${overdueDays} ${overdueDays === 1 ? "day" : "days"}`)}
+                      {hlForColumn("status")(`${overdueDays} ${overdueDays === 1 ? "day" : "days"}`)}
                     </span>
                   )}
                 </div>
@@ -1607,7 +1684,10 @@ export const TransactionRow = React.memo(
                       shouldAnimateSpendWiseAmountText && !isZeroBalance && "animate-spend-wise-balance-blink"
                     )}
                   >
-                    {useOutstandingForBalance ? formatBalanceCell(displayValue) : formatBalanceCell(balance)}
+                    {renderHlDrCr(
+                      useOutstandingForBalance ? formatBalanceCell(displayValue) : formatBalanceCell(balance),
+                      "balance"
+                    )}
                   </span>
                 )}
               </TableCell>

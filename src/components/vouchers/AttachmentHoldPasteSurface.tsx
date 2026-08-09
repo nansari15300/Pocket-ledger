@@ -17,14 +17,23 @@ import {
   refreshAttachmentHoldSessionBackup,
   persistableAttachmentRefFromHoldPayload,
   voucherFormFilesIncludePersistableRef,
+  companyIdFromAttachmentHoldPayload,
+  attachmentHoldCompaniesMatch,
   ATTACHMENT_HOLD_CROSS_TAB_BACKUP_KEY,
 } from "@/lib/attachmentHoldClipboard";
 import { toast as sonnerToast } from "sonner";
+import { Loader2 } from "lucide-react";
 import { CompanyAttachmentReuseButton } from "@/components/vouchers/CompanyAttachmentReuseDialog";
-import { voucherAttachmentReuseEnabled } from "@/lib/firebaseBillingOptimization";
-import { linkCloudAttachmentRefs } from "@/lib/companyAttachmentRegistry";
+import {
+  attachmentReuseCopyAsNewEnabled,
+  voucherAttachmentReuseEnabled,
+} from "@/lib/firebaseBillingOptimization";
+import { copyCloudAttachmentRefToCompany } from "@/lib/companyAttachmentRegistry";
 import { useCompany } from "@/hooks/useCompany";
 import { useCrossCompanyAttachmentAccess } from "@/hooks/useCrossCompanyAttachmentAccess";
+import { isLocalFileRef } from "@/lib/localPendingFiles";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
+import { useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
 
 function sanitizeDownloadFileName(raw: string): string {
   const base = String(raw || "attachment").trim() || "attachment";
@@ -69,11 +78,16 @@ export function AttachmentHoldPasteSurface({
   const { companyId } = useCompany();
   const { isHoldPayloadVisible } = useCrossCompanyAttachmentAccess();
   const tapMode = useTapInteractionMode();
+  const isCompressing = useVoucherAttachmentProcessing();
   const [mobilePasteRevealed, setMobilePasteRevealed] = useState(false);
-  /** Reuse dialog Use / close ke baad click-through se file picker mat kholo. */
+  /** Reuse dialog open / Use / close ke baad click-through se file picker mat kholo. */
   const suppressFilePickerUntilRef = useRef(0);
-  const markReuseDialogDismissed = useCallback(() => {
-    suppressFilePickerUntilRef.current = Date.now() + 500;
+  const reuseDialogOpenRef = useRef(false);
+  const markReuseDialogOpenChange = useCallback((next: boolean) => {
+    reuseDialogOpenRef.current = next;
+    if (!next) {
+      suppressFilePickerUntilRef.current = Date.now() + 500;
+    }
   }, []);
 
   /** EXE multi-tab: Tab A copy → Tab B me Paste chip dikhao (storage event). */
@@ -109,44 +123,109 @@ export function AttachmentHoldPasteSurface({
     }
 
     const reuseRef = persistableAttachmentRefFromHoldPayload(payload);
-    const canReuseUrl =
-      voucherAttachmentReuseEnabled() &&
-      voucherAttachmentReuse &&
-      reuseRef &&
-      !voucherFormFilesIncludePersistableRef(voucherAttachmentReuse.currentFiles, reuseRef);
+    const sourceCompanyId = companyIdFromAttachmentHoldPayload(payload);
+    const targetCompanyId = String(companyId || "").trim();
+    const sameCompany = await attachmentHoldCompaniesMatch(sourceCompanyId, targetCompanyId);
+    const isHttpsReuse =
+      Boolean(reuseRef) &&
+      (/^https?:\/\//i.test(reuseRef!) ||
+        isDriveFileRef(reuseRef!) ||
+        isLocalFileRef(reuseRef!));
 
     const pasteReusedUrl = async (ref: string) => {
-      if (companyId) await linkCloudAttachmentRefs(companyId, [ref]);
-      voucherAttachmentReuse!.setFiles((prev) => [...prev, ref]);
+      let finalRef = String(ref || "").trim();
+      if (!finalRef) return;
+      // Legacy share-URL only (SHARE_URL=1).
+      if (companyId && /^https?:\/\//i.test(finalRef)) {
+        try {
+          const { ensureSharedHttpsAttachmentCompressed } = await import(
+            "@/lib/attachmentRecompressOnSave"
+          );
+          finalRef = await ensureSharedHttpsAttachmentCompressed({
+            companyId,
+            fromUrl: finalRef,
+          });
+        } catch {
+          /* keep original */
+        }
+      }
+      if (companyId) {
+        const { linkCloudAttachmentRefs } = await import("@/lib/companyAttachmentRegistry");
+        await linkCloudAttachmentRefs(companyId, [finalRef]);
+      }
+      voucherAttachmentReuse!.setFiles((prev) => [...prev, finalRef]);
       refreshAttachmentHoldSessionBackup(payload);
-      sonnerToast.success("Pasted — same file reused", {
-        description: "No new upload on save. Shared link stays on other vouchers too.",
+      sonnerToast.success("Pasted — same file linked");
+      setMobilePasteRevealed(false);
+    };
+
+    const pasteAsNewFileCopy = async () => {
+      const got = await fetchBlobForAttachmentHoldPaste(payload, undefined, {
+        companyId: companyId ?? undefined,
+      });
+      if (!got || got.blob.size === 0) {
+        if (reuseRef && /^https?:\/\//i.test(reuseRef) && companyId) {
+          const copiedUrl = await copyCloudAttachmentRefToCompany({
+            sourceUrl: reuseRef,
+            targetCompanyId: companyId,
+          });
+          voucherAttachmentReuse!.setFiles((prev) => [...prev, copiedUrl]);
+          refreshAttachmentHoldSessionBackup(payload);
+          sonnerToast.success("Pasted — new file copy", {
+            description: "Separate Storage object for this voucher.",
+          });
+          setMobilePasteRevealed(false);
+          return;
+        }
+        throw new Error("Could not read attachment (offline or link expired)");
+      }
+      const file = blobToFile(got.blob, sanitizeDownloadFileName(got.fileName), got.contentType);
+      await onPastedFiles([file]);
+      refreshAttachmentHoldSessionBackup(payload);
+      sonnerToast.success("Pasted as new file", {
+        description: "Save uploads a separate copy for this voucher.",
       });
       setMobilePasteRevealed(false);
     };
 
-    if (canReuseUrl) {
-      try {
-        await pasteReusedUrl(reuseRef);
-        return;
-      } catch (e) {
-        sonnerToast.error("Could not link attachment", {
-          description: e instanceof Error ? e.message : String(e),
-        });
+    const pasteCrossCompanyCopy = async (sourceUrl: string) => {
+      if (!targetCompanyId) throw new Error("Current company is missing.");
+      const copiedUrl = await copyCloudAttachmentRefToCompany({
+        sourceUrl,
+        targetCompanyId,
+      });
+      voucherAttachmentReuse!.setFiles((prev) => [...prev, copiedUrl]);
+      refreshAttachmentHoldSessionBackup(payload);
+      sonnerToast.success("Pasted — copied into this company", {
+        description: "New upload for this company. Original company file unchanged.",
+      });
+      setMobilePasteRevealed(false);
+    };
+
+    // Persistable link — default: copy as new File (no shared URL / badges).
+    if (
+      voucherAttachmentReuseEnabled() &&
+      voucherAttachmentReuse &&
+      reuseRef &&
+      isHttpsReuse
+    ) {
+      if (voucherFormFilesIncludePersistableRef(voucherAttachmentReuse.currentFiles, reuseRef)) {
+        sonnerToast.message("Already attached on this voucher");
+        setMobilePasteRevealed(false);
         return;
       }
-    }
-
-    const got = await fetchBlobForAttachmentHoldPaste(payload, undefined, {
-      companyId: companyId ?? undefined,
-    });
-    if (!got || got.blob.size === 0) {
-      if (
-        voucherAttachmentReuseEnabled() &&
-        voucherAttachmentReuse &&
-        reuseRef &&
-        !voucherFormFilesIncludePersistableRef(voucherAttachmentReuse.currentFiles, reuseRef)
-      ) {
+      if (attachmentReuseCopyAsNewEnabled()) {
+        try {
+          await pasteAsNewFileCopy();
+          return;
+        } catch (e) {
+          sonnerToast.error("Could not copy attachment", {
+            description: e instanceof Error ? e.message : String(e),
+          });
+          return;
+        }
+      }
+      if (sameCompany) {
         try {
           await pasteReusedUrl(reuseRef);
           return;
@@ -157,6 +236,27 @@ export function AttachmentHoldPasteSurface({
           return;
         }
       }
+      if (/^https?:\/\//i.test(reuseRef)) {
+        try {
+          await pasteCrossCompanyCopy(reuseRef);
+          return;
+        } catch (e) {
+          sonnerToast.error("Could not copy attachment", {
+            description: e instanceof Error ? e.message : String(e),
+          });
+          return;
+        }
+      }
+      sonnerToast.error("Cannot paste this file type across companies", {
+        description: "Open the other company, or copy an online (https) file.",
+      });
+      return;
+    }
+
+    const got = await fetchBlobForAttachmentHoldPaste(payload, undefined, {
+      companyId: companyId ?? undefined,
+    });
+    if (!got || got.blob.size === 0) {
       sonnerToast.error("Could not read attachment (offline or link expired)");
       return;
     }
@@ -164,15 +264,13 @@ export function AttachmentHoldPasteSurface({
     await onPastedFiles([file]);
     refreshAttachmentHoldSessionBackup(payload);
     sonnerToast.success("Pasted as new file", {
-      description: reuseRef
-        ? "Already on this voucher — or copy was unsaved (no stored link)."
-        : "Unsaved copy — save uploads a separate file.",
+      description: "Save uploads a separate copy for this voucher.",
     });
     setMobilePasteRevealed(false);
   }, [companyId, isHoldPayloadVisible, onPastedFiles, voucherAttachmentReuse]);
 
   const hold = useAttachmentHoldPointer({
-    disabled: !enabled,
+    disabled: !enabled || isCompressing,
     holdMs: tapMode ? ATTACHMENT_HOLD_MS_MOBILE : undefined,
     onHoldComplete: tapMode
       ? () => {
@@ -191,20 +289,25 @@ export function AttachmentHoldPasteSurface({
       currentFiles={voucherAttachmentReuse.currentFiles}
       maxFiles={voucherAttachmentReuse.maxFiles}
       onAddUrls={(urls) => voucherAttachmentReuse.setFiles((prev) => [...prev, ...urls])}
-      disabled={!enabled}
+      onAddFiles={(files) => voucherAttachmentReuse.setFiles((prev) => [...prev, ...files])}
+      disabled={!enabled || isCompressing}
       className={VOUCHER_ATTACHMENT_REUSE_TILE_CLASS}
-      onDialogDismissed={markReuseDialogDismissed}
+      onDialogOpenChange={markReuseDialogOpenChange}
     />
   ) : null;
+
+  const slotEnabled = enabled && !isCompressing;
 
   const addTile = (
     <div
       role="button"
-      tabIndex={enabled ? 0 : -1}
-      aria-disabled={!enabled}
+      tabIndex={slotEnabled ? 0 : -1}
+      aria-disabled={!slotEnabled}
+      aria-busy={isCompressing || undefined}
       className={cn(
         "group relative flex h-full w-full min-h-0 flex-col items-center justify-center touch-manipulation outline-none",
-        className
+        className,
+        isCompressing && "pointer-events-none cursor-wait opacity-90"
       )}
       onClickCapture={hold.onClickCapture}
       onPointerDown={hold.onPointerDown}
@@ -213,15 +316,19 @@ export function AttachmentHoldPasteSurface({
       onPointerCancel={hold.onPointerCancel}
       onPointerLeave={hold.onPointerLeave}
       onClick={(e) => {
-        if (!enabled) return;
+        if (!slotEnabled) return;
+        // Reuse dialog open — portal clicks React tree se yahan aa sakte hain; browse mat kholo.
+        if (reuseDialogOpenRef.current) return;
         if ((e.target as HTMLElement).closest("[data-attachment-paste-chip]")) return;
         if ((e.target as HTMLElement).closest("[data-attachment-reuse-action]")) return;
+        // Sirf Reuse dialog — Edit Trxn `role=dialog` mat pakdo (warna Add File hamesha band).
+        if ((e.target as HTMLElement).closest("[data-pl-reuse-dialog]")) return;
         if (Date.now() < suppressFilePickerUntilRef.current) return;
         onShortActivate();
       }}
       onContextMenu={(e) => e.preventDefault()}
       onPaste={(e) => {
-        if (!enabled) return;
+        if (!slotEnabled) return;
         const text = e.clipboardData.getData("text/plain");
         if (!text?.trim()) return;
         e.preventDefault();
@@ -234,14 +341,23 @@ export function AttachmentHoldPasteSurface({
         }
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
+          if (!slotEnabled) return;
+          if (reuseDialogOpenRef.current) return;
           if (Date.now() < suppressFilePickerUntilRef.current) return;
           onShortActivate();
         }
       }}
     >
-      {children}
-      {reuseAction}
-      {enabled ? (
+      {isCompressing ? (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-1 rounded-lg bg-background/85 px-1 text-center">
+          <Loader2 className="h-5 w-5 animate-spin text-primary" aria-hidden />
+          <span className="text-[10px] font-semibold leading-tight text-foreground">Compressing…</span>
+        </div>
+      ) : (
+        children
+      )}
+      {!isCompressing ? reuseAction : null}
+      {slotEnabled ? (
         <>
           {/* PC: hover par Paste — chip alag click; baaki poori tile file picker */}
           <div className="pointer-events-none absolute inset-x-0 top-0 z-10 hidden justify-center pt-0.5 opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:opacity-100">

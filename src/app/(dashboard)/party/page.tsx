@@ -298,7 +298,7 @@ function PartyPageContent() {
     () => resolveMasterListSelection(selectedPartyRaw, processedPartiesForSelection),
     [selectedPartyRaw, processedPartiesForSelection]
   );
-  const selectedGroup = activeView === 'groups' ? selected as Group : null;
+  const selectedGroupRaw = activeView === "groups" ? (selected as Group | null) : null;
   const handlePartyUpdated = useCallback((patch?: Partial<Party>) => {
     if (!patch?.id || !selectedPartyRaw || selectedPartyRaw.id !== patch.id) return;
     setSelected({ ...selectedPartyRaw, ...patch });
@@ -356,8 +356,6 @@ function PartyPageContent() {
     );
   }, [isMobile, selectedParty]);
   // Header Report: sessionStorage sync — URL ?selected= flicker / router.replace race se button stable rahe
-  useSyncMasterDetailHeaderId("party", selectedParty?.id ?? selectedGroup?.id ?? null);
-
   const overdueVirtualParty = useMemo((): Party | null => {
     if (!hasOverdueTransactions || overdueTransactions.length === 0) return null;
     const totalDebit = overdueTransactions.reduce((s, t) => s + t.debit, 0);
@@ -490,6 +488,17 @@ function PartyPageContent() {
     return processedGroups.filter((g) => (pendingApprovalByGroupId[g.id] ?? 0) > 0);
   }, [processedGroups, showOnlyPartyGroupsWithPendingApproval, showApproveOnList, pendingApprovalByGroupId]);
 
+  const selectedGroup = useMemo(
+    () =>
+      selectedGroupRaw
+        ? processedGroups.find((group) => group.id === selectedGroupRaw.id) ?? null
+        : null,
+    [processedGroups, selectedGroupRaw]
+  );
+
+  // Header Report: sessionStorage sync — URL ?selected= flicker / router.replace race se button stable rahe
+  useSyncMasterDetailHeaderId("party", selectedParty?.id ?? selectedGroup?.id ?? null);
+
   const partyUrlState = readPartyPageUrlState(viewFromUrl, selectedIdFromUrl);
 
   // URL sync effect ko har voucher snapshot par re-run na karo — refs se latest lists
@@ -595,8 +604,8 @@ function PartyPageContent() {
     if (groupItem && partyItem) {
       targetView = view === "groups" ? "groups" : "parties";
     } else if (view === "groups" && groupItem) targetView = "groups";
-    else if (partyItem) targetView = "parties";
-    else if (groupItem) targetView = "groups";
+    else if (view === "parties" && partyItem) targetView = "parties";
+    // No entity-type inference — stale ?selected= without view must not snap tabs on PL refresh.
     if (targetView !== currentActiveView) setActiveView(targetView);
     const item =
       groupItem && partyItem

@@ -13,8 +13,18 @@ import { useVouchers } from "./useVouchers";
 import { useDate } from "./useDate";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { type Context } from "@/components/vouchers/TransactionsTable";
-import { getNoteLinkedEntityLabel, transactionRowHasFileAttachment } from "@/components/vouchers/transactionTableShared";
-import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
+import {
+  getDisplayType,
+  getDisplayVoucherNumber,
+  getParticularsText,
+  transactionRowHasFileAttachment,
+} from "@/components/vouchers/transactionTableShared";
+import {
+  amountColumnHaystackMatchesFilter,
+  columnFieldValuesHaystack,
+  columnHaystackMatchesFilter,
+} from "@/lib/transactionColumnHeaderFilter";
+import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import {
   getAllocatedByVoucherId,
   getAllocatedByVoucherIdFromPaymentOuts,
@@ -67,84 +77,6 @@ const ledgerIdEq = (value: unknown, id: string): boolean => {
         return String((value as { id?: unknown }).id ?? "").trim() === target;
     }
     return String(value).trim() === target;
-};
-
-const getParticularsText = (t: any, names: Record<string, string> = {}) => {
-    let particulars: string[] = [];
-    
-    const getName = (id: string | undefined) => (id ? (names[id] || "—") : "N/A");
-
-    if (t.type === 'sale') particulars.push(`To: ${getName(t.partyId)}`);
-    else if (t.type === 'purchase') particulars.push(`From: ${getName(t.partyId)}`);
-    else if (t.type === 'payment_in') particulars.push(`From: ${names?.[t.partyId] || names?.[t.staffId] || names?.[t.taxAccountId] || names?.[t.incomeAccountId] || t.payeeName || 'N/A'}`);
-    else if (t.type === 'payment_out') particulars.push(`To: ${names?.[t.partyId] || names?.[t.staffId] || names?.[t.taxAccountId] || names?.[t.expenseAccountId] || t.payeeName || 'N/A'}`);
-    else if (t.type === 'contra') particulars.push(`${getName(t.fromAccountId)} to ${getName(t.toAccountId)}`);
-    else if (t.type === 'direct_income') particulars.push(`By: ${getName(t.incomeAccountId)}`);
-    else if (t.type === 'direct_expense') particulars.push(`To: ${getName(t.toAccountId || t.expenseAccountId)}`);
-    else if (t.type === 'journal') {
-        if (t.entries && Array.isArray(t.entries)) {
-            const dr = t.entries.filter((e: any) => e.debit > 0).map((e: any) => `Dr: ${getName(e.accountId)}`);
-            const cr = t.entries.filter((e: any) => e.credit > 0).map((e: any) => `Cr: ${getName(e.accountId)}`);
-            particulars.push(...dr, ...cr);
-        }
-    }
-    else if (t.type === 'note') {
-        particulars.push(`Note for: ${getNoteLinkedEntityLabel(t, names)}`);
-    }
-    else if (t.type === 'inter_company') {
-        const side = interCompanyVoucherViewerSide(t);
-        const dir = side === 'source' ? 'Out' : side === 'target' ? 'In' : '';
-        const peerLabel =
-            side === 'source'
-                ? String(t.targetEntityLabel || getName(t.targetEntityId) || '—')
-                : side === 'target'
-                  ? String(t.sourceEntityLabel || getName(t.sourceEntityId) || '—')
-                  : '—';
-        particulars.push(`Inter Company${dir ? ` (${dir})` : ''}: ${peerLabel}`);
-    }
-    
-    return particulars.join(', ');
-};
-
-/** Voucher me jitne accountId / ledger ids hain — daybook account search ke liye */
-const collectVoucherLedgerAccountIds = (t: any): string[] => {
-    const ids = new Set<string>();
-    const push = (id: unknown) => {
-        if (id != null && String(id).trim()) ids.add(String(id));
-    };
-    push(t.accountId);
-    push(t.fromAccountId);
-    push(t.toAccountId);
-    push(t.expenseAccountId);
-    push(t.incomeAccountId);
-    push(t.taxAccountId);
-    if (Array.isArray(t.entries)) {
-        t.entries.forEach((e: any) => push(e?.accountId));
-    }
-    return Array.from(ids);
-};
-
-/** Bank/Cash naam search → matched account ids par voucher touch check */
-const daybookAccountSearchMatchesVoucher = (
-    t: any,
-    rawSearchTerm: string,
-    names: Record<string, string>,
-    entityList?: any[]
-): boolean => {
-    if (!rawSearchTerm) return true;
-    const particularsOnly = getParticularsText(t, names).toLowerCase();
-    if (particularsOnly.includes(rawSearchTerm)) return true;
-    const bankCashAccounts = (entityList || []).filter(
-        (a: any) => a?.accountType === "Bank" || a?.accountType === "Cash"
-    );
-    const matchedIds = new Set(
-        bankCashAccounts
-            .filter((a: any) => (a.accountName || "").toLowerCase().includes(rawSearchTerm))
-            .map((a: any) => String(a.id))
-    );
-    if (matchedIds.size === 0) return false;
-    const voucherIds = collectVoucherLedgerAccountIds(t);
-    return voucherIds.some((id) => matchedIds.has(id));
 };
 
 export const getTransactionAmounts = (
@@ -621,7 +553,8 @@ export const getTransactionAmounts = (
               credit = ic.credit;
             } else {
               const side = interCompanyVoucherViewerSide(transaction);
-              if (side === "source") debit = amount;
+              // Fallback — Payment Out = Cr, Payment In = Dr (clearing)
+              if (side === "source") credit = amount;
               else if (side === "target") debit = amount;
             }
           }
@@ -1105,34 +1038,19 @@ export function useTransactions(
                   return true;
                 }
 
-                const rawSearchTerm = String(value).toLowerCase().trim();
-
-                // Daybook account search — particulars + bank/cash account id match
-                if (key === "accounts") {
-                  const nameMap = { ...journalAccountNames, ...userNames };
-                  return daybookAccountSearchMatchesVoucher(t, rawSearchTerm, nameMap, entityList);
-                }
-                
+                const rawSearchTerm = String(value).trim();
                 const d = safeToDate(t.date);
-        
-                const narrationFields = [t.narration, t.title];
-                const dateFields: string[] = [];
-                
-                // Date fields
-                if (d) {
-                    dateFields.push(formatDateBS(d));
-                    dateFields.push(formatDate(d));
+                const entryClock = formatVoucherEntryTimeLocal(t as Record<string, unknown>);
+                const nameMap = { ...journalAccountNames, ...userNames };
+
+                // Accounts column — sirf jo Accounts cell me dikhta hai (via text included)
+                if (key === "accounts") {
+                  return columnHaystackMatchesFilter(getParticularsText(t, nameMap), rawSearchTerm);
                 }
-                
-                // Type
-                const displayType = t.type ? (t.subType === 'add_salary' ? 'Add Salary' : t.type.replace(/_/g, " ")) : "";
-                
-                // Voucher No. column filter — dono field names (Firestore / legacy)
-                const vn = t.voucherNumber ?? t.voucher_number;
-                
-                // User — same resolver as table column (Auto flicker fix)
+
+                // User — table cell display name only (hidden ids se cross-hit na ho)
                 const userName = resolveLedgerTransactionUserDisplayName(t, userNames);
-                
+
                 // Amount fields
                 const { debit, credit } = getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes);
                 const debitStr = formatCurrency(debit, { noSuffix: true, noAnimation: true })?.toString() ?? "";
@@ -1145,37 +1063,37 @@ export function useTransactions(
                           : debit - credit;
                 const balanceAbsStr = formatCurrency(Math.abs(balanceValue), { noSuffix: true, noAnimation: true })?.toString() ?? "";
                 const balanceSide = balanceValue >= 0 ? "Dr" : "Cr";
+                const displayType = getDisplayType(t);
+                const displayVoucherNo = getDisplayVoucherNumber(t);
+                const dateBs = d ? formatDateBS(d) : "";
+                const dateAd = d ? formatDate(d) : "";
+                // Har key sirf usi column ka visible text — kabhi dusri column fields se match mat karo
                 const columnFieldsByKey: Record<string, unknown[]> = {
-                    syncStatus: [t.syncStatus, t.syncState, t.pendingSync ? "pending" : "", t.isSynced ? "synced" : ""],
-                    date: dateFields,
-                    date_bs: d ? [formatDateBS(d)] : [],
-                    date_ad: d ? [formatDate(d)] : [],
-                    type: [displayType, t.type, t.subType],
-                    voucherNumber: [vn],
-                    user: [userName, t.userId, t.createdBy, t.updatedBy],
+                    syncStatus: [
+                      String(t?.__plSyncStatus || "").trim() === "sync_due" ? "sync due pending" : "synced",
+                    ],
+                    date: [dateBs, dateAd, entryClock].filter(Boolean),
+                    date_bs: [dateBs, entryClock].filter(Boolean),
+                    date_ad: [dateAd, entryClock].filter(Boolean),
+                    type: [displayType],
+                    voucherNumber: [displayVoucherNo],
+                    user: [userName],
                     debit: [debit, debitStr],
                     credit: [credit, creditStr],
                     status: [t.paymentStatus, t.status, t.isApproved === true ? "approved" : "unapproved"],
                     balance: [balanceValue, Math.abs(balanceValue), balanceAbsStr, `${balanceAbsStr} ${balanceSide}`, balanceSide],
                 };
-                const columnFields = columnFieldsByKey[key] ?? [];
-                
-                const combinedSearchText = [...columnFields, ...narrationFields].join(" ");
-                
-                // For amount fields, also check numeric matching (works with 1+ characters)
+                // Unknown column key → no match (empty haystack would hide all rows; skip instead)
+                if (!Object.prototype.hasOwnProperty.call(columnFieldsByKey, key)) {
+                  return true;
+                }
+                const columnHaystack = columnFieldValuesHaystack(columnFieldsByKey[key] ?? []);
+
                 if (key === "debit" || key === "credit" || key === "balance") {
-                    const amountSearchTerm = rawSearchTerm.replace(/[^0-9.]/g, "");
-                    const cleanCombinedText = combinedSearchText.replace(/[^0-9.-]/g, "");
-                    // Allow matching even with single digit/character
-                    if (amountSearchTerm.length > 0 && cleanCombinedText.includes(amountSearchTerm)) {
-                        return true;
-                    }
+                    return amountColumnHaystackMatchesFilter(columnHaystack, rawSearchTerm);
                 }
-                
-                if (rawSearchTerm.length > 0 && combinedSearchText.includes(rawSearchTerm)) {
-                    return true;
-                }
-                return false;
+
+                return columnHaystackMatchesFilter(columnHaystack, rawSearchTerm);
               });
             });
         }

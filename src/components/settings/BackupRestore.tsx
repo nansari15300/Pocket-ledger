@@ -40,7 +40,7 @@ import { PermissionButton } from "@/components/permission";
 import { assertCan, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
 import { decryptBytes, encryptData } from "@/lib/encryption";
 import { isPlbpZipPayload, unpackPlbpZipBackup } from "@/lib/plbpBackupZip";
-import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import { getLocalCompanyById, promoteLocalCompanyRowToOnline, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { flushBrowserDbToIndexedDB, flushPendingBrowserDbSave, getBrowserDb } from "@/lib/localSqlite";
 import {
   upsertCompanyDocInBrowserDb,
@@ -53,7 +53,9 @@ import {
   hydrateVoucherLocalAttachmentsForServer,
 } from "@/lib/hydrateVoucherLocalAttachmentsForServer";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { canUploadOneMoreOnline } from "@/lib/companyOnlineSlots";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
+import { SettingsInfoTip } from "@/components/settings/SettingsInfoTip";
 import {
   checkAttachmentBackupAllowed,
   checkAttachmentRestoreAllowed,
@@ -72,6 +74,8 @@ import {
   restoreAttachmentsFromBackupData,
 } from "@/lib/attachmentBackupBundle";
 import { finalizeLocalCompanyRowAfterBackupRestore, markLocalBackupRestoreSelectionGrace, beginLocalAttachmentRestoreHold, endLocalAttachmentRestoreHold, stripOnlineFieldsFromBackupLedgerDoc } from "@/lib/localBackupRestoreCompany";
+import { pocketLedgerStorageDocFields } from "@/lib/firebaseStoragePaths";
+import { wipeCompanyFirebaseStorageForRestore } from "@/lib/deleteCompanyStorageFolder";
 import { grantOpenLocalCompanySession } from "@/lib/companyUnlockGate";
 import {
   dismissCompanyBackupRunLater,
@@ -87,12 +91,7 @@ import {
   type CompanyBackupProgress,
   type CompanyBackupSourceMode,
 } from "@/lib/companyBackupCore";
-import {
-  beginRestoreCloudFilesUpload,
-  persistPendingRestoreCloudPush,
-  queuePendingRestoreCloudPushFilesOnly,
-  uploadRestoreDataToCloudImmediately,
-} from "@/lib/restoreCloudBackgroundSync";
+import { startRestoreCloudBackgroundSync } from "@/lib/restoreCloudBackgroundSync";
 import { useCompanyBackupRun } from "@/hooks/useCompanyBackupRun";
 import { readBackupLocationDisplayLabel, formatNativeFolderDisplayPath, readBackupLocationDisplayHint, formatAutoBackupPathPreview } from "@/lib/backupLocationDisplay";
 import {
@@ -752,6 +751,35 @@ export function BackupRestore() {
   /** Restore ke baad `companies.name`: default = jis slot mein restore ho raha hai (target); alternate = backup file ka naam */
   const [restoreCompanyNameChoice, setRestoreCompanyNameChoice] = useState<"target" | "backup">("target");
   const [restoreTargetMode, setRestoreTargetMode] = useState<RestoreTargetMode>("replace_current");
+  const restoreAsNewCompany = !company || restoreTargetMode === "new_company";
+  const restoreOnlineSlotGate = useMemo(() => {
+    if (!user?.uid) return { ok: false, max: 0, current: 0 };
+    const candidateId =
+      !restoreAsNewCompany && company?.id ? company.id : "__restore_as_new__";
+    return canUploadOneMoreOnline(
+      allCompanies,
+      accountPlanId,
+      candidateId,
+      user.uid,
+      accountPlanLive
+    );
+  }, [
+    user?.uid,
+    restoreAsNewCompany,
+    company?.id,
+    allCompanies,
+    accountPlanId,
+    accountPlanLive,
+  ]);
+  const isOfflineIntentRestore = isOfflineIntentBackupData(
+    backupDataToRestore as Record<string, unknown> | null
+  );
+  /** Offline backup → Online sirf naya company (replace block). No company open = hamesha naya company. */
+  const restoreOnlineDestinationEnabled =
+    !staticBackupClient &&
+    restoreOnlineSlotGate.ok &&
+    restoreOnlineSlotGate.max > 0 &&
+    (!isOfflineIntentRestore || restoreAsNewCompany);
   const [autoBackupEditCompanyOpen, setAutoBackupEditCompanyOpen] = useState(false);
   const [autoBackupEditCompanyTarget, setAutoBackupEditCompanyTarget] = useState<Company | null>(null);
   const autoBackupPreviousCompanyIdRef = useRef<string | null>(null);
@@ -1071,6 +1099,14 @@ export function BackupRestore() {
     return { signal, report };
   };
 
+  // When Online destination becomes unavailable, fall back to Offline.
+  useEffect(() => {
+    if (!isOverwriteConfirmOpen) return;
+    if (!restoreOnlineDestinationEnabled && !restoreToLocalSqlite) {
+      setRestoreToLocalSqlite(true);
+    }
+  }, [isOverwriteConfirmOpen, restoreOnlineDestinationEnabled, restoreToLocalSqlite]);
+
   // Restore chalu hote hi progress popup khud khule; restore khatam par band (render-phase sync, effect nahi).
   const [prevIsRestoring, setPrevIsRestoring] = useState(isRestoring);
   if (isRestoring !== prevIsRestoring) {
@@ -1089,9 +1125,10 @@ export function BackupRestore() {
     const hasBundle = backupDataHasAttachmentBundle(backupDataToRestore);
     // Local device restore: attachments default ON jab backup me embedded files hon.
     setRestoreIncludeAttachments(Boolean(hasBundle));
-    if (offlineBackup) setRestoreToLocalSqlite(true);
+    // Offline backup + open company → default Offline; no company → user Online choose kar sakta hai (naya company).
+    if (offlineBackup && company) setRestoreToLocalSqlite(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: open-only reset
-  }, [isOverwriteConfirmOpen, company?.id]);
+  }, [isOverwriteConfirmOpen, company?.id, backupDataToRestore]);
 
   useEffect(() => {
     // Attachment backup dialog: plan limit hint (online merge + attachments only).
@@ -2058,7 +2095,8 @@ export function BackupRestore() {
           targetCompanyId,
           (done, total, bytes) =>
             report.tick("Restoring attachments", `${done}/${total} file(s) to device storage…`, 1, bytes),
-          signal
+          signal,
+          { usePocketLedgerStorage: cloudRestore }
         );
         await flushPendingBrowserDbSave();
         const expectedFiles = getAttachmentRestoreEntryCount(backupData);
@@ -2083,6 +2121,27 @@ export function BackupRestore() {
             description: `${restoredFiles} of ${expectedFiles} file(s) restored to this device.`,
             duration: 10_000,
           });
+        }
+      }
+
+      let cloudStorageFolderCleared = false;
+      if (
+        replaceCurrent &&
+        cloudRestore &&
+        restoreAttachments &&
+        backupDataHasAttachmentBundle(backupData)
+      ) {
+        report.tick("Preparing", "Clearing old cloud attachment files…");
+        try {
+          await wipeCompanyFirebaseStorageForRestore({
+            companyId: targetCompanyId,
+            companyName:
+              resolvedCompanyName.trim() ||
+              String(backupCompanyDetails.name ?? company?.name ?? ""),
+          });
+          cloudStorageFolderCleared = true;
+        } catch (e) {
+          console.warn("[BackupRestore] cloud storage wipe before replace skipped:", e);
         }
       }
 
@@ -2165,94 +2224,51 @@ export function BackupRestore() {
         ...restNoFiscalLocalSafe
       } = restNoFiscal as Record<string, unknown>;
 
-      const localCompanyRow = finalizeLocalCompanyRowAfterBackupRestore(
-        {
-          ...(existing || existingBeforeReplace || {}),
-          ...restNoFiscalLocalSafe,
-          fiscalYearStart: fyStart ?? fiscalFieldToLocalIso((existing as { fiscalYearStart?: unknown })?.fiscalYearStart),
-          fiscalYearEnd: fyEnd ?? fiscalFieldToLocalIso((existing as { fiscalYearEnd?: unknown })?.fiscalYearEnd),
-          localCompanyUsers:
-            (rest as { localCompanyUsers?: unknown }).localCompanyUsers ??
-            (existing as { localCompanyUsers?: unknown })?.localCompanyUsers,
-          updatedAt: Date.now(),
-          name:
-            resolvedCompanyName.trim() ||
-            String((restNoFiscalLocalSafe as { name?: string }).name ?? (existing as { name?: string })?.name ?? ""),
-        },
-        {
+      const companyRowBase = {
+        ...(existing || existingBeforeReplace || {}),
+        ...restNoFiscalLocalSafe,
+        fiscalYearStart: fyStart ?? fiscalFieldToLocalIso((existing as { fiscalYearStart?: unknown })?.fiscalYearStart),
+        fiscalYearEnd: fyEnd ?? fiscalFieldToLocalIso((existing as { fiscalYearEnd?: unknown })?.fiscalYearEnd),
+        localCompanyUsers:
+          (rest as { localCompanyUsers?: unknown }).localCompanyUsers ??
+          (existing as { localCompanyUsers?: unknown })?.localCompanyUsers,
+        updatedAt: Date.now(),
+        name:
+          resolvedCompanyName.trim() ||
+          String((restNoFiscalLocalSafe as { name?: string }).name ?? (existing as { name?: string })?.name ?? ""),
+      };
+      const resolvedCompanyLabel =
+        resolvedCompanyName.trim() ||
+        String((restNoFiscalLocalSafe as { name?: string }).name ?? "");
+
+      if (cloudRestore) {
+        report.tick("Finalizing", "Promoting to online company…");
+        await promoteLocalCompanyRowToOnline(targetCompanyId, {
+          ...companyRowBase,
+          ownerId: user.uid,
+          ownerEmail: user.email ?? null,
+          syncedFromCloud: true,
+          ...pocketLedgerStorageDocFields(targetCompanyId),
+        } as Parameters<typeof promoteLocalCompanyRowToOnline>[1]);
+      } else {
+        const localCompanyRow = finalizeLocalCompanyRowAfterBackupRestore(companyRowBase, {
           companyId: targetCompanyId,
           ownerUid: user.uid,
           ownerEmail: user.email ?? null,
-          companyName:
-            resolvedCompanyName.trim() ||
-            String((restNoFiscalLocalSafe as { name?: string }).name ?? ""),
-        }
-      );
-      if (cloudRestore) {
-        localCompanyRow.authoritativeCompanyId = targetCompanyId;
-        localCompanyRow.syncPolicy = "online";
-        localCompanyRow.storageOption = String(
-          (restNoFiscalLocalSafe as { storageOption?: string }).storageOption || "firebase"
-        );
-        localCompanyRow.syncedFromCloud = true;
-        delete localCompanyRow.localRestoredFromBackupAt;
+          companyName: resolvedCompanyLabel,
+        });
+        report.tick("Finalizing", "Saving company row…");
+        await upsertLocalCompany(localCompanyRow as Parameters<typeof upsertLocalCompany>[0]);
       }
-
-      report.tick("Finalizing", "Saving company row…");
-      await upsertLocalCompany(localCompanyRow as Parameters<typeof upsertLocalCompany>[0]);
       report.tick("Finalizing", "Flushing local database…");
       await flushBrowserDbToIndexedDB();
       reloadLocalCompanyRegistry();
       triggerSync();
 
-      let deferCloudSkipReload = false;
-
-      if (cloudRestore) {
-        const cloudJob = {
-          companyId: targetCompanyId,
-          ownerUid: user.uid,
-          ownerEmail: user.email ?? "",
-          companyName:
-            resolvedCompanyName.trim() ||
-            String((restNoFiscalLocalSafe as { name?: string }).name ?? company?.name ?? ""),
-          replaceCurrent,
-        };
-        persistPendingRestoreCloudPush({
-          ...cloudJob,
-          phase: "data",
-          dataUploaded: false,
-          createdAtMs: Date.now(),
-        });
-
-        report.tick("Uploading to cloud", "Sending company data to server…");
-        const cloudData = await uploadRestoreDataToCloudImmediately(cloudJob);
-        if (!cloudData.ok) {
-          console.warn("[BackupRestore] immediate cloud data upload:", cloudData.message);
-          queuePendingRestoreCloudPushFilesOnly(cloudJob);
-          deferCloudSkipReload = true;
-          toast({
-            variant: "destructive",
-            title: "Cloud data upload issue",
-            description:
-              cloudData.message ||
-              "Local restore OK — files safe on device. Retry upload when online (no restart).",
-            duration: 12_000,
-          });
-        } else {
-          await beginRestoreCloudFilesUpload(cloudJob);
-          deferCloudSkipReload = true;
-          toast({
-            title: "Restore complete — uploading files",
-            description:
-              "Company data is restored. Browse the app now; uploaded files appear as the header bar progresses. New tabs resume from the same %.",
-            duration: 12_000,
-          });
-        }
-      }
-      // Local device (SQLite) restore: no Firestore upload — data stays on this device only.
+      endLocalAttachmentRestoreHold(targetCompanyId);
 
       if (restoreAttachments && backupDataHasAttachmentBundle(backupData) && !staticBackupClient) {
-        await incrementAttachmentRestoreUsage(user.uid);
+        void incrementAttachmentRestoreUsage(user.uid);
       }
 
       setCompanyId(targetCompanyId);
@@ -2260,30 +2276,40 @@ export function BackupRestore() {
         grantOpenLocalCompanySession(targetCompanyId, { role: "owner" });
         markLocalBackupRestoreSelectionGrace(targetCompanyId);
       }
-      endLocalAttachmentRestoreHold(targetCompanyId);
 
-      if (cloudRestore && deferCloudSkipReload) {
+      // Device restore done — dialog band, UI responsive (cloud upload background me).
+      setIsRestoring(false);
+      setRestoreProgress(null);
+      setRestoreProgressDialogOpen(false);
+      restoreAbortRef.current = null;
+
+      if (cloudRestore) {
         toast({
-          title: "Restore complete on this device",
-          description:
-            "Company is ready to use. Cloud upload continues in the background — header bar shows progress (same % in new tabs).",
-          duration: 10_000,
+          title: "Restore Successful",
+          description: replaceCurrent
+            ? `Company "${resolvedCompanyLabel || company?.name}" restored on this device. Cloud sync continues in the header bar.`
+            : `New online company "${resolvedCompanyLabel || targetCompanyId}" restored on this device. Cloud sync continues in the header bar.`,
         });
+        startRestoreCloudBackgroundSync({
+          companyId: targetCompanyId,
+          ownerUid: user.uid,
+          ownerEmail: user.email ?? "",
+          companyName: resolvedCompanyLabel || company?.name || targetCompanyId,
+          replaceCurrent,
+          restoreWithAttachments: restoreAttachments && backupDataHasAttachmentBundle(backupData),
+          storageFolderCleared: cloudStorageFolderCleared,
+        });
+        setFileToRestore(null);
+        window.setTimeout(() => window.location.assign("/dashboard"), 0);
         return;
       }
 
-      report.tick("Complete", "Reloading app…");
       toast({
         title: "Restore Successful",
-        description: cloudRestore
-          ? replaceCurrent
-            ? `Company "${resolvedCompanyName.trim() || company?.name}" restored. Cloud upload complete — opening dashboard.`
-            : `New company restored (${targetCompanyId}). Cloud upload complete — opening dashboard.`
-          : replaceCurrent
-            ? `Company "${resolvedCompanyName.trim() || company?.name}" data replaced on this device only. Opening dashboard…`
-            : `New local company created (${targetCompanyId}). Your other companies are unchanged. Opening dashboard…`,
+        description: replaceCurrent
+          ? `Company "${resolvedCompanyLabel || company?.name}" data replaced on this device only. Opening dashboard…`
+          : `New local company created (${targetCompanyId}). Your other companies are unchanged. Opening dashboard…`,
       });
-      // Success: box se file hatao + dashboard par redirect (full reload company context refresh karta hai).
       setFileToRestore(null);
       window.location.assign("/dashboard");
     } catch (error: any) {
@@ -2448,6 +2474,17 @@ export function BackupRestore() {
           );
           await flushPendingBrowserDbSave();
           dataToWrite = applyAttachmentRefMapToBackupData(backupData, map);
+          if (replaceCurrent) {
+            report.tick("Preparing", "Clearing old cloud attachment files…");
+            try {
+              await wipeCompanyFirebaseStorageForRestore({
+                companyId: targetCompanyId,
+                companyName: resolvedCompanyName.trim() || company?.name || "",
+              });
+            } catch (e) {
+              console.warn("[BackupRestore] cloud storage wipe before replace skipped:", e);
+            }
+          }
         }
 
         let batch = writeBatch(firestore);
@@ -2794,7 +2831,7 @@ export function BackupRestore() {
                 spinning
                 inCard
                 showRefreshWarning
-                refreshWarningText="Do not refresh or close this tab until restore completes."
+                refreshWarningText="Device restore in progress — you can close this dialog; online sync continues in the header bar after device restore completes."
                 showCancel
                 onCancel={() => {
                   cancelRestoreRun();
@@ -4017,108 +4054,172 @@ export function BackupRestore() {
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
                 <FileWarning className="h-6 w-6 text-destructive" /> Are you absolutely sure?
+                <SettingsInfoTip
+                  label="Restore confirmation"
+                  description={
+                    !company
+                      ? "No company is selected. Restore creates a new company with a new id. Choose Online (cloud sync) or Offline (this device only). Only the company owner can restore."
+                      : restoreTargetMode === "replace_current"
+                        ? `Restore will replace all data in the open company "${company?.name}" (same id). Other companies stay unchanged. Only the company owner can restore.`
+                        : `Restore creates a new company with a new id. Data in "${company?.name}" and your other companies stays as-is. Only the company owner can restore.`
+                  }
+                />
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
-              <div className="space-y-2 text-sm text-muted-foreground">
-                {!company ? (
-                  <p>
-                    No company is selected. Restore will automatically create a new local company with a new id.
-                  </p>
-                ) : restoreTargetMode === "replace_current" ? (
-                  <p>
-                    Restore will <strong className="text-foreground">replace all data</strong> in the open company{" "}
-                    <strong className="text-foreground">{company?.name}</strong> (same id). Other companies stay
-                    unchanged. Only the company owner can restore.
-                  </p>
-                ) : (
-                  <p>
-                    Restore creates a <strong className="text-foreground">new company</strong> with a new id. Data in{" "}
-                    <strong className="text-foreground">{company?.name}</strong> and your other companies stays as-is.
-                    Only the company owner can restore.
-                  </p>
-                )}
-                <p>
-                  Type the confirmation text below (backup decryption already verified the file). To confirm, type{" "}
-                  <code className="bg-muted px-2 py-1 rounded-md font-mono text-foreground">{restoreConfirmationName.toLowerCase()}</code>{" "}
-                  {company ? "(the company you have open now)." : "(the company name stored in the backup)."}
-                </p>
-              </div>
+              <p className="text-sm text-muted-foreground">
+                Type{" "}
+                <code className="bg-muted px-2 py-1 rounded-md font-mono text-foreground">
+                  {restoreConfirmationName.toLowerCase()}
+                </code>{" "}
+                below to confirm.
+              </p>
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {!company ? (
+            <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              No company is open — restore will create a <strong className="text-foreground">new company</strong> with
+              a new id. Choose Online or Offline below.
+            </p>
+          ) : null}
           {company && (
             <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
-              <Label className="text-sm font-medium text-foreground">How to restore</Label>
+              <div className="flex items-center gap-1">
+                <Label className="text-sm font-medium text-foreground">How to restore</Label>
+                <SettingsInfoTip
+                  label="How to restore"
+                  description={
+                    <>
+                      <p className="mb-1.5">
+                        <strong>Replace current company</strong> — overwrite {company.name} data (same company id).
+                        Current vouchers, parties, etc. will be replaced by the backup.
+                      </p>
+                      <p>
+                        <strong>Restore as new company</strong> — keep the current company as-is; the backup becomes a
+                        separate company with a new id.
+                      </p>
+                    </>
+                  }
+                />
+              </div>
               <RadioGroup
                 value={restoreTargetMode}
                 onValueChange={(v) => setRestoreTargetMode(v as RestoreTargetMode)}
                 className="grid gap-2"
               >
-                <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
-                  <RadioGroupItem value="replace_current" id="restore-target-replace" className="mt-0.5" />
-                  <span>
-                    <span className="font-medium text-foreground">1 — Replace current company</span> — overwrite{" "}
-                    <strong>{company.name}</strong> data (same company id). Current vouchers, parties, etc. will be
-                    replaced by backup.
-                  </span>
+                <label className="flex cursor-pointer items-center gap-2 text-left text-sm">
+                  <RadioGroupItem value="replace_current" id="restore-target-replace" />
+                  <span className="font-medium text-foreground">1 — Replace current company</span>
                 </label>
-                <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
-                  <RadioGroupItem value="new_company" id="restore-target-new" className="mt-0.5" />
-                  <span>
-                    <span className="font-medium text-foreground">2 — Restore as new company</span> — keep current
-                    company as-is; backup becomes a separate company with a new id.
-                  </span>
+                <label className="flex cursor-pointer items-center gap-2 text-left text-sm">
+                  <RadioGroupItem value="new_company" id="restore-target-new" />
+                  <span className="font-medium text-foreground">2 — Restore as new company</span>
                 </label>
               </RadioGroup>
             </div>
           )}
-          {company && (
-            <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+          <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+            <div className="flex items-center gap-1">
               <Label className="text-sm font-medium text-foreground">Restore destination</Label>
-              {isOfflineIntentBackupData(backupDataToRestore as Record<string, unknown> | null) ? (
-                <p className="text-sm leading-relaxed">
-                  <span className="font-medium text-foreground">This device (SQLite) — offline backup</span>
-                  {" — "}HTTPS links were removed from this file. Restore saves all data to local SQLite and marks
-                  the company offline (read/write stay on this device).
-                </p>
-              ) : (
-                <>
-                  <p className="text-xs text-muted-foreground">
-                    <strong>This device</strong> = SQLite only on this PC/browser — no server upload.{" "}
-                    <strong>Firestore (cloud)</strong> = restore here first, then upload to your online company in the
-                    background (attachments from the header bar after reload).
-                  </p>
-                  <RadioGroup
-                    value={restoreToLocalSqlite ? "local" : "cloud"}
-                    onValueChange={(v) => setRestoreToLocalSqlite(v === "local")}
-                    className="grid gap-2"
-                  >
-                    <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
-                      <RadioGroupItem value="local" id="restore-dest-local" className="mt-0.5" />
-                      <span>
-                        <span className="font-medium text-foreground">This device (SQLite)</span> — full data on this browser; best for offline / local companies. Company row will stay local-first after restore.
-                      </span>
-                    </label>
-                    <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
-                      <RadioGroupItem value="cloud" id="restore-dest-cloud" className="mt-0.5" />
-                      <span>
-                        <span className="font-medium text-foreground">Firestore (cloud)</span> — same SQLite restore + app reload; then uploads to Firestore in the background (other devices can sync later).
-                      </span>
-                    </label>
-                  </RadioGroup>
-                </>
-              )}
+              <SettingsInfoTip
+                label="Restore destination"
+                description={
+                  <>
+                    <p className="mb-1.5">
+                      <strong>Online</strong> — restore on this device, then upload to Firestore in the background so
+                      other devices can sync. Needs a free online company slot (unless this company is already
+                      cloud-linked). For Offline backups: Online is blocked when replacing the same company (cloud
+                      HTTPS links were removed); use &quot;Restore as new company&quot; to build fresh cloud links.
+                    </p>
+                    <p>
+                      <strong>Offline</strong> — keep everything in local SQLite on this device only. No automatic cloud
+                      upload.
+                    </p>
+                  </>
+                }
+              />
             </div>
-          )}
+            <RadioGroup
+              value={restoreToLocalSqlite ? "offline" : "online"}
+              onValueChange={(v) => {
+                if (v === "online" && !restoreOnlineDestinationEnabled) return;
+                setRestoreToLocalSqlite(v === "offline");
+              }}
+              className="grid gap-2"
+            >
+              <div className="flex items-center gap-2 text-sm">
+                <RadioGroupItem
+                  value="online"
+                  id="restore-dest-online"
+                  disabled={!restoreOnlineDestinationEnabled}
+                />
+                <Label
+                  htmlFor="restore-dest-online"
+                  className={`font-medium ${
+                    restoreOnlineDestinationEnabled
+                      ? "cursor-pointer text-foreground"
+                      : "cursor-not-allowed text-muted-foreground"
+                  }`}
+                >
+                  Online
+                </Label>
+                <SettingsInfoTip
+                  label="Online"
+                  description={
+                    isOfflineIntentRestore && !restoreAsNewCompany
+                      ? "This is an Offline backup (cloud HTTPS links were removed). Replacing the same company Online is not available. Choose Offline, or switch to “Restore as new company” — then Online can create fresh cloud links (needs a free plan slot)."
+                      : restoreOnlineSlotGate.max <= 0
+                        ? "Your plan has no online company slots. Upgrade to restore into Firestore (cloud)."
+                        : !restoreOnlineSlotGate.ok
+                          ? `Online company slots are full (${restoreOnlineSlotGate.current}/${restoreOnlineSlotGate.max}). Free a slot or upgrade, then restore Online.`
+                          : isOfflineIntentRestore || !company
+                            ? "Offline backup restored as a new Online company: fresh cloud file links are created on upload. Uses one online company slot."
+                            : "Restore data to this device and register the company on Firebase (Online tab). Masters, vouchers, and files sync when you tick Data / Files in Company → Online and Save. Uses one online slot when the company is not already cloud-linked."
+                  }
+                />
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <RadioGroupItem value="offline" id="restore-dest-offline" />
+                <Label htmlFor="restore-dest-offline" className="cursor-pointer font-medium text-foreground">
+                  Offline
+                </Label>
+                <SettingsInfoTip
+                  label="Offline"
+                  description="Saves all data to local SQLite on this device (browser / EXE). Best for offline and local companies. Read/write stay on this device — no automatic cloud upload."
+                />
+              </div>
+            </RadioGroup>
+            {!restoreOnlineDestinationEnabled && isOfflineIntentRestore && restoreAsNewCompany ? (
+              <p className="text-xs text-amber-800 dark:text-amber-200">
+                {restoreOnlineSlotGate.max <= 0
+                  ? "Online restore needs an online company slot on your plan."
+                  : !restoreOnlineSlotGate.ok
+                    ? `Online slots full (${restoreOnlineSlotGate.current}/${restoreOnlineSlotGate.max}). Free a slot or choose Offline.`
+                    : staticBackupClient
+                      ? "Online restore from backup is not available in the desktop app — use the web app."
+                      : null}
+              </p>
+            ) : isOfflineIntentRestore && restoreAsNewCompany && restoreOnlineDestinationEnabled ? (
+              <p className="text-xs text-muted-foreground">
+                Offline backup → pick <strong className="text-foreground">Online</strong> to create a new cloud
+                company with fresh attachment links.
+              </p>
+            ) : null}
+          </div>
           {backupDataToRestore?.companyDetails?.[0] && company && (
             <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
-              <Label className="text-sm font-medium text-foreground" htmlFor="restore-company-name-select">
-                Company name after restore
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                {restoreTargetMode === "replace_current"
-                  ? "Choose the display name for the restored company (same id as the open company)."
-                  : "This name is stored on the new restored company only (id is always new). Pick backup name if you want the label to match the file."}
-              </p>
+              <div className="flex items-center gap-1">
+                <Label className="text-sm font-medium text-foreground" htmlFor="restore-company-name-select">
+                  Company name after restore
+                </Label>
+                <SettingsInfoTip
+                  label="Company name after restore"
+                  description={
+                    restoreTargetMode === "replace_current"
+                      ? "Choose the display name for the restored company (same id as the open company)."
+                      : "This name is stored on the new restored company only (id is always new). Pick the backup name if you want the label to match the file."
+                  }
+                />
+              </div>
               <select
                 id="restore-company-name-select"
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -4145,21 +4246,38 @@ export function BackupRestore() {
           )}
           {backupDataHasAttachmentBundle(backupDataToRestore) && (
             <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
-              <Label className="text-sm font-medium text-foreground">Attachment restore</Label>
-              <p className="text-xs text-muted-foreground">
-                This backup includes a compressed attachments zip (locked with your company password). Restore files to this device or keep URL links only.
-              </p>
+              <div className="flex items-center gap-1">
+                <Label className="text-sm font-medium text-foreground">Attachment restore</Label>
+                <SettingsInfoTip
+                  label="Attachment restore"
+                  description={
+                    <>
+                      <p className="mb-1.5">
+                        This backup includes a compressed attachments zip (locked with your company password).
+                      </p>
+                      <p className="mb-1.5">
+                        <strong>Data only</strong> — keep URLs from the backup (files may be missing offline).
+                      </p>
+                      <p className="mb-1.5">
+                        <strong>With attachments</strong> — write files to this device and update links. Restore on the
+                        same app/EXE where you will use the company; web browser and desktop storage are separate.
+                      </p>
+                      {restoreAttachmentGateHint ? <p>{restoreAttachmentGateHint}</p> : null}
+                    </>
+                  }
+                />
+              </div>
               <RadioGroup
                 value={restoreIncludeAttachments ? "attachments" : "data"}
                 onValueChange={(v) => setRestoreIncludeAttachments(v === "attachments")}
                 className="grid gap-2"
               >
-                <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
-                  <RadioGroupItem value="data" id="restore-mode-data" className="mt-0.5" />
-                  <span>Data only — keep URLs from backup (files may be missing offline).</span>
+                <label className="flex cursor-pointer items-center gap-2 text-left text-sm">
+                  <RadioGroupItem value="data" id="restore-mode-data" />
+                  <span className="font-medium text-foreground">Data only</span>
                 </label>
                 <label
-                  className={`flex items-start gap-2 text-left text-sm ${
+                  className={`flex items-center gap-2 text-left text-sm ${
                     !attachmentFeatureOn && !staticBackupClient && !restoreToLocalSqlite
                       ? "opacity-60 cursor-not-allowed"
                       : "cursor-pointer"
@@ -4168,21 +4286,9 @@ export function BackupRestore() {
                   <RadioGroupItem
                     value="attachments"
                     id="restore-mode-attachments"
-                    className="mt-0.5"
                     disabled={!attachmentFeatureOn && !staticBackupClient && !restoreToLocalSqlite}
                   />
-                  <span>
-                    With attachments — write files to this device and update links.
-                    {restoreToLocalSqlite || staticBackupClient ? (
-                      <span className="block text-xs mt-1 text-muted-foreground">
-                        Restore on the same app/EXE where you will use the company. Web browser and desktop app have
-                        separate storage — files do not sync automatically.
-                      </span>
-                    ) : null}
-                    {restoreAttachmentGateHint ? (
-                      <span className="block text-xs mt-1 text-muted-foreground">{restoreAttachmentGateHint}</span>
-                    ) : null}
-                  </span>
+                  <span className="font-medium text-foreground">With attachments</span>
                 </label>
               </RadioGroup>
             </div>
@@ -4252,10 +4358,7 @@ export function BackupRestore() {
                       withAttachments,
                       company ? restoreTargetMode : "new_company",
                       {
-                        cloudRestore:
-                          Boolean(company) &&
-                          !isOfflineIntentBackupData(data as Record<string, unknown>) &&
-                          !restoreToLocalSqlite,
+                        cloudRestore: restoreOnlineDestinationEnabled && !restoreToLocalSqlite,
                         zipFilesByPath: zipFilesCaptured,
                       }
                     );
@@ -4284,7 +4387,9 @@ export function BackupRestore() {
           <DialogHeader>
             <DialogTitle>Restoring…</DialogTitle>
             <DialogDescription>
-              Restore is running. You can close this popup — it will keep running and stay visible on the page.
+              Device data restores first. You can close this dialog anytime — restore keeps running.
+              Online sync continues in the header bar afterward. Avoid refreshing only while attachments
+              are uploading.
             </DialogDescription>
           </DialogHeader>
           {restoreProgress ? (
@@ -4293,7 +4398,7 @@ export function BackupRestore() {
               spinning
               inCard
               showRefreshWarning
-              refreshWarningText="Do not refresh or close this tab until restore completes."
+              refreshWarningText="Device restore in progress — you can close this dialog; online sync continues in the header bar after device restore completes."
               showCancel
               onCancel={() => {
                 cancelRestoreRun();

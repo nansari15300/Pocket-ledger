@@ -18,7 +18,9 @@ import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 import { companyRowUsesSqliteLedgerWrites, isServerGateCompany, isServerSelectorCompanyRow } from "@/lib/companyStorageKind";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
 import { PL_SERVER_COMPANY_META_UPDATED_EVENT } from "@/lib/plServerCompanyMetaSync";
-import { logPlPerm, resolvePermissionConfigSource, summarizePermissionDateLimits, companyUsesDeviceOrPlPermissionConfig } from "@/lib/permissionConfigSource";
+import { logPlPerm, resolvePermissionConfigSource, summarizePermissionDateLimits, companyUsesDeviceOrPlPermissionConfig, companyRolesAuthorityExcludesFirebase } from "@/lib/permissionConfigSource";
+import { findLocalCompanyUserRowForAppUser, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
+import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
 
 /** Offline company SQLite session — ye role Firebase owner se alag ho sakta hai (same email owner + staff login). */
 function isLocalStorageCompany(c: { storageOption?: string } | null | undefined): boolean {
@@ -203,6 +205,8 @@ const usePermissions = () => {
     const [plServerMetaEpoch, setPlServerMetaEpoch] = useState(0);
     /** PL / local staff: host meta → client SQLite `permissionConfig` (server se har save pe verify nahi). */
     const [sqlitePermissionConfig, setSqlitePermissionConfig] = useState<PermissionConfig | null>(null);
+    /** Host Manage Sharing users — assigned role My Role me session se pehle yahi. */
+    const [sqliteLocalCompanyUsers, setSqliteLocalCompanyUsers] = useState<unknown>(null);
     /** Async reload / missing row pe default 7-day flash mat do — last good config sticky. */
     const sqlitePermissionStickyRef = useRef<{ companyId: string; config: PermissionConfig } | null>(null);
     const plPermLogSigRef = useRef<string>("");
@@ -213,13 +217,34 @@ const usePermissions = () => {
     }, []);
     useEffect(() => {
       const onMeta = (event: Event) => {
-        const detail = (event as CustomEvent<{ companyId?: string }>).detail;
-        if (detail?.companyId && company?.id && detail.companyId !== company.id) return;
+        const detail = (event as CustomEvent<{
+          companyId?: string;
+          localCompanyUsers?: unknown;
+        }>).detail;
+        const eventCid = String(detail?.companyId || "").trim();
+        const cid = String(company?.id || "").trim();
+        if (eventCid && cid && eventCid !== cid) {
+          // Live snapshot: host canonical id ≠ client slug — My Role tabhi update ho.
+          const hostAlias = String(
+            (company as { plServerHostCompanyId?: string } | null)?.plServerHostCompanyId ||
+              (company as { authoritativeCompanyId?: string } | null)?.authoritativeCompanyId ||
+              ""
+          ).trim();
+          if (eventCid !== hostAlias) return;
+        }
+        // Instant apply — async effect race se refresh-ke-baad-hi My Role mat dikhao.
+        if (detail && "localCompanyUsers" in detail) {
+          setSqliteLocalCompanyUsers(detail.localCompanyUsers ?? null);
+        }
         setPlServerMetaEpoch((n) => n + 1);
       };
       window.addEventListener(PL_SERVER_COMPANY_META_UPDATED_EVENT, onMeta);
       return () => window.removeEventListener(PL_SERVER_COMPANY_META_UPDATED_EVENT, onMeta);
-    }, [company?.id]);
+    }, [
+      company?.id,
+      (company as { plServerHostCompanyId?: string } | null)?.plServerHostCompanyId,
+      (company as { authoritativeCompanyId?: string } | null)?.authoritativeCompanyId,
+    ]);
 
     useEffect(() => {
       const cid = String(company?.id || "").trim();
@@ -227,7 +252,10 @@ const usePermissions = () => {
         if (sqlitePermissionStickyRef.current?.companyId !== cid) {
           sqlitePermissionStickyRef.current = null;
         }
-        if (!cid) setSqlitePermissionConfig(null);
+        if (!cid) {
+          setSqlitePermissionConfig(null);
+          setSqliteLocalCompanyUsers(null);
+        }
         return;
       }
       let cancelled = false;
@@ -236,6 +264,9 @@ const usePermissions = () => {
           const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
           const row = await getLocalCompanyById(cid, { includeDeleted: true });
           if (cancelled) return;
+          setSqliteLocalCompanyUsers(
+            (row as { localCompanyUsers?: unknown } | null)?.localCompanyUsers ?? null
+          );
           const cfg = (row as { permissionConfig?: PermissionConfig } | null)?.permissionConfig;
           if (cfg && typeof cfg === "object") {
             const normalized = normalizePermissionConfig(cfg);
@@ -326,13 +357,42 @@ const usePermissions = () => {
         
         let role: UserRole = 'viewer'; 
 
-        // Shared / PL unlock: role = localAuth only. Firebase ownerEmail/isOwned overlay → kabhi owner
-        // (unlimited save) kabhi manager+default-7 (deny) — intermittent ka root.
+        // Shared / PL unlock: prefer host SQLite `localCompanyUsers` role (Manage Sharing),
+        // phir localAuth session — stale Manager session host Data Entry ko mat dabao.
         if (localAuthUser && company?.id) {
             if (localAuthUser.id === "local_admin_fallback") {
                 role = "owner";
             } else if (plStaffSurface || company.isOwned === false) {
-                role = normalizeStaffRoleString(localAuthUser.role);
+                const usersRaw =
+                  sqliteLocalCompanyUsers ??
+                  (company as { localCompanyUsers?: unknown }).localCompanyUsers;
+                const localUsers = parseLocalCompanyUserRows(usersRaw);
+                const sessionUn = String(localAuthUser.username || "").trim();
+                const fromHostUsers =
+                  findLocalCompanyUserRowForAppUser(
+                    localUsers,
+                    customUser?.uid || localAuthUser.id,
+                    customUser?.email || (sessionUn.includes("@") ? sessionUn : null)
+                  ) ||
+                  localUsers.find(
+                    (u) => u.username.trim().toLowerCase() === sessionUn.toLowerCase()
+                  ) ||
+                  (!sessionUn.includes("@")
+                    ? localUsers.find((u) => {
+                        const share = String(u.shareEmail || "")
+                          .trim()
+                          .toLowerCase();
+                        return (
+                          share.split("@")[0] === sessionUn.toLowerCase() ||
+                          u.username.trim().toLowerCase() === sessionUn.toLowerCase()
+                        );
+                      })
+                    : undefined);
+                role = normalizeStaffRoleString(
+                  fromHostUsers?.role
+                    ? normalizeLocalCompanyAppRole(fromHostUsers.role)
+                    : localAuthUser.role
+                );
             } else if (customUser) {
                 const shareUser = { uid: customUser.uid || "", email: customUser.email ?? null };
                 if (resolveCompanyIsOwnedForUser(company, shareUser)) {
@@ -351,6 +411,21 @@ const usePermissions = () => {
             const shareUser = { uid: customUser.uid || "", email: customUser.email ?? null };
             if (resolveCompanyIsOwnedForUser(company, shareUser)) {
                 role = 'owner';
+            } else if (companyRolesAuthorityExcludesFirebase(company)) {
+                // PL Server / local / Drive — assigned role from host SQLite users, never Firebase sharedWith.
+                const localUsers = parseLocalCompanyUserRows(
+                  (company as { localCompanyUsers?: unknown }).localCompanyUsers
+                );
+                const localRow = findLocalCompanyUserRowForAppUser(
+                  localUsers,
+                  customUser.uid,
+                  customUser.email
+                );
+                if (localRow?.role) {
+                  role = normalizeStaffRoleString(
+                    normalizeLocalCompanyAppRole(localRow.role)
+                  );
+                }
             } else {
                 const normalizedEmail = (customUser.email || "").toLowerCase().trim();
                 const sharedUser = company.sharedWith?.find((u: any) => {
@@ -515,7 +590,7 @@ const usePermissions = () => {
             permissionConfigSourceKey: configSource,
         };
 
-    }, [customUser, company, allCompanies, livePlans, localAuthEpoch, localCompanyRegistryEpoch, plServerMetaEpoch, sqlitePermissionConfig]);
+    }, [customUser, company, allCompanies, livePlans, localAuthEpoch, localCompanyRegistryEpoch, plServerMetaEpoch, sqlitePermissionConfig, sqliteLocalCompanyUsers]);
 
     return permissions;
 };

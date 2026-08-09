@@ -7,8 +7,8 @@ import { getPlServerSharedCompanies } from "@/lib/plServerAccessContext";
 import { plServerClientLocalCompanyRow } from "@/lib/plServerClientCompanyDelta";
 import { resolvePlServerDeltaTransport } from "@/lib/plServerClientDeltaSync";
 import { BUMP_LOCAL_COMPANY_REGISTRY_EVENT } from "@/lib/applyStripePlanToLocalCompany";
-import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { plGateTrace } from "@/lib/plGateTrace";
+import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
 
 export const PL_SERVER_COMPANY_META_COLLECTION = "company_meta";
 export const PL_SERVER_COMPANY_META_UPDATED_EVENT = "pl-server-company-meta-updated";
@@ -98,31 +98,98 @@ export async function applyPlServerStaffSessionFromCompanyMeta(companyId: string
   const id = String(companyId || "").trim();
   if (!id || typeof window === "undefined") return false;
   const { getLocalAuthToken, getLocalAuthUser, setLocalAuthToken } = await import("@/lib/localApiClient");
-  const token = getLocalAuthToken(id);
-  if (!token) return false;
-  const sessionUser = getLocalAuthUser(id);
-  if (!sessionUser?.username) return false;
   const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
   const doc = await getLocalCompanyById(id, { includeDeleted: true });
   if (!doc) return false;
+
+  // Live snapshot: token client slug ya host canonical id pe ho sakta hai.
+  const authCompanyIds = new Set<string>([id]);
+  const hostAlias = String(
+    (doc as { plServerHostCompanyId?: string }).plServerHostCompanyId ||
+      (doc as { authoritativeCompanyId?: string }).authoritativeCompanyId ||
+      ""
+  ).trim();
+  if (hostAlias) authCompanyIds.add(hostAlias);
+  try {
+    const { resolvePlServerHostCompanyId } = await import("@/lib/plServerHostCompanyId");
+    const host = String((await resolvePlServerHostCompanyId(id)) || "").trim();
+    if (host) authCompanyIds.add(host);
+  } catch {
+    /* optional */
+  }
+
+  let sessionCompanyId = "";
+  let token: string | null = null;
+  let sessionUser: ReturnType<typeof getLocalAuthUser> = null;
+  for (const cid of authCompanyIds) {
+    const t = getLocalAuthToken(cid);
+    const u = t ? getLocalAuthUser(cid) : null;
+    if (t && u?.username) {
+      sessionCompanyId = cid;
+      token = t;
+      sessionUser = u;
+      break;
+    }
+  }
+  if (!token || !sessionUser?.username || !sessionCompanyId) return false;
+
+  const { parseLocalCompanyUserRows, findLocalCompanyUserRowForAppUser } = await import(
+    "@/lib/localCompanyUsers"
+  );
   const rows = parseLocalCompanyUserRows((doc as { localCompanyUsers?: unknown }).localCompanyUsers);
   const un = sessionUser.username.trim().toLowerCase();
+  const unLocal = un.includes("@") ? un.split("@")[0]!.trim() : un;
   const match =
+    findLocalCompanyUserRowForAppUser(rows, sessionUser.id, un.includes("@") ? un : null) ||
     rows.find((row) => row.username.trim().toLowerCase() === un) ||
-    rows.find((row) => row.id === sessionUser.id);
-  if (!match) return false;
-  const nextRole = String(match.role || sessionUser.role || "viewer").trim().toLowerCase();
-  const changed =
-    nextRole !== String(sessionUser.role || "").trim().toLowerCase() ||
-    String(match.displayName || "").trim() !== String(sessionUser.displayName || "").trim();
-  if (!changed) return false;
-  setLocalAuthToken(id, token, {
+    rows.find((row) => row.id === sessionUser.id) ||
+    (unLocal
+      ? rows.find((row) => {
+          const ru = row.username.trim().toLowerCase();
+          if (ru === unLocal) return true;
+          const share = String(row.shareEmail || "")
+            .trim()
+            .toLowerCase();
+          if (share === un || (share.includes("@") && share.split("@")[0] === unLocal)) return true;
+          return false;
+        })
+      : undefined) ||
+    null;
+  if (!match) {
+    plGateTrace("staff_session_role_sync_no_match", {
+      companyId: id,
+      sessionUsername: un,
+      sessionId: sessionUser.id,
+      userCount: rows.length,
+      usernames: rows.slice(0, 8).map((r) => r.username),
+    });
+    return false;
+  }
+  const nextRole = normalizeLocalCompanyAppRole(match.role || sessionUser.role || "viewer");
+  const nextUser = {
     id: match.id || sessionUser.id,
     username: match.username || sessionUser.username,
     displayName: match.displayName || sessionUser.displayName,
     role: nextRole,
+  };
+  const changed =
+    nextRole !== normalizeLocalCompanyAppRole(sessionUser.role) ||
+    String(nextUser.id || "") !== String(sessionUser.id || "") ||
+    String(nextUser.displayName || "").trim() !== String(sessionUser.displayName || "").trim() ||
+    String(nextUser.username || "").trim().toLowerCase() !== un;
+
+  // Unchanged pe LOCAL_AUTH / setCompany storm mat chalao — role really badle tabhi write.
+  if (!changed) return false;
+  for (const cid of authCompanyIds) {
+    const t = getLocalAuthToken(cid) || (cid === sessionCompanyId ? token : null);
+    if (!t) continue;
+    setLocalAuthToken(cid, t, nextUser);
+  }
+  plGateTrace("staff_session_role_synced_from_host", {
+    companyId: id,
+    role: nextRole,
+    username: match.username,
   });
-  plGateTrace("staff_session_role_synced_from_host", { companyId: id, role: nextRole });
   return true;
 }
 
@@ -147,17 +214,31 @@ export async function applyPlServerCompanyMetaPatch(
     id,
     updatedAt: Date.now(),
   });
-  await applyPlServerStaffSessionFromCompanyMeta(id);
+  try {
+    const { flushPendingBrowserDbSave } = await import("@/lib/localSqlite");
+    await flushPendingBrowserDbSave();
+  } catch {
+    /* non-fatal */
+  }
+  const sessionChanged = await applyPlServerStaffSessionFromCompanyMeta(id);
   bumpLocalCompanyRegistry();
   if (typeof window !== "undefined") {
+    const users =
+      patch.localCompanyUsers !== undefined
+        ? patch.localCompanyUsers
+        : (await getLocalCompanyById(id, { includeDeleted: true }) as { localCompanyUsers?: unknown } | null)
+            ?.localCompanyUsers;
     window.dispatchEvent(
-      new CustomEvent(PL_SERVER_COMPANY_META_UPDATED_EVENT, { detail: { companyId: id } })
+      new CustomEvent(PL_SERVER_COMPANY_META_UPDATED_EVENT, {
+        detail: { companyId: id, localCompanyUsers: users },
+      })
     );
   }
   plGateTrace("staff_company_meta_patch_applied", {
     companyId: id,
     hasPermissionConfig: Boolean(patch.permissionConfig),
     hasLocalCompanyUsers: Array.isArray(patch.localCompanyUsers),
+    sessionChanged,
   });
   try {
     const { logPlPerm, summarizePermissionDateLimits } = await import("@/lib/permissionConfigSource");
@@ -172,74 +253,150 @@ export async function applyPlServerCompanyMetaPatch(
   return true;
 }
 
+/** Inflight + cooldown — click storm pe HTTP/SQLite flood → EXE crash (40–60s). */
+const META_PULL_COOLDOWN_MS = 20_000;
+const META_NOOP_LOG_COOLDOWN_MS = 30_000;
+const metaPullInflight = new Map<string, Promise<boolean>>();
+const metaPullLastOkAt = new Map<string, number>();
+const metaNoopLogLastAt = new Map<string, number>();
+
+async function logMetaPullNoopOnce(companyId: string, extra?: Record<string, unknown>): Promise<void> {
+  const now = Date.now();
+  const last = metaNoopLogLastAt.get(companyId) || 0;
+  if (now - last < META_NOOP_LOG_COOLDOWN_MS) return;
+  metaNoopLogLastAt.set(companyId, now);
+  try {
+    const { plNavLog } = await import("@/lib/plServerLivePullDevLog");
+    plNavLog("meta_pull_noop", { companyId, skippedUiBump: true, ...extra });
+  } catch {
+    /* optional */
+  }
+}
+
 /** Staff / hub client: host se company meta (permissions + login users) pull + apply. */
-export async function pullPlServerCompanyMetaFromHost(companyId: string): Promise<boolean> {
+export async function pullPlServerCompanyMetaFromHost(
+  companyId: string,
+  options?: { force?: boolean }
+): Promise<boolean> {
   const id = String(companyId || "").trim();
   if (!id) return false;
-  const bundle = await fetchCompanyMetaBundle(id);
-  const fromHost = bundle?.company;
-  if (!fromHost || typeof fromHost !== "object") return false;
+  const force = options?.force === true;
 
-  const shared = getPlServerSharedCompanies().find((row) => String(row.id || "").trim() === id);
-  const { getLocalCompanyById, upsertLocalCompany } = await import("@/lib/localCompanyStore");
-  const existing = await getLocalCompanyById(id, { includeDeleted: true });
-  const permissionConfig = fromHost.permissionConfig as PermissionConfig | undefined;
-  const localCompanyUsers = fromHost.localCompanyUsers;
-  const prevPermJson = JSON.stringify((existing as { permissionConfig?: PermissionConfig } | null)?.permissionConfig ?? null);
-  const nextPermJson = JSON.stringify(permissionConfig ?? null);
-  const prevUsersJson = JSON.stringify((existing as { localCompanyUsers?: unknown } | null)?.localCompanyUsers ?? null);
-  const nextUsersJson = JSON.stringify(localCompanyUsers ?? null);
-  const metaChanged = prevPermJson !== nextPermJson || prevUsersJson !== nextUsersJson;
+  const inflight = metaPullInflight.get(id);
+  if (inflight) return inflight;
 
-  const hostName = String(fromHost.name || "").trim();
-  const sharedName = String(shared?.name || "").trim();
-  const existingName = String(existing?.name || "").trim();
-  const resolvedName =
-    (hostName && hostName !== id && hostName !== "Server company" ? hostName : "") ||
-    (sharedName && sharedName !== id && sharedName !== "Server company" ? sharedName : "") ||
-    (existingName && existingName !== id && existingName !== "Server company" ? existingName : "") ||
-    "Server company";
+  const lastOk = metaPullLastOkAt.get(id) || 0;
+  if (!force && Date.now() - lastOk < META_PULL_COOLDOWN_MS) {
+    await logMetaPullNoopOnce(id, { reason: "cooldown", cooldownMs: META_PULL_COOLDOWN_MS });
+    return true;
+  }
 
-  const mergedRow = plServerClientLocalCompanyRow(
-    id,
-    resolvedName,
-    shared?.ownerEmail ?? existing?.ownerEmail ?? null,
-    fromHost
-  );
-  await upsertLocalCompany({
-    ...(existing || mergedRow),
-    ...mergedRow,
-    id,
-    ...(permissionConfig ? { permissionConfig } : {}),
-    ...(Array.isArray(localCompanyUsers) ? { localCompanyUsers } : {}),
-    updatedAt: Date.now(),
-  });
-  const sessionChanged = await applyPlServerStaffSessionFromCompanyMeta(id);
-  if (metaChanged || sessionChanged) {
-    bumpLocalCompanyRegistry();
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(
-        new CustomEvent(PL_SERVER_COMPANY_META_UPDATED_EVENT, { detail: { companyId: id } })
+  const run = (async (): Promise<boolean> => {
+    try {
+      const bundle = await fetchCompanyMetaBundle(id);
+      const fromHost = bundle?.company;
+      if (!fromHost || typeof fromHost !== "object") return false;
+
+      const shared = getPlServerSharedCompanies().find((row) => String(row.id || "").trim() === id);
+      const { getLocalCompanyById, upsertLocalCompany } = await import("@/lib/localCompanyStore");
+      const existing = await getLocalCompanyById(id, { includeDeleted: true });
+      const permissionConfig = fromHost.permissionConfig as PermissionConfig | undefined;
+      const localCompanyUsers = fromHost.localCompanyUsers;
+      const prevPermJson = JSON.stringify(
+        (existing as { permissionConfig?: PermissionConfig } | null)?.permissionConfig ?? null
       );
+      const nextPermJson = JSON.stringify(permissionConfig ?? null);
+      const prevUsersJson = JSON.stringify(
+        (existing as { localCompanyUsers?: unknown } | null)?.localCompanyUsers ?? null
+      );
+      const nextUsersJson = JSON.stringify(localCompanyUsers ?? null);
+      const metaChanged = prevPermJson !== nextPermJson || prevUsersJson !== nextUsersJson;
+
+      const hostName = String(fromHost.name || "").trim();
+      const sharedName = String(shared?.name || "").trim();
+      const existingName = String(existing?.name || "").trim();
+      const resolvedName =
+        (hostName && hostName !== id && hostName !== "Server company" ? hostName : "") ||
+        (sharedName && sharedName !== id && sharedName !== "Server company" ? sharedName : "") ||
+        (existingName && existingName !== id && existingName !== "Server company" ? existingName : "") ||
+        "Server company";
+
+      if (metaChanged) {
+        const mergedRow = plServerClientLocalCompanyRow(
+          id,
+          resolvedName,
+          shared?.ownerEmail ?? existing?.ownerEmail ?? null,
+          fromHost
+        );
+        await upsertLocalCompany({
+          ...(existing || mergedRow),
+          ...mergedRow,
+          id,
+          ...(permissionConfig ? { permissionConfig } : {}),
+          ...(Array.isArray(localCompanyUsers) ? { localCompanyUsers } : {}),
+          updatedAt: Date.now(),
+        });
+      }
+      const sessionChanged = await applyPlServerStaffSessionFromCompanyMeta(id);
+      metaPullLastOkAt.set(id, Date.now());
+
+      if (!metaChanged && !sessionChanged) {
+        plGateTrace("staff_company_meta_pull_done", {
+          companyId: id,
+          hasPermissionConfig: Boolean(permissionConfig),
+          userCount: Array.isArray(localCompanyUsers) ? localCompanyUsers.length : 0,
+          metaChanged: false,
+          sessionChanged: false,
+          skippedUiBump: true,
+        });
+        await logMetaPullNoopOnce(id, { reason: "unchanged" });
+        return true;
+      }
+      bumpLocalCompanyRegistry();
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent(PL_SERVER_COMPANY_META_UPDATED_EVENT, {
+            detail: {
+              companyId: id,
+              localCompanyUsers: Array.isArray(localCompanyUsers)
+                ? localCompanyUsers
+                : (existing as { localCompanyUsers?: unknown } | null)?.localCompanyUsers,
+            },
+          })
+        );
+      }
+      plGateTrace("staff_company_meta_pull_done", {
+        companyId: id,
+        hasPermissionConfig: Boolean(permissionConfig),
+        userCount: Array.isArray(localCompanyUsers) ? localCompanyUsers.length : 0,
+        metaChanged,
+        sessionChanged,
+      });
+      try {
+        const { plNavLog } = await import("@/lib/plServerLivePullDevLog");
+        plNavLog("meta_pull_applied", { companyId: id, metaChanged, sessionChanged });
+      } catch {
+        /* optional */
+      }
+      try {
+        const { logPlPerm, summarizePermissionDateLimits } = await import("@/lib/permissionConfigSource");
+        logPlPerm("client-pull", {
+          companyId: id,
+          metaChanged,
+          hasPermissionConfig: Boolean(permissionConfig),
+          dateLimits: summarizePermissionDateLimits(permissionConfig),
+        });
+      } catch {
+        /* ignore */
+      }
+      return true;
+    } finally {
+      if (metaPullInflight.get(id) === run) metaPullInflight.delete(id);
     }
-  }
-  plGateTrace("staff_company_meta_pull_done", {
-    companyId: id,
-    hasPermissionConfig: Boolean(permissionConfig),
-    userCount: Array.isArray(localCompanyUsers) ? localCompanyUsers.length : 0,
-  });
-  try {
-    const { logPlPerm, summarizePermissionDateLimits } = await import("@/lib/permissionConfigSource");
-    logPlPerm("client-pull", {
-      companyId: id,
-      metaChanged,
-      hasPermissionConfig: Boolean(permissionConfig),
-      dateLimits: summarizePermissionDateLimits(permissionConfig),
-    });
-  } catch {
-    /* ignore */
-  }
-  return true;
+  })();
+
+  metaPullInflight.set(id, run);
+  return run;
 }
 
 /** Host-side save helpers: SQLite/local row likhne ke baad live bump. */
@@ -265,6 +422,20 @@ export async function notifyPlServerHostCompanyMetaSaved(
     } catch {
       /* signal-only fallback */
     }
+  }
+  try {
+    const { plRoleLog, plRoleUsersSummary } = await import("@/lib/plRoleChangeLog");
+    const users = Array.isArray(patch?.localCompanyUsers)
+      ? (patch!.localCompanyUsers as Array<{ id?: string; username?: string; role?: string }>)
+      : [];
+    plRoleLog("notify_host_meta", {
+      companyId,
+      hasPatch: Boolean(patch),
+      userCount: users.length,
+      users: plRoleUsersSummary(users),
+    });
+  } catch {
+    /* ignore */
   }
   await publishPlServerHostCompanyMetaChange(companyId, patch);
 }

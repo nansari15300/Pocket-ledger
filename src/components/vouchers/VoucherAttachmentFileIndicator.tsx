@@ -16,6 +16,13 @@ import {
   type FirebaseLedgerCompanySyncPrefsChangedDetail,
 } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { requestAttachmentUiRefresh } from "@/lib/attachmentLoadReady";
+import {
+  ATTACHMENT_REUSE_COUNT_EVENT,
+  attachmentPersistableRefsMatch,
+  buildAttachmentReusePlaceKey,
+  resolveAttachmentReuseUiMeta,
+} from "@/lib/companyAttachmentRegistry";
+import { useVoucherListReuseHint, lookupVoucherListReuseHint } from "@/lib/voucherAttachmentListReuseIndex";
 
 type Props = {
   urls: readonly string[];
@@ -24,6 +31,8 @@ type Props = {
   displayMode?: "preview" | "tick";
   companyId?: string;
   voucherId?: string;
+  /** Override place key; default `vouchers/{voucherId}` when voucherId set. */
+  attachmentReusePlaceKey?: string | null;
   clientFileUrls?: readonly string[] | null;
   "aria-label"?: string;
 };
@@ -36,6 +45,7 @@ export function VoucherAttachmentFileIndicator({
   displayMode = "preview",
   companyId: companyIdProp,
   voucherId,
+  attachmentReusePlaceKey: attachmentReusePlaceKeyProp,
   clientFileUrls,
   "aria-label": ariaLabel = "Attachment",
 }: Props) {
@@ -98,6 +108,162 @@ export function VoucherAttachmentFileIndicator({
       filesNetworkAllowed,
     }
   );
+
+  const currentReusePlaceKey = React.useMemo(() => {
+    const fromProp = String(attachmentReusePlaceKeyProp || "").trim();
+    if (fromProp) return fromProp;
+    return buildAttachmentReusePlaceKey("vouchers", voucherId) || "";
+  }, [attachmentReusePlaceKeyProp, voucherId]);
+
+  const trimmedUrls = React.useMemo(
+    () => urls.map((u) => String(u || "").trim()).filter(Boolean),
+    [urlsKey]
+  );
+
+  const REUSE_ORIGIN_FRAME = "#22c55e";
+  const REUSE_COPY_FRAME = "#2563eb";
+
+  /** Multi-file collapsed cell: per-URL origin vs reuse (for 50/50 horizontal frame). */
+  const [urlReuseRoles, setUrlReuseRoles] = React.useState<
+    Record<string, "origin" | "reuse" | "none">
+  >({});
+  React.useEffect(() => {
+    if (!wantsPreview || !companyId || trimmedUrls.length === 0) {
+      setUrlReuseRoles({});
+      return;
+    }
+    let cancelled = false;
+    const unique = [...new Set(trimmedUrls)];
+    void Promise.all(
+      unique.map(async (url) => {
+        const meta = await resolveAttachmentReuseUiMeta(companyId, url);
+        const listHint = lookupVoucherListReuseHint(url, currentReusePlaceKey || null);
+        const count = Math.max(meta.count, listHint.count);
+        const shared = count >= 2 || meta.originDetached;
+        if (!shared) return [url, "none"] as const;
+        const originKey = meta.originPlaceKey || listHint.originPlaceKey;
+        const isOrigin =
+          !meta.originDetached &&
+          Boolean(currentReusePlaceKey) &&
+          Boolean(originKey) &&
+          currentReusePlaceKey === originKey;
+        return [url, isOrigin ? "origin" : "reuse"] as const;
+      })
+    ).then((pairs) => {
+      if (cancelled) return;
+      const next: Record<string, "origin" | "reuse" | "none"> = {};
+      for (const [url, role] of pairs) next[url] = role;
+      setUrlReuseRoles(next);
+    });
+    const onReuse = () => {
+      // Roles refresh on reuse events (same deps as primary meta).
+      void Promise.all(
+        unique.map(async (url) => {
+          const meta = await resolveAttachmentReuseUiMeta(companyId, url);
+          const listHint = lookupVoucherListReuseHint(url, currentReusePlaceKey || null);
+          const count = Math.max(meta.count, listHint.count);
+          const shared = count >= 2 || meta.originDetached;
+          if (!shared) return [url, "none"] as const;
+          const originKey = meta.originPlaceKey || (meta.originDetached ? null : listHint.originPlaceKey);
+          const isOrigin =
+            !meta.originDetached &&
+            Boolean(currentReusePlaceKey) &&
+            Boolean(originKey) &&
+            currentReusePlaceKey === originKey;
+          return [url, isOrigin ? "origin" : "reuse"] as const;
+        })
+      ).then((pairs) => {
+        if (cancelled) return;
+        const next: Record<string, "origin" | "reuse" | "none"> = {};
+        for (const [url, role] of pairs) next[url] = role;
+        setUrlReuseRoles(next);
+      });
+    };
+    window.addEventListener(ATTACHMENT_REUSE_COUNT_EVENT, onReuse as EventListener);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(ATTACHMENT_REUSE_COUNT_EVENT, onReuse as EventListener);
+    };
+  }, [wantsPreview, companyId, urlsKey, currentReusePlaceKey]);
+
+  const [reuseCount, setReuseCount] = React.useState(0);
+  const [reuseOriginPlaceKey, setReuseOriginPlaceKey] = React.useState<string | null>(null);
+  const [reuseOriginDetached, setReuseOriginDetached] = React.useState(false);
+  const listReuseHint = useVoucherListReuseHint(primaryUrl, currentReusePlaceKey || null);
+  React.useEffect(() => {
+    if (!wantsPreview || !companyId || !primaryUrl) {
+      setReuseCount(0);
+      setReuseOriginPlaceKey(null);
+      setReuseOriginDetached(false);
+      return;
+    }
+    let cancelled = false;
+    const refresh = () => {
+      void resolveAttachmentReuseUiMeta(companyId, primaryUrl).then((meta) => {
+        if (cancelled) return;
+        setReuseCount(meta.count);
+        setReuseOriginPlaceKey(meta.originPlaceKey);
+        setReuseOriginDetached(Boolean(meta.originDetached));
+      });
+    };
+    refresh();
+    const onReuse = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ companyId?: string; url?: string; count?: number }>).detail;
+      if (!detail) return;
+      const detailUrl = String(detail.url || "").trim();
+      if (!detailUrl || !attachmentPersistableRefsMatch(detailUrl, primaryUrl)) return;
+      const hinted = Number(detail.count);
+      if (Number.isFinite(hinted) && hinted > 0) {
+        setReuseCount((prev) => Math.max(prev, hinted));
+      }
+      refresh();
+    };
+    window.addEventListener(ATTACHMENT_REUSE_COUNT_EVENT, onReuse as EventListener);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(ATTACHMENT_REUSE_COUNT_EVENT, onReuse as EventListener);
+    };
+  }, [wantsPreview, companyId, primaryUrl]);
+
+  const effectiveReuseCount = Math.max(reuseCount, listReuseHint.count);
+  const effectiveOriginPlaceKey =
+    reuseOriginPlaceKey || (reuseOriginDetached ? null : listReuseHint.originPlaceKey) || null;
+  const isSharedAcrossPlaces =
+    (effectiveReuseCount >= 2 || reuseOriginDetached) && Boolean(primaryUrl);
+  const isReuseOriginPlace =
+    !reuseOriginDetached &&
+    Boolean(currentReusePlaceKey) &&
+    Boolean(effectiveOriginPlaceKey) &&
+    currentReusePlaceKey === effectiveOriginPlaceKey;
+
+  const multiHasOrigin = trimmedUrls.some((u) => urlReuseRoles[u] === "origin");
+  const multiHasReuse = trimmedUrls.some((u) => urlReuseRoles[u] === "reuse");
+  /** Show-all OFF (multi urls in one indicator): source+reuse → horizontal 50/50; else solid. */
+  const reuseFrameBackground: string | null = (() => {
+    if (!wantsPreview) return null;
+    if (trimmedUrls.length > 1) {
+      if (multiHasOrigin && multiHasReuse) {
+        return `linear-gradient(to right, ${REUSE_ORIGIN_FRAME} 50%, ${REUSE_COPY_FRAME} 50%)`;
+      }
+      if (multiHasOrigin) return REUSE_ORIGIN_FRAME;
+      if (multiHasReuse) return REUSE_COPY_FRAME;
+      // Fall through to primary-url role while multi roles still loading.
+    }
+    if (!isSharedAcrossPlaces) return null;
+    return isReuseOriginPlace ? REUSE_ORIGIN_FRAME : REUSE_COPY_FRAME;
+  })();
+
+  const reuseTitle =
+    trimmedUrls.length > 1 && multiHasOrigin && multiHasReuse
+      ? "Mixed attachments — green = source, blue = reused (50/50)"
+      : isSharedAcrossPlaces && isReuseOriginPlace
+        ? `Original source — also used in ${effectiveReuseCount} places`
+        : isSharedAcrossPlaces && reuseOriginDetached
+          ? `Reused file — original source removed; file still linked here`
+          : isSharedAcrossPlaces
+            ? `Reused file — used in ${effectiveReuseCount} places`
+            : undefined;
+
   const fileCount = urls.map((u) => String(u || "").trim()).filter(Boolean).length;
   if (fileCount === 0) return null;
   const isReady =
@@ -127,44 +293,51 @@ export function VoucherAttachmentFileIndicator({
       (filesNetworkAllowed
         ? isReady || isWebBrowserAttachmentLazyLoad()
         : true);
-    if (canShowThumb) {
-      return (
-        <span
-          className={cn(
-            "relative inline-flex overflow-hidden rounded border border-border/80 bg-muted/30",
-            thumbClass,
-            className
-          )}
-          aria-label={fileCount > 1 ? `${ariaLabel} preview (${fileCount} files)` : `${ariaLabel} preview`}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element -- warmed blob / pdf raster */}
-          <img
-            key={`${thumbUrl}:${thumbRetryKey}`}
-            src={thumbUrl!}
-            alt=""
-            className="h-full w-full object-cover"
-            draggable={false}
-            onError={() => {
-              invalidateAttachmentThumbDisplayUrl(primaryUrl, thumbUrl);
-              setThumbRetryKey((n) => n + 1);
-            }}
-          />
-          {countBadge}
-        </span>
-      );
-    }
+
+    const thumbInner = canShowThumb ? (
+      <>
+        {/* eslint-disable-next-line @next/next/no-img-element -- warmed blob / pdf raster */}
+        <img
+          key={`${thumbUrl}:${thumbRetryKey}`}
+          src={thumbUrl!}
+          alt=""
+          className="h-full w-full object-cover"
+          draggable={false}
+          onError={() => {
+            invalidateAttachmentThumbDisplayUrl(primaryUrl, thumbUrl);
+            setThumbRetryKey((n) => n + 1);
+          }}
+        />
+        {countBadge}
+      </>
+    ) : (
+      countBadge
+    );
+
     return (
       <span
         className={cn(
-          "relative inline-flex items-center justify-center overflow-hidden rounded border border-border/80 bg-muted/40",
+          "relative inline-flex box-border shrink-0 rounded-[4px]",
           thumbClass,
-          className
+          className,
+          !reuseFrameBackground && "border border-border/80 bg-muted/30"
         )}
-        aria-label={
-          fileCount > 1 ? `${ariaLabel} preview (${fileCount} files)` : `${ariaLabel} preview`
+        style={
+          reuseFrameBackground
+            ? { padding: 2, background: reuseFrameBackground }
+            : undefined
         }
+        title={reuseTitle}
+        aria-label={fileCount > 1 ? `${ariaLabel} preview (${fileCount} files)` : `${ariaLabel} preview`}
       >
-        {countBadge}
+        <span
+          className={cn(
+            "relative flex h-full w-full items-center justify-center overflow-hidden rounded-[2px]",
+            canShowThumb ? "bg-muted/30" : "bg-muted/40"
+          )}
+        >
+          {thumbInner}
+        </span>
       </span>
     );
   }

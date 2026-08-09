@@ -53,6 +53,7 @@ import {
   parseLocalCompanyUserRows,
   removeDriveShareUserFromLocalCompanyUsers,
   upsertUserInList,
+  withLocalCompanyUsersWriteLock,
   type LocalCompanyUserRecord,
 } from "@/lib/localCompanyUsers";
 import { assertCanAddPlServerShareUser } from "@/lib/localShareRouteGuards";
@@ -383,9 +384,39 @@ export function LocalPlServerSharePanel({
       for (const row of rows) {
         const key = normalizeEmail(row.shareEmail || row.email) || row.loginUsername || row.tokenId;
         const prev = merged.get(key);
-        merged.set(key, prev ? { ...prev, allowedCompanyIds: [...new Set([...(prev.allowedCompanyIds || []), ...(row.allowedCompanyIds || [])])] } : row);
+        // Later row wins role (duplicate local users) — pehli stale Manager-miss mat rakho.
+        merged.set(
+          key,
+          prev
+            ? {
+                ...row,
+                role: row.role || prev.role,
+                allowedCompanyIds: [
+                  ...new Set([...(prev.allowedCompanyIds || []), ...(row.allowedCompanyIds || [])]),
+                ],
+              }
+            : row
+        );
       }
-      setUserRows([...merged.values()]);
+      const nextRows = [...merged.values()];
+      setUserRows(nextRows);
+      // F5 / panel open: IndexedDB se kya aaya — filter label `PL-ROLE`
+      if (!options?.silent || nextRows.length > 0) {
+        try {
+          const { plRoleLog } = await import("@/lib/plRoleChangeLog");
+          plRoleLog("panel_boot_read", {
+            companyId: effectiveCompanyId,
+            silent: Boolean(options?.silent),
+            users: nextRows.map((r) => ({
+              tokenId: String(r.tokenId || "").slice(0, 40),
+              role: r.role,
+              login: r.loginUsername || r.shareEmail || r.email || null,
+            })),
+          });
+        } catch {
+          /* ignore */
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -452,20 +483,33 @@ export function LocalPlServerSharePanel({
     return () => unsubs.forEach((u) => u());
   }, [ownerEmail, displayedUserRows]);
 
+  const displayedUserIdentityKey = useMemo(
+    () =>
+      displayedUserRows
+        .map((row) => `${row.tokenId}\0${normalizeEmail(row.shareEmail || row.email)}\0${row.loginUsername || ""}`)
+        .join("|"),
+    [displayedUserRows]
+  );
+  const displayedUserRowsRef = useRef(displayedUserRows);
+  displayedUserRowsRef.current = displayedUserRows;
+
   useEffect(() => {
-    if (!effectiveCompanyId || !displayedUserRows.length) return;
+    if (!effectiveCompanyId || !displayedUserIdentityKey) return;
     let cancelled = false;
     void (async () => {
-      for (const row of displayedUserRows) {
+      for (const row of displayedUserRowsRef.current) {
+        if (cancelled) return;
         const backfillKey = `${effectiveCompanyId}:${row.tokenId}`;
         const inferredShareEmail = normalizeEmail(row.shareEmail || row.email);
         if (inferredShareEmail.includes("@") && !row.shareEmail && !backfilledShareMetaRef.current.has(`${backfillKey}:email`)) {
           backfilledShareMetaRef.current.add(`${backfillKey}:email`);
           const localUserId = row.tokenId.replace(/^lcu:/, "");
-          void backfillLocalCompanyUserShareMeta(effectiveCompanyId, localUserId, {
+          await backfillLocalCompanyUserShareMeta(effectiveCompanyId, localUserId, {
             shareEmail: inferredShareEmail,
             uid: row.uid ?? null,
-          }).then(() => onUsersChanged?.());
+          });
+          if (cancelled) return;
+          onUsersChanged?.();
         }
         const knownEmail = normalizeEmail(row.email || row.shareEmail);
         const cached =
@@ -490,7 +534,7 @@ export function LocalPlServerSharePanel({
         if (shareEmail.includes("@") && !backfilledShareMetaRef.current.has(backfillKey)) {
           backfilledShareMetaRef.current.add(backfillKey);
           const localUserId = row.tokenId.replace(/^lcu:/, "");
-          void backfillLocalCompanyUserShareMeta(effectiveCompanyId, localUserId, {
+          await backfillLocalCompanyUserShareMeta(effectiveCompanyId, localUserId, {
             shareEmail,
             uid: profile.id,
           });
@@ -500,7 +544,7 @@ export function LocalPlServerSharePanel({
     return () => {
       cancelled = true;
     };
-  }, [displayedUserRows, effectiveCompanyId, onUsersChanged]);
+  }, [displayedUserIdentityKey, effectiveCompanyId, onUsersChanged]);
 
   useEffect(() => {
     if (!addOpen) return;
@@ -771,15 +815,46 @@ export function LocalPlServerSharePanel({
     row: PlServerShareUserRow,
     fallbackName?: string
   ): LocalCompanyUserRecord | null => {
+    const tokenUserId = String(row.tokenId || "").replace(/^lcu:/, "").trim();
     const email = normalizeEmail(row.email);
+    const shareEmail = normalizeEmail(row.shareEmail || "");
     const localPart = email.includes("@") ? email.split("@")[0]!.trim().toLowerCase() : "";
     const label = String(fallbackName || row.name || "").trim().toLowerCase();
     return (
+      (tokenUserId ? users.find((u) => u.id === tokenUserId) : undefined) ||
       users.find((u) => normalizeEmail(u.username) === email) ||
+      (shareEmail.includes("@")
+        ? users.find((u) => normalizeEmail(u.shareEmail || "") === shareEmail)
+        : undefined) ||
       (localPart ? users.find((u) => u.username.trim().toLowerCase() === localPart) : undefined) ||
       (label ? users.find((u) => u.displayName.trim().toLowerCase() === label) : undefined) ||
       null
     );
+  };
+
+  const matchLocalUsersForShareRow = (
+    users: LocalCompanyUserRecord[],
+    row: PlServerShareUserRow,
+    fallbackName?: string
+  ): LocalCompanyUserRecord[] => {
+    const primary = findLocalUserForShareRow(users, row, fallbackName);
+    if (!primary) return [];
+    const email = normalizeEmail(row.email || row.shareEmail || primary.shareEmail || "");
+    const localPart = email.includes("@") ? email.split("@")[0]!.trim().toLowerCase() : "";
+    const ids = new Set<string>([primary.id]);
+    const out = [primary];
+    for (const u of users) {
+      if (ids.has(u.id)) continue;
+      const un = u.username.trim().toLowerCase();
+      const share = normalizeEmail(u.shareEmail || "");
+      const same =
+        (email.includes("@") && (normalizeEmail(un) === email || share === email)) ||
+        (localPart && (un === localPart || (share.includes("@") && share.split("@")[0] === localPart)));
+      if (!same) continue;
+      ids.add(u.id);
+      out.push(u);
+    }
+    return out;
   };
 
   const openEditUser = async (row: PlServerShareUserRow, fallbackName?: string) => {
@@ -879,43 +954,224 @@ export function LocalPlServerSharePanel({
   const updateUserRole = async (row: PlServerShareUserRow, nextRoleRaw: string, fallbackName?: string) => {
     if (!effectiveCompanyId) return;
     const nextRole = normalizeLocalCompanyAppRole(nextRoleRaw);
-    if (normalizeLocalCompanyAppRole(row.role) === nextRole) return;
+    const primaryId = String(row.tokenId || "").replace(/^lcu:/, "").trim();
+    const { plRoleLog, plRoleUsersSummary } = await import("@/lib/plRoleChangeLog");
+    plRoleLog("select", {
+      companyId: effectiveCompanyId,
+      tokenId: row.tokenId,
+      primaryId,
+      uiRowRole: row.role,
+      nextRoleRaw,
+      nextRole,
+      shareEmail: row.shareEmail || row.email || null,
+      loginUsername: row.loginUsername || null,
+    });
 
     setRoleBusyTokenId(row.tokenId);
+    // Optimistic UI — same-session Select turant nayi role dikhaye.
+    setUserRows((prev) =>
+      prev.map((r) => (r.tokenId === row.tokenId ? { ...r, role: nextRole } : r))
+    );
     try {
-      const doc = await getLocalCompanyById(effectiveCompanyId, { includeDeleted: true });
-      if (!doc) throw new Error("Local company not found");
-      const prev = parseLocalCompanyUserRows((doc as { localCompanyUsers?: unknown }).localCompanyUsers);
-      const localUser = findLocalUserForShareRow(prev, row, fallbackName);
-      if (!localUser) {
-        toast({ variant: "destructive", title: "User not found in local company" });
-        return;
-      }
-      const idx = prev.findIndex((u) => u.id === localUser.id);
-      if (idx < 0) return;
-      const next = [...prev];
-      next[idx] = { ...next[idx], role: nextRole };
-      await upsertLocalCompany({
-        ...(doc as LocalCompanyDoc),
-        id: effectiveCompanyId,
-        localCompanyUsers: next,
-        updatedAt: Date.now(),
+      await withLocalCompanyUsersWriteLock(effectiveCompanyId, async () => {
+        const doc = await getLocalCompanyById(effectiveCompanyId, { includeDeleted: true });
+        if (!doc) throw new Error("Local company not found");
+        const prev = parseLocalCompanyUserRows((doc as { localCompanyUsers?: unknown }).localCompanyUsers);
+        const matches = matchLocalUsersForShareRow(prev, row, fallbackName);
+        plRoleLog("lock_read", {
+          companyId: effectiveCompanyId,
+          userCount: prev.length,
+          matchCount: matches.length,
+          matchIds: matches.map((m) => m.id),
+          matchRolesBefore: matches.map((m) => ({ id: m.id, role: m.role })),
+          allUsersBefore: plRoleUsersSummary(prev),
+          storageOption: (doc as { storageOption?: string }).storageOption ?? null,
+          plServerShared: (doc as { plServerShared?: boolean }).plServerShared ?? null,
+        });
+        if (!matches.length) {
+          plRoleLog("abort_no_match", { companyId: effectiveCompanyId, tokenId: row.tokenId });
+          toast({ variant: "destructive", title: "User not found in local company" });
+          await refreshUserRows({ silent: true });
+          return;
+        }
+        // Always include token primary id — Manager save miss kabhi duplicate-match pe depend na kare.
+        const matchIds = new Set(matches.map((u) => u.id));
+        if (primaryId) matchIds.add(primaryId);
+        const already = [...matchIds].every((id) => {
+          const m = prev.find((u) => u.id === id);
+          return m ? normalizeLocalCompanyAppRole(m.role) === nextRole : false;
+        });
+        if (already) {
+          plRoleLog("skip_already_saved", {
+            companyId: effectiveCompanyId,
+            nextRole,
+            matchIds: [...matchIds],
+          });
+          await refreshUserRows({ silent: true });
+          return;
+        }
+
+        const writeAndVerify = async (
+          attempt: number
+        ): Promise<{
+          ok: boolean;
+          users: ReturnType<typeof parseLocalCompanyUserRows>;
+          perm: unknown;
+        }> => {
+          const fresh = await getLocalCompanyById(effectiveCompanyId, { includeDeleted: true });
+          if (!fresh) {
+            plRoleLog("write_fail_no_doc", { attempt, companyId: effectiveCompanyId });
+            return { ok: false, users: [], perm: null };
+          }
+          const base = parseLocalCompanyUserRows(
+            (fresh as { localCompanyUsers?: unknown }).localCompanyUsers
+          );
+          const nextUsers = base.map((u) =>
+            matchIds.has(u.id)
+              ? { ...u, role: nextRole }
+              : { ...u, role: normalizeLocalCompanyAppRole(u.role) }
+          );
+          plRoleLog("write_before_upsert", {
+            attempt,
+            nextRole,
+            matchIds: [...matchIds],
+            nextUsersTarget: plRoleUsersSummary(nextUsers.filter((u) => matchIds.has(u.id))),
+          });
+          await upsertLocalCompany({
+            ...(fresh as LocalCompanyDoc),
+            id: effectiveCompanyId,
+            localCompanyUsers: nextUsers,
+            updatedAt: Date.now(),
+          });
+          await flushPendingBrowserDbSave();
+          plRoleLog("idb_flush_done", { attempt, nextRole, companyId: effectiveCompanyId });
+          const verify = await getLocalCompanyById(effectiveCompanyId, { includeDeleted: true });
+          const verifiedUsers = parseLocalCompanyUserRows(
+            (verify as { localCompanyUsers?: unknown } | null)?.localCompanyUsers
+          );
+          const perId = [...matchIds].map((id) => {
+            const v = verifiedUsers.find((u) => u.id === id);
+            return {
+              id,
+              role: v?.role ?? null,
+              normalized: v ? normalizeLocalCompanyAppRole(v.role) : null,
+              ok: Boolean(v && normalizeLocalCompanyAppRole(v.role) === nextRole),
+            };
+          });
+          const ok = perId.every((x) => x.ok);
+          plRoleLog("write_verify", {
+            attempt,
+            ok,
+            nextRole,
+            perId,
+            allUsersAfter: plRoleUsersSummary(verifiedUsers),
+          });
+          const perm =
+            (verify as { permissionConfig?: unknown } | null)?.permissionConfig ??
+            (fresh as { permissionConfig?: unknown }).permissionConfig;
+          return { ok, users: verifiedUsers.length ? verifiedUsers : nextUsers, perm };
+        };
+
+        let result = await writeAndVerify(1);
+        // Sirf verify fail pe ek retry — manager special double-write race badhata tha.
+        if (!result.ok) {
+          plRoleLog("rewrite_retry", { reason: "verify_failed", nextRole });
+          await new Promise<void>((r) => window.setTimeout(() => r(), 80));
+          result = await writeAndVerify(2);
+        }
+        if (!result.ok) {
+          plRoleLog("abort_verify_failed", { companyId: effectiveCompanyId, nextRole });
+          toast({
+            variant: "destructive",
+            title: "Role save verify failed",
+            description: "SQLite me role confirm nahi hua — try again.",
+          });
+          await refreshUserRows({ silent: true });
+          return;
+        }
+
+        // Hidden PL bridge / sibling tabs: stale sql.js drop — IDB me naya role rahe.
+        try {
+          const { notifySiblingRenderersReloadBrowserDbFromIndexedDb } = await import(
+            "@/lib/localSqlite"
+          );
+          notifySiblingRenderersReloadBrowserDbFromIndexedDb({
+            companyId: effectiveCompanyId,
+            nextRole,
+            source: "pl_host_role_save",
+          });
+        } catch {
+          /* ignore */
+        }
+
+        const { notifyPlServerHostCompanyMetaSaved, PL_SERVER_COMPANY_META_UPDATED_EVENT } =
+          await import("@/lib/plServerCompanyMetaSync");
+        plRoleLog("meta_bump_start", {
+          companyId: effectiveCompanyId,
+          nextRole,
+          pushUsers: plRoleUsersSummary(result.users),
+        });
+        await notifyPlServerHostCompanyMetaSaved(effectiveCompanyId, {
+          localCompanyUsers: result.users,
+          ...(result.perm && typeof result.perm === "object"
+            ? { permissionConfig: result.perm }
+            : {}),
+        });
+        plRoleLog("meta_bump_done", { companyId: effectiveCompanyId, nextRole });
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent(PL_SERVER_COMPANY_META_UPDATED_EVENT, {
+              detail: {
+                companyId: effectiveCompanyId,
+                localCompanyUsers: result.users,
+              },
+            })
+          );
+        }
+        bumpLocalCompanyRegistry();
+        toast({
+          title: "Role updated",
+          description: `${matches[0]?.displayName || row.name} → ${localCompanyAppRoleLabel(nextRole)}`,
+        });
+        await new Promise<void>((r) => window.setTimeout(() => r(), 50));
+        await refreshUserRows({ silent: true });
+        // Post-refresh: UI list me kya padha — permanent save miss yahin dikhega.
+        try {
+          const afterDoc = await getLocalCompanyById(effectiveCompanyId, { includeDeleted: true });
+          const afterUsers = parseLocalCompanyUserRows(
+            (afterDoc as { localCompanyUsers?: unknown } | null)?.localCompanyUsers
+          );
+          const primary = primaryId ? afterUsers.find((u) => u.id === primaryId) : null;
+          plRoleLog("after_refresh_sqlite", {
+            companyId: effectiveCompanyId,
+            wanted: nextRole,
+            primaryId,
+            primaryRole: primary?.role ?? null,
+            primaryOk: primary
+              ? normalizeLocalCompanyAppRole(primary.role) === nextRole
+              : false,
+            allUsers: plRoleUsersSummary(afterUsers),
+          });
+        } catch (e) {
+          plRoleLog("after_refresh_read_error", {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+        onUsersChanged?.();
+        plRoleLog("done", { companyId: effectiveCompanyId, nextRole });
       });
-      void import("@/lib/plServerCompanyMetaSync").then(({ notifyPlServerHostCompanyMetaSaved }) =>
-        notifyPlServerHostCompanyMetaSaved(effectiveCompanyId)
-      );
-      toast({
-        title: "Role updated",
-        description: `${localUser.displayName || row.name} → ${localCompanyAppRoleLabel(nextRole)}`,
-      });
-      await refreshUserRows();
-      onUsersChanged?.();
     } catch (e) {
+      plRoleLog("error", {
+        companyId: effectiveCompanyId,
+        nextRole,
+        error: e instanceof Error ? e.message : String(e),
+      });
       toast({
         variant: "destructive",
         title: "Role update failed",
         description: e instanceof Error ? e.message : "Try again.",
       });
+      await refreshUserRows({ silent: true });
     } finally {
       setRoleBusyTokenId(null);
     }

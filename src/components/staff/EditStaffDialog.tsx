@@ -14,6 +14,10 @@ import {
   isProfileAvatarImageFile,
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
+import {
+  captureEntityFormAttachmentBaseline,
+  finalizeFormAttachmentEditAfterSave,
+} from "@/lib/formAttachmentEditHelper";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { useAuth } from "@/hooks/useAuth";
@@ -56,6 +60,7 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { CreateStaffGroupDialog } from "./CreateStaffGroupDialog";
 import { Textarea } from "../ui/textarea";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
@@ -102,6 +107,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   hasTransactions?: boolean;
 }) {
   const [isLoading, setIsLoading] = useState(false);
+  const isCompressing = useImageCompressionProcessing();
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const dialogOpen = isOpen !== undefined ? isOpen : internalIsOpen;
@@ -269,6 +275,10 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const staffRefSnap = staff;
+    const attachmentBaselineSnap = captureEntityFormAttachmentBaseline({
+      fileUrl: initialFileRef.current,
+      documentFileUrls: initialDocUrlsRef.current,
+    });
 
     setDialogOpen(false); // Immediate close — APK/PC/mobile; persistence async below
 
@@ -279,11 +289,20 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
       const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
       setIsLoading(true);
       try {
-        let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
-        const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
-        const keptDocUrls = docSlotsSnap.filter((x): x is string => typeof x === "string");
+        const { prepareMasterEditAttachmentsForSave } = await import(
+          "@/lib/attachmentRecompressOnSave"
+        );
+        const prepared = await prepareMasterEditAttachmentsForSave({
+          companyId,
+          avatar: fileSnap,
+          documents: docSlotsSnap,
+        });
+        let fileUrl: string | null = typeof prepared.avatar === "string" ? prepared.avatar : null;
+        const newDocFiles = prepared.newDocFiles;
+        const keptDocUrls = prepared.keptDocUrls;
         const totalBytes =
-          (fileSnap instanceof File ? fileSnap.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+          (prepared.avatar instanceof File ? prepared.avatar.size : 0) +
+          newDocFiles.reduce((s, f) => s + f.size, 0);
         if (totalBytes > 0 && companyId) {
           const limitCheck = await checkStorageLimit(
             companyId,
@@ -297,7 +316,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           }
         }
 
-        const needAvatarUpload = fileSnap instanceof File && canAddAvatar;
+        const needAvatarUpload = prepared.avatar instanceof File && canAddAvatar;
         const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
         let documentFileUrls = [...keptDocUrls];
         if (companyId && (needAvatarUpload || needNewDocsUpload)) {
@@ -305,7 +324,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
             companyId,
             collectionSeg: "staff",
             entityId: staffRefSnap.id,
-            avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+            avatarFile: needAvatarUpload ? (prepared.avatar as File) : null,
             documentFiles: needNewDocsUpload ? newDocFiles : [],
           });
           if (st.fileUrl) fileUrl = st.fileUrl;
@@ -357,6 +376,12 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           });
           initialFileRef.current = fileUrl || null;
           initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
+          finalizeFormAttachmentEditAfterSave({
+            companyId,
+            baselineUrls: attachmentBaselineSnap,
+            finalUrls: captureEntityFormAttachmentBaseline({ fileUrl, documentFileUrls }),
+            oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
+          });
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Staff Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
@@ -403,6 +428,12 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
         });
         initialFileRef.current = fileUrl || null;
         initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
+        finalizeFormAttachmentEditAfterSave({
+          companyId,
+          baselineUrls: attachmentBaselineSnap,
+          finalUrls: captureEntityFormAttachmentBaseline({ fileUrl, documentFileUrls }),
+          oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
+        });
         sonnerToast.success("Staff Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating staff:", error);
@@ -525,15 +556,8 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
 
     if (inputFile) {
       try {
-        const compressedFile = await compressFile(inputFile);
-         if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-            toast({
-              variant: "destructive",
-              title: "File Too Large After Compression",
-              description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-            });
-            return;
-        }
+        const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, companyId);
+         
         setFile(compressedFile);
       } catch (err) {
         console.error("File compression error:", err);
@@ -752,15 +776,19 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                   onAvatarChange={handleFileChange}
                   onRemoveAvatar={removeAvatar}
                   canAddAvatar={canAddAvatar}
+                  attachmentCompanyId={companyId ?? undefined}
+                  attachmentReusePlaceKey={staff.id ? `staff/${staff.id}` : null}
                 />
                 <EntityDocumentsBlock
                   docSlots={docSlots}
+                  setDocSlots={setDocSlots}
                   onRemoveDoc={removeDocAt}
                   onAddClick={() => docsInputRef.current?.click()}
                   docsInputRef={docsInputRef}
                   onDocsChange={handleDocsChange}
                   canAttachDocuments={canAttachDocuments}
                   attachmentCompanyId={companyId ?? undefined}
+                  attachmentReusePlaceKey={staff.id ? `staff/${staff.id}` : null}
                   entityStatementLabel="staff"
                 />
                 <EntityOpeningBalanceNarrationField
@@ -787,7 +815,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                             variant="destructive"
                             className="shrink-0 px-3 sm:px-4"
                             onClick={() => setIsDeleteDialogOpen(true)}
-                            disabled={isLoading || hasTransactions || apkOfflineViewOnly}
+                            disabled={isLoading || isCompressing || hasTransactions || apkOfflineViewOnly}
                           >
                             <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Move to Bin
                           </Button>
@@ -806,7 +834,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
+                <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>

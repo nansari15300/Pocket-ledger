@@ -56,7 +56,7 @@ function SideBlock({ side }: { side: Side }) {
       ) : side.bankToBank ? (
         <p className="mt-1 text-[11px] text-muted-foreground">Bank-to-bank — no party account</p>
       ) : (
-        <p className="mt-1 text-[11px] text-muted-foreground">Account not selected (optional)</p>
+        <p className="mt-1 text-[11px] text-muted-foreground">Account not selected</p>
       )}
     </div>
   );

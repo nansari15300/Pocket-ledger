@@ -60,7 +60,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_MOBILE_ATTACH_TILE_SLOT, VOUCHER_MOBILE_ATTACH_PREVIEW_CLASS, VOUCHER_MOBILE_ATTACH_ADD_SURFACE_CLASS, VOUCHER_DESKTOP_ATTACH_TILE_SLOT, VOUCHER_DESKTOP_ATTACH_PREVIEW_CLASS, VOUCHER_DESKTOP_ATTACH_ADD_SURFACE_CLASS } from "@/components/vouchers/voucherButtonStyles";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
@@ -117,12 +117,11 @@ import {
 } from "@/components/ui/tooltip";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
-import {
-  convertPdfAttachmentsToJpegIfEnabled,
-  shouldSuggestPdfAsImage,
-} from "@/lib/voucherAttachmentPdfAsImage";
+import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
+import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
 import {
   applyVoucherAttachmentsAfterFormSave,
+  uploadVoucherAttachmentFileToFirebase,
   voucherAttachmentFieldsForSave,
 } from "@/lib/voucherFormAttachmentSave";
 import { CreateBankAccountDialog } from "../bank-cash/CreateBankAccountDialog";
@@ -1237,15 +1236,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           type: "sale",
         };
 
-        let filesForSave = files;
-        if (savePdfAsImage) {
-          const convToast = sonnerToast.loading("Converting PDF attachments to image…");
-          try {
-            filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
-          } finally {
-            sonnerToast.dismiss(convToast);
-          }
-        }
+        const filesForSave = await prepareVoucherAttachmentsForSave(files, {
+          companyId,
+          savePdfAsImage,
+        });
 
         /** Convert / Copy-draft: Firestore `saveVoucher` 4th arg — copy pehli bar null hona chahiye (stale id overwrite na ho). */
         const originalVoucherIdToDelete: string | null =
@@ -1261,10 +1255,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         /** Local create + nayi files: `appendLocalOnlyVoucherFilesToUrls` ne jo id banai — `saveVoucher` ko same chahiye */
         let preGeneratedVoucherId: string | undefined;
 
-        // If an unassignedFile is present, add its URL
-        if(data.unassignedFile?.url && !existingFileUrls.includes(data.unassignedFile.url)) {
-            existingFileUrls.push(data.unassignedFile.url);
-        }
+        // `files` UI list is canonical — do not re-inject `unassignedFile` (resurrects removed attachments).
 
         const newFilesToUpload = filesForSave.filter(
           (f): f is File => f instanceof File
@@ -1308,12 +1299,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           } else {
             for (const file of newFilesToUpload) {
               if (existingFileUrls.length >= fileAttachmentLimits.maxFileCount) break;
-              const storageRef = ref(
-                storage,
-                `voucher-files/${companyId}/sale/${Date.now()}_${file.name}`
-              );
-              const snapshot = await uploadBytes(storageRef, file);
-              const url = await getDownloadURL(snapshot.ref);
+              const url = await uploadVoucherAttachmentFileToFirebase({
+                companyId,
+                voucherType: "sale",
+                file,
+              });
               existingFileUrls.push(url);
               await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
             }
@@ -1323,7 +1313,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         let finalData = {
           ...submissionData,
           ...voucherAttachmentFieldsForSave(existingFileUrls),
-          unassignedFile: data.unassignedFile || voucher?.unassignedFile || null,
           isApproved: isCompanyAdmin ? true : (data.isApproved ?? voucher?.isApproved ?? false),
         };
         // Keep opening balance link from current voucher (set by Link to Txns); copy-draft pehli save par stale savedVoucherId se purani row na uthao
@@ -1390,6 +1379,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           }).then((persistedUrls) => {
             if (!isMounted.current) return;
             savedFileUrlsSnapshotRef.current = [...persistedUrls];
+            if (process.env.NODE_ENV !== "production") {
+              void import("@/lib/attachmentDeleteTrace").then((m) => {
+                m.markAttachmentDeleteIntent({
+                  companyId,
+                  voucherId: docId,
+                  intendedUrls: persistedUrls,
+                  source: "CreateSaleForm.afterSave.setFiles",
+                });
+                m.traceAttachmentUrlsChange({
+                  source: "CreateSaleForm.afterSave.setFiles",
+                  companyId,
+                  voucherId: docId,
+                  prevUrls: existingFileUrls,
+                  nextUrls: persistedUrls,
+                });
+              });
+            }
             setFiles(persistedUrls);
             initialFilesRef.current = persistedUrls;
           });
@@ -1420,11 +1426,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               }
             }
           }
-          if (approveAfterSave && savedDoc?.id) {
-            if (!isEditForApprove) {
-              await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
-            }
-          }
+          // New create: saveVoucher(approveAfterSave) already set isApproved — skip second approve lookup.
           if (companyId && company) {
             const isEditHist = !!voucher?.id;
             const amount = Number((finalData as any).total) || 0;
@@ -1583,6 +1585,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!allowAttachments) return;
     await handleVoucherAttachmentInputChange(e, {
+      companyId,
       currentFiles: files,
       maxFiles: fileAttachmentLimits.maxFileCount || 0,
       allowImage: fileAttachmentLimits.allowImage,
@@ -3504,6 +3507,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               key={index} 
                               file={file} 
                               attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
+                        attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                               className={cn(
                                 !allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : "",
@@ -3528,6 +3532,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 }}
                                 onPastedFiles={(incoming) =>
                                   void appendCompressedVoucherAttachmentsToState({
+                                    companyId,
                                     incomingFiles: incoming,
                                     currentFiles: files,
                                     maxFiles: fileAttachmentLimits.maxFileCount || 0,
@@ -3804,6 +3809,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 key={index} 
                                 file={file} 
                                 attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
+                        attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                                 onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                                 className={cn(
                                   !allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : "",
@@ -3828,6 +3834,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   }}
                                   onPastedFiles={(incoming) =>
                                     void appendCompressedVoucherAttachmentsToState({
+                                      companyId,
                                       incomingFiles: incoming,
                                       currentFiles: files,
                                       maxFiles: fileAttachmentLimits.maxFileCount || 0,

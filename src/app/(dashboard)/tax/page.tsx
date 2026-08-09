@@ -38,7 +38,12 @@ import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import {
   masterDetailTabHref,
+  masterDetailCanonicalHref,
   replaceMasterDetailTabUrl,
+  tabSwitchSelection,
+  pickRememberedListSelection,
+  writeMasterDetailPageState,
+  readMasterDetailLocationQuery,
 } from "@/lib/masterDetailTabChange";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { isSystemParentGroup } from "@/lib/system-groups";
@@ -135,21 +140,7 @@ function TaxPageContent() {
     router.replace(masterDetailListHref("tax"), { scroll: false });
   }, [setSelected, router]);
   useRegisterMasterDetailHardwareBack("tax", onBackToList);
-
-  const handleTaxTabChange = useCallback(
-    (value: string) => {
-      setActiveView(value);
-      if (!isMobile) return;
-      setSelected(null);
-      const href = masterDetailTabHref("tax", {
-        tab: value,
-        defaultTab: "taxes",
-        listOnly: true,
-      });
-      replaceMasterDetailTabUrl(href, router, useQueryNav);
-    },
-    [isMobile, setActiveView, setSelected, router, useQueryNav]
-  );
+  const pendingTaxSelectIdRef = useRef<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [taxListQuickFilter, setTaxListQuickFilter] = useState<EntityListQuickFilter>("default");
@@ -250,6 +241,31 @@ function TaxPageContent() {
     }
     return baseGroups;
   }, [processedTaxes, initialProcessedTaxGroups, companyId]);
+
+  const handleTaxTabChange = useCallback(
+    (value: string) => {
+      const tab = value === "groups" ? "groups" : "taxes";
+      const items =
+        (tab === "groups" ? processedTaxGroups : processedTaxes) as ReadonlyArray<{ id: string }>;
+      const nextSelected = tabSwitchSelection(
+        isMobile,
+        pickRememberedListSelection("taxPageState", tab, items)
+      );
+      pendingTaxSelectIdRef.current = nextSelected?.id ?? null;
+      setActiveView(tab);
+      setSelected(nextSelected as (typeof processedTaxes)[number] | (typeof processedTaxGroups)[number] | null);
+      const href = isMobile
+        ? masterDetailTabHref("tax", { tab, defaultTab: "taxes", listOnly: true })
+        : masterDetailCanonicalHref("tax", {
+            tab,
+            defaultTab: "taxes",
+            selectedId: nextSelected?.id ?? null,
+          });
+      replaceMasterDetailTabUrl(href, router, useQueryNav);
+      writeMasterDetailPageState("taxPageState", tab, nextSelected?.id);
+    },
+    [isMobile, useQueryNav, processedTaxes, processedTaxGroups, setActiveView, setSelected, router]
+  );
 
   // ========== MEMORY LOGIC ==========
   usePageMemory(
@@ -377,31 +393,40 @@ function TaxPageContent() {
   };
 
   useEffect(() => {
-    if (!selectedIdFromUrl) return;
     if (vouchersLoading) return;
-    const groupItem = processedTaxGroups.find((i) => i.id === selectedIdFromUrl);
-    const taxItem = processedTaxes.find((i) => i.id === selectedIdFromUrl);
-    if (groupItem && taxItem) {
-      if (viewFromUrl === "groups") setActiveView("groups");
-      else setActiveView("taxes");
-    } else if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
-    else if (taxItem) setActiveView("taxes");
-    else if (groupItem) setActiveView("groups");
+    const { view, selectedId } = readMasterDetailLocationQuery();
+    const pendingId = pendingTaxSelectIdRef.current;
+    if (pendingId) {
+      if (selectedId === pendingId) pendingTaxSelectIdRef.current = null;
+      else if (selected?.id === pendingId) return;
+    }
+    if (!selectedId) {
+      if (view === "groups") {
+        if (activeView !== "groups") setActiveView("groups");
+      } else if (activeView !== "taxes") {
+        setActiveView("taxes");
+      }
+      return;
+    }
+    const groupItem = processedTaxGroups.find((i) => i.id === selectedId);
+    const taxItem = processedTaxes.find((i) => i.id === selectedId);
+    if (view === "groups" && groupItem) setActiveView("groups");
+    else if (view === "taxes" && taxItem) setActiveView("taxes");
     const item =
       groupItem && taxItem
-        ? viewFromUrl === "groups"
+        ? view === "groups"
           ? groupItem
           : taxItem
         : groupItem || taxItem;
     if (item) setSelected(item);
     const canonical =
-      viewFromUrl === "groups"
-        ? `/tax?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
-        : `/tax?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+      view === "groups"
+        ? `/tax?view=groups&selected=${encodeURIComponent(selectedId)}`
+        : `/tax?selected=${encodeURIComponent(selectedId)}`;
     if (shouldReplaceWithMasterDetailCanonical(canonical)) {
       router.replace(canonical, { scroll: false });
     }
-  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedTaxes, processedTaxGroups, setSelected, setActiveView, router]);
+  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedTaxes, processedTaxGroups, selected?.id, activeView, setSelected, setActiveView, router]);
 
   const taxesForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];

@@ -37,8 +37,7 @@ import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile } from "@/lib/lo
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Calendar } from "@/components/ui/calendar";
-import { compressVoucherAttachment } from "@/lib/compression";
-import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { FilePreview } from "../vouchers/FilePreview";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { doc, setDoc, serverTimestamp, Timestamp, collection, query, where, getDocs } from "firebase/firestore";
@@ -46,6 +45,7 @@ import { initializeCompanyDataClient } from "@/lib/initializeCompanyDataClient";
 import { ensureSuperAdminInSharedEmails } from "@/lib/superAdminEmails";
 import { sharedWithEmailsLowerFromList } from "@/lib/sharedWithEmailsQuery";
 import { generateCompanyId } from "@/lib/generateCompanyId";
+import { pocketLedgerStorageDocFields } from "@/lib/firebaseStoragePaths";
 import { generateUniqueInterCompanyAccountNo } from "@/lib/interCompany/interCompanyAccountNo";
 import { generateUniqueInterCompanyCompanyCode } from "@/lib/interCompany/interCompanyCompanyCode";
 import { CompanyInterCompanyCodeField } from "@/components/inter-company/CompanyInterCompanyCodeField";
@@ -223,12 +223,11 @@ export function CreateCompanyForm({
 
     setIsFileProcessing(true);
     try {
-      const maxBytes = attachmentMaxBytes();
-      const compressedFile = await compressVoucherAttachment(inputFile, maxBytes);
+      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, null);
       if (compressedFile.size > maxBytes) {
         toast({
           variant: "destructive",
-          ...attachmentStillTooLargeToastFields(),
+          ...attachmentImageStillTooLargeToastFields(maxKb),
         });
         e.target.value = "";
         return;
@@ -406,7 +405,9 @@ export function CreateCompanyForm({
           });
           logoUrl = `${LOCAL_FILE_PREFIX}${id}`;
         } else {
-          logoUrl = await uploadCompanyLogo(companyId, values.companyName, fileToUpload.file);
+          logoUrl = await uploadCompanyLogo(companyId, values.companyName, fileToUpload.file, {
+            usePocketLedger: true,
+          });
         }
       }
 
@@ -510,6 +511,7 @@ export function CreateCompanyForm({
           storageOption: "firebase",
           ownerId: effectiveUserId,
           ownerEmail: effectiveUserEmail,
+          ...pocketLedgerStorageDocFields(companyId),
           createdAt: serverTimestamp(),
           sharedWith: [],
           ...(() => {
@@ -547,6 +549,7 @@ export function CreateCompanyForm({
             storageOption: "firebase",
             ownerId: effectiveUserId,
             ownerEmail: effectiveUserEmail,
+            ...pocketLedgerStorageDocFields(companyId),
             createdAt: Date.now(),
             sharedWith: [],
             ...(() => {

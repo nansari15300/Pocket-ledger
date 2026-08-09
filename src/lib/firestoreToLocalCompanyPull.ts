@@ -11,6 +11,7 @@ import { firestore } from "@/lib/firebase";
 import type { Company } from "@/hooks/useCompany";
 import {
   deleteCompanyDocFromBrowserDb,
+  getCompanyDocFromBrowserDb,
   listCompanyDocsFromBrowserDb,
   mirrorCollectionDocsToBrowserDbSilent,
 } from "@/lib/localCompanyDocMirror";
@@ -25,6 +26,11 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 export type MergeRemoteLocalDocsOptions = {
   /** True: SQLite row same `id` par remote ko replace kare — extras-only merge se zyada zaroori jab authoritativeCompanyId + Firestore stale ho */
   preferLocalSqliteWhenIdsConflict?: boolean;
+  /**
+   * Online restore sync: Firestore pe vouchers abhi incomplete/empty ho sakte hain —
+   * orphan delete SQLite vouchers hata deta tha ("restore pe vouchers nahi dikhe").
+   */
+  skipOrphanSqliteDelete?: boolean;
 };
 
 function sortMergedByField(merged: any[], orderByField: string): any[] {
@@ -45,28 +51,375 @@ function sortMergedByField(merged: any[], orderByField: string): any[] {
  * stale “extra” ghost ban jati thi + mirror usko wapas bake karta tha → hard-delete SQLite row (restore impossible).
  */
 import { isLocalFileRef } from "@/lib/localPendingFiles";
+import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
+import {
+  resolveUrlsAgainstAttachmentIntent,
+  shouldPreserveClearedVoucherAttachments,
+  shouldPreserveIntendedVoucherAttachments,
+} from "@/lib/attachmentDeleteTrace";
 
 function isHttpsAttachmentRef(u: unknown): boolean {
   return typeof u === "string" && /^https?:\/\//i.test(u.trim());
 }
 
+function docAttachmentEditTimeMs(row: Record<string, unknown> | null | undefined): number {
+  if (!row) return 0;
+  for (const key of ["lastEditedAt", "updatedAt", "createdAt"] as const) {
+    const d = parseFirestoreDateFieldToJsDate(row[key]);
+    if (d && !Number.isNaN(d.getTime())) return d.getTime();
+  }
+  return 0;
+}
+
+/** `local:` slots ko same-index remote HTTPS se upgrade — list length grow mat karo (delete undo). */
+function upgradeLocalAttachmentListFromRemote(localArr: unknown[], remoteArr: unknown[]): unknown[] {
+  if (localArr.length === 0) return [];
+  if (remoteArr.length === localArr.length) {
+    return localArr.map((localRef, i) => {
+      const remoteRef = remoteArr[i];
+      if (isLocalFileRef(String(localRef || "")) && isHttpsAttachmentRef(remoteRef)) return remoteRef;
+      return localRef;
+    });
+  }
+  return localArr;
+}
+
 /** SQLite mirror row me stale `local:` ho aur Firestore snapshot HTTPS ho — attachment fields remote se. */
-function mergeDocAttachmentFieldsPreferRemote(remote: Record<string, unknown>, local: Record<string, unknown>): Record<string, unknown> {
+function mergeDocAttachmentFieldsPreferRemote(
+  remote: Record<string, unknown>,
+  local: Record<string, unknown>,
+  localCompanyId?: string
+): Record<string, unknown> {
   const out = { ...local };
+  const localMs = docAttachmentEditTimeMs(local);
+  const remoteMs = docAttachmentEditTimeMs(remote);
+  const beforeUrls = Array.isArray(local.fileUrls) ? (local.fileUrls as unknown[]) : [];
+  const docId = String(out.id || local.id || remote.id || "").trim();
+  const companyId = String(localCompanyId || "").trim();
+  const preserveCleared =
+    Boolean(docId) && shouldPreserveClearedVoucherAttachments(companyId, docId);
   for (const key of ["fileUrls", "documentFileUrls"] as const) {
+    const hasLocalKey = Object.prototype.hasOwnProperty.call(local, key);
     const rArr = Array.isArray(remote[key]) ? (remote[key] as unknown[]) : [];
     const lArr = Array.isArray(local[key]) ? (local[key] as unknown[]) : [];
     const rHttps = rArr.filter(isHttpsAttachmentRef);
     const lHttps = lArr.filter(isHttpsAttachmentRef);
-    if (rHttps.length > lHttps.length) out[key] = remote[key];
-    else if (rHttps.length === lHttps.length && rArr.some(isHttpsAttachmentRef) && lArr.some((u) => isLocalFileRef(String(u)))) {
-      out[key] = remote[key];
+    const lHasLocal = lArr.some((u) => isLocalFileRef(String(u)));
+    const remoteViolatesIntent =
+      key === "fileUrls" &&
+      Boolean(docId) &&
+      shouldPreserveIntendedVoucherAttachments(companyId, docId, rArr.map(String));
+    const intendedUrls =
+      key === "fileUrls" && remoteViolatesIntent
+        ? resolveUrlsAgainstAttachmentIntent(companyId, docId, rArr.map(String))
+        : null;
+
+    if (preserveCleared && key === "fileUrls" && !lHasLocal) {
+      out[key] = [];
+      continue;
     }
+
+    // Partial trim / stale empty pull: never bake local [] over non-empty save intent.
+    if (intendedUrls && key === "fileUrls" && !lHasLocal) {
+      out[key] =
+        hasLocalKey && lArr.length > 0 && lArr.length <= intendedUrls.length
+          ? local[key]
+          : intendedUrls;
+      continue;
+    }
+
+    // Explicit local empty — same race guard as mergeForPull.
+    if (hasLocalKey && Array.isArray(local[key]) && lArr.length === 0) {
+      if (key === "fileUrls") {
+        const healIntent = resolveUrlsAgainstAttachmentIntent(companyId, docId, []);
+        if (healIntent && healIntent.length > 0) {
+          out[key] = healIntent;
+          continue;
+        }
+      }
+      if (
+        preserveCleared ||
+        localMs >= remoteMs ||
+        localMs === 0 ||
+        rArr.length === 0 ||
+        !(remoteMs > localMs && rHttps.length > 0)
+      ) {
+        out[key] = [];
+        continue;
+      }
+      out[key] = remote[key];
+      continue;
+    }
+
+    // Newer/equal local list wins — keep local HTTPS; never wipe to empty because remote is still [].
+    if (hasLocalKey && localMs >= remoteMs) {
+      if (
+        Object.prototype.hasOwnProperty.call(remote, key) &&
+        Array.isArray(remote[key]) &&
+        rArr.length === 0 &&
+        lArr.length > 0
+      ) {
+        // Stale empty remote after local add/save — keep local.
+        out[key] = local[key];
+        continue;
+      }
+      if (lHasLocal && rHttps.length > 0) {
+        out[key] = upgradeLocalAttachmentListFromRemote(lArr, rArr);
+        continue;
+      }
+      out[key] = local[key];
+      continue;
+    }
+
+    // Remote newer + empty: only clear when intentional clear-intent, else keep local HTTPS.
+    if (
+      Object.prototype.hasOwnProperty.call(remote, key) &&
+      Array.isArray(remote[key]) &&
+      rArr.length === 0 &&
+      lArr.length > 0
+    ) {
+      if (preserveCleared) {
+        out[key] = lHasLocal
+          ? lArr.filter((u) => isLocalFileRef(String(u)))
+          : [];
+      } else if (remoteMs > localMs && !lHasLocal) {
+        out[key] = [];
+      } else {
+        out[key] = local[key];
+      }
+      continue;
+    }
+
+    // Shorter local HTTPS (no pending) beats longer remote even when remote timestamp is stale-ahead.
+    if (hasLocalKey && !lHasLocal && lArr.length > 0 && lArr.length < rArr.length) {
+      out[key] = local[key];
+      continue;
+    }
+
+    if (rHttps.length > lHttps.length) out[key] = remote[key];
+    else if (rHttps.length === lHttps.length && rArr.some(isHttpsAttachmentRef) && lHasLocal) {
+      out[key] = upgradeLocalAttachmentListFromRemote(lArr, rArr);
+    }
+  }
+  const mergedFileUrls = Array.isArray(out.fileUrls) ? (out.fileUrls as unknown[]) : [];
+  if (mergedFileUrls.length === 0) {
+    out.files = [];
+    out.unassignedFile = null;
   }
   for (const key of ["fileUrl", "avatarUrl"] as const) {
     const r = remote[key];
     const l = local[key];
+    const hasLocalKey = Object.prototype.hasOwnProperty.call(local, key);
+    if (hasLocalKey && localMs >= remoteMs) {
+      if (!l) {
+        out[key] = l ?? null;
+        continue;
+      }
+      if (isLocalFileRef(String(l || "")) && isHttpsAttachmentRef(r)) out[key] = r;
+      else out[key] = l;
+      continue;
+    }
     if (isHttpsAttachmentRef(r) && (isLocalFileRef(String(l || "")) || !l)) out[key] = r;
+  }
+  if (process.env.NODE_ENV !== "production") {
+    const afterUrls = Array.isArray(out.fileUrls) ? (out.fileUrls as unknown[]) : [];
+    void import("@/lib/attachmentDeleteTrace").then((m) => {
+      m.traceAttachmentUrlsChange({
+        source: "firestorePull.mergePreferRemote",
+        companyId,
+        voucherId: String(out.id || local.id || remote.id || ""),
+        prevUrls: beforeUrls.map(String),
+        nextUrls: afterUrls.map(String),
+        extra: { localMs, remoteMs, preserveCleared },
+      });
+      m.logAttachWipe({
+        source: "firestorePull.mergePreferRemote",
+        reason: "merge_shrank_fileUrls",
+        companyId,
+        voucherId: String(out.id || local.id || remote.id || ""),
+        beforeUrls: beforeUrls.map(String),
+        afterUrls: afterUrls.map(String),
+        extra: { localMs, remoteMs, preserveCleared },
+      });
+    });
+  }
+  return out;
+}
+
+/** Firestore pull: ledger remote se; attachments jis side par zyada / abhi-pending URLs hon. */
+function mergeDocAttachmentFieldsForPull(
+  remote: Record<string, unknown>,
+  local: Record<string, unknown>,
+  localCompanyId?: string
+): Record<string, unknown> {
+  const out = { ...remote };
+  const localMs = docAttachmentEditTimeMs(local);
+  const remoteMs = docAttachmentEditTimeMs(remote);
+  const beforeLocalUrls = Array.isArray(local.fileUrls) ? (local.fileUrls as unknown[]) : [];
+  const beforeRemoteUrls = Array.isArray(remote.fileUrls) ? (remote.fileUrls as unknown[]) : [];
+  const docId = String(out.id || local.id || remote.id || "").trim();
+  const companyId = String(localCompanyId || "").trim();
+  const preserveCleared =
+    Boolean(docId) && shouldPreserveClearedVoucherAttachments(companyId, docId);
+  for (const key of ["fileUrls", "documentFileUrls"] as const) {
+    const hasLocalKey = Object.prototype.hasOwnProperty.call(local, key);
+    const rArr = Array.isArray(remote[key]) ? (remote[key] as unknown[]) : [];
+    const lArr = Array.isArray(local[key]) ? (local[key] as unknown[]) : [];
+    const rHttps = rArr.filter(isHttpsAttachmentRef);
+    const lHttps = lArr.filter(isHttpsAttachmentRef);
+    const lHasLocal = lArr.some((u) => isLocalFileRef(String(u)));
+    const remoteViolatesIntent =
+      key === "fileUrls" &&
+      Boolean(docId) &&
+      shouldPreserveIntendedVoucherAttachments(companyId, docId, rArr.map(String));
+    const intendedUrls =
+      key === "fileUrls" && remoteViolatesIntent
+        ? resolveUrlsAgainstAttachmentIntent(companyId, docId, rArr.map(String))
+        : null;
+
+    // Session delete/trim tombstone — F5 / delta pull purani HTTPS SQLite pe wapas mat bake karo.
+    if (preserveCleared && key === "fileUrls" && !lHasLocal) {
+      out[key] = [];
+      continue;
+    }
+    // Partial trim / stale empty pull: never bake local [] over non-empty save intent.
+    if (intendedUrls && key === "fileUrls" && !lHasLocal) {
+      out[key] =
+        hasLocalKey && lArr.length > 0 && lArr.length <= intendedUrls.length
+          ? local[key]
+          : intendedUrls;
+      continue;
+    }
+
+    // Explicit local empty = user removed attachments. Stale remote HTTPS must not win the race
+    // (mirror then live-patches React and undoes delete). Only a clearly newer remote can re-add.
+    // Exception: durable non-empty intent (just saved files) — empty local is a race, restore intent.
+    if (hasLocalKey && Array.isArray(local[key]) && lArr.length === 0) {
+      if (key === "fileUrls") {
+        const healIntent = resolveUrlsAgainstAttachmentIntent(companyId, docId, []);
+        if (healIntent && healIntent.length > 0) {
+          out[key] = healIntent;
+          continue;
+        }
+      }
+      if (preserveCleared || localMs >= remoteMs || localMs === 0 || rArr.length === 0) {
+        out[key] = [];
+        continue;
+      }
+      // remote newer with files — another device may have added after delete
+      if (!preserveCleared && remoteMs > localMs && rHttps.length > 0) {
+        out[key] = remote[key];
+        continue;
+      }
+      out[key] = [];
+      continue;
+    }
+
+    // Delete/trim on newer local must beat stale remote HTTPS (outbox lag / snapshot race).
+    if (hasLocalKey && localMs >= remoteMs) {
+      if (lArr.length < rArr.length && !lHasLocal) {
+        out[key] = local[key];
+        continue;
+      }
+      if (lHasLocal && rHttps.length > 0) {
+        out[key] = upgradeLocalAttachmentListFromRemote(lArr, rArr);
+        continue;
+      }
+    }
+
+    // Server cleared attachments — only win when remote is actually newer, or user clear-intent is active.
+    // Stale empty Firestore (common ~1s after save before write lands) must NOT wipe local HTTPS.
+    if (
+      Object.prototype.hasOwnProperty.call(remote, key) &&
+      Array.isArray(remote[key]) &&
+      rArr.length === 0 &&
+      lArr.length > 0
+    ) {
+      if (lHasLocal && lHttps.length === 0) {
+        out[key] = local[key];
+      } else if (preserveCleared) {
+        out[key] = lHasLocal
+          ? lArr.filter((u) => isLocalFileRef(String(u)))
+          : [];
+        if (Array.isArray(out[key]) && (out[key] as unknown[]).length === 0) out[key] = [];
+      } else if (remoteMs > localMs) {
+        // Genuinely newer empty server doc.
+        if (lHasLocal) {
+          const pending = lArr.filter((u) => isLocalFileRef(String(u)));
+          out[key] = pending.length > 0 ? pending : [];
+        } else {
+          out[key] = [];
+        }
+      } else {
+        // Stale empty remote vs local/saved HTTPS — keep local.
+        out[key] = local[key];
+      }
+      continue;
+    }
+
+    // HTTPS-only local trim vs longer remote — timestamp lag pe bhi local jeete.
+    if (hasLocalKey && !lHasLocal && lArr.length > 0 && lArr.length < rArr.length) {
+      out[key] = local[key];
+      continue;
+    }
+
+    if (lHttps.length > rHttps.length) {
+      out[key] = local[key];
+    } else if (rHttps.length === 0 && lHasLocal) {
+      out[key] = local[key];
+    } else if (lHasLocal && rHttps.length > 0) {
+      out[key] = upgradeLocalAttachmentListFromRemote(lArr, rArr);
+    }
+  }
+  const mergedFileUrls = Array.isArray(out.fileUrls) ? (out.fileUrls as unknown[]) : [];
+  if (mergedFileUrls.length === 0) {
+    out.files = [];
+    out.unassignedFile = null;
+  }
+  for (const key of ["fileUrl", "avatarUrl"] as const) {
+    const r = remote[key];
+    const l = local[key];
+    const hasLocalKey = Object.prototype.hasOwnProperty.call(local, key);
+    if (hasLocalKey && localMs >= remoteMs) {
+      if (!l) {
+        out[key] = l ?? null;
+        continue;
+      }
+      if (isLocalFileRef(String(l || "")) && isHttpsAttachmentRef(r)) out[key] = r;
+      else out[key] = l;
+      continue;
+    }
+    if (isHttpsAttachmentRef(r)) out[key] = r;
+    else if (isHttpsAttachmentRef(l)) out[key] = l;
+    else if (isLocalFileRef(String(l || ""))) out[key] = l;
+  }
+  if (process.env.NODE_ENV !== "production") {
+    const afterUrls = Array.isArray(out.fileUrls) ? (out.fileUrls as unknown[]) : [];
+    void import("@/lib/attachmentDeleteTrace").then((m) => {
+      m.traceAttachmentUrlsChange({
+        source: "firestorePull.mergeForPull",
+        companyId,
+        voucherId: String(out.id || local.id || remote.id || ""),
+        prevUrls: beforeLocalUrls.map(String),
+        nextUrls: afterUrls.map(String),
+        extra: {
+          localMs,
+          remoteMs,
+          remoteCount: beforeRemoteUrls.length,
+          localCount: beforeLocalUrls.length,
+          preserveCleared,
+        },
+      });
+      m.logAttachWipe({
+        source: "firestorePull.mergeForPull",
+        reason: "merge_shrank_fileUrls",
+        companyId,
+        voucherId: String(out.id || local.id || remote.id || ""),
+        beforeUrls: beforeLocalUrls.map(String),
+        afterUrls: afterUrls.map(String),
+        extra: { localMs, remoteMs, preserveCleared, remoteCount: beforeRemoteUrls.length },
+      });
+    });
   }
   return out;
 }
@@ -87,11 +440,13 @@ export async function mergeRemoteSnapshotWithLocalOnlyDocs(
 
     const fsIds = new Set(remoteStamped.map((d: any) => String(d?.id ?? "")));
     const orphanSqliteIds: string[] = [];
-    for (const row of cached) {
-      const id = String((row as any)?.id ?? "").trim();
-      if (!id || (row as any)?.isDeleted === true) continue;
-      if (!fsIds.has(id) && isLocalMirrorMarkedServerBacked(row as Record<string, unknown>)) {
-        orphanSqliteIds.push(id);
+    if (!options?.skipOrphanSqliteDelete) {
+      for (const row of cached) {
+        const id = String((row as any)?.id ?? "").trim();
+        if (!id || (row as any)?.isDeleted === true) continue;
+        if (!fsIds.has(id) && isLocalMirrorMarkedServerBacked(row as Record<string, unknown>)) {
+          orphanSqliteIds.push(id);
+        }
       }
     }
     if (orphanSqliteIds.length) {
@@ -120,7 +475,7 @@ export async function mergeRemoteSnapshotWithLocalOnlyDocs(
         const id = String(c?.id ?? "");
         if (!id || c?.isDeleted === true) continue;
         const remoteRow = remoteStamped.find((r: any) => String(r?.id ?? "") === id) as Record<string, unknown> | undefined;
-        byId.set(id, remoteRow ? mergeDocAttachmentFieldsPreferRemote(remoteRow, c as Record<string, unknown>) : c);
+        byId.set(id, remoteRow ? mergeDocAttachmentFieldsPreferRemote(remoteRow, c as Record<string, unknown>, localCompanyId) : c);
       }
       const merged = [...byId.values()];
       if (!orderByField) return merged;
@@ -142,6 +497,21 @@ export async function mergeRemoteSnapshotWithLocalOnlyDocs(
       return !fsIds.has(id);
     });
     if (!extras.length) {
+      if (cached.length) {
+        const cachedById = new Map<string, Record<string, unknown>>();
+        for (const c of cached) {
+          const id = String((c as { id?: unknown })?.id ?? "").trim();
+          if (id) cachedById.set(id, c as Record<string, unknown>);
+        }
+        const merged = remoteStamped.map((r: Record<string, unknown>) => {
+          const id = String(r?.id ?? "").trim();
+          const localRow = id ? cachedById.get(id) : undefined;
+          if (!localRow) return r;
+          return mergeDocAttachmentFieldsForPull(r, localRow, localCompanyId);
+        });
+        if (!orderByField) return merged;
+        return sortMergedByField(merged, orderByField);
+      }
       if (!orderByField) return remoteStamped;
       return sortMergedByField(remoteStamped, orderByField);
     }
@@ -189,7 +559,8 @@ export async function pullCompanySubcollectionFromFirestoreToLocalDb(
   collectionPath: string,
   company: Company | null,
   /** vouchers: `date` sort — merge ke baad timeline sahi */
-  orderByField?: string
+  orderByField?: string,
+  mergeOpts?: MergeRemoteLocalDocsOptions
 ): Promise<any[]> {
   const cryptoCtx: ServerBackupCryptoContext | null = company
     ? { encryptServerBackupSalt: company.encryptServerBackupSalt }
@@ -206,9 +577,12 @@ export async function pullCompanySubcollectionFromFirestoreToLocalDb(
   )
     .filter((x): x is NonNullable<typeof x> => x != null)
     .filter((item: any) => item.isDeleted !== true);
-  const preferLocal = String(company?.storageOption || "").toLowerCase() === "local";
+  const preferLocal =
+    mergeOpts?.preferLocalSqliteWhenIdsConflict === true ||
+    String(company?.storageOption || "").toLowerCase() === "local";
   const merged = await mergeRemoteSnapshotWithLocalOnlyDocs(localCompanyId, collectionPath, remoteData, orderByField, {
     preferLocalSqliteWhenIdsConflict: preferLocal,
+    skipOrphanSqliteDelete: mergeOpts?.skipOrphanSqliteDelete === true,
   });
   /** Purani bugfix: sirf remoteData mirror se offline extras + purge/META SQLite me align nahi ho paate — merged hi bake karo */
   if (merged.length > 0) {
@@ -255,10 +629,36 @@ export async function pullCompanyDocFromFirestoreToLocalDb(
     await deleteCompanyDocFromBrowserDb(localId, path, id, { force: true, notify: true });
     return null;
   }
-  await mirrorCollectionDocsToBrowserDbSilent(localId, path, [decrypted as Record<string, unknown>], {
+  let toMirror = decrypted as Record<string, unknown>;
+  // Delta sync raw Firestore bake se local empty attachments undo na ho.
+  try {
+    const localRow = (await getCompanyDocFromBrowserDb(localId, path, id, {
+      includeDeleted: true,
+    })) as Record<string, unknown> | null;
+    if (localRow) {
+      toMirror = mergeDocAttachmentFieldsForPull(toMirror, localRow, localId);
+    } else if (path === "vouchers" && shouldPreserveClearedVoucherAttachments(localId, id)) {
+      toMirror = {
+        ...toMirror,
+        fileUrls: [],
+        files: [],
+        unassignedFile: null,
+      };
+    }
+  } catch {
+    if (path === "vouchers" && shouldPreserveClearedVoucherAttachments(localId, id)) {
+      toMirror = {
+        ...toMirror,
+        fileUrls: [],
+        files: [],
+        unassignedFile: null,
+      };
+    }
+  }
+  await mirrorCollectionDocsToBrowserDbSilent(localId, path, [toMirror], {
     cloudBackedOfflineCache: !isLocalOnlyMode(),
   });
-  return decrypted as Record<string, unknown>;
+  return toMirror;
 }
 
 export async function pullAllCompanySubcollectionsFromFirestoreToLocalDb(
@@ -267,6 +667,7 @@ export async function pullAllCompanySubcollectionsFromFirestoreToLocalDb(
   company: Company | null,
   opts?: {
     onSubcollectionDone?: (info: { path: string; completed: number; total: number }) => void;
+    mergeOpts?: MergeRemoteLocalDocsOptions;
   }
 ): Promise<{ path: string; count: number }[]> {
   const paths = [...COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS];
@@ -280,7 +681,8 @@ export async function pullAllCompanySubcollectionsFromFirestoreToLocalDb(
           localCompanyId,
           path,
           company,
-          path === "vouchers" ? "date" : undefined
+          path === "vouchers" ? "date" : undefined,
+          opts?.mergeOpts
         );
         completed++;
         opts?.onSubcollectionDone?.({ path, completed, total });

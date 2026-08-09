@@ -16,6 +16,13 @@ import { cn } from "@/lib/utils";
 import type { Account } from "@/components/bank-cash/types";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { HistoryDialog } from "@/components/vouchers/HistoryDialog";
+import { BankLedgerDrCrPerspectiveSwitch } from "@/components/bank-cash/BankLedgerDrCrPerspectiveSwitch";
+import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
+import {
+  applyBankDrCrPerspectiveToTxnRows,
+  flipLedgerDrCr,
+  flipLedgerSignedBalance,
+} from "@/lib/bankLedgerDrCrPerspective";
 
 type DaybookAccountDayPeekDialogProps = {
   open: boolean;
@@ -48,6 +55,7 @@ export function DaybookAccountDayPeekDialog({
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [historyVoucher, setHistoryVoucher] = useState<any>(null);
+  const { perspective, setPerspective } = useBankLedgerDrCrPerspective();
 
   const dateRange = useMemo(
     () => (daybookDate ? { from: daybookDate, to: daybookDate } : undefined),
@@ -89,11 +97,27 @@ export function DaybookAccountDayPeekDialog({
   const dayIn = typeof periodDr === "number" ? periodDr : Number(summaryIn) || 0;
   const dayOut = typeof periodCr === "number" ? periodCr : Number(summaryOut) || 0;
 
+  const displayOpening = flipLedgerSignedBalance(opening, perspective);
+  const displayClosing = flipLedgerSignedBalance(closing, perspective);
+  const displayPeriod = flipLedgerDrCr(dayIn, dayOut, perspective);
+  const displayTxns = useMemo(
+    () => applyBankDrCrPerspectiveToTxnRows(processedTransactions || [], perspective),
+    [processedTransactions, perspective]
+  );
+
   return (
     <>
       <Dialog open={open && !!account} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-[min(96vw,1100px)] w-full max-h-[90vh] flex flex-col gap-3 overflow-hidden p-4 sm:p-6">
-          <DialogHeader className="shrink-0 space-y-1 pr-6">
+          {/* X (right-4) ke left ~10ch gap — Company/Bank Dr/Cr switch + info */}
+          <div className="absolute right-[calc(2.75rem+10ch)] top-3.5 z-10 sm:top-4">
+            <BankLedgerDrCrPerspectiveSwitch
+              compact
+              perspective={perspective}
+              onPerspectiveChange={setPerspective}
+            />
+          </div>
+          <DialogHeader className="shrink-0 space-y-1 pr-[calc(7rem+10ch)]">
             <DialogTitle className="text-base sm:text-lg truncate">
               {account?.accountName || "Account"} — {dateLabel || "Day"}
             </DialogTitle>
@@ -105,8 +129,8 @@ export function DaybookAccountDayPeekDialog({
           <div className="shrink-0 grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
             <div className="rounded-md border bg-muted/30 px-2.5 py-1.5">
               <div className="text-[11px] text-muted-foreground">Opening</div>
-              <div className={cn("font-semibold", opening >= 0 ? "text-green-600" : "text-red-600")}>
-                {formatCurrency(opening)}
+              <div className={cn("font-semibold", displayOpening >= 0 ? "text-green-600" : "text-red-600")}>
+                {formatCurrency(displayOpening)}
               </div>
             </div>
             <div className="rounded-md border bg-muted/30 px-2.5 py-1.5">
@@ -119,16 +143,16 @@ export function DaybookAccountDayPeekDialog({
             </div>
             <div className="rounded-md border bg-muted/30 px-2.5 py-1.5">
               <div className="text-[11px] text-muted-foreground">Closing</div>
-              <div className={cn("font-semibold", closing >= 0 ? "text-green-600" : "text-red-600")}>
-                {formatCurrency(closing)}
+              <div className={cn("font-semibold", displayClosing >= 0 ? "text-green-600" : "text-red-600")}>
+                {formatCurrency(displayClosing)}
               </div>
             </div>
           </div>
 
           <div className="flex-1 min-h-0 overflow-auto rounded-md border">
-            {processedTransactions && processedTransactions.length > 0 ? (
+            {displayTxns.length > 0 ? (
               <TransactionsTable
-                transactions={processedTransactions}
+                transactions={displayTxns}
                 context="account"
                 contextId={account?.id}
                 showNarration={true}
@@ -139,10 +163,10 @@ export function DaybookAccountDayPeekDialog({
                   setIsVoucherDialogOpen(true);
                 }}
                 onHistoryVoucher={(v) => setHistoryVoucher(v)}
-                openingBalance={opening}
-                periodDr={dayIn}
-                periodCr={dayOut}
-                closingBalance={closing}
+                openingBalance={displayOpening}
+                periodDr={displayPeriod.debit}
+                periodCr={displayPeriod.credit}
+                closingBalance={displayClosing}
                 hideFooter={false}
               />
             ) : (

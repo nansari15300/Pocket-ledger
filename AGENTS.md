@@ -66,9 +66,64 @@ PDF attachment portal preview was stabilized so PDF files behave like image prev
 
 Display/thumb fixes may touch `FilePreview`, `attachmentHoverPreviewBody`, `useAttachmentThumbDisplayUrl`, etc. **without** changing backup pack / restore write logic, unless the human asks to change backup itself. For PDF portal preview, follow the freeze above.
 
-## Freeze: PL Server and Online Cloud
+## Freeze: Online Company Sync (hard)
 
-PL Server/local sharing and online/cloud company behavior are protected areas. **Do not edit these areas unless the human explicitly asks to change PL Server, local server sharing, or online/cloud behavior.**
+**Online company sync is frozen for every AI.** Do not edit online sync logic unless the human explicitly asks to change **online / Firebase / cloud company sync**.
+
+Stabilized behavior to preserve:
+- Firestore live listeners / delta (change-only) sync
+- Online company select / mirror / cloud upload
+- Write gateway for online companies
+- Online attachment HTTPS URL + Storage byte sync
+
+### Frozen online company sync paths (do not touch casually)
+
+- `src/firebase/**`
+- `src/app/api/company/**`
+- `src/app/api/admin/**`
+- `src/lib/writeGateway/**`
+- `src/lib/companyOnlineSync.ts`
+- `src/hooks/useCompanyOnlineSync.ts`
+- `src/lib/onlineCompanySelectorSyncPolicy.ts`
+- `src/lib/mirrorOnlineCompaniesFromFirestore.ts`
+- `src/lib/firestoreToLocalCompanyPull.ts`
+- `src/lib/firebaseLedgerSyncPolicy.ts`
+- `src/lib/firebaseLedgerSyncMode.ts`
+- `src/lib/firebaseLedgerCompanySyncPrefs.ts`
+- `src/lib/firebaseLedgerDataSyncDisabled.ts`
+- `src/lib/companyOnlineIntegrity.ts`
+- `src/lib/companyOnlineSlots.ts`
+- `src/lib/apkOnlineFirestoreWritePolicy.ts`
+- `src/lib/companyAttachmentStrategies/onlineCompanyAttachmentStrategy.ts`
+- `src/lib/resolveAuthoritativeFirestoreCompanyId.ts`
+- `src/lib/resolveVoucherAttachmentRemoteUrl.ts`
+- `src/components/FirebaseLedgerDeltaSyncManager.tsx`
+- `src/components/company/FirebaseLedgerOnlineCompanySyncList.tsx`
+- `src/components/company/UploadCompanyToCloudCard.tsx`
+- `src/components/company/ForceUploadLocalDataButton.tsx`
+- `src/components/layout/FirebaseLedgerSyncModeSwitch.tsx`
+- `src/components/layout/FirebaseLedgerDataSyncSidebarSwitch.tsx`
+
+### Do not (online)
+
+- Refactor, rename, “clean up”, or drive-by edit online sync paths.
+- Change Firestore listeners, delta watermarking, cloud upload, write gateway, or Storage attachment linking for unrelated work.
+- While fixing **PL Server**, do **not** edit online sync files — read them only as a behavior reference and implement fixes under PL Server paths.
+- Do not “share” helpers if that forces online sync files to change; duplicate minimally on the PL side instead.
+
+### If the human explicitly asks to change online sync
+
+- Keep the change minimal and scoped to that exact request.
+- Do not silently route online companies through PL Server/local server code.
+
+## Freeze: PL Server / local sharing
+
+PL Server/local sharing is protected. **Do not edit these areas unless the human explicitly asks to change PL Server or local server sharing.**
+
+When the human asks for PL Server fixes (including “make PL like online”):
+- Change **only** PL Server paths below.
+- Leave **Online Company Sync** frozen (section above).
+- Match online *behavior* by reimplementing on the PL side; do not modify online sync code to drive PL.
 
 ### Frozen PL Server paths (do not touch casually)
 
@@ -94,6 +149,8 @@ PL Server/local sharing and online/cloud company behavior are protected areas. *
 - `src/components/settings/LocalPlServerSharedCompaniesPicker.tsx`
 - `src/components/company/PlServerShareUserDialog.tsx`
 - `src/components/company/PlServerSharedCompanyUrlDialog.tsx`
+- `src/components/ServerShareableCompaniesBridge.tsx`
+- `src/components/PlServerAttachmentPreloadManager.tsx`
 - `src/lib/plServer*.ts`
 - `src/lib/plSharingPortRegistry.ts`
 - `src/lib/plMirrorProtocol.ts`
@@ -102,34 +159,18 @@ PL Server/local sharing and online/cloud company behavior are protected areas. *
 - `scripts/run-plserver-company-detection-audit.mjs`
 - `scripts/run-phase1b-runtime-verify.mjs`
 
-### Frozen online/cloud paths (do not touch casually)
+### Do not (PL Server)
 
-- `src/firebase/**`
-- `src/app/api/company/**`
-- `src/app/api/admin/**`
-- `src/lib/writeGateway/**`
-- `src/lib/companyOnlineSync.ts`
-- `src/hooks/useCompanyOnlineSync.ts`
-- `src/lib/onlineCompanySelectorSyncPolicy.ts`
-- `src/lib/mirrorOnlineCompaniesFromFirestore.ts`
-- `src/lib/resolveAuthoritativeFirestoreCompanyId.ts`
-- `src/lib/resolveVoucherAttachmentRemoteUrl.ts`
-- `src/components/company/FirebaseLedgerOnlineCompanySyncList.tsx`
-- `src/components/company/UploadCompanyToCloudCard.tsx`
-- `src/components/company/ForceUploadLocalDataButton.tsx`
+- Refactor, rename, clean up, or drive-by edit PL Server/local sharing code when not requested.
+- Change PL Server invite/access-token/auth, host/client delta sync, port registry, LAN relay, or attachment delta behavior for unrelated work.
+- Mix Drive sync or online/cloud edits into PL Server work unless the request explicitly says to connect those flows.
+- Silently route PL Server companies through online/cloud sync code.
 
-### Do not
-
-- Refactor, rename, clean up, or drive-by edit PL Server/local sharing code.
-- Change PL Server invite/access-token/auth, host/client delta sync, port registry, LAN relay, or attachment delta behavior.
-- Change online Firestore/Firebase company sync, cloud upload, write gateway, or cloud attachment behavior for unrelated work.
-- Mix Drive sync changes into PL Server or online/cloud behavior unless the request explicitly says to connect those flows.
-
-### If the human explicitly asks to change PL Server or online/cloud
+### If the human explicitly asks to change PL Server
 
 - Keep the change minimal and scoped to that exact request.
-- Preserve local-first PL Server behavior and do not silently route PL Server companies through online/cloud code.
-- Preserve online/cloud behavior and do not silently route online companies through PL Server/local server code.
+- Preserve local-first PL Server behavior.
+- Do not edit frozen Online Company Sync paths while doing PL work.
 
 ## Cursor note
 

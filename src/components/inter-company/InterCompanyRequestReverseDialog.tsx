@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { InterCompanyVoucherAttachments } from "@/components/inter-company/InterCompanyVoucherAttachments";
-import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
+import { uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
 import { storage } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
@@ -75,12 +75,12 @@ export function InterCompanyRequestReverseDialog({
         toast.error(limit.message || "Storage limit reached");
         continue;
       }
-      const sRef = storageRef(
-        storage,
-        `voucher-files/${companyId}/inter_company_reverse/${Date.now()}_${file.name}`
-      );
-      const snapshot = await uploadBytes(sRef, file);
-      urls.push(await getDownloadURL(snapshot.ref));
+      const url = await uploadVoucherAttachmentFileToFirebase({
+        companyId,
+        voucherType: "inter_company_reverse",
+        file,
+      });
+      urls.push(url);
       await incrementCompanyStorage(companyId, {
         attachmentsBytes: file.size,
         storageBytes: file.size,
@@ -158,6 +158,7 @@ export function InterCompanyRequestReverseDialog({
             onFilesChange={setFiles}
             disabled={sending}
             compact
+            companyId={companyId}
           />
         </div>
         <DialogFooter className="shrink-0 gap-2 border-t bg-background px-6 py-4 sm:gap-0">

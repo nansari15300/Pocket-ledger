@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { useDate } from "@/hooks/useDate";
-import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/tooltip";
 import React, { useMemo, useState } from "react";
@@ -60,7 +60,7 @@ export const PartyList = React.memo(({
 }) => {
   const { formatCurrency } = useDate();
   const { company } = useCompany();
-  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
+  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } = useMasterListRowMotion();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
@@ -113,8 +113,19 @@ export const PartyList = React.memo(({
   );
   usePrewarmVisibleAttachments(visiblePartyAttachmentUrls, company?.id);
 
+  const listOrderKey = useMemo(
+    () => masterListOrderKey(filteredAndSortedParties.map((p) => p.id)),
+    [filteredAndSortedParties]
+  );
+
+  const { displayRows: displayListRows, displayOrderKey } = useMasterListDisplayRows(
+    filteredAndSortedParties,
+    listOrderKey,
+    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
+  );
+
   // यदि कुनै पार्टी भेटिएन भने
-  if (filteredAndSortedParties.length === 0) {
+  if (displayListRows.length === 0) {
     return (
       <div className="p-8 text-center text-sm text-muted-foreground bg-background rounded-b-lg border-t-0">
         No parties found.
@@ -134,7 +145,7 @@ export const PartyList = React.memo(({
         >
           <ul className="pl-master-list-ul">
             <AnimatePresence mode={animatePresenceMode}>
-              {filteredAndSortedParties.map((party) => {
+              {displayListRows.map((party) => {
                 const isSelected = selectedParty?.id === party.id;
                 const href = getItemHref?.(party);
                 const attachmentPreviewUrl = trimEntityFileUrlForPreview(party.fileUrl);
@@ -204,7 +215,7 @@ export const PartyList = React.memo(({
                 );
                 const cardClassName = masterListRowUnselectedCn(isSelected);
                 return (
-                  <motion.li key={party.id} {...rowMotionProps}>
+                  <motion.li key={party.id} layoutDependency={displayOrderKey} {...rowMotionProps}>
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link

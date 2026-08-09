@@ -46,6 +46,7 @@ import { Combobox } from "@/components/ui/combobox";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
+import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import {
   MAX_IMAGE_BYTES_AFTER_COMPRESS,
   MAX_IMAGE_MB_AFTER_COMPRESS,
@@ -81,6 +82,7 @@ export function CreateFinishedGoodDialog({
   prefillName?: string;
 }) {
   const [isLoading, setIsLoading] = useState(false);
+  const isCompressing = useImageCompressionProcessing();
   const [files, setFiles] = useState<(File | string)[]>([]);
   const [datePopoverOpen, setDatePopoverOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -220,14 +222,8 @@ export function CreateFinishedGoodDialog({
             }
             toSend = file;
           } else {
-            const compressed = await compressFile(file);
-            if (compressed.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
-              sonnerToast.error("File too large", {
-                id: toastId,
-                description: `After compression still over ${MAX_IMAGE_MB_AFTER_COMPRESS} MB.`,
-              });
-              continue;
-            }
+            const { file: compressed, maxBytes, maxKb } = await compressImageForCompany(file, companyId);
+            
             toSend = compressed;
           }
           preparedFiles.push(toSend);
@@ -316,8 +312,8 @@ export function CreateFinishedGoodDialog({
           }
           setFiles((prev) => [...prev, file]);
         } else {
-          const compressed = await compressFile(file);
-          if (compressed.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+          const { file: compressed, maxBytes, maxKb } = await compressImageForCompany(file, companyId);
+          if (compressed.size > maxBytes) {
             sonnerToast.error("Image too large after compress", { description: `Max ${MAX_IMAGE_MB_AFTER_COMPRESS} MB.` });
             continue;
           }
@@ -459,7 +455,7 @@ export function CreateFinishedGoodDialog({
               <div className="flex flex-wrap gap-2">
                 {files.map((file, idx) => (
                   <div key={idx} className="relative">
-                    <FilePreview
+                    <FilePreview isCompressing={isCompressing}
                       file={file}
                       attachmentCompanyId={companyId ?? undefined}
                       onRemove={canAddAvatar ? () => setFiles((p) => p.filter((_, i) => i !== idx)) : undefined}
@@ -492,7 +488,7 @@ export function CreateFinishedGoodDialog({
                 </Button>
               </DialogClose>
               <span className="min-w-0 flex-1" aria-hidden />
-              <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
+              <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Create finished good
               </Button>

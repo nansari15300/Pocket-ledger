@@ -1,4 +1,4 @@
-﻿
+
 "use client";
 
 import * as React from "react";
@@ -77,9 +77,13 @@ import { useDate } from "@/hooks/useDate";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_OUTER_ROW_CN,
+  LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
+  LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
@@ -192,8 +196,14 @@ function filterByStatus(txns: any[], statusFilter: StatusFilter): any[] {
   if (!anySelected) return txns;
   return txns.filter((t) => {
     if (t.type === "note") return true; // Notes have no payment status; always show
-    // Journal/Contra/Inter Company — bill-wise status nahi; filter se hide na hon
-    if (t.type === "journal" || t.type === "contra" || t.type === "inter_company") return true;
+    // Journal/Adjustment/Contra/Inter Company — bill-wise status nahi; filter se hide na hon
+    if (
+      t.type === "journal" ||
+      t.type === "adjustment" ||
+      t.type === "contra" ||
+      t.type === "inter_company"
+    )
+      return true;
     if (statusFilter.paid && t.paymentStatus === "paid") return true;
     if (statusFilter.unpaid && t.paymentStatus === "unpaid") return true;
     if (statusFilter.partial && t.paymentStatus === "partially_paid") return true;
@@ -1387,11 +1397,10 @@ export function GroupDetails({
 
   const renderDesktopView = () => (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* Header: Part 1 (nameâ†’balance) and Part 2 (dateâ†’print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-      <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-          {/* Part 1: account name through balance â€” single line, no wrap */}
-          <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
+      {/* Header: identity + pills — Party-style single row */}
+      <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+        <div className={LEDGER_HEADER_OUTER_ROW_CN}>
+          <div className={LEDGER_HEADER_IDENTITY_CN}>
             {onBack && (
               <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
                 <ArrowLeft className="h-3 w-3" />
@@ -1402,33 +1411,30 @@ export function GroupDetails({
                 {getInitials(group.name)}
               </AvatarFallback>
             </Avatar>
-            <div className="flex items-center gap-2 flex-nowrap min-w-0">
-              <h2 className="text-xl font-semibold truncate">{group.name}</h2>
-              {group.id !== "ungrouped" && (
-                <EditGroupDialog
-                  group={group}
-                  allGroups={allGroups}
-                  onGroupUpdated={onGroupUpdated}
-                  onGroupDeleted={onGroupDeleted}
-                  hasAccounts={partiesInGroup.length > 0 || childGroups.length > 0}
-                >
-                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditGroupDialog>
-              )}
-              <div
-                className={cn(
-                  "text-lg font-bold whitespace-nowrap flex-shrink-0",
-                  closingBalance >= 0 ? "text-green-600" : "text-red-600"
-                )}
+            <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
+            {group.id !== "ungrouped" && (
+              <EditGroupDialog
+                group={group}
+                allGroups={allGroups}
+                onGroupUpdated={onGroupUpdated}
+                onGroupDeleted={onGroupDeleted}
+                hasAccounts={partiesInGroup.length > 0 || childGroups.length > 0}
               >
-                {formatCurrency(closingBalance, { showDrCr: true })}
-              </div>
+                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                  <Edit className="h-4 w-4" />
+                </Button>
+              </EditGroupDialog>
+            )}
+            <div
+              className={cn(
+                "text-lg font-bold whitespace-nowrap flex-shrink-0",
+                closingBalance >= 0 ? "text-green-600" : "text-red-600"
+              )}
+            >
+              {formatCurrency(closingBalance, { showDrCr: true })}
             </div>
           </div>
-          {/* Part 2: date range, Add Note, print â€” single line, no wrap; on small screens this row is below */}
-          <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+          <div className={LEDGER_HEADER_PILL_ROW_CN}>
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
             {(dateSystem === "BS" || dateSystem === "Both") && (
               <div className="flex items-center gap-1 flex-shrink-0">

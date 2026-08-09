@@ -22,9 +22,10 @@ import {
 import {
   buildLivePullSchedulerSnapshot,
   livePullDevLog,
+  plNavLog,
   plServerVoucherFlowLog,
 } from "@/lib/plServerLivePullDevLog";
-import { markPlServerReadSyncReconnecting, getPlServerReadSyncHealth } from "@/lib/plServerReadSyncHealth";
+import { markPlServerReadSyncReconnecting, getPlServerReadSyncHealth, markPlServerReadUsingLocalCache } from "@/lib/plServerReadSyncHealth";
 import { shouldRunPlServerContinuousLiveSync } from "@/lib/plGatePageOrigin";
 import { isPlHubServerClientMode } from "@/lib/plRemoteServerClient";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
@@ -32,11 +33,23 @@ import { plServerLiveCollectionsForPathname } from "@/lib/plServerVisiblePageLiv
 import type { CompanyBackupCollection } from "@/lib/companyBackupCollections";
 import { readCurrentAppAccountIdentity } from "@/lib/appAccountIdentity";
 
-const LIVE_FOCUS_POLL_MS = 3_000;
-const LIVE_FULL_CHECK_MS = 20_000;
-const LIVE_POLL_MS_AFTER_FAILURE = 10_000;
+const LIVE_FOCUS_POLL_MS = 8_000;
+/**
+ * SSE only after at least one real `change` event (not merely EventSource open).
+ * WAN tunnels often leave SSE "open" without delivering events — then we keep 8s focus_poll.
+ * After events are proven, idle poll slows so we don't re-download whole collections every 8s.
+ */
+const LIVE_FOCUS_POLL_MS_WITH_SSE = 45_000;
+/** Soft ledger health — full voucher re-pull only jab local peeche/empty. */
+const LIVE_FULL_CHECK_MS = 60_000;
+/** Host slow / 1–2 fails — UI local SQLite se chale, network kam dabao. */
+const LIVE_POLL_MS_AFTER_FAILURE = 45_000;
+/** Host down — sirf sparse reopen try; offline SQLite use atakna nahi chahiye. */
+const LIVE_POLL_MS_HOST_DOWN = 90_000;
 const LIVE_SERVER_EVENT_RETRY_MS = 5_000;
 const HUB_COMPANY_META_POLL_MS = 30_000;
+/** SSE open + silent too long → trust drop, resume normal focus_poll. */
+const LIVE_SSE_STALE_MS = 90_000;
 
 function isParallelFocusPullReason(reason: string): boolean {
   return (
@@ -46,6 +59,28 @@ function isParallelFocusPullReason(reason: string): boolean {
     reason.startsWith("server_event_") ||
     reason.startsWith("remote_bump_") ||
     reason.startsWith("queued_remote_bump_")
+  );
+}
+
+/** Routine polls — host unreachable hone par skip (local mirror already complete). */
+function isSkippableWhenHostDown(reason: string): boolean {
+  return (
+    reason === "focus_poll" ||
+    reason === "full_check" ||
+    reason === "route_change" ||
+    reason.startsWith("queued_focus_poll") ||
+    reason.startsWith("queued_full_check") ||
+    reason.startsWith("queued_route_change")
+  );
+}
+
+function hostLooksUnreachable(health: ReturnType<typeof getPlServerReadSyncHealth>): boolean {
+  // 1 fail enough — pehle cache usable par counter 0 ho jata tha isliye kabhi skip nahi hota tha.
+  return (
+    health.consecutiveFailures >= 1 ||
+    health.state === "sharing_unavailable" ||
+    health.state === "offline" ||
+    health.lastError === "offline_cached_view"
   );
 }
 /** P2P client: poll + reconnect pull — server → client. Local save ke bump par pull mat karo (stale server client edit overwrite karta tha). */
@@ -88,6 +123,10 @@ export function PlServerLiveSyncManager() {
   const pendingPullReasonRef = useRef<string | null>(null);
   const schedulerBumpTimerRef = useRef<number | null>(null);
   const serverEventRetryTimerRef = useRef<number | null>(null);
+  /** EventSource OPEN — not enough alone for idle focus_poll skip. */
+  const serverEventsOpenRef = useRef(false);
+  /** Last successful SSE `change` payload — proves live stream is delivering. */
+  const lastServerChangeEventAtRef = useRef(0);
   const [schedulerEpoch, setSchedulerEpoch] = useState(0);
 
   useEffect(() => {
@@ -103,14 +142,16 @@ export function PlServerLiveSyncManager() {
       if (schedulerBumpTimerRef.current != null) {
         window.clearTimeout(schedulerBumpTimerRef.current);
       }
+      // Pehle 100ms — LOCAL_AUTH/gate chatter pe LiveSync remount → meta HTTP flood + crash.
       schedulerBumpTimerRef.current = window.setTimeout(() => {
         schedulerBumpTimerRef.current = null;
         setSchedulerEpoch((n) => {
           const next = n + 1;
           livePullDevLog("scheduler_epoch_bump", { schedulerEpoch: next });
+          plNavLog("scheduler_epoch_bump", { schedulerEpoch: next });
           return next;
         });
-      }, 100);
+      }, 2_500);
     };
     window.addEventListener(PL_GATE_CHANGED_EVENT, bump);
     window.addEventListener(LOCAL_AUTH_CHANGED_EVENT, bump);
@@ -230,12 +271,29 @@ export function PlServerLiveSyncManager() {
       return;
     }
 
+    function sseTrustworthyForIdleSkip(): boolean {
+      if (!serverEventsOpenRef.current) return false;
+      const last = lastServerChangeEventAtRef.current;
+      if (!last) return false;
+      return Date.now() - last < LIVE_SSE_STALE_MS;
+    }
+
+    function desiredFocusPollMs(): number {
+      if (sseTrustworthyForIdleSkip()) return LIVE_FOCUS_POLL_MS_WITH_SSE;
+      const health = getPlServerReadSyncHealth(id);
+      if (health.consecutiveFailures >= 3) return LIVE_POLL_MS_HOST_DOWN;
+      if (health.consecutiveFailures >= 2) return LIVE_POLL_MS_AFTER_FAILURE;
+      return LIVE_FOCUS_POLL_MS;
+    }
+
     function schedulePoll() {
+      const nextMs = desiredFocusPollMs();
+      pollIntervalMsRef.current = nextMs;
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
       pollTimerRef.current = window.setInterval(() => {
         if (document.visibilityState !== "visible") return;
         void runPull("focus_poll");
-      }, pollIntervalMsRef.current);
+      }, nextMs);
       if (fullCheckTimerRef.current) window.clearInterval(fullCheckTimerRef.current);
       fullCheckTimerRef.current = window.setInterval(() => {
         if (document.visibilityState !== "visible") return;
@@ -246,14 +304,55 @@ export function PlServerLiveSyncManager() {
     const runPull = async (reason: string) => {
       const remoteTriggered = isPlServerRemoteLivePullReason(reason);
       const parallelFocus = isParallelFocusPullReason(reason);
+      const healthBefore = getPlServerReadSyncHealth(id);
+      // SSE open alone ≠ healthy (WAN silent stream). Skip idle poll only after real change events.
+      if (reason === "focus_poll" && sseTrustworthyForIdleSkip()) {
+        markPlServerReadUsingLocalCache(id);
+        livePullDevLog("poll_skipped", {
+          reason: "sse_proven_idle",
+          trigger: reason,
+          companyId: id,
+          lastSseChangeAgeMs: Date.now() - lastServerChangeEventAtRef.current,
+        });
+        plServerVoucherFlowLog("poll_skipped", {
+          companyId: id,
+          reason: "sse_proven_idle",
+          trigger: reason,
+        });
+        const nextMs = desiredFocusPollMs();
+        if (nextMs !== pollIntervalMsRef.current) schedulePoll();
+        return;
+      }
+      // Host down / unreachable: local SQLite pe pura data hai — menu mat atkao.
+      if (isSkippableWhenHostDown(reason) && hostLooksUnreachable(healthBefore)) {
+        markPlServerReadUsingLocalCache(id);
+        livePullDevLog("poll_skipped", {
+          reason: "host_unreachable_use_local_sqlite",
+          trigger: reason,
+          companyId: id,
+          consecutiveFailures: healthBefore.consecutiveFailures,
+          healthState: healthBefore.state,
+        });
+        plServerVoucherFlowLog("poll_skipped", {
+          reason: "host_unreachable_use_local_sqlite",
+          trigger: reason,
+          companyId: id,
+          consecutiveFailures: healthBefore.consecutiveFailures,
+        });
+        return;
+      }
       if (syncingRef.current) {
+        // Parallel meta/ledger while another pull runs = main-thread + SQLite contention → sidebar freeze.
+        // Queue once; hub meta timer / SSE handle roles.
+        if (parallelFocus && reason === "focus_poll") {
+          livePullDevLog("poll_skipped", { reason: "sync_in_flight_no_parallel_focus", trigger: reason, companyId: id });
+          plNavLog("poll_skipped_in_flight", { companyId: id, trigger: reason });
+          pendingPullReasonRef.current = pendingPullReasonRef.current || reason;
+          return;
+        }
         if (parallelFocus && !focusSyncingRef.current) {
           focusSyncingRef.current = true;
           try {
-            if (isPlHubServerClientMode() || isPlServerThinStaffClient()) {
-              const { pullPlServerCompanyMetaFromHost } = await import("@/lib/plServerCompanyMetaSync");
-              await pullPlServerCompanyMetaFromHost(id).catch(() => undefined);
-            }
             const focusCollectionsForLog = plServerLiveCollectionsForPathname(pathnameRef.current);
             const serverEventCollectionMatch = reason.match(/^server_event_(.+)$/);
             const serverEventCollection = serverEventCollectionMatch?.[1]?.trim() || "";
@@ -263,6 +362,7 @@ export function PlServerLiveSyncManager() {
                 ...new Set([serverEventCollection, ...focusCollectionsForLog]),
               ] as CompanyBackupCollection[];
             }
+            plNavLog("parallel_focus_pull", { companyId: id, trigger: reason, focusCollections });
             const result = await syncPlServerSharedCompanyLive(id, {
               pollOnly: true,
               focusCollections,
@@ -271,7 +371,7 @@ export function PlServerLiveSyncManager() {
             });
             if (result.ok && result.changedCollections?.length) {
               for (const col of result.changedCollections) {
-                notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_host_remote_write" });
+                notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_server_pull" });
               }
             }
           } finally {
@@ -313,18 +413,28 @@ export function PlServerLiveSyncManager() {
       }
       const serverEventCollectionMatch = reason.match(/^server_event_(.+)$/);
       const serverEventCollection = serverEventCollectionMatch?.[1]?.trim() || "";
-      const fullCheck = reason === "mount" || reason === "full_check";
       const mountLight = reason === "mount_light";
-      let focusCollectionsForLog =
-        fullCheck || serverEventCollection
-          ? undefined
-          : plServerLiveCollectionsForPathname(pathnameRef.current);
+      // Default: page focus collections. Full ledger sirf jab local empty/behind.
+      let focusCollectionsForLog: CompanyBackupCollection[] | undefined =
+        plServerLiveCollectionsForPathname(pathnameRef.current);
       if (serverEventCollection) {
         const pageCollections = plServerLiveCollectionsForPathname(pathnameRef.current);
         focusCollectionsForLog = [
           ...new Set([serverEventCollection, ...pageCollections]),
         ] as CompanyBackupCollection[];
+      } else if (reason === "mount" || reason === "full_check") {
+        const needsFull = await plServerCompanyLedgerNeedsFullPull(id);
+        if (needsFull) {
+          focusCollectionsForLog = undefined;
+        }
+        livePullDevLog("full_ledger_decision", {
+          trigger: reason,
+          companyId: id,
+          needsFull,
+          mode: needsFull ? "full_ledger" : "focus_only",
+        });
       }
+      const fullCheck = !focusCollectionsForLog;
       livePullDevLog("poll_started", { trigger: reason, companyId: id, sharedCompaniesCount: snap.sharedCompaniesCount });
       if (!focusCollectionsForLog || (focusCollectionsForLog as readonly string[]).includes("vouchers")) {
         plServerVoucherFlowLog("poll_started", {
@@ -337,17 +447,23 @@ export function PlServerLiveSyncManager() {
       syncingRef.current = true;
       let pullOk = false;
       try {
-        if ((isPlHubServerClientMode() || isPlServerThinStaffClient()) && (reason === "focus_poll" || reason === "mount" || reason === "full_check")) {
+        // Meta: mount / soft full_check only — focus_poll pe har baar meta = setCompany storm + UI freeze.
+        // Live role = hub 30s timer + company_meta SSE.
+        if (
+          (isPlHubServerClientMode() || isPlServerThinStaffClient()) &&
+          (reason === "mount" || reason === "full_check" || reason === "mount_light")
+        ) {
+          plNavLog("company_meta_pull", { companyId: id, trigger: reason });
           const { pullPlServerCompanyMetaFromHost } = await import("@/lib/plServerCompanyMetaSync");
           await pullPlServerCompanyMetaFromHost(id).catch(() => undefined);
         }
-        if (reason === "mount" || reason === "full_check") {
+        if (reason === "mount" || reason === "full_check" || reason === "mount_light") {
           // Cached gate/company context is enough to paint and pull the active
           // company. Refresh permissions in parallel so a slow host cannot hold
           // the SQLite-first UI or focused voucher lane blank.
           void refreshPlServerAccessContext().catch(() => null);
         }
-        const focusCollections = fullCheck ? undefined : focusCollectionsForLog;
+        const focusCollections = focusCollectionsForLog;
         const result = await syncPlServerSharedCompanyLive(id, {
           pollOnly: mountLight || reason !== "mount",
           focusCollections,
@@ -364,10 +480,8 @@ export function PlServerLiveSyncManager() {
           focusCollections,
           changedCollections: result.changedCollections,
         });
+        // No full voucher table scan here — was EXE idle lag on every poll.
         if (!focusCollections || (focusCollections as readonly string[]).includes("vouchers")) {
-          const localVoucherCount = await listCompanyDocsFromBrowserDb(id, "vouchers", { forBackupMerge: true })
-            .then((rows) => rows.filter((row) => (row as { isDeleted?: unknown }).isDeleted !== true).length)
-            .catch(() => null);
           plServerVoucherFlowLog("poll_finished", {
             trigger: reason,
             companyId: id,
@@ -375,7 +489,6 @@ export function PlServerLiveSyncManager() {
             fullPull: result.fullPull,
             focusCollections,
             changedCollections: result.changedCollections,
-            localAliveAfter: localVoucherCount,
           });
         }
         const bumpCollections: CompanyBackupCollection[] =
@@ -385,23 +498,24 @@ export function PlServerLiveSyncManager() {
               ? ([serverEventCollection] as CompanyBackupCollection[])
               : [];
         if ((result.ok || remoteTriggered) && bumpCollections.length > 0) {
-          pollIntervalMsRef.current = LIVE_FOCUS_POLL_MS;
-          for (const col of bumpCollections) {
-              notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_host_remote_write" });
-            if (col === "vouchers") {
-              plServerVoucherFlowLog("ui_bump_dispatched", {
-                trigger: reason,
-                companyId: id,
-                collection: col,
-              });
+          // Focus/full delta already notified per upserted collection. Only bump when
+          // SSE collection hint had no changedCollections (avoid double UI remmerge).
+          if (!result.changedCollections?.length) {
+            for (const col of bumpCollections) {
+              notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_server_pull" });
+              if (col === "vouchers") {
+                plServerVoucherFlowLog("ui_bump_dispatched", {
+                  trigger: reason,
+                  companyId: id,
+                  collection: col,
+                });
+              }
             }
           }
-        } else {
-          const health = getPlServerReadSyncHealth(id);
-          const nextMs =
-            health.consecutiveFailures >= 2 ? LIVE_POLL_MS_AFTER_FAILURE : LIVE_FOCUS_POLL_MS;
+        }
+        {
+          const nextMs = desiredFocusPollMs();
           if (nextMs !== pollIntervalMsRef.current) {
-            pollIntervalMsRef.current = nextMs;
             schedulePoll();
           }
         }
@@ -471,7 +585,15 @@ export function PlServerLiveSyncManager() {
           const appAccount = readCurrentAppAccountIdentity();
           if (appAccount) url.searchParams.set("appAccount", appAccount);
           eventSource = new EventSource(url.toString());
+          eventSource.onopen = () => {
+            serverEventsOpenRef.current = true;
+            // Do not mark proven until a real `change` arrives — open-only was WAN silent-fail.
+            plServerVoucherFlowLog("server_event_open", { companyId: id });
+            schedulePoll();
+          };
           eventSource.addEventListener("change", (event) => {
+            lastServerChangeEventAtRef.current = Date.now();
+            schedulePoll();
             let payload: { collection?: unknown; source?: unknown; docs?: unknown; company?: unknown } = {};
             try {
               payload = JSON.parse((event as MessageEvent).data || "{}") as typeof payload;
@@ -513,9 +635,10 @@ export function PlServerLiveSyncManager() {
                   collection as CompanyBackupCollection,
                   liveDocs
                 );
+                // Docs already applied — UI merge only (pl_host_remote_write would re-pull).
                 notifyBrowserDbCollectionUpdated(id, collection, {
                   immediate: true,
-                  source: "pl_host_remote_write",
+                  source: "pl_server_pull",
                 });
                 plServerVoucherFlowLog("server_event_docs_applied", {
                   companyId: id,
@@ -527,18 +650,17 @@ export function PlServerLiveSyncManager() {
               })();
               return;
             }
-            notifyBrowserDbCollectionUpdated(id, collection, {
-              immediate: true,
-              source: "pl_host_remote_write",
-            });
             void runPull(`server_event_${collection}`);
           });
           eventSource.onerror = () => {
+            serverEventsOpenRef.current = false;
+            lastServerChangeEventAtRef.current = 0;
             plServerVoucherFlowLog("server_event_error", { companyId: id });
             if (eventSource) {
               eventSource.close();
               eventSource = null;
             }
+            schedulePoll();
             if (serverEventRetryTimerRef.current != null) {
               window.clearTimeout(serverEventRetryTimerRef.current);
             }
@@ -560,6 +682,8 @@ export function PlServerLiveSyncManager() {
     startServerEvents();
     const onOnline = () => {
       markPlServerReadSyncReconnecting(id);
+      serverEventsOpenRef.current = false;
+      lastServerChangeEventAtRef.current = 0;
       pollIntervalMsRef.current = LIVE_FOCUS_POLL_MS;
       schedulePoll();
       if (eventSource) {
@@ -588,6 +712,8 @@ export function PlServerLiveSyncManager() {
     ).plElectronTabBridge;
     const unsubscribeElectronResume = electronTabBridge?.onLiveSyncResume?.((payload) => {
       markPlServerReadSyncReconnecting(id);
+      serverEventsOpenRef.current = false;
+      lastServerChangeEventAtRef.current = 0;
       pollIntervalMsRef.current = LIVE_FOCUS_POLL_MS;
       schedulePoll();
       if (eventSource) {
@@ -600,6 +726,10 @@ export function PlServerLiveSyncManager() {
     const onLocalBump = (event: Event) => {
       const detail = (event as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
       if (!detail || detail.companyId !== id) return;
+      // Same-tab pull already applied docs — UI merge via pl_server_pull; do not re-pull (loop → freeze).
+      if (detail.source === "pl_server_pull") {
+        return;
+      }
       if (detail.source === "pl_host_remote_write") {
         void import("@/lib/plServerLiveChangeTrace")
           .then(({ plServerLiveChangeTrace }) =>
@@ -627,6 +757,8 @@ export function PlServerLiveSyncManager() {
 
     return () => {
       livePullDevLog("scheduler_stopped", { runNumber, schedulerEpoch, companyId: id });
+      serverEventsOpenRef.current = false;
+      lastServerChangeEventAtRef.current = 0;
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
       if (fullCheckTimerRef.current) window.clearInterval(fullCheckTimerRef.current);
       window.clearTimeout(initialPullTimer);
@@ -644,75 +776,35 @@ export function PlServerLiveSyncManager() {
       window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onLocalBump);
       unsubscribeElectronResume?.();
     };
-  }, [companyId, schedulerEpoch, pathname]);
+  }, [companyId, schedulerEpoch]);
 
-  /** Route change: open page ke collections turant server se refresh. */
+  /**
+   * Route change: SQLite-first paint only.
+   * Pehle har menu click pe vouchers/parties pl_server_pull remmerge (immediate) → EXE UI 1+ min freeze.
+   * New page mounts already SQLite se padhta hai; host deltas = focus_poll / SSE.
+   */
   useEffect(() => {
     if (pathnameRef.current === pathname) return;
+    const from = pathnameRef.current;
     pathnameRef.current = pathname;
     if (!companyId) return;
     const id = String(companyId).trim();
     if (!id) return;
-    if (syncingRef.current) {
-      pendingPullReasonRef.current = "route_change";
-      plServerVoucherFlowLog("route_pull_queued_after_in_flight", {
-        companyId: id,
-        pathname,
-      });
-      return;
-    }
-    void (async () => {
-      if (syncingRef.current) {
-        pendingPullReasonRef.current = "route_change";
-        plServerVoucherFlowLog("route_pull_queued_after_in_flight", {
-          companyId: id,
-          pathname,
-        });
-        return;
-      }
-      syncingRef.current = true;
-      try {
-        const focusCollections = plServerLiveCollectionsForPathname(pathname);
-        const result = await syncPlServerSharedCompanyLive(id, {
-          pollOnly: true,
-          focusCollections,
-          ignoreLivePullPause: true,
-          pullReason: "route_change",
-        });
-        livePullDevLog("route_pull_finished", {
-          companyId: id,
-          ok: result.ok,
-          focusCollections,
-          changedCollections: result.changedCollections,
-        });
-        if ((focusCollections as readonly string[]).includes("vouchers")) {
-          const localVoucherCount = await listCompanyDocsFromBrowserDb(id, "vouchers", { forBackupMerge: true })
-            .then((rows) => rows.filter((row) => (row as { isDeleted?: unknown }).isDeleted !== true).length)
-            .catch(() => null);
-          plServerVoucherFlowLog("route_pull_finished", {
-            companyId: id,
-            ok: result.ok,
-            focusCollections,
-            changedCollections: result.changedCollections,
-            localAliveAfter: localVoucherCount,
-          });
-        }
-        if (result.ok) {
-          for (const col of (result.changedCollections?.length ? result.changedCollections : focusCollections || [])) {
-            notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_host_remote_write" });
-            if (col === "vouchers") {
-              plServerVoucherFlowLog("ui_bump_dispatched", {
-                trigger: "route_change",
-                companyId: id,
-                collection: col,
-              });
-            }
-          }
-        }
-      } finally {
-        syncingRef.current = false;
-      }
-    })();
+
+    const focusCollections = plServerLiveCollectionsForPathname(pathname);
+    plNavLog("route_sqlite_first_no_remmerge", {
+      companyId: id,
+      from,
+      pathname,
+      focusCollections,
+      networkPull: false,
+      collectionBump: false,
+    });
+    livePullDevLog("route_local_sqlite_only", {
+      companyId: id,
+      pathname,
+      focusCollections,
+    });
   }, [pathname, companyId]);
 
   return null;

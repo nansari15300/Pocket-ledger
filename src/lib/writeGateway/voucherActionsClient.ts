@@ -73,6 +73,7 @@ import {
 } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 import { isFirebaseLedgerCompanyDataSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
@@ -87,6 +88,12 @@ import {
 import { scheduleBrowserDbPersistAfterWrite } from "@/lib/localSqlite";
 import { parseAttachmentHoldClipboardText } from "@/lib/attachmentHoldClipboard";
 import { dispatchVoucherLivePatch, dispatchVoucherAttachmentSaved, materializeVoucherAttachmentsInSavePayload } from "@/lib/voucherFormAttachmentSave";
+import {
+  finalizeFormAttachmentEditAfterSave,
+  mergeAttachmentCleanupContexts,
+  readVoucherAttachmentBaselineFromRow,
+  readVoucherEditAttachmentContext,
+} from "@/lib/formAttachmentEditHelper";
 import { normalizeFileUrlsField, dedupeVoucherAttachmentUrlList, withoutTransientVoucherAttachmentUrls, isTransientVoucherAttachmentUrl } from "@/lib/voucherAttachmentNormalize";
 import { isDeviceLocalCompany, isServerGateCompany, shouldStripTransientVoucherAttachmentUrls } from "@/lib/companyStorageKind";
 import { isLocalFileRef, getPendingPayloadForLocalRef, LOCAL_FILE_PREFIX } from "@/lib/localPendingFiles";
@@ -117,12 +124,11 @@ function mergeVoucherEditPayloadPreservingAttachments(
     } else {
       merged.files = [];
     }
-    if (incomingUrls.length === 0) {
-      if (Object.prototype.hasOwnProperty.call(incoming, "unassignedFile")) {
-        merged.unassignedFile = incoming.unassignedFile;
-      } else {
-        merged.unassignedFile = null;
-      }
+    // `fileUrls` is canonical — never keep stale `unassignedFile` from existing (remove/replace revive).
+    if (Object.prototype.hasOwnProperty.call(incoming, "unassignedFile")) {
+      merged.unassignedFile = incoming.unassignedFile ?? null;
+    } else {
+      merged.unassignedFile = null;
     }
   } else if (existingUrls.length > 0) {
     merged.fileUrls = existingUrls;
@@ -149,7 +155,7 @@ function mergeVoucherEditPayloadPreservingAttachments(
 function isFirebaseStorageAttachmentPath(path: unknown): boolean {
   const s = String(path || "").trim();
   if (!s || isLocalFileRef(s) || isDriveFileRef(s)) return false;
-  if (s.startsWith("companies/") || s.startsWith("voucher-files/")) return true;
+  if (s.startsWith("companies/") || s.startsWith("voucher-files/") || s.startsWith("pocket-ledger/")) return true;
   return s.startsWith("http://") || s.startsWith("https://");
 }
 
@@ -169,7 +175,28 @@ async function shouldUseLocalVoucherPipeline(companyId: string): Promise<boolean
   if (!cid) return false;
   if (apkEmbeddedSqliteFirstWritesPreferred() || isClientNavigatorOffline()) return true;
   if (await apkCloudCompanyUsesSqliteFirstWrites(cid)) return true;
+  try {
+    const { isPlServerThinStaffCompany } = await import("@/lib/plServerThinStaffClient");
+    if (await isPlServerThinStaffCompany(cid)) return true;
+  } catch {
+    /* continue */
+  }
   const company = await getLocalCompanyById(cid, { includeDeleted: true }).catch(() => null);
+  if (company) {
+    try {
+      const { isServerGateCompany } = await import("@/lib/companyStorageKind");
+      if (isServerGateCompany(company)) return true;
+    } catch {
+      /* continue */
+    }
+    try {
+      const { isLocalServerShareableCompany } = await import("@/lib/localServerShareableCompanies");
+      if (isLocalServerShareableCompany(company)) return true;
+    } catch {
+      /* continue */
+    }
+  }
+  // Online ticker helper returns true when ticks N/A — that must NOT force Firestore for local/PL.
   return !isOnlineCompanyLedgerCloudSyncAllowed(cid, company as Company | null);
 }
 
@@ -224,25 +251,8 @@ async function syncPendingAttachmentsAfterFirestoreWrite(wrotePayload: Record<st
   }
 }
 
-const PL_SERVER_ATTACHMENT_FLUSH_BUDGET_MS = 8_000;
-
-async function companyNeedsStrictPlServerAttachmentFlush(companyId: string): Promise<boolean> {
-  try {
-    const { isPlServerThinStaffCompany } = await import("@/lib/plServerThinStaffClient");
-    if (await isPlServerThinStaffCompany(companyId)) return true;
-  } catch {
-    /* continue */
-  }
-  try {
-    const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
-    const { isServerGateCompany } = await import("@/lib/companyStorageKind");
-    const row = await getLocalCompanyById(companyId, { includeDeleted: true });
-    if (row && isServerGateCompany(row)) return true;
-  } catch {
-    /* ignore */
-  }
-  return false;
-}
+/** Party/master jaisa: stage ke baad `/__pl_attachment` race-budget, SQLite tip se pehle. */
+const PL_SERVER_ATTACHMENT_FLUSH_BUDGET_MS = 20_000;
 
 async function voucherHasUploadableLocalPendingAttachmentBytes(
   companyId: string,
@@ -279,6 +289,9 @@ async function listVoucherLocalPendingAttachmentIds(payload: Record<string, unkn
   return [...seen];
 }
 
+/**
+ * Party rule for vouchers: enqueue ke baad `/__pl_attachment` pehle, phir SQLite tip.
+ */
 export async function flushPlServerAttachmentsBeforeLocalSave(
   companyId: string,
   payload: Record<string, unknown>,
@@ -287,29 +300,30 @@ export async function flushPlServerAttachmentsBeforeLocalSave(
   if (!recordContainsLocalPendingVoucherFileRef(payload)) return;
   const strict = options?.awaitComplete === true;
   try {
-    const { shouldEnqueuePlServerAttachmentUpload, flushPlServerAttachmentUploadQueueNow } = await import(
-      "@/lib/plServerAttachmentUploadQueue"
-    );
+    const {
+      shouldEnqueuePlServerAttachmentUpload,
+      ensurePlServerAttachmentsQueuedFromRecord,
+      flushPlServerAttachmentsAfterStagingBudgeted,
+      flushPlServerAttachmentUploadQueueNow,
+    } = await import("@/lib/plServerAttachmentUploadQueue");
     if (!(await shouldEnqueuePlServerAttachmentUpload(companyId))) {
       if (strict) throw new Error("attachment_upload_transport_unavailable");
       return;
     }
-    const { ensurePlServerAttachmentsQueuedFromRecord } = await import("@/lib/plServerAttachmentUploadQueue");
     await ensurePlServerAttachmentsQueuedFromRecord(companyId, payload);
     const localIds = await listVoucherLocalPendingAttachmentIds(payload);
     const hasBytes = await voucherHasUploadableLocalPendingAttachmentBytes(companyId, payload);
     if (!hasBytes) {
-      // Edit / already-synced `local:` refs: device pe bytes nahi → har file Host GET se Save mat atkao.
       return;
     }
     if (strict) {
       await flushPlServerAttachmentUploadQueueNow(companyId, { throwOnFailure: true, localIds });
       return;
     }
-    await Promise.race([
-      flushPlServerAttachmentUploadQueueNow(companyId, { localIds }),
-      new Promise<void>((resolve) => setTimeout(resolve, PL_SERVER_ATTACHMENT_FLUSH_BUDGET_MS)),
-    ]);
+    await flushPlServerAttachmentsAfterStagingBudgeted(companyId, {
+      localIds,
+      budgetMs: PL_SERVER_ATTACHMENT_FLUSH_BUDGET_MS,
+    });
   } catch (e) {
     if (strict) throw e;
     console.warn("[voucherActionsClient] pl server attachment flush best-effort failed", e);
@@ -317,8 +331,7 @@ export async function flushPlServerAttachmentsBeforeLocalSave(
 }
 
 /**
- * Local SQLite Save turant complete. Host file + voucher sync live background me start —
- * Save UI wait nahi karti (20s budget hata diya).
+ * Party order: bytes already flushed pre-upsert when possible; post-save soft flush + voucher tip.
  */
 async function flushOrQueuePlServerVoucherAttachmentsAfterLocalSave(
   companyId: string,
@@ -326,21 +339,13 @@ async function flushOrQueuePlServerVoucherAttachmentsAfterLocalSave(
 ): Promise<void> {
   const voucherId = String(payload.id || "").trim();
   const hasLocalFiles = recordContainsLocalPendingVoucherFileRef(payload);
-  const strict = await companyNeedsStrictPlServerAttachmentFlush(companyId);
 
   const syncFilesThenVoucherToHost = async () => {
     if (hasLocalFiles) {
       try {
         await flushPlServerAttachmentsBeforeLocalSave(companyId, payload, { awaitComplete: false });
       } catch (e) {
-        console.warn("[voucherActionsClient] pl server soft attachment flush failed", e);
-      }
-      if (strict) {
-        try {
-          await flushPlServerAttachmentsBeforeLocalSave(companyId, payload, { awaitComplete: true });
-        } catch (e) {
-          console.warn("[voucherActionsClient] pl server live attachment flush failed (retry scheduled)", e);
-        }
+        console.warn("[voucherActionsClient] pl server post-save attachment flush failed", e);
       }
     }
     if (!voucherId) return;
@@ -352,7 +357,6 @@ async function flushOrQueuePlServerVoucherAttachmentsAfterLocalSave(
     }
   };
 
-  // Always fire-and-forget: Save form close turant; Host pe live sync peeche.
   void syncFilesThenVoucherToHost()
     .then(() => {
       void import("@/lib/plServerAuthoritativeReplay").then((m) => {
@@ -400,10 +404,15 @@ function dispatchSavedVoucherAttachmentUrls(
   voucherId: string,
   payload: Record<string, unknown>
 ): void {
+  // Empty `[]` bhi dispatch — warna remove-all ke baad useVouchers cache purani HTTPS URLs rakhta hai
+  // aur form/ledger ~500ms baad file wapas dikha deta hai.
+  if (!Object.prototype.hasOwnProperty.call(payload, "fileUrls")) return;
   const urls = Array.isArray(payload.fileUrls)
     ? payload.fileUrls.filter((u): u is string => typeof u === "string" && Boolean(String(u).trim()))
     : [];
-  if (urls.length > 0) dispatchVoucherAttachmentSaved(companyId, voucherId, urls);
+  // `local:` pending — form `applyVoucherAttachmentsAfterFormSave` resolve ke baad dispatch karega (duplicate upload avoid).
+  if (urls.some((u) => isLocalFileRef(u))) return;
+  dispatchVoucherAttachmentSaved(companyId, voucherId, urls);
 }
 
 /** Firestore company root: `planExpiry` Timestamp ya `planExpiryMs` — tier overlay + cache ke saath expiry compare */
@@ -488,13 +497,18 @@ function normalizeVoucherAttachmentFieldsForPersistence(
   }
 
   if (hasExplicitFileUrls) {
-    // Edit forms use `fileUrls` as the canonical attachment list. Some forms still
-    // fallback `unassignedFile` from the old voucher, which resurrects a deleted file.
-    delete data.unassignedFile;
+    // Edit forms use `fileUrls` as the canonical attachment list. Null (not delete) so
+    // SQLite merge overwrites stale `unassignedFile` instead of preserving it via spread.
+    data.unassignedFile = null;
+    if (!Object.prototype.hasOwnProperty.call(data, "files")) {
+      data.files = [];
+    }
   }
 
   const rawUf = data.unassignedFile;
-  if (rawUf && typeof rawUf === "object") {
+  if (hasExplicitFileUrls) {
+    data.unassignedFile = null;
+  } else if (rawUf && typeof rawUf === "object") {
     const uf = { ...(rawUf as Record<string, unknown>) };
     const normalizedUrl = normalizePersistableAttachmentUrl(uf.url);
     // Invalid clipboard marker payload (`sid`-only etc.) should be dropped to avoid saving broken pseudo-URLs.
@@ -509,11 +523,15 @@ function normalizeVoucherAttachmentFieldsForPersistence(
   if (companyId) {
     const filtered = filterVoucherAttachmentsForCompanyContext(data, companyId);
     data.fileUrls = filtered.fileUrls;
-    const filteredUf = filtered.unassignedFile;
-    if (filteredUf != null && typeof filteredUf === "object") {
-      data.unassignedFile = filteredUf;
+    if (hasExplicitFileUrls) {
+      data.unassignedFile = null;
     } else {
-      delete data.unassignedFile;
+      const filteredUf = filtered.unassignedFile;
+      if (filteredUf != null && typeof filteredUf === "object") {
+        data.unassignedFile = filteredUf;
+      } else {
+        delete data.unassignedFile;
+      }
     }
   }
   deleteUndefinedTopLevelFields(data);
@@ -535,8 +553,8 @@ async function mergePlanEntitlementsForId(planId: PlanId): Promise<Entitlements>
   const hit = mergedPlanEntitlementsCache.get(planId);
   if (hit && now - hit.cachedAtMs < MERGED_PLAN_ENTITLEMENTS_TTL_MS) return hit.entitlements;
 
-  // Static/APK: bundled `plans` catalog — `app_settings/plans` Firestore hang voucher save (file ke saath) se bachao.
-  if (apkEmbeddedSqliteFirstWritesPreferred()) {
+  // Static/APK/EXE + PL local pipelines: bundled `plans` — `app_settings/plans` Firestore hang mat.
+  if (apkEmbeddedSqliteFirstWritesPreferred() || isElectronDesktopApp() || isStaticAppBuild() || isCapacitorNativeApp()) {
     const rec = readCachedPlansRecord() ?? defaultPlansRecordFallback();
     const merged = getPlanFromPlans(rec, planId).entitlements;
     mergedPlanEntitlementsCache.set(planId, { entitlements: merged, cachedAtMs: now });
@@ -589,29 +607,49 @@ async function resolveLocalPlanForImmediateVoucherSave(
   return { planId, storageOption, entitlements };
 }
 
-/** SQLite mirror vouchers: `date` field ko day/month window me count karo (cloud query jaisa). */
+/** Coerce Timestamp / Date / ms / ISO — quota window ke liye. */
+function coerceVoucherInstant(raw: unknown): Date | null {
+  if (raw instanceof Timestamp) return raw.toDate();
+  if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (raw && typeof raw === "object" && "toDate" in raw && typeof (raw as { toDate?: () => Date }).toDate === "function") {
+    try {
+      const d = (raw as { toDate: () => Date }).toDate();
+      return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null;
+    } catch {
+      return null;
+    }
+  }
+  if (raw && typeof raw === "object" && "seconds" in raw) {
+    const sec = Number((raw as { seconds?: unknown }).seconds);
+    if (Number.isFinite(sec)) {
+      const d = new Date(sec * 1000);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+  }
+  return null;
+}
+
+/**
+ * Plan quota: kitne vouchers **aaj / is mahine create** hue (createdAt).
+ * Voucher calendar `date` (past/future) se nahi — warna future-date save daily cap bypass karti.
+ * Legacy rows bina createdAt: `date` fallback.
+ */
 function countLocalMirrorVouchersInRange(
   vouchers: Array<Record<string, unknown>>,
   start: Date,
   end: Date
 ): number {
   return vouchers.filter((v) => {
-    const raw = v.date;
-    let dt: Date | null = null;
-    if (raw instanceof Timestamp) dt = raw.toDate();
-    else if (raw instanceof Date) dt = raw;
-    else if (typeof raw === "string" && raw.trim()) {
-      const d = new Date(raw);
-      dt = !Number.isNaN(d.getTime()) ? d : null;
-    }
-    else if (raw && typeof raw === "object" && "toDate" in raw && typeof (raw as { toDate?: () => Date }).toDate === "function") {
-      try {
-        dt = (raw as { toDate: () => Date }).toDate();
-      } catch {
-        dt = null;
-      }
-    }
-    if (!dt || Number.isNaN(dt.getTime())) return false;
+    const dt = coerceVoucherInstant(v.createdAt) ?? coerceVoucherInstant(v.date);
+    if (!dt) return false;
     return dt >= start && dt <= end;
   }).length;
 }
@@ -662,7 +700,7 @@ async function enforceDailyMonthlyVoucherQuotaForCreate(
     const todayStart = Timestamp.fromDate(startOfDay(now));
     const todayEnd = Timestamp.fromDate(endOfDay(now));
     const dailySnap = await getDocs(
-      query(collection(firestore, collPath), where("date", ">=", todayStart), where("date", "<=", todayEnd))
+      query(collection(firestore, collPath), where("createdAt", ">=", todayStart), where("createdAt", "<=", todayEnd))
     );
     if (dailySnap.size >= dailyLimit) {
       const err = new Error(
@@ -676,7 +714,7 @@ async function enforceDailyMonthlyVoucherQuotaForCreate(
     const monthStart = Timestamp.fromDate(startOfMonth(now));
     const monthEnd = Timestamp.fromDate(endOfMonth(now));
     const monthlySnap = await getDocs(
-      query(collection(firestore, collPath), where("date", ">=", monthStart), where("date", "<=", monthEnd))
+      query(collection(firestore, collPath), where("createdAt", ">=", monthStart), where("createdAt", "<=", monthEnd))
     );
     if (monthlySnap.size >= monthlyLimit) {
       const err = new Error(
@@ -749,6 +787,21 @@ export async function patchVoucherFields(
   }
   const sqliteFirst =
     options?.forceSqliteFirst === true || (await shouldUseLocalVoucherPipeline(companyId));
+  let patchEditAttachmentCtx: { baselineUrls: string[]; remoteUrls: string[] } | null = null;
+  if (Object.prototype.hasOwnProperty.call(partial, "fileUrls")) {
+    patchEditAttachmentCtx = await readVoucherEditAttachmentContext(companyId, voucherId);
+  }
+  const schedulePatchAttachmentCleanup = (finalPayload: Record<string, unknown>): void => {
+    if (!patchEditAttachmentCtx) return;
+    finalizeFormAttachmentEditAfterSave({
+      companyId,
+      entityId: voucherId,
+      voucherType: String(finalPayload.type || "").trim() || undefined,
+      baselineUrls: patchEditAttachmentCtx.baselineUrls,
+      finalUrls: normalizeFileUrlsField(finalPayload.fileUrls),
+      oldDocRemoteUrls: patchEditAttachmentCtx.remoteUrls,
+    });
+  };
   if (sqliteFirst) {
     // Local-first: SQLite turant; online mirror company ke liye Firestore bhi seedha — warna outbox/JSON se delete server pe late/miss, refresh pe voucher wapas.
     const existing = (await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId)) || {};
@@ -761,6 +814,7 @@ export async function patchVoucherFields(
     }) as Record<string, unknown>;
     coerceVoucherDocumentDate(payload);
     await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, payload);
+    schedulePatchAttachmentCleanup(payload);
     if (isSoftDeleteLedgerPatch(partial)) {
       try {
         const { cancelDriveAttachmentSideEffectsForDoc } = await import(
@@ -866,6 +920,7 @@ export async function patchVoucherFields(
     if (!awaitHydratePatch) {
       await syncPendingAttachmentsAfterFirestoreWrite(partial as Record<string, unknown>);
     }
+    schedulePatchAttachmentCleanup(partial as Record<string, unknown>);
   } catch (e) {
     if (isCompanyNotFoundError(e)) {
       if (isSoftDeleteLedgerPatch(partial)) {
@@ -882,6 +937,7 @@ export async function patchVoucherFields(
       }) as Record<string, unknown>;
       coerceVoucherDocumentDate(fullPayload);
       await setFirestoreVoucherFromLocalMirrorWhenMissing(companyId, voucherId, fullPayload);
+      schedulePatchAttachmentCleanup(fullPayload);
       return;
     }
     if (!isLikelyOfflineFirestoreError(e)) throw e;
@@ -1266,6 +1322,8 @@ async function saveVoucherOfflineLocalCreate(
   // Sync‑3: device lineage debug / future merge tuning — Firebase flush me strip (`localVoucherOutbox`)
   body[PL_CLIENT_OFFLINE_FIRST_PERSIST_MS] = Date.now();
   const payload = { id: newId, ...body };
+  // Party rule: `/__pl_attachment` pehle, phir SQLite voucher tip.
+  await flushPlServerAttachmentsBeforeLocalSave(companyId, payload, { awaitComplete: false });
   await upsertCompanyDocInBrowserDb(companyId, "vouchers", newId, payload);
   scheduleBrowserDbPersistAfterWrite();
   void flushOrQueuePlServerVoucherAttachmentsAfterLocalSave(companyId, payload);
@@ -1433,12 +1491,59 @@ export async function saveVoucher(
   }
   const sqliteFirst = sqliteFirstEarly;
 
+  let voucherEditAttachmentCtx: { baselineUrls: string[]; remoteUrls: string[] } | null = null;
+  if (voucherId) {
+    voucherEditAttachmentCtx = await readVoucherEditAttachmentContext(companyId, voucherId);
+  }
+
+  const scheduleVoucherAttachmentCleanupIfNeeded = (
+    finalUrls: unknown,
+    ctxOverride?: { baselineUrls: string[]; remoteUrls: string[] } | null
+  ): void => {
+    const ctx = ctxOverride ?? voucherEditAttachmentCtx;
+    if (!voucherId || !ctx) {
+      if (process.env.NODE_ENV !== "production") {
+        void import("@/lib/attachmentDeleteTrace").then((t) =>
+          t.traceStorageCleanupBlocked({
+            companyId,
+            entityId: voucherId ?? undefined,
+            reason: !voucherId ? "missing voucherId" : "missing attachment cleanup context",
+          })
+        );
+      }
+      return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(cleanVoucherData, "fileUrls")) {
+      if (process.env.NODE_ENV !== "production") {
+        void import("@/lib/attachmentDeleteTrace").then((t) =>
+          t.traceStorageCleanupBlocked({
+            companyId,
+            entityId: voucherId,
+            reason: "save payload missing fileUrls key — cleanup skipped",
+            detail: { keys: Object.keys(cleanVoucherData).slice(0, 24) },
+          })
+        );
+      }
+      return;
+    }
+    finalizeFormAttachmentEditAfterSave({
+      companyId,
+      entityId: voucherId,
+      voucherType: String(cleanVoucherData.type || "").trim() || undefined,
+      baselineUrls: ctx.baselineUrls,
+      finalUrls: normalizeFileUrlsField(finalUrls),
+      oldDocRemoteUrls: ctx.remoteUrls,
+    });
+  };
+
   // Web online + Firestore company: production jaisa — `local:` / clipboard marker ko HTTPS me badal kar hi persist karo.
   if (!sqliteFirst) {
     await materializeVoucherAttachmentsInSavePayload({
       companyId,
       voucherId: voucherId ?? null,
       data: cleanVoucherData as Record<string, unknown>,
+      editBaselineUrls: voucherEditAttachmentCtx?.baselineUrls,
+      editOldDocRemoteUrls: voucherEditAttachmentCtx?.remoteUrls,
     });
     normalizeVoucherAttachmentFieldsForPersistence(cleanVoucherData as Record<string, unknown>, companyId);
     deleteUndefinedTopLevelFields(cleanVoucherData as Record<string, unknown>);
@@ -1586,12 +1691,21 @@ export async function saveVoucher(
     }
     mergedLocal = { ...mergedLocal, id: voucherId! };
     coerceVoucherDocumentDate(mergedLocal);
+    // Party rule: bytes bridge pe pehle, phir voucher JSON sync.
+    await flushPlServerAttachmentsBeforeLocalSave(writeCompanyIdLocal, mergedLocal, {
+      awaitComplete: false,
+    });
     await upsertCompanyDocInBrowserDb(writeCompanyIdLocal, "vouchers", voucherId!, mergedLocal);
     scheduleBrowserDbPersistAfterWrite();
     void flushOrQueuePlServerVoucherAttachmentsAfterLocalSave(writeCompanyIdLocal, mergedLocal);
     await enqueueVoucherOutbox(writeCompanyIdLocal, "update", voucherId!, mergedLocal);
     scheduleBrowserDbPersistAfterWrite();
     dispatchSavedVoucherAttachmentUrls(writeCompanyIdLocal, voucherId!, mergedLocal);
+    const cleanupCtx = mergeAttachmentCleanupContexts(
+      voucherEditAttachmentCtx,
+      readVoucherAttachmentBaselineFromRow(existingLocal as Record<string, unknown> | null)
+    );
+    scheduleVoucherAttachmentCleanupIfNeeded(mergedLocal.fileUrls, cleanupCtx);
     return { id: voucherId! };
   }
 
@@ -1899,6 +2013,7 @@ export async function saveVoucher(
       }) as Record<string, unknown>;
       coerceVoucherDocumentDate(forFs);
       await setFirestoreVoucherFromLocalMirrorWhenMissing(companyId, voucherId!, forFs);
+      scheduleVoucherAttachmentCleanupIfNeeded(forFs.fileUrls);
       return { id: voucherId! };
     }
     // Static/hybrid: offline queue; APK Firebase company par allowLocalFirestoreFailureQueue false ho to throw
@@ -1913,9 +2028,11 @@ export async function saveVoucher(
     coerceVoucherDocumentDate(forLocal);
     await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId!, forLocal);
     await enqueueVoucherOutbox(companyId, "update", voucherId!, forLocal);
+    scheduleVoucherAttachmentCleanupIfNeeded(forLocal.fileUrls);
     return { id: voucherId! };
   }
   await mirrorVoucherDocToBrowserDb(companyId, voucherId!);
+  scheduleVoucherAttachmentCleanupIfNeeded(cleanVoucherData.fileUrls);
   return { id: voucherId! };
 }
 
@@ -2214,10 +2331,14 @@ export async function approveVoucherWithHistory(
   }
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
 
-  // Live + SQLite-first: local row ho to local approve; warna Firestore (live) pe try — local-only force mat karo.
+  // Live + SQLite-first: local row ho to local approve; warna Firestore (live) pe try.
   const localResolved = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId);
-  const preferLocalPipeline = await shouldUseLocalVoucherPipeline(companyId);
-  if (preferLocalPipeline && localResolved) {
+  // Save & Approve create already embeds isApproved — skip FS race ("Voucher not found").
+  if (localResolved?.voucher?.isApproved === true) {
+    return;
+  }
+  // Prefer SQLite whenever the row exists (new create often not on Firestore yet).
+  if (localResolved) {
     await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName);
     void flushVoucherOutbox().catch(() => undefined);
     return;

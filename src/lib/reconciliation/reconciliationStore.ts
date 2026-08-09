@@ -17,6 +17,7 @@ import {
   type Unsubscribe,
 } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
+import { getPlServerSharedCompanies } from "@/lib/plServerAccessContext";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { buildReconciliationLedgerSnapshot } from "@/lib/reconciliation/ledgerSnapshot";
@@ -682,12 +683,21 @@ export function subscribeReconciliationSharesForViewer(
     return () => {};
   }
   const cid = String(companyId || "").trim();
+  // PL Server staff companies (local_* / access-context shared): Firestore company recon path permission-denied loop → EXE lag/crash.
+  // Keep uid-level + Drive/local shares; skip company-scoped Firestore queries.
+  const skipCompanyScopedFirestore =
+    Boolean(cid.startsWith("local_")) ||
+    (cid
+      ? getPlServerSharedCompanies().some((r) => String(r.id || "").trim() === cid)
+      : false);
   const sentQ = query(SHARES(), where("senderUserId", "==", userId));
   const recvQ = query(SHARES(), where("targetUserId", "==", userId));
   const linkedRecvQ = query(SHARES(), where("receiverUserId", "==", userId));
-  const senderCoQ = cid ? query(SHARES(), where("senderCompanyId", "==", cid)) : null;
-  const receiverCoQ = cid ? query(SHARES(), where("receiverCompanyId", "==", cid)) : null;
-  const companyIdxQ = cid ? query(COMPANY_SHARES(cid)) : null;
+  const senderCoQ =
+    cid && !skipCompanyScopedFirestore ? query(SHARES(), where("senderCompanyId", "==", cid)) : null;
+  const receiverCoQ =
+    cid && !skipCompanyScopedFirestore ? query(SHARES(), where("receiverCompanyId", "==", cid)) : null;
+  const companyIdxQ = cid && !skipCompanyScopedFirestore ? query(COMPANY_SHARES(cid)) : null;
   let sent: ReconciliationShare[] = [];
   let recv: ReconciliationShare[] = [];
   let linkedRecv: ReconciliationShare[] = [];
@@ -833,20 +843,26 @@ export function subscribeLinkedSharesForAccount(
     [...fromCompanyIndex, ...fromViewer].forEach((s) => map.set(s.id, s));
     onData(filterLinkedForAccount(Array.from(map.values())));
   };
-  const unsubs: Unsubscribe[] = [
-    onSnapshot(
-      query(COMPANY_SHARES(cid)),
-      (snap) => {
-        fromCompanyIndex = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ReconciliationShare);
-        emit();
-      },
-      (err) => {
-        console.warn("[reconciliation_shares] account company index listener:", err);
-        fromCompanyIndex = [];
-        emit();
-      }
-    ),
-  ];
+  const skipCompanyScopedFirestore =
+    cid.startsWith("local_") ||
+    getPlServerSharedCompanies().some((r) => String(r.id || "").trim() === cid);
+  const unsubs: Unsubscribe[] = [];
+  if (!skipCompanyScopedFirestore) {
+    unsubs.push(
+      onSnapshot(
+        query(COMPANY_SHARES(cid)),
+        (snap) => {
+          fromCompanyIndex = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ReconciliationShare);
+          emit();
+        },
+        (err) => {
+          console.warn("[reconciliation_shares] account company index listener:", err);
+          fromCompanyIndex = [];
+          emit();
+        }
+      )
+    );
+  }
   const uid = String(userId || "").trim();
   if (uid) {
     unsubs.push(
@@ -855,6 +871,8 @@ export function subscribeLinkedSharesForAccount(
         emit();
       })
     );
+  } else {
+    emit();
   }
   return () => unsubs.forEach((u) => u());
 }

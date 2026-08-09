@@ -67,7 +67,7 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
+import { applyVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
@@ -114,10 +114,8 @@ import {
 } from "@/components/ui/tooltip";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
-import {
-  convertPdfAttachmentsToJpegIfEnabled,
-  shouldSuggestPdfAsImage,
-} from "@/lib/voucherAttachmentPdfAsImage";
+import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
+import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
 import { CreateBankAccountDialog } from "../bank-cash/CreateBankAccountDialog";
 // Types only — runtime circular import SalaryForm ↔ AddVoucherDialog avoid.
 import type { CopyMasterDraftRequestPayload, CopyMissingMasterOpts } from "./AddVoucherDialog";
@@ -1588,15 +1586,10 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
         }
       }
 
-      let filesForSave = files;
-      if (savePdfAsImage) {
-        const convToast = sonnerToast.loading("Converting PDF attachments to image…");
-        try {
-          filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
-        } finally {
-          sonnerToast.dismiss(convToast);
-        }
-      }
+      const filesForSave = await prepareVoucherAttachmentsForSave(files, {
+        companyId,
+        savePdfAsImage,
+      });
       
       const existingUrls = filesForSave.filter(f => typeof f === 'string') as string[];
       const newFiles = filesForSave.filter(f => f instanceof File) as File[];
@@ -1656,10 +1649,13 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
       } else {
         const newUrls = await Promise.all(
           newFiles.map(async (file) => {
-            const docRef = ref(storage, `voucher-files/${companyId}/salary/${Date.now()}_${file.name}`);
-            await uploadBytes(docRef, file);
+            const url = await uploadVoucherAttachmentFileToFirebase({
+              companyId,
+              voucherType: "salary",
+              file,
+            });
             await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
-            return getDownloadURL(docRef);
+            return url;
           })
         );
         allFileUrls = [...existingUrls, ...newUrls];
@@ -1896,6 +1892,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!allowAttachments) return;
     await handleVoucherAttachmentInputChange(e, {
+      companyId,
       currentFiles: files,
       maxFiles: fileAttachmentLimits.maxFileCount || 0,
       allowImage: fileAttachmentLimits.allowImage,
@@ -2777,6 +2774,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                               key={index}
                               file={file}
                               attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
+                        attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                               className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                             />
@@ -2797,6 +2795,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                 }}
                                 onPastedFiles={(incoming) =>
                                   void appendCompressedVoucherAttachmentsToState({
+                                    companyId,
                                     incomingFiles: incoming,
                                     currentFiles: files,
                                     maxFiles: fileAttachmentLimits.maxFileCount || 0,
