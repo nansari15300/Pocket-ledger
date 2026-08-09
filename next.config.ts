@@ -63,14 +63,25 @@ const baseConfig: NextConfig = {
       };
     }
     // Dev PL userdata writes under `.data/` must not invalidate the bundle watcher.
-    const prevIgnored = config.watchOptions?.ignored;
+    // Firebase App Hosting merge kabhi `ignored: [""]` / non-string inject karta hai — webpack schema fail.
+    const toIgnoredStrings = (raw: unknown): string[] => {
+      if (typeof raw === "string" && raw.trim()) return [raw.trim()];
+      if (!Array.isArray(raw)) return [];
+      return raw
+        .map((v) => (typeof v === "string" ? v.trim() : ""))
+        .filter((v): v is string => v.length > 0);
+    };
     const extraIgnored = ["**/.data/**", "**/.codex-dev-server*.log"];
+    const mergedIgnored = [
+      ...toIgnoredStrings(config.watchOptions?.ignored),
+      ...extraIgnored,
+    ];
+    const uniqueIgnored = Array.from(new Set(mergedIgnored));
     config.watchOptions = {
       ...config.watchOptions,
-      ignored: Array.isArray(prevIgnored)
-        ? [...prevIgnored, ...extraIgnored]
-        : prevIgnored
-          ? [prevIgnored, ...extraIgnored]
+      ignored:
+        uniqueIgnored.length > 0
+          ? uniqueIgnored
           : ["**/node_modules/**", "**/.git/**", "**/.next/**", ...extraIgnored],
     };
     return config;
