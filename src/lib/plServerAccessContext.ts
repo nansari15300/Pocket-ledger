@@ -122,6 +122,7 @@ export type PlServerAccessContextPayload = {
 export type CompanyWithPlServerShared = Company & {
   plServerShared?: boolean;
   plServerGateId?: string;
+  plServerGateServerUrl?: string;
   plServerHostCompanyId?: string;
 };
 
