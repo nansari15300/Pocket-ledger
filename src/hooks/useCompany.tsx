@@ -594,7 +594,7 @@ type CompanyContextType = {
   /** Local-only registry reload counter — SQLite company row refresh (e.g. Edit Company “Existing users”). */
   localCompanyRegistryEpoch: number;
   setCompanyId: (companyId: string) => void;
-  clearCompanyId: (opts?: { force?: boolean }) => void;
+  clearCompanyId: (opts?: { force?: boolean; reason?: string }) => void;
   /** Server → local sync UX: 3d stale, 20d “go online”, offline license expiry */
   planAuthoritativeSync: PlanSyncBannerState;
   /** Manual: POST `/api/company/sync-plan` → SQLite overwrite + banner; avatar “Sync plan” se. */
