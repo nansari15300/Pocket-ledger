@@ -87,6 +87,8 @@ export type EntitlementKey =
   | "voucherHistoryEnabled"
   /** Plan-wise: max history entries per voucher (1–100). 0 = use default 10. */
   | "voucherHistoryLimit"
+  /** Plan-wise: Inter Company voucher create/edit (admin tick). Missing = off. */
+  | "interCompanyVoucherEnabled"
   /** Max joined inter-company partner companies (Join tab). 0 = unlimited. */
   | "maxInterCompanyPartners"
   /** Plan-wise: APK/EXE saved account quick switch on login + logout save. */
@@ -167,6 +169,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxVoucherFileCount: 0,
       voucherHistoryEnabled: false,
       voucherHistoryLimit: 0,
+      interCompanyVoucherEnabled: false,
       maxInterCompanyPartners: 1,
       shareForReconciliationEnabled: false,
       maxReconciliationLedgers: 0,
@@ -222,6 +225,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxVoucherFileCount: 3,
       voucherHistoryEnabled: true,
       voucherHistoryLimit: 10,
+      interCompanyVoucherEnabled: false,
       maxInterCompanyPartners: 3,
       shareForReconciliationEnabled: false,
       maxReconciliationLedgers: 0,
@@ -279,6 +283,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxVoucherFileCount: 5,
       voucherHistoryEnabled: true,
       voucherHistoryLimit: 20,
+      interCompanyVoucherEnabled: false,
       maxInterCompanyPartners: 10,
       shareForReconciliationEnabled: true,
       maxReconciliationLedgers: 10,
@@ -335,6 +340,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxVoucherFileCount: 5,
       voucherHistoryEnabled: true,
       voucherHistoryLimit: 50,
+      interCompanyVoucherEnabled: false,
       maxInterCompanyPartners: 0,
       shareForReconciliationEnabled: true,
       maxReconciliationLedgers: 0,

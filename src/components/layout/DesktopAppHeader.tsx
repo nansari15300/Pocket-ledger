@@ -76,6 +76,7 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 import { planSyncFailureUserMessage } from "@/lib/companyPlanServerSync";
 import { cn } from "@/lib/utils";
 import { chromeProPillCn } from "@/lib/chromePillButton";
+import { planAllowsInterCompanyVoucher } from "@/lib/planSyncEntitlements";
 import { DriveCloudSyncHeaderIndicator } from "@/components/layout/DriveCloudSyncHeaderIndicator";
 import { usePendingInterCompanySystemJoinCount } from "@/lib/interCompany/usePendingInterCompanySystemJoinCount";
 import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderIdSnapshot";
@@ -420,12 +421,20 @@ function MobileReportButtonsOnly() {
 function HeaderActions() {
   const { isMobile } = useMobileView();
   const pathname = usePathname();
-  const { user } = useAuth();
-  const { company } = useCompany();
-  // Inter Company vouchers are online-company only.
-  const interCompanyDisabled = Boolean(
-    company && (isDeviceLocalCompany(company) || isServerGateCompany(company))
+  const { user, customUser } = useAuth();
+  const { company, allCompanies } = useCompany();
+  const livePlans = useLivePlans();
+  const companyPlanId = resolvePlanIdForActiveCompany(
+    company,
+    allCompanies,
+    customUser?.uid ?? user?.uid,
+    customUser?.email ?? user?.email
   );
+  const companyPlanLive = getPlanFromPlans(livePlans, companyPlanId);
+  // Inter Company vouchers: online company + plan tick (admin Plans → Inter-company voucher).
+  const interCompanyDisabled =
+    Boolean(company && (isDeviceLocalCompany(company) || isServerGateCompany(company))) ||
+    !planAllowsInterCompanyVoucher(companyPlanId, companyPlanLive);
   const pendingSystemJoinCount = usePendingInterCompanySystemJoinCount({
     ownerUserId: user?.uid,
     companyId: company?.id,

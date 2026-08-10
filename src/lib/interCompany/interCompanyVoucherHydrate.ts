@@ -3,6 +3,7 @@
  */
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
 import { interCompanyUsesConduitParty } from "@/lib/interCompany/interCompanyPostingLegs";
+import { isInterCompanyPeerPendingChange } from "@/lib/interCompany/interCompanyPeerPending";
 
 const VALID_ENTITY_KINDS = new Set<InterCompanyEntityKind>([
   "party",
@@ -85,6 +86,7 @@ export function inferInterCompanyEntity(
 /**
  * Edit par entity lists — source/target masters kis company se load hon.
  * Target company voucher kholne par source accounts peer company se aate hain.
+ * Purane docs: `targetCompanyId` missing ho to source copy pe `link.peerCompanyId` use.
  */
 export function resolveInterCompanyEditCompanyIds(
   voucher: Record<string, unknown> | null | undefined,
@@ -96,20 +98,24 @@ export function resolveInterCompanyEditCompanyIds(
 } {
   const row = voucher || {};
   const link = readInterCompanyLink(row);
+  const currentId = String(currentCompanyId || "").trim();
   const storedTarget = String(row.targetCompanyId || "").trim();
+  const peerId = String(link?.peerCompanyId || "").trim();
 
   if (link?.role === "target") {
     return {
-      sourceEntitiesCompanyId: link.peerCompanyId,
-      targetEntitiesCompanyId: currentCompanyId,
-      targetCompanyFieldId: currentCompanyId,
+      sourceEntitiesCompanyId: peerId || currentId,
+      targetEntitiesCompanyId: currentId,
+      targetCompanyFieldId: currentId,
     };
   }
 
+  // Source copy (ya link missing) — target = denormalized id, warna peer
+  const targetFieldId = storedTarget || (link?.role === "source" ? peerId : "") || "";
   return {
-    sourceEntitiesCompanyId: currentCompanyId,
-    targetEntitiesCompanyId: storedTarget || currentCompanyId,
-    targetCompanyFieldId: storedTarget,
+    sourceEntitiesCompanyId: currentId,
+    targetEntitiesCompanyId: targetFieldId || currentId,
+    targetCompanyFieldId: targetFieldId,
   };
 }
 
@@ -122,7 +128,7 @@ export function readInterCompanyEntityLabelSnapshot(
   return String(voucher?.[key] || "").trim();
 }
 
-/** Saved voucher par company bank — role + denormalized fields + compound leg */
+/** Saved voucher par company clearing bank — payee/destination bank se confuse mat karo. */
 export function readInterCompanyCompanyBankId(voucher: Record<string, unknown> | null | undefined): string {
   if (!voucher) return "";
   const side = interCompanyVoucherViewerSide(voucher);
@@ -136,15 +142,36 @@ export function readInterCompanyCompanyBankId(voucher: Record<string, unknown> |
   }
   const direct = String(voucher.companyBankAccountId || "").trim();
   if (direct) return direct;
+
+  // Legs: prefer clearing intermediary (Dr+Cr); destination bank one-side mat lo as clearing.
   const legs = voucher.interCompanyLegs;
-  if (!Array.isArray(legs)) return "";
-  for (const raw of legs) {
-    if (!raw || typeof raw !== "object") continue;
-    const leg = raw as { kind?: string; accountId?: string };
-    if (String(leg.kind || "").toLowerCase() === "bank") {
+  if (Array.isArray(legs)) {
+    let firstBank = "";
+    for (const raw of legs) {
+      if (!raw || typeof raw !== "object") continue;
+      const leg = raw as { kind?: string; accountId?: string; debit?: number; credit?: number };
+      if (String(leg.kind || "").toLowerCase() !== "bank") continue;
       const id = String(leg.accountId || "").trim();
-      if (id) return id;
+      if (!id) continue;
+      if (!firstBank) firstBank = id;
+      const d = Number(leg.debit) || 0;
+      const c = Number(leg.credit) || 0;
+      if (d > 0 && c > 0) return id;
     }
+    // Destination bank payee — clearing ke liye use mat karo agar source/target entity bank hai
+    const destId =
+      side === "source"
+        ? String(voucher.sourceEntityId || "").trim()
+        : side === "target"
+          ? String(voucher.targetEntityId || "").trim()
+          : "";
+    const destKind =
+      side === "source"
+        ? String(voucher.sourceEntityKind || "").toLowerCase()
+        : side === "target"
+          ? String(voucher.targetEntityKind || "").toLowerCase()
+          : "";
+    if (firstBank && !(destKind === "bank" && firstBank === destId)) return firstBank;
   }
   return "";
 }
@@ -202,6 +229,7 @@ export const isInterCompanyVisibleOnTargetCompany = isInterCompanyVisibleOnTarge
 
 /**
  * Target: entity ledger (party/staff/tax/expense) — source approve + target copy approve dono.
+ * Peer Change Detected: applied destination posting mat hide karo (notification only).
  */
 export function isInterCompanyVisibleOnTargetEntity(
   voucher: Record<string, unknown> | null | undefined
@@ -209,6 +237,7 @@ export function isInterCompanyVisibleOnTargetEntity(
   if (!voucher || String(voucher.type || "") !== "inter_company") return true;
   if (interCompanyVoucherViewerSide(voucher) !== "target") return true;
   if (!isInterCompanySourceApprovedForTarget(voucher)) return false;
+  if (isInterCompanyPeerPendingChange(voucher)) return true;
   return voucher.isApproved === true;
 }
 

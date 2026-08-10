@@ -373,6 +373,7 @@ function StaffPageContent() {
 
   const handleSelect = useCallback((item: Staff | StaffGroup) => {
     const isStaffMember = "ownerId" in item;
+    pendingStaffSelectIdRef.current = item.id;
     if (!isStaffMember) {
       setActiveView("groups");
     }
@@ -390,7 +391,7 @@ function StaffPageContent() {
     if (useQueryNav) {
       router.replace(path, { scroll: false });
     }
-  }, [router, setSelected, useQueryNav]);
+  }, [router, setSelected, useQueryNav, setActiveView]);
   
   const staffForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];

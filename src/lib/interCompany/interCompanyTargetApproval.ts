@@ -2,7 +2,7 @@
  * Target IC voucher approve — pending legs ko bank + entity + IC clear legs se replace.
  */
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
-import { buildTargetInterCompanyLegsApproved, interCompanyUsesConduitParty } from "@/lib/interCompany/interCompanyPostingLegs";
+import { buildTargetInterCompanyLegsApproved, interCompanyUsesConduitParty, normalizeInterCompanyTargetPostMode } from "@/lib/interCompany/interCompanyPostingLegs";
 import {
   inferInterCompanyEntity,
   interCompanyVoucherViewerSide,
@@ -67,6 +67,7 @@ export function buildInterCompanyTargetApprovalPatch(
     companyBankAccountId: bankId,
     interCompanyCounterpartyPartyId: icId,
     useIcConduit,
+    targetPostMode: normalizeInterCompanyTargetPostMode(voucher.interCompanyTargetPostMode),
   });
   if (legs.length === 0) return null;
 

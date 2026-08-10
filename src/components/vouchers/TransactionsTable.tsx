@@ -2045,6 +2045,11 @@ export function TransactionsTable({
       const isPaidStatus = statusLabel === "Paid";
       const isUnpaidStatus = statusLabel === "Partial" || statusLabel === "Unpaid" || statusLabel === "Overdue";
       const isPendingApproval = highlightPendingApproval && (t as any).isApproved !== true; // mobile card — theme stripe N/A
+      const isPeerPendingChange =
+        String((t as any).type || "") === "inter_company" &&
+        !!(t as any).interCompanyPeerPending?.proposed &&
+        typeof (t as any).interCompanyPeerPending.proposed === "object" &&
+        Object.keys((t as any).interCompanyPeerPending.proposed).length > 0;
       const swBorder = !insideGroup && typeof (t as any)._spendWiseGroupColorIndex === "number"
         ? ((t as any)._spendWiseGroupColorIndex === 1 ? "border-l-4 border-l-green-500" : (t as any)._spendWiseGroupColorIndex === 2 ? "border-l-4 border-l-pink-500" : "border-l-4 border-l-blue-500")
         : "";
@@ -2056,15 +2061,22 @@ export function TransactionsTable({
             "relative p-2.5 min-w-0 w-full overflow-hidden border-2 shadow-sm cursor-pointer transition-colors",
             context === "daybook" && "rounded-lg",
             swBorder,
-            isPendingApproval
-              ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border-pink-300/90 dark:border-pink-700/55"
-              : "bg-card hover:bg-muted/30 border-emerald-300/85 dark:border-emerald-800/50"
+            isPeerPendingChange
+              ? "bg-blue-100 dark:bg-blue-950/40 hover:bg-blue-200 dark:hover:bg-blue-950/50 border-blue-300/90 dark:border-blue-700/55"
+              : isPendingApproval
+                ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border-pink-300/90 dark:border-pink-700/55"
+                : "bg-card hover:bg-muted/30 border-emerald-300/85 dark:border-emerald-800/50"
           )}
           onClick={() => onRowClick?.(t)}
         >
           <div className="flex justify-between items-start gap-2 min-w-0">
             <div className="min-w-0 flex-1 overflow-hidden">
               <p className="font-bold text-sm truncate">{hl(titleLabel)}</p>
+              {isPeerPendingChange ? (
+                <span className="mt-0.5 inline-flex items-center rounded-full border border-blue-600/50 bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white shadow-sm">
+                  Change Detected
+                </span>
+              ) : null}
             </div>
             <div className={cn("relative flex shrink-0 items-center justify-end font-bold text-sm", showFileBySelection && "pl-8", mainAmountClass)}>
               {showFileBySelection ? (

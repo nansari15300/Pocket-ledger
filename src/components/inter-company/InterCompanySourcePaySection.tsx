@@ -1,10 +1,12 @@
 "use client";
 
 /**
- * Source column — Source company (auto: current) + Company bank + Source account (must).
+ * Source column — Source company + Company bank + Source account (must).
+ * Edit / rematch: company combobox (My companies / joined partners).
  */
 import { InterCompanySectionTitle } from "@/components/inter-company/InterCompanySectionTitle";
 import { Input } from "@/components/ui/input";
+import { Combobox } from "@/components/ui/combobox";
 import { Label } from "@/components/ui/label";
 import { InterCompanyAccountLookupSection } from "@/components/inter-company/InterCompanyAccountLookupSection";
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
@@ -13,7 +15,9 @@ import { readCompanyInterCompanyAcNo } from "@/lib/interCompany/interCompanyAcco
 import { normalizeInterCompanyPhone } from "@/lib/interCompany/interCompanyPhone";
 import type { Company } from "@/hooks/useCompany";
 import {
+  interCompanyComboboxTriggerClass,
   interCompanyCompanyFieldsRowClass,
+  interCompanyDropdownContentClass,
   interCompanyFieldColClass,
   interCompanyIcReadonlyFieldClass,
   interCompanyInputClass,
@@ -31,6 +35,12 @@ import { useStickyInterCompanyCompanyCode } from "@/components/inter-company/use
 
 type Props = {
   company: Company | null;
+  /** Selected source company id (live) — combobox value */
+  sourceCompanyId?: string;
+  onSourceCompanyChange?: (id: string) => void;
+  /** Joined / My companies options */
+  companyComboboxOptions?: { value: string; label: string }[];
+  companySelectDisabled?: boolean;
   entities: InterCompanyEntityDetail[];
   entitiesLoading?: boolean;
   payeeKind: InterCompanyEntityKind;
@@ -51,6 +61,10 @@ type Props = {
 
 export function InterCompanySourcePaySection({
   company,
+  sourceCompanyId = "",
+  onSourceCompanyChange,
+  companyComboboxOptions = [],
+  companySelectDisabled = true,
   entities,
   entitiesLoading = false,
   payeeKind,
@@ -71,13 +85,17 @@ export function InterCompanySourcePaySection({
     () => filterInterCompanyClearingBankEntities(entities, companyBankAccountId),
     [entities, companyBankAccountId]
   );
-  // Source account row: clearing bank ko hide (sirf clearing row me)
   const optionalSourceEntities = useMemo(
     () => entities.filter((e) => !(e.kind === "bank" && e.isClearing === true)),
     [entities]
   );
-  // Edit locked: Firestore se accounts load — phir read-only UI (disabled par sirf hint mat dikhao)
   const showReadOnlyAccounts = fieldsDisabled && !entitiesLoading;
+  const selectedCompanyId = String(sourceCompanyId || company?.id || "").trim();
+  const selectedCompanyLabel =
+    company?.name ||
+    companyComboboxOptions.find((o) => o.value === selectedCompanyId)?.label ||
+    "—";
+  const canPickCompany = Boolean(onSourceCompanyChange) && !companySelectDisabled;
 
   return (
     <div
@@ -94,20 +112,38 @@ export function InterCompanySourcePaySection({
           trailingAction={null}
         />
         <p className="text-[11px] text-muted-foreground">
-          {isPeerSourceCompany ? "Linked source company" : "Auto — current logged-in company"}
+          {canPickCompany
+            ? "Select source company (My companies / joined)"
+            : isPeerSourceCompany
+              ? "Linked source company"
+              : "Auto — current logged-in company"}
         </p>
         <div className={interCompanyCompanyFieldsRowClass}>
           <div className={cn(interCompanyFieldColClass, "min-w-[8.5rem]")}>
-            <Label className="whitespace-nowrap text-xs text-muted-foreground sm:sr-only">Company name</Label>
-            <Input
-              readOnly
-              value={company?.name || "—"}
-              className={cn(
-                interCompanyInputClass,
-                interCompanyIcReadonlyFieldClass,
-                interCompanyReadOnlyCopyInputClass
-              )}
-            />
+            <Label className="whitespace-nowrap text-xs text-muted-foreground sm:sr-only">
+              Company name
+            </Label>
+            {canPickCompany ? (
+              <Combobox
+                options={companyComboboxOptions}
+                value={selectedCompanyId}
+                onChange={(id) => onSourceCompanyChange?.(String(id || "").trim())}
+                placeholder="Select company"
+                searchPlaceholder="Search company…"
+                triggerClassName={interCompanyComboboxTriggerClass}
+                popoverContentClassName={interCompanyDropdownContentClass}
+              />
+            ) : (
+              <Input
+                readOnly
+                value={selectedCompanyLabel}
+                className={cn(
+                  interCompanyInputClass,
+                  interCompanyIcReadonlyFieldClass,
+                  interCompanyReadOnlyCopyInputClass
+                )}
+              />
+            )}
           </div>
           <div className={interCompanyFieldColClass}>
             <Label className="whitespace-nowrap text-xs text-muted-foreground">Company Code</Label>
@@ -143,7 +179,7 @@ export function InterCompanySourcePaySection({
           sectionTitle="Clearing account"
           entities={bankEntities}
           entitiesLoading={entitiesLoading}
-          activeCompanyId={company?.id ?? ""}
+          activeCompanyId={company?.id ?? selectedCompanyId}
           autoEnsureInterCoAcNo
           lockEntityKind="bank"
           entityKind="bank"
@@ -168,7 +204,7 @@ export function InterCompanySourcePaySection({
           sectionTitle="Source account"
           entities={optionalSourceEntities}
           entitiesLoading={entitiesLoading}
-          activeCompanyId={company?.id ?? ""}
+          activeCompanyId={company?.id ?? selectedCompanyId}
           autoEnsureInterCoAcNo
           showClosingBalance
           entityKind={payeeKind}

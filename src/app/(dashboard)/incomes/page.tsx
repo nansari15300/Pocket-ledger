@@ -522,20 +522,39 @@ function IncomeExpensePageContent() {
           .reduce((acc, group) => acc + group.balance, 0);
   }, [activeView, processedExpenseAccounts, processedExpenseGroups]);
 
-  const handleSelect = (item: ExpenseAccount | ExpenseGroup, view?: 'accounts' | 'groups') => {
-    const isGroup = view === 'groups';
-    if (isGroup && !groupDetailsEnabled) return;
-    if (!isGroup && !accountDetailsEnabled) return;
-    if (useQueryNav) {
-        // Static export ke liye query params – /incomes/[id] path refresh/redirect de sakta hai
-        const path = isGroup
-          ? `/incomes?view=groups&selected=${item.id}`
-          : `/incomes?selected=${item.id}`;
-        router.push(path);
-    } else {
-        setSelected(item);
-    }
-  };
+  const handleSelect = useCallback(
+    (item: ExpenseAccount | ExpenseGroup, view?: "accounts" | "groups") => {
+      const isGroup = view === "groups";
+      if (isGroup && !groupDetailsEnabled) return;
+      if (!isGroup && !accountDetailsEnabled) return;
+      pendingIncomesSelectIdRef.current = item.id;
+      setSelected(item);
+      if (isGroup) setActiveView("groups");
+      else if (activeView !== "accounts") setActiveView("accounts");
+      const path = isGroup
+        ? `/incomes?view=groups&selected=${encodeURIComponent(item.id)}`
+        : `/incomes?selected=${encodeURIComponent(item.id)}`;
+      if (typeof window !== "undefined") {
+        try {
+          window.history.replaceState(window.history.state, "", path);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (useQueryNav && shouldReplaceWithMasterDetailCanonical(path)) {
+        router.replace(path, { scroll: false });
+      }
+    },
+    [
+      useQueryNav,
+      router,
+      setSelected,
+      activeView,
+      setActiveView,
+      groupDetailsEnabled,
+      accountDetailsEnabled,
+    ]
+  );
 
   const accountsForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];

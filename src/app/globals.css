@@ -4143,6 +4143,20 @@ body.theme-pro [data-theme-table="transactions"]:not([data-pl-txn-table-tone="gr
   background-color: rgb(80 7 36 / 0.55) !important;
 }
 
+/* Inter Company peer Change Detected — blue (pink unapproved jaisa weight) */
+[data-theme-table="transactions"] tbody tr[data-pl-peer-pending] > td {
+  background-color: rgb(219 234 254) !important;
+}
+.dark [data-theme-table="transactions"] tbody tr[data-pl-peer-pending] > td {
+  background-color: rgb(23 37 84 / 0.45) !important;
+}
+[data-theme-table="transactions"] tbody tr[data-pl-peer-pending]:hover > td {
+  background-color: rgb(191 219 254) !important;
+}
+.dark [data-theme-table="transactions"] tbody tr[data-pl-peer-pending]:hover > td {
+  background-color: rgb(23 37 84 / 0.6) !important;
+}
+
 /* Reconciliation matched pair — dono side green (detail: file end par stripe override ke baad) */
 body[class*="theme-"] main .rounded-lg.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card),
 body[class*="theme-"] main .rounded-md.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card),
@@ -5477,6 +5491,16 @@ body.theme-pro main [data-pl-backup-restore] button.pl-chrome-btn-drop[data-pl-a
 [data-theme-table="transactions"][data-pl-txn-table-tone="green"] tbody tr[data-pl-pending-approval]:hover > td,
 [data-theme-table="transactions"][data-pl-txn-table-tone="blue"] tbody tr[data-pl-pending-approval]:hover > td {
   background-color: rgb(251 207 232) !important;
+  background-image: none !important;
+}
+[data-theme-table="transactions"][data-pl-txn-table-tone="green"] tbody tr[data-pl-peer-pending] > td,
+[data-theme-table="transactions"][data-pl-txn-table-tone="blue"] tbody tr[data-pl-peer-pending] > td {
+  background-color: rgb(219 234 254) !important;
+  background-image: none !important;
+}
+[data-theme-table="transactions"][data-pl-txn-table-tone="green"] tbody tr[data-pl-peer-pending]:hover > td,
+[data-theme-table="transactions"][data-pl-txn-table-tone="blue"] tbody tr[data-pl-peer-pending]:hover > td {
+  background-color: rgb(191 219 254) !important;
   background-image: none !important;
 }
 body[class*="theme-"] header .pl-chrome-card.pl-chrome-tone-emerald,

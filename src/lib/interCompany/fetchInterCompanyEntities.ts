@@ -1,5 +1,6 @@
 /**
  * Ek company ke inter-company masters — Firestore (cloud) ya SQLite (pure local).
+ * My-company / APK: cloud path empty ho to SQLite mirror fallback.
  */
 import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
@@ -10,14 +11,9 @@ import {
   fetchInterCompanyBankEntityDetailFromLocalMirror,
 } from "@/lib/interCompany/fetchInterCompanyEntitiesLocal";
 
-/** Company id par saare party/bank/staff/tax/expense rows */
-export async function fetchInterCompanyEntitiesForCompany(
+async function fetchInterCompanyEntitiesFromFirestore(
   companyId: string
 ): Promise<InterCompanyEntityDetail[]> {
-  if (!companyId) return [];
-  if (await isPureLocalInterCompanyCompany(companyId)) {
-    return fetchInterCompanyEntitiesFromLocalMirror(companyId);
-  }
   const cid = companyId;
   const [banks, parties, staff, taxes, expenses] = await Promise.all([
     getDocs(
@@ -117,6 +113,29 @@ export async function fetchInterCompanyEntitiesForCompany(
   return rows;
 }
 
+/** Company id par saare party/bank/staff/tax/expense rows */
+export async function fetchInterCompanyEntitiesForCompany(
+  companyId: string
+): Promise<InterCompanyEntityDetail[]> {
+  if (!companyId) return [];
+  if (await isPureLocalInterCompanyCompany(companyId)) {
+    return fetchInterCompanyEntitiesFromLocalMirror(companyId);
+  }
+  try {
+    const cloud = await fetchInterCompanyEntitiesFromFirestore(companyId);
+    if (cloud.length > 0) return cloud;
+  } catch {
+    /* fall through to local mirror */
+  }
+  try {
+    const local = await fetchInterCompanyEntitiesFromLocalMirror(companyId);
+    if (local.length > 0) return local;
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
 /** Edit hydrate: bank id list me na mile to Firestore se naam lao */
 export async function fetchInterCompanyBankEntityDetail(
   companyId: string,
@@ -130,26 +149,28 @@ export async function fetchInterCompanyBankEntityDetail(
   }
   try {
     const snap = await getDoc(doc(firestore, `companies/${cid}/bank_accounts`, bid));
-    if (!snap.exists()) return null;
-    const data = snap.data() as {
-      accountName?: string;
-      bankName?: string;
-      accountNumber?: string;
-      phone?: string;
-      interCompanyAccountNo?: string;
-      isClearing?: boolean;
-    };
-    return {
-      id: snap.id,
-      kind: "bank",
-      label: data.accountName || snap.id,
-      bankName: data.bankName,
-      accountNumber: data.accountNumber,
-      phone: data.phone,
-      interCompanyAccountNo: data.interCompanyAccountNo,
-      isClearing: data.isClearing === true,
-    };
+    if (snap.exists()) {
+      const data = snap.data() as {
+        accountName?: string;
+        bankName?: string;
+        accountNumber?: string;
+        phone?: string;
+        interCompanyAccountNo?: string;
+        isClearing?: boolean;
+      };
+      return {
+        id: snap.id,
+        kind: "bank",
+        label: data.accountName || snap.id,
+        bankName: data.bankName,
+        accountNumber: data.accountNumber,
+        phone: data.phone,
+        interCompanyAccountNo: data.interCompanyAccountNo,
+        isClearing: data.isClearing === true,
+      };
+    }
   } catch {
-    return null;
+    /* fall through */
   }
+  return fetchInterCompanyBankEntityDetailFromLocalMirror(cid, bid);
 }

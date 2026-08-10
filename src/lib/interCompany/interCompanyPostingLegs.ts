@@ -1,7 +1,9 @@
 /**
  * Inter Company — compound ledger legs (clearing bank ↔ destination account ↔ IC conduit).
- * Unapproved: amount clearing bank pe (source Cr / target Dr); destination account nahi.
- * Approved: bank rasta (Dr+Cr); destination pe Payment Out=Dr / Payment In=Cr.
+ * Unapproved: amount clearing bank pe one-side (source Cr / target Dr); destination nahi.
+ * Approved: clearing Dr+Cr (path-through) + destination one-side
+ *   (party/staff/tax/expense/bank same — target bank select pe clearing bypass nahi).
+ * Journal mode: target destination Dr/Cr ulta = Payment Out jaisa.
  */
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
 import {
@@ -13,6 +15,13 @@ import {
   readInterCompanyLink,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
 
+function voucherHasInterCompanyPeerPending(voucher: Record<string, unknown>): boolean {
+  const raw = voucher.interCompanyPeerPending;
+  if (!raw || typeof raw !== "object") return false;
+  const proposed = (raw as { proposed?: unknown }).proposed;
+  return !!proposed && typeof proposed === "object" && Object.keys(proposed as object).length > 0;
+}
+
 export type InterCompanyLedgerLeg = {
   /** party | bank | staff | tax | expense */
   kind: InterCompanyEntityKind;
@@ -20,6 +29,88 @@ export type InterCompanyLedgerLeg = {
   debit: number;
   credit: number;
 };
+
+/** Target destination posting: Payment In (default) vs Journal (Dr/Cr ulta on target account). */
+export type InterCompanyTargetPostMode = "payment_in" | "journal";
+
+export function normalizeInterCompanyTargetPostMode(raw: unknown): InterCompanyTargetPostMode {
+  return String(raw || "").trim().toLowerCase() === "journal" ? "journal" : "payment_in";
+}
+
+export function isInterCompanyTargetJournalPostMode(
+  voucher: Record<string, unknown> | null | undefined
+): boolean {
+  return normalizeInterCompanyTargetPostMode(voucher?.interCompanyTargetPostMode) === "journal";
+}
+
+/**
+ * Auto narration (Account→Account aur Company→Company dono):
+ * "SourceCo, SourceAccount paid to TargetCo, TargetAccount"
+ */
+export function buildInterCompanyAutoNarration(args: {
+  sourceCompanyName?: string | null;
+  sourceEntityLabel?: string | null;
+  targetCompanyName?: string | null;
+  targetEntityLabel?: string | null;
+}): string {
+  const srcCo = String(args.sourceCompanyName || "").trim() || "Source company";
+  const srcAc = String(args.sourceEntityLabel || "").trim() || "account";
+  const tgtCo = String(args.targetCompanyName || "").trim() || "Target company";
+  const tgtAc = String(args.targetEntityLabel || "").trim() || "account";
+  return `${srcCo}, ${srcAc} paid to ${tgtCo}, ${tgtAc}`;
+}
+
+/** @deprecated use buildInterCompanyAutoNarration */
+export function buildInterCompanyJournalNarration(args: {
+  sourceCompanyName?: string | null;
+  sourceEntityLabel?: string | null;
+  targetCompanyName?: string | null;
+  targetEntityLabel?: string | null;
+}): string {
+  return buildInterCompanyAutoNarration(args);
+}
+
+/** Strip IC ref brackets + optional current auto line — user typed part bachaao. */
+export function extractInterCompanyUserNarration(
+  raw: string | null | undefined,
+  autoLine?: string | null
+): string {
+  let t = String(raw || "").trim();
+  if (!t) return "";
+  t = t.replace(/\[Inter-company[^\]]*\]/gi, "").trim();
+  if (!t) return "";
+  const auto = String(autoLine || "").trim();
+  const lines = t
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const rest: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (auto && line === auto) continue;
+    // Pehli auto-shaped line hatao (purani auto jab accounts badle)
+    if (i === 0 && /^(.+), (.+) paid to (.+), (.+)$/.test(line)) continue;
+    rest.push(line);
+  }
+  return rest.join("\n").trim();
+}
+
+/** Auto line must + optional user typed (duplicate auto mat jodo). */
+export function composeInterCompanyNarrationBase(
+  autoLine: string,
+  userTyped: string | null | undefined
+): string {
+  const auto = String(autoLine || "").trim();
+  const user = String(userTyped || "").trim();
+  if (!auto) return user;
+  if (!user) return auto;
+  if (user === auto || user.startsWith(`${auto}\n`) || user.startsWith(auto)) {
+    // Ensure auto is first line current
+    const extra = extractInterCompanyUserNarration(user, auto);
+    return extra ? `${auto}\n${extra}` : auto;
+  }
+  return `${auto}\n${user}`;
+}
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -171,23 +262,30 @@ export function buildTargetInterCompanyLegsPending(args: {
 /**
  * Destination Dr/Cr — Payment In/Out jaisa:
  * Bank/Cash: Out=Cr, In=Dr; Party/Staff/Tax/Expense: Out=Dr, In=Cr.
+ * Journal mode on target: Payment Out style (Payment In se ulta).
  */
 function destinationLegAmount(
   side: "source" | "target",
   entityKind: InterCompanyEntityKind,
-  amt: number
+  amt: number,
+  targetPostMode: InterCompanyTargetPostMode = "payment_in"
 ): { debit: number; credit: number } {
   const isBank = String(entityKind || "").toLowerCase() === "bank";
   if (side === "source") {
     // Payment Out
     return isBank ? { debit: 0, credit: amt } : { debit: amt, credit: 0 };
   }
-  // Payment In
+  if (targetPostMode === "journal") {
+    // Target Journal — Payment Out jaisa (Payment In se ulta); company-to-company conduit alag leg.
+    return isBank ? { debit: 0, credit: amt } : { debit: amt, credit: 0 };
+  }
+  // Payment In (default)
   return isBank ? { debit: amt, credit: 0 } : { debit: 0, credit: amt };
 }
 
 /**
- * Source approve: destination Payment Out jaisa; clearing bank madhyasth (Dr+Cr).
+ * Source approve: destination Payment Out jaisa (one side); clearing bank madhyasth (Dr+Cr).
+ * Destination bank/party/staff/tax/expense — same; clearing kabhi bypass mat karo.
  */
 export function buildSourceInterCompanyLegsApproved(args: {
   amount: number;
@@ -208,23 +306,21 @@ export function buildSourceInterCompanyLegsApproved(args: {
     const sideAmt = destinationLegAmount("source", entityKind, amt);
     legs.push({ kind: entityKind, accountId: entityId, debit: sideAmt.debit, credit: sideAmt.credit });
     if (bankId) {
+      // Approved: clearing pe dono side (path-through) — destination alag one-side
       legs.push({ kind: "bank", accountId: bankId, debit: amt, credit: amt });
     }
     return legs;
   }
   if (bankId) {
-    // Legacy/fallback — destination missing
-    if (useConduit && icId) {
-      legs.push({ kind: "bank", accountId: bankId, debit: amt, credit: amt });
-    } else {
-      legs.push({ kind: "bank", accountId: bankId, debit: 0, credit: amt });
-    }
+    // Destination missing — amount clearing pe one-side (Payment Out = Cr)
+    legs.push({ kind: "bank", accountId: bankId, debit: 0, credit: amt });
   }
   return legs;
 }
 
 /**
- * Target approve: destination Payment In jaisa; clearing bank madhyasth (Dr+Cr).
+ * Target approve: destination Payment In / Journal one-side (party/staff/tax/expense/bank same).
+ * Clearing approved pe Dr+Cr — target bank select hone par bhi bypass nahi.
  */
 export function buildTargetInterCompanyLegsApproved(args: {
   amount: number;
@@ -233,11 +329,13 @@ export function buildTargetInterCompanyLegsApproved(args: {
   companyBankAccountId: string;
   interCompanyCounterpartyPartyId: string;
   useIcConduit?: boolean;
+  targetPostMode?: InterCompanyTargetPostMode;
 }): InterCompanyLedgerLeg[] {
   const amt = round2(Number(args.amount) || 0);
   if (amt <= 0) return [];
   const { entityKind, entityId, companyBankAccountId: bankId, interCompanyCounterpartyPartyId: icId } = args;
   const useConduit = args.useIcConduit === true;
+  const postMode = normalizeInterCompanyTargetPostMode(args.targetPostMode);
   const destination = isInterCompanyDestinationAccount(entityKind, entityId, bankId);
   const legs: InterCompanyLedgerLeg[] = [];
   appendIcComTargetLeg(legs, icId, amt, useConduit);
@@ -245,13 +343,13 @@ export function buildTargetInterCompanyLegsApproved(args: {
     if (bankId) {
       legs.push({ kind: "bank", accountId: bankId, debit: amt, credit: amt });
     }
-    const sideAmt = destinationLegAmount("target", entityKind, amt);
+    const sideAmt = destinationLegAmount("target", entityKind, amt, postMode);
     legs.push({ kind: entityKind, accountId: entityId, debit: sideAmt.debit, credit: sideAmt.credit });
     return legs;
   }
   if (bankId) {
-    if (useConduit && icId) {
-      legs.push({ kind: "bank", accountId: bankId, debit: amt, credit: amt });
+    if (postMode === "journal") {
+      legs.push({ kind: "bank", accountId: bankId, debit: 0, credit: amt });
     } else {
       legs.push({ kind: "bank", accountId: bankId, debit: amt, credit: 0 });
     }
@@ -370,16 +468,20 @@ export function getInterCompanyLegAmounts(
   }
 
   // Target entity legs — target approve ke baad; IC Com = source approve par
+  // Peer Change Detected: applied posting mat hatao (sirf notification)
   if (
     side === "target" &&
     context !== "account" &&
     !isIcComLedger &&
-    !isInterCompanyVisibleOnTargetEntity(voucher)
+    !isInterCompanyVisibleOnTargetEntity(voucher) &&
+    !voucherHasInterCompanyPeerPending(voucher)
   ) {
     return empty;
   }
 
-  if (!isInterCompanyVoucherApproved(voucher)) {
+  const keepAppliedPostingDuringPeerPending = voucherHasInterCompanyPeerPending(voucher);
+
+  if (!isInterCompanyVoucherApproved(voucher) && !keepAppliedPostingDuringPeerPending) {
     // Unapproved: amount sirf clearing bank pe (Payment Out=Cr / Payment In=Dr)
     if (side === "target" && context === "account" && amt > 0) {
       const bankId = resolveInterCompanyBankIdForLegs(voucher);
@@ -423,6 +525,30 @@ export function getInterCompanyLegAmounts(
     return empty;
   }
 
+  // Approved (ya peer-pending notification) + destination exist: clearing pe hamesha Dr+Cr
+  if (
+    (isInterCompanyVoucherApproved(voucher) || keepAppliedPostingDuringPeerPending) &&
+    context === "account" &&
+    amt > 0 &&
+    (side === "source" || side === "target")
+  ) {
+    const clearingId = resolveInterCompanyBankIdForLegs(voucher);
+    if (clearingId && id === clearingId && isInterCompanyOperationalEntityInvolved(voucher, side)) {
+      const legsClearing = resolveInterCompanyLegsForVoucher(voucher);
+      let clearingDebit = 0;
+      let clearingCredit = 0;
+      for (const leg of legsClearing) {
+        if (leg.kind !== "bank" || String(leg.accountId) !== clearingId) continue;
+        clearingDebit += leg.debit;
+        clearingCredit += leg.credit;
+      }
+      // Bypass / incomplete legs — display pe Dr+Cr dikhao
+      if (!(clearingDebit > 0 && clearingCredit > 0)) {
+        return finalizeIcLegAmounts(voucher, { touched: true, debit: amt, credit: amt });
+      }
+    }
+  }
+
   // Approved bank — sirf jab koi aur account na ho; clearing (IC/entity) stored legs se Dr+Cr
   if (
     isInterCompanyVoucherApproved(voucher) &&
@@ -442,17 +568,21 @@ export function getInterCompanyLegAmounts(
     }
   }
 
-  // Destination Bank/Cash — Payment Out=Cr / In=Dr (purani saved legs ulti hon to bhi ledger sahi)
+  // Destination Bank/Cash — one side only (clearing se alag id)
   if (context === "account" && amt > 0 && (side === "source" || side === "target")) {
     const clearingId = resolveInterCompanyBankIdForLegs(voucher);
-    if (id !== clearingId) {
+    if (id && clearingId && id !== clearingId) {
       const dest = inferInterCompanyEntity(voucher, side);
       if (
         dest &&
         String(dest.id) === id &&
         String(dest.kind || "").toLowerCase() === "bank"
       ) {
-        const sideAmt = destinationLegAmount(side, "bank", amt);
+        const postMode =
+          side === "target"
+            ? normalizeInterCompanyTargetPostMode(voucher.interCompanyTargetPostMode)
+            : "payment_in";
+        const sideAmt = destinationLegAmount(side, "bank", amt, postMode);
         return finalizeIcLegAmounts(voucher, {
           touched: true,
           debit: sideAmt.debit,

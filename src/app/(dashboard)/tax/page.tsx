@@ -381,16 +381,26 @@ function TaxPageContent() {
       : processedTaxGroups.reduce((acc, group) => acc + group.balance, 0);
   }, [activeView, processedTaxes, processedTaxGroups]);
 
-  const handleSelect = (item: Tax | TaxGroup) => {
-    if (useQueryNav) {
-      // Static export ke liye query params – /tax/[id] path refresh/redirect de sakta hai
-      if ('rate' in item) {
-        router.push(`/tax?selected=${item.id}`);
-      } else router.push(`/tax?view=groups&selected=${item.id}`);
-    } else {
-        setSelected(item);
+  const handleSelect = useCallback((item: Tax | TaxGroup) => {
+    pendingTaxSelectIdRef.current = item.id;
+    setSelected(item);
+    const isTax = "rate" in item;
+    if (!isTax) setActiveView("groups");
+    else if (activeView !== "taxes") setActiveView("taxes");
+    const path = isTax
+      ? `/tax?selected=${encodeURIComponent(item.id)}`
+      : `/tax?view=groups&selected=${encodeURIComponent(item.id)}`;
+    if (typeof window !== "undefined") {
+      try {
+        window.history.replaceState(window.history.state, "", path);
+      } catch {
+        /* ignore */
+      }
     }
-  };
+    if (useQueryNav && shouldReplaceWithMasterDetailCanonical(path)) {
+      router.replace(path, { scroll: false });
+    }
+  }, [useQueryNav, router, setSelected, activeView, setActiveView]);
 
   useEffect(() => {
     if (vouchersLoading) return;

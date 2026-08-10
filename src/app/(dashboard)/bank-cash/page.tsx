@@ -467,14 +467,27 @@ function BankCashPageContent() {
   }, [activeView, totalBalance, bankDrCrPerspective]);
 
   const handleSelect = useCallback((item: Account | AccountGroup) => {
-    if (useQueryNav) {
-        // Static export ke liye query params – /bank-cash/[id] path refresh/redirect de sakta hai
-        const path = 'accountName' in item ? `/bank-cash?selected=${item.id}` : `/bank-cash?view=groups&selected=${item.id}`;
-        router.push(path);
-    } else {
-        setSelected(item);
+    // Party/Staff jaisa: turant select + location replaceState —
+    // warna stale ?selected= / URL effect click ke baad purane account pe snap-back karta hai (refresh pe).
+    pendingBankSelectIdRef.current = item.id;
+    setSelected(item);
+    const isGroup = !("accountName" in item);
+    const path = isGroup
+      ? `/bank-cash?view=groups&selected=${encodeURIComponent(item.id)}`
+      : activeView === "clearing"
+        ? `/bank-cash?view=clearing&selected=${encodeURIComponent(item.id)}`
+        : `/bank-cash?selected=${encodeURIComponent(item.id)}`;
+    if (typeof window !== "undefined") {
+      try {
+        window.history.replaceState(window.history.state, "", path);
+      } catch {
+        /* ignore */
+      }
     }
-  }, [useQueryNav, router, setSelected]);
+    if (useQueryNav && shouldReplaceWithMasterDetailCanonical(path)) {
+      router.replace(path, { scroll: false });
+    }
+  }, [useQueryNav, router, setSelected, activeView]);
 
   /** Stable href — har render naya inline fn list ko re-mount kara ref loop */
   const getAccountItemHref = useCallback(

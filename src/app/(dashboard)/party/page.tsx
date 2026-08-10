@@ -86,7 +86,16 @@ import {
   writeOverdueImportanceFilter,
   type OverdueImportanceFilter,
 } from "@/lib/overdueImportanceFilter";
+import {
+  dedupeInterCompanyClearingParties,
+  isInterCompanyPartyListAccount,
+} from "@/lib/interCompany/interCompanyCounterpartyPartyName";
+import { mergeDuplicateInterCompanyCounterpartyParties } from "@/lib/interCompany/mergeInterCompanyCounterpartyDuplicates";
+
 /** Tab `replaceState` ke baad `useSearchParams` stale reh sakta hai — address bar (location) pehle. */
+
+type PartyListTab = "parties" | "groups" | "ic_ac";
+
 function readPartyPageUrlState(viewFromUrl: string | null, selectedIdFromUrl: string | null) {
   if (typeof window === "undefined") {
     return { view: viewFromUrl, selectedId: selectedIdFromUrl };
@@ -113,11 +122,12 @@ function readPartyPageSelectionsFromStorage(): Record<string, string> {
 
 /** Active tab ki list se memory / pehli real row — Overdue default skip. */
 function pickPartyTabSelection(
-  tab: "parties" | "groups",
+  tab: PartyListTab,
   parties: Party[],
-  groups: Group[]
+  groups: Group[],
+  icParties: Party[]
 ): Party | Group | null {
-  const items = tab === "parties" ? parties : groups;
+  const items = tab === "groups" ? groups : tab === "ic_ac" ? icParties : parties;
   if (items.length === 0) return null;
   const remembered = readPartyPageSelectionsFromStorage()[tab];
   if (remembered) {
@@ -127,11 +137,18 @@ function pickPartyTabSelection(
   return items.find((i) => i.id !== OVERDUE_ACCOUNT_ID) ?? items[0] ?? null;
 }
 
-function partyTabCanonicalHref(tab: "parties" | "groups", item: { id: string } | null): string {
+function partyTabCanonicalHref(tab: PartyListTab, item: { id: string } | null): string {
   const base = masterDetailListHref("party");
-  if (!item) return tab === "groups" ? `${base}?view=groups` : base;
+  if (!item) {
+    if (tab === "groups") return `${base}?view=groups`;
+    if (tab === "ic_ac") return `${base}?view=ic_ac`;
+    return base;
+  }
   if (tab === "groups") {
     return `${base}?view=groups&selected=${encodeURIComponent(item.id)}`;
+  }
+  if (tab === "ic_ac") {
+    return `${base}?view=ic_ac&selected=${encodeURIComponent(item.id)}`;
   }
   if (item.id === OVERDUE_ACCOUNT_ID) {
     return `${base}?selected=${encodeURIComponent(OVERDUE_ACCOUNT_ID)}`;
@@ -205,10 +222,13 @@ function PartyPageContent() {
   const suppressPartyListRestoreRef = useRef(false);
   const { setBalanceMode } = useBalanceMode();
 
-  const [activeView, setActiveView] = useState(() => {
-    // Refresh / ?view=groups deep link — pehla paint sahi tab
+  const [activeView, setActiveView] = useState<PartyListTab>(() => {
+    // Refresh / ?view=groups|ic_ac deep link — pehla paint sahi tab
     if (typeof window === "undefined") return "parties";
-    return new URLSearchParams(window.location.search).get("view") === "groups" ? "groups" : "parties";
+    const v = new URLSearchParams(window.location.search).get("view");
+    if (v === "groups") return "groups";
+    if (v === "ic_ac") return "ic_ac";
+    return "parties";
   });
   const { isMobile, selected, setSelected } = useResponsiveListLayout<Party | Group>(`party_view_${activeView}`);
   // APK/static: mobile list-detail + hardware back — sirf `isMobile` par mat band karo (PC mode tablet)
@@ -221,7 +241,12 @@ function PartyPageContent() {
     suppressPartyListRestoreRef.current = true;
     const base = masterDetailListHref("party");
     // Groups tab se detail se wapas aane par URL me `view=groups` rakho — warna bare `/party` pe memory/effect Parties pe kheench leta hai
-    const href = activeView === "groups" ? `${base}?view=groups` : base;
+    const href =
+      activeView === "groups"
+        ? `${base}?view=groups`
+        : activeView === "ic_ac"
+          ? `${base}?view=ic_ac`
+          : base;
     // Pehle URL + memory clear — phir selected null (sync effect purani ?selected= se detail na khole)
     if (typeof window !== "undefined") {
       try {
@@ -293,7 +318,8 @@ function PartyPageContent() {
     }
   });
 
-  const selectedPartyRaw = activeView === 'parties' ? selected as Party : null;
+  const selectedPartyRaw =
+    activeView === "parties" || activeView === "ic_ac" ? (selected as Party) : null;
   const selectedParty = useMemo(
     () => resolveMasterListSelection(selectedPartyRaw, processedPartiesForSelection),
     [selectedPartyRaw, processedPartiesForSelection]
@@ -312,7 +338,8 @@ function PartyPageContent() {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as Party | Group).balance);
   }, [selected]);
-  const partyMasterDetailTitle = activeView === "groups" ? "Party Groups" : "Parties";
+  const partyMasterDetailTitle =
+    activeView === "groups" ? "Party Groups" : activeView === "ic_ac" ? "IC / Ac" : "Parties";
   /** Mobile party ledger: master row me "Parties" ki jagah context clear ("Party details" + naam). */
   const responsiveMasterDetailTitle = useMemo(() => {
     if (isMobile && selectedParty) return "Party details";
@@ -442,6 +469,13 @@ function PartyPageContent() {
   }, [mobileFilteredOverdue]);
 
   const partiesForList = processedPartiesForSelection;
+  const icParties = useMemo(
+    () =>
+      dedupeInterCompanyClearingParties(
+        partiesForList.filter((p) => isInterCompanyPartyListAccount(p))
+      ),
+    [partiesForList]
+  );
   /** usePageMemory: overdue virtual row list me — save ke baad __overdue__ valid rahe */
   const partiesForPageMemory = useMemo(() => {
     if (!overdueVirtualParty) return partiesForList;
@@ -451,6 +485,10 @@ function PartyPageContent() {
     if (!showOnlyPartiesWithPendingApproval || !showApproveOnList) return partiesForList;
     return partiesForList.filter((p) => (pendingApprovalByPartyId[p.id] ?? 0) > 0);
   }, [partiesForList, showOnlyPartiesWithPendingApproval, showApproveOnList, pendingApprovalByPartyId]);
+  const icPartiesForListView = useMemo(() => {
+    if (!showOnlyPartiesWithPendingApproval || !showApproveOnList) return icParties;
+    return icParties.filter((p) => (pendingApprovalByPartyId[p.id] ?? 0) > 0);
+  }, [icParties, showOnlyPartiesWithPendingApproval, showApproveOnList, pendingApprovalByPartyId]);
   
    const processedGroups = useMemo(() => {
     // Show Ungrouped row only when at least one party is in the Ungrouped bucket.
@@ -517,10 +555,16 @@ function PartyPageContent() {
   usePageMemory(
     "partyPageState",
     activeView,
-    setActiveView,
+    (view) => {
+      if (view === "groups" || view === "ic_ac" || view === "parties") setActiveView(view);
+    },
     selected,
     setSelected,
-    activeView === "parties" ? partiesForPageMemory : processedGroups,
+    activeView === "groups"
+      ? processedGroups
+      : activeView === "ic_ac"
+        ? icParties
+        : partiesForPageMemory,
     pageDataLoading,
     isMobile, // static PC: auto-select chalu — `useQueryNav` sirf URL/mobile list-first ke liye
     partyUrlState.selectedId,
@@ -538,7 +582,9 @@ function PartyPageContent() {
     const href =
       activeView === "groups"
         ? `${masterDetailListHref("party")}?view=groups`
-        : masterDetailListHref("party");
+        : activeView === "ic_ac"
+          ? `${masterDetailListHref("party")}?view=ic_ac`
+          : masterDetailListHref("party");
     if (typeof window !== "undefined") {
       try {
         window.history.replaceState(window.history.state, "", href);
@@ -548,6 +594,7 @@ function PartyPageContent() {
           if (parsed.selections) {
             delete parsed.selections.parties;
             delete parsed.selections.groups;
+            delete parsed.selections.ic_ac;
             localStorage.setItem("partyPageState", JSON.stringify(parsed));
           }
         }
@@ -581,6 +628,10 @@ function PartyPageContent() {
         if (currentActiveView !== "groups") {
           setActiveView("groups");
         }
+      } else if (view === "ic_ac") {
+        if (currentActiveView !== "ic_ac") {
+          setActiveView("ic_ac");
+        }
       } else if (currentActiveView !== "parties") {
         setActiveView("parties");
       }
@@ -602,8 +653,10 @@ function PartyPageContent() {
     const partyItem = processedPartiesRef.current.find((i) => i.id === selectedId);
     let targetView = currentActiveView;
     if (groupItem && partyItem) {
-      targetView = view === "groups" ? "groups" : "parties";
+      targetView =
+        view === "groups" ? "groups" : view === "ic_ac" ? "ic_ac" : "parties";
     } else if (view === "groups" && groupItem) targetView = "groups";
+    else if (view === "ic_ac" && partyItem) targetView = "ic_ac";
     else if (view === "parties" && partyItem) targetView = "parties";
     // No entity-type inference — stale ?selected= without view must not snap tabs on PL refresh.
     if (targetView !== currentActiveView) setActiveView(targetView);
@@ -617,7 +670,9 @@ function PartyPageContent() {
     const canonical =
       view === "groups"
         ? `/party?view=groups&selected=${encodeURIComponent(selectedId)}`
-        : `/party?selected=${encodeURIComponent(selectedId)}`;
+        : view === "ic_ac"
+          ? `/party?view=ic_ac&selected=${encodeURIComponent(selectedId)}`
+          : `/party?selected=${encodeURIComponent(selectedId)}`;
     const canonicalWithModal = appendPreservedModalQueryToHref(canonical);
     if (shouldReplaceWithMasterDetailCanonical(canonicalWithModal)) {
       router.replace(canonicalWithModal, { scroll: false });
@@ -639,7 +694,7 @@ function PartyPageContent() {
     if (suppressPartyListRestoreRef.current) return;
     const { view, selectedId } = readPartyPageUrlState(viewFromUrl, selectedIdFromUrl);
     if (selectedId) return;
-    if (view === "groups") return;
+    if (view === "groups" || view === "ic_ac") return;
     if (activeView !== "parties") return;
     if (selected?.id && selected.id !== OVERDUE_ACCOUNT_ID) return;
 
@@ -679,10 +734,10 @@ function PartyPageContent() {
     mobileMasterDetail,
   ]);
 
-  /** Parties tab + selected id kisi group row se match ho (same id edge) to selection clear. */
+  /** Parties / IC tab + selected id kisi group row se match ho (same id edge) to selection clear. */
   useEffect(() => {
     if (pageDataLoading) return;
-    if (activeView !== "parties") return;
+    if (activeView !== "parties" && activeView !== "ic_ac") return;
     const sid = selected?.id;
     if (!sid) return;
     if (!processedGroups.some((g) => g.id === sid)) return;
@@ -692,10 +747,11 @@ function PartyPageContent() {
   /** Tab switch — turant list row select (null + useEffect = 1–7s random delay fix). */
   const handlePartyGroupsTabChange = useCallback(
     (value: string) => {
-      const tab: "parties" | "groups" = value === "groups" ? "groups" : "parties";
+      const tab: PartyListTab =
+        value === "groups" ? "groups" : value === "ic_ac" ? "ic_ac" : "parties";
       const nextSelected = tabSwitchSelection(
         isMobile,
-        pickPartyTabSelection(tab, partiesForPageMemory, processedGroups)
+        pickPartyTabSelection(tab, partiesForPageMemory, processedGroups, icParties)
       );
       suppressPartyListRestoreRef.current = false;
       pendingPartySelectIdRef.current = nextSelected?.id ?? null;
@@ -717,7 +773,7 @@ function PartyPageContent() {
         /* ignore */
       }
     },
-    [partiesForPageMemory, processedGroups, setActiveView, setSelected, useQueryNav, router, isMobile]
+    [partiesForPageMemory, processedGroups, icParties, setActiveView, setSelected, useQueryNav, router, isMobile]
   );
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
@@ -781,6 +837,30 @@ function PartyPageContent() {
     if (activeView !== "groups") setShowOnlyPartyGroupsWithPendingApproval(false);
   }, [activeView]);
 
+  /** Same-name / same-peer IC Company clearing duplicates → voucher remap + purge losers. */
+  useEffect(() => {
+    const cid = String(companyId || "").trim();
+    if (!cid || pageDataLoading) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const removed = await mergeDuplicateInterCompanyCounterpartyParties(cid);
+        if (!cancelled && removed > 0) {
+          toast.success(
+            removed === 1
+              ? "Merged duplicate IC Company account"
+              : `Merged ${removed} duplicate IC Company accounts`
+          );
+        }
+      } catch (err) {
+        console.warn("[IC] merge duplicate counterparty parties:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, pageDataLoading]);
+
   // Mobile overdue: force bill-wise mode while on this page (party default is already bill_wise; restore on leave)
   useEffect(() => {
     if (isMobile && selectedParty?.id === OVERDUE_ACCOUNT_ID) {
@@ -797,16 +877,19 @@ function PartyPageContent() {
   }, []);
   
   const totalBalance = useMemo(() => {
-    if (activeView === 'parties') {
+    if (activeView === "parties") {
         // Exclude system accounts from total balance
         return processedParties
             .filter(p => !(p as any).isSystemAccount)
             .reduce((acc, party) => acc + party.balance, 0);
     }
+    if (activeView === "ic_ac") {
+      return icParties.reduce((acc, party) => acc + party.balance, 0);
+    }
     // Groups view: sum only user-defined + synthetic groups (processedGroups already excludes system parents)
     return processedGroups
       .reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, processedParties, processedGroups]);
+  }, [activeView, processedParties, processedGroups, icParties]);
 
   const restoreOverdueDetailAfterVoucherDialog = useCallback(() => {
     if (!editingFromOverdueRef.current || !overdueVirtualParty) return;
@@ -824,12 +907,15 @@ function PartyPageContent() {
     pendingPartySelectIdRef.current = item.id;
     setSelected(item);
     // Har viewport: ?selected= URL sync — refresh / wapas aane par wahi party/group khule
+    const isGroup = !("pan" in item);
     const path =
       item.id === OVERDUE_ACCOUNT_ID
         ? `/party?selected=${encodeURIComponent(OVERDUE_ACCOUNT_ID)}`
-        : "pan" in item
-          ? `/party?selected=${encodeURIComponent(item.id)}`
-          : `/party?view=groups&selected=${encodeURIComponent(item.id)}`;
+        : isGroup
+          ? `/party?view=groups&selected=${encodeURIComponent(item.id)}`
+          : activeView === "ic_ac"
+            ? `/party?view=ic_ac&selected=${encodeURIComponent(item.id)}`
+            : `/party?selected=${encodeURIComponent(item.id)}`;
     const syncRouter = useQueryNav && shouldReplaceWithMasterDetailCanonical(path);
     // replaceState pehle — URL effect ko turant sahi id mile (1-click-late bug fix)
     if (typeof window !== "undefined") {
@@ -842,7 +928,7 @@ function PartyPageContent() {
     if (syncRouter) {
       router.replace(path, { scroll: false });
     }
-  }, [router, setSelected, useQueryNav]);
+  }, [router, setSelected, useQueryNav, activeView]);
 
   const partiesForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
@@ -863,6 +949,14 @@ function PartyPageContent() {
     }).length;
   }, [partiesForPartyListView, searchTerm]);
 
+  const filteredIcPartyCount = useMemo(() => {
+    const searchLower = (searchTerm || "").toLowerCase();
+    return (icPartiesForListView || []).filter((p) => {
+      if (!p.name) return false;
+      const matchesSearch = searchLower ? p.name.toLowerCase().includes(searchLower) : true;
+      return matchesSearch;
+    }).length;
+  }, [icPartiesForListView, searchTerm]);
 
   if (!companyId) {
     return (
@@ -888,6 +982,7 @@ function PartyPageContent() {
       <TabsList listChrome>
         <TabsTrigger listChrome value="parties" className="flex-1">Parties</TabsTrigger>
         <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
+        <TabsTrigger listChrome value="ic_ac" className="flex-1">IC / Ac</TabsTrigger>
       </TabsList>
     </Tabs>
   );
@@ -897,7 +992,13 @@ function PartyPageContent() {
       <div className={mlc.searchWrap}>
         <Search className={mlc.searchIcon} />
         <Input
-          placeholder={activeView === "parties" ? "Search parties..." : "Search groups..."}
+          placeholder={
+            activeView === "parties"
+              ? "Search parties..."
+              : activeView === "ic_ac"
+                ? "Search IC accounts..."
+                : "Search groups..."
+          }
           listChrome
           listChromeSearch
           value={searchTerm}
@@ -905,7 +1006,9 @@ function PartyPageContent() {
           autoComplete="off"
         />
       </div>
-      {activeView === "parties" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+      {(activeView === "parties" || activeView === "ic_ac") &&
+      showApproveOnList &&
+      totalPendingApprovalVoucherCount > 0 ? (
         <PendingApprovalListFilterBadge
           compact
           count={totalPendingApprovalVoucherCount}
@@ -935,13 +1038,13 @@ function PartyPageContent() {
             + Add Party
           </PermissionButton>
         </CreatePartyDialog>
-      ) : (
+      ) : activeView === "groups" ? (
         <CreateGroupDialog onGroupCreated={() => {}} groups={processedGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
           <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
             + Add Group
           </PermissionButton>
         </CreateGroupDialog>
-      )}
+      ) : null}
     </div>
   );
 
@@ -972,15 +1075,30 @@ function PartyPageContent() {
     </div>
   );
 
+  const icSectionLabelEl = (
+    <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+      <User className={mlc.sectionIcon} />
+      <span>IC / Ac ({filteredIcPartyCount})</span>
+    </div>
+  );
+
   const listView = (
     <MasterListViewShell
       isMobile={isMobile}
       searchRow={partySearchRowEl}
-      sectionLabel={activeView === "parties" ? partySectionLabelEl : groupSectionLabelEl}
+      sectionLabel={
+        activeView === "parties"
+          ? partySectionLabelEl
+          : activeView === "ic_ac"
+            ? icSectionLabelEl
+            : groupSectionLabelEl
+      }
       tabs={partyTabsEl}
-      quickFilter={activeView === "parties" ? partyListQuickFilter : groupListQuickFilter}
+      quickFilter={
+        activeView === "groups" ? groupListQuickFilter : partyListQuickFilter
+      }
       onQuickFilterChange={
-        activeView === "parties" ? setPartyListQuickFilter : setGroupListQuickFilter
+        activeView === "groups" ? setGroupListQuickFilter : setPartyListQuickFilter
       }
     >
       <div className="relative h-full min-h-0 w-full overflow-hidden">
@@ -1026,6 +1144,29 @@ function PartyPageContent() {
             hideCategoryHeaders
           />
         </div>
+        <div
+          className={cn(
+            "absolute inset-0 flex h-full min-h-0 flex-col overflow-hidden",
+            activeView !== "ic_ac" && "hidden pointer-events-none"
+          )}
+          aria-hidden={activeView !== "ic_ac"}
+        >
+          <PartyList
+            parties={icPartiesForListView}
+            onSelectParty={handleSelect}
+            selectedParty={selectedParty}
+            searchTerm={searchTerm}
+            pendingApprovalByPartyId={pendingApprovalByPartyId}
+            getItemHref={
+              useQueryNav
+                ? (p) => `/party?view=ic_ac&selected=${p.id}`
+                : undefined
+            }
+            quickFilter={partyListQuickFilter}
+            onQuickFilterChange={setPartyListQuickFilter}
+            hideQuickFilterBar
+          />
+        </div>
       </div>
     </MasterListViewShell>
   );
@@ -1058,7 +1199,9 @@ function PartyPageContent() {
           }}
         />
       )}
-      {activeView === 'parties' && selectedParty && selectedParty.id !== OVERDUE_ACCOUNT_ID && (
+      {(activeView === "parties" || activeView === "ic_ac") &&
+        selectedParty &&
+        selectedParty.id !== OVERDUE_ACCOUNT_ID && (
         <PartyDetails party={selectedParty} allParties={processedParties} onPartyUpdated={handlePartyUpdated} onPartyDeleted={() => setSelected(null)} dateRange={partyDetailsDateRange} onDateRangeChange={setPartyDetailsDateRange} userNames={mergedUserNames} />
       )}
       {activeView === 'groups' && selectedGroup && (

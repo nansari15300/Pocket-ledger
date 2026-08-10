@@ -15,10 +15,15 @@ import {
   isInterCompanyMirroredEntityKindSupported,
 } from "@/lib/interCompany/ensureInterCompanyMirroredEntity";
 import {
+  buildInterCompanyJournalNarration,
   buildSourceInterCompanyLegs,
   buildSourceInterCompanyLegsApproved,
   buildTargetInterCompanyLegsApproved,
   buildTargetInterCompanyLegsPending,
+  composeInterCompanyNarrationBase,
+  extractInterCompanyUserNarration,
+  normalizeInterCompanyTargetPostMode,
+  type InterCompanyTargetPostMode,
 } from "@/lib/interCompany/interCompanyPostingLegs";
 import { getNextInterCompanyVoucherNumber } from "@/lib/interCompany/nextInterCompanyVoucherNumber";
 import {
@@ -47,10 +52,18 @@ import {
   flushVoucherOutbox,
 } from "@/lib/localVoucherOutbox";
 import { dispatchVoucherLivePatch } from "@/lib/voucherFormAttachmentSave";
+import { notifyBrowserDbCollectionUpdated } from "@/lib/localCompanyDocMirror";
 import {
   isLocalToLocalInterCompanyPair,
   isPureLocalInterCompanyCompany,
 } from "@/lib/interCompany/localInterCompanyPolicy";
+import {
+  buildInterCompanyPeerPendingProposed,
+  mergeInterCompanyPeerPendingIntoValues,
+  readInterCompanyPeerPending,
+  type InterCompanyPeerPendingFieldKey,
+  type InterCompanyPeerPendingProposed,
+} from "@/lib/interCompany/interCompanyPeerPending";
 import { coerceVoucherDocumentDate, mergeVoucherCalendarDateWithSaveClock } from "@/lib/voucherDateNormalize";
 
 export type InterCompanyLinkDoc = {
@@ -101,6 +114,19 @@ export type SaveInterCompanyPairInput = {
   shareSourceAttachmentsWithPeer?: boolean;
   /** ON = target ki attachments bhi source copy par dikhengi */
   shareTargetAttachmentsWithSource?: boolean;
+  /**
+   * Target destination posting:
+   * - payment_in (default) — target account Payment In jaisa
+   * - journal — target account pe Dr/Cr ulta; company-to-company conduit same
+   */
+  targetPostMode?: InterCompanyTargetPostMode;
+  /**
+   * Kaunsi company se user save kar raha hai.
+   * Pair pehle se exist kare to peer par fields auto-apply nahi — `interCompanyPeerPending` stamp.
+   */
+  editingSide?: "source" | "target";
+  /** Target/source Change Detected — selected pending fields is save par apply */
+  applyPeerPendingFieldKeys?: InterCompanyPeerPendingFieldKey[];
 };
 
 export type SaveInterCompanyPairResult = {
@@ -142,6 +168,26 @@ function newLinkId(): string {
   return `ic-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+/** Peer pending stamp ke baad ledger/UI turant — bina page refresh. */
+function notifyInterCompanyPeerDocLive(
+  companyId: string,
+  voucherId: string,
+  patch: Record<string, unknown>
+): void {
+  const cid = String(companyId || "").trim();
+  const vid = String(voucherId || "").trim();
+  if (!cid || !vid) return;
+  dispatchVoucherLivePatch(cid, vid, { ...patch, id: vid });
+  try {
+    notifyBrowserDbCollectionUpdated(cid, "vouchers", {
+      immediate: true,
+      source: "local_write",
+    });
+  } catch {
+    /* optional */
+  }
+}
+
 function buildVoucherPayload(args: {
   voucherNumber: string;
   dateIso: string;
@@ -171,6 +217,7 @@ function buildVoucherPayload(args: {
   targetCompanyBankLabel?: string;
   shareSourceAttachmentsWithPeer?: boolean;
   shareTargetAttachmentsWithSource?: boolean;
+  targetPostMode?: InterCompanyTargetPostMode;
 }): Record<string, unknown> {
   return {
     type: "inter_company",
@@ -183,6 +230,7 @@ function buildVoucherPayload(args: {
     interCompanyOwnFileUrls: args.ownFileUrls,
     interCompanyShareAttachmentsWithPeer: args.shareSourceAttachmentsWithPeer === true,
     interCompanySharePeerAttachmentsToSource: args.shareTargetAttachmentsWithSource === true,
+    interCompanyTargetPostMode: normalizeInterCompanyTargetPostMode(args.targetPostMode),
     allocations: [],
     linkedPaymentInIds: [],
     targetCompanyId: args.targetCompanyId,
@@ -326,12 +374,14 @@ export async function saveInterCompanyVoucherPair(
   const dateForSave = isCreate
     ? mergeVoucherCalendarDateWithSaveClock(input.date)
     : input.date;
-  const dateIso = dateForSave.toISOString();
-  const amount = Number(input.amount) || 0;
+  let dateIso = dateForSave.toISOString();
+  let amount = Number(input.amount) || 0;
   const sourceOwnFileUrls = input.sourceFileUrls ?? [];
   const targetOwnFileUrls = input.targetFileUrls ?? [];
   const shareSourceAttachmentsWithPeer = input.shareSourceAttachmentsWithPeer === true;
   const shareTargetAttachmentsWithSource = input.shareTargetAttachmentsWithSource === true;
+  const editingSide = input.editingSide === "target" ? "target" : "source";
+  const applyPeerKeys = (input.applyPeerPendingFieldKeys || []).filter(Boolean);
 
   // Har company ka apna inter_company serial — create par alag number; update par purana rakho
   const [sourceCompanyDoc, targetCompanyDoc] = await Promise.all([
@@ -344,24 +394,50 @@ export async function saveInterCompanyVoucherPair(
   let existingSourceApproved = false;
   let existingTargetApproved = false;
 
+  // Stale / missing peer id → create a fresh target copy (Data Entry / failed peer leave orphan source).
+  let resolvedExistingTargetVoucherId = String(input.existingTargetVoucherId || "").trim() || null;
+  let existingSourceRow: Record<string, unknown> | null = null;
+  let existingTargetRow: Record<string, unknown> | null = null;
+
   if (input.existingSourceVoucherId) {
     const existing = await readInterCompanyVoucherRow(
       input.sourceCompanyId,
       input.existingSourceVoucherId
     );
     if (existing) {
+      existingSourceRow = existing;
       sourceVoucherNumber = String(existing.voucherNumber || sourceVoucherNumber);
       existingSourceApproved = existing.isApproved === true;
+      if (!resolvedExistingTargetVoucherId) {
+        const linkedPeer = String(
+          (existing.interCompanyLink as { peerVoucherId?: string } | undefined)?.peerVoucherId || ""
+        ).trim();
+        if (linkedPeer) resolvedExistingTargetVoucherId = linkedPeer;
+      }
     }
-    if (input.existingTargetVoucherId) {
+    if (resolvedExistingTargetVoucherId) {
       const existingTarget = await readInterCompanyVoucherRow(
         input.targetCompanyId,
-        input.existingTargetVoucherId
+        resolvedExistingTargetVoucherId
       );
       if (existingTarget) {
+        existingTargetRow = existingTarget;
         targetVoucherNumber = String(existingTarget.voucherNumber || targetVoucherNumber);
         existingTargetApproved = existingTarget.isApproved === true;
+      } else {
+        // Peer id pointed at a missing voucher — recreate on target.
+        resolvedExistingTargetVoucherId = null;
+        targetVoucherNumber = await getNextInterCompanyVoucherNumber(
+          input.targetCompanyId,
+          targetCompanyDoc
+        );
       }
+    } else {
+      // Orphan source (peer never written) — mint target number on heal save.
+      targetVoucherNumber = await getNextInterCompanyVoucherNumber(
+        input.targetCompanyId,
+        targetCompanyDoc
+      );
     }
   } else {
     sourceVoucherNumber = await getNextInterCompanyVoucherNumber(input.sourceCompanyId, sourceCompanyDoc);
@@ -375,27 +451,33 @@ export async function saveInterCompanyVoucherPair(
     String(sourceCompanyDoc?.ownerId || targetCompanyDoc?.ownerId || input.userId || "").trim() ||
     input.userId;
 
-  const sourceEntityId = String(input.sourceEntityId || "").trim();
   const targetEntityId = String(input.targetEntityId || "").trim();
   // Har IC pair — com-to-com balance ke liye IC · Due from/to party (bank-to-bank par bhi).
   const useIcConduit = true;
 
-  const [sourceIcPartyId, targetIcPartyId] = await Promise.all([
-    ensureInterCompanyCounterpartyParty({
-      companyId: input.sourceCompanyId,
-      peerCompanyId: input.targetCompanyId,
-      peerCompanyName: input.targetCompanyName || "Company",
-      side: "source",
-      ownerId,
-    }),
-    ensureInterCompanyCounterpartyParty({
-      companyId: input.targetCompanyId,
-      peerCompanyId: input.sourceCompanyId,
-      peerCompanyName: input.sourceCompanyName || "Company",
-      side: "target",
-      ownerId,
-    }),
-  ]);
+  // Source ek baar approve ke baad — source account / clearing kabhi move mat karo (txn hatna band).
+  let lockedSourceEntityKind = input.sourceEntityKind;
+  let lockedSourceEntityId = String(input.sourceEntityId || "").trim();
+  let lockedSourceBankId = String(input.sourceCompanyBankAccountId || "").trim();
+  let lockedSourceEntityLabel = String(input.sourceEntityLabel || "").trim();
+  let lockedSourceBankLabel = String(input.sourceCompanyBankLabel || "").trim();
+  if (existingSourceApproved && existingSourceRow) {
+    const sk = String(existingSourceRow.sourceEntityKind || "").trim() as InterCompanyEntityKind;
+    const sid = String(existingSourceRow.sourceEntityId || "").trim();
+    const sBank = String(
+      existingSourceRow.sourceCompanyBankAccountId || existingSourceRow.companyBankAccountId || ""
+    ).trim();
+    if (sk && sid) {
+      lockedSourceEntityKind = sk;
+      lockedSourceEntityId = sid;
+    }
+    if (sBank) lockedSourceBankId = sBank;
+    const sLabel = String(existingSourceRow.sourceEntityLabel || "").trim();
+    if (sLabel) lockedSourceEntityLabel = sLabel;
+    const sBankLabel = String(existingSourceRow.sourceCompanyBankLabel || "").trim();
+    if (sBankLabel) lockedSourceBankLabel = sBankLabel;
+  }
+  const sourceEntityId = lockedSourceEntityId;
 
   // Optional entity (party/staff/tax/expense) — jab select ho to peer company me mirror
   // (naam "IC {code} {full name}"), taaki peer bhi apne ledger me isi entity ko track kar sake.
@@ -407,14 +489,14 @@ export async function saveInterCompanyVoucherPair(
         ensureCompanyInterCompanyCode(input.targetCompanyId, input.targetCompanyName),
     ]);
     await Promise.all([
-      isInterCompanyMirroredEntityKindSupported(input.sourceEntityKind) && sourceEntityId
+      isInterCompanyMirroredEntityKindSupported(lockedSourceEntityKind) && sourceEntityId
         ? ensureInterCompanyMirroredEntity({
             peerCompanyId: input.targetCompanyId,
             originCompanyId: input.sourceCompanyId,
             originCompanyCode: sourceCode,
             originEntityId: sourceEntityId,
-            entityKind: input.sourceEntityKind,
-            entityFullName: input.sourceEntityLabel || "",
+            entityKind: lockedSourceEntityKind,
+            entityFullName: lockedSourceEntityLabel || "",
             ownerId,
           })
         : Promise.resolve(null),
@@ -434,20 +516,109 @@ export async function saveInterCompanyVoucherPair(
     console.warn("[IC] optional entity mirror sync:", err);
   }
 
+  const targetPostModeBase = normalizeInterCompanyTargetPostMode(input.targetPostMode);
+  let workTargetEntityKind = input.targetEntityKind;
+  let workTargetEntityId = String(input.targetEntityId || "").trim();
+  let workTargetEntityLabel = String(input.targetEntityLabel || "").trim();
+  let workTargetBankId = String(input.targetCompanyBankAccountId || "").trim();
+  let workTargetBankLabel = String(input.targetCompanyBankLabel || "").trim();
+  let workNarrationInput = input.narration;
+  let workTargetPostMode = targetPostModeBase;
+  let appliedPeerPendingKeys: InterCompanyPeerPendingFieldKey[] = [];
+  let peerPendingRemainOnOwnSide: InterCompanyPeerPendingProposed | null | undefined;
+
+  // Change Detected apply — pending fields is company ki copy pe merge; baaki pending rehne do
+  if (applyPeerKeys.length > 0) {
+    const ownRow = editingSide === "target" ? existingTargetRow : existingSourceRow;
+    const pending = readInterCompanyPeerPending(ownRow);
+    if (pending) {
+      const merged = mergeInterCompanyPeerPendingIntoValues({
+        base: {
+          amount,
+          dateIso,
+          narration: String(workNarrationInput || ""),
+          sourceEntityKind: lockedSourceEntityKind,
+          sourceEntityId: lockedSourceEntityId,
+          sourceEntityLabel: lockedSourceEntityLabel,
+          targetEntityKind: workTargetEntityKind,
+          targetEntityId: workTargetEntityId,
+          targetEntityLabel: workTargetEntityLabel,
+          sourceCompanyBankAccountId: lockedSourceBankId,
+          sourceCompanyBankLabel: lockedSourceBankLabel,
+          targetCompanyBankAccountId: workTargetBankId,
+          targetCompanyBankLabel: workTargetBankLabel,
+          targetPostMode: workTargetPostMode,
+        },
+        pending,
+        applyKeys: applyPeerKeys,
+      });
+      amount = merged.amount;
+      dateIso = merged.dateIso;
+      workNarrationInput = merged.narration;
+      if (!existingSourceApproved || editingSide === "source") {
+        lockedSourceEntityKind = merged.sourceEntityKind;
+        lockedSourceEntityId = merged.sourceEntityId;
+        lockedSourceEntityLabel = String(merged.sourceEntityLabel || lockedSourceEntityLabel);
+        lockedSourceBankId = merged.sourceCompanyBankAccountId;
+        lockedSourceBankLabel = String(merged.sourceCompanyBankLabel || lockedSourceBankLabel);
+      }
+      workTargetEntityKind = merged.targetEntityKind;
+      workTargetEntityId = merged.targetEntityId;
+      workTargetEntityLabel = String(merged.targetEntityLabel || workTargetEntityLabel);
+      workTargetBankId = merged.targetCompanyBankAccountId;
+      workTargetBankLabel = String(merged.targetCompanyBankLabel || workTargetBankLabel);
+      workTargetPostMode = merged.targetPostMode;
+      appliedPeerPendingKeys = applyPeerKeys;
+      // Apply Selected → poora Change Detected clear (partial remain mat rakho)
+      peerPendingRemainOnOwnSide = null;
+    }
+  }
+
+  const targetPostMode = workTargetPostMode;
+  /** journal = Company→Company (IC Company); payment_in = Account→Account (IC Account). */
+  const clearingMode = targetPostMode === "journal" ? "company" : "account";
+
+  const [sourceIcPartyId, targetIcPartyId] = await Promise.all([
+    ensureInterCompanyCounterpartyParty({
+      companyId: input.sourceCompanyId,
+      peerCompanyId: input.targetCompanyId,
+      peerCompanyName: input.targetCompanyName || "Company",
+      side: "source",
+      ownerId,
+      clearingMode,
+      // Source books: peer = target company entity
+      peerEntityKind: workTargetEntityKind,
+      peerEntityId: workTargetEntityId,
+      peerEntityLabel: workTargetEntityLabel,
+    }),
+    ensureInterCompanyCounterpartyParty({
+      companyId: input.targetCompanyId,
+      peerCompanyId: input.sourceCompanyId,
+      peerCompanyName: input.sourceCompanyName || "Company",
+      side: "target",
+      ownerId,
+      clearingMode,
+      // Target books: peer = source company entity
+      peerEntityKind: lockedSourceEntityKind,
+      peerEntityId: lockedSourceEntityId,
+      peerEntityLabel: lockedSourceEntityLabel,
+    }),
+  ]);
+
   const sourceLegs = existingSourceApproved
     ? buildSourceInterCompanyLegsApproved({
         amount,
-        entityKind: input.sourceEntityKind,
-        entityId: input.sourceEntityId,
-        companyBankAccountId: input.sourceCompanyBankAccountId,
+        entityKind: lockedSourceEntityKind,
+        entityId: lockedSourceEntityId,
+        companyBankAccountId: lockedSourceBankId,
         interCompanyCounterpartyPartyId: sourceIcPartyId,
         useIcConduit,
       })
     : buildSourceInterCompanyLegs({
         amount,
-        entityKind: input.sourceEntityKind,
-        entityId: input.sourceEntityId,
-        companyBankAccountId: input.sourceCompanyBankAccountId,
+        entityKind: lockedSourceEntityKind,
+        entityId: lockedSourceEntityId,
+        companyBankAccountId: lockedSourceBankId,
         interCompanyCounterpartyPartyId: sourceIcPartyId,
         useIcConduit,
       });
@@ -455,26 +626,39 @@ export async function saveInterCompanyVoucherPair(
   const targetLegs = existingTargetApproved
     ? buildTargetInterCompanyLegsApproved({
         amount,
-        entityKind: input.targetEntityKind,
-        entityId: input.targetEntityId,
-        companyBankAccountId: input.targetCompanyBankAccountId,
+        entityKind: workTargetEntityKind,
+        entityId: workTargetEntityId,
+        companyBankAccountId: workTargetBankId,
         interCompanyCounterpartyPartyId: targetIcPartyId,
         useIcConduit,
+        targetPostMode,
       })
     : buildTargetInterCompanyLegsPending({
         amount,
-        entityKind: input.targetEntityKind,
-        entityId: input.targetEntityId,
-        companyBankAccountId: input.targetCompanyBankAccountId,
+        entityKind: workTargetEntityKind,
+        entityId: workTargetEntityId,
+        companyBankAccountId: workTargetBankId,
         interCompanyCounterpartyPartyId: targetIcPartyId,
         useIcConduit,
       });
+
+  const autoNarration = buildInterCompanyJournalNarration({
+    sourceCompanyName: input.sourceCompanyName,
+    sourceEntityLabel: lockedSourceEntityLabel || input.sourceEntityLabel,
+    targetCompanyName: input.targetCompanyName,
+    targetEntityLabel: workTargetEntityLabel || input.targetEntityLabel,
+  });
+  // Auto must + user typed text rakho; blank user → sirf auto
+  const userExtra = extractInterCompanyUserNarration(workNarrationInput, autoNarration);
+  const userNarrationBase = composeInterCompanyNarrationBase(autoNarration, userExtra);
+  const sourceNarration = mergeNarration(userNarrationBase, sourceSuffix);
+  const targetNarration = mergeNarration(userNarrationBase, targetSuffix);
 
   const sourceLink: InterCompanyLinkDoc = {
     linkId,
     role: "source",
     peerCompanyId: input.targetCompanyId,
-    peerVoucherId: input.existingTargetVoucherId || "",
+    peerVoucherId: resolvedExistingTargetVoucherId || "",
   };
 
   const localPair = await isLocalToLocalInterCompanyPair(
@@ -516,103 +700,361 @@ export async function saveInterCompanyVoucherPair(
     voucherNumber: sourceVoucherNumber,
     dateIso,
     amount,
-    narration: mergeNarration(input.narration, sourceSuffix),
+    narration: sourceNarration,
     targetCompanyId: input.targetCompanyId,
-    sourceEntityKind: input.sourceEntityKind,
-    sourceEntityId: input.sourceEntityId,
-    targetEntityKind: input.targetEntityKind,
-    targetEntityId: input.targetEntityId,
-    sourceEntityLabel: input.sourceEntityLabel,
-    targetEntityLabel: input.targetEntityLabel,
+    sourceEntityKind: lockedSourceEntityKind,
+    sourceEntityId: lockedSourceEntityId,
+    targetEntityKind: workTargetEntityKind,
+    targetEntityId: workTargetEntityId,
+    sourceEntityLabel: lockedSourceEntityLabel,
+    targetEntityLabel: workTargetEntityLabel,
     sourceCompanyName: input.sourceCompanyName,
     targetCompanyName: input.targetCompanyName,
     link: sourceLink,
-    entityKind: input.sourceEntityKind,
-    entityId: input.sourceEntityId,
+    entityKind: lockedSourceEntityKind,
+    entityId: lockedSourceEntityId,
     ownFileUrls: sourceOwnFileUrls,
-    companyBankAccountId: input.sourceCompanyBankAccountId,
-    sourceCompanyBankAccountId: input.sourceCompanyBankAccountId,
-    targetCompanyBankAccountId: input.targetCompanyBankAccountId,
-    sourceCompanyBankLabel: input.sourceCompanyBankLabel,
-    targetCompanyBankLabel: input.targetCompanyBankLabel,
+    companyBankAccountId: lockedSourceBankId,
+    sourceCompanyBankAccountId: lockedSourceBankId,
+    targetCompanyBankAccountId: workTargetBankId,
+    sourceCompanyBankLabel: lockedSourceBankLabel,
+    targetCompanyBankLabel: workTargetBankLabel,
     interCompanyCounterpartyPartyId: sourceIcPartyId,
     interCompanyLegs: sourceLegs,
     shareSourceAttachmentsWithPeer,
     shareTargetAttachmentsWithSource,
+    targetPostMode,
   });
-
-  const sourceSaved = await saveVoucher(
-    input.sourceCompanyId,
-    input.userId,
-    sourcePayload,
-    input.existingSourceVoucherId || null,
-    undefined,
-    icHistoryOpts
-  );
 
   const targetLink: InterCompanyLinkDoc = {
     linkId,
     role: "target",
     peerCompanyId: input.sourceCompanyId,
-    peerVoucherId: sourceSaved.id,
+    peerVoucherId: input.existingSourceVoucherId || "",
   };
 
+  const sourceApprovedForTargetVisibility =
+    existingSourceApproved || input.approveSourceAfterSave === true;
+
+  const targetPayloadBase = buildVoucherPayload({
+    voucherNumber: targetVoucherNumber,
+    dateIso,
+    amount,
+    narration: targetNarration,
+    targetCompanyId: input.targetCompanyId,
+    sourceEntityKind: lockedSourceEntityKind,
+    sourceEntityId: lockedSourceEntityId,
+    targetEntityKind: workTargetEntityKind,
+    targetEntityId: workTargetEntityId,
+    sourceEntityLabel: lockedSourceEntityLabel,
+    targetEntityLabel: workTargetEntityLabel,
+    sourceCompanyName: input.sourceCompanyName,
+    targetCompanyName: input.targetCompanyName,
+    link: targetLink,
+    entityKind: workTargetEntityKind,
+    entityId: workTargetEntityId,
+    ownFileUrls: targetOwnFileUrls,
+    companyBankAccountId: workTargetBankId,
+    sourceCompanyBankAccountId: lockedSourceBankId,
+    targetCompanyBankAccountId: workTargetBankId,
+    sourceCompanyBankLabel: lockedSourceBankLabel,
+    targetCompanyBankLabel: workTargetBankLabel,
+    interCompanyCounterpartyPartyId: targetIcPartyId,
+    interCompanyLegs: targetLegs,
+    shareSourceAttachmentsWithPeer,
+    shareTargetAttachmentsWithSource,
+    targetPostMode,
+  });
+
+  const targetKeepsSourceApprovedFlag =
+    sourceApprovedForTargetVisibility ||
+    existingTargetRow?.interCompanySourceApproved === true;
+
   const targetPayload = {
-    ...buildVoucherPayload({
-      voucherNumber: targetVoucherNumber,
-      dateIso,
-      amount,
-      narration: mergeNarration(input.narration, targetSuffix),
-      targetCompanyId: input.targetCompanyId,
-      sourceEntityKind: input.sourceEntityKind,
-      sourceEntityId: input.sourceEntityId,
-      targetEntityKind: input.targetEntityKind,
-      targetEntityId: input.targetEntityId,
-      sourceEntityLabel: input.sourceEntityLabel,
-      targetEntityLabel: input.targetEntityLabel,
-      sourceCompanyName: input.sourceCompanyName,
-      targetCompanyName: input.targetCompanyName,
-      link: targetLink,
-      entityKind: input.targetEntityKind,
-      entityId: input.targetEntityId,
-      ownFileUrls: targetOwnFileUrls,
-      companyBankAccountId: input.targetCompanyBankAccountId,
-      sourceCompanyBankAccountId: input.sourceCompanyBankAccountId,
-      targetCompanyBankAccountId: input.targetCompanyBankAccountId,
-      sourceCompanyBankLabel: input.sourceCompanyBankLabel,
-      targetCompanyBankLabel: input.targetCompanyBankLabel,
-      interCompanyCounterpartyPartyId: targetIcPartyId,
-      interCompanyLegs: targetLegs,
-      shareSourceAttachmentsWithPeer,
-      shareTargetAttachmentsWithSource,
-    }),
-    // Target = incoming copy — unapproved unless already approved (edit recalc)
+    ...targetPayloadBase,
     ...(existingTargetApproved
-      ? {}
+      ? {
+          ...(targetKeepsSourceApprovedFlag ? { interCompanySourceApproved: true } : {}),
+        }
       : {
           isApproved: false,
-          interCompanySourceApproved: existingSourceApproved || false,
+          interCompanySourceApproved: targetKeepsSourceApprovedFlag,
         }),
   };
 
-  const targetSaved = await saveVoucher(
-    input.targetCompanyId,
-    input.userId,
-    targetPayload,
-    input.existingTargetVoucherId || null,
-    undefined,
-    isCreate ? icHistoryOpts : undefined
-  );
+  /** Change Detected apply — pehle se approved copy save pe unapprove na ho. */
+  const peerApplyKeepApprovedOpt =
+    appliedPeerPendingKeys.length > 0
+      ? {
+          approvedByUserId: input.userId,
+          approvedByName: String(input.approverName || input.userId || "").trim() || input.userId,
+        }
+      : undefined;
+  const targetSaveKeepApproved =
+    peerApplyKeepApprovedOpt && existingTargetApproved ? peerApplyKeepApprovedOpt : undefined;
+  const sourceSaveKeepApproved =
+    peerApplyKeepApprovedOpt && existingSourceApproved ? peerApplyKeepApprovedOpt : undefined;
+
+  /** Pair pehle se dono companies par exist — peer auto-overwrite mat karo. */
+  const freezePeerOnEdit =
+    !isCreate && !!input.existingSourceVoucherId && !!resolvedExistingTargetVoucherId;
+
+  let sourceSavedId = String(input.existingSourceVoucherId || "").trim();
+  let targetSavedId = String(resolvedExistingTargetVoucherId || "").trim();
+
+  if (!freezePeerOnEdit) {
+    const sourceSaved = await saveVoucher(
+      input.sourceCompanyId,
+      input.userId,
+      sourcePayload,
+      input.existingSourceVoucherId || null,
+      undefined,
+      icHistoryOpts
+    );
+    sourceSavedId = sourceSaved.id;
+    targetLink.peerVoucherId = sourceSavedId;
+    const targetSaved = await saveVoucher(
+      input.targetCompanyId,
+      input.userId,
+      { ...targetPayload, interCompanyLink: targetLink },
+      resolvedExistingTargetVoucherId,
+      undefined,
+      isCreate || !resolvedExistingTargetVoucherId ? icHistoryOpts : undefined
+    );
+    targetSavedId = targetSaved.id;
+  } else if (editingSide === "source") {
+    const sourceSaved = await saveVoucher(
+      input.sourceCompanyId,
+      input.userId,
+      {
+        ...sourcePayload,
+        interCompanyPeerPending: null,
+      },
+      input.existingSourceVoucherId || null,
+      sourceSaveKeepApproved
+    );
+    sourceSavedId = sourceSaved.id;
+    targetLink.peerVoucherId = sourceSavedId;
+
+    if (appliedPeerPendingKeys.length > 0) {
+      // Change Detected apply — apni company lists me badge turant hatao; peer pe reverse pending mat lagao
+      notifyInterCompanyPeerDocLive(input.sourceCompanyId, sourceSavedId, {
+        interCompanyPeerPending: null,
+        interCompanyLegs: sourceLegs,
+        amount,
+        total: amount,
+        date: dateIso,
+        narration: sourceNarration,
+      });
+    } else {
+      const proposed = existingTargetRow
+        ? buildInterCompanyPeerPendingProposed({
+            existingPeer: existingTargetRow,
+            amount,
+            dateIso,
+            narration: targetNarration,
+            sourceEntityKind: lockedSourceEntityKind,
+            sourceEntityId: lockedSourceEntityId,
+            sourceEntityLabel: lockedSourceEntityLabel,
+            targetEntityKind: workTargetEntityKind,
+            targetEntityId: workTargetEntityId,
+            targetEntityLabel: workTargetEntityLabel,
+            sourceCompanyBankAccountId: lockedSourceBankId,
+            sourceCompanyBankLabel: lockedSourceBankLabel,
+            targetCompanyBankAccountId: workTargetBankId,
+            targetCompanyBankLabel: workTargetBankLabel,
+            targetPostMode,
+          })
+        : null;
+
+      const targetPendingPatch = {
+        interCompanyLink: targetLink,
+        ...(sourceApprovedForTargetVisibility ? { interCompanySourceApproved: true } : {}),
+        interCompanyPeerPending: proposed
+          ? {
+              fromPeerCompanyId: input.sourceCompanyId,
+              fromPeerVoucherId: sourceSavedId,
+              updatedAt: new Date().toISOString(),
+              proposed,
+            }
+          : null,
+      };
+      await patchVoucherFields(input.targetCompanyId, targetSavedId, targetPendingPatch);
+      notifyInterCompanyPeerDocLive(input.targetCompanyId, targetSavedId, targetPendingPatch);
+      // Notification only — amount / legs / isApproved peer pe mat chhedo
+    }
+  } else {
+    // Target company se save — target full update; source pe pending stamp (normal edit)
+    targetLink.peerVoucherId = sourceSavedId;
+    const targetSaved = await saveVoucher(
+      input.targetCompanyId,
+      input.userId,
+      {
+        ...targetPayload,
+        interCompanyLink: targetLink,
+        interCompanyPeerPending:
+          appliedPeerPendingKeys.length > 0
+            ? null
+            : peerPendingRemainOnOwnSide === undefined
+              ? undefined
+              : peerPendingRemainOnOwnSide
+                ? {
+                    fromPeerCompanyId: String(
+                      readInterCompanyPeerPending(existingTargetRow)?.fromPeerCompanyId ||
+                        input.sourceCompanyId
+                    ),
+                    fromPeerVoucherId: String(
+                      readInterCompanyPeerPending(existingTargetRow)?.fromPeerVoucherId || sourceSavedId
+                    ),
+                    updatedAt: new Date().toISOString(),
+                    proposed: peerPendingRemainOnOwnSide,
+                  }
+                : null,
+      },
+      resolvedExistingTargetVoucherId,
+      targetSaveKeepApproved
+    );
+    targetSavedId = targetSaved.id;
+
+    if (appliedPeerPendingKeys.length > 0) {
+      notifyInterCompanyPeerDocLive(input.targetCompanyId, targetSavedId, {
+        interCompanyPeerPending: null,
+        interCompanyLegs: targetLegs,
+        amount,
+        total: amount,
+        date: dateIso,
+        narration: targetNarration,
+      });
+    } else {
+      const proposedOnSource = existingSourceRow
+        ? buildInterCompanyPeerPendingProposed({
+            existingPeer: existingSourceRow,
+            amount,
+            dateIso,
+            narration: sourceNarration,
+            sourceEntityKind: lockedSourceEntityKind,
+            sourceEntityId: lockedSourceEntityId,
+            sourceEntityLabel: lockedSourceEntityLabel,
+            targetEntityKind: workTargetEntityKind,
+            targetEntityId: workTargetEntityId,
+            targetEntityLabel: workTargetEntityLabel,
+            sourceCompanyBankAccountId: lockedSourceBankId,
+            sourceCompanyBankLabel: lockedSourceBankLabel,
+            targetCompanyBankAccountId: workTargetBankId,
+            targetCompanyBankLabel: workTargetBankLabel,
+            targetPostMode,
+          })
+        : null;
+
+      // Source approved account fields — pending me mat stamp karo (lock preserve)
+      let sourceProposed = proposedOnSource;
+      if (sourceProposed && existingSourceApproved) {
+        const scrubbed = { ...sourceProposed };
+        delete scrubbed.sourceEntityKind;
+        delete scrubbed.sourceEntityId;
+        delete scrubbed.sourceEntityLabel;
+        delete scrubbed.sourceCompanyBankAccountId;
+        delete scrubbed.sourceCompanyBankLabel;
+        sourceProposed = Object.keys(scrubbed).length > 0 ? scrubbed : null;
+      }
+
+      const sourcePendingPatch = {
+        interCompanyLink: { ...sourceLink, peerVoucherId: targetSavedId },
+        interCompanyPeerPending: sourceProposed
+          ? {
+              fromPeerCompanyId: input.targetCompanyId,
+              fromPeerVoucherId: targetSavedId,
+              updatedAt: new Date().toISOString(),
+              proposed: sourceProposed,
+            }
+          : null,
+      };
+      await patchVoucherFields(input.sourceCompanyId, sourceSavedId, sourcePendingPatch);
+      notifyInterCompanyPeerDocLive(input.sourceCompanyId, sourceSavedId, sourcePendingPatch);
+    }
+  }
+
+  // Change Detected apply — saveVoucher unapprove ko undo + pending clear (ledger lists live)
+  if (appliedPeerPendingKeys.length > 0) {
+    const approverName = String(input.approverName || input.userId || "").trim() || input.userId;
+    if (editingSide === "target" && existingTargetApproved) {
+      try {
+        await approveVoucherWithHistory(
+          input.targetCompanyId,
+          targetSavedId,
+          input.userId,
+          approverName
+        );
+        const approvedTargetLegs = buildTargetInterCompanyLegsApproved({
+          amount,
+          entityKind: workTargetEntityKind,
+          entityId: workTargetEntityId,
+          companyBankAccountId: workTargetBankId,
+          interCompanyCounterpartyPartyId: targetIcPartyId,
+          useIcConduit,
+          targetPostMode,
+        });
+        const afterApplyPatch = {
+          ...(approvedTargetLegs.length > 0 ? { interCompanyLegs: approvedTargetLegs } : {}),
+          interCompanyPeerPending: null,
+        };
+        await patchVoucherFields(input.targetCompanyId, targetSavedId, afterApplyPatch);
+        notifyInterCompanyPeerDocLive(input.targetCompanyId, targetSavedId, afterApplyPatch);
+      } catch (err) {
+        console.warn("[IC] restore target approval after peer apply:", err);
+        notifyInterCompanyPeerDocLive(input.targetCompanyId, targetSavedId, {
+          interCompanyPeerPending: null,
+        });
+      }
+    } else if (editingSide === "target") {
+      notifyInterCompanyPeerDocLive(input.targetCompanyId, targetSavedId, {
+        interCompanyPeerPending: null,
+      });
+    }
+    if (editingSide === "source" && existingSourceApproved) {
+      try {
+        await approveVoucherWithHistory(
+          input.sourceCompanyId,
+          sourceSavedId,
+          input.userId,
+          approverName
+        );
+        const approvedSourceLegs = buildSourceInterCompanyLegsApproved({
+          amount,
+          entityKind: lockedSourceEntityKind,
+          entityId: lockedSourceEntityId,
+          companyBankAccountId: lockedSourceBankId,
+          interCompanyCounterpartyPartyId: sourceIcPartyId,
+          useIcConduit,
+        });
+        const afterApplySourcePatch = {
+          ...(approvedSourceLegs.length > 0 ? { interCompanyLegs: approvedSourceLegs } : {}),
+          interCompanyPeerPending: null,
+        };
+        await patchVoucherFields(input.sourceCompanyId, sourceSavedId, afterApplySourcePatch);
+        notifyInterCompanyPeerDocLive(input.sourceCompanyId, sourceSavedId, afterApplySourcePatch);
+      } catch (err) {
+        console.warn("[IC] restore source approval after peer apply:", err);
+        notifyInterCompanyPeerDocLive(input.sourceCompanyId, sourceSavedId, {
+          interCompanyPeerPending: null,
+        });
+      }
+    } else if (editingSide === "source") {
+      notifyInterCompanyPeerDocLive(input.sourceCompanyId, sourceSavedId, {
+        interCompanyPeerPending: null,
+      });
+    }
+  }
 
   let attachmentReplicationWarning: string | undefined;
   try {
     const shareResult = await reconcileAndPatchInterCompanyAttachmentSharing({
       sourceCompanyId: input.sourceCompanyId,
-      sourceVoucherId: sourceSaved.id,
+      sourceVoucherId: sourceSavedId,
       sourceOwnFileUrls,
       shareSourceToTarget: shareSourceAttachmentsWithPeer,
       targetCompanyId: input.targetCompanyId,
-      targetVoucherId: targetSaved.id,
+      targetVoucherId: targetSavedId,
       targetOwnFileUrls,
       shareTargetToSource: shareTargetAttachmentsWithSource,
       sourceAttachmentBlobByRef: input.sourceAttachmentBlobByRef,
@@ -625,37 +1067,78 @@ export async function saveInterCompanyVoucherPair(
     console.warn("[IC] attachment share reconcile:", err);
   }
 
-  await patchVoucherFields(input.sourceCompanyId, sourceSaved.id, {
-    interCompanyLink: { ...sourceLink, peerVoucherId: targetSaved.id },
-  });
+  if (!freezePeerOnEdit || editingSide === "source") {
+    const sourceLinkPatch: Record<string, unknown> = {
+      interCompanyLink: { ...sourceLink, peerVoucherId: targetSavedId },
+      ...(appliedPeerPendingKeys.length > 0 && editingSide === "source"
+        ? { interCompanyPeerPending: null }
+        : {}),
+    };
+    await patchVoucherFields(input.sourceCompanyId, sourceSavedId, sourceLinkPatch);
+    if (appliedPeerPendingKeys.length > 0 && editingSide === "source") {
+      notifyInterCompanyPeerDocLive(input.sourceCompanyId, sourceSavedId, sourceLinkPatch);
+    }
+  }
 
   if (input.approveSourceAfterSave) {
     const approverName = String(input.approverName || input.userId || "").trim() || input.userId;
-    await approveVoucherWithHistory(
-      input.sourceCompanyId,
-      sourceSaved.id,
-      input.userId,
-      approverName
-    );
-    const approvedLegs = buildSourceInterCompanyLegsApproved({
-      amount,
-      entityKind: input.sourceEntityKind,
-      entityId: input.sourceEntityId,
-      companyBankAccountId: input.sourceCompanyBankAccountId,
-      interCompanyCounterpartyPartyId: sourceIcPartyId,
-      useIcConduit,
-    });
-    if (approvedLegs.length > 0) {
-      await patchVoucherFields(input.sourceCompanyId, sourceSaved.id, {
-        interCompanyLegs: approvedLegs,
+    // Target company Save & Approve — apni (target) copy approve; source mat chhedo
+    if (editingSide === "target") {
+      await approveVoucherWithHistory(
+        input.targetCompanyId,
+        targetSavedId,
+        input.userId,
+        approverName
+      );
+      const approvedTargetLegs = buildTargetInterCompanyLegsApproved({
+        amount,
+        entityKind: workTargetEntityKind,
+        entityId: workTargetEntityId,
+        companyBankAccountId: workTargetBankId,
+        interCompanyCounterpartyPartyId: targetIcPartyId,
+        useIcConduit,
+        targetPostMode,
       });
+      if (approvedTargetLegs.length > 0) {
+        await patchVoucherFields(input.targetCompanyId, targetSavedId, {
+          interCompanyLegs: approvedTargetLegs,
+          ...(targetKeepsSourceApprovedFlag ? { interCompanySourceApproved: true } : {}),
+        });
+      }
+    } else {
+      await approveVoucherWithHistory(
+        input.sourceCompanyId,
+        sourceSavedId,
+        input.userId,
+        approverName
+      );
+      const approvedLegs = buildSourceInterCompanyLegsApproved({
+        amount,
+        entityKind: lockedSourceEntityKind,
+        entityId: lockedSourceEntityId,
+        companyBankAccountId: lockedSourceBankId,
+        interCompanyCounterpartyPartyId: sourceIcPartyId,
+        useIcConduit,
+      });
+      if (approvedLegs.length > 0) {
+        await patchVoucherFields(input.sourceCompanyId, sourceSavedId, {
+          interCompanyLegs: approvedLegs,
+        });
+      }
     }
+  }
+
+  // Source already approved (or just approved) — target ledger must show the pair copy.
+  if (sourceApprovedForTargetVisibility) {
     try {
-      await patchVoucherFields(input.targetCompanyId, targetSaved.id, {
+      await patchVoucherFields(input.targetCompanyId, targetSavedId, {
         interCompanySourceApproved: true,
       });
     } catch (err) {
       console.warn("[IC] target interCompanySourceApproved sync:", err);
+      throw new Error(
+        "Inter Company target copy saved, but visibility flag failed on the other company. Open the target company and try Save again."
+      );
     }
   }
 
@@ -673,8 +1156,8 @@ export async function saveInterCompanyVoucherPair(
   }
 
   return {
-    sourceId: sourceSaved.id,
-    targetId: targetSaved.id,
+    sourceId: sourceSavedId,
+    targetId: targetSavedId,
     linkId,
     ...(attachmentReplicationWarning ? { attachmentReplicationWarning } : {}),
   };

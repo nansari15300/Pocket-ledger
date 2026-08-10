@@ -18,11 +18,19 @@ const ITEMS: {
 /** localStorage — ribbon collapsed preference (icons-only sidebar) */
 const RIBBON_COLLAPSED_STORAGE_KEY = "interCompanyRibbonCollapsed";
 
+/** Last save popup pay-mode — next save pe default tick */
+export const IC_PAY_MODE_STORAGE_KEY = "interCompanyLastPayMode";
+
+export type InterCompanyPayModeChoice = "account_to_account" | "company_to_company";
+
 type Props = {
   active: InterCompanyRibbonTab;
   onChange: (tab: InterCompanyRibbonTab) => void;
   /** Inter Com System — pending join requests for this company */
   pendingSystemJoinCount?: number;
+  /** Edit: account fields differ from last saved — show under Voucher */
+  changeDetected?: boolean;
+  onChangeDetectedClick?: () => void;
 };
 
 /** Left ribbon — Voucher / Inter Com System; collapse par sirf icon */
@@ -30,6 +38,8 @@ export function InterCompanyRibbonNav({
   active,
   onChange,
   pendingSystemJoinCount = 0,
+  changeDetected = false,
+  onChangeDetectedClick,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -56,7 +66,7 @@ export function InterCompanyRibbonNav({
   return (
     <nav
       className={cn(
-        "app-chrome-sidebar-ribbon pl-dashboard-ribbon-sky flex min-h-0 shrink-0 flex-col gap-1 rounded-lg border border-black shadow-sm dark:border-black",
+        "app-chrome-sidebar-ribbon pl-dashboard-ribbon-sky flex h-full min-h-0 shrink-0 flex-col gap-1 self-stretch rounded-lg border border-black shadow-sm dark:border-black",
         collapsed ? "w-[3.25rem] p-1.5" : "w-full min-w-[11.5rem] p-2"
       )}
       aria-label="Inter company sections"
@@ -118,6 +128,21 @@ export function InterCompanyRibbonNav({
           </button>
         );
       })}
+
+      {changeDetected ? (
+        <button
+          type="button"
+          onClick={() => onChangeDetectedClick?.()}
+          className={cn(
+            "mt-auto rounded-md border border-blue-700/50 bg-blue-100 px-2 py-1.5 text-left text-[10px] font-semibold leading-snug text-blue-950 transition-colors hover:bg-blue-200/80 dark:border-blue-500/40 dark:bg-blue-900/50 dark:text-blue-50 dark:hover:bg-blue-900/70",
+            collapsed && "px-1 text-center text-[9px]"
+          )}
+          title="Compare and apply peer changes"
+          aria-label="Change Detected — compare and apply"
+        >
+          {collapsed ? "Δ" : "Change Detected"}
+        </button>
+      ) : null}
     </nav>
   );
 }

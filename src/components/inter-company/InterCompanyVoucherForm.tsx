@@ -21,6 +21,25 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
@@ -36,14 +55,28 @@ import {
 import { toast } from "sonner";
 import { formatVoucherNumber, parseVoucherNumberPart } from "@/lib/voucherNumberFormat";
 import {
+  buildInterCompanyJournalNarration,
+  buildSourceInterCompanyLegsApproved,
+  buildTargetInterCompanyLegsApproved,
+  composeInterCompanyNarrationBase,
+  extractInterCompanyUserNarration,
+  normalizeInterCompanyTargetPostMode,
+} from "@/lib/interCompany/interCompanyPostingLegs";
+import {
   deleteInterCompanyVoucherLocalCopyOnly,
   saveInterCompanyVoucherPair,
 } from "@/lib/interCompany/saveInterCompanyVoucherPair";
+import {
+  mergeInterCompanyPeerPendingIntoValues,
+  peerPendingProposedFieldKeys,
+  readInterCompanyPeerPending,
+  type InterCompanyPeerPendingFieldKey,
+} from "@/lib/interCompany/interCompanyPeerPending";
 import { reconcileAndPatchInterCompanyAttachmentSharing } from "@/lib/interCompany/interCompanySharedAttachments";
 import { approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
-import { buildSourceInterCompanyLegsApproved } from "@/lib/interCompany/interCompanyPostingLegs";
 import {
   inferInterCompanyEntity,
+  isInterCompanySourceApprovedForTarget,
   readInterCompanyBankLabelSnapshot,
   readInterCompanyCompanyBankId,
   readInterCompanyEntityLabelSnapshot,
@@ -105,8 +138,11 @@ import { InterCompanyVoucherIdentityStrip } from "@/components/inter-company/Int
 import { useStickyInterCompanyCompanyCode } from "@/components/inter-company/useStickyInterCompanyCompanyCode";
 import {
   InterCompanyRibbonNav,
+  IC_PAY_MODE_STORAGE_KEY,
   type InterCompanyRibbonTab,
+  type InterCompanyPayModeChoice,
 } from "@/components/inter-company/InterCompanyRibbonNav";
+import { InterCompanyPayModeInfoButton } from "@/components/inter-company/InterCompanyPayModeInfoButton";
 import { InterCompanyJoinSettingsPanel } from "@/components/inter-company/InterCompanyJoinSettingsPanel";
 import { InterCompanyVoucherFooter } from "@/components/inter-company/InterCompanyVoucherFooter";
 import {
@@ -127,6 +163,45 @@ const interCompanySchema = z.object({
 });
 
 type InterCompanyFormValues = z.infer<typeof interCompanySchema>;
+
+type IcAccountBaseline = {
+  sourcePayeeKind: InterCompanyEntityKind;
+  sourcePayeeId: string;
+  targetPayeeKind: InterCompanyEntityKind;
+  targetPayeeId: string;
+  sourceCompanyBankId: string;
+  targetCompanyBankId: string;
+  sourcePayeeLabel: string;
+  targetPayeeLabel: string;
+  sourceBankLabel: string;
+  targetBankLabel: string;
+};
+
+type IcDiffFieldKey = InterCompanyPeerPendingFieldKey;
+
+type IcAccountDiffRow = {
+  key: IcDiffFieldKey;
+  field: string;
+  oldLabel: string;
+  newLabel: string;
+  /** false = locked / info only */
+  applyable: boolean;
+  note?: string;
+};
+
+type IcSaveOpts = {
+  saveAndNew?: boolean;
+  approveAfterSave?: boolean;
+  saveAndPrint?: boolean;
+  targetPostMode?: "journal" | "payment_in";
+  /**
+   * Selective account apply from local Change detected (form vs baseline).
+   * Listed keys take form values; other account fields keep baseline.
+   */
+  applyAccountKeys?: Array<"sourceBank" | "sourceEntity" | "targetBank" | "targetEntity">;
+  /** Peer pending apply — selected fields from interCompanyPeerPending */
+  applyPeerPendingFieldKeys?: InterCompanyPeerPendingFieldKey[];
+};
 
 /** Edit par entity list me missing row � save-time label snapshot se card/combobox bhare */
 function mergeHydratedEntity(
@@ -322,6 +397,8 @@ export type InterCompanyVoucherFormProps = {
   onRibbonTabChange?: (tab: import("@/components/inter-company/InterCompanyRibbonNav").InterCompanyRibbonTab) => void;
   /** Alerts deep link — `/inter-company?icTab=join` se Join ribbon khule */
   initialRibbonTab?: InterCompanyRibbonTab;
+  /** Edit Trxn header — pay mode badge (Account/Company to Company) */
+  onPayModeLabelChange?: (label: string | null) => void;
 };
 
 export function InterCompanyVoucherForm({
@@ -339,12 +416,13 @@ export function InterCompanyVoucherForm({
   defaultVoucherData,
   onRibbonTabChange,
   initialRibbonTab,
+  onPayModeLabelChange,
 }: InterCompanyVoucherFormProps) {
   const { user, customUser } = useAuth();
   const { can, canEditRecord, canPerformBackdatedAction, canDeleteVoucher, fileAttachmentLimits, allowAttachments, role } =
     usePermissions();
   const { company, companyId, allCompanies } = useCompany();
-  const { formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint, dateSystem } = useDate();
+  const { formatDate, formatDateBS, formatDateBySystem, formatCurrency, formatCurrencyForPrint, dateSystem } = useDate();
 
   const [ribbonTab, setRibbonTab] = useState<InterCompanyRibbonTab>(initialRibbonTab ?? "voucher");
 
@@ -359,6 +437,13 @@ export function InterCompanyVoucherForm({
   /** Source/target company bank � entity account se alag (compound IC legs). */
   const [sourceCompanyBankId, setSourceCompanyBankId] = useState("");
   const [targetCompanyBankId, setTargetCompanyBankId] = useState("");
+  /**
+   * Live source company for combobox + entity lists (edit rematch / My companies).
+   * Create default = current company.
+   */
+  const [sourceCompanyOverrideId, setSourceCompanyOverrideId] = useState("");
+  /** Hydrate-time source home — rematch detect */
+  const sourceHomeCompanyIdRef = useRef("");
   /** Edit: bank id entities list me missing ho to Firestore row */
   const [hydratedSourceBankExtra, setHydratedSourceBankExtra] = useState<InterCompanyEntityDetail | null>(null);
   const [hydratedTargetBankExtra, setHydratedTargetBankExtra] = useState<InterCompanyEntityDetail | null>(null);
@@ -376,6 +461,22 @@ export function InterCompanyVoucherForm({
   /** ON = target ki attachments source copy par bhi dikhengi */
   const [shareTargetAttachmentsWithSource, setShareTargetAttachmentsWithSource] = useState(false);
   const [savedShareTargetAttachmentsWithSource, setSavedShareTargetAttachmentsWithSource] = useState(false);
+  /**
+   * Target post mode — UI ab save popup se (Account→Account / Company→Company).
+   * journal = Company→Company (reverse Dr/Cr); payment_in = Account→Account.
+   */
+  const [postTargetAsJournal, setPostTargetAsJournal] = useState(false);
+  const [savedPostTargetAsJournal, setSavedPostTargetAsJournal] = useState(false);
+  const [payModeDialogOpen, setPayModeDialogOpen] = useState(false);
+  const [payModeChoice, setPayModeChoice] = useState<InterCompanyPayModeChoice | "">("");
+  const [pendingSaveOpts, setPendingSaveOpts] = useState<IcSaveOpts | null>(null);
+  const [changeDetectDialogOpen, setChangeDetectDialogOpen] = useState(false);
+  const [accountDiffRows, setAccountDiffRows] = useState<IcAccountDiffRow[]>([]);
+  const [selectedApplyKeys, setSelectedApplyKeys] = useState<
+    Partial<Record<IcDiffFieldKey, boolean>>
+  >({});
+  const [changeDetectMode, setChangeDetectMode] = useState<"peer" | "local">("peer");
+  const accountBaselineRef = useRef<IcAccountBaseline | null>(null);
   /** Tick: doosri company ki account side bhi edit + save pe apply (jab peer company exist) */
   const [applyAccountChangesToOtherSide, setApplyAccountChangesToOtherSide] = useState(false);
   const [reverseTick, setReverseTick] = useState(0);
@@ -389,13 +490,16 @@ export function InterCompanyVoucherForm({
   useEffect(() => {
     setVoucherOverride(null);
     setApplyAccountChangesToOtherSide(false);
+    accountBaselineRef.current = null;
   }, [voucher?.id]);
 
   const hasPersistedIc = !!(displayVoucher?.id || savedSourceId);
   // IC edit independent — global approve/target view-lock hata diya; sirf permission `editingDisabled`.
   const isInterCompanyEditLocked = false;
   const isCompanyAdmin =
-    role === "owner" || customUser?.role === "CompanyAdmin" || customUser?.role === "SuperAdmin";
+    String(role) === "owner" ||
+    customUser?.role === "CompanyAdmin" ||
+    customUser?.role === "SuperAdmin";
   const fieldsDisabled = editingDisabled || isInterCompanyEditLocked;
 
   const buildIcExtrasSig = useCallback(
@@ -443,6 +547,14 @@ export function InterCompanyVoucherForm({
 
   const targetCompanyId = form.watch("targetCompanyId");
   const { isDirty: isFormDirty } = form.formState;
+
+  // Create: source company default = current (edit hydrate overrides)
+  useEffect(() => {
+    if (displayVoucher?.id || savedSourceId) return;
+    if (!companyId) return;
+    setSourceCompanyOverrideId((prev) => prev || companyId);
+    if (!sourceHomeCompanyIdRef.current) sourceHomeCompanyIdRef.current = companyId;
+  }, [companyId, displayVoucher?.id, savedSourceId]);
 
   const isAutoVoucherEnabled = company?.autoVoucherNumbering?.inter_company ?? true;
 
@@ -581,6 +693,10 @@ export function InterCompanyVoucherForm({
       amount: Number(row.amount || 0),
       narration: String(row.narration || ""),
     });
+    const sourceHome =
+      editIds.sourceEntitiesCompanyId || String(companyId || "").trim();
+    sourceHomeCompanyIdRef.current = sourceHome;
+    setSourceCompanyOverrideId(sourceHome);
     const sourceEntity = inferInterCompanyEntity(row, "source");
     const targetEntity = inferInterCompanyEntity(row, "target");
     if (sourceEntity) {
@@ -647,6 +763,10 @@ export function InterCompanyVoucherForm({
     setShareTargetAttachmentsWithSource(shareTarget);
     setSavedShareTargetAttachmentsWithSource(shareTarget);
 
+    const journalMode = normalizeInterCompanyTargetPostMode(row.interCompanyTargetPostMode) === "journal";
+    setPostTargetAsJournal(journalMode);
+    setSavedPostTargetAsJournal(journalMode);
+
     // Edit: company bank — pehle is doc par denormalized ids; phir peer se missing side + peer ki apni attachments
     let bankHydrateCancelled = false;
     void (async () => {
@@ -705,6 +825,20 @@ export function InterCompanyVoucherForm({
             targetFiles: targetFilesNext,
           })
         );
+        accountBaselineRef.current = {
+          sourcePayeeKind: (sourceEntity?.kind || "party") as InterCompanyEntityKind,
+          sourcePayeeId: sourceEntity?.id || "",
+          targetPayeeKind: (targetEntity?.kind || "party") as InterCompanyEntityKind,
+          targetPayeeId: targetEntity?.id || "",
+          sourceCompanyBankId: srcBank || "",
+          targetCompanyBankId: tgtBank || "",
+          sourcePayeeLabel:
+            readInterCompanyEntityLabelSnapshot(row, "source") || sourceEntity?.id || "—",
+          targetPayeeLabel:
+            readInterCompanyEntityLabelSnapshot(row, "target") || targetEntity?.id || "—",
+          sourceBankLabel: readInterCompanyBankLabelSnapshot(row, "source") || srcBank || "—",
+          targetBankLabel: readInterCompanyBankLabelSnapshot(row, "target") || tgtBank || "—",
+        };
       }
     })();
 
@@ -837,12 +971,17 @@ export function InterCompanyVoucherForm({
     [displayVoucher, companyId]
   );
 
-  const sourceEntitiesCompanyId = hasPersistedIc
-    ? editEntityCompanyIds.sourceEntitiesCompanyId
-    : companyId || "";
-  const targetEntitiesCompanyId = hasPersistedIc
-    ? editEntityCompanyIds.targetEntitiesCompanyId
-    : targetCompanyId;
+  const sourceEntitiesCompanyId = String(
+    sourceCompanyOverrideId ||
+      (hasPersistedIc ? editEntityCompanyIds.sourceEntitiesCompanyId : companyId) ||
+      ""
+  ).trim();
+  // Live form target — My-company rematch pe purane IC-system peer id mat chipkao
+  const targetEntitiesCompanyId = String(
+    targetCompanyId ||
+      (hasPersistedIc ? editEntityCompanyIds.targetEntitiesCompanyId : "") ||
+      ""
+  ).trim();
 
   const { entities: sourceEntitiesRaw, loading: sourceEntitiesLoading } =
     useInterCompanyEntities(sourceEntitiesCompanyId);
@@ -924,24 +1063,16 @@ export function InterCompanyVoucherForm({
     [allCompanies, displayTargetCompanyId]
   );
 
-  // Edit: source column — peer company ka real row (target-copy se kholo to current company source nahi)
+  // Edit: source column — live override / peer / current
   const sourceCompanyForDisplay = useMemo(() => {
-    const sid = hasPersistedIc
-      ? editEntityCompanyIds.sourceEntitiesCompanyId
-      : companyId || "";
-    return (allCompanies || []).find((c) => c.id === sid) ?? company ?? null;
-  }, [
-    hasPersistedIc,
-    editEntityCompanyIds.sourceEntitiesCompanyId,
-    companyId,
-    allCompanies,
-    company,
-  ]);
+    const sid = sourceEntitiesCompanyId || companyId || "";
+    return (allCompanies || []).find((c) => c.id === sid) ?? (sid === companyId ? company : null);
+  }, [sourceEntitiesCompanyId, companyId, allCompanies, company]);
 
   const isPeerSourceCompany =
     hasPersistedIc &&
-    !!editEntityCompanyIds.sourceEntitiesCompanyId &&
-    editEntityCompanyIds.sourceEntitiesCompanyId !== companyId;
+    !!sourceEntitiesCompanyId &&
+    sourceEntitiesCompanyId !== companyId;
 
   const sourceStickyCompanyCode = useStickyInterCompanyCompanyCode(sourceCompanyForDisplay);
   const targetStickyCompanyCode = useStickyInterCompanyCompanyCode(targetCompany);
@@ -967,16 +1098,30 @@ export function InterCompanyVoucherForm({
     String(targetCompanyId || displayTargetCompanyId || icLink?.peerCompanyId || "").trim()
   );
   const canEditOtherSideAccounts = applyAccountChangesToOtherSide && peerCompanyExists;
+  /** My-company rematch — doosri side accounts bina tick ke editable (purana IC-system peer chhod diya) */
+  const targetCompanyRematched =
+    hasPersistedIc &&
+    icViewerSide === "source" &&
+    Boolean(String(targetCompanyId || "").trim()) &&
+    String(targetCompanyId || "").trim() !==
+      String(
+        editEntityCompanyIds.targetCompanyFieldId || icLink?.peerCompanyId || ""
+      ).trim();
+  const sourceCompanyRematched =
+    hasPersistedIc &&
+    Boolean(String(sourceCompanyOverrideId || "").trim()) &&
+    String(sourceCompanyOverrideId || "").trim() !==
+      String(sourceHomeCompanyIdRef.current || editEntityCompanyIds.sourceEntitiesCompanyId || "").trim();
   const sourceSideDisabled = !hasPersistedIc
     ? fieldsDisabled
     : icViewerSide === "source"
       ? fieldsDisabled
-      : !canEditOtherSideAccounts;
+      : !(canEditOtherSideAccounts || sourceCompanyRematched);
   const targetSideDisabled = !hasPersistedIc
     ? fieldsDisabled
     : icViewerSide === "target"
       ? fieldsDisabled
-      : !canEditOtherSideAccounts;
+      : !(canEditOtherSideAccounts || targetCompanyRematched);
   const sourceAttachDisabled = !hasPersistedIc
     ? fieldsDisabled
     : icViewerSide !== "source" || fieldsDisabled;
@@ -1024,10 +1169,11 @@ export function InterCompanyVoucherForm({
     can("approve_transactions") &&
     (showSaveAndApproveOnCreate || isCompanyAdmin);
 
-  /** Saved source copy — Approve / Save & Approve */
+  /** Saved voucher — Approve / Save & Approve (source ya target; role `approve_transactions`) */
   const icShowApproveButton =
-    icViewerSide === "source" &&
-    (showApproveButton || (isCompanyAdmin && can("approve_transactions") && !!currentLinkedVoucherId));
+    !!currentLinkedVoucherId &&
+    can("approve_transactions") &&
+    (showApproveButton || isCompanyAdmin);
 
   /** Reverted — source/target header par blue pill (ledger type pill jaisa) */
   const showIcRevertedBadge =
@@ -1040,24 +1186,104 @@ export function InterCompanyVoucherForm({
   const targetCompanyIdForAttachBox =
     icViewerSide === "target" ? companyId : displayTargetCompanyId || icLink?.peerCompanyId || null;
 
-  /** Target dropdown — joined partners; edit par saved target id missing ho to option add */
+  /** Target dropdown — joined partners; edit par saved / peer id missing ho to option add */
   const targetComboboxOptions = useMemo(
     () =>
       targetComboboxOptionsIncluding([
         displayTargetCompanyId,
         editEntityCompanyIds.targetCompanyFieldId,
+        icLink?.peerCompanyId,
+        icViewerSide === "target" ? companyId : null,
       ]),
     [
       targetComboboxOptionsIncluding,
       displayTargetCompanyId,
       editEntityCompanyIds.targetCompanyFieldId,
+      icLink?.peerCompanyId,
+      icViewerSide,
+      companyId,
     ]
   );
 
   const targetCompanyDisplayName =
     targetCompany?.name ||
     joinedPartnerRowById.get(displayTargetCompanyId)?.name ||
+    String((displayVoucher as { targetCompanyName?: string } | undefined)?.targetCompanyName || "").trim() ||
+    (icViewerSide === "target" ? String(company?.name || "").trim() : "") ||
     "";
+
+  /** Source dropdown — My / joined; edit rematch */
+  const sourceComboboxOptions = useMemo(
+    () =>
+      targetComboboxOptionsIncluding([
+        sourceEntitiesCompanyId,
+        companyId,
+        editEntityCompanyIds.sourceEntitiesCompanyId,
+        icLink?.peerCompanyId,
+      ]),
+    [
+      targetComboboxOptionsIncluding,
+      sourceEntitiesCompanyId,
+      companyId,
+      editEntityCompanyIds.sourceEntitiesCompanyId,
+      icLink?.peerCompanyId,
+    ]
+  );
+
+  const sourceCompanySelectLocked = fieldsDisabled;
+
+  const handleSourceCompanyChange = (id: string) => {
+    if (sourceCompanySelectLocked) return;
+    const nextId = String(id || "").trim();
+    if (!nextId || nextId === sourceEntitiesCompanyId) return;
+    setSourceCompanyOverrideId(nextId);
+    setSourcePayeeId("");
+    setSourceCompanyBankId("");
+    if (!hasPersistedIc) return;
+    const home = String(sourceHomeCompanyIdRef.current || "").trim();
+    // Rematch away from hydrate-time home — purana peer voucher chipkao mat
+    if (home && nextId !== home) {
+      if (icViewerSide === "source" && nextId !== companyId) {
+        setSavedSourceId(null);
+        setPeerTargetVoucherId(null);
+        setLinkId(null);
+      } else if (icViewerSide === "target") {
+        setSavedSourceId(null);
+      }
+    }
+  };
+
+  /**
+   * Target company combobox:
+   * - Target-side viewer: locked (yehi company "target" hai)
+   * - Source edit / create: unlocked (My companies rematch)
+   */
+  const targetCompanySelectLocked =
+    fieldsDisabled || (hasPersistedIc && icViewerSide === "target");
+
+  // Purane source voucher — targetCompanyId empty; peerCompanyId se heal
+  useEffect(() => {
+    if (!hasPersistedIc) return;
+    const cur = String(form.getValues("targetCompanyId") || "").trim();
+    if (cur) return;
+    const healId =
+      icViewerSide === "target"
+        ? String(companyId || "").trim()
+        : String(
+            icLink?.peerCompanyId ||
+              editEntityCompanyIds.targetCompanyFieldId ||
+              ""
+          ).trim();
+    if (!healId) return;
+    form.setValue("targetCompanyId", healId, { shouldDirty: false });
+  }, [
+    hasPersistedIc,
+    icViewerSide,
+    companyId,
+    icLink?.peerCompanyId,
+    editEntityCompanyIds.targetCompanyFieldId,
+    form,
+  ]);
 
   // Edit: peer source / target company ka Inter Co. A/c — real company row se display
   useEffect(() => {
@@ -1091,6 +1317,30 @@ export function InterCompanyVoucherForm({
     () => targetEntities.find((e) => e.kind === targetPayeeKind && e.id === targetPayeeId) ?? null,
     [targetEntities, targetPayeeKind, targetPayeeId]
   );
+
+  // Auto narration must refresh — user typed extra lines rakho.
+  useEffect(() => {
+    if (fieldsDisabled || icViewerSide === "target") return;
+    const autoNarration = buildInterCompanyJournalNarration({
+      sourceCompanyName: sourceCompanyForDisplay?.name || company?.name,
+      sourceEntityLabel: sourceSelected?.label,
+      targetCompanyName: targetCompany?.name,
+      targetEntityLabel: targetSelected?.label,
+    });
+    const userExtra = extractInterCompanyUserNarration(form.getValues("narration"), autoNarration);
+    form.setValue("narration", composeInterCompanyNarrationBase(autoNarration, userExtra), {
+      shouldDirty: true,
+    });
+  }, [
+    fieldsDisabled,
+    icViewerSide,
+    sourceCompanyForDisplay?.name,
+    company?.name,
+    sourceSelected?.label,
+    targetCompany?.name,
+    targetSelected?.label,
+    form,
+  ]);
 
   const validateEntities = () => {
     if (!targetCompanyId) {
@@ -1148,7 +1398,8 @@ export function InterCompanyVoucherForm({
     !savedSourceId ||
     icExtrasDirty ||
     shareSourceAttachmentsWithPeer !== savedShareSourceAttachmentsWithPeer ||
-    shareTargetAttachmentsWithSource !== savedShareTargetAttachmentsWithSource;
+    shareTargetAttachmentsWithSource !== savedShareTargetAttachmentsWithSource ||
+    postTargetAsJournal !== savedPostTargetAsJournal;
 
   const ownSideSaveBlocked =
     hasPersistedIc
@@ -1157,11 +1408,7 @@ export function InterCompanyVoucherForm({
         : sourceSideDisabled
       : fieldsDisabled;
 
-  const processAndSave = async (opts?: {
-    saveAndNew?: boolean;
-    approveAfterSave?: boolean;
-    saveAndPrint?: boolean;
-  }) => {
+  const processAndSave = async (opts?: IcSaveOpts) => {
     // Apni side editable hona zaroori — bina tick ke source-view par target RO tha to purana guard Save rok deta tha
     if (ownSideSaveBlocked || isLoading) return;
     if (!user?.uid || !companyId) {
@@ -1170,11 +1417,96 @@ export function InterCompanyVoucherForm({
     }
     if (!validateEntities()) return;
 
+    const asJournal =
+      opts?.targetPostMode != null
+        ? opts.targetPostMode === "journal"
+        : postTargetAsJournal;
+
+    const baseline = accountBaselineRef.current;
+    const applyKeySet = new Set(opts?.applyAccountKeys || []);
+    const resolveAccountField = <T,>(
+      key: "sourceBank" | "sourceEntity" | "targetBank" | "targetEntity",
+      formValue: T,
+      baselineValue: T | undefined
+    ): T => {
+      // Create / no snapshot yet — form is source of truth
+      if (!hasPersistedIc || !baseline || baselineValue === undefined) return formValue;
+      // Selective apply from Change detected
+      if (applyKeySet.size > 0) {
+        return applyKeySet.has(key) ? formValue : baselineValue;
+      }
+      // Normal Save: pending account edits apply nahi — txn pehle wale account pe rahe
+      return baselineValue;
+    };
+
+    const saveSourcePayeeKind = resolveAccountField(
+      "sourceEntity",
+      sourcePayeeKind,
+      baseline?.sourcePayeeKind
+    );
+    const saveSourcePayeeId = resolveAccountField(
+      "sourceEntity",
+      sourcePayeeId,
+      baseline?.sourcePayeeId
+    );
+    const saveTargetPayeeKind = resolveAccountField(
+      "targetEntity",
+      targetPayeeKind,
+      baseline?.targetPayeeKind
+    );
+    const saveTargetPayeeId = resolveAccountField(
+      "targetEntity",
+      targetPayeeId,
+      baseline?.targetPayeeId
+    );
+    const saveSourceBankId = resolveAccountField(
+      "sourceBank",
+      sourceCompanyBankId,
+      baseline?.sourceCompanyBankId
+    );
+    const saveTargetBankId = resolveAccountField(
+      "targetBank",
+      targetCompanyBankId,
+      baseline?.targetCompanyBankId
+    );
+
+    const sourceEntityLabelForSave =
+      saveSourcePayeeId === sourcePayeeId
+        ? sourceSelected?.label || baseline?.sourcePayeeLabel
+        : baseline?.sourcePayeeLabel || sourceSelected?.label;
+    const targetEntityLabelForSave =
+      saveTargetPayeeId === targetPayeeId
+        ? targetSelected?.label || baseline?.targetPayeeLabel
+        : baseline?.targetPayeeLabel || targetSelected?.label;
+
+    const autoNarration = buildInterCompanyJournalNarration({
+      sourceCompanyName: sourceCompanyForDisplay?.name || company?.name,
+      sourceEntityLabel: sourceEntityLabelForSave,
+      targetCompanyName: targetCompany?.name,
+      targetEntityLabel: targetEntityLabelForSave,
+    });
+    const valuesBefore = form.getValues();
+    const userExtra = extractInterCompanyUserNarration(valuesBefore.narration, autoNarration);
+    const narrationForSave = composeInterCompanyNarrationBase(autoNarration, userExtra);
+    form.setValue("narration", narrationForSave, { shouldDirty: true });
+
     const values = form.getValues();
-    const toastId = toast.loading(savedSourceId ? "Updating�" : "Saving�");
+    const toastId = toast.loading(savedSourceId ? "Updating…" : "Saving…");
     setIsLoading(true);
     try {
       const isEdit = !!savedSourceId;
+      if (
+        hasPersistedIc &&
+        accountBaselineRef.current &&
+        !(opts?.applyAccountKeys && opts.applyAccountKeys.length > 0) &&
+        !(opts?.applyPeerPendingFieldKeys && opts.applyPeerPendingFieldKeys.length > 0) &&
+        !peerPendingDoc &&
+        computeAccountDiffs().length > 0
+      ) {
+        toast.message("Account edits not applied yet", {
+          description: "Use Change Detected on the Voucher ribbon to apply selected fields.",
+        });
+      }
       const voucherDate = values.date instanceof Date ? values.date : new Date(values.date);
 
       if (isEdit && savedSourceId) {
@@ -1203,18 +1535,42 @@ export function InterCompanyVoucherForm({
       }
 
       const link = readInterCompanyLink(voucher as Record<string, unknown> | undefined);
-      const peerVoucherId = peerTargetVoucherId || link?.peerVoucherId || null;
-      // Target apni copy se save kare to "source" = peer (asli source company), "target" = current company
+      // Live combobox / My-company rematch — form selection primary
       const resolvedSourceCompanyId =
-        icViewerSide === "target"
+        String(sourceCompanyOverrideId || "").trim() ||
+        (icViewerSide === "target"
           ? String(icLink?.peerCompanyId || link?.peerCompanyId || "").trim() || companyId
-          : companyId;
+          : companyId);
       const resolvedTargetCompanyId =
         icViewerSide === "target" ? companyId : String(values.targetCompanyId || "").trim();
-      const sourcePlanContext =
+      const sourceHome = String(sourceHomeCompanyIdRef.current || "").trim();
+      const existingSourceForSave = (() => {
+        if (!savedSourceId) return null;
+        if (icViewerSide === "source") {
+          return resolvedSourceCompanyId === companyId ? savedSourceId : null;
+        }
+        const peerHome =
+          sourceHome || String(icLink?.peerCompanyId || link?.peerCompanyId || "").trim();
+        return peerHome && resolvedSourceCompanyId === peerHome ? savedSourceId : null;
+      })();
+      // Rematch target company — peer voucher sirf usi company me dhundo
+      const peerVoucherId =
         icViewerSide === "target"
-          ? { planId: sourceCompanyForDisplay?.planId, storageOption: sourceCompanyForDisplay?.storageOption }
-          : { planId: company?.planId, storageOption: company?.storageOption };
+          ? peerTargetVoucherId || link?.peerVoucherId || null
+          : (() => {
+              const hid = String(
+                editEntityCompanyIds.targetCompanyFieldId ||
+                  (displayVoucher as { targetCompanyId?: string } | undefined)?.targetCompanyId ||
+                  icLink?.peerCompanyId ||
+                  ""
+              ).trim();
+              if (hid && resolvedTargetCompanyId && hid !== resolvedTargetCompanyId) return null;
+              return peerTargetVoucherId || link?.peerVoucherId || null;
+            })();
+      const sourcePlanContext = {
+        planId: sourceCompanyForDisplay?.planId ?? company?.planId,
+        storageOption: sourceCompanyForDisplay?.storageOption ?? company?.storageOption,
+      };
       const targetPlanContext =
         icViewerSide === "target"
           ? { planId: company?.planId, storageOption: company?.storageOption }
@@ -1224,7 +1580,7 @@ export function InterCompanyVoucherForm({
         { fileUrls: sourceFileUrls, attachmentBlobByRef: sourceAttachmentBlobByRef },
         { fileUrls: targetFileUrls, attachmentBlobByRef: targetAttachmentBlobByRef },
       ] = await Promise.all([
-        resolveFileUrlsForSave(sourceFiles, resolvedSourceCompanyId, savedSourceId, sourcePlanContext),
+        resolveFileUrlsForSave(sourceFiles, resolvedSourceCompanyId, existingSourceForSave, sourcePlanContext),
         resolveFileUrlsForSave(targetFiles, resolvedTargetCompanyId, peerVoucherId, targetPlanContext),
       ]);
 
@@ -1236,24 +1592,28 @@ export function InterCompanyVoucherForm({
         voucherNumber: values.voucherNumber,
         date: voucherDate,
         amount: values.amount,
-        narration: values.narration,
-        sourceEntityKind: sourcePayeeKind,
-        sourceEntityId: sourcePayeeId,
-        targetEntityKind: targetPayeeKind,
-        targetEntityId: targetPayeeId,
-        sourceCompanyBankAccountId: sourceCompanyBankId,
-        targetCompanyBankAccountId: targetCompanyBankId,
+        narration: narrationForSave,
+        sourceEntityKind: saveSourcePayeeKind,
+        sourceEntityId: saveSourcePayeeId,
+        targetEntityKind: saveTargetPayeeKind,
+        targetEntityId: saveTargetPayeeId,
+        sourceCompanyBankAccountId: saveSourceBankId,
+        targetCompanyBankAccountId: saveTargetBankId,
         sourceCompanyBankLabel:
-          sourceEntities.find((e) => e.kind === "bank" && e.id === sourceCompanyBankId)?.label ||
+          sourceEntities.find((e) => e.kind === "bank" && e.id === saveSourceBankId)?.label ||
+          (saveSourceBankId === sourceCompanyBankId ? null : baseline?.sourceBankLabel) ||
+          baseline?.sourceBankLabel ||
           readInterCompanyBankLabelSnapshot(voucherRow, "source"),
         targetCompanyBankLabel:
-          targetEntities.find((e) => e.kind === "bank" && e.id === targetCompanyBankId)?.label ||
+          targetEntities.find((e) => e.kind === "bank" && e.id === saveTargetBankId)?.label ||
+          (saveTargetBankId === targetCompanyBankId ? null : baseline?.targetBankLabel) ||
+          baseline?.targetBankLabel ||
           readInterCompanyBankLabelSnapshot(voucherRow, "target"),
-        sourceEntityLabel: sourceSelected?.label,
-        targetEntityLabel: targetSelected?.label,
+        sourceEntityLabel: sourceEntityLabelForSave,
+        targetEntityLabel: targetEntityLabelForSave,
         sourceCompanyName: sourceCompanyForDisplay?.name || company?.name,
         targetCompanyName: targetCompany?.name,
-        existingSourceVoucherId: savedSourceId,
+        existingSourceVoucherId: existingSourceForSave,
         existingTargetVoucherId: peerVoucherId,
         existingLinkId: linkId || link?.linkId,
         approveSourceAfterSave: opts?.approveAfterSave,
@@ -1263,6 +1623,9 @@ export function InterCompanyVoucherForm({
         targetAttachmentBlobByRef,
         shareSourceAttachmentsWithPeer,
         shareTargetAttachmentsWithSource,
+        targetPostMode: asJournal ? "journal" : "payment_in",
+        editingSide: icViewerSide === "target" ? "target" : "source",
+        applyPeerPendingFieldKeys: opts?.applyPeerPendingFieldKeys,
       });
 
       setSavedSourceId(result.sourceId);
@@ -1272,14 +1635,121 @@ export function InterCompanyVoucherForm({
       setTargetFiles(targetFileUrls);
       setSavedShareSourceAttachmentsWithPeer(shareSourceAttachmentsWithPeer);
       setSavedShareTargetAttachmentsWithSource(shareTargetAttachmentsWithSource);
+      setPostTargetAsJournal(asJournal);
+      setSavedPostTargetAsJournal(asJournal);
+      form.setValue("narration", narrationForSave, { shouldDirty: false });
+
+      // Peer pending apply — form/ledger values ko selected keys se sync karo
+      const pendingBefore = readInterCompanyPeerPending(
+        (displayVoucher || voucher) as Record<string, unknown> | null
+      );
+      if (opts?.applyPeerPendingFieldKeys?.length && pendingBefore) {
+        const merged = mergeInterCompanyPeerPendingIntoValues({
+          base: {
+            amount: Number(values.amount) || 0,
+            dateIso: voucherDate.toISOString(),
+            narration: narrationForSave,
+            sourceEntityKind: saveSourcePayeeKind,
+            sourceEntityId: saveSourcePayeeId,
+            sourceEntityLabel: String(sourceEntityLabelForSave || ""),
+            targetEntityKind: saveTargetPayeeKind,
+            targetEntityId: saveTargetPayeeId,
+            targetEntityLabel: String(targetEntityLabelForSave || ""),
+            sourceCompanyBankAccountId: saveSourceBankId,
+            sourceCompanyBankLabel: baseline?.sourceBankLabel,
+            targetCompanyBankAccountId: saveTargetBankId,
+            targetCompanyBankLabel: baseline?.targetBankLabel,
+            targetPostMode: asJournal ? "journal" : "payment_in",
+          },
+          pending: pendingBefore,
+          applyKeys: opts.applyPeerPendingFieldKeys,
+        });
+        form.setValue("amount", merged.amount, { shouldDirty: false });
+        form.setValue("date", new Date(merged.dateIso), { shouldDirty: false });
+        form.setValue("narration", merged.narration, { shouldDirty: false });
+        setSourcePayeeKind(merged.sourceEntityKind);
+        setSourcePayeeId(merged.sourceEntityId);
+        setTargetPayeeKind(merged.targetEntityKind);
+        setTargetPayeeId(merged.targetEntityId);
+        setSourceCompanyBankId(merged.sourceCompanyBankAccountId);
+        setTargetCompanyBankId(merged.targetCompanyBankAccountId);
+        setPostTargetAsJournal(merged.targetPostMode === "journal");
+        setSavedPostTargetAsJournal(merged.targetPostMode === "journal");
+        accountBaselineRef.current = {
+          sourcePayeeKind: merged.sourceEntityKind,
+          sourcePayeeId: merged.sourceEntityId,
+          targetPayeeKind: merged.targetEntityKind,
+          targetPayeeId: merged.targetEntityId,
+          sourceCompanyBankId: merged.sourceCompanyBankAccountId,
+          targetCompanyBankId: merged.targetCompanyBankAccountId,
+          sourcePayeeLabel: String(merged.sourceEntityLabel || "—"),
+          targetPayeeLabel: String(merged.targetEntityLabel || "—"),
+          sourceBankLabel: String(merged.sourceCompanyBankLabel || merged.sourceCompanyBankAccountId || "—"),
+          targetBankLabel: String(merged.targetCompanyBankLabel || merged.targetCompanyBankAccountId || "—"),
+        };
+        // Clear stale pending from override so ribbon updates before parent reload
+        const wasApprovedBeforeApply = Boolean(
+          ((displayVoucher || voucher) as { isApproved?: boolean } | null | undefined)?.isApproved
+        );
+        setVoucherOverride({
+          ...((displayVoucher || voucher || {}) as Record<string, unknown>),
+          amount: merged.amount,
+          total: merged.amount,
+          date: merged.dateIso,
+          narration: merged.narration,
+          sourceEntityKind: merged.sourceEntityKind,
+          sourceEntityId: merged.sourceEntityId,
+          targetEntityKind: merged.targetEntityKind,
+          targetEntityId: merged.targetEntityId,
+          sourceCompanyBankAccountId: merged.sourceCompanyBankAccountId,
+          targetCompanyBankAccountId: merged.targetCompanyBankAccountId,
+          interCompanyTargetPostMode: merged.targetPostMode,
+          interCompanyPeerPending: null,
+          ...(wasApprovedBeforeApply ? { isApproved: true } : {}),
+          id: (displayVoucher || voucher)?.id,
+        });
+      }
+
+      // Baseline = what ledger actually has after this save (pending UI account edits stay in form)
+      if (!(opts?.applyPeerPendingFieldKeys && opts.applyPeerPendingFieldKeys.length > 0)) {
+        accountBaselineRef.current = {
+          sourcePayeeKind: saveSourcePayeeKind,
+          sourcePayeeId: saveSourcePayeeId,
+          targetPayeeKind: saveTargetPayeeKind,
+          targetPayeeId: saveTargetPayeeId,
+          sourceCompanyBankId: saveSourceBankId,
+          targetCompanyBankId: saveTargetBankId,
+          sourcePayeeLabel: String(sourceEntityLabelForSave || "—"),
+          targetPayeeLabel: String(targetEntityLabelForSave || "—"),
+          sourceBankLabel:
+            sourceEntities.find((e) => e.kind === "bank" && e.id === saveSourceBankId)?.label ||
+            baseline?.sourceBankLabel ||
+            saveSourceBankId ||
+            "—",
+          targetBankLabel:
+            targetEntities.find((e) => e.kind === "bank" && e.id === saveTargetBankId)?.label ||
+            baseline?.targetBankLabel ||
+            saveTargetBankId ||
+            "—",
+        };
+      }
+      // Sync form to applied/saved accounts when selective apply; else keep form edits for Change detected
+      if (applyKeySet.size > 0) {
+        setSourcePayeeKind(saveSourcePayeeKind);
+        setSourcePayeeId(saveSourcePayeeId);
+        setTargetPayeeKind(saveTargetPayeeKind);
+        setTargetPayeeId(saveTargetPayeeId);
+        setSourceCompanyBankId(saveSourceBankId);
+        setTargetCompanyBankId(saveTargetBankId);
+      }
       setIcExtrasBaseline(
         buildIcExtrasSig({
-          sourcePayeeKind,
-          sourcePayeeId,
-          targetPayeeKind,
-          targetPayeeId,
-          sourceCompanyBankId,
-          targetCompanyBankId,
+          sourcePayeeKind: applyKeySet.size > 0 ? saveSourcePayeeKind : sourcePayeeKind,
+          sourcePayeeId: applyKeySet.size > 0 ? saveSourcePayeeId : sourcePayeeId,
+          targetPayeeKind: applyKeySet.size > 0 ? saveTargetPayeeKind : targetPayeeKind,
+          targetPayeeId: applyKeySet.size > 0 ? saveTargetPayeeId : targetPayeeId,
+          sourceCompanyBankId: applyKeySet.size > 0 ? saveSourceBankId : sourceCompanyBankId,
+          targetCompanyBankId: applyKeySet.size > 0 ? saveTargetBankId : targetCompanyBankId,
           sourceFiles: sourceFileUrls,
           targetFiles: targetFileUrls,
         })
@@ -1349,12 +1819,18 @@ export function InterCompanyVoucherForm({
         setSavedSourceId(null);
         setPeerTargetVoucherId(null);
         setLinkId(null);
+        setSourceCompanyOverrideId(String(companyId || "").trim());
+        sourceHomeCompanyIdRef.current = String(companyId || "").trim();
+        setSourceCompanyBankId("");
+        setTargetCompanyBankId("");
         setSourceFiles([]);
         setTargetFiles([]);
         setShareSourceAttachmentsWithPeer(false);
         setSavedShareSourceAttachmentsWithPeer(false);
         setShareTargetAttachmentsWithSource(false);
         setSavedShareTargetAttachmentsWithSource(false);
+        setPostTargetAsJournal(false);
+        setSavedPostTargetAsJournal(false);
         setApplyAccountChangesToOtherSide(false);
         setIcExtrasBaseline("");
         lastHydratedVoucherIdRef.current = null;
@@ -1374,46 +1850,405 @@ export function InterCompanyVoucherForm({
     }
   };
 
-  const handleIcApprove = async () => {
-    if (isInterCompanyEditLocked || editingDisabled || isLoading || isApproving) return;
+  const sourceIsApprovedForLock =
+    icViewerSide === "source"
+      ? Boolean((displayVoucher as { isApproved?: boolean } | null | undefined)?.isApproved)
+      : Boolean(
+          (displayVoucher as { interCompanySourceApproved?: boolean } | null | undefined)
+            ?.interCompanySourceApproved
+        );
+
+  const peerPendingDoc = useMemo(
+    () => readInterCompanyPeerPending((displayVoucher || voucher) as Record<string, unknown> | null),
+    [displayVoucher, voucher]
+  );
+
+  const formatAmountLabel = (n: unknown) => {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return "—";
+    try {
+      return formatCurrencyForPrint(v);
+    } catch {
+      return String(v);
+    }
+  };
+
+  const computePeerPendingDiffs = (): IcAccountDiffRow[] => {
+    const pending = peerPendingDoc;
+    if (!pending) return [];
+    const row = (displayVoucher || voucher) as Record<string, unknown> | null | undefined;
+    if (!row) return [];
+    const p = pending.proposed;
+    const keys = peerPendingProposedFieldKeys(p);
+    const rows: IcAccountDiffRow[] = [];
+    const push = (
+      key: IcDiffFieldKey,
+      field: string,
+      oldLabel: string,
+      newLabel: string,
+      applyable = true,
+      note?: string
+    ) => {
+      rows.push({ key, field, oldLabel, newLabel, applyable, note });
+    };
+
+    for (const key of keys) {
+      if (key === "amount" && p.amount != null) {
+        push("amount", "Amount", formatAmountLabel(row.amount ?? row.total), formatAmountLabel(p.amount));
+      } else if (key === "date" && p.dateIso) {
+        const oldD =
+          row.date && typeof (row.date as { toDate?: () => Date }).toDate === "function"
+            ? (row.date as { toDate: () => Date }).toDate()
+            : row.date
+              ? new Date(row.date as string | Date)
+              : null;
+        const newD = new Date(p.dateIso);
+        push(
+          "date",
+          "Date",
+          oldD && !Number.isNaN(oldD.getTime()) ? formatDateBySystem(oldD) : "—",
+          !Number.isNaN(newD.getTime()) ? formatDateBySystem(newD) : p.dateIso
+        );
+      } else if (key === "narration" && p.narration != null) {
+        push(
+          "narration",
+          "Narration",
+          String(row.narration || "—").slice(0, 120) || "—",
+          String(p.narration || "—").slice(0, 120) || "—"
+        );
+      } else if (key === "sourceEntity") {
+        const locked = sourceIsApprovedForLock && icViewerSide === "target";
+        push(
+          "sourceEntity",
+          "Source account",
+          readInterCompanyEntityLabelSnapshot(row, "source") ||
+            String(row.sourceEntityId || "—"),
+          p.sourceEntityLabel || p.sourceEntityId || "—",
+          !locked,
+          locked ? "Source already approved — unapprove only; posting stays on the source account" : undefined
+        );
+      } else if (key === "targetEntity") {
+        push(
+          "targetEntity",
+          "Target account",
+          readInterCompanyEntityLabelSnapshot(row, "target") ||
+            String(row.targetEntityId || "—"),
+          p.targetEntityLabel || p.targetEntityId || "—"
+        );
+      } else if (key === "sourceBank") {
+        const locked = sourceIsApprovedForLock && icViewerSide === "target";
+        push(
+          "sourceBank",
+          "Clearing account (source)",
+          readInterCompanyBankLabelSnapshot(row, "source") ||
+            String(row.sourceCompanyBankAccountId || "—"),
+          p.sourceCompanyBankLabel || p.sourceCompanyBankAccountId || "—",
+          !locked,
+          locked ? "Source already approved — unapprove only; posting stays on the source account" : undefined
+        );
+      } else if (key === "targetBank") {
+        push(
+          "targetBank",
+          "Clearing account (target)",
+          readInterCompanyBankLabelSnapshot(row, "target") ||
+            String(row.targetCompanyBankAccountId || row.companyBankAccountId || "—"),
+          p.targetCompanyBankLabel || p.targetCompanyBankAccountId || "—"
+        );
+      } else if (key === "targetPostMode" && p.targetPostMode) {
+        const oldMode =
+          normalizeInterCompanyTargetPostMode(
+            String(row.interCompanyTargetPostMode || "payment_in")
+          ) === "journal"
+            ? "Company to Company"
+            : "Account to Account";
+        const newMode =
+          normalizeInterCompanyTargetPostMode(p.targetPostMode) === "journal"
+            ? "Company to Company"
+            : "Account to Account";
+        push("targetPostMode", "Pay mode", oldMode, newMode);
+      }
+    }
+    return rows;
+  };
+
+  const resolveEntityLabel = (
+    list: { kind: string; id: string; label?: string }[],
+    kind: string,
+    id: string,
+    fallback: string
+  ) => {
+    const hit = list.find((e) => e.kind === kind && e.id === id);
+    return String(hit?.label || fallback || id || "—").trim() || "—";
+  };
+
+  const computeAccountDiffs = (): IcAccountDiffRow[] => {
+    const base = accountBaselineRef.current;
+    if (!base || !hasPersistedIc) return [];
+    const rows: IcAccountDiffRow[] = [];
+    const push = (
+      key: IcDiffFieldKey,
+      field: string,
+      oldId: string,
+      newId: string,
+      oldLabel: string,
+      newLabel: string,
+      applyable: boolean,
+      note?: string
+    ) => {
+      if (String(oldId || "").trim() === String(newId || "").trim()) return;
+      rows.push({
+        key,
+        field,
+        oldLabel: oldLabel || oldId || "—",
+        newLabel: newLabel || newId || "—",
+        applyable,
+        note,
+      });
+    };
+
+    push(
+      "targetBank",
+      "Clearing account (target)",
+      base.targetCompanyBankId,
+      targetCompanyBankId,
+      base.targetBankLabel,
+      resolveEntityLabel(targetEntities, "bank", targetCompanyBankId, base.targetBankLabel),
+      true
+    );
+    push(
+      "targetEntity",
+      "Target account",
+      base.targetPayeeId,
+      targetPayeeId,
+      base.targetPayeeLabel,
+      resolveEntityLabel(targetEntities, targetPayeeKind, targetPayeeId, base.targetPayeeLabel),
+      true
+    );
+
+    const sourceNote = sourceIsApprovedForLock
+      ? "Source already approved — unapprove only; posting stays on the source account"
+      : undefined;
+    push(
+      "sourceBank",
+      "Clearing account (source)",
+      base.sourceCompanyBankId,
+      sourceCompanyBankId,
+      base.sourceBankLabel,
+      resolveEntityLabel(sourceEntities, "bank", sourceCompanyBankId, base.sourceBankLabel),
+      !sourceIsApprovedForLock,
+      sourceNote
+    );
+    push(
+      "sourceEntity",
+      "Source account",
+      base.sourcePayeeId,
+      sourcePayeeId,
+      base.sourcePayeeLabel,
+      resolveEntityLabel(sourceEntities, sourcePayeeKind, sourcePayeeId, base.sourcePayeeLabel),
+      !sourceIsApprovedForLock,
+      sourceNote
+    );
+    return rows;
+  };
+
+  const peerPendingDiffs = peerPendingDoc ? computePeerPendingDiffs() : [];
+  const liveAccountDiffs = !peerPendingDoc && hasPersistedIc ? computeAccountDiffs() : [];
+  const showChangeDetected = peerPendingDiffs.length > 0 || liveAccountDiffs.length > 0;
+
+  const openChangeDetectDialog = () => {
+    const peerDiffs = computePeerPendingDiffs();
+    if (peerDiffs.length > 0) {
+      setChangeDetectMode("peer");
+      setAccountDiffRows(peerDiffs);
+      setSelectedApplyKeys(
+        Object.fromEntries(peerDiffs.filter((d) => d.applyable).map((d) => [d.key, true]))
+      );
+      setChangeDetectDialogOpen(true);
+      return;
+    }
+    const diffs = computeAccountDiffs();
+    if (diffs.length === 0) {
+      toast.message("No changes to compare");
+      return;
+    }
+    setChangeDetectMode("local");
+    setAccountDiffRows(diffs);
+    setSelectedApplyKeys(
+      Object.fromEntries(diffs.filter((d) => d.applyable).map((d) => [d.key, true]))
+    );
+    setChangeDetectDialogOpen(true);
+  };
+
+  const confirmChangeDetectApply = () => {
+    const keys = accountDiffRows
+      .filter((row) => row.applyable && selectedApplyKeys[row.key])
+      .map((row) => row.key);
+    if (keys.length === 0) {
+      toast.error("Tick at least one field to apply");
+      return;
+    }
+    setChangeDetectDialogOpen(false);
+    setAccountDiffRows([]);
+    setSelectedApplyKeys({});
+    if (changeDetectMode === "peer") {
+      void processAndSave({
+        targetPostMode: postTargetAsJournal ? "journal" : "payment_in",
+        applyPeerPendingFieldKeys: keys as InterCompanyPeerPendingFieldKey[],
+      });
+      return;
+    }
+    void processAndSave({
+      targetPostMode: postTargetAsJournal ? "journal" : "payment_in",
+      applyAccountKeys: keys as Array<"sourceBank" | "sourceEntity" | "targetBank" | "targetEntity">,
+    });
+  };
+
+  /** Save pe ask: Account→Account (Payment In) vs Company→Company (Journal). */
+  const requestSave = (opts?: IcSaveOpts) => {
+    if (ownSideSaveBlocked || isLoading) return;
     if (!user?.uid || !companyId) {
       toast.error("Sign in and select a company");
       return;
     }
-    if (icFooterDirty) {
-      await processAndSave({ approveAfterSave: true });
+    if (!validateEntities()) return;
+
+    // Target viewer — pay mode already saved; Save keep baseline for unapplied account edits
+    if (icViewerSide === "target") {
+      void processAndSave({
+        ...opts,
+        targetPostMode: postTargetAsJournal ? "journal" : "payment_in",
+      });
       return;
     }
-    const sourceVoucherId = String(savedSourceId || voucher?.id || "").trim();
-    if (!sourceVoucherId) {
-      await processAndSave({ approveAfterSave: true });
+    setPendingSaveOpts(opts || {});
+    // Default tick: is voucher ka saved mode, warna last save choice
+    let initial: InterCompanyPayModeChoice | "" = postTargetAsJournal
+      ? "company_to_company"
+      : savedSourceId || hasPersistedIc
+        ? "account_to_account"
+        : "";
+    if (!hasPersistedIc && !savedSourceId) {
+      try {
+        const last = localStorage.getItem(IC_PAY_MODE_STORAGE_KEY);
+        if (last === "account_to_account" || last === "company_to_company") {
+          initial = last;
+        }
+      } catch {
+        /* ignore */
+      }
+    } else if (hasPersistedIc || savedSourceId) {
+      initial = postTargetAsJournal ? "company_to_company" : "account_to_account";
+    }
+    setPayModeChoice(initial);
+    setPayModeDialogOpen(true);
+  };
+
+  const confirmPayModeAndSave = () => {
+    if (payModeChoice !== "account_to_account" && payModeChoice !== "company_to_company") {
+      toast.error("Select how you are paying");
       return;
+    }
+    const targetPostMode =
+      payModeChoice === "company_to_company" ? "journal" : "payment_in";
+    try {
+      localStorage.setItem(IC_PAY_MODE_STORAGE_KEY, payModeChoice);
+    } catch {
+      /* ignore */
+    }
+    const opts = pendingSaveOpts || {};
+    setPayModeDialogOpen(false);
+    setPendingSaveOpts(null);
+    void processAndSave({ ...opts, targetPostMode });
+  };
+
+  const handleIcApprove = async () => {
+    if (isLoading || isApproving) return;
+    if (!user?.uid || !companyId) {
+      toast.error("Sign in and select a company");
+      return;
+    }
+    if (!can("approve_transactions") && !isCompanyAdmin) {
+      toast.error("You do not have permission to approve");
+      return;
+    }
+    // Dirty form — save (+ approve) role editable side pe
+    if (icFooterDirty) {
+      if (ownSideSaveBlocked || editingDisabled) {
+        toast.error("Save changes first — or discard edits before Approve");
+        return;
+      }
+      requestSave({ approveAfterSave: true });
+      return;
+    }
+    const approveVoucherId = String(currentLinkedVoucherId || "").trim();
+    if (!approveVoucherId) {
+      if (ownSideSaveBlocked || editingDisabled) {
+        toast.error("Nothing to approve yet");
+        return;
+      }
+      requestSave({ approveAfterSave: true });
+      return;
+    }
+    if (icViewerSide === "target") {
+      const row = (displayVoucher || voucher || {}) as Record<string, unknown>;
+      if (!isInterCompanySourceApprovedForTarget(row)) {
+        toast.error("Source company must approve this Inter Company voucher first.");
+        return;
+      }
     }
     const toastId = toast.loading("Approving…");
     setIsLoading(true);
     try {
       const approverName = customUser?.displayName || user.displayName || user.email || user.uid;
-      await approveVoucherWithHistory(companyId, sourceVoucherId, user.uid, approverName);
+      await approveVoucherWithHistory(companyId, approveVoucherId, user.uid, approverName);
       const icPartyId = String(
-        (voucherRow as { interCompanyCounterpartyPartyId?: string })?.interCompanyCounterpartyPartyId || ""
+        (voucherRow as { interCompanyCounterpartyPartyId?: string })?.interCompanyCounterpartyPartyId ||
+          (displayVoucher as { interCompanyCounterpartyPartyId?: string } | undefined)
+            ?.interCompanyCounterpartyPartyId ||
+          ""
       ).trim();
       const useIcConduit = true;
-      const approvedLegs = buildSourceInterCompanyLegsApproved({
-        amount: Number(form.getValues().amount) || 0,
-        entityKind: sourcePayeeKind,
-        entityId: sourcePayeeId,
-        companyBankAccountId: sourceCompanyBankId,
-        interCompanyCounterpartyPartyId: icPartyId,
-        useIcConduit,
-      });
-      if (approvedLegs.length > 0) {
-        await patchVoucherFields(companyId, sourceVoucherId, {
-          interCompanyLegs: approvedLegs,
-          interCompanyCounterpartyPartyId: icPartyId || null,
+      const amount = Number(form.getValues().amount) || 0;
+      if (icViewerSide === "target") {
+        const approvedLegs = buildTargetInterCompanyLegsApproved({
+          amount,
+          entityKind: targetPayeeKind,
+          entityId: targetPayeeId,
+          companyBankAccountId: targetCompanyBankId,
+          interCompanyCounterpartyPartyId: icPartyId,
+          useIcConduit,
+          targetPostMode: postTargetAsJournal ? "journal" : "payment_in",
         });
+        if (approvedLegs.length > 0) {
+          await patchVoucherFields(companyId, approveVoucherId, {
+            interCompanyLegs: approvedLegs,
+            interCompanyCounterpartyPartyId: icPartyId || null,
+            interCompanySourceApproved: true,
+          });
+        }
+      } else {
+        const approvedLegs = buildSourceInterCompanyLegsApproved({
+          amount,
+          entityKind: sourcePayeeKind,
+          entityId: sourcePayeeId,
+          companyBankAccountId: sourceCompanyBankId,
+          interCompanyCounterpartyPartyId: icPartyId,
+          useIcConduit,
+        });
+        if (approvedLegs.length > 0) {
+          await patchVoucherFields(companyId, approveVoucherId, {
+            interCompanyLegs: approvedLegs,
+            interCompanyCounterpartyPartyId: icPartyId || null,
+          });
+        }
       }
+      setVoucherOverride((prev) => ({
+        ...((prev || displayVoucher || voucher || {}) as Record<string, unknown>),
+        id: approveVoucherId,
+        isApproved: true,
+      }));
       toast.success("Inter Company approved", { id: toastId });
-      onVoucherAction?.("saved", false, sourceVoucherId);
+      onVoucherAction?.("saved", false, approveVoucherId);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not approve";
       toast.error("Approve failed", { id: toastId, description: message });
@@ -1528,7 +2363,7 @@ export function InterCompanyVoucherForm({
   };
 
   const handlePrint = () => {
-    void processAndSave({ saveAndPrint: true });
+    requestSave({ saveAndPrint: true });
   };
 
   const showBsDate = dateSystem === "BS" || dateSystem === "Both";
@@ -1593,14 +2428,18 @@ export function InterCompanyVoucherForm({
                 <InterCompanyTargetConnectSection
                   targetCompanyId={field.value}
                   onTargetCompanyChange={(id) => {
-                    if (hasPersistedIc) return;
+                    if (targetCompanySelectLocked) return;
                     const nextId = String(id || "").trim();
                     if (!nextId || field.value === nextId) return;
                     field.onChange(nextId);
                     setTargetPayeeId("");
                     setTargetCompanyBankId("");
+                    // Rematch: purana peer target id mat chipkao — naya target company pe link/create
+                    if (hasPersistedIc && icViewerSide === "source") {
+                      setPeerTargetVoucherId(null);
+                    }
                   }}
-                  fieldsDisabled={hasPersistedIc || fieldsDisabled}
+                  fieldsDisabled={targetCompanySelectLocked}
                   accountFieldsDisabled={targetSideDisabled}
                   headerTrailing={
                     peerCompanyExists ? (
@@ -1664,6 +2503,10 @@ export function InterCompanyVoucherForm({
         sourcePanel={
           <InterCompanySourcePaySection
             company={sourceCompanyForDisplay}
+            sourceCompanyId={sourceEntitiesCompanyId}
+            onSourceCompanyChange={handleSourceCompanyChange}
+            companyComboboxOptions={sourceComboboxOptions}
+            companySelectDisabled={sourceCompanySelectLocked}
             entities={sourceEntities}
             entitiesLoading={sourceEntitiesLoading}
             payeeKind={sourcePayeeKind}
@@ -1745,7 +2588,9 @@ export function InterCompanyVoucherForm({
             name="narration"
             render={({ field }) => (
               <FormItem className="flex min-h-0 flex-1 flex-col space-y-2">
-                <FormLabel>Narration</FormLabel>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <FormLabel className="mb-0">Narration</FormLabel>
+                </div>
                 <FormControl className="min-h-0 flex-1">
                   <Textarea
                     {...field}
@@ -1789,17 +2634,38 @@ export function InterCompanyVoucherForm({
     </div>
   );
 
+  const payModeFromDoc =
+    normalizeInterCompanyTargetPostMode(
+      (displayVoucher as { interCompanyTargetPostMode?: string } | null | undefined)
+        ?.interCompanyTargetPostMode
+    ) === "journal";
+  const payModeIsJournal = hasPersistedIc || savedSourceId ? postTargetAsJournal || payModeFromDoc : false;
+  const payModeRibbonLabel =
+    hasPersistedIc || savedSourceId
+      ? payModeIsJournal
+        ? "Company to Company"
+        : "Account to Account"
+      : null;
+
+  useEffect(() => {
+    onPayModeLabelChange?.(payModeRibbonLabel);
+    return () => {
+      onPayModeLabelChange?.(null);
+    };
+  }, [payModeRibbonLabel, onPayModeLabelChange]);
+
   const formInner = (
     <Form {...form}>
       <form
         className="flex min-h-0 flex-1 flex-col"
-        onSubmit={form.handleSubmit(() => void processAndSave())}
+        onSubmit={form.handleSubmit(() => requestSave())}
       >
         <ScrollArea
           icVoucherChrome
           className={cn("min-h-0 flex-1 pr-2", interCompanyVoucherScrollAreaClass)}
         >
           <div className="space-y-4 pb-2">
+            {/* Page (non-dialog): type + pay mode. Dialog: pay mode Edit Trxn header center pe. */}
             {!inDialog ? (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-medium text-muted-foreground">Voucher type</span>
@@ -1809,6 +2675,15 @@ export function InterCompanyVoucherForm({
                 >
                   Inter Company
                 </Badge>
+                {payModeRibbonLabel ? (
+                  <Badge
+                    variant="outline"
+                    className="inline-flex items-center gap-1.5 border-emerald-700/50 bg-emerald-50 text-[10px] font-semibold text-emerald-950 dark:border-emerald-500/50 dark:bg-emerald-950/40 dark:text-emerald-50"
+                  >
+                    ✓ {payModeRibbonLabel}
+                    <InterCompanyPayModeInfoButton compact />
+                  </Badge>
+                ) : null}
               </div>
             ) : null}
 
@@ -1842,6 +2717,20 @@ export function InterCompanyVoucherForm({
             showSaveAndApproveOnCreate={icSaveAndApproveOnCreate}
             onOpenHistory={onOpenHistory}
             onApprove={() => void handleIcApprove()}
+            approveBlockedHint={
+              icViewerSide === "target" &&
+              !isInterCompanySourceApprovedForTarget(
+                (displayVoucher || voucher || {}) as Record<string, unknown>
+              )
+                ? "Source company must approve this Inter Company voucher first."
+                : null
+            }
+            approveExtraDisabled={
+              icViewerSide === "target" &&
+              !isInterCompanySourceApprovedForTarget(
+                (displayVoucher || voucher || {}) as Record<string, unknown>
+              )
+            }
             isApproving={isApproving || isLoading}
             isLoading={isLoading}
             isFormDirty={icFooterDirty}
@@ -1856,19 +2745,211 @@ export function InterCompanyVoucherForm({
 
   // auto column = ribbon collapse par icon-only width; content column baaki width le
   const ribbonLayout = (
-    <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[auto_1fr] md:gap-4">
+    <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[auto_1fr] md:gap-4 md:items-stretch">
       <InterCompanyRibbonNav
         active={ribbonTab}
         onChange={setRibbonTab}
         pendingSystemJoinCount={pendingSystemJoinCount}
+        changeDetected={showChangeDetected}
+        onChangeDetectedClick={openChangeDetectDialog}
       />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">{formInner}</div>
     </div>
   );
 
+  const payModeDialog = (
+    <AlertDialog
+      open={payModeDialogOpen}
+      onOpenChange={(open) => {
+        setPayModeDialogOpen(open);
+        if (!open) {
+          setPendingSaveOpts(null);
+          setPayModeChoice("");
+        }
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>How are you paying?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Choose how to post this Inter Company voucher on the target company. Posting rules stay the
+            same — this only picks the mode.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <RadioGroup
+          value={payModeChoice}
+          onValueChange={(v) => setPayModeChoice(v as InterCompanyPayModeChoice)}
+          className="gap-3 py-1"
+        >
+          <label
+            htmlFor="ic-pay-account-to-account"
+            className="flex cursor-pointer items-start gap-3 rounded-md border p-3 hover:bg-muted/40"
+          >
+            <RadioGroupItem value="account_to_account" id="ic-pay-account-to-account" className="mt-0.5" />
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                Account to Account
+                <InterCompanyPayModeInfoButton />
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                Target posts as Payment In (normal Dr/Cr)
+              </span>
+            </span>
+          </label>
+          <label
+            htmlFor="ic-pay-company-to-company"
+            className="flex cursor-pointer items-start gap-3 rounded-md border p-3 hover:bg-muted/40"
+          >
+            <RadioGroupItem value="company_to_company" id="ic-pay-company-to-company" className="mt-0.5" />
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                Company to Company
+                <InterCompanyPayModeInfoButton />
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                Target Journal — reverse Dr/Cr on the destination account
+              </span>
+            </span>
+          </label>
+        </RadioGroup>
+        {hasPersistedIc && peerCompanyExists ? (
+          <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2.5">
+            <Checkbox
+              id="ic-pay-apply-other-side"
+              checked={applyAccountChangesToOtherSide}
+              disabled={fieldsDisabled}
+              className="mt-0.5"
+              onCheckedChange={(v) => setApplyAccountChangesToOtherSide(v === true)}
+            />
+            <Label
+              htmlFor="ic-pay-apply-other-side"
+              className={cn(
+                "min-w-0 text-sm font-normal leading-snug",
+                fieldsDisabled ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer"
+              )}
+            >
+              Also apply on other side
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                Unlock the other company&apos;s clearing / account fields for this edit (same as voucher tick).
+              </span>
+            </Label>
+          </div>
+        ) : null}
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            type="button"
+            disabled={!payModeChoice}
+            onClick={(e) => {
+              e.preventDefault();
+              confirmPayModeAndSave();
+            }}
+          >
+            Continue Save
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+
+  const accountApplyDialogs = (
+    <AlertDialog
+      open={changeDetectDialogOpen}
+      onOpenChange={(open) => {
+        setChangeDetectDialogOpen(open);
+        if (!open) {
+          setAccountDiffRows([]);
+          setSelectedApplyKeys({});
+        }
+      }}
+    >
+      <AlertDialogContent className="max-w-2xl gap-0 overflow-hidden p-0 sm:max-w-3xl">
+        <div className="border-b-[1.5px] border-foreground/80 bg-muted px-4 py-3">
+          <AlertDialogHeader className="space-y-1 text-left">
+            <AlertDialogTitle>Change Detected</AlertDialogTitle>
+            <AlertDialogDescription>
+              {changeDetectMode === "peer"
+                ? "Peer company saved changes. Review Old vs New, then tick Apply for fields to update on this company."
+                : "Account fields changed. Review Old vs New, then tick Apply. Source stays locked after approve."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+        </div>
+        <div className="max-h-[55vh] overflow-auto px-0">
+          <Table className="w-full min-w-[520px] [&_tr]:!border-b-[1.5px] [&_tr]:!border-foreground/90 [&_tbody>tr:last-child]:!border-b-0">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-[22%] min-w-[120px] pl-4 text-left font-semibold">Field</TableHead>
+                <TableHead className="w-[30%] min-w-[140px] px-2.5 text-left font-semibold">Old</TableHead>
+                <TableHead className="w-[30%] min-w-[140px] px-2.5 text-left font-semibold">New</TableHead>
+                <TableHead className="w-[18%] min-w-[88px] pr-4 text-center font-semibold">Apply</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {accountDiffRows.map((row) => {
+                const checked = Boolean(selectedApplyKeys[row.key]);
+                return (
+                  <TableRow
+                    key={row.key}
+                    className={cn(
+                      "even:bg-muted/30",
+                      !row.applyable && "bg-muted/40 opacity-90"
+                    )}
+                  >
+                    <TableCell className="align-top whitespace-normal break-words pl-4 pr-2.5 font-medium">
+                      {row.field}
+                      {row.note ? (
+                        <span className="mt-1 block text-[10px] font-medium leading-snug text-amber-800 dark:text-amber-200">
+                          {row.note}
+                        </span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="align-top whitespace-normal break-words px-2.5 text-muted-foreground">
+                      {row.oldLabel}
+                    </TableCell>
+                    <TableCell className="align-top whitespace-normal break-words px-2.5 text-emerald-800 dark:text-emerald-300">
+                      {row.newLabel}
+                    </TableCell>
+                    <TableCell className="align-middle pr-4 text-center">
+                      <Checkbox
+                        id={`ic-change-${row.key}`}
+                        checked={row.applyable ? checked : false}
+                        disabled={!row.applyable}
+                        aria-label={`Apply ${row.field}`}
+                        onCheckedChange={(v) => {
+                          if (!row.applyable) return;
+                          setSelectedApplyKeys((prev) => ({ ...prev, [row.key]: v === true }));
+                        }}
+                      />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+        <AlertDialogFooter className="border-t-[1.5px] border-foreground/80 bg-muted/40 px-4 py-3 sm:space-x-2">
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              confirmChangeDetectApply();
+            }}
+          >
+            Apply selected
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+
   if (inDialog) {
     return (
-      <div className="flex min-h-0 flex-col gap-3 px-1 pb-2 md:px-0">{ribbonLayout}</div>
+      <>
+        <div className="flex min-h-0 flex-col gap-3 px-1 pb-2 md:px-0">{ribbonLayout}</div>
+        {payModeDialog}
+        {accountApplyDialogs}
+      </>
     );
   }
 
@@ -1884,6 +2965,8 @@ export function InterCompanyVoucherForm({
         </div>
       </div>
       <div className="min-h-0 flex-1 px-4 py-3">{ribbonLayout}</div>
+      {payModeDialog}
+      {accountApplyDialogs}
     </div>
   );
 }

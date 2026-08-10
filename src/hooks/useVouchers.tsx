@@ -53,7 +53,7 @@ import {
   type MasterEntityPatchCollection,
 } from "@/lib/masterEntityLiveUpdate";
 import {
-  VOUCHER_ATTACHMENT_SAVED_EVENT,
+  subscribeVoucherLivePatch,
   voucherAttachmentUiFingerprint,
 } from "@/lib/voucherFormAttachmentSave";
 import { normalizeVoucherRowAttachmentsForUi, getVoucherAttachmentUrlsForUi, stripTransientVoucherAttachmentFields } from "@/lib/voucherAttachmentNormalize";
@@ -965,11 +965,13 @@ export const VoucherProvider = ({
     return applyTargetIcVisibility(activeVouchers.filter((v) => v.userId === user.uid));
   }, [vouchers, viewAllRecords, user?.uid, isLocalCompanySelected, companyId, localAuthEpoch]);
 
-  // Target IC: source pehle approve ho chuka ho to `interCompanySourceApproved` backfill (bank/recent ke liye)
+  // Target IC: source pehle approve ho chuka ho to `interCompanySourceApproved` backfill (bank/recent ke liye).
+  // IMPORTANT: scan raw `vouchers`, not `vouchersForDisplay` — display already hides unflagged target IC rows.
   const icBackfillGenRef = useRef(0);
   useEffect(() => {
-    if (!companyId || !vouchersForDisplay.length) return;
-    const needsBackfill = vouchersForDisplay.some(
+    if (!companyId || !vouchers.length) return;
+    const rawAlive = (vouchers || []).filter(isAliveDoc);
+    const needsBackfill = rawAlive.some(
       (v) =>
         String(v?.type || "") === "inter_company" &&
         interCompanyVoucherViewerSide(v as Record<string, unknown>) === "target" &&
@@ -980,14 +982,14 @@ export const VoucherProvider = ({
     const timer = setTimeout(() => {
       void backfillInterCompanySourceApprovedFlags(
         companyId,
-        vouchersForDisplay as Array<Record<string, unknown> & { id?: string }>
+        rawAlive as Array<Record<string, unknown> & { id?: string }>
       ).then(() => {
         if (gen !== icBackfillGenRef.current) return;
         /* Firestore listener vouchers refresh karega */
       });
     }, 600);
     return () => clearTimeout(timer);
-  }, [companyId, vouchersForDisplay]);
+  }, [companyId, vouchers]);
   
   const [parties, setParties] = useState<Party[]>([]);
   const [staff, setStaff] = useState<Staff[]>([]);
@@ -1053,22 +1055,13 @@ export const VoucherProvider = ({
     });
   }, [companyId]);
 
-  // Voucher form save: attachment patch event — ledger/dialog bina refresh update.
+  // Voucher form save: attachment / IC peer-pending patch — ledger/dialog bina refresh update.
   useEffect(() => {
     if (!companyId) return;
-    const onAttachmentSaved = (event: Event) => {
-      const detail = (
-        event as CustomEvent<{
-          companyId: string;
-          voucherId: string;
-          patch: Record<string, unknown>;
-        }>
-      ).detail;
-      if (!detail || detail.companyId !== companyId) return;
+    return subscribeVoucherLivePatch((detail) => {
+      if (detail.companyId !== companyId) return;
       patchVoucherInCache(detail.voucherId, detail.patch);
-    };
-    window.addEventListener(VOUCHER_ATTACHMENT_SAVED_EVENT, onAttachmentSaved);
-    return () => window.removeEventListener(VOUCHER_ATTACHMENT_SAVED_EVENT, onAttachmentSaved);
+    });
   }, [companyId, patchVoucherInCache]);
 
   /** Entity edit save — turant raw masters state patch (list fingerprint + processed recompute). */

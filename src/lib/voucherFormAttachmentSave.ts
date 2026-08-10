@@ -301,6 +301,15 @@ export function buildVoucherAttachmentLivePatch(fileUrls: readonly string[]): {
 
 export const VOUCHER_ATTACHMENT_SAVED_EVENT = "pocket-ledger-voucher-attachment-saved";
 
+const VOUCHER_LIVE_PATCH_BROADCAST = "pocket-ledger-voucher-live-patch-bc";
+const VOUCHER_LIVE_PATCH_STORAGE_KEY = "pl-voucher-live-patch";
+
+export type VoucherLivePatchDetail = {
+  companyId: string;
+  voucherId: string;
+  patch: Record<string, unknown>;
+};
+
 /** Save / link ke turant baad `useVouchers` cache patch — ledger + dialogs bina refresh. */
 export function dispatchVoucherLivePatch(
   companyId: string,
@@ -308,15 +317,81 @@ export function dispatchVoucherLivePatch(
   patch: Record<string, unknown>
 ): void {
   if (typeof window === "undefined" || !companyId?.trim() || !voucherId?.trim()) return;
+  const detail: VoucherLivePatchDetail = {
+    companyId: companyId.trim(),
+    voucherId: voucherId.trim(),
+    patch,
+  };
   window.dispatchEvent(
     new CustomEvent(VOUCHER_ATTACHMENT_SAVED_EVENT, {
-      detail: {
-        companyId: companyId.trim(),
-        voucherId: voucherId.trim(),
-        patch,
-      },
+      detail,
     })
   );
+  // Sibling tab / EXE strip — same company pe Change Detected bina hard refresh
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      const channel = new BroadcastChannel(VOUCHER_LIVE_PATCH_BROADCAST);
+      channel.postMessage(detail);
+      channel.close();
+    }
+  } catch {
+    /* optional */
+  }
+  try {
+    window.localStorage.setItem(
+      VOUCHER_LIVE_PATCH_STORAGE_KEY,
+      JSON.stringify({ ...detail, at: Date.now() })
+    );
+    window.localStorage.removeItem(VOUCHER_LIVE_PATCH_STORAGE_KEY);
+  } catch {
+    /* private mode */
+  }
+}
+
+/** useVouchers — same-tab CustomEvent + multi-tab BroadcastChannel / storage. */
+export function subscribeVoucherLivePatch(
+  listener: (detail: VoucherLivePatchDetail) => void
+): () => void {
+  if (typeof window === "undefined") return () => {};
+
+  const onCustom = (event: Event) => {
+    const detail = (event as CustomEvent<VoucherLivePatchDetail>).detail;
+    if (detail?.companyId && detail?.voucherId) listener(detail);
+  };
+  window.addEventListener(VOUCHER_ATTACHMENT_SAVED_EVENT, onCustom);
+
+  let channel: BroadcastChannel | null = null;
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      channel = new BroadcastChannel(VOUCHER_LIVE_PATCH_BROADCAST);
+      channel.addEventListener("message", (event: MessageEvent<VoucherLivePatchDetail>) => {
+        const detail = event.data;
+        if (detail?.companyId && detail?.voucherId) listener(detail);
+      });
+    }
+  } catch {
+    channel = null;
+  }
+
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== VOUCHER_LIVE_PATCH_STORAGE_KEY || !event.newValue) return;
+    try {
+      const detail = JSON.parse(event.newValue) as VoucherLivePatchDetail;
+      if (detail?.companyId && detail?.voucherId) listener(detail);
+    } catch {
+      /* ignore */
+    }
+  };
+  window.addEventListener("storage", onStorage);
+
+  return () => {
+    window.removeEventListener(VOUCHER_ATTACHMENT_SAVED_EVENT, onCustom);
+    window.removeEventListener("storage", onStorage);
+    if (channel) {
+      channel.close();
+      channel = null;
+    }
+  };
 }
 
 /** Save ke turant baad `useVouchers` cache update — har voucher form se (Payment/Sale/Journal…). */

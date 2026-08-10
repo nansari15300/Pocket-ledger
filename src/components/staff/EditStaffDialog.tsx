@@ -18,6 +18,7 @@ import {
   captureEntityFormAttachmentBaseline,
   finalizeFormAttachmentEditAfterSave,
 } from "@/lib/formAttachmentEditHelper";
+import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { useAuth } from "@/hooks/useAuth";
@@ -137,9 +138,11 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [file, setFile] = useState<File | string | null>(staff.fileUrl || null);
-  const [docSlots, setDocSlots] = useState<Array<File | string>>(() => staff.documentFileUrls || []);
+  const [docSlots, setDocSlots] = useState<Array<File | string>>(() =>
+    normalizeFileUrlsField(staff.documentFileUrls)
+  );
   const initialFileRef = useRef<string | null>(staff.fileUrl || null);
-  const initialDocUrlsRef = useRef<string[]>(staff.documentFileUrls || []);
+  const initialDocUrlsRef = useRef<string[]>(normalizeFileUrlsField(staff.documentFileUrls));
   const attachmentsDirty =
     file instanceof File ||
     docSlots.some((x) => x instanceof File) ||
@@ -153,9 +156,10 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
         setFile(nextFile);
         initialFileRef.current = nextFile;
       }
-      if (fields.documentFileUrls) {
-        setDocSlots(fields.documentFileUrls);
-        initialDocUrlsRef.current = fields.documentFileUrls;
+      if (fields.documentFileUrls !== undefined) {
+        const nextDocs = normalizeFileUrlsField(fields.documentFileUrls);
+        setDocSlots(nextDocs);
+        initialDocUrlsRef.current = nextDocs;
       }
     },
     []
@@ -214,9 +218,10 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
         openingBalanceNarration: staff.openingBalanceNarration ?? "",
     });
       setFile(staff.fileUrl || null);
-      setDocSlots(staff.documentFileUrls || []);
+      const nextDocs = normalizeFileUrlsField(staff.documentFileUrls);
+      setDocSlots(nextDocs);
       initialFileRef.current = staff.fileUrl || null;
-      initialDocUrlsRef.current = staff.documentFileUrls || [];
+      initialDocUrlsRef.current = nextDocs;
     }
   }, [dialogOpen, staff, form]);
   

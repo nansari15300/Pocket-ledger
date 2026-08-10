@@ -35,3 +35,15 @@ export function planAllowsLocalAppServer(
   const plan = livePlan ?? getPlan((planId as PlanId) || "basic");
   return entitlementBool(plan.entitlements, "allowLocalAppServer");
 }
+
+/**
+ * Inter Company voucher create/open entry — admin Plans tick.
+ * Missing / false = off (super-admin bhi plan follow).
+ */
+export function planAllowsInterCompanyVoucher(
+  planId: PlanId | string | null | undefined,
+  livePlan?: Plan | null
+): boolean {
+  const plan = livePlan ?? getPlan((planId as PlanId) || "basic");
+  return plan.entitlements.interCompanyVoucherEnabled === true;
+}

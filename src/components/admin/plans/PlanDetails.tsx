@@ -51,6 +51,7 @@ const entitlementLabels: Partial<Record<EntitlementKey, string>> = {
     allowCompanyAdminRecycleBin: "Allow Restore Company",
     canAddAvatar: "Can add avatar (Profile & Company logo)",
     canAddFileImagePdf: "Can add file (image/PDF) on vouchers",
+    interCompanyVoucherEnabled: "Inter-company voucher",
     maxInterCompanyPartners: "Max joined inter-company partners",
     shareForReconciliationEnabled: "Share for Reconciling (cross-user ledger match)",
     maxReconciliationLedgers: "Max reconciliation ledgers per user",
@@ -544,27 +545,45 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                     </div>
 
                     <div className="flex items-center gap-2 p-3 border rounded-lg bg-muted/30 col-span-1 md:col-span-2 flex-wrap">
-                        <Label htmlFor={`${plan.id}-maxInterCompanyPartners`} className="text-sm flex-1">
-                            {entitlementLabels.maxInterCompanyPartners}
-                        </Label>
-                        <Input
-                            id={`${plan.id}-maxInterCompanyPartners`}
-                            type="number"
-                            min={0}
-                            className="w-24 h-8"
-                            value={String(
-                                Number.isFinite(Number(editablePlan.entitlements.maxInterCompanyPartners))
-                                    ? Number(editablePlan.entitlements.maxInterCompanyPartners)
-                                    : 0
-                            )}
-                            onChange={(e) =>
-                                handleEntitlementChange(
-                                    "maxInterCompanyPartners",
-                                    Math.max(0, parseInt(e.target.value, 10) || 0)
-                                )
-                            }
-                            placeholder="0 = unlimited"
-                        />
+                        <div className="flex items-center gap-2 flex-1 min-w-[12rem]">
+                            <Switch
+                                id={`${plan.id}-interCompanyVoucherEnabled`}
+                                checked={!!editablePlan.entitlements.interCompanyVoucherEnabled}
+                                onCheckedChange={(checked) => {
+                                    handleEntitlementChange("interCompanyVoucherEnabled", checked);
+                                }}
+                            />
+                            <Label htmlFor={`${plan.id}-interCompanyVoucherEnabled`} className="text-sm">
+                                {entitlementLabels.interCompanyVoucherEnabled}
+                            </Label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Label
+                                htmlFor={`${plan.id}-maxInterCompanyPartners`}
+                                className="text-sm whitespace-nowrap"
+                            >
+                                {entitlementLabels.maxInterCompanyPartners}
+                            </Label>
+                            <Input
+                                id={`${plan.id}-maxInterCompanyPartners`}
+                                type="number"
+                                min={0}
+                                className="w-24 h-8"
+                                value={String(
+                                    Number.isFinite(Number(editablePlan.entitlements.maxInterCompanyPartners))
+                                        ? Number(editablePlan.entitlements.maxInterCompanyPartners)
+                                        : 0
+                                )}
+                                onChange={(e) =>
+                                    handleEntitlementChange(
+                                        "maxInterCompanyPartners",
+                                        Math.max(0, parseInt(e.target.value, 10) || 0)
+                                    )
+                                }
+                                placeholder="0 = unlimited"
+                                disabled={!editablePlan.entitlements.interCompanyVoucherEnabled}
+                            />
+                        </div>
                     </div>
 
                     {/* Attachment backup/restore + local→online MB — plan traffic control (0 = unlimited). */}

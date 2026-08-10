@@ -23,6 +23,7 @@ import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachmen
 import { useCompany } from "@/hooks/useCompany";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
 import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
+import { getInterCompanyPartyListTitleLines } from "@/lib/interCompany/interCompanyCounterpartyPartyName";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -81,7 +82,12 @@ export const PartyList = React.memo(({
     const list = parties || [];
     const filterFn = (party: Party) => {
       if (!party.name) return false;
-      const matchesSearch = masterEntityTextMatchesSearch(party.name, searchTerm);
+      const title = getInterCompanyPartyListTitleLines(party);
+      const matchesSearch =
+        masterEntityTextMatchesSearch(party.name, searchTerm) ||
+        (title.secondary
+          ? masterEntityTextMatchesSearch(title.secondary, searchTerm)
+          : false);
       const isSystemAccount = (party as any).isSystemAccount === true;
       if (!matchesSearch || isSystemAccount) return false;
       const bal = Number(party.balance || 0);
@@ -149,6 +155,7 @@ export const PartyList = React.memo(({
                 const isSelected = selectedParty?.id === party.id;
                 const href = getItemHref?.(party);
                 const attachmentPreviewUrl = trimEntityFileUrlForPreview(party.fileUrl);
+                const titleLines = getInterCompanyPartyListTitleLines(party);
                 const cardContent = (
                   <div className="pl-master-list-row">
                         {/* बायाँ: avatar + naam (flex-1 truncate — mobile ma amount clip hundaina) */}
@@ -163,8 +170,8 @@ export const PartyList = React.memo(({
                                 className="h-8 w-8 border text-xs"
                                 companyId={party.companyId}
                                 src={attachmentPreviewUrl ?? undefined}
-                                alt={party.name}
-                                fallbackText={getInitials(party.name)}
+                                alt={titleLines.primary}
+                                fallbackText={getInitials(titleLines.primary)}
                               />
                             </EntityFileAttachmentHover>
                             {(pendingApprovalByPartyId[party.id] ?? 0) > 0 && (
@@ -183,13 +190,29 @@ export const PartyList = React.memo(({
                               type="button"
                               data-pl-list-name=""
                               onPointerDown={(e) => e.stopPropagation()}
-                              className={masterListNameTriggerCn}
+                              className={cn(masterListNameTriggerCn, titleLines.secondary && "items-start py-0.5")}
                             >
-                              {highlightSearch ? highlightQueryInText(party.name, highlightSearch) : party.name}
+                              <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
+                                <span className="block w-full truncate">
+                                  {highlightSearch
+                                    ? highlightQueryInText(titleLines.primary, highlightSearch)
+                                    : titleLines.primary}
+                                </span>
+                                {titleLines.secondary ? (
+                                  <span className="block w-full truncate text-[11px] font-normal leading-tight text-muted-foreground">
+                                    {highlightSearch
+                                      ? highlightQueryInText(titleLines.secondary, highlightSearch)
+                                      : titleLines.secondary}
+                                  </span>
+                                ) : null}
+                              </span>
                             </TooltipTrigger>
                             {/* Narrow list column: tooltip niche — amount column se overlap kam */}
                             <TooltipContent side="bottom" align="start">
-                              <p className="font-medium">{party.name}</p>
+                              <p className="font-medium">{titleLines.primary}</p>
+                              {titleLines.secondary ? (
+                                <p className="text-xs text-muted-foreground">{titleLines.secondary}</p>
+                              ) : null}
                               {(pendingApprovalByPartyId[party.id] ?? 0) > 0 && (
                                 <p className="text-xs text-muted-foreground">{pendingApprovalByPartyId[party.id]} pending approval</p>
                               )}

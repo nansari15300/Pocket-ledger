@@ -350,8 +350,25 @@ export async function removeLocalPendingRefsFromDoc(data: Record<string, unknown
   }
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise.then((v) => {
+      if (timer) clearTimeout(timer);
+      return v;
+    }),
+    new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => {
+        console.warn(`[permanentDelete] timed out after ${ms}ms:`, label);
+        resolve(undefined);
+      }, ms);
+    }),
+  ]);
+}
+
 /**
- * Bin se permanent delete — local SQLite, Drive files, Firestore (optional), doosre devices par purge op.
+ * Bin se permanent delete — pehle local SQLite hatao (UI stuck na ho),
+ * Storage/Drive/Firestore cleanup best-effort + timeout.
  */
 export async function permanentDeleteCompanySubdocFromRecycleBin(
   companyId: string,
@@ -372,36 +389,18 @@ export async function permanentDeleteCompanySubdocFromRecycleBin(
   const fsId = String((reg as { authoritativeCompanyId?: string } | null)?.authoritativeCompanyId || cid).trim();
   let data: Record<string, unknown> = localRow ? { ...localRow } : {};
   try {
-    const snap = await getDoc(doc(firestore, `companies/${fsId}/${collectionPath}`, id));
-    if (snap.exists()) data = { ...data, ...(snap.data() as Record<string, unknown>) };
+    const snap = await withTimeout(
+      getDoc(doc(firestore, `companies/${fsId}/${collectionPath}`, id)),
+      8000,
+      `getDoc ${collectionPath}/${id}`
+    );
+    if (snap?.exists()) data = { ...data, ...(snap.data() as Record<string, unknown>) };
   } catch {
     /* optional */
   }
 
-  await removeLocalPendingRefsFromDoc(data);
-  await deleteDriveAttachmentRefsForDoc(cid, data);
-  // HTTPS attachments: unused → Storage delete; reused elsewhere → skip (refcount).
-  await deleteFirebaseStorageFilesForDoc(data, cid, { entityId: id });
-
-  if (collectionPath === "vouchers") {
-    try {
-      // Orphan `{voucherId}_*` objects only — shared HTTPS URLs pehle registry path se handle.
-      // Reuse-safe: object still referenced in company → skip deleteObject.
-      // Never default missing type → "journal" (warna payment_in delete journal folder scan karta).
-      const vt = String(data.type || "").trim();
-      await deleteVoucherFirebaseStorageObjectsReuseSafe({
-        companyId: cid,
-        voucherId: id,
-        voucherType: vt || undefined,
-      });
-    } catch (e) {
-      console.warn("[permanentDelete] voucher storage folder sweep failed", id, e);
-    }
-  }
-
+  // Critical: pehle local row hatao — Storage list/hang pe dialog stuck na rahe.
   await deleteCompanyDocFromBrowserDb(cid, collectionPath, id, { force: true, notify: true });
-
-  // Again: wipe any upsert enqueued by notify/side-effects during attachment cleanup.
   await removeOutboxRowsForCompanyDoc(cid, collectionPath, id);
 
   await enqueueCompanyDocOutbox(cid, collectionPath, "delete", id, {
@@ -411,8 +410,50 @@ export async function permanentDeleteCompanySubdocFromRecycleBin(
     isDeleted: true,
   }).catch(() => {});
 
+  // Best-effort bytes cleanup — object-not-found / permission / hang ignore
+  await withTimeout(
+    (async () => {
+      try {
+        await removeLocalPendingRefsFromDoc(data);
+      } catch (e) {
+        console.warn("[permanentDelete] local pending refs cleanup failed", id, e);
+      }
+      try {
+        await deleteDriveAttachmentRefsForDoc(cid, data);
+      } catch (e) {
+        console.warn("[permanentDelete] Drive attachment cleanup failed", id, e);
+      }
+      try {
+        await deleteFirebaseStorageFilesForDoc(data, cid, { entityId: id });
+      } catch (e) {
+        console.warn("[permanentDelete] Firebase Storage file cleanup failed", id, e);
+      }
+      if (collectionPath === "vouchers") {
+        try {
+          const vt = String(data.type || "").trim();
+          await deleteVoucherFirebaseStorageObjectsReuseSafe({
+            companyId: cid,
+            voucherId: id,
+            voucherType: vt || undefined,
+          });
+        } catch (e) {
+          console.warn("[permanentDelete] voucher storage folder sweep failed", id, e);
+        }
+      }
+    })(),
+    15000,
+    `attachment cleanup ${collectionPath}/${id}`
+  );
+
+  // Again: wipe upserts from cleanup side-effects
+  await removeOutboxRowsForCompanyDoc(cid, collectionPath, id);
+
   try {
-    await deleteDoc(doc(firestore, `companies/${fsId}/${collectionPath}`, id));
+    await withTimeout(
+      deleteDoc(doc(firestore, `companies/${fsId}/${collectionPath}`, id)),
+      10000,
+      `deleteDoc ${collectionPath}/${id}`
+    );
   } catch (e) {
     console.warn("[permanentDelete] Firestore deleteDoc failed", collectionPath, id, e);
   }
@@ -421,10 +462,14 @@ export async function permanentDeleteCompanySubdocFromRecycleBin(
     const partyId = String(data.interCompanyCounterpartyPartyId || "").trim();
     if (partyId) {
       try {
-        await purgeInterCompanyCounterpartyPartyIfUnused({
-          companyId: cid,
-          partyId,
-        });
+        await withTimeout(
+          purgeInterCompanyCounterpartyPartyIfUnused({
+            companyId: cid,
+            partyId,
+          }),
+          8000,
+          `IC party purge ${partyId}`
+        );
       } catch (err) {
         console.warn("[IC] counterparty party cleanup after permanent delete:", err);
       }

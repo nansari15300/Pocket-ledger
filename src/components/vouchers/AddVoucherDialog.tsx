@@ -43,6 +43,7 @@ import { CreateNoteForm } from "./CreateNoteForm";
 import { SalaryForm } from "./SalaryForm";
 import { CreateProductionForm } from "./CreateProductionForm";
 import { InterCompanyVoucherForm } from "@/components/inter-company/InterCompanyVoucherForm";
+import { InterCompanyPayModeInfoButton } from "@/components/inter-company/InterCompanyPayModeInfoButton";
 import type { InterCompanyRibbonTab } from "@/components/inter-company/InterCompanyRibbonNav";
 import { isInterCompanyVoucherEditDeleteBlocked } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { useCompany, CompanyContext } from "@/hooks/useCompany";
@@ -99,6 +100,9 @@ import {
   isDeviceLocalCompany,
   isServerGateCompany,
 } from "@/lib/companyStorageKind";
+import { planAllowsInterCompanyVoucher } from "@/lib/planSyncEntitlements";
+import { resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
+import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { useDate } from "@/hooks/useDate";
 import { recurringAutoVoucherLabels } from "@/lib/calendarDisplayLabels";
@@ -1048,6 +1052,7 @@ function VoucherDialogContent({
   /** Parent `AddVoucherDialog` ko current tab batao — header Auto Monthly sirf journal pe. */
   onActiveTabChange,
   onInterCompanyRibbonTabChange,
+  onInterCompanyPayModeLabelChange,
   initialInterCompanyRibbonTab,
   recurringVoucherSaveBlocked = false,
   recurringVoucherAuxiliaryDirty = false,
@@ -1085,6 +1090,8 @@ function VoucherDialogContent({
   onRefreshCopyMismatch?: () => void | Promise<void>;
   onActiveTabChange?: (tab: VoucherType) => void;
   onInterCompanyRibbonTabChange?: (tab: InterCompanyRibbonTab) => void;
+  /** Edit Trxn header center — Account / Company to Company badge */
+  onInterCompanyPayModeLabelChange?: (label: string | null) => void;
   /** `/inter-company?icTab=join` — dialog open par Join ribbon */
   initialInterCompanyRibbonTab?: InterCompanyRibbonTab;
   /** `true` jab account me 1 se zyada company — header company dropdown dikhane ke liye. */
@@ -1096,11 +1103,21 @@ function VoucherDialogContent({
   recurringVoucherAuxiliaryDirty?: boolean;
 }) {
   const { processedStaff } = useVouchers();
-  const { company: voucherCompany } = useCompany();
-  // Local and PL Server companies do not expose Inter Company voucher creation.
-  const interCompanyDisabled = Boolean(
-    voucherCompany && (isDeviceLocalCompany(voucherCompany) || isServerGateCompany(voucherCompany))
+  const { company: voucherCompany, allCompanies } = useCompany();
+  const { user: authUser, customUser: authCustomUser } = useAuth();
+  const livePlans = useLivePlans();
+  const voucherCompanyPlanId = resolvePlanIdForActiveCompany(
+    voucherCompany,
+    allCompanies,
+    authCustomUser?.uid ?? authUser?.uid,
+    authCustomUser?.email ?? authUser?.email
   );
+  const voucherCompanyPlanLive = getPlanFromPlans(livePlans, voucherCompanyPlanId);
+  // Local / PL Server companies, or plan tick OFF — no Inter Company voucher create.
+  const interCompanyDisabled =
+    Boolean(
+      voucherCompany && (isDeviceLocalCompany(voucherCompany) || isServerGateCompany(voucherCompany))
+    ) || !planAllowsInterCompanyVoucher(voucherCompanyPlanId, voucherCompanyPlanLive);
   const isEditing = !!voucher?.id;
   const isMobile = useIsMobile();
   // Parent se `allowedTabs={[...]}` inline aaye to har render naya reference milta hai; effect reset-loop rokne ke liye stable key use karo.
@@ -1389,6 +1406,7 @@ function VoucherDialogContent({
               {...(activeTab === "inter_company"
                 ? {
                     onRibbonTabChange: onInterCompanyRibbonTabChange,
+                    onPayModeLabelChange: onInterCompanyPayModeLabelChange,
                     ...(initialInterCompanyRibbonTab
                       ? { initialRibbonTab: initialInterCompanyRibbonTab }
                       : {}),
@@ -1619,6 +1637,27 @@ export function AddVoucherDialog(props: any) {
   const [interCompanyRibbonTab, setInterCompanyRibbonTab] = useState<InterCompanyRibbonTab>(
     () => (rest as { initialInterCompanyRibbonTab?: InterCompanyRibbonTab }).initialInterCompanyRibbonTab ?? "voucher"
   );
+  /** Edit Trxn header center — ✓ Account/Company to Company */
+  const [interCompanyPayModeLabel, setInterCompanyPayModeLabel] = useState<string | null>(null);
+  useEffect(() => {
+    if (voucherFormActiveTab !== "inter_company") setInterCompanyPayModeLabel(null);
+  }, [voucherFormActiveTab]);
+  useEffect(() => {
+    if (!isOpen) setInterCompanyPayModeLabel(null);
+  }, [isOpen]);
+  const interCompanyPayModeHeaderBadge = interCompanyPayModeLabel ? (
+    <span
+      className={cn(
+        "inline-flex max-w-full items-center justify-center gap-1.5 rounded-md border border-emerald-700/45 bg-emerald-50 px-2.5 py-1 text-center text-[10px] font-semibold leading-snug text-emerald-950 shadow-sm dark:border-emerald-500/40 dark:bg-emerald-950/45 dark:text-emerald-50",
+        isMobile ? "text-[9px] px-2 py-0.5" : "md:text-[11px]"
+      )}
+      title={`Saved pay rule: ${interCompanyPayModeLabel}`}
+      aria-label={`Saved pay rule: ${interCompanyPayModeLabel}`}
+    >
+      <span>✓ {interCompanyPayModeLabel}</span>
+      <InterCompanyPayModeInfoButton compact />
+    </span>
+  ) : null;
   /** Inter Company saved voucher — edit read-only; Copy To band; Join/Invite/Revert par bhi band */
   const copyToDisabledForInterCompany =
     voucherFormActiveTab === "inter_company" &&
@@ -4151,14 +4190,33 @@ export function AddVoucherDialog(props: any) {
                   </div>
                 </div>
               ) : (
-                <div className={cn("flex w-full min-w-0 flex-nowrap items-center gap-2")}>
-                  <div className="flex min-w-0 flex-1 flex-row flex-wrap items-center gap-x-2 gap-y-0">
+                <div
+                  className={cn(
+                    "w-full min-w-0",
+                    interCompanyPayModeHeaderBadge
+                      ? "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3"
+                      : "flex flex-nowrap items-center gap-2"
+                  )}
+                >
+                  <div className="flex min-w-0 flex-row flex-wrap items-center gap-x-2 gap-y-0 justify-self-start">
                     <DialogTitle className="m-0 font-bold font-headline text-inherit text-xl leading-tight">
                       {voucherDialogTitle}
                     </DialogTitle>
                     {copiedDraftHeaderBadge}
                   </div>
-                  <div className="ml-auto flex shrink-0 items-center gap-[10px]">
+                  {interCompanyPayModeHeaderBadge ? (
+                    <div className="justify-self-center self-center shrink-0">
+                      {interCompanyPayModeHeaderBadge}
+                    </div>
+                  ) : null}
+                  <div
+                    className={cn(
+                      "flex shrink-0 items-center gap-[10px]",
+                      interCompanyPayModeHeaderBadge
+                        ? "justify-end justify-self-end"
+                        : "ml-auto"
+                    )}
+                  >
                     <VoucherDialogDateSystemSwitcher />
                     {interCompanyRibbonCompanyReadOnly ? (
                       <span
@@ -4217,6 +4275,11 @@ export function AddVoucherDialog(props: any) {
                 </DialogTitle>
                 {copiedDraftHeaderBadge}
               </div>
+              {interCompanyPayModeHeaderBadge ? (
+                <div className="min-w-0 flex-1 self-center flex justify-center px-1">
+                  {interCompanyPayModeHeaderBadge}
+                </div>
+              ) : null}
               {isEditLockedByLinks && (
                 <div className="min-w-0 max-w-[min(100%,14rem)] flex-1 rounded-full border border-gray-300/80 bg-gray-200 px-2 py-1.5">
                   <p className="m-0 text-center text-[10px] font-semibold leading-snug text-[#ff0000]">
@@ -4596,6 +4659,7 @@ export function AddVoucherDialog(props: any) {
           onRefreshCopyMismatch={postCopyNewFormSeed ? refreshCopyMismatchAfterMasterSave : undefined}
           onActiveTabChange={setVoucherFormActiveTab}
           onInterCompanyRibbonTabChange={setInterCompanyRibbonTab}
+          onInterCompanyPayModeLabelChange={setInterCompanyPayModeLabel}
           recurringVoucherSaveBlocked={recurringVoucherSaveBlocked}
           recurringVoucherAuxiliaryDirty={recurringVoucherAuxiliaryDirty}
         />

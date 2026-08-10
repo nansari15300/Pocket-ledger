@@ -30,7 +30,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
-import { isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
+import { isLedgerTransactionPeerPendingChange, isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
 import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import { getAllocationTotal } from "@/lib/payment-allocation-utils";
 import type { Item } from "@/components/items/types";
@@ -1393,6 +1393,10 @@ export const TransactionRow = React.memo(
       );
     };
 
+    const isPeerPendingChange = isLedgerTransactionPeerPendingChange(
+      transaction as { type?: string; interCompanyPeerPending?: unknown }
+    );
+
     const mainRowContent = (
       <>
         {showCol("syncStatus") && (
@@ -1457,7 +1461,19 @@ export const TransactionRow = React.memo(
         )}
         {showCol("voucherNo") && (
           <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined}>
-            {hlForColumn("voucherNumber")(getDisplayVoucherNumber(transaction))}
+            <span className="inline-flex max-w-full flex-wrap items-center gap-1">
+              <span className="min-w-0 truncate">
+                {hlForColumn("voucherNumber")(getDisplayVoucherNumber(transaction))}
+              </span>
+              {isPeerPendingChange ? (
+                <span
+                  className="inline-flex shrink-0 items-center rounded-full border border-blue-600/50 bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white shadow-sm dark:border-blue-400/50 dark:bg-blue-600"
+                  title="Peer company saved changes — open voucher and use Change Detected to apply"
+                >
+                  Change Detected
+                </span>
+              ) : null}
+            </span>
           </TableCell>
         )}
         {context === "daybook" && (
@@ -1759,6 +1775,8 @@ export const TransactionRow = React.memo(
 
     const isPaid = (transaction as any).paymentStatus === "paid";
     const isPendingApproval = highlightPendingApproval && isLedgerTransactionUnapproved(transaction as { isApproved?: boolean; type?: string; id?: string });
+    // Peer change-detect blue wins over unapproved pink when both present
+    const showPendingApprovalPink = isPendingApproval && !isPeerPendingChange;
     const narrationText =
       transaction.type === "note" ? transaction.title : transaction.narration;
     const narrationLabel = transaction.type === "note" ? "Title" : "Narration";
@@ -1848,7 +1866,7 @@ export const TransactionRow = React.memo(
     const txnStripeAttr = txnStripeMod !== null ? String(txnStripeMod) : undefined;
     /* Spend-wise / pending / selected par apna rang — sirf normal rows par gray-white alternate */
     const txnStripeBgClass =
-      txnStripeMod === null || isSelected || isCheckModeMarked || (highlightPendingApproval && isPendingApproval) || hasSpendWiseColor
+      txnStripeMod === null || isSelected || isCheckModeMarked || (highlightPendingApproval && isPendingApproval) || isPeerPendingChange || hasSpendWiseColor
         ? ""
         : txnStripeMod === 0
           ? "[&>td]:!bg-muted/50"
@@ -1876,7 +1894,8 @@ export const TransactionRow = React.memo(
         onDoubleClick={() => onRowClick?.(transaction)}
         data-txn-stripe={txnStripeAttr}
         /* Theme stripe rules (globals.css) se bachne + pink !important target */
-        data-pl-pending-approval={isPendingApproval ? "" : undefined}
+        data-pl-pending-approval={showPendingApprovalPink ? "" : undefined}
+        data-pl-peer-pending={isPeerPendingChange ? "" : undefined}
         /* globals.css [data-pl-txn-selected] — theme stripe/bg par orange box dikhe */
         ref={mainRowRef}
         onMouseEnter={onPairHoverEnter}
@@ -1907,11 +1926,15 @@ export const TransactionRow = React.memo(
           isNote && !isSelected && "bg-amber-50 [&>td]:bg-amber-50 hover:bg-amber-100 [&>td]:hover:bg-amber-100",
           isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
           /* Statement / non–spend-wise: full pink band — bank, item, tax, reports, etc. */
-          isPendingApproval && !isSelected && !inSpendWiseGroup &&
+          showPendingApprovalPink && !isSelected && !inSpendWiseGroup &&
             "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
           /* Spend-wise group: green/gray pe bhi unapproved dikhe — tint override + ring */
-          isPendingApproval && !isSelected && inSpendWiseGroup &&
+          showPendingApprovalPink && !isSelected && inSpendWiseGroup &&
             "[&>td]:!bg-pink-100/90 dark:[&>td]:!bg-pink-950/45 [&>td]:hover:!bg-pink-200/95 dark:hover:[&>td]:!bg-pink-950/55 ring-2 ring-inset ring-pink-500/45 dark:ring-pink-400/35",
+          isPeerPendingChange && !isSelected && !inSpendWiseGroup &&
+            "bg-blue-100 dark:bg-blue-950/40 [&>td]:bg-blue-100 [&>td]:dark:bg-blue-950/40 hover:bg-blue-200 dark:hover:bg-blue-950/50 [&>td]:hover:bg-blue-200 [&>td]:dark:hover:bg-blue-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
+          isPeerPendingChange && !isSelected && inSpendWiseGroup &&
+            "[&>td]:!bg-blue-100/90 dark:[&>td]:!bg-blue-950/45 [&>td]:hover:!bg-blue-200/95 dark:hover:[&>td]:!bg-blue-950/55 ring-2 ring-inset ring-blue-500/45 dark:ring-blue-400/35",
           txnRowSelectedChrome && txnSelectedMainRowCn(showNarrationRow),
           // Spend-wise blink: animation on Dr/Cr/Balance text only (see shouldAnimateSpendWiseAmountText), not on tr/border.
           // Keep transaction row compact when narration is visible (override default TableCell p-1).
@@ -1960,7 +1983,8 @@ export const TransactionRow = React.memo(
         onClick={() => onRowSelect?.(transaction)}
         onDoubleClick={() => onRowClick?.(transaction)}
         data-txn-stripe={txnStripeAttr}
-        data-pl-pending-approval={isPendingApproval ? "" : undefined}
+        data-pl-pending-approval={showPendingApprovalPink ? "" : undefined}
+        data-pl-peer-pending={isPeerPendingChange ? "" : undefined}
         data-pl-txn-hovered={pairHovered ? "" : undefined}
         data-pl-txn-selected={txnRowSelectedChrome ? "" : undefined}
         data-pl-check-marked={isCheckModeMarked ? "" : undefined}
@@ -1990,10 +2014,14 @@ export const TransactionRow = React.memo(
             "[&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-br-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden"
           ),
           /* Side borders sirf main row par — narration par dubara mat (beech line hat jati hai) */
-          isPendingApproval && !isSelected && !inSpendWiseGroup &&
+          showPendingApprovalPink && !isSelected && !inSpendWiseGroup &&
             "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50",
-          isPendingApproval && !isSelected && inSpendWiseGroup &&
+          showPendingApprovalPink && !isSelected && inSpendWiseGroup &&
             "[&>td]:!bg-pink-100/90 dark:[&>td]:!bg-pink-950/45 [&>td]:hover:!bg-pink-200/95 ring-2 ring-inset ring-pink-500/40 dark:ring-pink-400/30",
+          isPeerPendingChange && !isSelected && !inSpendWiseGroup &&
+            "bg-blue-100 dark:bg-blue-950/40 [&>td]:bg-blue-100 [&>td]:dark:bg-blue-950/40 hover:bg-blue-200 dark:hover:bg-blue-950/50 [&>td]:hover:bg-blue-200 [&>td]:dark:hover:bg-blue-950/50",
+          isPeerPendingChange && !isSelected && inSpendWiseGroup &&
+            "[&>td]:!bg-blue-100/90 dark:[&>td]:!bg-blue-950/45 [&>td]:hover:!bg-blue-200/95 ring-2 ring-inset ring-blue-500/40 dark:ring-blue-400/30",
           txnRowSelectedChrome
             ? txnSelectedNarrationRowCn()
             : isSpendWiseChild && !isSpendWiseInflowRow && !isSpendWiseOutflowRow && !spendWiseChildNeedsIndent && "bg-muted/20 [&>td]:bg-muted/20",
@@ -2001,7 +2029,7 @@ export const TransactionRow = React.memo(
           (isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow) || spendWiseGroupStandaloneOutflow) && !isSelected && "bg-gray-50 dark:bg-gray-900/20 [&>td]:bg-gray-50 [&>td]:dark:bg-gray-900/20 [&>td]:text-xs",
           isNote && !isSelected && "bg-amber-50 hover:bg-amber-100 [&>td]:bg-amber-50 [&>td]:hover:bg-amber-100",
           isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
-          !isSelected && !isPendingApproval && !isSpendWiseChild && !isNote && !isPaid && "hover:bg-muted/20 [&>td]:hover:bg-muted/20",
+          !isSelected && !showPendingApprovalPink && !isPeerPendingChange && !isSpendWiseChild && !isNote && !isPaid && "hover:bg-muted/20 [&>td]:hover:bg-muted/20",
           // Avoid extra bottom expansion in sub-row; we only want a small top gap.
           "md:[&>td]:pb-0"
         )}

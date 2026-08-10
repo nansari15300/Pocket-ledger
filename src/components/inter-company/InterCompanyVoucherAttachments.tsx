@@ -109,6 +109,7 @@ export function InterCompanyVoucherAttachments({
               file={file}
               allowPreviewWhenDisabled={allowPreviewWhenDisabled}
               attachmentClientFileUrls={stringFileUrls}
+              attachmentCompanyId={companyId ?? undefined}
               onRemove={
                 canAttach && fileAttachmentLimits.allowDelete
                   ? () => onFilesChange(files.filter((_, i) => i !== idx))

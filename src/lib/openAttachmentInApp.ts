@@ -280,9 +280,17 @@ async function tryOpenAttachmentFromDeviceCacheOnly(
 
   try {
     const { peekHoverCachedBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
-    const cellThumb = peekHoverCachedBlobUrl(`${u}::cell-thumb`);
-    if (cellThumb && (await openInMemoryUrlAttachment(cellThumb, { title: opts?.title, kind: opts?.kind }))) {
-      return true;
+    // FilePreview PDF thumbs use `::cell-thumb-v2`; ledger cells use `::cell-thumb`.
+    for (const thumbKey of [`${u}::cell-thumb-v2`, `${u}::cell-thumb`, `${u}::pdf-portal`]) {
+      const cellThumb = peekHoverCachedBlobUrl(thumbKey);
+      if (cellThumb && (await openInMemoryUrlAttachment(cellThumb, { title: opts?.title, kind: opts?.kind }))) {
+        return true;
+      }
+      const persistedThumb = await tryOfflineCachedAttachmentBlobMultiKey(thumbKey);
+      if (persistedThumb && persistedThumb.size > 0) {
+        await openBlobAttachmentInApp(persistedThumb, { title: opts?.title, kind: opts?.kind });
+        return true;
+      }
     }
   } catch {
     /* ignore */

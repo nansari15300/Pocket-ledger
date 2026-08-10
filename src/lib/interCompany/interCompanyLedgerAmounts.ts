@@ -16,6 +16,7 @@ import {
   isInterCompanyVisibleOnTargetEntity,
   readInterCompanyCompanyBankId,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
+import { isInterCompanyPeerPendingChange } from "@/lib/interCompany/interCompanyPeerPending";
 
 const PAYEE_FIELD: Record<InterCompanyEntityKind, string> = {
   party: "partyId",
@@ -143,11 +144,13 @@ export function getInterCompanyLedgerAmounts(
   const isIcCounterpartyLedger =
     context === "party" && icCounterpartyId && entityId === icCounterpartyId;
   // Target entity: bank approve ke baad hi (party/staff/tax/expense); IC · Due to = source approve par
+  // Peer Change Detected = notification only — destination posting mat hide karo
   if (
     interCompanyVoucherViewerSide(transaction) === "target" &&
     context !== "account" &&
     !isIcCounterpartyLedger &&
-    !isInterCompanyVisibleOnTargetEntity(transaction)
+    !isInterCompanyVisibleOnTargetEntity(transaction) &&
+    !isInterCompanyPeerPendingChange(transaction)
   ) {
     return empty;
   }

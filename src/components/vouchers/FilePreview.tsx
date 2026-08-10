@@ -2689,8 +2689,27 @@ export function FilePreview({
       typeof normalizedPreviewFile === "string" && isLocalFileRef(normalizedPreviewFile)
         ? normalizedPreviewFile
         : "";
-    // Click-open: thumbnail `blob:` mat — canonical `local:` / https ref (revoke / CORS false alarm avoid).
+    const isMemoryUrl = (u: string) => u.startsWith("blob:") || u.startsWith("data:");
+    // IC + other edit forms: thumb already resolved to memory blob while Files OFF —
+    // prefer that over canonical HTTPS (network blocked) so open matches portal / Payment In.
+    const previewMemoryUrl = (() => {
+      if (!localLedgerOnly) return "";
+      const fromView = String(viewFileInfo.url || "").trim();
+      if (fromView && isMemoryUrl(fromView)) return fromView;
+      const fromPdf = String(viewPdfThumbnail || "").trim();
+      if (fromPdf && isMemoryUrl(fromPdf)) return fromPdf;
+      if (!rawRef) return "";
+      const full = peekHoverCachedBlobUrl(rawRef);
+      if (full && isMemoryUrl(full)) return full;
+      const v2 = peekHoverCachedBlobUrl(sharedPdfCellThumbKey(rawRef));
+      if (v2 && isMemoryUrl(v2)) return v2;
+      const v1 = peekHoverCachedBlobUrl(sharedAttachmentCellThumbKey(rawRef));
+      if (v1 && isMemoryUrl(v1)) return v1;
+      return "";
+    })();
+    // Click-open: network ON → canonical `local:` / https. Files OFF + local blob → open blob.
     const openSrc =
+      previewMemoryUrl ||
       underlyingLocalRef ||
       (rawRef && !rawRef.startsWith("blob:") ? rawRef : "") ||
       (viewFileInfo.url && !viewFileInfo.url.startsWith("blob:") ? viewFileInfo.url : "") ||
@@ -2737,6 +2756,7 @@ export function FilePreview({
     viewFileInfo.type,
     viewFileInfo.name,
     viewFileInfo.formatLabel,
+    viewPdfThumbnail,
     normalizedPreviewFile,
     attachmentGalleryFingerprint,
     attachmentClientUrlsFingerprint,

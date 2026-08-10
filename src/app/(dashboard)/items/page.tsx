@@ -456,20 +456,26 @@ function ItemsPageContent() {
     }).length;
   }, [processedItemGroupsForList, searchTerm]);
 
-  const handleSelect = (item: Item | ItemGroup) => {
-    if (useQueryNav) {
-      // Static export ke liye query params – /items/[id] path refresh/redirect de sakta hai
-      if ("type" in item) {
-        router.push(`/items?selected=${item.id}`);
-      } else if (item.id !== "ungrouped") {
-        router.push(`/items?view=groups&selected=${item.id}`);
-      } else {
-        setSelected(item);
+  const handleSelect = useCallback((item: Item | ItemGroup) => {
+    pendingItemsSelectIdRef.current = item.id;
+    setSelected(item);
+    const isItem = "type" in item;
+    if (!isItem) setActiveView("groups");
+    else if (activeView !== "items") setActiveView("items");
+    const href = isItem
+      ? `/items?selected=${encodeURIComponent(item.id)}`
+      : `/items?view=groups&selected=${encodeURIComponent(item.id)}`;
+    if (typeof window !== "undefined") {
+      try {
+        window.history.replaceState(window.history.state, "", href);
+      } catch {
+        /* ignore */
       }
-    } else {
-      setSelected(item);
     }
-  };
+    if (useQueryNav && shouldReplaceWithMasterDetailCanonical(href)) {
+      router.replace(href, { scroll: false });
+    }
+  }, [useQueryNav, router, setSelected, activeView, setActiveView]);
 
   if (!companyId) {
     return (
