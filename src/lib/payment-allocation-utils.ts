@@ -593,16 +593,27 @@ export function hasPaymentLinks(voucherData: any): boolean {
 }
 
 /**
- * Returns true if any payment_in, direct_income, payment_out, direct_expense, journal, sale, purchase voucher
- * has allocations targeting the given voucherId (bill-wise link to a sale/purchase).
- * Used so sale/purchase edit is disabled when linked from "Link to Txns" or journal.
+ * Returns true if any payment_in, direct_income, payment_out, direct_expense, journal, sale, purchase,
+ * or inter_company voucher has allocations targeting the given voucherId (bill-wise link).
+ * Used so sale/purchase/IC edit is disabled when linked from "Link to Txns" or journal.
  */
 export function hasAllocationsToVoucherId(voucherId: string, allVouchers: any[]): boolean {
   if (!voucherId || !Array.isArray(allVouchers)) return false;
   for (const v of allVouchers) {
     if (v.isDeleted) continue;
     const type = v.type;
-    const isBillWiseSource = ["payment_in", "direct_income", "payment_out", "direct_expense", "purchase", "purchase_service", "sale", "sale_service", "journal"].includes(type);
+    const isBillWiseSource = [
+      "payment_in",
+      "direct_income",
+      "payment_out",
+      "direct_expense",
+      "purchase",
+      "purchase_service",
+      "sale",
+      "sale_service",
+      "journal",
+      "inter_company",
+    ].includes(type);
     if (!isBillWiseSource) continue;
     const allocations = (v.allocations as Allocation[] | undefined) ?? [];
     if (allocations.some((a) => a.voucherId === voucherId)) return true;

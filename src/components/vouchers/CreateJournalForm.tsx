@@ -118,6 +118,7 @@ import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedEr
 import { loadJournalLedgerScopeSnapshot, type JournalScopedLedgerSnapshot } from "@/lib/journalLedgerScopeLoad";
 import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID, getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
+import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
 /** Copy chip → parent ko journal row index bhejna hai — runtime import na ho isliye sirf types AddVoucherDialog se. */
 import type { CopyMissingMasterOpts, CopyMasterDraftRequestPayload } from "@/components/vouchers/AddVoucherDialog";
@@ -1061,14 +1062,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       // Bill-wise / books OB remaining — card preview me Book Opening row (Dr→Cr / Cr→Dr) ke liye.
       const billWiseObRemaining =
         typeof effectiveLedgerObOutstanding === "number" ? effectiveLedgerObOutstanding : null;
-      const shouldIncludeObRow = (paymentSide: "payment_in" | "payment_out") => {
-        if (hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID)) return true;
-        if (paymentSide === "payment_out") {
-          return partyOB < 0 || ((billWiseObRemaining ?? 0) > 0 && partyOB <= 0);
-        }
-        return partyOB > 0 || ((billWiseObRemaining ?? 0) > 0 && partyOB >= 0);
-      };
-
       // totalConsumedFromOB: allocations to OB from payments + sale/purchase openingBalanceAllocated.
       const totalConsumedFromOB = (() => {
         if (!accountId || !vouchers?.length) return 0;
@@ -1090,6 +1083,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         return fromPayments + fromBillwise;
       })();
       const obOutstandingIn = Math.max(0, obAmount - totalConsumedFromOB);
+      const shouldIncludeObRow = (paymentSide: "payment_in" | "payment_out") => {
+        if (hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID)) return true;
+        const remaining =
+          billWiseObRemaining != null && billWiseObRemaining > 0
+            ? billWiseObRemaining
+            : obOutstandingIn;
+        if (remaining <= 0) return false;
+        if (paymentSide === "payment_out") {
+          return partyOB < 0 || partyOB === 0;
+        }
+        return partyOB > 0 || partyOB === 0;
+      };
       // Card preview Amount: gross books OB — sirf remaining (obAmount) 0 ho to bhi bill-wise gross dikhao.
       const obGrossTotalForDisplay =
         obAmount > 0
@@ -1156,7 +1161,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           for (const v of vouchers as any[]) {
             if (isCurrentVoucher(v)) continue;
             if (
-              v.type !== "sale" && v.type !== "sale_service" && v.type !== "purchase" && v.type !== "purchase_service" && v.type !== "journal"
+              v.type !== "sale" && v.type !== "sale_service" && v.type !== "purchase" && v.type !== "purchase_service" && v.type !== "journal" && v.type !== "inter_company"
             ) continue;
             const allocations = (v.allocations as Allocation[] | undefined) || [];
             for (const a of allocations) {
@@ -1256,6 +1261,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               });
             }
           });
+          const icEntityCtx =
+            staffIdSet.has(accountId) ? ("staff" as const) : ("party" as const);
+          (vouchers as any[])
+            .filter((v) => !isCurrentVoucher(v) && v.type === "inter_company")
+            .forEach((v) => {
+              const partyAmount = getInterCompanyEntityBillWiseAmount(v, accountId, icEntityCtx);
+              if (!partyAmount || partyAmount.debit <= 0) return;
+              const allocatedToOthers = getAllocatedToOthersFromTarget(v, v.id);
+              const outstanding = Math.max(0, partyAmount.total - allocatedToOthers);
+              if (outstanding <= 0 && !hasExistingAlloc(v.id)) return;
+              const key = String(v.id);
+              if (!map.has(key)) {
+                map.set(key, {
+                  voucherId: key,
+                  voucherNumber: String((v as any).voucherNumber ?? "—"),
+                  date: safeToDate(v.date),
+                  total: partyAmount.total,
+                  linkedOnCurrent: linkedOnCurrentFor(v.id),
+                });
+              }
+            });
           if (shouldIncludeObRow("payment_in")) {
             const key = OPENING_BALANCE_VOUCHER_ID;
             if (!map.has(key)) {
@@ -1333,6 +1359,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               });
             }
           });
+          const icEntityCtxOut =
+            staffIdSet.has(accountId) ? ("staff" as const) : ("party" as const);
+          (vouchers as any[])
+            .filter((v) => !isCurrentVoucher(v) && v.type === "inter_company")
+            .forEach((v) => {
+              const partyAmount = getInterCompanyEntityBillWiseAmount(v, accountId, icEntityCtxOut);
+              if (!partyAmount || partyAmount.credit <= 0) return;
+              const allocatedToOthers = getAllocatedToOthersFromTarget(v, v.id);
+              const outstanding = Math.max(0, partyAmount.total - allocatedToOthers);
+              if (outstanding <= 0 && !hasExistingAlloc(v.id)) return;
+              const key = String(v.id);
+              if (!map.has(key)) {
+                map.set(key, {
+                  voucherId: key,
+                  voucherNumber: String((v as any).voucherNumber ?? "—"),
+                  date: safeToDate(v.date),
+                  total: partyAmount.total,
+                  linkedOnCurrent: linkedOnCurrentForOut(v.id),
+                });
+              }
+            });
           if (shouldIncludeObRow("payment_out")) {
             const key = OPENING_BALANCE_VOUCHER_ID;
             if (!map.has(key)) {
@@ -1446,6 +1493,93 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       amount: sideAmount,
     };
   }, [activeJournalLinkSide, journalLinkContextBySide, journalBillWiseBySide]);
+
+  /**
+   * Dialog ticks: outbound (isi journal pe saved) + incoming (PYMT/JRNL Dr ne is Cr pe link kiya).
+   * Pehle sirf outbound jaata tha — isliye pehle se linked rows edit pe unticked + linkable > 0 dikhte the.
+   */
+  const journalDialogExistingAllocations = useMemo((): Allocation[] => {
+    const side = activeJournalLinkContext?.side;
+    const accountId = String(activeJournalLinkContext?.accountId ?? "").trim();
+    if (!side || !accountId) return [];
+    const outbound = (journalAllocationsBySide[side] || []) as Allocation[];
+    const byId = new Map<string, Allocation>();
+    for (const a of outbound) {
+      const id = String(a?.voucherId ?? "").trim();
+      if (!id || getAllocationTotal(a) <= 0) continue;
+      byId.set(id, {
+        ...a,
+        voucherId: id,
+        amount: getAllocationTotal(a),
+        linkedAccountId: (a as any).linkedAccountId ?? accountId,
+      });
+    }
+
+    const debitSources = new Set(["payment_in", "direct_income", "purchase", "purchase_service"]);
+    const creditSources = new Set(["payment_out", "direct_expense", "sale", "sale_service"]);
+    // credit card (Journal Cr) ← Dr sources; debit card (Journal Dr) ← Cr sources
+    const allowTypes = side === "credit" ? creditSources : debitSources;
+
+    const voucherTouchesAccount = (v: any) =>
+      String((v as any)?.partyId ?? "") === accountId ||
+      String((v as any)?.staffId ?? "") === accountId ||
+      (Array.isArray((v as any)?.entries) &&
+        (v as any).entries.some((e: any) => String(e?.accountId ?? "") === accountId));
+
+    const journalMatchesSide = (v: any) => {
+      if (!Array.isArray(v?.entries)) return false;
+      const entry = v.entries.find((e: any) => String(e?.accountId ?? "") === accountId);
+      if (!entry) return false;
+      // Incoming to Journal Cr → source must be Dr on this party; Journal Dr ← Cr source
+      return side === "credit"
+        ? (Number(entry.debit) || 0) > 0
+        : (Number(entry.credit) || 0) > 0;
+    };
+
+    const icMatchesSide = (v: any) => {
+      const amt = getInterCompanyEntityBillWiseAmount(
+        v,
+        accountId,
+        staffIdSet.has(accountId) ? "staff" : "party"
+      );
+      if (!amt) return false;
+      return side === "credit" ? amt.debit > 0 : amt.credit > 0;
+    };
+
+    for (const row of journalLinkedFromRows) {
+      const id = String(row.voucherId || "").trim();
+      if (!id) continue;
+      const src = (vouchers as any[])?.find((v: any) => String(v?.id ?? "") === id);
+      if (!src || !voucherTouchesAccount(src)) continue;
+      const st = String(row.sourceType || src.type || "").toLowerCase();
+      if (st === "journal") {
+        if (!journalMatchesSide(src)) continue;
+      } else if (st === "inter_company") {
+        if (!icMatchesSide(src)) continue;
+      } else if (!allowTypes.has(st)) {
+        continue;
+      }
+      const amt = Number(row.amount) || 0;
+      if (amt <= 0) continue;
+      const prev = byId.get(id);
+      const mergedAmt = Math.max(prev ? getAllocationTotal(prev) : 0, amt);
+      byId.set(id, {
+        voucherId: id,
+        amount: mergedAmt,
+        linkedAccountId: accountId,
+      });
+    }
+
+    return Array.from(byId.values());
+  }, [
+    activeJournalLinkContext?.side,
+    activeJournalLinkContext?.accountId,
+    journalAllocationsBySide,
+    journalLinkedFromRows,
+    vouchers,
+    staffIdSet,
+  ]);
+
   // Dialog ko signed books OB — ledger prop pehle (Dr→Cr / Cr→Dr mirror ke liye same source).
   const activePartySignedOpeningBalance = useMemo(() => {
     if (!activeJournalLinkContext || activeJournalLinkContext.kind !== "party") return 0;
@@ -3068,7 +3202,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         partyId={activeJournalLinkContext?.kind === "party" ? activeJournalLinkContext.accountId : null}
         partyName={activeJournalLinkContext?.kind === "party" ? activeJournalLinkContext.label : "Party"}
         receivedAmount={Number(activeJournalLinkContext?.amount ?? 0) || 0}
-        existingAllocations={activeJournalLinkContext?.side === "debit" ? (journalAllocationsBySide.debit || []) : (journalAllocationsBySide.credit || [])}
+        existingAllocations={journalDialogExistingAllocations}
         paymentInId={journalVoucherId || null}
         paymentOutId={journalVoucherId || null}
         partyOpeningBalance={activePartySignedOpeningBalance}
@@ -3097,7 +3231,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         staffName={activeJournalLinkContext?.kind === "staff" ? activeJournalLinkContext.label : "Staff"}
         paymentInId={journalVoucherId || null}
         amountReceived={Number(activeJournalLinkContext?.amount ?? 0) || 0}
-        existingAllocations={journalAllocationsBySide.credit || []}
+        existingAllocations={journalDialogExistingAllocations}
         staffOpeningBalance={Number(activeJournalLinkContext?.openingBalance ?? 0) || 0}
         paymentInVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}
         paymentInDate={form.getValues("date")}
@@ -3118,7 +3252,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         staffName={activeJournalLinkContext?.kind === "staff" ? activeJournalLinkContext.label : "Staff"}
         paymentOutId={journalVoucherId || null}
         amountPaid={Number(activeJournalLinkContext?.amount ?? 0) || 0}
-        existingAllocations={journalAllocationsBySide.debit || []}
+        existingAllocations={journalDialogExistingAllocations}
         staffOpeningBalance={Number(activeJournalLinkContext?.openingBalance ?? 0) || 0}
         paymentOutVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}
         paymentOutDate={form.getValues("date")}

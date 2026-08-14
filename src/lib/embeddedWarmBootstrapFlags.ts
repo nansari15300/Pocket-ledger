@@ -40,6 +40,9 @@ export function sqliteBumpCollectionNeededOnLedgerRoute(pathname: string, collec
   if (route.startsWith("/gallery")) {
     return coll === "vouchers";
   }
+  if (route === "/reports" || route === "/reports/") {
+    return coll === "vouchers";
+  }
   return true;
 }
 

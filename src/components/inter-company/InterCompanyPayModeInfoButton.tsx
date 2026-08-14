@@ -91,7 +91,8 @@ export function InterCompanyPayModeInfoButton({ className, compact = false }: Pr
             <button
               type="button"
               className={cn(
-                "inline-flex shrink-0 items-center justify-center rounded-full border border-current/25 text-current/80 transition-colors hover:bg-black/5 hover:text-current dark:hover:bg-white/10",
+                // Lucide Info already has one circle — no extra border (double ring looked rough).
+                "inline-flex shrink-0 items-center justify-center rounded-full text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-700 dark:text-sky-400 dark:hover:bg-sky-950/40 dark:hover:text-sky-300",
                 compact ? "h-3.5 w-3.5" : "h-4 w-4",
                 className
               )}
@@ -104,7 +105,10 @@ export function InterCompanyPayModeInfoButton({ className, compact = false }: Pr
               onMouseDown={stopLabelSelect}
               onPointerDown={stopLabelSelect}
             >
-              <Info className={cn(compact ? "h-2.5 w-2.5" : "h-3 w-3")} aria-hidden />
+              <Info
+                className={cn(compact ? "h-3.5 w-3.5" : "h-4 w-4", "stroke-[2]")}
+                aria-hidden
+              />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="max-w-[240px] text-xs">

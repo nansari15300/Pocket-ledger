@@ -58,6 +58,11 @@ import {
 } from "@/lib/voucherFormAttachmentSave";
 import { normalizeVoucherRowAttachmentsForUi, getVoucherAttachmentUrlsForUi, stripTransientVoucherAttachmentFields } from "@/lib/voucherAttachmentNormalize";
 import { protectClearedAttachmentsFromStalePatch, resolveUrlsAgainstAttachmentIntent, shouldPreserveIntendedVoucherAttachments, logAttachWipe } from "@/lib/attachmentDeleteTrace";
+import {
+  applyLocalApprovalHoldToRows,
+  applyLocalApprovalHoldToVoucherList,
+  mergeVoucherRowKeepingLocalApproval,
+} from "@/lib/ledgerPendingApproval";
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { getBillWiseAllocatedToTarget, getPaymentStatus as getPaymentStatusResult, isSaleOrPurchaseBillVoucherType } from "@/lib/payment-allocation-utils";
@@ -336,7 +341,8 @@ function mergeEntityListsById(prev: any[], cached: any[], orderByField?: string)
   const map = new Map<string, any>(prev.filter(isAliveDoc).map((v: any) => [v.id, v]));
   for (const v of cached) {
     if (!isAliveDoc(v)) continue;
-    map.set(v.id, v);
+    const existing = map.get(v.id);
+    map.set(v.id, mergeVoucherRowKeepingLocalApproval(existing, v));
   }
   const merged = [...map.values()].filter(isAliveDoc);
   const sorted = orderByField ? sortDocsByDateField(merged, orderByField) : merged;
@@ -481,9 +487,10 @@ function commitEntityListSetter<T>(setter: StateSetter<T>, next: T[]): void {
 
 function commitVouchersSetter(setter: StateSetter<any>, next: any[]): void {
   setter((prev) => {
+    const held = applyLocalApprovalHoldToVoucherList(prev as any[], next as any[]);
     const preserved = preserveClearedAttachmentsInList(
       prev as any[],
-      next as any[],
+      held as any[],
       commitEntityListCompanyId
     );
     return entityListUiFingerprint(prev as any[]) === entityListUiFingerprint(preserved as any[])
@@ -715,7 +722,16 @@ function activeMasterCollectionPathsForRoute(
   if (route.startsWith("/tax")) return new Set(["vouchers", "taxes", "tax_groups"]);
   if (route.startsWith("/items")) return new Set(["vouchers", "items", "item_groups"]);
   if (route.startsWith("/incomes")) return new Set(["vouchers", "expense_accounts", "expense_groups"]);
-  // Voucher/reports/dashboard/reconciliation jaise shared pages par full master dataset chahiye.
+  // Gallery / Reports hub: Party/Bank jaisa — sirf vouchers; click pe saari masters mat lao.
+  if (route.startsWith("/gallery")) return new Set(["vouchers"]);
+  if (route === "/reports" || route === "/reports/") return new Set(["vouchers"]);
+  if (route.startsWith("/reports/")) {
+    // Individual report routes may need masters; keep full set.
+    return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
+  }
+  // Dashboard: pehle vouchers (Recent/daybook); baaki masters idle background warm se.
+  if (route.startsWith("/dashboard")) return new Set(["vouchers"]);
+  // Voucher forms / reconciliation jaise shared pages par full master dataset chahiye.
   return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
 }
 
@@ -730,6 +746,8 @@ export const VoucherProvider = ({
   const { companyId, company, clearCompanyId } = useCompany();
   commitEntityListCompanyId = String(companyId || "").trim();
   const pathname = usePathname() || "";
+  /** Gate/settings shells vs ledger — pathname string har sidebar click pe change; boolean sirf shell enter/exit. */
+  const ledgerBootstrapActive = !shouldSkipHeavyVoucherBootstrap(pathname);
   const { user, customUser, loading: authLoading } = useAuth();
   const { can } = usePermissions();
   const isServerGateCompanyContext =
@@ -821,6 +839,8 @@ export const VoucherProvider = ({
   /** Same company par listener rebind — poora page spinner mat dikhao (EXE/APK party/bank shake). */
   const hasWarmLedgerDataRef = useRef(false);
   const lastCompanyIdRef = useRef<string | null>(null);
+  /** Route nav pe already-hydrated SQLite collections dubara JSON.parse mat — APK sidebar 15–20s lag. */
+  const warmSqliteCollectionPathsRef = useRef<Set<string>>(new Set());
   /** Async SQLite/Firestore callbacks purani company ke liye late na aayein. */
   const companyDataLoadEpochRef = useRef(0);
   /** Intentional clears only (company switch / gate-shell). Accidental [] = shared-user blink. */
@@ -925,7 +945,8 @@ export const VoucherProvider = ({
   const viewAllRecords = can("view_all_records");
   const vouchersForDisplay = useMemo(() => {
     // Defensive guard: agar stale source se deleted voucher aa bhi gaya, view layer se hata do.
-    const activeVouchers = (vouchers || []).filter(isAliveDoc);
+    // Approve All hold: stale reload row ko unapproved dikhaye to bhi pink wapas na aaye.
+    const activeVouchers = applyLocalApprovalHoldToRows((vouchers || []).filter(isAliveDoc));
     const applyTargetIcVisibility = <T extends { type?: string }>(list: T[]): T[] =>
       list.filter((v) => {
         if (String(v?.type || "") !== "inter_company") return true;
@@ -1055,14 +1076,43 @@ export const VoucherProvider = ({
     });
   }, [companyId]);
 
+  /** Approve All: ek setState — N CustomEvent se sirf pehli row paint / baaki SQLite bump se revert. */
+  const patchVouchersInCache = useCallback((voucherIds: string[], patch: Record<string, unknown>) => {
+    const idSet = new Set((voucherIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+    if (!idSet.size) return;
+    setVouchers((prev) => {
+      let changed = false;
+      const next = prev.map((row) => {
+        const id = String(row?.id || "").trim();
+        if (!id || !idSet.has(id)) return row;
+        changed = true;
+        let safePatch = patch;
+        try {
+          safePatch = protectClearedAttachmentsFromStalePatch(row as Record<string, unknown>, patch, {
+            companyId: companyId ?? undefined,
+            voucherId: id,
+          });
+        } catch {
+          safePatch = patch;
+        }
+        return { ...row, ...safePatch, id };
+      });
+      return changed ? next : prev;
+    });
+  }, [companyId]);
+
   // Voucher form save: attachment / IC peer-pending patch — ledger/dialog bina refresh update.
   useEffect(() => {
     if (!companyId) return;
     return subscribeVoucherLivePatch((detail) => {
       if (detail.companyId !== companyId) return;
+      if (Array.isArray(detail.voucherIds) && detail.voucherIds.length > 1) {
+        patchVouchersInCache(detail.voucherIds, detail.patch);
+        return;
+      }
       patchVoucherInCache(detail.voucherId, detail.patch);
     });
-  }, [companyId, patchVoucherInCache]);
+  }, [companyId, patchVoucherInCache, patchVouchersInCache]);
 
   /** Entity edit save — turant raw masters state patch (list fingerprint + processed recompute). */
   const patchMasterEntity = useCallback(
@@ -1151,6 +1201,7 @@ export const VoucherProvider = ({
     setJournalAccountNames({});
     setUserNames({});
     hasWarmLedgerDataRef.current = false;
+    warmSqliteCollectionPathsRef.current = new Set();
     setLoadingIfChanged(true);
     previousData.current = {
       vouchers: [],
@@ -1271,7 +1322,6 @@ export const VoucherProvider = ({
   // --- Data Fetching Logic ---
   useEffect(() => {
     const keepWarmUi = hasWarmLedgerDataRef.current && lastCompanyIdRef.current === companyId;
-    const skipWarmVoucherSqliteReload = keepWarmUi && lastCompanyIdRef.current === companyId;
 
     if (authLoading) {
       if (!keepWarmUi) setLoadingIfChanged(true);
@@ -1310,9 +1360,13 @@ export const VoucherProvider = ({
       allowEmptyVoucherWipeRef.current = false;
     };
 
-    if (shouldSkipHeavyVoucherBootstrap(pathname)) {
-      // Route-level hard stop: background listeners/pulls off on selection/admin/gate shells.
-      resetAllStates();
+    if (!ledgerBootstrapActive) {
+      // Gate/settings: listeners band. Same-company warm ledger mat mitao — wapas aate hi 15–20s SQLite reload.
+      if (!keepWarmUi) {
+        resetAllStates();
+        hasWarmLedgerDataRef.current = false;
+        warmSqliteCollectionPathsRef.current = new Set();
+      }
       setLoadingIfChanged(false);
       return;
     }
@@ -1395,7 +1449,11 @@ export const VoucherProvider = ({
       { path: "expense_groups", setter: setExpenseGroups },
     ];
     /** Active page collections hi prefetch/listen — nested voucher dialog par full voucher-form scope. */
-    const activeCollectionPaths = activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope);
+    const routePathForBootstrap = pathnameForWipeGuardRef.current || pathname;
+    const activeCollectionPaths = activeMasterCollectionPathsForRoute(
+      routePathForBootstrap,
+      voucherFormMasterScope
+    );
     const collectionsToPrefetch = allCollectionsToPrefetch.filter((c) => activeCollectionPaths.has(c.path));
 
     // Pure offline row: Firestore try mat karo — warna getDoc fail / empty se web jaisa reset ho sakta hai
@@ -1408,10 +1466,14 @@ export const VoucherProvider = ({
     let cancelled = false;
     const loadEpoch = companyDataLoadEpochRef.current;
 
+    const skipWarmSqlitePath = (path: string) =>
+      keepWarmUi && warmSqliteCollectionPathsRef.current.has(path);
+
     const applySqliteRows = <T,>(
       setter: StateSetter<T>,
       cached: T[],
-      orderByField?: string
+      orderByField?: string,
+      collectionPath?: string
     ) => {
       if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return;
       const next = sqliteCachedRowsForSetter(cached as any[], orderByField) as T[];
@@ -1421,10 +1483,13 @@ export const VoucherProvider = ({
         if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return prev;
         const prevAlive = (prev as any[]).filter(isAliveDoc);
         if (!prevAlive.length || !hasWarmLedgerDataRef.current) {
-          return next as any;
+          return applyLocalApprovalHoldToVoucherList(prevAlive, next as any[]) as any;
         }
         return mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any;
       });
+      if (collectionPath && !cancelled && loadEpoch === companyDataLoadEpochRef.current) {
+        warmSqliteCollectionPathsRef.current.add(collectionPath);
+      }
     };
 
     if (isExplicitLocalRegistryRow) {
@@ -1435,7 +1500,7 @@ export const VoucherProvider = ({
       const loadSqliteChunk = (items: typeof collectionsToPrefetch) =>
         Promise.all(
           items.map(({ path, setter, orderByField }) =>
-            (path === "vouchers" && skipWarmVoucherSqliteReload
+            (skipWarmSqlitePath(path)
               ? Promise.resolve()
               : path === "vouchers"
               ? // Fast-first vouchers: projection table se lite rows pehle; full JSON parse background me.
@@ -1457,13 +1522,13 @@ export const VoucherProvider = ({
                   .then(() =>
                     listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
                       .then((cached) => {
-                        applySqliteRows(setter, cached, orderByField);
+                        applySqliteRows(setter, cached, orderByField, path);
                       })
                       .catch(() => {})
                   )
               : listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
                   .then((cached) => {
-                    applySqliteRows(setter, cached, orderByField);
+                    applySqliteRows(setter, cached, orderByField, path);
                   })
                   .catch(() => {}))
           )
@@ -1498,7 +1563,7 @@ export const VoucherProvider = ({
       const loadSqliteChunk = (items: typeof collectionsToPrefetch) =>
         Promise.all(
           items.map(({ path, setter, orderByField }) =>
-            (path === "vouchers" && skipWarmVoucherSqliteReload
+            (skipWarmSqlitePath(path)
               ? Promise.resolve()
               : path === "vouchers"
               ? // Local/APK cold load: projection rows se pehle paint; heavy voucher JSON parse baad me merge.
@@ -1520,13 +1585,13 @@ export const VoucherProvider = ({
                   .then(() =>
                     listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
                       .then((cached) => {
-                        applySqliteRows(setter, cached, orderByField);
+                        applySqliteRows(setter, cached, orderByField, path);
                       })
                       .catch(() => {})
                   )
               : listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
                   .then((cached) => {
-                    applySqliteRows(setter, cached, orderByField);
+                    applySqliteRows(setter, cached, orderByField, path);
                   })
                   .catch(() => {}))
           )
@@ -1574,12 +1639,12 @@ export const VoucherProvider = ({
         const loadSqliteChunk = (items: typeof collectionsToPrefetch) =>
           Promise.all(
             items.map(({ path, setter, orderByField }) =>
-              ((path === "vouchers" && skipWarmVoucherSqliteReload)
+              (skipWarmSqlitePath(path)
                 ? Promise.resolve()
                 : listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true }))
                 .then((cached) => {
                   if (!cached) return;
-                  applySqliteRows(setter, cached, orderByField);
+                  applySqliteRows(setter, cached, orderByField, path);
                 })
                 .catch(() => {})
             )
@@ -2050,7 +2115,241 @@ export const VoucherProvider = ({
       unsubRef.current.forEach(u => u());
       unsubRef.current = [];
     };
-  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, ledgerSyncModeEpoch, onlineSyncPrefsEpoch, pathname, voucherFormMasterScope, sqliteLedgerRouteHint.usesSqlite, sqliteLedgerRouteHint.ownerMatchesUser, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId, setLoadingIfChanged]);
+  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, ledgerSyncModeEpoch, onlineSyncPrefsEpoch, ledgerBootstrapActive, voucherFormMasterScope, sqliteLedgerRouteHint.usesSqlite, sqliteLedgerRouteHint.ownerMatchesUser, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId, setLoadingIfChanged]);
+
+  // Sidebar/route change: pehle se warm company pe missing masters hi SQLite se — full teardown/spinner mat.
+  useEffect(() => {
+    if (authLoading || loading || !companyId || !user) return;
+    if (!ledgerBootstrapActive) return;
+    if (lastCompanyIdRef.current !== companyId) return;
+
+    const allCollectionsToPrefetch: MasterCollectionConfig[] = [
+      { path: "vouchers", setter: setVouchers, orderByField: "date" },
+      { path: "parties", setter: setParties },
+      { path: "staff", setter: setStaff },
+      { path: "bank_accounts", setter: setAccounts },
+      { path: "taxes", setter: setTaxes },
+      { path: "expense_accounts", setter: setUnprocessedExpenseAccounts },
+      { path: "items", setter: setItems },
+      { path: "item_groups", setter: setItemGroups },
+      { path: "groups", setter: setGroups },
+      { path: "account_groups", setter: setAccountGroups },
+      { path: "staff_groups", setter: setStaffGroups },
+      { path: "tax_groups", setter: setTaxGroups },
+      { path: "expense_groups", setter: setExpenseGroups },
+    ];
+    const needed = activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope);
+    const missing = allCollectionsToPrefetch.filter(
+      (c) => needed.has(c.path) && !warmSqliteCollectionPathsRef.current.has(c.path)
+    );
+    if (!missing.length) return;
+
+    let cancelled = false;
+    const loadEpoch = companyDataLoadEpochRef.current;
+    const applySqliteRows = <T,>(
+      setter: StateSetter<T>,
+      cached: T[],
+      orderByField?: string,
+      collectionPath?: string
+    ) => {
+      if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return;
+      const next = sqliteCachedRowsForSetter(cached as any[], orderByField) as T[];
+      setter((prev) => {
+        if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return prev;
+        const prevAlive = (prev as any[]).filter(isAliveDoc);
+        if (!prevAlive.length || !hasWarmLedgerDataRef.current) {
+          return applyLocalApprovalHoldToVoucherList(prevAlive, next as any[]) as any;
+        }
+        return mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any;
+      });
+      if (collectionPath && !cancelled && loadEpoch === companyDataLoadEpochRef.current) {
+        warmSqliteCollectionPathsRef.current.add(collectionPath);
+      }
+    };
+
+    const loadOne = async ({ path, setter, orderByField }: MasterCollectionConfig) => {
+      if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return;
+      if (path === "vouchers") {
+        try {
+          const lite = await listVoucherSummaryProjectionFromBrowserDb(companyId, { forBackupMerge: true });
+          if (!cancelled && loadEpoch === companyDataLoadEpochRef.current && lite.length) {
+            applySqliteRows(
+              setter,
+              lite.map((r) => ({
+                id: r.id,
+                type: r.type || "sale",
+                date: r.date || null,
+                amount: Number(r.amount || 0),
+              })),
+              orderByField
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+        if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return;
+        try {
+          const cached = await listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true });
+          applySqliteRows(setter, cached, orderByField, path);
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      try {
+        const cached = await listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true });
+        applySqliteRows(setter, cached, orderByField, path);
+      } catch {
+        /* ignore */
+      }
+    };
+
+    const yieldToPaint = () =>
+      new Promise<void>((resolve) => {
+        if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+          window.requestAnimationFrame(() => resolve());
+        } else {
+          setTimeout(resolve, 0);
+        }
+      });
+
+    void (async () => {
+      // Dashboard / full-route: saari missing collections ek saath mat — pehle vouchers, phir baaki yield ke saath
+      // taaki sidebar click pe page turant paint ho (party/bank jaisa).
+      const voucherFirst = missing.filter((c) => c.path === "vouchers");
+      const rest = missing.filter((c) => c.path !== "vouchers");
+      for (const c of voucherFirst) {
+        await loadOne(c);
+        if (cancelled) return;
+      }
+      for (const c of rest) {
+        await yieldToPaint();
+        if (cancelled) return;
+        await loadOne(c);
+        if (cancelled) return;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    pathname,
+    voucherFormMasterScope,
+    companyId,
+    authLoading,
+    loading,
+    user?.uid,
+    ledgerBootstrapActive,
+  ]);
+
+  // Party/Bank pe rehte hue bhi dashboard masters idle me warm — Dashboard/Reports/Gallery click pe missing load freeze na ho.
+  useEffect(() => {
+    if (authLoading || loading || !companyId || !user) return;
+    if (!ledgerBootstrapActive) return;
+    if (lastCompanyIdRef.current !== companyId) return;
+    if (!hasWarmLedgerDataRef.current) return;
+
+    const allCollectionsToPrefetch: MasterCollectionConfig[] = [
+      { path: "vouchers", setter: setVouchers, orderByField: "date" },
+      { path: "parties", setter: setParties },
+      { path: "staff", setter: setStaff },
+      { path: "bank_accounts", setter: setAccounts },
+      { path: "taxes", setter: setTaxes },
+      { path: "expense_accounts", setter: setUnprocessedExpenseAccounts },
+      { path: "items", setter: setItems },
+      { path: "item_groups", setter: setItemGroups },
+      { path: "groups", setter: setGroups },
+      { path: "account_groups", setter: setAccountGroups },
+      { path: "staff_groups", setter: setStaffGroups },
+      { path: "tax_groups", setter: setTaxGroups },
+      { path: "expense_groups", setter: setExpenseGroups },
+    ];
+    const missing = allCollectionsToPrefetch.filter(
+      (c) =>
+        VOUCHER_FORM_MASTER_COLLECTION_PATHS.has(c.path) &&
+        !warmSqliteCollectionPathsRef.current.has(c.path)
+    );
+    if (!missing.length) return;
+
+    let cancelled = false;
+    const loadEpoch = companyDataLoadEpochRef.current;
+    const applySqliteRows = <T,>(
+      setter: StateSetter<T>,
+      cached: T[],
+      orderByField?: string,
+      collectionPath?: string
+    ) => {
+      if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return;
+      const next = sqliteCachedRowsForSetter(cached as any[], orderByField) as T[];
+      setter((prev) => {
+        if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return prev;
+        const prevAlive = (prev as any[]).filter(isAliveDoc);
+        if (!prevAlive.length || !hasWarmLedgerDataRef.current) {
+          return applyLocalApprovalHoldToVoucherList(prevAlive, next as any[]) as any;
+        }
+        return mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any;
+      });
+      if (collectionPath && !cancelled && loadEpoch === companyDataLoadEpochRef.current) {
+        warmSqliteCollectionPathsRef.current.add(collectionPath);
+      }
+    };
+
+    const yieldToPaint = () =>
+      new Promise<void>((resolve) => {
+        if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+          window.requestAnimationFrame(() => resolve());
+        } else {
+          setTimeout(resolve, 0);
+        }
+      });
+
+    const run = async () => {
+      for (const { path, setter, orderByField } of missing) {
+        if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return;
+        if (warmSqliteCollectionPathsRef.current.has(path)) continue;
+        try {
+          if (path === "vouchers") {
+            const cached = await listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true });
+            applySqliteRows(setter, cached, orderByField, path);
+          } else {
+            const cached = await listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true });
+            applySqliteRows(setter, cached, orderByField, path);
+          }
+        } catch {
+          /* ignore */
+        }
+        await yieldToPaint();
+      }
+    };
+
+    let idleHandle: number | null = null;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const start = () => {
+      if (cancelled) return;
+      void run();
+    };
+    if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+      idleHandle = window.requestIdleCallback(start, { timeout: 4000 });
+    } else {
+      timeoutHandle = setTimeout(start, 1800);
+    }
+
+    return () => {
+      cancelled = true;
+      if (idleHandle != null && typeof window !== "undefined" && typeof window.cancelIdleCallback === "function") {
+        window.cancelIdleCallback(idleHandle);
+      }
+      if (timeoutHandle != null) clearTimeout(timeoutHandle);
+    };
+  }, [
+    companyId,
+    authLoading,
+    loading,
+    user?.uid,
+    ledgerBootstrapActive,
+    pathname,
+  ]);
 
   // Single-doc / write-path upsert ke baad merge (notify) — collections ke hisaab se state update.
   useEffect(() => {
@@ -2243,6 +2542,7 @@ export const VoucherProvider = ({
         return;
       }
       // Active page ke bahar collection bump ignore — unnecessary background merge avoid.
+      // Dashboard/gallery: active paths vouchers-only ho sakte hain, lekin route bump list (masters) phir bhi merge ho.
       if (d.immediate === true) {
         mergeCollectionFromSqliteBump(coll, {
           remoteIncoming,
@@ -2250,10 +2550,13 @@ export const VoucherProvider = ({
         });
         return;
       }
-      if (!activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope).has(coll)) return;
+      const activePaths = activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope);
+      const routeWantsBump = sqliteBumpCollectionNeededOnLedgerRoute(pathname, coll);
+      if (!activePaths.has(coll) && !routeWantsBump) return;
       if (
         embeddedClientPrefersQuietBackgroundSync() &&
-        !sqliteBumpCollectionNeededOnLedgerRoute(pathname, coll)
+        !routeWantsBump &&
+        !activePaths.has(coll)
       ) {
         return;
       }
@@ -3064,7 +3367,7 @@ export const VoucherProvider = ({
     const currentData = {
         vouchers: vouchersForDisplay,
         // `vouchersAll` bhi alive-only rakho; reports/status logic me deleted voucher leak na ho.
-        vouchersAll: vouchers.filter(isAliveDoc),
+        vouchersAll: applyLocalApprovalHoldToRows(vouchers.filter(isAliveDoc)),
         loading,
         processedParties, 
         processedPartiesForSelection, 

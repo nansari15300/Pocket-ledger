@@ -25,6 +25,7 @@ import { getTaxFromAllocation, getNetFromAllocation, getAllocationTotal, autoLin
 import { patchVoucherFields } from "@/lib/voucherActionsClient";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 
 const safeToDate = (date: unknown): Date | null => {
   if (!date) return null;
@@ -70,13 +71,18 @@ export async function applyAdvancesAllocationsToServer(params: ApplyAdvancesAllo
     : [];
   const toRemoveFromTarget = targetAllocations.filter((a) => a.voucherId && !(Number(linkedAmounts[a.voucherId]) > 0)).map((a) => a.voucherId);
   const toRemove = toRemoveFromTarget.length > 0 ? toRemoveFromTarget : (() => {
-    const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service", "journal"];
-    const drTypes = ["payment_out", "direct_expense", "sale", "sale_service", "journal"];
+    const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service", "journal", "inter_company"];
+    const drTypes = ["payment_out", "direct_expense", "sale", "sale_service", "journal", "inter_company"];
     const sourceTypes = mode === "sale" ? crTypes : drTypes;
     return (vouchers as any[])
       .filter((v) => {
         if (!sourceTypes.includes(v.type)) return false;
         if (v.type === "journal") return (v.entries as any[] || []).some((e: any) => String(e?.accountId ?? "") === String(targetPartyId));
+        if (v.type === "inter_company") {
+          const side = mode === "sale" ? "credit" : "debit";
+          const amt = getInterCompanyEntityBillWiseAmount(v, String(targetPartyId), "party");
+          return !!amt && (side === "credit" ? amt.credit > 0 : amt.debit > 0);
+        }
         return String((v as any).partyId ?? "") === String(targetPartyId);
       })
       .filter((v) => ((v.allocations as Allocation[] | undefined) || []).some((a) => a.voucherId === targetVoucherId))
@@ -119,7 +125,9 @@ export async function applyAdvancesAllocationsToServer(params: ApplyAdvancesAllo
     const newNet = balanceKind === "net" || balanceKind === "all" ? prevNet + addAmt : prevNet;
     const newEntry: Allocation = { voucherId: targetVoucherId, amount: newTax + newNet, taxAmount: newTax, netAmount: newNet };
     const sourceVoucher = (vouchers as any[]).find((v) => v.id === sourceVoucherId);
-    if (sourceVoucher?.type === "journal") (newEntry as any).linkedAccountId = targetPartyId;
+    if (sourceVoucher?.type === "journal" || sourceVoucher?.type === "inter_company") {
+      (newEntry as any).linkedAccountId = targetPartyId;
+    }
     if (idx >= 0) allocations[idx] = newEntry;
     else allocations.push(newEntry);
     await patchVoucherFields(companyId, sourceVoucherId, { allocations });
@@ -255,13 +263,17 @@ export function LinkAdvancesToVoucherDialog({
     const targetVoucher = (vouchers as any[]).find((v) => v.id === targetVoucherId);
     const obAllocated = Number(targetVoucher?.openingBalanceAllocated) || 0;
     if (obAllocated > 0) initial[OPENING_BALANCE_VOUCHER_ID] = obAllocated;
-    const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service", "journal"];
-    const drTypes = ["payment_out", "direct_expense", "sale", "sale_service", "journal"];
+    const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service", "journal", "inter_company"];
+    const drTypes = ["payment_out", "direct_expense", "sale", "sale_service", "journal", "inter_company"];
     const srcTypes = mode === "sale" ? crTypes : drTypes;
     (vouchers as any[])
       .filter((v) => {
         if (!srcTypes.includes(v.type)) return false;
         if (v.type === "journal") return (v.entries as any[] || []).some((e: any) => String(e?.accountId ?? "") === String(targetPartyId));
+        if (v.type === "inter_company") {
+          const amt = getInterCompanyEntityBillWiseAmount(v, String(targetPartyId), "party");
+          return !!amt && (mode === "sale" ? amt.credit > 0 : amt.debit > 0);
+        }
         return String((v as any).partyId ?? "") === String(targetPartyId);
       })
       .forEach((v) => {
@@ -322,14 +334,18 @@ export function LinkAdvancesToVoucherDialog({
     const updates = Object.entries(linkedAmounts).filter(([, amt]) => Number(amt) > 0);
     const voucherPath = `companies/${companyId}/vouchers`;
 
-    // Source voucher IDs that currently have an allocation to this target — same types as dialog (sale: Cr incl. purchase, journal; purchase: Dr incl. sale, journal)
-    const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service", "journal"];
-    const drTypes = ["payment_out", "direct_expense", "sale", "sale_service", "journal"];
+    // Source voucher IDs that currently have an allocation to this target — same types as dialog (sale: Cr incl. purchase, journal, IC; purchase: Dr incl. sale, journal, IC)
+    const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service", "journal", "inter_company"];
+    const drTypes = ["payment_out", "direct_expense", "sale", "sale_service", "journal", "inter_company"];
     const sourceTypes = mode === "sale" ? crTypes : drTypes;
     const sourceVoucherIds = (vouchers as any[])
       .filter((v) => {
         if (!sourceTypes.includes(v.type)) return false;
         if (v.type === "journal") return (v.entries as any[] || []).some((e: any) => String(e?.accountId ?? "") === String(targetPartyId));
+        if (v.type === "inter_company") {
+          const amt = getInterCompanyEntityBillWiseAmount(v, String(targetPartyId), "party");
+          return !!amt && (mode === "sale" ? amt.credit > 0 : amt.debit > 0);
+        }
         return String((v as any).partyId ?? "") === String(targetPartyId);
       })
       .filter((v) => ((v.allocations as Allocation[] | undefined) || []).some((a) => a.voucherId === targetVoucherId))

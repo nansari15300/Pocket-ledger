@@ -4,7 +4,7 @@ import * as React from "react";
 import { TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, Pencil, History, CheckCircle, Printer, MousePointerClick, RefreshCw, Loader2 } from "lucide-react";
+import { MoreVertical, Pencil, History, CheckCircle, CheckCheck, Printer, MousePointerClick, RefreshCw, Loader2 } from "lucide-react";
 import { VoucherAttachmentFileIndicator } from "@/components/vouchers/VoucherAttachmentFileIndicator";
 import {
   DropdownMenu,
@@ -1125,6 +1125,8 @@ export const TransactionRow = React.memo(
     onAddLink,
     onHistoryVoucher,
     onApproveVoucher,
+    onApproveAllVisible,
+    showApproveAll = false,
     onRowSelect,
     isSelected,
     isRelatedBlink = false,
@@ -1726,7 +1728,7 @@ export const TransactionRow = React.memo(
                 <MoreVertical className="h-4 w-4 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
+            <DropdownMenuContent align="end" className="w-48">
               {showSpendWiseGroupMenuActions ? (
                 <>
                   <DropdownMenuItem
@@ -1750,6 +1752,16 @@ export const TransactionRow = React.memo(
                   <DropdownMenuItem onClick={() => onApproveVoucher?.(transaction)} className="flex items-center gap-2">
                     <CheckCircle className="h-3.5 w-3.5" />
                     Approve
+                  </DropdownMenuItem>
+                )}
+              {can("approve_transactions") &&
+                effectiveNotificationSettings?.approve?.on !== false &&
+                effectiveNotificationSettings?.approve?.onTransaction !== false &&
+                showApproveAll &&
+                onApproveAllVisible && (
+                  <DropdownMenuItem onClick={() => onApproveAllVisible()} className="flex items-center gap-2">
+                    <CheckCheck className="h-3.5 w-3.5" />
+                    Approve All
                   </DropdownMenuItem>
                 )}
               {(() => {

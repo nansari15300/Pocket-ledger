@@ -14,6 +14,7 @@ import { useDate } from "@/hooks/useDate";
 import { cn } from "@/lib/utils";
 import { getTaxNetAllocatedByVoucherIdFromPaymentOuts, getAllocationTotal, getPaymentInRemaining, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
+import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 import { Link2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -140,6 +141,36 @@ export function LinkPaymentOutToSalaryDialog({
         const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
         return dA - dB;
       });
+    // Journal Dr / Payment Out → Cr IC vouchers (same staff).
+    const icCrRows = (vouchers as any[])
+      .filter((v: any) => v.type === "inter_company")
+      .map((v: any) => {
+        const staffAmount = getInterCompanyEntityBillWiseAmount(v, String(staffId), "staff");
+        if (!staffAmount || staffAmount.credit <= 0) return null;
+        const allocations = (v.allocations as Allocation[] | undefined) || [];
+        const allocatedToOthers = paymentOutId
+          ? allocations.filter((a) => a.voucherId !== paymentOutId).reduce((s, a) => s + getAllocationTotal(a), 0)
+          : allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+        const currentAllocated = paymentOutId
+          ? allocations.filter((a) => a.voucherId === paymentOutId).reduce((s, a) => s + getAllocationTotal(a), 0)
+          : 0;
+        const remaining = Math.max(0, staffAmount.total - allocatedToOthers - currentAllocated);
+        return {
+          id: v.id,
+          voucherNumber: v.voucherNumber ?? "—",
+          date: v.date,
+          netTotal: staffAmount.total,
+          allocated: allocatedToOthers,
+          outstanding: remaining + currentAllocated,
+          sourceType: "inter_company" as const,
+        };
+      })
+      .filter((r: any) => !!r && r.outstanding > 0)
+      .sort((a: any, b: any) => {
+        const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
+        const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
+        return dA - dB;
+      });
     const obRow = showOBRow && obAmount > 0 && (obOutstanding > 0 || obAllocatedToCurrent > 0) ? [{
       id: OPENING_BALANCE_VOUCHER_ID,
       voucherNumber: "—",
@@ -150,7 +181,7 @@ export function LinkPaymentOutToSalaryDialog({
       isDr: obIsDr,
       sourceType: "opening_balance" as const,
     }] : [];
-    return [...obRow, ...list.map((row: any) => ({ ...row, sourceType: "add_salary" as const })), ...paymentInRows];
+    return [...obRow, ...list.map((row: any) => ({ ...row, sourceType: "add_salary" as const })), ...paymentInRows, ...icCrRows];
   }, [staffId, vouchers, paymentOutId, staffOB, showOBRow, obOutstanding, obAmount, obIsDr, totalAllocatedToOB, obAllocatedToCurrent]);
 
   useEffect(() => {

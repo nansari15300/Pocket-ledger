@@ -12,6 +12,7 @@ import {
   OPENING_BALANCE_VOUCHER_ID,
   type Allocation,
 } from "@/lib/payment-allocation-utils";
+import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 
 export type PaymentInWithRemaining = {
   id: string;
@@ -162,13 +163,38 @@ export function useAdvancesForSale(
       };
     });
 
-    const allCrRows = [...paymentInsWithRemaining, ...journalCrRows];
+    const icCrVouchers = (vouchers as any[]).filter((v) => {
+      if (v.type !== "inter_company") return false;
+      const amt = getInterCompanyEntityBillWiseAmount(v, partyIdStr, "party");
+      return !!amt && amt.credit > 0;
+    });
+    const icCrRows: PaymentInWithRemaining[] = icCrVouchers.map((v) => {
+      const partyAmount = getInterCompanyEntityBillWiseAmount(v, partyIdStr, "party")!;
+      const allocations = (v.allocations as Allocation[] | undefined) || [];
+      const allocatedTotal = allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+      const allocatedToOthers = targetSaleId
+        ? allocations.filter((a) => a.voucherId !== targetSaleId).reduce((s, a) => s + getAllocationTotal(a), 0)
+        : allocatedTotal;
+      const remaining = Math.max(0, partyAmount.total - allocatedTotal);
+      return {
+        id: v.id,
+        amount: partyAmount.total,
+        allocatedTotal,
+        allocatedToOthers,
+        remaining,
+        date: v.date,
+        voucherNumber: v.voucherNumber ?? (v as any).voucher_number,
+        type: "inter_company",
+      };
+    });
+
+    const allCrRows = [...paymentInsWithRemaining, ...journalCrRows, ...icCrRows];
 
     // Show only if linkable (remaining > 0) OR already linked to this sale (so user can unlink)
     const filtered = allCrRows.filter((row) => {
       if (row.remaining > 0) return true;
       if (!targetSaleId) return true;
-      const v = [...crVouchers, ...journalCrVouchers].find((x) => x.id === row.id);
+      const v = [...crVouchers, ...journalCrVouchers, ...icCrVouchers].find((x) => x.id === row.id);
       if (!v) return false;
       const allocations = (v.allocations as Allocation[] | undefined) || [];
       const toCurrent = allocations.find((a) => a.voucherId === targetSaleId);
@@ -292,13 +318,38 @@ export function useAdvancesForPurchase(
       };
     });
 
-    const allDrRows = [...paymentOutsWithRemaining, ...journalDrRows];
+    const icDrVouchers = (vouchers as any[]).filter((v) => {
+      if (v.type !== "inter_company") return false;
+      const amt = getInterCompanyEntityBillWiseAmount(v, partyIdStr, "party");
+      return !!amt && amt.debit > 0;
+    });
+    const icDrRows: PaymentOutWithRemaining[] = icDrVouchers.map((v) => {
+      const partyAmount = getInterCompanyEntityBillWiseAmount(v, partyIdStr, "party")!;
+      const allocations = (v.allocations as Allocation[] | undefined) || [];
+      const allocatedTotal = allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+      const allocatedToOthers = targetPurchaseId
+        ? allocations.filter((a) => a.voucherId !== targetPurchaseId).reduce((s, a) => s + getAllocationTotal(a), 0)
+        : allocatedTotal;
+      const remaining = Math.max(0, partyAmount.total - allocatedTotal);
+      return {
+        id: v.id,
+        amount: partyAmount.total,
+        allocatedTotal,
+        allocatedToOthers,
+        remaining,
+        date: v.date,
+        voucherNumber: v.voucherNumber ?? (v as any).voucher_number,
+        type: "inter_company",
+      };
+    });
+
+    const allDrRows = [...paymentOutsWithRemaining, ...journalDrRows, ...icDrRows];
 
     // Show only if linkable (remaining > 0) OR already linked to this purchase (so user can unlink)
     const filtered = allDrRows.filter((row) => {
       if (row.remaining > 0) return true;
       if (!targetPurchaseId) return true;
-      const v = [...drVouchers, ...journalDrVouchers].find((x) => x.id === row.id);
+      const v = [...drVouchers, ...journalDrVouchers, ...icDrVouchers].find((x) => x.id === row.id);
       if (!v) return false;
       const allocations = (v.allocations as Allocation[] | undefined) || [];
       const toCurrent = allocations.find((a) => a.voucherId === targetPurchaseId);

@@ -1,13 +1,13 @@
 
 "use client";
 
-import React, { Suspense, useState, useMemo, useEffect, useCallback } from "react";
+import React, { Suspense, useState, useMemo, useEffect, useCallback, startTransition } from "react";
+import dynamic from "next/dynamic";
 import { ReportList } from "@/components/reports/ReportList";
 import { reports, type Report } from "@/components/reports/report-data";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Input } from "@/components/ui/input";
 import { Search, PanelRight } from "lucide-react";
-import { ReportDetails } from "@/components/reports/ReportDetails";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { useReportList } from "@/contexts/ReportListContext";
@@ -22,6 +22,14 @@ import { cn } from "@/lib/utils";
 import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
 import { pathnameForModalRouterReplace } from "@/lib/modalUrlSync";
 import { appNavHref } from "@/lib/appNavHref";
+
+const ReportDetails = dynamic(
+  () => import("@/components/reports/ReportDetails").then((m) => m.ReportDetails),
+  {
+    ssr: false,
+    loading: () => <LoadingSpinner />,
+  }
+);
 
 /** Path + query same ho to `router.replace` mat chalao — static/Electron par dobara RSC fetch + "200ms refresh" feel. */
 function reportListUrlMatchesWindow(targetPathAndQuery: string): boolean {
@@ -59,7 +67,7 @@ function ReportsPageContent() {
   const [searchTerm, setSearchTerm] = useState("");
   const [isDesktopReportListOpen, setIsDesktopReportListOpen] = useState(true);
   const isMobile = useIsMobile();
-  const [loading, setLoading] = useState(true);
+  const [loading] = useState(false);
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -69,7 +77,7 @@ function ReportsPageContent() {
   // Auto-collapse app sidebar whenever user is on reports page.
   useEffect(() => {
     if (pathname?.startsWith("/reports")) {
-      setIsOpen(false);
+      startTransition(() => setIsOpen(false));
     }
   }, [pathname, setIsOpen]);
 
@@ -151,10 +159,6 @@ function ReportsPageContent() {
     openReportListSheet
   );
 
-  useEffect(() => {
-    setLoading(false); 
-  }, []);
-
   const filteredReports = useMemo(() => {
     if (!searchTerm) return reportsForCompany;
     return reportsForCompany.filter(
@@ -163,10 +167,6 @@ function ReportsPageContent() {
         report.description.toLowerCase().includes(searchTerm.toLowerCase())
     );
   }, [searchTerm, reportsForCompany]);
-
-  if (loading) {
-      return <LoadingSpinner />
-  }
 
   const listView = (
     <div className="flex flex-col h-full">

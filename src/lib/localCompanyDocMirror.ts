@@ -1027,7 +1027,7 @@ export async function upsertCompanyDocInBrowserDb(
         } catch {
           /* optional warm */
         }
-        if (collectionName === "vouchers") {
+        if (collectionName === "vouchers" && shouldNotify) {
           const { dispatchVoucherLivePatch } = await import("@/lib/voucherFormAttachmentSave");
           dispatchVoucherLivePatch(companyId, docId, { ...out.stampedData, id: docId });
         }
@@ -1054,7 +1054,7 @@ export async function upsertCompanyDocInBrowserDb(
 
     const out = await commitCompanyDocOnRenderer(companyId, collectionName, docId, data, options);
     if (out.persisted) {
-      if (collectionName === "vouchers") {
+      if (collectionName === "vouchers" && shouldNotify) {
         const { dispatchVoucherLivePatch } = await import("@/lib/voucherFormAttachmentSave");
         dispatchVoucherLivePatch(companyId, docId, { ...out.stampedData, id: docId });
       }
@@ -1406,6 +1406,18 @@ export async function mirrorCompanyDocToBrowserDb(
     );
     if (dec) payload = dec;
     else if (isEncryptedServerBackupDoc(payload)) return false;
+    if (collectionName === "vouchers") {
+      const local = await getCompanyDocFromBrowserDb(companyId, collectionName, docId, { includeDeleted: true });
+      if (local && (local as { isApproved?: boolean }).isApproved === true && payload.isApproved !== true) {
+        payload = {
+          ...payload,
+          isApproved: true,
+          approvedByUserId: (local as { approvedByUserId?: unknown }).approvedByUserId ?? payload.approvedByUserId,
+          approvedByUserName: (local as { approvedByUserName?: unknown }).approvedByUserName ?? payload.approvedByUserName,
+          approvedAt: (local as { approvedAt?: unknown }).approvedAt ?? payload.approvedAt,
+        };
+      }
+    }
     // Server snapshot = trusted read path; voucher plan gate yahan nahi (flush already paid-gated upstream where needed).
     await upsertCompanyDocInBrowserDb(companyId, collectionName, docId, stampLocalMirrorBackedByFirestore(payload), {
       notify: false,

@@ -25,6 +25,7 @@ import {
   getAllocationTotal,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
+import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 
 const safeToDate = (date: unknown): Date | null => {
   if (!date) return null;
@@ -215,33 +216,29 @@ export function LinkPaymentToTxnsDialog({
       : obOutstandingIn;
   const billWiseObRemaining =
     effectiveObRemaining > 0 ? effectiveObRemaining : null;
-  const hasLinkableObAmount =
-    effectiveObRemaining > 0 ||
-    existingAllocations.some((a) => a.voucherId === OPENING_BALANCE_VOUCHER_ID && getAllocationTotal(a) > 0);
+  const openingBalanceRowOutstanding = (_side: "payment_in" | "payment_out") => {
+    if (effectiveObRemaining > 0) {
+      return Math.max(0, effectiveObRemaining + currentVoucherAllocToOB);
+    }
+    return Math.max(0, obAmount - obAllocatedToOthers);
+  };
   /**
-   * Journal link: link account ka books opening — Dr (+) ho to Dr-list (Cr card),
-   * Cr (−) ho to Cr-list (Dr card). Remaining 0 ho tab bhi row dikhe (linkable column me 0).
+   * Book Opening / OB: sirf jab linkable > 0, ya current voucher pe pehle se link ho
+   * (edit me unlink ke liye). Linkable 0 + koi current link nahi → list me mat dikhao.
    */
   const shouldIncludeOpeningBalanceRow = (
     side: "payment_in" | "payment_out",
     hasExisting: (id: string) => boolean
   ) => {
     if (hasExisting(OPENING_BALANCE_VOUCHER_ID)) return true;
+    if (openingBalanceRowOutstanding(side) <= 0) return false;
     if (isJournalLinkDialog) {
-      if (side === "payment_out") {
-        return partyOB < 0 || (effectiveObRemaining > 0 && partyOB <= 0);
-      }
-      return partyOB > 0 || (effectiveObRemaining > 0 && partyOB >= 0);
+      // Cr OB → Cr list (payment_out); Dr OB → Dr list (payment_in)
+      if (side === "payment_out") return partyOB < 0 || partyOB === 0;
+      return partyOB > 0 || partyOB === 0;
     }
     const showSide = side === "payment_out" ? showOBInPaymentOut : showOBInPaymentIn;
-    const hasLinkable = hasLinkableObAmount || hasExisting(OPENING_BALANCE_VOUCHER_ID);
-    return showSide && hasLinkable;
-  };
-  const openingBalanceRowOutstanding = (_side: "payment_in" | "payment_out") => {
-    if (effectiveObRemaining > 0) {
-      return Math.max(0, effectiveObRemaining + currentVoucherAllocToOB);
-    }
-    return Math.max(0, obAmount - obAllocatedToOthers);
+    return showSide;
   };
   // Amount column: books opening gross; linkable alag column.
   const openingBalanceGrossTotal = (_side: "payment_in" | "payment_out") => {
@@ -274,7 +271,8 @@ export function LinkPaymentToTxnsDialog({
           v.type !== "sale_service" &&
           v.type !== "purchase" &&
           v.type !== "purchase_service" &&
-          v.type !== "journal"
+          v.type !== "journal" &&
+          v.type !== "inter_company"
         ) continue;
         const allocations = (v.allocations as Allocation[] | undefined) || [];
         for (const a of allocations) {
@@ -374,6 +372,26 @@ export function LinkPaymentToTxnsDialog({
       })
       .filter((row): row is NonNullable<typeof row> => !!row);
     const journalsDrFiltered = journalDrRows.filter((j) => j.outstanding > 0 || hasExistingAlloc(j.id));
+    // Cr source (Payment In / Journal Cr) → Dr IC vouchers same party.
+    const icDrRows = (vouchers as any[])
+      .filter((v) => !isCurrentVoucher(v) && v.type === "inter_company")
+      .map((v) => {
+        const partyAmount = getInterCompanyEntityBillWiseAmount(v, String(partyId), "party");
+        if (!partyAmount || partyAmount.debit <= 0) return null;
+        const allocatedToOthers = getAllocatedToOthersFromTarget(getFreshTarget(v), v.id);
+        const outstanding = Math.max(0, partyAmount.total - allocatedToOthers);
+        return {
+          id: v.id,
+          date: v.date,
+          type: "Inter Company (Dr)" as const,
+          refNo: (v as any).voucherNumber ?? "—",
+          total: partyAmount.total,
+          outstanding,
+          allocatedToOthers,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => !!row);
+    const icDrFiltered = icDrRows.filter((j) => j.outstanding > 0 || hasExistingAlloc(j.id));
     const byDate = (a: { date: unknown }, b: { date: unknown }) => {
       const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
       const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
@@ -390,7 +408,7 @@ export function LinkPaymentToTxnsDialog({
       outstanding: openingBalanceRowOutstanding("payment_in"),
       allocatedToOthers: obAllocatedToOthers,
     }] : [];
-    const combined = [...ob, ...salesFiltered, ...paymentOutsFiltered, ...journalsDrFiltered];
+    const combined = [...ob, ...salesFiltered, ...paymentOutsFiltered, ...journalsDrFiltered, ...icDrFiltered];
     combined.sort((a, b) => {
       const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
       const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
@@ -427,7 +445,8 @@ export function LinkPaymentToTxnsDialog({
           v.type !== "sale_service" &&
           v.type !== "purchase" &&
           v.type !== "purchase_service" &&
-          v.type !== "journal"
+          v.type !== "journal" &&
+          v.type !== "inter_company"
         ) continue;
         const allocations = (v.allocations as Allocation[] | undefined) || [];
         for (const a of allocations) {
@@ -528,6 +547,26 @@ export function LinkPaymentToTxnsDialog({
       })
       .filter((row): row is NonNullable<typeof row> => !!row);
     const journalsCrFiltered = journalCrRows.filter((j) => j.outstanding > 0 || hasExistingAllocOut(j.id));
+    // Dr source (Payment Out / Journal Dr) → Cr IC vouchers same party.
+    const icCrRows = (vouchers as any[])
+      .filter((v) => !isCurrentVoucher(v) && v.type === "inter_company")
+      .map((v) => {
+        const partyAmount = getInterCompanyEntityBillWiseAmount(v, String(partyId), "party");
+        if (!partyAmount || partyAmount.credit <= 0) return null;
+        const allocatedToOthers = getAllocatedToOthersFromTargetOut(getFreshTargetOut(v), v.id);
+        const outstanding = Math.max(0, partyAmount.total - allocatedToOthers);
+        return {
+          id: v.id,
+          date: v.date,
+          type: "Inter Company (Cr)" as const,
+          refNo: (v as any).voucherNumber ?? "—",
+          total: partyAmount.total,
+          outstanding,
+          allocatedToOthers,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => !!row);
+    const icCrFiltered = icCrRows.filter((j) => j.outstanding > 0 || hasExistingAllocOut(j.id));
     const byDate = (a: { date: unknown }, b: { date: unknown }) => {
       const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
       const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
@@ -544,7 +583,7 @@ export function LinkPaymentToTxnsDialog({
       outstanding: openingBalanceRowOutstanding("payment_out"),
       allocatedToOthers: obAllocatedToOthers,
     }] : [];
-    const combined = [...ob, ...purchasesFiltered, ...paymentInsFiltered, ...journalsCrFiltered];
+    const combined = [...ob, ...purchasesFiltered, ...paymentInsFiltered, ...journalsCrFiltered, ...icCrFiltered];
     combined.sort((a, b) => {
       const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
       const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;

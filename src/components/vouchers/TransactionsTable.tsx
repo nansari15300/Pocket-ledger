@@ -75,7 +75,9 @@ import type { SpendWiseBlinkMode } from "@/components/vouchers/transactionColumn
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import usePermissions from "@/hooks/usePermissions";
-import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
+import { approveVoucherWithHistory, approveVouchersWithHistoryBatch } from "@/lib/voucherActionsClient";
+import { clearLedgerVouchersLocallyApproved, isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
+import { dispatchVoucherLivePatch, dispatchVoucherLivePatchMany } from "@/lib/voucherFormAttachmentSave";
 import {
   insertFiscalPartitionRows,
   getFiscalMergePartitionDateFromCompany,
@@ -284,6 +286,16 @@ interface TransactionsTableProps {
   spendWiseGroupPrint?: SpendWiseGroupPrintConfig;
 }
 
+function samePendingOutboxIdSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const id of a) if (!b.has(id)) return false;
+  return true;
+}
+
+/** Outbox drain background me hota hai — badge live rakhne ke liye pending rows tak halka poll. */
+const PENDING_OUTBOX_POLL_MS = 3000;
+
 export function TransactionsTable({
   transactions,
   context,
@@ -384,10 +396,13 @@ export function TransactionsTable({
   const refreshPendingOutboxVoucherIds = useCallback(() => {
     const cid = String(companyId || "").trim();
     if (!cid) {
-      setPendingOutboxVoucherIds(new Set());
+      setPendingOutboxVoucherIds((prev) => (prev.size ? new Set<string>() : prev));
       return;
     }
-    void listPendingOutboxDocIdsForCompany(cid, "vouchers").then(setPendingOutboxVoucherIds);
+    void listPendingOutboxDocIdsForCompany(cid, "vouchers").then((next) => {
+      // Same ids par identity stable rakho — warna har poll pe puri table re-render hogi.
+      setPendingOutboxVoucherIds((prev) => (samePendingOutboxIdSet(prev, next) ? prev : next));
+    });
   }, [companyId]);
   const handleSyncVoucherNow = useCallback(
     async (transaction: any) => {
@@ -427,6 +442,12 @@ export function TransactionsTable({
       window.removeEventListener("online", onDataSyncChanged);
     };
   }, [refreshPendingOutboxVoucherIds]);
+  // Pending rows rehne tak poll karo: background flush ke baad "Sync due" khud green tick ban jaye.
+  useEffect(() => {
+    if (!pendingOutboxVoucherIds.size) return;
+    const timer = window.setInterval(refreshPendingOutboxVoucherIds, PENDING_OUTBOX_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [pendingOutboxVoucherIds, refreshPendingOutboxVoucherIds]);
   // FY merge: neela divider row — company par local fiscal merge `useCompany` se aa chuka hai.
   const fiscalPartitionOpts = useMemo(() => {
     if (company?.fiscalSplitMode !== "merge") return { at: null as Date | null, label: undefined as string | undefined };
@@ -482,8 +503,15 @@ export function TransactionsTable({
       }
     })().finally(() => {
       markVoucherSyncing(firstId, false);
+      refreshPendingOutboxVoucherIds();
     });
-  }, [companyId, tableTransactions, markVoucherSyncing, dataSyncEpoch]);
+  }, [
+    companyId,
+    tableTransactions,
+    markVoucherSyncing,
+    dataSyncEpoch,
+    refreshPendingOutboxVoucherIds,
+  ]);
   const hasSpendWiseGroups = tableTransactions?.some((t: any) => typeof t._spendWiseGroupColorIndex === "number");
   const useSpendWiseOpeningBalanceCard = context === "account" && hasSpendWiseGroups;
   const { user, customUser } = useAuth();
@@ -499,15 +527,121 @@ export function TransactionsTable({
       try {
         const approverName = customUser?.displayName || user?.displayName || user?.email || user.uid;
         await approveVoucherWithHistory(companyId, transaction.id, user.uid, approverName);
+        dispatchVoucherLivePatch(companyId, String(transaction.id), {
+          id: String(transaction.id),
+          isApproved: true,
+          approvedByUserId: user.uid,
+          approvedByUserName: approverName,
+        });
+        refreshPendingOutboxVoucherIds();
         toast.success("Transaction approved.");
       } catch (e) {
         const message = e instanceof Error && e.message ? e.message : "Failed to approve transaction.";
         toast.error(message);
       }
     },
-    [companyId, user?.uid, user?.displayName, user?.email, customUser?.displayName]
+    [
+      companyId,
+      user?.uid,
+      user?.displayName,
+      user?.email,
+      customUser?.displayName,
+      refreshPendingOutboxVoucherIds,
+    ]
   );
   const effectiveOnApproveVoucher = onApproveVoucher ?? handleApproveVoucherDefault;
+  /** Current page slice — pagination 10/20/30 pe jo rows table me hain. */
+  const pageUnapprovedVouchers = useMemo(() => {
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const t of tableTransactions as any[]) {
+      if (!t || t._spendWiseSpacer) continue;
+      if (t.type === FISCAL_YEAR_PARTITION_ROW_TYPE) continue;
+      const id = String(t.id || "").trim();
+      if (!id || seen.has(id)) continue;
+      if (!isLedgerTransactionUnapproved(t)) continue;
+      seen.add(id);
+      out.push(t);
+    }
+    return out;
+  }, [tableTransactions]);
+  const approveAllTargets = pageUnapprovedVouchers;
+  const approveAllInFlightRef = useRef(false);
+  const handleApproveAllVisible = useCallback(async () => {
+    if (!companyId || !user?.uid) return;
+    if (approveAllInFlightRef.current) return;
+    const pending = approveAllTargets;
+    if (!pending.length) {
+      toast.message("No unapproved transactions on this page.");
+      return;
+    }
+    approveAllInFlightRef.current = true;
+    const approverName = customUser?.displayName || user?.displayName || user?.email || user.uid;
+    const pendingById = new Map<string, any>();
+    for (const row of pending as any[]) {
+      const id = String(row?.id || "").trim();
+      if (id) pendingById.set(id, row);
+    }
+    const pendingIds = pending
+      .map((t) => String(t?.id || "").trim())
+      .filter(Boolean);
+    try {
+      // Optimistic page patch first, then quiet row writes.
+      dispatchVoucherLivePatchMany(companyId, pendingIds, {
+        isApproved: true,
+        approvedByUserId: user.uid,
+        approvedByUserName: approverName,
+      });
+      const result = await approveVouchersWithHistoryBatch(
+        companyId,
+        pendingIds,
+        user.uid,
+        approverName
+      );
+      if (result.failed > 0) {
+        const approvedSet = new Set(result.approvedIds);
+        for (const id of pendingIds) {
+          if (approvedSet.has(id)) continue;
+          const original = pendingById.get(id);
+          if (!original) continue;
+          clearLedgerVouchersLocallyApproved([id]);
+          dispatchVoucherLivePatch(companyId, id, {
+            ...original,
+            id,
+          });
+        }
+      }
+      refreshPendingOutboxVoucherIds();
+      if (result.ok > 0) {
+        void flushVoucherOutbox()
+          .catch(() => undefined)
+          .finally(refreshPendingOutboxVoucherIds);
+      }
+      if (result.ok > 0) {
+        toast.success(
+          result.ok === 1 ? "1 transaction approved." : `${result.ok} transactions approved.`
+        );
+      }
+      if (result.failed > 0) {
+        toast.error(
+          result.failed === 1
+            ? "1 transaction failed to approve."
+            : `${result.failed} transactions failed to approve.`
+        );
+      }
+    } finally {
+      approveAllInFlightRef.current = false;
+    }
+  }, [
+    companyId,
+    user?.uid,
+    user?.displayName,
+    user?.email,
+    customUser?.displayName,
+    approveAllTargets,
+    refreshPendingOutboxVoucherIds,
+  ]);
+  const showApproveAllOnPage = approveAllTargets.length > 0;
   // Statement view = running balance. Bill wise: Party/Staff show per-row outstanding (closing balance); others show running balance.
   const isBillWiseMode = resolvedBalanceMode === "bill_wise";
   // Party/Staff bill-wise only: show per-row outstanding (per row closing balance), including journal. Daybook/account/expense/tax bill-wise: running balance.
@@ -2762,6 +2896,8 @@ export function TransactionsTable({
                                           onAddLink={onAddLink}
                                           onHistoryVoucher={onHistoryVoucher}
                                           onApproveVoucher={effectiveOnApproveVoucher}
+                                          onApproveAllVisible={handleApproveAllVisible}
+                                          showApproveAll={showApproveAllOnPage}
                                           {...getStatementCheckRowProps(t)}
                                           isRelatedBlink={getIsRelatedBlink(t)}
                                           isSelectedRowBlink={getIsSelectedRowBlink(t)}
@@ -2835,6 +2971,8 @@ export function TransactionsTable({
                           onAddLink={onAddLink}
                           onHistoryVoucher={onHistoryVoucher}
                           onApproveVoucher={effectiveOnApproveVoucher}
+                          onApproveAllVisible={handleApproveAllVisible}
+                          showApproveAll={showApproveAllOnPage}
                           {...getStatementCheckRowProps(t)}
                           isRelatedBlink={getIsRelatedBlink(t)}
                           isSelectedRowBlink={getIsSelectedRowBlink(t)}
@@ -2912,6 +3050,8 @@ export function TransactionsTable({
                         onAddLink={onAddLink}
                         onHistoryVoucher={onHistoryVoucher}
                         onApproveVoucher={effectiveOnApproveVoucher}
+                        onApproveAllVisible={handleApproveAllVisible}
+                        showApproveAll={showApproveAllOnPage}
                         {...getStatementCheckRowProps(t)}
                         isRelatedBlink={getIsRelatedBlink(t)}
                         isSelectedRowBlink={getIsSelectedRowBlink(t)}

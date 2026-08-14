@@ -218,6 +218,23 @@ export function getInterCompanyLedgerAmounts(
   });
 }
 
+/** Bill-wise link: party/staff pe IC row ka Dr/Cr amount (linkable list ke liye). */
+export function getInterCompanyEntityBillWiseAmount(
+  voucher: Record<string, unknown> | null | undefined,
+  entityId: string,
+  context: "party" | "staff"
+): { debit: number; credit: number; total: number } | null {
+  if (!voucher || String(voucher.type || "") !== "inter_company") return null;
+  const id = String(entityId || "").trim();
+  if (!id) return null;
+  const amt = Number(voucher.amount ?? voucher.total ?? 0) || 0;
+  const r = getInterCompanyLedgerAmounts(voucher, context, id, amt);
+  if (!r.touched) return null;
+  const total = r.debit > 0 ? r.debit : r.credit;
+  if (total <= 0) return null;
+  return { debit: r.debit, credit: r.credit, total };
+}
+
 /** Party list / copy ledger — kya yeh party id inter_company se touch hoti hai */
 export function interCompanyTouchesPartyId(
   voucher: Record<string, unknown>,

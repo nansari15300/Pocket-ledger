@@ -18,6 +18,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { getAllocationTotal, getPaymentOutRemaining, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
+import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 
 export interface LinkPaymentInToSalaryDialogProps {
   isOpen: boolean;
@@ -108,6 +109,35 @@ export function LinkPaymentInToSalaryDialog({
         return dB - dA;
       });
 
+    // Journal Cr / Payment In → Dr IC vouchers (same staff).
+    const icDrRows = (vouchers as any[])
+      .filter((v: any) => v.type === "inter_company")
+      .map((v: any) => {
+        const staffAmount = getInterCompanyEntityBillWiseAmount(v, String(staffId), "staff");
+        if (!staffAmount || staffAmount.debit <= 0) return null;
+        const allocations = (v.allocations as Allocation[] | undefined) || [];
+        const currentAllocated = currentAllocMap.get(v.id) ?? 0;
+        const allocatedToOthers = paymentInId
+          ? allocations.filter((a) => a.voucherId !== paymentInId).reduce((s, a) => s + getAllocationTotal(a), 0)
+          : allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+        const remaining = Math.max(0, staffAmount.total - allocatedToOthers - currentAllocated);
+        return {
+          id: v.id,
+          voucherNumber: v.voucherNumber ?? "—",
+          date: v.date,
+          amount: staffAmount.total,
+          otherLinked: allocatedToOthers,
+          linkable: remaining + currentAllocated,
+          sourceType: "inter_company" as const,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => !!row && row.linkable > 0)
+      .sort((a, b) => {
+        const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
+        const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
+        return dB - dA;
+      });
+
     const obRow = ((showOBRow && obOutstanding > 0) || obAllocatedToCurrent > 0) ? [{
       id: OPENING_BALANCE_VOUCHER_ID,
       voucherNumber: "—",
@@ -118,7 +148,7 @@ export function LinkPaymentInToSalaryDialog({
       sourceType: "opening_balance" as const,
     }] : [];
 
-    return [...obRow, ...paymentOutRows];
+    return [...obRow, ...paymentOutRows, ...icDrRows];
   }, [staffId, vouchers, existingAllocations, paymentInId, showOBRow, obAmount, obOutstanding, obAllocatedToCurrent, totalAllocatedToOB]);
 
   useEffect(() => {

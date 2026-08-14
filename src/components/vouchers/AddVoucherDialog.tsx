@@ -1090,7 +1090,7 @@ function VoucherDialogContent({
   onRefreshCopyMismatch?: () => void | Promise<void>;
   onActiveTabChange?: (tab: VoucherType) => void;
   onInterCompanyRibbonTabChange?: (tab: InterCompanyRibbonTab) => void;
-  /** Edit Trxn header center — Account / Company to Company badge */
+  /** Edit Trxn header — Account / Company to Company badge (BS ke left) */
   onInterCompanyPayModeLabelChange?: (label: string | null) => void;
   /** `/inter-company?icTab=join` — dialog open par Join ribbon */
   initialInterCompanyRibbonTab?: InterCompanyRibbonTab;
@@ -1637,7 +1637,7 @@ export function AddVoucherDialog(props: any) {
   const [interCompanyRibbonTab, setInterCompanyRibbonTab] = useState<InterCompanyRibbonTab>(
     () => (rest as { initialInterCompanyRibbonTab?: InterCompanyRibbonTab }).initialInterCompanyRibbonTab ?? "voucher"
   );
-  /** Edit Trxn header center — ✓ Account/Company to Company */
+  /** Edit Trxn header — ✓ Account/Company to Company (BS ke left) */
   const [interCompanyPayModeLabel, setInterCompanyPayModeLabel] = useState<string | null>(null);
   useEffect(() => {
     if (voucherFormActiveTab !== "inter_company") setInterCompanyPayModeLabel(null);
@@ -2463,11 +2463,13 @@ export function AddVoucherDialog(props: any) {
   }, [effectiveVoucher, missingEditVoucherNumber, voucherNumberForEdit]);
   // Dialog chrome / link-locks sirf saved edit par: copied-draft session me null rakho (nahi to source voucher id se locks lag jate hain).
   const voucherForDialogChrome = postCopyNewFormSeed ? null : effectiveVoucher;
-  // Bill-wise: voucher's own allocations/linked refs, OR (sale/purchase) any payment has allocations to this voucher
+  // Bill-wise: voucher's own allocations/linked refs, OR (sale/purchase/IC) any source allocates to this voucher
   const hasBillWiseLinks =
     !!voucherForDialogChrome?.id &&
     (hasPaymentLinks(voucherForDialogChrome) ||
-      ((voucherForDialogChrome.type === "sale" || voucherForDialogChrome.type === "purchase") &&
+      ((voucherForDialogChrome.type === "sale" ||
+        voucherForDialogChrome.type === "purchase" ||
+        voucherForDialogChrome.type === "inter_company") &&
         hasAllocationsToVoucherId(voucherForDialogChrome.id, vouchers || [])));
   const hasSpendWise = !!voucherForDialogChrome?.id && hasSpendWiseLinks(voucherForDialogChrome, vouchers || []);
   /** Use form-reported effective state when set (local unlink); else server-based hasLinks so banner/fields follow local changes. */
@@ -4146,6 +4148,7 @@ export function AddVoucherDialog(props: any) {
             <div className="flex flex-col justify-center px-3 py-2 md:px-4 md:py-2">
               {isEditLockedByLinks ? (
                 // 3-equal wing grid: beechna ribbon header ke geometric center rahe — company dropdown width se shift na ho.
+                // Company to Company badge center me mat rakho (edit-lock banner se ribbon ke niche chala jata tha) — BS ke left.
                 <div className="grid min-h-[2.75rem] w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3">
                   <div className="flex min-w-0 shrink flex-row flex-wrap items-center gap-x-2 gap-y-0 justify-self-start self-center pr-2">
                     <DialogTitle className="m-0 font-bold font-headline text-inherit text-xl leading-tight">
@@ -4161,6 +4164,7 @@ export function AddVoucherDialog(props: any) {
                     </p>
                   </div>
                   <div className="flex shrink-0 flex-row items-center justify-end justify-self-end self-center gap-[10px]">
+                    {interCompanyPayModeHeaderBadge}
                     <VoucherDialogDateSystemSwitcher />
                     {interCompanyRibbonCompanyReadOnly ? (
                       <span
@@ -4190,33 +4194,15 @@ export function AddVoucherDialog(props: any) {
                   </div>
                 </div>
               ) : (
-                <div
-                  className={cn(
-                    "w-full min-w-0",
-                    interCompanyPayModeHeaderBadge
-                      ? "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3"
-                      : "flex flex-nowrap items-center gap-2"
-                  )}
-                >
-                  <div className="flex min-w-0 flex-row flex-wrap items-center gap-x-2 gap-y-0 justify-self-start">
+                <div className="flex w-full min-w-0 flex-nowrap items-center gap-2">
+                  <div className="flex min-w-0 flex-row flex-wrap items-center gap-x-2 gap-y-0">
                     <DialogTitle className="m-0 font-bold font-headline text-inherit text-xl leading-tight">
                       {voucherDialogTitle}
                     </DialogTitle>
                     {copiedDraftHeaderBadge}
                   </div>
-                  {interCompanyPayModeHeaderBadge ? (
-                    <div className="justify-self-center self-center shrink-0">
-                      {interCompanyPayModeHeaderBadge}
-                    </div>
-                  ) : null}
-                  <div
-                    className={cn(
-                      "flex shrink-0 items-center gap-[10px]",
-                      interCompanyPayModeHeaderBadge
-                        ? "justify-end justify-self-end"
-                        : "ml-auto"
-                    )}
-                  >
+                  <div className="ml-auto flex shrink-0 items-center gap-[10px]">
+                    {interCompanyPayModeHeaderBadge}
                     <VoucherDialogDateSystemSwitcher />
                     {interCompanyRibbonCompanyReadOnly ? (
                       <span
@@ -4275,43 +4261,41 @@ export function AddVoucherDialog(props: any) {
                 </DialogTitle>
                 {copiedDraftHeaderBadge}
               </div>
-              {interCompanyPayModeHeaderBadge ? (
-                <div className="min-w-0 flex-1 self-center flex justify-center px-1">
-                  {interCompanyPayModeHeaderBadge}
-                </div>
-              ) : null}
-              {isEditLockedByLinks && (
-                <div className="min-w-0 max-w-[min(100%,14rem)] flex-1 rounded-full border border-gray-300/80 bg-gray-200 px-2 py-1.5">
-                  <p className="m-0 text-center text-[10px] font-semibold leading-snug text-[#ff0000]">
-                    To Edit Unlink Linked trxn 1st
-                  </p>
-                </div>
-              )}
-              {recurringEditorsEffective ? (
-                <div
-                  className="shrink-0 self-center pl-0.5"
-                  onPointerDownCapture={(e) => e.stopPropagation()}
-                  onMouseDownCapture={(e) => e.stopPropagation()}
-                  onTouchStartCapture={(e) => e.stopPropagation()}
-                >
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    style={{
-                      height: SWITCH_TRACK_HEIGHT_PX,
-                      minHeight: SWITCH_TRACK_HEIGHT_PX,
-                      width: SWITCH_TRACK_HEIGHT_PX,
-                    }}
-                    className="rounded-full border-indigo-400/90 bg-white/90 p-0 text-indigo-900 shadow-sm hover:bg-white"
-                    disabled={autoMonthlyHydrating || !autoMonthlyEnabled || !canEditRecurringOnVoucher}
-                    onClick={() => setRecurringSettingsOpen(true)}
-                    aria-label="Auto monthly settings"
+              <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-1.5">
+                {interCompanyPayModeHeaderBadge}
+                {isEditLockedByLinks && (
+                  <div className="min-w-0 max-w-[min(100%,14rem)] rounded-full border border-gray-300/80 bg-gray-200 px-2 py-1.5">
+                    <p className="m-0 text-center text-[10px] font-semibold leading-snug text-[#ff0000]">
+                      To Edit Unlink Linked trxn 1st
+                    </p>
+                  </div>
+                )}
+                {recurringEditorsEffective ? (
+                  <div
+                    className="shrink-0 self-center pl-0.5"
+                    onPointerDownCapture={(e) => e.stopPropagation()}
+                    onMouseDownCapture={(e) => e.stopPropagation()}
+                    onTouchStartCapture={(e) => e.stopPropagation()}
                   >
-                    <Settings className="h-3.5 w-3.5" aria-hidden />
-                  </Button>
-                </div>
-              ) : null}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      style={{
+                        height: SWITCH_TRACK_HEIGHT_PX,
+                        minHeight: SWITCH_TRACK_HEIGHT_PX,
+                        width: SWITCH_TRACK_HEIGHT_PX,
+                      }}
+                      className="rounded-full border-indigo-400/90 bg-white/90 p-0 text-indigo-900 shadow-sm hover:bg-white"
+                      disabled={autoMonthlyHydrating || !autoMonthlyEnabled || !canEditRecurringOnVoucher}
+                      onClick={() => setRecurringSettingsOpen(true)}
+                      aria-label="Auto monthly settings"
+                    >
+                      <Settings className="h-3.5 w-3.5" aria-hidden />
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
             </div>
             {historyBlocksEdit && !isEditLockedByLinks && (
               <div className="mt-1 w-full max-w-full mx-auto bg-amber-600 rounded-md flex items-center justify-center self-center px-2 py-1">

@@ -1,7 +1,6 @@
-
 "use client";
 
-import React, { createContext, useContext, useState, ReactNode, useEffect } from "react";
+import React, { createContext, useContext, useState, ReactNode, useEffect, startTransition } from "react";
 
 type DashboardContextType = {
   visibleCard: string;
@@ -28,8 +27,15 @@ export const DashboardProvider = ({ children }: { children: ReactNode }) => {
   const setVisibleCard = (cardId: string) => {
     // Recurring tab removed — normalize stale id from old clients or bookmarks
     const id = cardId === "auto-recurring" ? "all" : cardId;
-    localStorage.setItem("dashboardVisibleCard", id);
-    setVisibleCardState(id);
+    try {
+      localStorage.setItem("dashboardVisibleCard", id);
+    } catch {
+      /* private mode / quota */
+    }
+    // Tab highlight pehle; heavy Daybook/Summary paint transition me — All↔Daybook freeze kam.
+    startTransition(() => {
+      setVisibleCardState(id);
+    });
   };
 
   return (

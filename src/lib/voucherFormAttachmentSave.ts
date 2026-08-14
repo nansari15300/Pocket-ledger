@@ -1,5 +1,6 @@
 "use client";
 
+import { markLedgerVouchersLocallyApproved } from "@/lib/ledgerPendingApproval";
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 import { isLocalFileRef, getBlobFromLocalFileRef } from "@/lib/localPendingFiles";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
@@ -307,6 +308,8 @@ const VOUCHER_LIVE_PATCH_STORAGE_KEY = "pl-voucher-live-patch";
 export type VoucherLivePatchDetail = {
   companyId: string;
   voucherId: string;
+  /** Approve All: ek setState me kai ids. */
+  voucherIds?: string[];
   patch: Record<string, unknown>;
 };
 
@@ -317,6 +320,9 @@ export function dispatchVoucherLivePatch(
   patch: Record<string, unknown>
 ): void {
   if (typeof window === "undefined" || !companyId?.trim() || !voucherId?.trim()) return;
+  if (patch?.isApproved === true) {
+    markLedgerVouchersLocallyApproved([voucherId.trim()]);
+  }
   const detail: VoucherLivePatchDetail = {
     companyId: companyId.trim(),
     voucherId: voucherId.trim(),
@@ -345,6 +351,39 @@ export function dispatchVoucherLivePatch(
     window.localStorage.removeItem(VOUCHER_LIVE_PATCH_STORAGE_KEY);
   } catch {
     /* private mode */
+  }
+}
+
+/** Approve All: har id pe alag CustomEvent mat — ek hi React setState. */
+export function dispatchVoucherLivePatchMany(
+  companyId: string,
+  voucherIds: string[],
+  patch: Record<string, unknown>
+): void {
+  const ids = Array.from(new Set((voucherIds || []).map((id) => String(id || "").trim()).filter(Boolean)));
+  if (typeof window === "undefined" || !companyId?.trim() || !ids.length) return;
+  if (patch?.isApproved === true) {
+    markLedgerVouchersLocallyApproved(ids);
+  }
+  const detail: VoucherLivePatchDetail = {
+    companyId: companyId.trim(),
+    voucherId: ids[0],
+    voucherIds: ids,
+    patch,
+  };
+  window.dispatchEvent(
+    new CustomEvent(VOUCHER_ATTACHMENT_SAVED_EVENT, {
+      detail,
+    })
+  );
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      const channel = new BroadcastChannel(VOUCHER_LIVE_PATCH_BROADCAST);
+      channel.postMessage(detail);
+      channel.close();
+    }
+  } catch {
+    /* optional */
   }
 }
 

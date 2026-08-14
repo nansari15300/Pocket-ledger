@@ -9,6 +9,7 @@ import {
   getAllocationTotal,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
+import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 
 export type LinkPaymentVariant = "payment_in" | "payment_out";
 
@@ -83,7 +84,8 @@ export function useLinkPaymentToTxnsLinkableCount(
             v.type !== "sale_service" &&
             v.type !== "purchase" &&
             v.type !== "purchase_service" &&
-            v.type !== "journal"
+            v.type !== "journal" &&
+            v.type !== "inter_company"
           ) continue;
           const allocations = (v.allocations as Allocation[] | undefined) || [];
           for (const a of allocations) {
@@ -126,9 +128,17 @@ export function useLinkPaymentToTxnsLinkableCount(
         const outstanding = getOutstanding(partyAmount.total, allocated);
         return outstanding > 0 || hasExistingAlloc(v.id);
       });
+      const icDrFiltered = (vouchers as any[]).filter((v) => {
+        if (v.type !== "inter_company") return false;
+        const partyAmount = getInterCompanyEntityBillWiseAmount(v, partyIdStr, "party");
+        if (!partyAmount || partyAmount.debit <= 0) return false;
+        const allocated = totalAllocatedTo(v.id);
+        const outstanding = getOutstanding(partyAmount.total, allocated);
+        return outstanding > 0 || hasExistingAlloc(v.id);
+      });
 
       const ob = showOBInPaymentIn && (obOutstandingIn > 0 || hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID)) ? 1 : 0;
-      return ob + salesFiltered.length + paymentOutsFiltered.length + journalsDrFiltered.length;
+      return ob + salesFiltered.length + paymentOutsFiltered.length + journalsDrFiltered.length + icDrFiltered.length;
     }
 
     // variant === "payment_out"
@@ -146,7 +156,8 @@ export function useLinkPaymentToTxnsLinkableCount(
           v.type !== "sale_service" &&
           v.type !== "purchase" &&
           v.type !== "purchase_service" &&
-          v.type !== "journal"
+          v.type !== "journal" &&
+          v.type !== "inter_company"
         ) continue;
         const allocations = (v.allocations as Allocation[] | undefined) || [];
         for (const a of allocations) {
@@ -190,8 +201,16 @@ export function useLinkPaymentToTxnsLinkableCount(
       const outstanding = getOutstanding(partyAmount.total, allocated);
       return outstanding > 0 || hasExistingAllocOut(v.id);
     });
+    const icCrFiltered = (vouchers as any[]).filter((v) => {
+      if (v.type !== "inter_company") return false;
+      const partyAmount = getInterCompanyEntityBillWiseAmount(v, partyIdStr, "party");
+      if (!partyAmount || partyAmount.credit <= 0) return false;
+      const allocated = totalAllocatedToOut(v.id);
+      const outstanding = getOutstanding(partyAmount.total, allocated);
+      return outstanding > 0 || hasExistingAllocOut(v.id);
+    });
 
     const ob = showOBInPaymentOut && (obOutstandingIn > 0 || hasExistingAllocOut(OPENING_BALANCE_VOUCHER_ID)) ? 1 : 0;
-    return ob + purchasesFiltered.length + paymentInsFiltered.length + journalsCrFiltered.length;
+    return ob + purchasesFiltered.length + paymentInsFiltered.length + journalsCrFiltered.length + icCrFiltered.length;
   }, [variant, partyId, vouchers, paymentInId, paymentOutId, existingAllocations, partyOpeningBalance]);
 }

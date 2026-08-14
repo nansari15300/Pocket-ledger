@@ -494,13 +494,14 @@ export function InterCompanyVoucherForm({
   }, [voucher?.id]);
 
   const hasPersistedIc = !!(displayVoucher?.id || savedSourceId);
-  // IC edit independent — global approve/target view-lock hata diya; sirf permission `editingDisabled`.
+  // IC global approve/target view-lock hata diya; bill-wise link par sale/purchase jaisa field lock.
   const isInterCompanyEditLocked = false;
   const isCompanyAdmin =
     String(role) === "owner" ||
     customUser?.role === "CompanyAdmin" ||
     customUser?.role === "SuperAdmin";
-  const fieldsDisabled = editingDisabled || isInterCompanyEditLocked;
+  const fieldsDisabled =
+    editingDisabled || isInterCompanyEditLocked || (!!displayVoucher?.id && deleteDisabledWhenLinked);
 
   const buildIcExtrasSig = useCallback(
     (args: {

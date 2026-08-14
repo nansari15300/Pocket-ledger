@@ -17,6 +17,7 @@ import { moveFilesToVoucherDateClient } from "@/lib/storageClient";
 import { deleteFirebaseStorageUrlsWithRegistry } from "@/lib/companyAttachmentRegistry";
 import {
   getCompanyDocFromBrowserDb,
+  mirrorCompanyDocToBrowserDb,
   mirrorVoucherDocToBrowserDb,
   upsertCompanyDocInBrowserDb,
 } from "@/lib/localCompanyDocMirror";
@@ -1387,7 +1388,8 @@ async function approveVoucherLocalPersist(
   companyId: string,
   voucherId: string,
   approvedByUserId: string,
-  approvedByName?: string | null
+  approvedByName?: string | null,
+  options?: { skipUiNotify?: boolean }
 ): Promise<void> {
   const resolved = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId);
   if (!resolved) throw new Error("Voucher not found.");
@@ -1429,7 +1431,11 @@ async function approveVoucherLocalPersist(
     history: newHistory,
   }) as Record<string, unknown>;
   coerceVoucherDocumentDate(payload);
-  await upsertCompanyDocInBrowserDb(writeCompanyId, "vouchers", voucherId, payload);
+  // Approve All: har upsert pe collection bump UI ko stale list se overwrite karta tha (sirf pehli row pink hat'ti).
+  await upsertCompanyDocInBrowserDb(writeCompanyId, "vouchers", voucherId, payload, {
+    notify: options?.skipUiNotify === true ? false : undefined,
+    skipCloudSyncEnqueue: options?.skipUiNotify === true ? true : undefined,
+  });
   await enqueueVoucherOutbox(writeCompanyId, "update", voucherId, payload);
   if (interCompanyVoucherViewerSide(payload) === "source") {
     await syncInterCompanySourceApprovedToPeerTarget(payload);
@@ -2319,17 +2325,20 @@ export async function applyPaymentBillWiseLinkAllocations(
 /**
  * Approve a voucher and append a history entry with approver metadata.
  * Uses a transaction so we read the latest doc (including any just-saved edit history) and append approval.
+ * `skipUiNotify`: Approve All batch — har write pe SQLite bump mat chalao (stale list race).
  */
 export async function approveVoucherWithHistory(
   companyId: string,
   voucherId: string,
   approvedByUserId: string,
-  approvedByName?: string | null
+  approvedByName?: string | null,
+  options?: { skipUiNotify?: boolean }
 ): Promise<void> {
   if (!companyId || !voucherId || !approvedByUserId) {
     throw new Error("Missing required approval parameters.");
   }
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
+  const skipUiNotify = options?.skipUiNotify === true;
 
   // Live + SQLite-first: local row ho to local approve; warna Firestore (live) pe try.
   const localResolved = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId);
@@ -2339,8 +2348,12 @@ export async function approveVoucherWithHistory(
   }
   // Prefer SQLite whenever the row exists (new create often not on Firestore yet).
   if (localResolved) {
-    await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName);
-    void flushVoucherOutbox().catch(() => undefined);
+    await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName, {
+      skipUiNotify,
+    });
+    if (!skipUiNotify) {
+      void flushVoucherOutbox().catch(() => undefined);
+    }
     return;
   }
 
@@ -2411,8 +2424,12 @@ export async function approveVoucherWithHistory(
       if (!isLikelyOfflineFirestoreError(e)) throw e;
       if (!(await allowLocalFirestoreFailureQueue(companyId))) throw e;
       if (localResolved) {
-        await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName);
-        void flushVoucherOutbox().catch(() => undefined);
+        await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName, {
+          skipUiNotify,
+        });
+        if (!skipUiNotify) {
+          void flushVoucherOutbox().catch(() => undefined);
+        }
         return;
       }
       throw e;
@@ -2420,17 +2437,52 @@ export async function approveVoucherWithHistory(
   }
 
   if (approvedViaFs) {
-    await mirrorVoucherDocToBrowserDb(companyId, voucherId);
+    if (skipUiNotify) {
+      await mirrorCompanyDocToBrowserDb(companyId, "vouchers", voucherId);
+    } else {
+      await mirrorVoucherDocToBrowserDb(companyId, voucherId);
+    }
     return;
   }
 
   // Live Firestore miss + SQLite pending outbox row → local approve.
   if (localResolved) {
-    await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName);
-    void flushVoucherOutbox().catch(() => undefined);
+    await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName, {
+      skipUiNotify,
+    });
+    if (!skipUiNotify) {
+      void flushVoucherOutbox().catch(() => undefined);
+    }
     return;
   }
   throw new Error("Voucher not found.");
+}
+
+/** Approve All: quiet batch writes; caller handles one optimistic page patch + one flush. */
+export async function approveVouchersWithHistoryBatch(
+  companyId: string,
+  voucherIds: string[],
+  approvedByUserId: string,
+  approvedByName?: string | null
+): Promise<{ ok: number; failed: number; approvedIds: string[] }> {
+  const ids = Array.from(
+    new Set((voucherIds || []).map((id) => String(id || "").trim()).filter(Boolean))
+  );
+  let ok = 0;
+  let failed = 0;
+  const approvedIds: string[] = [];
+  for (const voucherId of ids) {
+    try {
+      await approveVoucherWithHistory(companyId, voucherId, approvedByUserId, approvedByName, {
+        skipUiNotify: true,
+      });
+      ok += 1;
+      approvedIds.push(voucherId);
+    } catch {
+      failed += 1;
+    }
+  }
+  return { ok, failed, approvedIds };
 }
 
 /**
