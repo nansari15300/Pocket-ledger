@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, Suspense, type ReactNode } from "react";
 import { toast } from "@/hooks/use-toast";
 import {
   DEFAULT_PLANS,
@@ -729,6 +729,20 @@ type BillingPaymentsStatementApiResponse = {
 };
 
 export default function BillingPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-8 text-center text-muted-foreground" aria-busy="true">
+          Loading billing…
+        </div>
+      }
+    >
+      <BillingPageInner />
+    </Suspense>
+  );
+}
+
+function BillingPageInner() {
   const { user } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
