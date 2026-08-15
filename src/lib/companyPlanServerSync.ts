@@ -10,7 +10,6 @@
 import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 import { hostedApiFetch } from "@/lib/hostedApiFetch";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
-import { isLocalDemoPlanActive } from "@/lib/applyLocalDemoPlan";
 import { isHostedPlanSyncDisabled } from "@/lib/hostedPlanSyncDisabled";
 import { bumpLocalCompanyRegistry } from "@/lib/applyStripePlanToLocalCompany";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
@@ -75,11 +74,6 @@ async function applyAuthoritativePlanPayloadToLocal(opts: {
   data: ServerAuthoritativePlanPayload;
 }): Promise<SyncCompanyPlanResult> {
   const { firebaseCompanyId, localCompanyId, data } = opts;
-
-  const localDemoGuard = await getLocalCompanyById(localCompanyId);
-  if (isLocalDemoPlanActive(localDemoGuard)) {
-    return { ok: true, applied: false, reason: "local_demo_plan_active" };
-  }
 
   const planId = String(data.planId || "basic").trim() || "basic";
   const planExpiryMs =
@@ -214,10 +208,6 @@ export async function syncLocalOnlyCompanyPlanFromOwnerAccount(opts: {
   const uid = String(opts.firebaseUid || "").trim();
   if (!localCompanyId || !uid) return { ok: false, applied: false, reason: "missing_ids" };
 
-  const localDemoGuard = await getLocalCompanyById(localCompanyId);
-  if (isLocalDemoPlanActive(localDemoGuard)) {
-    return { ok: true, applied: false, reason: "local_demo_plan_active" };
-  }
   if (isHostedPlanSyncDisabled()) {
     return { ok: true, applied: false, reason: "hosted_plan_sync_disabled" };
   }

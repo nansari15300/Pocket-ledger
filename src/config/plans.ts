@@ -89,21 +89,21 @@ export type EntitlementKey =
   | "voucherHistoryLimit"
   /** Plan-wise: Inter Company voucher create/edit (admin tick). Missing = off. */
   | "interCompanyVoucherEnabled"
-  /** Max joined inter-company partner companies (Join tab). 0 = unlimited. */
+  /** Max joined inter-company partner companies (Join tab). 0 = none; -1 = unlimited. */
   | "maxInterCompanyPartners"
   /** Plan-wise: APK/EXE saved account quick switch on login + logout save. */
   | "savedAccountSwitchEnabled"
   /** Plan-wise: Share for Reconciliation (header + cross-user ledger match). */
   | "shareForReconciliationEnabled"
-  /** Max ledgers a user can join/share for reconciliation. 0 = unlimited. */
+  /** Max ledgers a user can join/share for reconciliation. 0 = none; -1 = unlimited. */
   | "maxReconciliationLedgers"
   /** Backup/restore `.plbp` me attachment bytes embed + restore (Option A). Off = data-only URLs. */
   | "attachmentBackupRestoreEnabled"
-  /** Per owner per calendar month — attachment wala backup count; 0 = unlimited. */
+  /** Per owner per calendar month — attachment wala backup count; 0 = none; -1 = unlimited. */
   | "maxAttachmentBackupPerMonth"
-  /** Per owner per calendar month — attachment wala restore count; 0 = unlimited. */
+  /** Per owner per calendar month — attachment wala restore count; 0 = none; -1 = unlimited. */
   | "maxAttachmentRestorePerMonth"
-  /** Local company → cloud upload: max attachment payload (MB); 0 = unlimited. */
+  /** Local company → cloud upload: max attachment payload (MB); 0 = none; -1 = unlimited. */
   | "maxLocalToOnlineAttachmentMB"
   /** Online Firestore companies (`storageOption: firebase`) — off = create/edit me local/online choice hide. */
   | "allowFirebaseOnlineCompanies"
@@ -111,6 +111,48 @@ export type EntitlementKey =
   | "allowLocalAppServer";
 
 export type Entitlements = Record<EntitlementKey, number | boolean>;
+
+/**
+ * Admin / plan caps:
+ * - `0` = exact zero / not allowed
+ * - `-1` = unlimited
+ * - `> 0` = that hard limit
+ */
+export const UNLIMITED_ENTITLEMENT = -1;
+
+export function isUnlimitedEntitlementCap(n: number | null | undefined): boolean {
+  const v = Number(n);
+  return Number.isFinite(v) && v < 0;
+}
+
+export function isZeroEntitlementCap(n: number | null | undefined): boolean {
+  const v = Number(n);
+  return Number.isFinite(v) && v === 0;
+}
+
+/** Prefer unlimited when either side is unlimited; else the larger finite cap. */
+export function maxEntitlementCap(a: number, b: number): number {
+  if (isUnlimitedEntitlementCap(a) || isUnlimitedEntitlementCap(b)) return UNLIMITED_ENTITLEMENT;
+  const na = Number(a);
+  const nb = Number(b);
+  return Math.max(Number.isFinite(na) ? na : 0, Number.isFinite(nb) ? nb : 0);
+}
+
+/** Profile / billing / admin table label for numeric caps. */
+export function formatEntitlementCapLabel(n: number | null | undefined): string {
+  if (isUnlimitedEntitlementCap(n)) return "Unlimited";
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "0";
+  return String(v);
+}
+
+/** `used >= cap` when cap is finite (including exact 0); never “full” when unlimited. */
+export function isAtOrOverEntitlementCap(used: number, cap: number): boolean {
+  if (isUnlimitedEntitlementCap(cap)) return false;
+  const c = Number(cap);
+  if (!Number.isFinite(c)) return true;
+  return used >= c;
+}
 
 export interface Plan {
   id: PlanId;
@@ -128,9 +170,60 @@ export interface Plan {
   isFree?: boolean; // Mark plan as free regardless of price
   discountPercentage?: number;
   limitedTimeOfferDate?: any;
+  /**
+   * Derived per-tier mirror of the catalog-level `onlineDemo` offer.
+   * Only the selected demo planId is enabled; other tiers stay off.
+   */
+  demo?: {
+    enabled: boolean;
+    /** Full demo length granted when an owner activates this tier (1–999 days). */
+    days: number;
+  };
   highlight?: boolean; // For UI emphasis (e.g., popular)
   entitlements: Entitlements;
   features: string[]; // Human friendly bullets for UI
+}
+
+/** Paid tiers that may be offered as the single online demo. */
+export type OnlineDemoPlanId = Exclude<PlanId, "basic">;
+
+/** One catalog-level demo offer — Admin list card under Pro Plus. */
+export type OnlineDemoOffer = {
+  enabled: boolean;
+  days: number;
+  planId: OnlineDemoPlanId;
+  /**
+   * When false, an owner who already finished a demo cannot click Demo again
+   * to get another full period. First-time activation is always allowed.
+   */
+  allowExtendAfterExpiry: boolean;
+};
+
+export const ONLINE_DEMO_PLAN_IDS: OnlineDemoPlanId[] = ["advance", "pro", "pro-plus"];
+
+export const DEFAULT_ONLINE_DEMO_OFFER: OnlineDemoOffer = {
+  enabled: true,
+  days: 100,
+  planId: "pro-plus",
+  allowExtendAfterExpiry: false,
+};
+
+export function clampOnlineDemoDays(raw: unknown): number {
+  return Math.min(999, Math.max(1, Math.floor(Number(raw) || 1)));
+}
+
+export function sanitizeOnlineDemoOffer(raw: unknown): OnlineDemoOffer {
+  const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const planIdRaw = String(row.planId || "").trim().toLowerCase();
+  const planId = (ONLINE_DEMO_PLAN_IDS as readonly string[]).includes(planIdRaw)
+    ? (planIdRaw as OnlineDemoPlanId)
+    : DEFAULT_ONLINE_DEMO_OFFER.planId;
+  return {
+    enabled: row.enabled === true,
+    days: clampOnlineDemoDays(row.days ?? DEFAULT_ONLINE_DEMO_OFFER.days),
+    planId,
+    allowExtendAfterExpiry: row.allowExtendAfterExpiry === true,
+  };
 }
 
 export const DEFAULT_PLANS: Record<PlanId, Plan> = {
@@ -267,10 +360,10 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxCompaniesLocal: 25,
       maxAttachmentsGBLocal: 200,
       maxStorageGBLocal: 200,
-      dailyVoucherLimit: 0, // unlimited
-      monthlyVoucherLimit: 0, // unlimited
-      dailyVoucherLimitLocal: 0,
-      monthlyVoucherLimitLocal: 0,
+      dailyVoucherLimit: -1, // unlimited
+      monthlyVoucherLimit: -1, // unlimited
+      dailyVoucherLimitLocal: -1,
+      monthlyVoucherLimitLocal: -1,
       hasMultiDeviceSync: true,
       maxDevices: 10,
       maxDevicesLocal: 10,
@@ -324,10 +417,10 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxCompaniesLocal: 100,
       maxAttachmentsGBLocal: 500,
       maxStorageGBLocal: 500,
-      dailyVoucherLimit: 0, // unlimited
-      monthlyVoucherLimit: 0, // unlimited
-      dailyVoucherLimitLocal: 0,
-      monthlyVoucherLimitLocal: 0,
+      dailyVoucherLimit: -1, // unlimited
+      monthlyVoucherLimit: -1, // unlimited
+      dailyVoucherLimitLocal: -1,
+      monthlyVoucherLimitLocal: -1,
       hasMultiDeviceSync: true,
       maxDevices: 25,
       maxDevicesLocal: 25,
@@ -341,9 +434,9 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryEnabled: true,
       voucherHistoryLimit: 50,
       interCompanyVoucherEnabled: false,
-      maxInterCompanyPartners: 0,
+      maxInterCompanyPartners: -1,
       shareForReconciliationEnabled: true,
-      maxReconciliationLedgers: 0,
+      maxReconciliationLedgers: -1,
       attachmentBackupRestoreEnabled: true,
       maxAttachmentBackupPerMonth: 10,
       maxAttachmentRestorePerMonth: 10,
@@ -453,8 +546,7 @@ export function companyStorageIsLocal(storageOption?: string | null): boolean {
 
 /**
  * Read plan cap for cloud vs SQLite-first company. Local key missing (old Firestore) → use online value.
- * Voucher day/month caps: aksar sirf Firestore/UI me `dailyVoucherLimit` bump hota aur `dailyVoucherLimitLocal` default 25 chipka rehta —
- * SQLite-first company par dono finite hon to Math.max taaki unintended Basic cap na lage.
+ * Caps: `0` = none / not allowed; `-1` = unlimited; `>0` = hard limit.
  */
 export function numericEntitlement(
   entitlements: Partial<Entitlements> | undefined,
@@ -470,10 +562,7 @@ export function numericEntitlement(
     const localN = typeof lv === "number" && Number.isFinite(lv) ? lv : null;
     const baseN = typeof bv === "number" && Number.isFinite(bv) ? bv : null;
     if (isVoucherQuota) {
-      // Plans me `0` = unlimited cap for that bucket
-      if (localN != null && localN <= 0) return 0;
-      if (baseN != null && baseN <= 0) return 0;
-      if (localN != null && baseN != null) return Math.max(localN, baseN);
+      // Prefer the local bucket when set (including exact 0 = blocked).
       if (localN != null) return localN;
       if (baseN != null) return baseN;
       return 0;
@@ -482,6 +571,61 @@ export function numericEntitlement(
   }
   const v = e[baseKey];
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+/** Online-bucket caps — `allowFirebaseOnlineCompanies === false` par exact 0 (legacy migrate mat karo). */
+export const ONLINE_ENTITLEMENT_CAP_KEYS = [
+  "maxUsers",
+  "maxCompanies",
+  "maxAttachmentsGB",
+  "maxStorageGB",
+  "dailyVoucherLimit",
+  "monthlyVoucherLimit",
+  "maxDevices",
+  "maxOnlineCompanies",
+  "maxLocalToOnlineAttachmentMB",
+] as const satisfies ReadonlyArray<EntitlementKey>;
+
+export function isOnlineEntitlementCapKey(key: EntitlementKey): boolean {
+  return (ONLINE_ENTITLEMENT_CAP_KEYS as readonly string[]).includes(key);
+}
+
+/** Keys that historically treated `0` as unlimited before `zero_means_none`. */
+export const LEGACY_ZERO_MEANT_UNLIMITED_KEYS = [
+  "dailyVoucherLimit",
+  "dailyVoucherLimitLocal",
+  "monthlyVoucherLimit",
+  "monthlyVoucherLimitLocal",
+  "maxInterCompanyPartners",
+  "maxReconciliationLedgers",
+  "maxAttachmentBackupPerMonth",
+  "maxAttachmentRestorePerMonth",
+  "maxLocalToOnlineAttachmentMB",
+  "maxUsers",
+  "maxUsersLocal",
+  "maxCompanies",
+  "maxCompaniesLocal",
+  "maxAttachmentsGB",
+  "maxAttachmentsGBLocal",
+  "maxStorageGB",
+  "maxStorageGBLocal",
+  "maxDevices",
+  "maxDevicesLocal",
+] as const satisfies ReadonlyArray<EntitlementKey>;
+
+/** In-memory only until `app_settings/plans.entitlementCapConvention === "zero_means_none"`. */
+export function migrateLegacyUnlimitedZeroEntitlements(
+  entitlements: Partial<Entitlements> | undefined
+): Partial<Entitlements> {
+  if (!entitlements) return {};
+  const out: Partial<Entitlements> = { ...entitlements };
+  const onlineOff = out.allowFirebaseOnlineCompanies === false;
+  for (const key of LEGACY_ZERO_MEANT_UNLIMITED_KEYS) {
+    // Allow-online OFF + exact 0 must stay "none", not become unlimited.
+    if (onlineOff && isOnlineEntitlementCapKey(key)) continue;
+    if (out[key] === 0) out[key] = UNLIMITED_ENTITLEMENT;
+  }
+  return out;
 }
 
 export function formatPrice(

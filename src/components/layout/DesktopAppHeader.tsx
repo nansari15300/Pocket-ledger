@@ -68,6 +68,9 @@ import {
   normalizePlanIdForClient,
   numericEntitlement,
   companyStorageIsLocal,
+  formatEntitlementCapLabel,
+  isUnlimitedEntitlementCap,
+  maxEntitlementCap,
   type PlanId,
 } from "@/config/plans";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
@@ -815,28 +818,36 @@ function UserProfileButton() {
 
   const maxAttGB =
     !isSelectedCompanyOwned && hasOwnedCompanies
-      ? Math.max(
+      ? maxEntitlementCap(
           numericEntitlement(limitsPlan?.entitlements, "maxAttachmentsGB", false),
           numericEntitlement(limitsPlan?.entitlements, "maxAttachmentsGB", true)
         )
       : numericEntitlement(limitsPlan?.entitlements, "maxAttachmentsGB", limitsUseLocalForSelected);
   const attUsedGB =
     ownedForUsage.reduce((s, c) => s + Number((c as Company).attachmentsUsedBytes ?? 0), 0) / 1e9;
-  const attFreeGB = Math.max(0, maxAttGB - attUsedGB);
+  const attFreeGB = isUnlimitedEntitlementCap(maxAttGB)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, maxAttGB - attUsedGB);
   const GB_TO_MB = 1024;
   const attUsedMB = attUsedGB * GB_TO_MB;
-  const attFreeMB = attFreeGB * GB_TO_MB;
+  const attFreeMB = isUnlimitedEntitlementCap(maxAttGB) ? Number.POSITIVE_INFINITY : attFreeGB * GB_TO_MB;
   const userStorUsedMB = userStorageUsedBytes != null ? userStorageUsedBytes / (1024 * 1024) : 0;
   const accountMaxStorGB =
     !isSelectedCompanyOwned && hasOwnedCompanies
-      ? Math.max(
+      ? maxEntitlementCap(
           numericEntitlement(limitsPlan?.entitlements, "maxStorageGB", false),
           numericEntitlement(limitsPlan?.entitlements, "maxStorageGB", true)
         )
       : numericEntitlement(limitsPlan?.entitlements, "maxStorageGB", limitsUseLocalForSelected);
-  const totalMaxStorMB = accountMaxStorGB * GB_TO_MB;
-  const storFreeMB = Math.max(0, totalMaxStorMB - userStorUsedMB);
+  const totalMaxStorMB = isUnlimitedEntitlementCap(accountMaxStorGB)
+    ? Number.POSITIVE_INFINITY
+    : accountMaxStorGB * GB_TO_MB;
+  const storFreeMB = isUnlimitedEntitlementCap(accountMaxStorGB)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, totalMaxStorMB - userStorUsedMB);
   const maxStorGB = accountMaxStorGB;
+  const showAttQuota = maxAttGB > 0 || isUnlimitedEntitlementCap(maxAttGB);
+  const showStorQuota = maxStorGB > 0 || isUnlimitedEntitlementCap(maxStorGB);
   const onlineSlotMax = maxOnlineCompaniesForPlan(
     selectedCompanyPlanId,
     getPlanFromPlans(livePlans, selectedCompanyPlanId)
@@ -847,14 +858,14 @@ function UserProfileButton() {
   const selectedCompanyCanUpgradeToPaidTier = getNextPaidUpgrade(selectedCompanyPlanId) != null;
 
   const ownedPlanLive = getPlanFromPlans(livePlans, ownedOnlyPlanId);
-  const ownedMaxUsersOnline = Math.max(
-    1,
-    numericEntitlement(ownedPlanLive.entitlements, "maxUsers", false) || 1
-  );
-  const ownedMaxUsersLocal = Math.max(
-    1,
-    numericEntitlement(ownedPlanLive.entitlements, "maxUsers", true) || 1
-  );
+  const ownedMaxUsersOnlineRaw = numericEntitlement(ownedPlanLive.entitlements, "maxUsers", false);
+  const ownedMaxUsersLocalRaw = numericEntitlement(ownedPlanLive.entitlements, "maxUsers", true);
+  const ownedMaxUsersOnline = isUnlimitedEntitlementCap(ownedMaxUsersOnlineRaw)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, ownedMaxUsersOnlineRaw);
+  const ownedMaxUsersLocal = isUnlimitedEntitlementCap(ownedMaxUsersLocalRaw)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, ownedMaxUsersLocalRaw);
   const ownedOnlineSlotMax = maxOnlineCompaniesForPlan(ownedOnlyPlanId, ownedPlanLive);
 
   /** Shared: "Your account" = best owned tier; zero-owned shared = active company's owner plan (not account cache). */
@@ -869,15 +880,22 @@ function UserProfileButton() {
   const sharedProfileCanUpgrade = getNextPaidUpgrade(sharedProfilePlanId) != null;
 
   const selectedCompanyPlanLive = getPlanFromPlans(livePlans, selectedCompanyPlanId);
+  const selectedCompanyMaxDevicesRaw = Number(selectedCompanyPlanLive.entitlements.maxDevices);
   const selectedCompanyMaxDevices =
     selectedCompanyPlanLive.entitlements.hasMultiDeviceSync === true
-      ? Math.max(1, Number(selectedCompanyPlanLive.entitlements.maxDevices) || 1)
+      ? isUnlimitedEntitlementCap(selectedCompanyMaxDevicesRaw)
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, Number.isFinite(selectedCompanyMaxDevicesRaw) ? selectedCompanyMaxDevicesRaw : 0)
       : 1;
   const thisCompanyStorageLocal = company ? companyStorageIsLocal(company.storageOption) : false;
-  const thisCompanyMaxUsers = Math.max(
-    1,
-    numericEntitlement(selectedCompanyPlanLive.entitlements, "maxUsers", thisCompanyStorageLocal) || 1
+  const thisCompanyMaxUsersRaw = numericEntitlement(
+    selectedCompanyPlanLive.entitlements,
+    "maxUsers",
+    thisCompanyStorageLocal
   );
+  const thisCompanyMaxUsers = isUnlimitedEntitlementCap(thisCompanyMaxUsersRaw)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, thisCompanyMaxUsersRaw);
 
   /** Profile card: plan voucher caps — `numericEntitlement` + company local flag (Billing matrix jaisa). */
   const dailyVoucherPlanCap = numericEntitlement(
@@ -1025,13 +1043,17 @@ function UserProfileButton() {
                       All storage:{" "}
                       {storageIsLocal ? "Device local (offline-first)" : "Online (cloud-linked)"}
                       {/* Plan par storage cap ho to yahin total baaki MB — neeche Storage pill jaisa `storFreeMB`. */}
-                      {maxStorGB > 0 ? (
+                      {showStorQuota ? (
                         <>
                           <span aria-hidden className="mx-0.5 opacity-90">
                             ·
                           </span>
                           {userStorageUsedBytes != null ? (
-                            <>{storFreeMB.toFixed(0)} MB left</>
+                            <>
+                              {isUnlimitedEntitlementCap(maxStorGB)
+                                ? "Unlimited"
+                                : `${storFreeMB.toFixed(0)} MB left`}
+                            </>
                           ) : (
                             <>… MB left</>
                           )}
@@ -1040,37 +1062,45 @@ function UserProfileButton() {
                     </ProfilePlanStatPill>
                     <ProfilePlanStatPill tone="dailyVoucher">
                       Daily vouchers (plan cap):{" "}
-                      {dailyVoucherPlanCap <= 0 ? "Unlimited" : dailyVoucherPlanCap} /day
+                      {formatEntitlementCapLabel(dailyVoucherPlanCap)} /day
                     </ProfilePlanStatPill>
                     <ProfilePlanStatPill tone="monthlyVoucher">
                       Monthly vouchers (plan cap):{" "}
-                      {monthlyVoucherPlanCap <= 0 ? "Unlimited" : monthlyVoucherPlanCap} /month
+                      {formatEntitlementCapLabel(monthlyVoucherPlanCap)} /month
                     </ProfilePlanStatPill>
                     {onlineSlotMax > 0 && user?.uid ? (
                       <ProfilePlanStatPill tone="onlineSlots">
-                        Online company slots (cloud-linked): {onlineSlotUsed} / {onlineSlotMax}
+                        Online company slots (cloud-linked): {onlineSlotUsed} /{" "}
+                        {formatEntitlementCapLabel(onlineSlotMax)}
                       </ProfilePlanStatPill>
                     ) : null}
                     {user?.uid ? (
                       <ProfilePlanStatPill tone="offlineSlots">
                         Offline / local company slots: {localCompanySlotUsed} /{" "}
-                        {localCompanySlotMax <= 0 ? "Unlimited" : localCompanySlotMax}
+                        {formatEntitlementCapLabel(localCompanySlotMax)}
                       </ProfilePlanStatPill>
                     ) : null}
                     <ProfilePlanStatPill tone="usersDevices">
-                      Max users / devices (this company): {thisCompanyMaxUsers} users ·{" "}
-                      {selectedCompanyMaxDevices} devices
+                      Max users / devices (this company): {formatEntitlementCapLabel(thisCompanyMaxUsers)}{" "}
+                      users · {formatEntitlementCapLabel(selectedCompanyMaxDevices)} devices
                     </ProfilePlanStatPill>
-                    {maxAttGB > 0 ? (
+                    {showAttQuota ? (
                       <ProfilePlanStatPill tone="attachments">
-                        Attachments: {attUsedMB.toFixed(0)} MB used / {attFreeMB.toFixed(0)} MB free
+                        Attachments: {attUsedMB.toFixed(0)} MB used /{" "}
+                        {isUnlimitedEntitlementCap(maxAttGB)
+                          ? "Unlimited"
+                          : `${attFreeMB.toFixed(0)} MB free`}
                       </ProfilePlanStatPill>
                     ) : null}
-                    {maxStorGB > 0 ? (
+                    {showStorQuota ? (
                       <ProfilePlanStatPill tone="storage">
                         Storage:{" "}
                         {userStorageUsedBytes != null ? userStorUsedMB.toFixed(0) : "…"} MB used /{" "}
-                        {userStorageUsedBytes != null ? storFreeMB.toFixed(0) : "…"} MB free
+                        {userStorageUsedBytes != null
+                          ? isUnlimitedEntitlementCap(maxStorGB)
+                            ? "Unlimited"
+                            : `${storFreeMB.toFixed(0)} MB free`
+                          : "… MB free"}
                       </ProfilePlanStatPill>
                     ) : null}
                     {company?.planExpiry && (() => {
@@ -1196,30 +1226,41 @@ function UserProfileButton() {
                       <div className="text-xs text-muted-foreground mt-1.5">
                         Your online company slots:{" "}
                         <span className="font-medium text-foreground">{onlineSlotUsed}</span> /{" "}
-                        <span className="font-medium text-foreground">{ownedOnlineSlotMax}</span>
+                        <span className="font-medium text-foreground">
+                          {formatEntitlementCapLabel(ownedOnlineSlotMax)}
+                        </span>
                       </div>
                     ) : null}
                     {hasOwnedCompanies ? (
                       <div className="text-xs text-muted-foreground mt-1.5">
                         Max users per company (your plan):{" "}
-                        <span className="font-medium text-foreground">{ownedMaxUsersOnline}</span> online
+                        <span className="font-medium text-foreground">
+                          {formatEntitlementCapLabel(ownedMaxUsersOnline)}
+                        </span>{" "}
+                        online
                         {ownedMaxUsersLocal !== ownedMaxUsersOnline ? (
                           <>
-                            , <span className="font-medium text-foreground">{ownedMaxUsersLocal}</span> local
+                            ,{" "}
+                            <span className="font-medium text-foreground">
+                              {formatEntitlementCapLabel(ownedMaxUsersLocal)}
+                            </span>{" "}
+                            local
                           </>
                         ) : null}
                       </div>
                     ) : null}
-                    {hasOwnedCompanies && (maxAttGB > 0 || maxStorGB > 0) ? (
+                    {hasOwnedCompanies && (showAttQuota || showStorQuota) ? (
                       <div className="text-xs text-muted-foreground mt-1.5 space-y-1">
-                        {maxAttGB > 0 ? (
+                        {showAttQuota ? (
                           <div>
                             Attachments (your companies):{" "}
                             <span className="font-medium text-foreground">{attUsedMB.toFixed(0)}</span> MB used /{" "}
-                            <span className="font-medium text-foreground">{attFreeMB.toFixed(0)}</span> MB free
+                            <span className="font-medium text-foreground">
+                              {isUnlimitedEntitlementCap(maxAttGB) ? "Unlimited" : `${attFreeMB.toFixed(0)} MB free`}
+                            </span>
                           </div>
                         ) : null}
-                        {maxStorGB > 0 ? (
+                        {showStorQuota ? (
                           <div>
                             Storage (your account):{" "}
                             <span className="font-medium text-foreground">
@@ -1227,25 +1268,40 @@ function UserProfileButton() {
                             </span>{" "}
                             MB used /{" "}
                             <span className="font-medium text-foreground">
-                              {userStorageUsedBytes != null ? storFreeMB.toFixed(0) : "…"}
-                            </span>{" "}
-                            MB free
+                              {userStorageUsedBytes != null
+                                ? isUnlimitedEntitlementCap(maxStorGB)
+                                  ? "Unlimited"
+                                  : `${storFreeMB.toFixed(0)} MB free`
+                                : "…"}
+                            </span>
                           </div>
                         ) : null}
                       </div>
                     ) : null}
-                    {!hasOwnedCompanies && (maxAttGB > 0 || maxStorGB > 0) ? (
+                    {!hasOwnedCompanies && (showAttQuota || showStorQuota) ? (
                       <div className="text-xs text-muted-foreground mt-1.5 space-y-1">
-                        {maxAttGB > 0 ? (
+                        {showAttQuota ? (
                           <div>
                             Attachments: <span className="font-medium text-foreground">{attUsedMB.toFixed(0)}</span> MB used /{" "}
-                            <span className="font-medium text-foreground">{attFreeMB.toFixed(0)}</span> MB free
+                            <span className="font-medium text-foreground">
+                              {isUnlimitedEntitlementCap(maxAttGB) ? "Unlimited" : `${attFreeMB.toFixed(0)} MB free`}
+                            </span>
                           </div>
                         ) : null}
-                        {maxStorGB > 0 ? (
+                        {showStorQuota ? (
                           <div>
-                            Storage: <span className="font-medium text-foreground">{userStorageUsedBytes != null ? userStorUsedMB.toFixed(0) : "…"}</span> MB used /{" "}
-                            <span className="font-medium text-foreground">{userStorageUsedBytes != null ? storFreeMB.toFixed(0) : "…"}</span> MB free
+                            Storage:{" "}
+                            <span className="font-medium text-foreground">
+                              {userStorageUsedBytes != null ? userStorUsedMB.toFixed(0) : "…"}
+                            </span>{" "}
+                            MB used /{" "}
+                            <span className="font-medium text-foreground">
+                              {userStorageUsedBytes != null
+                                ? isUnlimitedEntitlementCap(maxStorGB)
+                                  ? "Unlimited"
+                                  : `${storFreeMB.toFixed(0)} MB free`
+                                : "…"}
+                            </span>
                           </div>
                         ) : null}
                       </div>
@@ -1293,11 +1349,15 @@ function UserProfileButton() {
                     </div>
                     <div className="text-xs text-muted-foreground">
                       Sync devices (owner plan): up to{" "}
-                      <span className="font-medium text-foreground">{selectedCompanyMaxDevices}</span>
+                      <span className="font-medium text-foreground">
+                        {formatEntitlementCapLabel(selectedCompanyMaxDevices)}
+                      </span>
                     </div>
                     <div className="text-xs text-muted-foreground">
                       Max users (this company):{" "}
-                      <span className="font-medium text-foreground">{thisCompanyMaxUsers}</span>
+                      <span className="font-medium text-foreground">
+                        {formatEntitlementCapLabel(thisCompanyMaxUsers)}
+                      </span>
                     </div>
                   </div>
                   </ProfileDropdownPlanCard>

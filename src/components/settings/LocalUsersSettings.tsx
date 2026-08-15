@@ -16,7 +16,7 @@ import {
 } from "@/lib/localCompanyUsers";
 import { Loader2, UserPlus } from "lucide-react";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
-import { numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
+import { numericEntitlement, companyStorageIsLocal, isAtOrOverEntitlementCap, formatEntitlementCapLabel, type PlanId } from "@/config/plans";
 import { doc, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { updateCompanyDocRoot } from "@/lib/companyDocsClient";
@@ -37,10 +37,9 @@ export function LocalUsersSettings() {
 
   const plan = getPlanFromPlans(livePlans, (company?.planId as PlanId) || "basic");
   const maxUsersCap = numericEntitlement(plan.entitlements, "maxUsers", companyStorageIsLocal(company?.storageOption));
-  const maxUsers = Math.max(1, maxUsersCap || 1);
   const ownerPlusShared = 1 + (company?.sharedWithEmails?.length ?? 0);
   const totalAfterAdd = users.length + 1 + ownerPlusShared;
-  const atLimit = totalAfterAdd > maxUsers;
+  const atLimit = isAtOrOverEntitlementCap(totalAfterAdd, maxUsersCap);
 
   const baseUrl = localApiBaseUrl || getLocalApiBaseUrl();
 
@@ -80,7 +79,7 @@ export function LocalUsersSettings() {
       return;
     }
     if (atLimit) {
-      setError(`Plan limit: is plan me ${maxUsers} user tak allowed. Upgrade karein ya online shared users kam karein.`);
+      setError(`Plan limit: is plan me ${formatEntitlementCapLabel(maxUsersCap)} user tak allowed. Upgrade karein ya online shared users kam karein.`);
       return;
     }
     setAdding(true);
@@ -133,7 +132,7 @@ export function LocalUsersSettings() {
         <CardTitle>Local users</CardTitle>
         <CardDescription>
           {/* Plan admin: "Max users" Online vs Local — yahan company `storageOption` ke hisaab se effective cap ({maxUsers}). */}
-          Is company me kaam karne ke liye username/password se login. Is plan / storage type par max {maxUsers} user (shared + yahan ke users, owner mila kar). Naya user add karein.
+          Is company me kaam karne ke liye username/password se login. Is plan / storage type par max {formatEntitlementCapLabel(maxUsersCap)} user (shared + yahan ke users, owner mila kar). Naya user add karein.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -196,7 +195,7 @@ export function LocalUsersSettings() {
           {error && <p className="text-sm text-destructive">{error}</p>}
           {atLimit && !error && (
             <p className="text-sm text-amber-600 dark:text-amber-400">
-              Plan limit: is company ke liye max {maxUsers} user ho sakte hain. Ab add nahi kar sakte.
+              Plan limit: is company ke liye max {formatEntitlementCapLabel(maxUsersCap)} user ho sakte hain. Ab add nahi kar sakte.
             </p>
           )}
           <Button type="submit" disabled={adding || atLimit}>

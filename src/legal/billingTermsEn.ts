@@ -85,6 +85,7 @@ export const BILLING_TERMS_EN: BillingTermsDoc = {
       h: "11. Upgrades, downgrades, and plan changes",
       p: [
         "Upgrades and certain plan changes may be priced using proration rules shown in the app. Downgrades to a lower paid tier or to Basic may convert remaining subscription value into longer time at the lower rate or follow separate product rules (including administrator toggles that restrict downgrades).",
+        "When paid-to-paid downgrades are turned off by the administrator, after you upgrade to a higher paid tier the Billing table will not show a Downgrade / return action on lower paid plan columns (those columns may show a locked notice such as “This tier is locked after your upgrade”). Mentions of “downgrade” in these Terms mean the product can support that flow when the policy is enabled — not that every account can switch back after every upgrade.",
         "“Just change plan” or zero-net upgrades adjust expiry and entitlements without a new payment only when the product explicitly allows and the server accepts the request. You are responsible for understanding the effect on your expiry date and entitlements before confirming.",
       ],
     },

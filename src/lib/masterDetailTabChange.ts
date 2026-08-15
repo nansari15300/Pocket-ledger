@@ -1,4 +1,5 @@
 import { masterDetailListHref, type MasterDetailListRouteKey } from "@/lib/masterDetailListPath";
+import { browserHistoryHref } from "@/lib/webAppBasePath";
 
 /** Default tab pe `view` query omit (e.g. accounts / parties / staff). */
 export function masterDetailTabViewQuery(tab: string, defaultTab: string): string | null {
@@ -34,7 +35,8 @@ export function replaceMasterDetailTabUrl(
 ): void {
   if (typeof window !== "undefined") {
     try {
-      window.history.replaceState(window.history.state, "", href);
+      // History API needs `/app` prefix; Next router.replace must stay without it.
+      window.history.replaceState(window.history.state, "", browserHistoryHref(href));
     } catch {
       /* ignore */
     }

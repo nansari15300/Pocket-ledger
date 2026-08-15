@@ -58,7 +58,13 @@ import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
-import { getNextPaidUpgrade, numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
+import { getNextPaidUpgrade, numericEntitlement, companyStorageIsLocal, isUnlimitedEntitlementCap, formatEntitlementCapLabel, type PlanId } from "@/config/plans";
+import {
+  EMPTY_PURCHASED_PLAN_ADDONS,
+  parsePurchasedPlanAddOns,
+  planUserCapWithAddOns,
+  type PurchasedPlanAddOns,
+} from "@/lib/planAddOns";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import {
   COMPANY_PERMISSION_ROLE_OPTIONS,
@@ -381,12 +387,32 @@ export function ManageShare() {
     [allCompanies, user?.uid, companyData?.planId]
   );
   const activePlan = useMemo(() => getPlanFromPlans(livePlans, effectivePlanId), [livePlans, effectivePlanId]);
+  const [ownerAddons, setOwnerAddons] = useState<PurchasedPlanAddOns>(EMPTY_PURCHASED_PLAN_ADDONS);
+  useEffect(() => {
+    const ownerUid = String(companyData?.ownerId || user?.uid || "").trim();
+    if (!ownerUid) {
+      setOwnerAddons(EMPTY_PURCHASED_PLAN_ADDONS);
+      return;
+    }
+    const unsub = onSnapshot(
+      doc(firestore, "users", ownerUid),
+      (snap) => {
+        setOwnerAddons(parsePurchasedPlanAddOns(snap.exists() ? (snap.data() as Record<string, unknown>) : null));
+      },
+      () => setOwnerAddons(EMPTY_PURCHASED_PLAN_ADDONS)
+    );
+    return () => unsub();
+  }, [companyData?.ownerId, user?.uid]);
   const planAllowsFileAttachment = activePlan.entitlements.canAddFileImagePdf === true;
   const planMaxFilesPerVoucher = Math.max(0, Number(activePlan.entitlements.maxVoucherFileCount) || 0);
-  const maxUsersPerPlan = Math.max(
-    1,
-    numericEntitlement(activePlan.entitlements, "maxUsers", companyStorageIsLocal(companyData?.storageOption)) || 1
+  const maxUsersPerPlanRaw = planUserCapWithAddOns(
+    activePlan,
+    companyStorageIsLocal(companyData?.storageOption),
+    ownerAddons
   );
+  const maxUsersPerPlan = isUnlimitedEntitlementCap(maxUsersPerPlanRaw)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, maxUsersPerPlanRaw);
   const roleMaxFilesRaw = Number(fileAttachmentLimitsForSelectedRole.maxFileCount) || 0;
   const effectiveRoleMaxFiles = planAllowsFileAttachment
     ? Math.min(roleMaxFilesRaw, planMaxFilesPerVoucher)
@@ -996,13 +1022,16 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   <span className="text-xs text-muted-foreground">
-                    Users: {currentUserCount}/{maxUsersPerPlan}
+                    Users: {currentUserCount}/{formatEntitlementCapLabel(maxUsersPerPlan)}
                   </span>
                   {isUserLimitReached && (
                     <span className="text-xs text-amber-700">
                       User limit reached.{" "}
-                      <Link href="/billing" className="underline font-medium hover:no-underline">
-                        Update plan
+                      <Link
+                        href={nextPaidUpgradePlanId ? "/billing" : "/billing?addon=user"}
+                        className="underline font-medium hover:no-underline"
+                      >
+                        {nextPaidUpgradePlanId ? "Update plan" : "Buy user add-on"}
                       </Link>
                     </span>
                   )}

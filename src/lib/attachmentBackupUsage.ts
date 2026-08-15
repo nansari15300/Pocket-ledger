@@ -3,11 +3,12 @@
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import type { Entitlements, PlanId } from "@/config/plans";
+import { isUnlimitedEntitlementCap } from "@/config/plans";
 import { getPlanFromPlans } from "@/hooks/useLivePlans";
 import { readCachedPlansRecord, defaultPlansRecordFallback } from "@/lib/plansCatalogCache";
 import type { Plan } from "@/config/plans";
 
-/** Owner account monthly counters — attachment wala backup/restore traffic limit (0 cap = unlimited). */
+/** Owner account monthly counters — attachment wala backup/restore traffic limit (-1 = unlimited, 0 = none). */
 export type AttachmentUsageMonth = {
   backups: number;
   restores: number;
@@ -122,7 +123,7 @@ function resolvePlanEntitlements(planId?: PlanId | string | null): Entitlements 
 }
 
 function capRemaining(cap: number, used: number): number | null {
-  if (!Number.isFinite(cap) || cap <= 0) return null; // 0 = unlimited
+  if (!Number.isFinite(cap) || isUnlimitedEntitlementCap(cap)) return null; // -1 = unlimited
   return Math.max(0, cap - used);
 }
 
@@ -210,7 +211,7 @@ export async function incrementAttachmentRestoreUsage(ownerUid: string): Promise
   await writeFirestoreUsage(ownerUid, month, next);
 }
 
-/** Local → online upload gate — plan MB cap (0 = unlimited). */
+/** Local → online upload gate — plan MB cap (-1 = unlimited, 0 = none). */
 export function checkLocalToOnlineAttachmentMbAllowed(
   totalBytes: number,
   planId?: PlanId | string | null,
@@ -219,7 +220,15 @@ export function checkLocalToOnlineAttachmentMbAllowed(
   const ent = livePlan?.entitlements ?? resolvePlanEntitlements(planId);
   const capMb = Number(ent.maxLocalToOnlineAttachmentMB ?? 0);
   const totalMb = totalBytes / (1024 * 1024);
-  if (capMb <= 0) return { allowed: true, capMb: 0, totalMb };
+  if (isUnlimitedEntitlementCap(capMb)) return { allowed: true, capMb, totalMb };
+  if (capMb <= 0) {
+    return {
+      allowed: false,
+      capMb: 0,
+      totalMb,
+      message: "Your plan does not allow attaching files on local→cloud upload. Upgrade or remove files.",
+    };
+  }
   if (totalMb <= capMb) return { allowed: true, capMb, totalMb };
   return {
     allowed: false,

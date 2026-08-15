@@ -7,6 +7,78 @@
     {
       "bucket": "studio-5452513410-a3f5b.firebasestorage.app",
       "rules": "src/storage.rules"
+    },
+    {
+      "bucket": "studio-5452513410-a3f5b.appspot.com",
+      "rules": "src/storage.rules"
     }
-  ]
+  ],
+  "hosting": {
+    "public": "website/dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "cleanUrls": true,
+    "trailingSlash": true,
+    "headers": [
+      {
+        "source": "**/*.@(css|js)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public,max-age=86400"
+          }
+        ]
+      }
+    ],
+    "redirects": [
+      {
+        "source": "/dashboard",
+        "destination": "/app/dashboard/",
+        "type": 301
+      },
+      {
+        "source": "/dashboard/**",
+        "destination": "/app/dashboard/:splat",
+        "type": 301
+      },
+      {
+        "source": "/party",
+        "destination": "/app/party/",
+        "type": 301
+      },
+      {
+        "source": "/party/**",
+        "destination": "/app/party/:splat",
+        "type": 301
+      },
+      {
+        "source": "/gate",
+        "destination": "/app/gate/",
+        "type": 301
+      },
+      {
+        "source": "/settings",
+        "destination": "/app/settings/",
+        "type": 301
+      },
+      {
+        "source": "/settings/**",
+        "destination": "/app/settings/:splat",
+        "type": 301
+      },
+      {
+        "source": "/reports",
+        "destination": "/app/reports/",
+        "type": 301
+      },
+      {
+        "source": "/reports/**",
+        "destination": "/app/reports/:splat",
+        "type": 301
+      }
+    ]
+  }
 }

@@ -12,8 +12,23 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import type { Plan, PlanId } from "@/config/plans";
-import { buildDefaultPlansFirestoreDoc, mergeAppSettingsPlansDoc, sanitizePlanForFirestoreWrite } from "@/lib/mergeAppSettingsPlans";
+import type { OnlineDemoOffer, Plan, PlanId } from "@/config/plans";
+import { DEFAULT_ONLINE_DEMO_OFFER } from "@/config/plans";
+import {
+  applyOnlineDemoOfferToPlans,
+  buildDefaultPlansFirestoreDoc,
+  buildOnlineDemoOfferWritePatch,
+  mergeAppSettingsPlansDoc,
+  readOnlineDemoOfferFromPlansDoc,
+  sanitizePlanForFirestoreWrite,
+} from "@/lib/mergeAppSettingsPlans";
+import {
+  buildDeviceUserAddOnOfferWritePatch,
+  DEFAULT_DEVICE_USER_ADDON_OFFER,
+  readDeviceUserAddOnOfferFromPlansDoc,
+  sanitizeDeviceUserAddOnOffer,
+  type DeviceUserAddOnOffer,
+} from "@/lib/planAddOns";
 import {
   defaultPlansListFallback,
   readAdminPlansSelectedPlanId,
@@ -31,6 +46,10 @@ export default function PlansPage() {
     const { toast } = useToast();
     // Pehli paint stale localStorage na ho — server read ke baad ya snapshot se fill.
     const [plans, setPlans] = useState<Plan[]>(() => defaultPlansListFallback());
+    const [onlineDemo, setOnlineDemo] = useState<OnlineDemoOffer>(() => ({ ...DEFAULT_ONLINE_DEMO_OFFER }));
+    const [deviceUserAddOns, setDeviceUserAddOns] = useState<DeviceUserAddOnOffer>(() => ({
+      ...DEFAULT_DEVICE_USER_ADDON_OFFER,
+    }));
     const [loading, setLoading] = useState(true);
     const [missingPlansDoc, setMissingPlansDoc] = useState(false);
     const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
@@ -50,8 +69,11 @@ export default function PlansPage() {
                 const snap = await getDocFromServer(plansRef);
                 if (cancelled) return;
                 if (snap.exists()) {
-                    const merged = mergeAppSettingsPlansDoc(snap.data() as Record<string, unknown>);
+                    const data = snap.data() as Record<string, unknown>;
+                    const merged = mergeAppSettingsPlansDoc(data);
                     setPlans(merged);
+                    setOnlineDemo(readOnlineDemoOfferFromPlansDoc(data));
+                    setDeviceUserAddOns(readDeviceUserAddOnOfferFromPlansDoc(data));
                     writeCachedPlansList(merged);
                     setMissingPlansDoc(false);
                     serverHydratedRef.current = true;
@@ -89,6 +111,10 @@ export default function PlansPage() {
                     fromCache && online && serverHydratedRef.current;
                 if (!skipStaleCacheOverlay) {
                     setPlans(mergedPlans);
+                    setOnlineDemo(readOnlineDemoOfferFromPlansDoc(docSnap.data() as Record<string, unknown>));
+                    setDeviceUserAddOns(
+                      readDeviceUserAddOnOfferFromPlansDoc(docSnap.data() as Record<string, unknown>)
+                    );
                 }
                 setMissingPlansDoc(false);
                 if (!fromCache) {
@@ -135,8 +161,10 @@ export default function PlansPage() {
             }
             const snap = await getDocFromServer(doc(db, "app_settings", "plans"));
             if (snap.exists()) {
-                const merged = mergeAppSettingsPlansDoc(snap.data() as Record<string, unknown>);
+                const data = snap.data() as Record<string, unknown>;
+                const merged = mergeAppSettingsPlansDoc(data);
                 setPlans(merged);
+                setOnlineDemo(readOnlineDemoOfferFromPlansDoc(data));
                 writeCachedPlansList(merged);
                 setMissingPlansDoc(false);
             }
@@ -190,20 +218,25 @@ export default function PlansPage() {
 
         const writeClientOnly = async () => {
             // Sirf is tier ka field — poora doc spread nahi (kam undefined / size issues).
+            const { demo: _d, ...planWithoutDemo } = updatedPlan as Plan & { demo?: unknown };
             await setDoc(
                 doc(db, "app_settings", "plans"),
-                { [updatedPlan.id]: sanitizePlanForFirestoreWrite(updatedPlan) },
+                { [updatedPlan.id]: sanitizePlanForFirestoreWrite(planWithoutDemo as Plan) },
                 { merge: true }
             );
         };
 
         try {
             const token = await user.getIdToken();
-            const planPayload = sanitizePlanForFirestoreWrite(updatedPlan);
+            const { demo: _d, ...planWithoutDemo } = updatedPlan as Plan & { demo?: unknown };
+            const planPayload = sanitizePlanForFirestoreWrite(planWithoutDemo as Plan);
             const res = await fetch("/api/admin/app-settings/plans", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ planId: updatedPlan.id, plan: planPayload }),
+                body: JSON.stringify({
+                    planId: updatedPlan.id,
+                    plan: planPayload,
+                }),
             });
             const j = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
 
@@ -236,6 +269,81 @@ export default function PlansPage() {
                 toast({ variant: "destructive", title: "Save failed", description: msg });
                 return false;
             }
+        }
+    };
+
+    const handleSaveOnlineDemo = async (
+        offer: OnlineDemoOffer,
+        options?: { existingDemoAction?: "retain" | "reset" | "replace" }
+    ) => {
+        if (!user) {
+            toast({ variant: "destructive", title: "Not signed in", description: "Login required to save demo offer." });
+            return false;
+        }
+        try {
+            const token = await user.getIdToken();
+            const res = await fetch("/api/admin/app-settings/plans", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({
+                    onlineDemo: offer,
+                    ...(options?.existingDemoAction
+                        ? { existingDemoAction: options.existingDemoAction }
+                        : {}),
+                }),
+            });
+            if (!res.ok) {
+                // Client fallback keeps admin usable if Admin SDK is down.
+                await setDoc(doc(db, "app_settings", "plans"), buildOnlineDemoOfferWritePatch(offer), {
+                    merge: true,
+                });
+            }
+            setOnlineDemo(offer);
+            setPlans((prev) => {
+                const next = applyOnlineDemoOfferToPlans(prev, offer);
+                writeCachedPlansList(next);
+                return next;
+            });
+            toast({ title: "Saved", description: "Online demo offer updated." });
+            return true;
+        } catch (e: unknown) {
+            toast({
+                variant: "destructive",
+                title: "Demo save failed",
+                description: e instanceof Error ? e.message : String(e),
+            });
+            return false;
+        }
+    };
+
+    const handleSaveDeviceUserAddOns = async (offer: DeviceUserAddOnOffer) => {
+        if (!user) {
+            toast({ variant: "destructive", title: "Not signed in", description: "Login required to save add-ons." });
+            return false;
+        }
+        try {
+            const token = await user.getIdToken();
+            const sanitized = sanitizeDeviceUserAddOnOffer(offer);
+            const res = await fetch("/api/admin/app-settings/plans", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ deviceUserAddOns: sanitized }),
+            });
+            if (!res.ok) {
+                await setDoc(doc(db, "app_settings", "plans"), buildDeviceUserAddOnOfferWritePatch(sanitized), {
+                    merge: true,
+                });
+            }
+            setDeviceUserAddOns(sanitized);
+            toast({ title: "Saved", description: "Add-on service updated." });
+            return true;
+        } catch (e: unknown) {
+            toast({
+                variant: "destructive",
+                title: "Add-on save failed",
+                description: e instanceof Error ? e.message : String(e),
+            });
+            return false;
         }
     };
 
@@ -286,7 +394,7 @@ export default function PlansPage() {
                             </CardHeader>
                         </Card>
                     )}
-                    <Card className="shrink-0">
+                    <Card className="shrink-0 pl-chrome-card pl-chrome-tone-emerald">
                         <CardHeader>
                             <CardTitle>Subscription Plans</CardTitle>
                             <CardDescription>Select a plan to view and edit its details.</CardDescription>
@@ -308,6 +416,10 @@ export default function PlansPage() {
                             plans={filteredPlans}
                             selectedPlan={selectedPlan}
                             onSelectPlan={handleSelectPlan}
+                            onlineDemo={onlineDemo}
+                            onSaveOnlineDemo={handleSaveOnlineDemo}
+                            deviceUserAddOns={deviceUserAddOns}
+                            onSaveDeviceUserAddOns={handleSaveDeviceUserAddOns}
                         />
                     </div>
                 </div>

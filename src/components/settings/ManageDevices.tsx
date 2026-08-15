@@ -34,6 +34,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
+import { formatEntitlementCapLabel, isUnlimitedEntitlementCap } from "@/config/plans";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -218,7 +219,8 @@ function DeviceCardHeaderBar(props: {
           {/* Selected row icon ke neeche count align; otherCompany me icon nahi — spacer bhi nahi */}
           {isSelectedCard ? <span className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /> : null}
           <CardDescription className="mt-0 flex-1 text-xs text-muted-foreground leading-snug">
-            devices in use. Count: {p.count} / {p.max}.{p.subtitleExtra ? ` ${p.subtitleExtra}` : ""}
+            devices in use. Count: {p.count} / {formatEntitlementCapLabel(p.max)}.
+            {p.subtitleExtra ? ` ${p.subtitleExtra}` : ""}
           </CardDescription>
         </div>
       </div>
@@ -303,7 +305,10 @@ export function ManageDevices() {
     return userCanUseMultiDevice;
   }, [selectedFirestoreCompanyId, optimisticMultiDeviceByFsId, userCanUseMultiDevice]);
   const plan = getPlanFromPlans(livePlans, company?.planId as any);
-  const maxDevices = Math.max(1, Number(plan?.entitlements?.maxDevices) || 1);
+  const maxDevicesRaw = Number(plan?.entitlements?.maxDevices);
+  const maxDevices = isUnlimitedEntitlementCap(maxDevicesRaw)
+    ? -1
+    : Math.max(0, Number.isFinite(maxDevicesRaw) ? Math.floor(maxDevicesRaw) : 1);
 
   const companiesOverviewKey = useMemo(() => allCompanies.map((c) => c.id).join("|"), [allCompanies]);
 
@@ -323,7 +328,10 @@ export function ManageDevices() {
           const name = (c.name || "").trim() || c.id;
           const fsCompanyId = String((c as { authoritativeCompanyId?: string }).authoritativeCompanyId || c.id).trim() || c.id;
           const planRow = getPlanFromPlans(livePlans, (c as { planId?: string }).planId as any);
-          const maxDev = Math.max(1, Number(planRow?.entitlements?.maxDevices) || 1);
+          const maxDevRaw = Number(planRow?.entitlements?.maxDevices);
+          const maxDev = isUnlimitedEntitlementCap(maxDevRaw)
+            ? -1
+            : Math.max(0, Number.isFinite(maxDevRaw) ? Math.floor(maxDevRaw) : 1);
           const ownerIdForCompany = (c.ownerId || "").trim();
           const isLocalRow = String(c.storageOption || "local").toLowerCase() === "local";
           if (isLocalRow) {

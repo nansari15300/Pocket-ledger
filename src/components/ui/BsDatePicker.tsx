@@ -143,7 +143,7 @@ export default function BsDatePicker({
         <Button 
           variant="outline" 
           className={cn(
-            "w-auto justify-start text-left font-normal h-7 min-h-7 px-2 gap-1 min-w-0",
+            "w-auto justify-start text-left font-normal h-[27px] min-h-[27px] px-2 gap-1 min-w-0",
             hideTriggerIcon && "gap-0",
             !valueAD && "text-muted-foreground",
             className

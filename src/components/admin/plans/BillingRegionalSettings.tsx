@@ -23,6 +23,7 @@ import {
   type BillingPricingSettings,
 } from "@/lib/billingRegionalPricing";
 import { Loader2, RefreshCw } from "lucide-react";
+import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 import { useToast } from "@/hooks/use-toast";
 import type { FxRatesSnapshot } from "@/lib/liveFxRates";
 
@@ -108,8 +109,8 @@ export function BillingRegionalSettings() {
   const loadFx = useCallback(async (base: string) => {
     setFxBusy(true);
     try {
-      const res = await fetch(`/api/billing/fx-rates?base=${encodeURIComponent(base)}`);
-      const data = await res.json();
+      const res = await fetch(getBillingApiUrl(`/api/billing/fx-rates?base=${encodeURIComponent(base)}`));
+      const data = (await res.json().catch(() => ({}))) as { error?: string } & Partial<FxRatesSnapshot>;
       if (!res.ok) throw new Error(data.error || "FX failed");
       setFx(data as FxRatesSnapshot);
     } catch (e: unknown) {

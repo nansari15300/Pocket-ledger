@@ -35,7 +35,14 @@ import {
   mergeVoucherCalendarDateWithSaveClock,
   parseFirestoreDateFieldToJsDate,
 } from "@/lib/voucherDateNormalize";
-import { getPlan, numericEntitlement, companyStorageIsLocal, type Entitlements, type PlanId } from "@/config/plans";
+import {
+  getPlan,
+  numericEntitlement,
+  companyStorageIsLocal,
+  isUnlimitedEntitlementCap,
+  type Entitlements,
+  type PlanId,
+} from "@/config/plans";
 import { getPlanFromPlans } from "@/hooks/useLivePlans";
 import { readCachedPlansRecord, defaultPlansRecordFallback } from "@/lib/plansCatalogCache";
 import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore";
@@ -665,7 +672,10 @@ async function enforceDailyMonthlyVoucherQuotaForCreate(
   monthlyLimit: number,
   storageOptionIsLocal: boolean
 ): Promise<void> {
-  if (dailyLimit <= 0 && monthlyLimit <= 0) return;
+  // Caps: -1 unlimited; 0 = none (block create); >0 hard cap.
+  const dailyUnlimited = isUnlimitedEntitlementCap(dailyLimit);
+  const monthlyUnlimited = isUnlimitedEntitlementCap(monthlyLimit);
+  if (dailyUnlimited && monthlyUnlimited) return;
   const now = new Date();
   const collPath = `companies/${companyId}/vouchers`;
   // `forBackupMerge`: local-first + APK + cloud user jiske paas restore/prefetch cache ho — bina iske web online par rows [] rehti hain.
@@ -674,7 +684,7 @@ async function enforceDailyMonthlyVoucherQuotaForCreate(
     isLocalOnlyMode() || storageOptionIsLocal || mirrorRows.length > 0;
 
   if (countFromSqlite) {
-    if (dailyLimit > 0) {
+    if (!dailyUnlimited) {
       const n = countLocalMirrorVouchersInRange(mirrorRows, startOfDay(now), endOfDay(now));
       if (n >= dailyLimit) {
         const err = new Error(
@@ -684,7 +694,7 @@ async function enforceDailyMonthlyVoucherQuotaForCreate(
         throw err;
       }
     }
-    if (monthlyLimit > 0) {
+    if (!monthlyUnlimited) {
       const n = countLocalMirrorVouchersInRange(mirrorRows, startOfMonth(now), endOfMonth(now));
       if (n >= monthlyLimit) {
         const err = new Error(
@@ -697,7 +707,7 @@ async function enforceDailyMonthlyVoucherQuotaForCreate(
     return;
   }
 
-  if (dailyLimit > 0) {
+  if (!dailyUnlimited) {
     const todayStart = Timestamp.fromDate(startOfDay(now));
     const todayEnd = Timestamp.fromDate(endOfDay(now));
     const dailySnap = await getDocs(
@@ -711,7 +721,7 @@ async function enforceDailyMonthlyVoucherQuotaForCreate(
       throw err;
     }
   }
-  if (monthlyLimit > 0) {
+  if (!monthlyUnlimited) {
     const monthStart = Timestamp.fromDate(startOfMonth(now));
     const monthEnd = Timestamp.fromDate(endOfMonth(now));
     const monthlySnap = await getDocs(

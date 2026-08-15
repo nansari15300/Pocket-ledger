@@ -50,7 +50,7 @@ import { generateUniqueInterCompanyAccountNo } from "@/lib/interCompany/interCom
 import { generateUniqueInterCompanyCompanyCode } from "@/lib/interCompany/interCompanyCompanyCode";
 import { CompanyInterCompanyCodeField } from "@/components/inter-company/CompanyInterCompanyCodeField";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
-import { numericEntitlement, type PlanId } from "@/config/plans";
+import { numericEntitlement, isAtOrOverEntitlementCap, type PlanId } from "@/config/plans";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { countOnlineCompanySlotsForOwner, maxOnlineCompaniesForPlan } from "@/lib/companyOnlineSlots";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
@@ -321,7 +321,7 @@ export function CreateCompanyForm({
       const planId: PlanId = ownedCount === 0 ? "basic" : (ownedSnap.docs[0]?.data()?.planId as PlanId) || "basic";
       const plan = getPlanFromPlans(livePlans, planId);
       const maxCompanies = numericEntitlement(plan.entitlements, "maxCompanies", false);
-      if (maxCompanies > 0 && ownedCount >= maxCompanies) {
+      if (isAtOrOverEntitlementCap(ownedCount, maxCompanies)) {
         toast({
           variant: "destructive",
           title: "Plan limit reached",
@@ -338,7 +338,7 @@ export function CreateCompanyForm({
       const planId: PlanId = planIdForSlots;
       const plan = getPlanFromPlans(livePlans, planId);
       const maxLocalCompanies = numericEntitlement(plan.entitlements, "maxCompanies", true);
-      if (maxLocalCompanies > 0 && localCount >= maxLocalCompanies) {
+      if (isAtOrOverEntitlementCap(localCount, maxLocalCompanies)) {
         toast({
           variant: "destructive",
           title: "Plan limit reached",

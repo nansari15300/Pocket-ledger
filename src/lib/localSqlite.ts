@@ -925,9 +925,10 @@ async function openNamespaceDb(ns: SqliteStorageNamespace): Promise<BrowserDbWra
 
   openPromiseByNs[ns] = (async () => {
     const initSqlJs = await getSqlJsCtor();
+    const { publicAssetUrl } = await import("@/lib/webAppBasePath");
     const SQL = await initSqlJs({
       locateFile: (file: string) =>
-        file.endsWith(".wasm") ? "/sql-wasm.wasm" : file,
+        file.endsWith(".wasm") ? publicAssetUrl("/sql-wasm.wasm") : file,
     });
     await ensureSqliteNamespacesMigrated(SQL);
 

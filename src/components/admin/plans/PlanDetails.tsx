@@ -10,8 +10,8 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Save, Calendar as CalendarIcon } from "lucide-react";
-import { type Plan, type EntitlementKey } from "@/config/plans";
+import { Loader2, Save, Calendar as CalendarIcon, Info } from "lucide-react";
+import { type Plan, type EntitlementKey, ONLINE_ENTITLEMENT_CAP_KEYS } from "@/config/plans";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
@@ -25,11 +25,40 @@ import {
     type RegionalPlanPrice,
 } from "@/lib/billingRegionalPricing";
 import { convertWithFxRates, roundMoneyForCurrency } from "@/lib/liveFxRates";
+import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 
+/** Online column caps — "Allow online" off par sab 0. */
 interface PlanDetailsProps {
     plan: Plan;
     onSave: (updatedPlan: Plan) => Promise<boolean>;
 }
+
+/** Blue (i) — click/tap se rule dikhe (hover-only tooltip mobile par miss ho jata hai). */
+function PlanRuleInfo({ tip }: { tip: string }) {
+    return (
+        <Popover>
+            <PopoverTrigger asChild>
+                <button
+                    type="button"
+                    data-pl-plan-rule-info=""
+                    className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-0 bg-transparent text-sky-500 hover:bg-sky-100 hover:text-sky-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                    aria-label="Rule"
+                >
+                    <Info className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden />
+                </button>
+            </PopoverTrigger>
+            <PopoverContent side="top" align="start" className="max-w-xs text-left text-xs leading-snug">
+                {tip}
+            </PopoverContent>
+        </Popover>
+    );
+}
+
+const REGIONAL_PRICES_RULE =
+    "Nepal is the base regional price in the catalog currency. SAARC and International use Markup % on Nepal’s monthly and yearly amounts (not on the top Monthly/Yearly fields alone). Changing Nepal or a region’s Markup % auto-fills that region’s Monthly and Yearly (those two fields stay read-only). Apply today’s FX fills all three regions from live FX rates.";
+
+const REGIONAL_MARKUP_RULE =
+    "Markup % = extra on Nepal’s price. Formula: Nepal amount × (1 + Markup% ÷ 100). Example: Nepal monthly Rs. 500 and Markup 15% → Monthly Rs. 575. Same for yearly. Leave blank or 0 for no markup (same as Nepal).";
 
 /** Amount input — catalog base country ka symbol prefix. */
 function AmountInput({
@@ -66,9 +95,12 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
     const [editablePlan, setEditablePlan] = useState<Plan>(plan);
     const { baseCountry, symbol: catalogSymbol, currencyCode: catalogCurrency } =
         useBillingCatalogBase();
+    /** Untick Allow online → stash online caps; tick restores. */
+    const onlineCapsSnapshotRef = useRef<Partial<Record<EntitlementKey, number>> | null>(null);
 
     useEffect(() => {
         setEditablePlan(plan);
+        onlineCapsSnapshotRef.current = null;
     }, [plan]);
 
     // Catalog amounts = billing default region currency (Regional billing upar se)
@@ -152,6 +184,34 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
             }
         }));
     };
+
+    /** Untick → stash online caps then set 0; tick → restore stash (or leave zeros for admin to fill). */
+    const allowOnline = editablePlan.entitlements.allowFirebaseOnlineCompanies === true;
+
+    const handleAllowOnlineChange = (checked: boolean) => {
+        setEditablePlan((prev) => {
+            const nextEnt = { ...prev.entitlements };
+            if (!checked) {
+                const snap: Partial<Record<EntitlementKey, number>> = {};
+                for (const key of ONLINE_ENTITLEMENT_CAP_KEYS) {
+                    const v = nextEnt[key];
+                    if (typeof v === "number" && Number.isFinite(v)) snap[key] = v;
+                    nextEnt[key] = 0;
+                }
+                onlineCapsSnapshotRef.current = snap;
+                nextEnt.allowFirebaseOnlineCompanies = false;
+            } else {
+                nextEnt.allowFirebaseOnlineCompanies = true;
+                const snap = onlineCapsSnapshotRef.current;
+                if (snap) {
+                    for (const key of ONLINE_ENTITLEMENT_CAP_KEYS) {
+                        if (typeof snap[key] === "number") nextEnt[key] = snap[key]!;
+                    }
+                }
+            }
+            return { ...prev, entitlements: nextEnt };
+        });
+    };
     
     const handlePriceChange = (cycle: 'monthly' | 'yearly', value: string) => {
         setEditablePlan(prev => ({
@@ -208,10 +268,10 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
     const applyLiveFxToRegional = async () => {
         try {
             const base = String(editablePlan.currency || "NPR").toUpperCase();
-            const res = await fetch(`/api/billing/fx-rates?base=${encodeURIComponent(base)}`);
-            const data = await res.json();
+            const res = await fetch(getBillingApiUrl(`/api/billing/fx-rates?base=${encodeURIComponent(base)}`));
+            const data = (await res.json().catch(() => ({}))) as { error?: string; rates?: Record<string, number>; base?: string };
             if (!res.ok || !data.rates) throw new Error(data.error || "FX failed");
-            const rates = data.rates as Record<string, number>;
+            const rates = data.rates;
             const fxBase = data.base as string;
             setEditablePlan((prev) => {
                 const regionalPrices = { ...prev.regionalPrices } as NonNullable<Plan["regionalPrices"]>;
@@ -242,15 +302,55 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
     };
 
     // Har numeric cap do fields: online (Firestore) + local (SQLite / storageOption local) — admin alag se set kar sake.
-    const pairedNumericEntitlements: { online: EntitlementKey; local: EntitlementKey; label: string }[] = [
-      { online: "maxUsers", local: "maxUsersLocal", label: "Max users" },
-      { online: "maxCompanies", local: "maxCompaniesLocal", label: "Max companies" },
-      { online: "maxAttachmentsGB", local: "maxAttachmentsGBLocal", label: "Max attachments (GB)" },
-      { online: "maxStorageGB", local: "maxStorageGBLocal", label: "Max storage (GB)" },
-      { online: "dailyVoucherLimit", local: "dailyVoucherLimitLocal", label: "Daily voucher limit" },
-      { online: "monthlyVoucherLimit", local: "monthlyVoucherLimitLocal", label: "Monthly voucher limit" },
+    const pairedNumericEntitlements: {
+      online: EntitlementKey;
+      local: EntitlementKey;
+      label: string;
+      tip: string;
+    }[] = [
+      {
+        online: "maxUsers",
+        local: "maxUsersLocal",
+        label: "Max users",
+        tip: "0 = no users for that bucket; -1 = unlimited. Online = cloud company; Local = device/SQLite company.",
+      },
+      {
+        online: "maxCompanies",
+        local: "maxCompaniesLocal",
+        label: "Max companies",
+        tip: "0 = no companies for that bucket; -1 = unlimited. Does not change max online-upload slots separately.",
+      },
+      {
+        online: "maxAttachmentsGB",
+        local: "maxAttachmentsGBLocal",
+        label: "Max attachments (GB)",
+        tip: "0 = no attachment storage; -1 = unlimited GB for Online or Local.",
+      },
+      {
+        online: "maxStorageGB",
+        local: "maxStorageGBLocal",
+        label: "Max storage (GB)",
+        tip: "0 = no total storage; -1 = unlimited GB for Online or Local.",
+      },
+      {
+        online: "dailyVoucherLimit",
+        local: "dailyVoucherLimitLocal",
+        label: "Daily voucher limit",
+        tip: "0 = no vouchers that day; -1 = unlimited; positive = hard daily cap.",
+      },
+      {
+        online: "monthlyVoucherLimit",
+        local: "monthlyVoucherLimitLocal",
+        label: "Monthly voucher limit",
+        tip: "0 = no vouchers that month; -1 = unlimited; positive = hard monthly cap.",
+      },
       // Multi-device switch off = dono 1; on = online/local alag caps (billing chart rows).
-      { online: "maxDevices", local: "maxDevicesLocal", label: "Max devices" },
+      {
+        online: "maxDevices",
+        local: "maxDevicesLocal",
+        label: "Max devices",
+        tip: "0 = no extra devices; -1 = unlimited when Multi-Device Sync is ON. Sync OFF forces both sides to 1.",
+      },
     ];
     const entitlementBooleanFields: EntitlementKey[] = [
         "hasPrioritySupport",
@@ -260,7 +360,6 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
         "canAddAvatar",
         "savedAccountSwitchEnabled",
         "attachmentBackupRestoreEnabled",
-        "allowFirebaseOnlineCompanies",
     ];
 
     const offerDate = editablePlan.limitedTimeOfferDate ? 
@@ -374,8 +473,11 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
 
                     <div className="space-y-3 rounded-lg border border-black p-4 bg-muted/30">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                            <h3 className="font-semibold text-sm">
-                                Regional prices (Nepal · SAARC · International) — {catalogSymbol}
+                            <h3 className="font-semibold text-sm flex items-center gap-1.5">
+                                <span>
+                                    Regional prices (Nepal · SAARC · International) — {catalogSymbol}
+                                </span>
+                                <PlanRuleInfo tip={REGIONAL_PRICES_RULE} />
                             </h3>
                             <Button type="button" variant="outline" size="sm" onClick={() => void applyLiveFxToRegional()}>
                                 Apply today&apos;s FX to all 3
@@ -389,10 +491,18 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                     regionId === "saarc" || regionId === "international";
                                 return (
                                     <div key={regionId} className="space-y-2 rounded-md border border-black/40 bg-background p-3">
-                                        <Label className="font-semibold">{meta.label}</Label>
+                                        <div className="flex items-center gap-1.5">
+                                            <Label className="font-semibold">{meta.label}</Label>
+                                            {regionId === "nepal" ? (
+                                                <PlanRuleInfo tip="Base region for regional pricing. Edit Monthly and Yearly here; SAARC and International Markup % apply on these Nepal amounts." />
+                                            ) : null}
+                                        </div>
                                         {isMarkupRegion && (
                                             <div className="space-y-1">
-                                                <Label className="text-xs">Markup %</Label>
+                                                <div className="flex items-center gap-1.5">
+                                                    <Label className="text-xs">Markup %</Label>
+                                                    <PlanRuleInfo tip={REGIONAL_MARKUP_RULE} />
+                                                </div>
                                                 <div className="relative">
                                                     <Input
                                                         type="number"
@@ -449,16 +559,46 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {pairedNumericEntitlements.map(({ online, local, label }) => {
+                    <div className="md:col-span-2 lg:col-span-3 flex items-start gap-2 rounded-md border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs text-sky-900 dark:border-sky-900/50 dark:bg-sky-950/30 dark:text-sky-100">
+                        <Info
+                            data-pl-plan-rule-info=""
+                            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-500"
+                            strokeWidth={2.5}
+                            aria-hidden
+                        />
+                        <p>
+                            <span className="font-medium">Rule:</span> for number caps,{" "}
+                            <span className="font-semibold">0 = none / not allowed</span>,{" "}
+                            <span className="font-semibold">-1 = unlimited</span>, positive = hard cap
+                            (unless the field is off with its switch).
+                            Click any blue (i) for the field-specific rule. Online = cloud company; Local = device/SQLite.
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-2 p-3 border rounded-lg bg-muted/30 col-span-1 md:col-span-2 lg:col-span-3">
+                        <Switch
+                            id={`${plan.id}-allow-online`}
+                            checked={allowOnline}
+                            onCheckedChange={(checked) => handleAllowOnlineChange(checked === true)}
+                        />
+                        <Label htmlFor={`${plan.id}-allow-online`} className="flex-1">
+                            Allow online
+                        </Label>
+                        <PlanRuleInfo tip="ON keeps Online caps editable. OFF sets every Online cap to 0 (users, companies, storage, vouchers, devices, online slots, local→cloud MB) so you need not clear each field." />
+                    </div>
+                    {pairedNumericEntitlements.map(({ online, local, label, tip }) => {
                         const onlineVal = editablePlan.entitlements[online];
                         const localVal = editablePlan.entitlements[local];
                         const onlineNum = typeof onlineVal === "number" ? onlineVal : Number(onlineVal ?? 0);
                         const localNum = typeof localVal === "number" ? localVal : Number(localVal ?? 0);
                         const isMaxDevicesPair = online === "maxDevices" && local === "maxDevicesLocal";
                         const pairDisabled = isMaxDevicesPair && !editablePlan.entitlements.hasMultiDeviceSync;
+                        const onlineDisabled = !allowOnline || pairDisabled;
                         return (
                             <div key={`${online}-${local}`} className="rounded-lg border bg-card/50 p-3 space-y-2 md:col-span-1">
-                                <div className="text-sm font-medium">{label}</div>
+                                <div className="flex items-center gap-1.5 text-sm font-medium">
+                                    <span>{label}</span>
+                                    <PlanRuleInfo tip={tip} />
+                                </div>
                                 <div className="grid grid-cols-2 gap-2">
                                     <div className="space-y-1">
                                         <Label className="text-xs text-muted-foreground" htmlFor={`${plan.id}-${online}`}>Online</Label>
@@ -470,8 +610,8 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                                 const raw = e.target.value;
                                                 handleEntitlementChange(online, raw === "" ? 0 : Number(raw));
                                             }}
-                                            placeholder="0 = unlimited"
-                                            disabled={pairDisabled}
+                                            placeholder="-1 = unlimited"
+                                            disabled={onlineDisabled}
                                         />
                                     </div>
                                     <div className="space-y-1">
@@ -484,7 +624,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                                 const raw = e.target.value;
                                                 handleEntitlementChange(local, raw === "" ? 0 : Number(raw));
                                             }}
-                                            placeholder="0 = unlimited"
+                                            placeholder="-1 = unlimited"
                                             disabled={pairDisabled}
                                         />
                                     </div>
@@ -499,19 +639,28 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                             checked={!!editablePlan.entitlements.hasMultiDeviceSync}
                             onCheckedChange={(checked) => {
                                 handleEntitlementChange('hasMultiDeviceSync', checked);
-                                const dOn = Number(editablePlan.entitlements.maxDevices) || 1;
-                                const dLoc = Number(editablePlan.entitlements.maxDevicesLocal) || 1;
+                                const dOnRaw = Number(editablePlan.entitlements.maxDevices);
+                                const dLocRaw = Number(editablePlan.entitlements.maxDevicesLocal);
+                                const dOn = Number.isFinite(dOnRaw) && dOnRaw !== 0 ? dOnRaw : 1;
+                                const dLoc = Number.isFinite(dLocRaw) && dLocRaw !== 0 ? dLocRaw : 1;
                                 if (!checked) {
                                     handleEntitlementChange('maxDevices', 1);
                                     handleEntitlementChange('maxDevicesLocal', 1);
                                 } else {
-                                    const next = Math.max(dOn, dLoc) <= 1 ? 3 : Math.max(dOn, dLoc);
-                                    handleEntitlementChange('maxDevices', next);
-                                    handleEntitlementChange('maxDevicesLocal', next);
+                                    // Preserve -1 (unlimited) when turning sync back on.
+                                    if (dOn < 0 || dLoc < 0) {
+                                        handleEntitlementChange('maxDevices', -1);
+                                        handleEntitlementChange('maxDevicesLocal', -1);
+                                    } else {
+                                        const next = Math.max(dOn, dLoc) <= 1 ? 3 : Math.max(dOn, dLoc);
+                                        handleEntitlementChange('maxDevices', next);
+                                        handleEntitlementChange('maxDevicesLocal', next);
+                                    }
                                 }
                             }}
                         />
                         <Label htmlFor={`${plan.id}-hasMultiDeviceSync`} className="flex-1">Multi-Device Sync</Label>
+                        <PlanRuleInfo tip="OFF forces Max devices Online and Local to 1. ON unlocks device caps (0 = none; -1 = unlimited)." />
                     </div>
 
                     <div className="flex items-center gap-2 p-3 border rounded-lg bg-muted/30 col-span-1 md:col-span-2 flex-wrap">
@@ -528,6 +677,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                             }}
                         />
                         <Label htmlFor={`${plan.id}-canAddFileImagePdf`} className="flex-1">{entitlementLabels.canAddFileImagePdf}</Label>
+                        <PlanRuleInfo tip="OFF clears Max files (0 = no files). ON allows 1–10 files per voucher." />
                         {editablePlan.entitlements.canAddFileImagePdf && (
                             <div className="flex items-center gap-2">
                                 <Label htmlFor={`${plan.id}-maxVoucherFileCount`} className="text-sm whitespace-nowrap">Max files per voucher</Label>
@@ -556,6 +706,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                             <Label htmlFor={`${plan.id}-interCompanyVoucherEnabled`} className="text-sm">
                                 {entitlementLabels.interCompanyVoucherEnabled}
                             </Label>
+                            <PlanRuleInfo tip="When enabled, Max joined partners: 0 = none; -1 = unlimited partner companies." />
                         </div>
                         <div className="flex items-center gap-2">
                             <Label
@@ -567,26 +718,27 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                             <Input
                                 id={`${plan.id}-maxInterCompanyPartners`}
                                 type="number"
-                                min={0}
+                                min={-1}
                                 className="w-24 h-8"
                                 value={String(
                                     Number.isFinite(Number(editablePlan.entitlements.maxInterCompanyPartners))
                                         ? Number(editablePlan.entitlements.maxInterCompanyPartners)
                                         : 0
                                 )}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                    const n = parseInt(e.target.value, 10);
                                     handleEntitlementChange(
                                         "maxInterCompanyPartners",
-                                        Math.max(0, parseInt(e.target.value, 10) || 0)
-                                    )
-                                }
-                                placeholder="0 = unlimited"
+                                        !Number.isFinite(n) ? 0 : n < 0 ? -1 : n
+                                    );
+                                }}
+                                placeholder="-1 = unlimited"
                                 disabled={!editablePlan.entitlements.interCompanyVoucherEnabled}
                             />
                         </div>
                     </div>
 
-                    {/* Attachment backup/restore + local→online MB — plan traffic control (0 = unlimited). */}
+                    {/* Attachment backup/restore + local→online MB — plan traffic control (0 = none; -1 = unlimited). */}
                     <div className="flex items-center gap-2 p-3 border rounded-lg bg-muted/30 col-span-1 md:col-span-2 flex-wrap">
                         <div className="flex items-center gap-2 flex-1">
                             <Switch
@@ -600,6 +752,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                             <Label htmlFor={`${plan.id}-shareForReconciliationEnabled`} className="text-sm">
                                 {entitlementLabels.shareForReconciliationEnabled}
                             </Label>
+                            <PlanRuleInfo tip="When enabled, Max reconciliation ledgers: 0 = none; -1 = unlimited ledgers per user." />
                         </div>
                         <div className="flex items-center gap-2">
                             <Label htmlFor={`${plan.id}-maxReconciliationLedgers`} className="text-sm whitespace-nowrap">
@@ -608,25 +761,29 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                             <Input
                                 id={`${plan.id}-maxReconciliationLedgers`}
                                 type="number"
-                                min={0}
+                                min={-1}
                                 className="w-24 h-8"
                                 value={String(Number(editablePlan.entitlements.maxReconciliationLedgers ?? 0))}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                    const n = parseInt(e.target.value, 10);
                                     handleEntitlementChange(
                                         "maxReconciliationLedgers",
-                                        Math.max(0, parseInt(e.target.value, 10) || 0)
-                                    )
-                                }
-                                placeholder="0 = unlimited"
+                                        !Number.isFinite(n) ? 0 : n < 0 ? -1 : n
+                                    );
+                                }}
+                                placeholder="-1 = unlimited"
                                 disabled={!editablePlan.entitlements.shareForReconciliationEnabled}
                             />
                         </div>
                     </div>
 
                     <div className="md:col-span-2 lg:col-span-3 rounded-lg border bg-card/50 p-3 space-y-3">
-                        <div className="text-sm font-medium">Attachment backup &amp; restore</div>
+                        <div className="flex items-center gap-1.5 text-sm font-medium">
+                            <span>Attachment backup &amp; restore</span>
+                            <PlanRuleInfo tip="Monthly backup/restore counts and Local→cloud MB: 0 = none; -1 = unlimited. Requires Attachment backup & restore switch ON for monthly caps." />
+                        </div>
                         <p className="text-xs text-muted-foreground">
-                            Monthly counts limit attachment-heavy .plbp export/import. Local→online MB caps one-time upload size when linking a local company to cloud. Use 0 for unlimited.
+                            Monthly counts limit attachment-heavy .plbp export/import. Local→online MB caps one-time upload size when linking a local company to cloud. Use 0 for none, -1 for unlimited.
                         </p>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                             <div className="space-y-1">
@@ -636,15 +793,16 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                 <Input
                                     id={`${plan.id}-maxAttachmentBackupPerMonth`}
                                     type="number"
-                                    min={0}
+                                    min={-1}
                                     value={String(Number(editablePlan.entitlements.maxAttachmentBackupPerMonth ?? 0))}
-                                    onChange={(e) =>
+                                    onChange={(e) => {
+                                        const n = parseInt(e.target.value, 10);
                                         handleEntitlementChange(
                                             "maxAttachmentBackupPerMonth",
-                                            Math.max(0, parseInt(e.target.value, 10) || 0)
-                                        )
-                                    }
-                                    placeholder="0 = unlimited"
+                                            !Number.isFinite(n) ? 0 : n < 0 ? -1 : n
+                                        );
+                                    }}
+                                    placeholder="-1 = unlimited"
                                     disabled={!editablePlan.entitlements.attachmentBackupRestoreEnabled}
                                 />
                             </div>
@@ -655,15 +813,16 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                 <Input
                                     id={`${plan.id}-maxAttachmentRestorePerMonth`}
                                     type="number"
-                                    min={0}
+                                    min={-1}
                                     value={String(Number(editablePlan.entitlements.maxAttachmentRestorePerMonth ?? 0))}
-                                    onChange={(e) =>
+                                    onChange={(e) => {
+                                        const n = parseInt(e.target.value, 10);
                                         handleEntitlementChange(
                                             "maxAttachmentRestorePerMonth",
-                                            Math.max(0, parseInt(e.target.value, 10) || 0)
-                                        )
-                                    }
-                                    placeholder="0 = unlimited"
+                                            !Number.isFinite(n) ? 0 : n < 0 ? -1 : n
+                                        );
+                                    }}
+                                    placeholder="-1 = unlimited"
                                     disabled={!editablePlan.entitlements.attachmentBackupRestoreEnabled}
                                 />
                             </div>
@@ -674,15 +833,17 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                 <Input
                                     id={`${plan.id}-maxLocalToOnlineAttachmentMB`}
                                     type="number"
-                                    min={0}
+                                    min={-1}
                                     value={String(Number(editablePlan.entitlements.maxLocalToOnlineAttachmentMB ?? 0))}
-                                    onChange={(e) =>
+                                    onChange={(e) => {
+                                        const n = parseInt(e.target.value, 10);
                                         handleEntitlementChange(
                                             "maxLocalToOnlineAttachmentMB",
-                                            Math.max(0, parseInt(e.target.value, 10) || 0)
-                                        )
-                                    }
-                                    placeholder="0 = unlimited"
+                                            !Number.isFinite(n) ? 0 : n < 0 ? -1 : n
+                                        );
+                                    }}
+                                    placeholder="-1 = unlimited"
+                                    disabled={!allowOnline}
                                 />
                             </div>
                         </div>

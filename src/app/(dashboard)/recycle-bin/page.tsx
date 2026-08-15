@@ -49,7 +49,7 @@ import {
 import { getRecycleBinConfig, subscribeRecycleBinConfig, type RecycleBinConfig } from "@/lib/recycleBinConfig";
 import { removeRecycleBinAlerts } from "@/lib/transactionAlerts";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
-import { numericEntitlement, type PlanId } from "@/config/plans";
+import { numericEntitlement, isAtOrOverEntitlementCap, type PlanId } from "@/config/plans";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
     getLocalCompanyById,
@@ -329,7 +329,7 @@ function RecycleBinContent() {
                     const planId: PlanId = count === 0 ? "basic" : ((rows[0]?.planId as PlanId) || "basic");
                     const plan = getPlanFromPlans(livePlans, planId);
                     const max = numericEntitlement(plan?.entitlements, "maxCompanies", true);
-                    setAtMaxCompanies(max > 0 && count >= max);
+                    setAtMaxCompanies(isAtOrOverEntitlementCap(count, max));
                 })
                 .catch(() => setAtMaxCompanies(false));
             return;
@@ -344,7 +344,7 @@ function RecycleBinContent() {
             const planId: PlanId = count === 0 ? "basic" : (snap.docs[0]?.data()?.planId as PlanId) || "basic";
             const plan = getPlanFromPlans(livePlans, planId);
             const max = numericEntitlement(plan?.entitlements, "maxCompanies", false);
-            setAtMaxCompanies(max > 0 && count >= max);
+            setAtMaxCompanies(isAtOrOverEntitlementCap(count, max));
         }, () => setAtMaxCompanies(false));
         return () => unsub();
     }, [user?.uid, livePlans]);
@@ -952,7 +952,7 @@ function RecycleBinContent() {
                 const planId: PlanId = resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId);
                 const plan = getPlanFromPlans(livePlans, planId);
                 const maxCompanies = numericEntitlement(plan?.entitlements, "maxCompanies", true);
-                if (maxCompanies > 0 && currentCount >= maxCompanies) {
+                if (isAtOrOverEntitlementCap(currentCount, maxCompanies)) {
                     toast({
                         variant: "destructive",
                         title: "Plan limit reached",
@@ -972,7 +972,7 @@ function RecycleBinContent() {
                 const planId: PlanId = resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId);
                 const plan = getPlanFromPlans(livePlans, planId);
                 const maxCompanies = numericEntitlement(plan?.entitlements, "maxCompanies", false);
-                if (maxCompanies > 0 && currentCount >= maxCompanies) {
+                if (isAtOrOverEntitlementCap(currentCount, maxCompanies)) {
                     toast({
                         variant: "destructive",
                         title: "Plan limit reached",
@@ -987,7 +987,7 @@ function RecycleBinContent() {
                 const planId: PlanId = (company?.planId as PlanId) || "basic";
                 const plan = getPlanFromPlans(livePlans, planId);
                 const maxCompanies = numericEntitlement(plan?.entitlements, "maxCompanies", false);
-                if (maxCompanies > 0 && currentCount >= maxCompanies) {
+                if (isAtOrOverEntitlementCap(currentCount, maxCompanies)) {
                     toast({
                         variant: "destructive",
                         title: "Plan limit reached",

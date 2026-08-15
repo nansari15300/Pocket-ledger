@@ -84,12 +84,12 @@ const featureDescriptions: Record<string, { en: string; ne: string }> = {
         ne: "On: सबै कम्पनी डाटा र ब्याकअपहरूको लागि कुल भण्डारण सीमा गिगाबाइट (GB) मा सेट गर्दछ।\nOff: भण्डारण सीमा योजनाको पूर्वनिर्धारितमा फर्किनेछ।"
     },
     dailyVoucherLimit: {
-        en: "On: Sets the maximum number of vouchers that can be created per day. Use 0 for unlimited.\nOff: Limit reverts to the plan's default.",
-        ne: "On: प्रति दिन बनाउन सकिने भाउचरहरूको अधिकतम संख्या सेट गर्दछ। असीमितको लागि ० प्रयोग गर्नुहोस्।\nOff: सीमा योजनाको पूर्वनिर्धारितमा फर्किनेछ।"
+        en: "On: Sets the maximum number of vouchers that can be created per day. Use 0 for none, -1 for unlimited.\nOff: Limit reverts to the plan's default.",
+        ne: "On: प्रति दिन बनाउन सकिने भाउचरहरूको अधिकतम संख्या सेट गर्दछ। कुनै पनि नचाहियो भने ०, असीमितको लागि -१ प्रयोग गर्नुहोस्।\nOff: सीमा योजनाको पूर्वनिर्धारितमा फर्किनेछ।"
     },
     monthlyVoucherLimit: {
-        en: "On: Sets the maximum number of vouchers that can be created per month. Use 0 for unlimited.\nOff: Limit reverts to the plan's default.",
-        ne: "On: प्रति महिना बनाउन सकिने भाउचरहरूको अधिकतम संख्या सेट गर्दछ। असीमितको लागि ० प्रयोग गर्नुहोस्।\nOff: सीमा योजनाको पूर्वनिर्धारितमा फर्किनेछ।"
+        en: "On: Sets the maximum number of vouchers that can be created per month. Use 0 for none, -1 for unlimited.\nOff: Limit reverts to the plan's default.",
+        ne: "On: प्रति महिना बनाउन सकिने भाउचरहरूको अधिकतम संख्या सेट गर्दछ। कुनै पनि नचाहियो भने ०, असीमितको लागि -१ प्रयोग गर्नुहोस्।\nOff: सीमा योजनाको पूर्वनिर्धारितमा फर्किनेछ।"
     },
     hasMultiDeviceSync: {
         en: "On: Enables real-time data synchronization across multiple devices.\nOff: Data will only be saved locally on the device it was entered on.",

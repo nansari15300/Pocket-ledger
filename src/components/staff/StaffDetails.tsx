@@ -98,6 +98,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
@@ -157,6 +158,11 @@ import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { toast } from "sonner";
 import { chromePillActive } from "@/lib/chromePillButton";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import {
+  BillWiseAutoLinkPromptDialog,
+  usePartyBillWiseAutoLinkPrompt,
+} from "@/components/vouchers/BillWiseAutoLinkPrompt";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -208,6 +214,7 @@ export function StaffDetails({
     useDate();
   const {
     vouchers,
+    vouchersAll,
     processedStaff,
     processedAccounts,
     processedParties,
@@ -215,6 +222,8 @@ export function StaffDetails({
     processedTaxes,
     journalAccountNames,
   } = useVouchers();
+  const { user, customUser } = useAuth();
+  const isLocalMode = isLocalOnlyMode();
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
   const router = useRouter();
@@ -236,6 +245,33 @@ export function StaffDetails({
     if (!processedStaff) return initialStaff;
     return processedStaff.find(s => s.id === initialStaff.id) || initialStaff;
   }, [processedStaff, initialStaff]);
+  // Auto link needs the complete staff ledger, not only the current date/filter view.
+  const vouchersForAutoLink = vouchersAll?.length ? vouchersAll : vouchers;
+  const isCompanyAdmin = React.useMemo(() => {
+    const role = String(customUser?.role || "").trim();
+    if (role === "CompanyAdmin" || role === "SuperAdmin" || role === "owner") return true;
+    if (!company || !user) return false;
+    if (company.ownerId && user.uid && company.ownerId === user.uid) return true;
+    const ownerEmail = String((company as any).ownerEmail || "").trim().toLowerCase();
+    const email = String(user.email || "").trim().toLowerCase();
+    return !!ownerEmail && !!email && ownerEmail === email;
+  }, [customUser?.role, company, user]);
+  const autoLinkPrompt = usePartyBillWiseAutoLinkPrompt({
+    enabled: isCompanyAdmin && !!staff?.id && staff.id !== "all" && !(staff as any).isSystemAccount,
+    companyId,
+    userId: user?.uid || (isLocalMode && companyId ? "local" : null),
+    ledgerId: staff?.id,
+    ledgerName: staff?.name,
+    ledgerKind: "staff",
+    vouchers: vouchersForAutoLink,
+  });
+  const openBillWiseAutoLink = useCallback(() => {
+    if (autoLinkPrompt.proposal) {
+      autoLinkPrompt.setOpen(true);
+      return;
+    }
+    toast.info("No eligible unlinked bill-wise payment found for this staff ledger.");
+  }, [autoLinkPrompt.proposal, autoLinkPrompt.setOpen]);
 
   const handleStaffUpdated = useMasterEntityLivePatch<Staff>({
     collection: "staff",
@@ -1619,6 +1655,17 @@ export function StaffDetails({
             >
               <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
             </Button>
+            {isCompanyAdmin ? (
+              <Button
+                type="button"
+                variant="chromePill"
+                size="sm"
+                className={LEDGER_HEADER_PILL_CN}
+                onClick={openBillWiseAutoLink}
+              >
+                Link for Bill Wise
+              </Button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -1793,6 +1840,16 @@ export function StaffDetails({
   return (
     <>
       {staff?.id && <EntityAlarmPopup context="Staff" entityId={staff.id} />}
+      {companyId && (user?.uid || isLocalMode) ? (
+        <BillWiseAutoLinkPromptDialog
+          open={autoLinkPrompt.open}
+          onOpenChange={autoLinkPrompt.setOpen}
+          proposal={autoLinkPrompt.proposal}
+          companyId={companyId}
+          userId={user?.uid || "local"}
+          vouchers={vouchersForAutoLink}
+        />
+      ) : null}
       <div className={cn("flex flex-col min-h-0 overflow-hidden", isMobile ? "flex-1" : "h-full")}>
         {isMobile ? renderMobileView() : renderDesktopView()}
       </div>

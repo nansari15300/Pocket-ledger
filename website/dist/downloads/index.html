@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Downloads — Pocket Ledger</title>
+  <meta name="description" content="Download Pocket Ledger for Windows and Android, or open the web app." />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap nav">
+      <a class="brand" href="../">
+        <span class="brand-mark" aria-hidden="true"></span>
+        Pocket Ledger
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="../">Home</a>
+        <a href="../#features">Features</a>
+        <a href="./">Downloads</a>
+        <a href="../company/">Company</a>
+      </nav>
+      <a class="btn btn-primary btn-sm" href="/app">Go to App</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="page-hero">
+      <div class="wrap">
+        <h1>Downloads</h1>
+        <p>
+          Windows EXE and Android APK. On this computer, buttons use the local
+          <strong>/releases/YYYY-MM-DD/</strong> folder. Live site uses the Firebase upload.
+        </p>
+        <p id="releaseNote" style="margin:0.75rem 0 0;color:var(--muted)"></p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="wrap download-list">
+        <div class="download-item">
+          <div>
+            <strong>Windows desktop (EXE)</strong>
+            <div id="windowsMeta" style="color:var(--muted);font-size:0.9rem">Looking for installer…</div>
+          </div>
+          <div class="download-actions" id="windowsActions">
+            <label class="sr-only" for="windowsVersionSelect">Windows version</label>
+            <select id="windowsVersionSelect" class="version-select" aria-label="Windows version"></select>
+            <a class="btn btn-primary btn-sm is-disabled" id="windowsBtn" aria-disabled="true">Download EXE</a>
+          </div>
+        </div>
+        <div class="download-item">
+          <div>
+            <strong>Android (APK)</strong>
+            <div id="androidMeta" style="color:var(--muted);font-size:0.9rem">Looking for installer…</div>
+          </div>
+          <div class="download-actions" id="androidActions">
+            <label class="sr-only" for="androidVersionSelect">Android version</label>
+            <select id="androidVersionSelect" class="version-select" aria-label="Android version"></select>
+            <a class="btn btn-primary btn-sm is-disabled" id="androidBtn" aria-disabled="true">Download APK</a>
+          </div>
+        </div>
+        <div class="download-item" id="playStoreCard">
+          <div>
+            <strong>Google Play Store</strong>
+            <div style="color:var(--muted);font-size:0.9rem">Shown after an admin adds the Play Store link.</div>
+          </div>
+          <a class="btn btn-outline btn-sm" id="playStoreBtn" href="#" hidden>Open Play Store</a>
+        </div>
+        <div class="download-item">
+          <div>
+            <strong>Web app</strong>
+            <div style="color:var(--muted);font-size:0.9rem">No install — opens under /app</div>
+          </div>
+          <a class="btn btn-outline btn-sm" href="/app">Go to App</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap footer-row">
+      <div>© Pocket Ledger</div>
+      <div class="footer-links">
+        <a href="../">Home</a>
+        <a href="../company/">Company</a>
+        <a href="/app">Go to App</a>
+      </div>
+    </div>
+  </footer>
+  <script src="../js/firebase-config.js"></script>
+  <script src="../js/downloads.js"></script>
+</body>
+</html>

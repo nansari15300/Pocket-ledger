@@ -36,8 +36,9 @@ android/keystore.properties
 *.jks
 *.keystore
 
-# production
-/build
+# Staged website installers (date folders + latest.json)
+/releases/**
+!/releases/README.md
 
 # misc
 .data/

@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Smartphone } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { formatEntitlementCapLabel, getNextPaidUpgrade } from "@/config/plans";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
@@ -142,12 +143,33 @@ function ApkCloudOnlineSyncToast() {
 
 function DeviceLimitBanner() {
   const { deviceLimitReached, deviceCount, maxDevices } = useDeviceLimitContext();
+  const { user } = useAuth();
+  const { company, allCompanies } = useCompany();
+  const accountPlanId = useMemo(
+    () =>
+      user?.uid && company
+        ? resolvePlanIdForActiveCompany(company, allCompanies, user.uid, user.email)
+        : ("basic" as PlanId),
+    [allCompanies, user?.uid, user?.email, company?.planId, company]
+  );
+  const canUpgrade = getNextPaidUpgrade(accountPlanId) != null;
   if (!deviceLimitReached) return null;
   return (
     <div className="bg-amber-500 text-amber-950 text-center py-2 px-4 text-sm font-medium flex items-center justify-center gap-2 flex-wrap">
       <Smartphone className="h-4 w-4 shrink-0" />
-      <span>Device limit reached ({deviceCount}/{maxDevices}). Sync from this device is blocked.</span>
-      <Link href="/billing" className="underline font-semibold hover:no-underline">Upgrade to add more devices</Link>
+      <span>
+        Device limit reached ({deviceCount}/{formatEntitlementCapLabel(maxDevices)}). Sync from this
+        device is blocked.
+      </span>
+      {canUpgrade ? (
+        <Link href="/billing" className="underline font-semibold hover:no-underline">
+          Upgrade to add more devices
+        </Link>
+      ) : (
+        <Link href="/billing?addon=device" className="underline font-semibold hover:no-underline">
+          Buy device add-on
+        </Link>
+      )}
     </div>
   );
 }
@@ -174,6 +196,7 @@ function DeviceLimitOverlay() {
   );
   const deviceOverlayPlanName =
     DEFAULT_PLANS[deviceOverlayAccountPlanId]?.name ?? String(deviceOverlayAccountPlanId);
+  const canUpgradePlan = getNextPaidUpgrade(deviceOverlayAccountPlanId) != null;
   const { toast } = useToast();
   const router = useRouter();
   const goSwitchCompany = useCallback(() => {
@@ -396,16 +419,23 @@ function DeviceLimitOverlay() {
     <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-background/95 backdrop-blur-sm p-6 overflow-y-auto">
       <Smartphone className="h-12 w-12 text-amber-500 shrink-0" />
       <p className="text-center font-medium text-lg">
-        Device limit reached ({deviceCount}/{maxDevices})
+        Device limit reached ({deviceCount}/{formatEntitlementCapLabel(maxDevices)})
+      </p>
+      <p className="text-center text-base font-semibold text-foreground">
+        Current plan: {deviceOverlayPlanName}
       </p>
       {/* `maxDevices` hook se = profile wala effective account plan (highest owned tier) */}
       <p className="text-center text-xs text-muted-foreground max-w-md px-2">
-        Account plan (header profile jaisa):{" "}
-        <span className="font-medium text-foreground">{deviceOverlayPlanName}</span>
         {deviceOverlayPlan.entitlements.hasMultiDeviceSync ? (
-          <span> — {maxDevices} device slot{maxDevices !== 1 ? "s" : ""} for this account</span>
+          <span>
+            {formatEntitlementCapLabel(maxDevices)} device slot
+            {maxDevices !== 1 ? "s" : ""} for this account
+            {deviceOverlayAccountPlanId === "pro-plus"
+              ? " (top plan — add more via add-on)"
+              : ""}
+          </span>
         ) : (
-          <span> — multi-device sync is off for this plan (1 device)</span>
+          <span>Multi-device sync is off for this plan (1 device)</span>
         )}
       </p>
       <div className="w-full max-w-sm rounded-lg border bg-muted/50 px-3 py-2 text-left text-xs text-muted-foreground space-y-1">
@@ -651,7 +681,8 @@ function DeviceLimitOverlay() {
       ) : !showReplaceOfferDialog && isCompanyOwner ? (
         <>
           <p className="text-center text-muted-foreground text-sm max-w-sm">
-            This device is not allowed for this company. Remove a device above or switch company or upgrade your plan.
+            This device is not allowed for this company. Remove a device above or switch company
+            {canUpgradePlan ? " or upgrade your plan" : " or buy a device add-on"}.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <Button
@@ -661,12 +692,21 @@ function DeviceLimitOverlay() {
             >
               Switch company
             </Button>
-            <Link
-              href="/billing"
-              className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-            >
-              Upgrade to add more devices
-            </Link>
+            {canUpgradePlan ? (
+              <Link
+                href="/billing"
+                className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                Upgrade to add more devices
+              </Link>
+            ) : (
+              <Link
+                href="/billing?addon=device"
+                className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                Buy device add-on
+              </Link>
+            )}
             <Link
               href="/settings?view=devices"
               className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"

@@ -1,14 +1,15 @@
 /**
  * Joined inter-company partners — plan cap (`maxInterCompanyPartners` entitlement).
- * 0 = unlimited (admin PlanDetails convention).
+ * 0 = none / not allowed; -1 = unlimited.
  */
 import type { Entitlements } from "@/config/plans";
+import { isUnlimitedEntitlementCap } from "@/config/plans";
 import { toast } from "sonner";
 
 export const IC_JOINED_LIST_FULL_MESSAGE =
   "Your inter company list is full. Upgrade to increase list.";
 
-/** Plan / admin entitlements se joined-partner cap (0 = unlimited). */
+/** Plan / admin entitlements se joined-partner cap (0 = none; -1 = unlimited). */
 export function maxInterCompanyPartnersFromEntitlements(
   entitlements: Partial<Entitlements> | undefined
 ): number {
@@ -22,7 +23,8 @@ export function isInterCompanyJoinedListFull(
   partnerIdToAdd: string,
   maxPartners: number
 ): boolean {
-  if (maxPartners <= 0) return false;
+  if (isUnlimitedEntitlementCap(maxPartners)) return false;
+  if (maxPartners <= 0) return true;
   if (joinedCompanyIds.includes(partnerIdToAdd)) return false;
   return joinedCompanyIds.length >= maxPartners;
 }

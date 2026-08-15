@@ -5,6 +5,15 @@ import withSerwistInit from "@serwist/next";
 
 const isStaticBuild = process.env.STATIC_BUILD === "1";
 const isDevBuild = process.env.NODE_ENV !== "production";
+/**
+ * Hosted web + local gateway: `WEB_APP_BASE_PATH=/app` → …/app/dashboard …
+ * - `npm run dev` (gateway) sets this automatically.
+ * - App Hosting sets it via apphosting.yaml.
+ * EXE/APK static export must stay at `/` (never set with STATIC_BUILD=1).
+ * Marketing site: `website/` at domain / localhost root.
+ */
+const webAppBasePath =
+  !isStaticBuild && process.env.WEB_APP_BASE_PATH === "/app" ? "/app" : undefined;
 
 /** `/~offline` precache busting — git nahi ho to UUID (Firebase CI safe). */
 function serwistOfflineRevision(): string {
@@ -25,6 +34,10 @@ const baseConfig: NextConfig = {
   // Next.js 16: dev + prod default Turbopack; purana `webpack()` hata kar `turbopack.resolveAlias` — mix par "misconfiguration" fail
   // Dev me React 18 Strict Mode effect 2× run karta hai — kuch navigation side-effects zyada dikhte hain.
   reactStrictMode: false,
+  ...(webAppBasePath ? { basePath: webAppBasePath } : {}),
+  env: {
+    NEXT_PUBLIC_WEB_APP_BASE_PATH: webAppBasePath || "",
+  },
   serverExternalPackages: ["googleapis", "google-auth-library"],
   // Pdf.js Turbopack me seedha bundle; SWC transpile se nested bundle clash kam
   transpilePackages: ["pdfjs-dist"],
@@ -94,7 +107,7 @@ const withSerwist = withSerwistInit({
   swDest: "public/sw.js",
   disable: isDevBuild || isStaticBuild,
   additionalPrecacheEntries: [
-    { url: "/~offline", revision: serwistOfflineRevision() },
+    { url: `${webAppBasePath || ""}/~offline`, revision: serwistOfflineRevision() },
     ...(isStaticBuild ? [{ url: "/~offline/", revision: serwistOfflineRevision() }] : []),
   ],
 });

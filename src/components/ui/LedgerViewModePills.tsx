@@ -25,7 +25,8 @@ export function LedgerViewModePills<T extends string>({
   return (
     <div
       data-pl-ledger-view-pills
-      className={cn("flex items-center gap-1 flex-shrink-0", className)}
+      // `contents` = children join the parent 2-row pill-row grid (no nested flex cell).
+      className={cn("contents", className)}
       role="group"
       aria-label="View mode"
     >

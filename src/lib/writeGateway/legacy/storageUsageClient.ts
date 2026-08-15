@@ -3,7 +3,12 @@
 import { doc, getDoc, updateDoc, collection, getCountFromServer } from "firebase/firestore";
 import { increment } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
+import {
+  numericEntitlement,
+  companyStorageIsLocal,
+  isUnlimitedEntitlementCap,
+  type PlanId,
+} from "@/config/plans";
 import { getPlanFromPlans } from "@/hooks/useLivePlans";
 import { readCachedPlansRecord, defaultPlansRecordFallback } from "@/lib/plansCatalogCache";
 import { isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
@@ -109,8 +114,12 @@ export async function checkStorageLimit(
 
   const newAttachmentsBytes = usage.attachmentsUsedBytes + addAtt;
   const newStorageBytes = usage.storageUsedBytes + addStor;
-  const limitAttachmentsBytes = maxAttachmentsGB > 0 ? maxAttachmentsGB * BYTES_PER_GB : Number.POSITIVE_INFINITY;
-  const limitStorageBytes = maxStorageGB > 0 ? maxStorageGB * BYTES_PER_GB : Number.POSITIVE_INFINITY;
+  const limitAttachmentsBytes = isUnlimitedEntitlementCap(maxAttachmentsGB)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, maxAttachmentsGB) * BYTES_PER_GB;
+  const limitStorageBytes = isUnlimitedEntitlementCap(maxStorageGB)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, maxStorageGB) * BYTES_PER_GB;
 
   if (Number.isFinite(limitAttachmentsBytes) && newAttachmentsBytes > limitAttachmentsBytes) {
     return {

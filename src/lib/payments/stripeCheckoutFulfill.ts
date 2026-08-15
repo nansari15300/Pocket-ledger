@@ -8,6 +8,10 @@ import { normalizePlanIdForClient, type PlanId } from "@/config/plans";
 import { mergeGatewayKeysWithEnv, type GatewayKeys } from "@/ai/flows/gateway-keys";
 import { getAdminDb } from "@/lib/firebaseAdmin";
 import { applyPlanChangeOneTimeToFirestore } from "@/lib/payments/planChangeApply";
+import {
+  applyAddonPurchaseToFirestore,
+  parseAddonItemsFromCheckoutMetadata,
+} from "@/lib/payments/addonCheckoutApply";
 import { findOwnedCompanyIdForUser } from "@/lib/payments/resolveStripeFirestoreCompany";
 import { applyOwnerPlanMirrorBatched } from "@/lib/server/mirrorOwnerCompanyPlanBilling";
 import { persistAccountCanonicalPlanDoc } from "@/lib/server/accountCanonicalPlan";
@@ -278,6 +282,27 @@ export async function fulfillStripeCheckoutSessionCompleted(
   // Prorated upgrades/renews use Checkout `mode: payment` + metadata.planChange (not subscription mode).
   if (session.mode === "payment" && metadata.planChange === "true") {
     return fulfillPlanChangeOneTimePayment(session, db);
+  }
+
+  // Device/user add-ons — one-time payment; do not change planId.
+  if (session.mode === "payment" && metadata.addonPurchase === "true") {
+    const companyId = metadata.companyId?.trim() || "";
+    const userId = metadata.userId?.trim() || "";
+    const items = parseAddonItemsFromCheckoutMetadata(metadata);
+    const applied = await applyAddonPurchaseToFirestore({
+      db,
+      companyId,
+      userId,
+      paymentId: session.id,
+      gateway: "stripe",
+      amount: session.amount_total != null ? session.amount_total / 100 : 0,
+      currency: session.currency || "npr",
+      items,
+    });
+    if (applied.ok === false) {
+      return { ok: false as const, reason: applied.reason };
+    }
+    return { ok: true as const };
   }
 
   const companyId = metadata.companyId?.trim();

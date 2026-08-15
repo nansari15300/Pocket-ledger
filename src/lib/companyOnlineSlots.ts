@@ -1,7 +1,7 @@
 "use client";
 
 import type { Entitlements, Plan, PlanId } from "@/config/plans";
-import { getPlan, numericEntitlement } from "@/config/plans";
+import { getPlan, numericEntitlement, isUnlimitedEntitlementCap } from "@/config/plans";
 import { planAllowsFirebaseOnline } from "@/lib/planSyncEntitlements";
 
 /**
@@ -9,15 +9,24 @@ import { planAllowsFirebaseOnline } from "@/lib/planSyncEntitlements";
  * - `maxOnlineCompanies` > 0: paid tiers (Advance+) — is cap aur `maxCompanies` (online) dono me se chhota.
  * - `maxOnlineCompanies` === 0: Basic / legacy — admin "Max companies (online)" = `maxCompanies` follow karo
  *   (admin sirf `maxCompanies` edit karta hai; purana code sirf `maxOnlineCompanies` padhta tha isliye 0 slot dikh raha tha).
+ * Caps: `0` = none; `-1` = unlimited; `>0` = hard limit (`maxOnlineCompanies` 0 still means “follow maxCompanies”).
  */
 export function maxOnlineSlotsFromEntitlements(entitlements: Partial<Entitlements> | undefined): number {
   const e = entitlements ?? {};
   const dedicated =
     typeof e.maxOnlineCompanies === "number" && Number.isFinite(e.maxOnlineCompanies) ? e.maxOnlineCompanies : 0;
   const maxCompaniesOnline = numericEntitlement(e, "maxCompanies", false);
+  if (isUnlimitedEntitlementCap(dedicated)) {
+    if (isUnlimitedEntitlementCap(maxCompaniesOnline) || maxCompaniesOnline <= 0) {
+      return Number.POSITIVE_INFINITY;
+    }
+    return maxCompaniesOnline;
+  }
   if (dedicated > 0) {
+    if (isUnlimitedEntitlementCap(maxCompaniesOnline)) return dedicated;
     return maxCompaniesOnline > 0 ? Math.min(dedicated, maxCompaniesOnline) : dedicated;
   }
+  if (isUnlimitedEntitlementCap(maxCompaniesOnline)) return Number.POSITIVE_INFINITY;
   return maxCompaniesOnline > 0 ? maxCompaniesOnline : 0;
 }
 

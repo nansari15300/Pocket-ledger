@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import type { MasterDetailListRouteKey } from "@/lib/masterDetailListPath";
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import { masterDetailRouteKeyFromPath } from "@/lib/masterDetailSidebarNav";
+import { browserHistoryHref } from "@/lib/webAppBasePath";
 
 /** Har master-detail route ka apna handler — singleton overwrite (bank) se party detail bigadna band */
 const handlersByRoute = new Map<MasterDetailListRouteKey, () => void>();
@@ -44,10 +45,10 @@ export function tryConsumeMasterDetailHardwareBack(): boolean {
   // Handler miss (race / stale singleton) — URL + event se current route list
   try {
     const href = listHrefForRoute(routeKey);
-    window.history.replaceState(window.history.state, "", href);
-    window.dispatchEvent(
-      new CustomEvent(MASTER_DETAIL_HW_BACK_EVENT, { detail: { routeKey } })
-    );
+      window.history.replaceState(window.history.state, "", browserHistoryHref(href));
+        window.dispatchEvent(
+          new CustomEvent(MASTER_DETAIL_HW_BACK_EVENT, { detail: { routeKey } })
+        );
   } catch {
     return false;
   }

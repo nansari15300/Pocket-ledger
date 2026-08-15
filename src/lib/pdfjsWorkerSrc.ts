@@ -8,6 +8,8 @@
  * **`origin` + absolute href** + (packaged Electron) **`text/javascript` for *.mjs`** se worker load web jaisa stable.
  */
 
+import { publicAssetUrl } from "@/lib/webAppBasePath";
+
 const LOCAL_PDF_WORKER_PATH = "/pdf.worker.min.mjs";
 
 /** Last-resort fallback when `version` is missing (keep aligned with installed `pdfjs-dist`). */
@@ -15,7 +17,7 @@ export const PDFJS_WORKER_VERSION_FALLBACK = "5.6.205";
 
 /** `file://` + nested `out/.../index.html`: har parent folder me `pdf.worker.min.mjs` probe (Next export worker sirf `out/` root par) */
 function collectLocalPdfWorkerHrefCandidates(): string[] {
-  if (typeof window === "undefined") return [LOCAL_PDF_WORKER_PATH];
+  if (typeof window === "undefined") return [publicAssetUrl(LOCAL_PDF_WORKER_PATH)];
   const list: string[] = [];
   try {
     if (window.location.protocol === "file:") {
@@ -26,11 +28,11 @@ function collectLocalPdfWorkerHrefCandidates(): string[] {
         if (next.href === cur.href) break;
         cur = next;
       }
-      return list.length ? list : [LOCAL_PDF_WORKER_PATH];
+      return list.length ? list : [publicAssetUrl(LOCAL_PDF_WORKER_PATH)];
     }
-    list.push(new URL(LOCAL_PDF_WORKER_PATH, window.location.origin).href);
+    list.push(new URL(publicAssetUrl(LOCAL_PDF_WORKER_PATH), window.location.origin).href);
   } catch {
-    list.push(LOCAL_PDF_WORKER_PATH);
+    list.push(publicAssetUrl(LOCAL_PDF_WORKER_PATH));
   }
   return list;
 }
@@ -97,7 +99,8 @@ export function setPdfJsWorkerSrc(pdfjs: unknown, _version?: string): void {
 export function alternatePdfJsWorkerSrc(current: string | undefined, version: string): string {
   const v = version || PDFJS_WORKER_VERSION_FALLBACK;
   const cdn = `https://unpkg.com/pdfjs-dist@${v}/legacy/build/pdf.worker.min.mjs`;
-  if (!current || current === LOCAL_PDF_WORKER_PATH || !current.includes("unpkg.com")) {
+  const local = publicAssetUrl(LOCAL_PDF_WORKER_PATH);
+  if (!current || current === LOCAL_PDF_WORKER_PATH || current === local || !current.includes("unpkg.com")) {
     return cdn;
   }
   return resolvePdfJsWorkerHref();

@@ -390,12 +390,15 @@ export async function prewarmPdfThumbnailsForGallery(
         continue;
       }
       if (signal?.aborted) return;
-      const result = await convertPdfFirstPageToImage(pdfFile, 0.85, 800, { signal });
+      // Gallery hover box is 600×700 — warm portal-quality raster so preview is not a soft tile thumb.
+      const result = await convertPdfFirstPageToImage(pdfFile, 0.92, 1800, { signal });
       if (signal?.aborted) {
         URL.revokeObjectURL(result.thumbnailUrl);
         return;
       }
       pdfThumbCacheSet(ck, result.thumbnailUrl);
+      rememberHoverBlobUrl(sharedPdfPortalThumbKey(u), result.thumbnailUrl);
+      void seedOfflineAttachmentCacheFromBlob(sharedPdfPortalThumbKey(u), result.thumbnailBlob);
     } catch {
       /* ek PDF fail ho to baaki warm rahein */
     }
@@ -1129,16 +1132,44 @@ export function FilePreview({
 
       const run = async (): Promise<string | null> => {
         const sharedThumbKey = sharedPdfCellThumbKey(pdfUrl);
+        const portalKey = sharedPdfPortalThumbKey(pdfUrl);
+        const wantsSharpPortal = layoutMaxEdge >= GALLERY_PDF_HOVER_THUMB_EDGE;
         const skipCachedThumb = badPdfThumbCacheKeysRef.current.has(sharedThumbKey);
+
+        // Company Files / large hover: use ::pdf-portal, not small cell thumb (blurry upscale).
+        if (wantsSharpPortal && !skipCachedThumb) {
+          const portalCached = peekHoverCachedBlobUrl(portalKey);
+          if (portalCached) {
+            pdfThumbCacheSet(ck, portalCached);
+            pdfThumbnailKeyRef.current = ck;
+            setPdfThumbnailSafe(portalCached);
+            return portalCached;
+          }
+          const persistedPortal = await tryOfflineCachedAttachmentBlobMultiKey(portalKey);
+          if (persistedPortal?.size) {
+            const portalUrl = URL.createObjectURL(persistedPortal);
+            rememberHoverBlobUrl(portalKey, portalUrl);
+            pdfThumbCacheSet(ck, portalUrl);
+            pdfThumbnailKeyRef.current = ck;
+            setPdfThumbnailSafe(portalUrl);
+            return portalUrl;
+          }
+        }
+
         const sharedThumb = skipCachedThumb ? undefined : peekHoverCachedBlobUrl(sharedThumbKey);
-        if (sharedThumb) {
+        if (sharedThumb && !wantsSharpPortal) {
           pdfThumbCacheSet(ck, sharedThumb);
           pdfThumbnailKeyRef.current = ck;
           setPdfThumbnailSafe(sharedThumb);
           return sharedThumb;
         }
+        if (sharedThumb && wantsSharpPortal) {
+          pdfThumbCacheSet(ck, sharedThumb);
+          pdfThumbnailKeyRef.current = ck;
+          setPdfThumbnailSafe(sharedThumb);
+        }
         const persistedSharedThumb = skipCachedThumb ? null : await tryOfflineCachedAttachmentBlobMultiKey(sharedThumbKey);
-        if (persistedSharedThumb?.size) {
+        if (persistedSharedThumb?.size && !wantsSharpPortal) {
           const persistedThumbUrl = URL.createObjectURL(persistedSharedThumb);
           rememberHoverBlobUrl(sharedThumbKey, persistedThumbUrl);
           pdfThumbCacheSet(ck, persistedThumbUrl);
@@ -1146,14 +1177,21 @@ export function FilePreview({
           setPdfThumbnailSafe(persistedThumbUrl);
           return persistedThumbUrl;
         }
+        if (persistedSharedThumb?.size && wantsSharpPortal && !sharedThumb) {
+          const persistedThumbUrl = URL.createObjectURL(persistedSharedThumb);
+          rememberHoverBlobUrl(sharedThumbKey, persistedThumbUrl);
+          pdfThumbCacheSet(ck, persistedThumbUrl);
+          pdfThumbnailKeyRef.current = ck;
+          setPdfThumbnailSafe(persistedThumbUrl);
+        }
         const cachedBlobUrl = skipCachedThumb ? undefined : pdfThumbCacheGet(ck);
-        if (cachedBlobUrl) {
+        if (cachedBlobUrl && !wantsSharpPortal) {
           pdfThumbnailKeyRef.current = ck;
           setPdfThumbnailSafe(cachedBlobUrl);
           return cachedBlobUrl;
         }
         // Native/local path: persisted jpg thumb ho to PDF bytes read ki zaroorat nahi.
-        if (isCapacitorNativeApp()) {
+        if (isCapacitorNativeApp() && !wantsSharpPortal) {
           const { getNativePdfThumbnailDisplayUrl } = await import("@/lib/pdfToImage");
           const nativeThumb = await getNativePdfThumbnailDisplayUrl(ck);
           if (nativeThumb) {
@@ -1263,12 +1301,14 @@ export function FilePreview({
           if (signal?.aborted) return null;
 
           const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
-          const result = await convertPdfFirstPageToImage(
-            pdfFile,
-            0.85,
-            layoutMaxEdge > 150 ? 800 : 600,
-            { signal }
-          );
+          const result = wantsSharpPortal
+            ? await convertPdfFirstPageToImage(pdfFile, 0.92, 1800, { signal })
+            : await convertPdfFirstPageToImage(
+                pdfFile,
+                0.85,
+                layoutMaxEdge > 150 ? 800 : 600,
+                { signal }
+              );
 
           if (signal?.aborted) {
             revokeThumbnailUrl(result.thumbnailUrl);
@@ -1276,7 +1316,7 @@ export function FilePreview({
           }
           let finalThumbUrl = result.thumbnailUrl;
           // Native/APK: generated thumb ko DataDirectory me persist karo, agle render me direct path load ho.
-          if (isCapacitorNativeApp()) {
+          if (isCapacitorNativeApp() && !wantsSharpPortal) {
             const { saveNativePdfThumbnail } = await import("@/lib/pdfToImage");
             const persistedUrl = await saveNativePdfThumbnail(ck, result.thumbnailBlob);
             if (persistedUrl) {
@@ -1289,16 +1329,21 @@ export function FilePreview({
             }
           }
           pdfThumbCacheSet(ck, finalThumbUrl);
-          rememberHoverBlobUrl(sharedThumbKey, finalThumbUrl);
-          badPdfThumbCacheKeysRef.current.delete(sharedThumbKey);
-          void seedOfflineAttachmentCacheFromBlob(sharedThumbKey, result.thumbnailBlob);
-          if (!peekHoverCachedBlobUrl(sharedPdfPortalThumbKey(pdfUrl))) {
-            void convertPdfFirstPageToImage(pdfFile, 0.92, 1800, { signal })
-              .then((full) => {
-                rememberHoverBlobUrl(sharedPdfPortalThumbKey(pdfUrl), full.thumbnailUrl);
-                void seedOfflineAttachmentCacheFromBlob(sharedPdfPortalThumbKey(pdfUrl), full.thumbnailBlob);
-              })
-              .catch(() => undefined);
+          if (wantsSharpPortal) {
+            rememberHoverBlobUrl(portalKey, finalThumbUrl);
+            void seedOfflineAttachmentCacheFromBlob(portalKey, result.thumbnailBlob);
+          } else {
+            rememberHoverBlobUrl(sharedThumbKey, finalThumbUrl);
+            badPdfThumbCacheKeysRef.current.delete(sharedThumbKey);
+            void seedOfflineAttachmentCacheFromBlob(sharedThumbKey, result.thumbnailBlob);
+            if (!peekHoverCachedBlobUrl(portalKey)) {
+              void convertPdfFirstPageToImage(pdfFile, 0.92, 1800, { signal })
+                .then((full) => {
+                  rememberHoverBlobUrl(portalKey, full.thumbnailUrl);
+                  void seedOfflineAttachmentCacheFromBlob(portalKey, full.thumbnailBlob);
+                })
+                .catch(() => undefined);
+            }
           }
           pdfThumbnailKeyRef.current = ck;
           setPdfThumbnailSafe(finalThumbUrl);
@@ -1359,14 +1404,27 @@ export function FilePreview({
             edge
           );
           const sharedThumb = peekHoverCachedBlobUrl(sharedPdfCellThumbKey(pdfThumbSource));
-          if (sharedThumb) {
+          const portalThumb = peekHoverCachedBlobUrl(sharedPdfPortalThumbKey(pdfThumbSource));
+          if (edge >= GALLERY_PDF_HOVER_THUMB_EDGE && portalThumb) {
+            pdfThumbCacheSet(ck, portalThumb);
+            pdfThumbnailKeyRef.current = ck;
+            setPdfThumbnailSafe(portalThumb);
+            return;
+          }
+          if (sharedThumb && edge < GALLERY_PDF_HOVER_THUMB_EDGE) {
             pdfThumbCacheSet(ck, sharedThumb);
             pdfThumbnailKeyRef.current = ck;
             setPdfThumbnailSafe(sharedThumb);
             return;
           }
+          if (sharedThumb && edge >= GALLERY_PDF_HOVER_THUMB_EDGE) {
+            pdfThumbCacheSet(ck, sharedThumb);
+            pdfThumbnailKeyRef.current = ck;
+            setPdfThumbnailSafe(sharedThumb);
+            // Fall through to regenerate portal-quality below.
+          } else {
           const persistedSharedThumb = await tryOfflineCachedAttachmentBlobMultiKey(sharedPdfCellThumbKey(pdfThumbSource));
-          if (persistedSharedThumb?.size) {
+          if (persistedSharedThumb?.size && edge < GALLERY_PDF_HOVER_THUMB_EDGE) {
             const persistedThumbUrl = URL.createObjectURL(persistedSharedThumb);
             rememberHoverBlobUrl(sharedPdfCellThumbKey(pdfThumbSource), persistedThumbUrl);
             pdfThumbCacheSet(ck, persistedThumbUrl);
@@ -1375,10 +1433,11 @@ export function FilePreview({
             return;
           }
           const cached = pdfThumbCacheGet(ck);
-          if (cached) {
+          if (cached && edge < GALLERY_PDF_HOVER_THUMB_EDGE) {
             pdfThumbnailKeyRef.current = ck;
             setPdfThumbnailSafe(cached);
             return;
+          }
           }
           if (!controller.signal.aborted) {
             pdfThumbDebounceTimer = setTimeout(() => {
@@ -1394,7 +1453,9 @@ export function FilePreview({
         }
       }
       if (typeof file === "string") {
+        const wantsSharpPdf = layoutMaxEdge >= GALLERY_PDF_HOVER_THUMB_EDGE;
         const sharedCellThumb =
+          (wantsSharpPdf ? peekHoverCachedBlobUrl(sharedPdfPortalThumbKey(file)) : undefined) ||
           peekHoverCachedBlobUrl(sharedAttachmentCellThumbKey(file)) ||
           peekHoverCachedBlobUrl(sharedPdfCellThumbKey(file));
         if (sharedCellThumb && !controller.signal.aborted && (await isUsableWarmedAttachmentDisplayUrl(sharedCellThumb))) {
@@ -1419,6 +1480,17 @@ export function FilePreview({
             setPdfThumbnailSafe(sharedCellThumb);
           }
           setIsLoading(false);
+          // Large PDF preview: cell thumb is only an instant placeholder — keep resolving the
+          // portal-quality raster unless it is already the cached portal image.
+          const alreadySharp =
+            sharedCellThumb === peekHoverCachedBlobUrl(sharedPdfPortalThumbKey(file));
+          if (thumbType === "pdf" && wantsSharpPdf && !alreadySharp) {
+            pdfThumbDebounceTimer = setTimeout(() => {
+              if (!controller.signal.aborted) {
+                generatePdfThumbnail(file, undefined, resolvedStoragePath, controller.signal);
+              }
+            }, 120);
+          }
           return;
         }
         const warmed = peekHoverCachedBlobUrl(file);
@@ -2421,17 +2493,33 @@ export function FilePreview({
           resolvedStoragePath,
           layoutMaxEdge
         );
+        const portalPdfThumb = peekHoverCachedBlobUrl(sharedPdfPortalThumbKey(pdfThumbSource));
         const sharedPdfThumb = peekHoverCachedBlobUrl(sharedPdfCellThumbKey(pdfThumbSource));
         const persistedSharedPdfThumb =
-          sharedPdfThumb ? null : await tryOfflineCachedAttachmentBlobMultiKey(sharedPdfCellThumbKey(pdfThumbSource));
-        const cachedPdfThumb = sharedPdfThumb || pdfThumbCacheGet(pdfCacheKey);
+          sharedPdfThumb || portalPdfThumb
+            ? null
+            : await tryOfflineCachedAttachmentBlobMultiKey(
+                layoutMaxEdge >= GALLERY_PDF_HOVER_THUMB_EDGE
+                  ? sharedPdfPortalThumbKey(pdfThumbSource)
+                  : sharedPdfCellThumbKey(pdfThumbSource)
+              );
+        const preferPortal = layoutMaxEdge >= GALLERY_PDF_HOVER_THUMB_EDGE;
+        const cachedPdfThumb =
+          (preferPortal ? portalPdfThumb : null) ||
+          (!preferPortal ? sharedPdfThumb : null) ||
+          (preferPortal ? sharedPdfThumb : null) ||
+          pdfThumbCacheGet(pdfCacheKey);
         if (cachedPdfThumb) {
-          if (sharedPdfThumb) pdfThumbCacheSet(pdfCacheKey, sharedPdfThumb);
+          if (portalPdfThumb && preferPortal) pdfThumbCacheSet(pdfCacheKey, portalPdfThumb);
+          else if (sharedPdfThumb && !preferPortal) pdfThumbCacheSet(pdfCacheKey, sharedPdfThumb);
           pdfThumbnailKeyRef.current = pdfCacheKey;
           setPdfThumbnailSafe(cachedPdfThumb);
         } else if (persistedSharedPdfThumb?.size) {
           const persistedThumbUrl = URL.createObjectURL(persistedSharedPdfThumb);
-          rememberHoverBlobUrl(sharedPdfCellThumbKey(pdfThumbSource), persistedThumbUrl);
+          rememberHoverBlobUrl(
+            preferPortal ? sharedPdfPortalThumbKey(pdfThumbSource) : sharedPdfCellThumbKey(pdfThumbSource),
+            persistedThumbUrl
+          );
           pdfThumbCacheSet(pdfCacheKey, persistedThumbUrl);
           pdfThumbnailKeyRef.current = pdfCacheKey;
           setPdfThumbnailSafe(persistedThumbUrl);

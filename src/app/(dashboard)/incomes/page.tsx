@@ -35,6 +35,7 @@ import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import { browserHistoryHref } from "@/lib/webAppBasePath";
 import {
   masterDetailTabHref,
   masterDetailCanonicalHref,
@@ -536,7 +537,7 @@ function IncomeExpensePageContent() {
         : `/incomes?selected=${encodeURIComponent(item.id)}`;
       if (typeof window !== "undefined") {
         try {
-          window.history.replaceState(window.history.state, "", path);
+          window.history.replaceState(window.history.state, "", browserHistoryHref(path));
         } catch {
           /* ignore */
         }

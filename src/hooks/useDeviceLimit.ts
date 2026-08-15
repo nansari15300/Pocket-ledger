@@ -1,17 +1,23 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { collection, onSnapshot } from "firebase/firestore";
+import { collection, doc, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "./useCompany";
 import { useAuth } from "./useAuth";
 import { useLivePlans, getPlanFromPlans } from "./useLivePlans";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
-import { normalizePlanIdForClient, type PlanId } from "@/config/plans";
+import { normalizePlanIdForClient, isUnlimitedEntitlementCap, type PlanId } from "@/config/plans";
 import { registerDeviceAndCheckLimit, replaceMyOtherDevicesAndRegister, getOrCreateDeviceId, setKickedForCompany, clearKickedForCompany, getWasKicked, enforceDeviceLimitByPlan } from "@/lib/deviceLimitClient";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
+import {
+  EMPTY_PURCHASED_PLAN_ADDONS,
+  parsePurchasedPlanAddOns,
+  planDeviceCapWithAddOns,
+  type PurchasedPlanAddOns,
+} from "@/lib/planAddOns";
 const runCheckRef = { current: (() => Promise.resolve()) as () => void | Promise<void> };
 
 export function useDeviceLimit() {
@@ -19,6 +25,7 @@ export function useDeviceLimit() {
   const { user } = useAuth();
   const livePlans = useLivePlans();
   const [isOffline, setIsOffline] = useState<boolean>(false);
+  const [ownerAddons, setOwnerAddons] = useState<PurchasedPlanAddOns>(EMPTY_PURCHASED_PLAN_ADDONS);
 
   useEffect(() => {
     // Static bundle me offline mode par device-limit blocking overlay disable rakho.
@@ -31,6 +38,27 @@ export function useDeviceLimit() {
       window.removeEventListener("offline", update);
     };
   }, []);
+
+  /** Owner account add-ons (extra devices) — shared users read company owner's user doc. */
+  useEffect(() => {
+    const isOwner =
+      !!company &&
+      !!user?.uid &&
+      (company.ownerId === user.uid || (!!user.email && company.ownerEmail === user.email));
+    const ownerUid = (isOwner ? user?.uid : company?.ownerId)?.trim() || "";
+    if (!ownerUid) {
+      setOwnerAddons(EMPTY_PURCHASED_PLAN_ADDONS);
+      return;
+    }
+    const unsub = onSnapshot(
+      doc(firestore, "users", ownerUid),
+      (snap) => {
+        setOwnerAddons(parsePurchasedPlanAddOns(snap.exists() ? (snap.data() as Record<string, unknown>) : null));
+      },
+      () => setOwnerAddons(EMPTY_PURCHASED_PLAN_ADDONS)
+    );
+    return () => unsub();
+  }, [company?.ownerId, company?.ownerEmail, user?.uid, user?.email, Boolean(company)]);
 
   const [result, setResult] = useState<{
     allowed: boolean;
@@ -83,9 +111,7 @@ export function useDeviceLimit() {
     const plan = getPlanFromPlans(livePlans, planIdForDeviceSlots);
     const hasMultiDeviceSync = plan.entitlements.hasMultiDeviceSync === true;
     const localCompany = isOfflineCompanyStorage(company);
-    const planMaxDevices = localCompany
-      ? Math.max(1, Number(plan.entitlements.maxDevicesLocal ?? plan.entitlements.maxDevices) || 1)
-      : Math.max(1, Number(plan.entitlements.maxDevices) || 1);
+    const planMaxDevices = planDeviceCapWithAddOns(plan, localCompany, ownerAddons);
     const maxDevices = hasMultiDeviceSync ? planMaxDevices : 1;
     const userCanUseMultiDevice = company?.userCanUseMultiDevice !== false;
 
@@ -101,7 +127,7 @@ export function useDeviceLimit() {
       })
         .then(async (r) => {
           if (cancelled) return;
-          if (r.count > r.limit && r.limit >= 1) {
+          if (r.count > r.limit && r.limit >= 1 && !isUnlimitedEntitlementCap(r.limit)) {
             try {
               await enforceDeviceLimitByPlan(companyId, r.limit);
               if (!cancelled) runCheck();
@@ -185,6 +211,11 @@ export function useDeviceLimit() {
     isOffline,
     allCompanies.length,
     Boolean(company),
+    ownerAddons.extraDevicesOnline,
+    ownerAddons.extraDevicesLocal,
+    ownerAddons.extraUsersOnline,
+    ownerAddons.extraUsersLocal,
+    ownerAddons.expiryMs,
   ]);
 
   const refreshDeviceCheck = useCallback(() => {
@@ -201,13 +232,11 @@ export function useDeviceLimit() {
     const plan = getPlanFromPlans(livePlans, planIdForDeviceSlots);
     const hasMultiDeviceSync = plan.entitlements.hasMultiDeviceSync === true;
     const localCompany = isOfflineCompanyStorage(company);
-    const planMaxDevices = localCompany
-      ? Math.max(1, Number(plan.entitlements.maxDevicesLocal ?? plan.entitlements.maxDevices) || 1)
-      : Math.max(1, Number(plan.entitlements.maxDevices) || 1);
+    const planMaxDevices = planDeviceCapWithAddOns(plan, localCompany, ownerAddons);
     const maxDevices = hasMultiDeviceSync ? planMaxDevices : 1;
     await replaceMyOtherDevicesAndRegister(companyId, user.uid, maxDevices);
     runCheckRef.current?.();
-  }, [companyId, user?.uid, company, livePlans, allCompanies]);
+  }, [companyId, user?.uid, company, livePlans, allCompanies, ownerAddons]);
 
   const clearKickedAndRefresh = useCallback((): Promise<void> => {
     if (!companyId) return Promise.resolve();

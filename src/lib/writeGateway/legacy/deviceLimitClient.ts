@@ -4,6 +4,7 @@ import { doc, getDoc, setDoc, getDocs, collection, deleteDoc, serverTimestamp, q
 import { firestore } from "@/lib/firebase";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { resolveDeviceSlotForCompanyWrite } from "@/lib/deviceSlotForUserDevices";
+import { isUnlimitedEntitlementCap } from "@/config/plans";
 
 type PlElectronDeviceApi = { getDisplayLabel?: () => Promise<string> };
 
@@ -184,15 +185,17 @@ export async function registerDeviceAndCheckLimit(
   hasMultiDeviceSync: boolean,
   options?: { userCanUseMultiDevice?: boolean; isOwner?: boolean; wasKicked?: boolean }
 ): Promise<DeviceLimitResult> {
-  if (maxDevices < 1) {
+  // Caps: 0 = none; -1 = unlimited; >0 = hard limit. Multi-sync off → single device.
+  if (!hasMultiDeviceSync) {
     return { allowed: true, count: 1, limit: 1, isNewDevice: false };
   }
-  if (!hasMultiDeviceSync) {
-    return { allowed: true, count: 1, limit: maxDevices || 1, isNewDevice: false };
-  }
+
+  const unlimited = isUnlimitedEntitlementCap(maxDevices);
+  const cap = unlimited ? Number.MAX_SAFE_INTEGER : Math.max(0, Math.floor(Number(maxDevices) || 0));
+  const limitForUi = unlimited ? -1 : cap;
 
   const deviceId = getOrCreateDeviceId();
-  if (!deviceId) return { allowed: true, count: 1, limit: maxDevices, isNewDevice: false };
+  if (!deviceId) return { allowed: true, count: 1, limit: limitForUi, isNewDevice: false };
 
   const deviceType = typeof navigator !== "undefined" && /Mobile|Android|iPhone|iPad|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ? "mobile" : "desktop";
 
@@ -214,16 +217,17 @@ export async function registerDeviceAndCheckLimit(
 
   // Kicked device: do not auto re-add; show message so user can Switch company / Logout / Rejoin
   if (!existing && options?.wasKicked) {
-    return { allowed: false, count: totalCount, limit: maxDevices, isNewDevice: true, kickedAndBlocked: true };
+    return { allowed: false, count: totalCount, limit: limitForUi, isNewDevice: true, kickedAndBlocked: true };
   }
 
   const deviceLabel = await resolveDeviceLabelForFirestoreAsync();
-  /** `deviceSlot` — multi-company sync list ke liye; pehle khali slot reuse ho sake isliye collectionGroup se resolve. */
+  const slotCap = unlimited || cap < 1 ? Number.MAX_SAFE_INTEGER : cap;
+  /** deviceSlot — multi-company sync list ke liye; pehle khali slot reuse ho sake isliye collectionGroup se resolve. */
   const doReplaceAndRegister = async () => {
     for (const d of myOtherDevices) {
       await deleteDoc(doc(firestore, "companies", companyId, "devices", d.id));
     }
-    const deviceSlot = await resolveDeviceSlotForCompanyWrite(userId, deviceId, maxDevices);
+    const deviceSlot = await resolveDeviceSlotForCompanyWrite(userId, deviceId, slotCap);
     await setDoc(doc(firestore, "companies", companyId, "devices", deviceId), {
       userId,
       lastActive: serverTimestamp(),
@@ -233,9 +237,31 @@ export async function registerDeviceAndCheckLimit(
     });
   };
 
+  // Exact 0 devices: keep existing registration; block new devices.
+  if (!unlimited && cap < 1) {
+    if (existing) {
+      const prevData = existing.data() as { deviceSlot?: unknown };
+      const prevSlot =
+        typeof prevData?.deviceSlot === "number" && Number.isFinite(prevData.deviceSlot)
+          ? Math.floor(prevData.deviceSlot)
+          : undefined;
+      const deviceSlot =
+        prevSlot != null && prevSlot >= 1 ? prevSlot : await resolveDeviceSlotForCompanyWrite(userId, deviceId, 1);
+      await setDoc(doc(firestore, "companies", companyId, "devices", deviceId), {
+        userId,
+        lastActive: serverTimestamp(),
+        deviceType,
+        deviceSlot,
+        ...(deviceLabel ? { deviceLabel } : {}),
+      });
+      return { allowed: true, count: totalCount, limit: 0, isNewDevice: false };
+    }
+    return { allowed: false, count: totalCount, limit: 0, isNewDevice: true };
+  }
+
   // User Can Use Multi Device = Off + shared user + this user has other device(s): do not allow new device; show no-permission message
   if (!userCanUseMultiDevice && !isOwner && myOtherDevices.length >= 1 && !existing) {
-    return { allowed: false, count: totalCount, limit: maxDevices, isNewDevice: true, singleDeviceOnly: true, noPermissionNewDevice: true };
+    return { allowed: false, count: totalCount, limit: limitForUi, isNewDevice: true, singleDeviceOnly: true, noPermissionNewDevice: true };
   }
 
   if (existing) {
@@ -245,7 +271,7 @@ export async function registerDeviceAndCheckLimit(
         ? Math.floor(prevData.deviceSlot)
         : undefined;
     const deviceSlot =
-      prevSlot != null && prevSlot >= 1 ? prevSlot : await resolveDeviceSlotForCompanyWrite(userId, deviceId, maxDevices);
+      prevSlot != null && prevSlot >= 1 ? prevSlot : await resolveDeviceSlotForCompanyWrite(userId, deviceId, slotCap);
     await setDoc(doc(firestore, "companies", companyId, "devices", deviceId), {
       userId,
       lastActive: serverTimestamp(),
@@ -253,20 +279,20 @@ export async function registerDeviceAndCheckLimit(
       deviceSlot,
       ...(deviceLabel ? { deviceLabel } : {}),
     });
-    return { allowed: true, count: totalCount, limit: maxDevices, isNewDevice: false };
+    return { allowed: true, count: totalCount, limit: limitForUi, isNewDevice: false };
   }
 
   // Slot full: if User Can Use Multi Device = Off and shared user has other devices, do not allow (no-permission)
-  if (totalCount >= maxDevices && !userCanUseMultiDevice && !isOwner && myOtherDevices.length >= 1) {
-    return { allowed: false, count: totalCount, limit: maxDevices, isNewDevice: true, singleDeviceOnly: true, noPermissionNewDevice: true };
+  if (!unlimited && totalCount >= cap && !userCanUseMultiDevice && !isOwner && myOtherDevices.length >= 1) {
+    return { allowed: false, count: totalCount, limit: limitForUi, isNewDevice: true, singleDeviceOnly: true, noPermissionNewDevice: true };
   }
 
-  if (totalCount >= maxDevices) {
+  if (!unlimited && totalCount >= cap) {
     const replaceOffer = !isOwner && myOtherDevices.length >= 1;
-    return { allowed: false, count: totalCount, limit: maxDevices, isNewDevice: true, replaceOffer: replaceOffer || undefined };
+    return { allowed: false, count: totalCount, limit: limitForUi, isNewDevice: true, replaceOffer: replaceOffer || undefined };
   }
 
-  const deviceSlotNew = await resolveDeviceSlotForCompanyWrite(userId, deviceId, maxDevices);
+  const deviceSlotNew = await resolveDeviceSlotForCompanyWrite(userId, deviceId, slotCap);
   await setDoc(doc(firestore, "companies", companyId, "devices", deviceId), {
     userId,
     lastActive: serverTimestamp(),
@@ -274,12 +300,9 @@ export async function registerDeviceAndCheckLimit(
     deviceSlot: deviceSlotNew,
     ...(deviceLabel ? { deviceLabel } : {}),
   });
-  return { allowed: true, count: totalCount + 1, limit: maxDevices, isNewDevice: true };
+  return { allowed: true, count: totalCount + 1, limit: limitForUi, isNewDevice: true };
 }
 
-/**
- * Remove this user's other devices and register current device. Call when user confirms "Yes" on replace-offer dialog.
- */
 export async function replaceMyOtherDevicesAndRegister(
   companyId: string,
   userId: string,
@@ -294,7 +317,9 @@ export async function replaceMyOtherDevicesAndRegister(
     await deleteDoc(doc(firestore, "companies", companyId, "devices", d.id));
   }
   const deviceLabel = await resolveDeviceLabelForFirestoreAsync();
-  const cap = Math.max(1, maxDevices);
+  const cap = isUnlimitedEntitlementCap(maxDevices)
+    ? Number.MAX_SAFE_INTEGER
+    : Math.max(1, Math.floor(Number(maxDevices) || 1));
   const deviceSlotRep = await resolveDeviceSlotForCompanyWrite(userId, deviceId, cap);
   await setDoc(doc(firestore, "companies", companyId, "devices", deviceId), {
     userId,
@@ -388,7 +413,7 @@ export async function trimDeviceHistoryToLimit(companyId: string, maxEntries: nu
  * (add to device_history then delete) until count <= maxDevices. Call when plan limit is reduced.
  */
 export async function enforceDeviceLimitByPlan(companyId: string, maxDevices: number): Promise<void> {
-  if (maxDevices < 1) return;
+  if (isUnlimitedEntitlementCap(maxDevices) || maxDevices < 1) return;
   const snap = await getDocs(collection(firestore, "companies", companyId, "devices"));
   if (snap.size <= maxDevices) return;
   const withTime = snap.docs.map((d) => {

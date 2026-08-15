@@ -10,6 +10,9 @@ import {
   EntitlementKey,
   normalizePlanIdForClient,
   planTierIndex,
+  isUnlimitedEntitlementCap,
+  isZeroEntitlementCap,
+  isOnlineEntitlementCapKey,
 } from "@/config/plans";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import {
@@ -30,7 +33,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import KhaltiCheckout from "khalti-checkout-web";
 import { Badge } from "@/components/ui/badge";
-import { Check, Download, Loader2, Printer, X } from "lucide-react";
+import { Check, Download, Info, Loader2, Printer, X } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { doc, onSnapshot } from "firebase/firestore";
 import { auth, firestore } from "@/lib/firebase";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,13 +43,15 @@ import { format as formatDateFns } from "date-fns";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany, type Company as CompanyRow } from "@/hooks/useCompany";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useBillingPolicyFlags } from "@/hooks/useBillingPolicyFlags";
 import { useBillingStatementWhenFormatters } from "@/hooks/useBillingStatementWhenFormatters";
 import { useDate } from "@/hooks/useDate";
 import { useBillingRegionPricing } from "@/hooks/useBillingRegionPricing";
 import { PlanPricingBreakdown, PlanPricingLineCell } from "@/components/billing/PlanPricingBreakdown";
+import { BillingFeatureLabelWithInfo } from "@/components/billing/BillingFeatureInfoButton";
+import { BillingAddOnPurchaseCard } from "@/components/billing/BillingAddOnPurchaseCard";
 import { CountrySearchCombobox } from "@/components/shared/CountrySearchCombobox";
 import type { BillingRegionId } from "@/lib/billingRegions";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -93,10 +99,6 @@ import {
   parseBillingFrozenPlanLedger,
   parseBillingDowngradeBlockedPlanIds,
 } from "@/lib/billingFrozenPlanSnapshots";
-import {
-  applyLocalDemoProPlusPlan,
-  LOCAL_DEMO_PLAN_DAYS,
-} from "@/lib/applyLocalDemoPlan";
 
 /** Per-column price — regional amounts (admin Nepal/SAARC/International ya live FX). */
 function formatTermPriceFromKey(
@@ -174,7 +176,7 @@ const BILLING_FEATURES: { key: EntitlementKey; label: string }[] = [
   { key: "maxUsersLocal", label: "Max Users (local)" },
   // Devices — number only (tick alag row `hasMultiDeviceSync`).
   { key: "maxDevices", label: "Max devices (online)" },
-  { key: "hasMultiDeviceSync", label: "Only multi device sync" },
+  { key: "hasMultiDeviceSync", label: "Multi device sync" },
   { key: "maxDevicesLocal", label: "Max devices (local)" },
   { key: "dailyVoucherLimit", label: "Daily Vouchers (online)" },
   { key: "dailyVoucherLimitLocal", label: "Daily Vouchers (local)" },
@@ -192,7 +194,7 @@ const BILLING_FEATURES: { key: EntitlementKey; label: string }[] = [
   { key: "hasPrioritySupport", label: "Priority support" },
 ];
 
-/** Billing table/mobile: ✓/✗ wale rows (hasMultiDeviceSync = "Only multi device sync" alag row). */
+/** Billing table/mobile: ✓/✗ wale rows (hasMultiDeviceSync = "Multi device sync" alag row). */
 const BILLING_BOOLEAN_ICON_KEYS: EntitlementKey[] = [
   "hasMultiDeviceSync",
   "hasRoleBasedAccess",
@@ -273,6 +275,184 @@ type CheckoutFormProps = {
   gatewayAvailability?: BillingGatewayAvailability | null;
 };
 
+/** Terms checkbox (left) + pay button — pay stays disabled until ticked. */
+function BillingTermsAndPayRow({
+  termsId,
+  termsAccepted,
+  onTermsAcceptedChange,
+  payDisabled,
+  onPay,
+  payLabel,
+  loading,
+  buttonSize = "default",
+  buttonClassName,
+}: {
+  termsId: string;
+  termsAccepted: boolean;
+  onTermsAcceptedChange: (accepted: boolean) => void;
+  payDisabled?: boolean;
+  onPay: () => void;
+  payLabel: ReactNode;
+  loading?: boolean;
+  buttonSize?: "default" | "sm";
+  buttonClassName?: string;
+}) {
+  return (
+    <div className="flex w-full flex-wrap items-center gap-2">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <Checkbox
+          id={termsId}
+          checked={termsAccepted}
+          onCheckedChange={(v) => onTermsAcceptedChange(v === true)}
+          aria-label="Accept Terms and Conditions"
+        />
+        <Link
+          href="/billing/terms"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[11px] font-normal leading-tight underline underline-offset-2 hover:text-foreground"
+        >
+          Terms &amp; Conditions
+        </Link>
+      </div>
+      <Button
+        type="button"
+        size={buttonSize}
+        className={cn("min-w-0 flex-1", buttonClassName)}
+        disabled={payDisabled || !termsAccepted || !!loading}
+        onClick={onPay}
+      >
+        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : payLabel}
+      </Button>
+    </div>
+  );
+}
+
+const AUTO_RENEW_TIP_STRIPE =
+  "On: Stripe renews automatically with your saved card. Off: no auto-renew after this period — renew manually with pay with … on this page.";
+const AUTO_RENEW_TIP_NO_SUB =
+  "Subscribe with Stripe recurring billing first; one-time renewals here do not use this toggle.";
+
+/** Blue (i) next to Auto renew — click shows On/Off help. */
+function AutoRenewInfoButton({ hasStripeSubscription }: { hasStripeSubscription: boolean }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-pl-billing-feature-info=""
+          className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-0 bg-transparent text-sky-500 hover:bg-sky-100 hover:text-sky-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+          aria-label="About Auto renew"
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <Info className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="start" className="max-w-xs text-left text-xs leading-snug">
+        {hasStripeSubscription ? AUTO_RENEW_TIP_STRIPE : AUTO_RENEW_TIP_NO_SUB}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Paid renew/upgrade: how many days this term adds (stack on Balance). */
+function billingTermStackTip(planName: string, term: SubscriptionTermKey): string {
+  const days = termAddedDaysRounded(term);
+  const dayWord = days === 1 ? "day" : "days";
+  return `This term adds about ${days} ${dayWord} of ${planName} access. After payment, this time is added on top of the Balance days you already have left.`;
+}
+
+/** Free→paid subscribe: days from payment date. */
+function billingNewSubscriberTermTip(planName: string, term: SubscriptionTermKey): string {
+  const days = termAddedDaysRounded(term);
+  const dayWord = days === 1 ? "day" : "days";
+  return `On this term, new subscribers get about ${days} ${dayWord} of ${planName} access from the payment date.`;
+}
+
+function BillingTipInfoButton({ tip, ariaLabel }: { tip: string; ariaLabel: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-pl-billing-feature-info=""
+          className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-0 bg-transparent text-sky-500 hover:bg-sky-100 hover:text-sky-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+          aria-label={ariaLabel}
+          aria-expanded={open}
+          onPointerDown={(e) => {
+            // Select ke neeche trigger mat kholo — pehle popover hi toggle.
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen((prev) => !prev);
+          }}
+        >
+          <Info className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="end"
+        sideOffset={6}
+        className="z-[160] max-w-xs text-left text-xs leading-snug"
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        {tip}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Term dropdown with blue (i) inside the trigger row (left of chevron). */
+function BillingTermSelectWithInfo({
+  value,
+  onValueChange,
+  tip,
+}: {
+  value: SubscriptionTermKey;
+  onValueChange: (v: SubscriptionTermKey) => void;
+  tip: string;
+}) {
+  return (
+    <div className="relative w-full">
+      <Select value={value} onValueChange={(v) => onValueChange(v as SubscriptionTermKey)}>
+        <SelectTrigger className="w-full">
+          <SelectValue placeholder="Term" />
+        </SelectTrigger>
+        <SelectContent>
+          {BILLING_TERM_OPTIONS.map((opt) => (
+            <SelectItem key={opt.value} value={opt.value}>
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {/* Outside SelectTrigger so overflow-hidden + Select click pe info miss na ho */}
+      <div
+        className="absolute right-8 top-1/2 z-20 -translate-y-1/2"
+        onPointerDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <BillingTipInfoButton tip={tip} ariaLabel="About this term" />
+      </div>
+    </div>
+  );
+}
+
 function CheckoutForm({
   plan,
   termKey,
@@ -286,6 +466,7 @@ function CheckoutForm({
   gatewayAvailability = null,
 }: CheckoutFormProps) {
   const [gateway, setGateway] = useState<"stripe" | "khalti" | "esewa">("stripe");
+  const [termsAccepted, setTermsAccepted] = useState(false);
 
   useEffect(() => {
     setGateway((prev) => firstAvailableBillingGateway(gatewayAvailability, prev));
@@ -304,6 +485,14 @@ function CheckoutForm({
   const esewaOk = gatewayAvailability == null || gatewayAvailability.esewa;
 
   async function handleCheckout() {
+    if (!termsAccepted) {
+      toast({
+        variant: "destructive",
+        title: "Accept Terms",
+        description: "Tick Terms & Conditions before paying.",
+      });
+      return;
+    }
     if (!networkOnline) {
       toast({
         variant: "destructive",
@@ -425,6 +614,18 @@ function CheckoutForm({
     }
   }
 
+  const gatewayBlocked =
+    gatewayAvailability != null &&
+    !(gateway === "stripe"
+      ? gatewayAvailability.stripe
+      : gateway === "khalti"
+        ? gatewayAvailability.khalti
+        : gatewayAvailability.esewa);
+
+  const payLabel = isFreePlan
+    ? `Donate ${formatPlanTermPrice({ ...plan, price: { monthly: donationAmount, yearly: donationAmount } } as Plan, "monthly")}`
+    : `pay with ${gateway}`;
+
   return (
     <div className="mt-8 border-t pt-8">
       {isFreePlan ? (
@@ -482,31 +683,17 @@ function CheckoutForm({
       {!networkOnline ? (
         <p className="mb-3 text-sm text-muted-foreground">Back online to subscribe or complete checkout.</p>
       ) : null}
-      <Button
-        onClick={handleCheckout}
-        disabled={
-          isLoading ||
-          !networkOnline ||
-          (gatewayAvailability != null &&
-            !(gateway === "stripe"
-              ? gatewayAvailability.stripe
-              : gateway === "khalti"
-                ? gatewayAvailability.khalti
-                : gatewayAvailability.esewa))
-        }
-        className="w-full max-w-sm"
-      >
-        {isLoading ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Processing...
-          </>
-        ) : isFreePlan ? (
-          `Donate ${formatPlanTermPrice({ ...plan, price: { monthly: donationAmount, yearly: donationAmount } } as Plan, "monthly")}`
-        ) : (
-          `Pay with ${gateway.toUpperCase()}`
-        )}
-      </Button>
+      <div className="max-w-sm">
+        <BillingTermsAndPayRow
+          termsId="checkout-terms-accept"
+          termsAccepted={termsAccepted}
+          onTermsAcceptedChange={setTermsAccepted}
+          payDisabled={!networkOnline || gatewayBlocked}
+          onPay={() => void handleCheckout()}
+          payLabel={payLabel}
+          loading={isLoading}
+        />
+      </div>
     </div>
   );
 }
@@ -544,6 +731,16 @@ type BillingPaymentsStatementApiResponse = {
 export default function BillingPage() {
   const { user } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const addonQuery = String(searchParams.get("addon") || "").toLowerCase();
+  const addonInitialKind =
+    addonQuery === "user" || addonQuery === "user-online"
+      ? ("user-online" as const)
+      : addonQuery === "user-local"
+        ? ("user-local" as const)
+        : addonQuery === "device-local"
+          ? ("device-local" as const)
+          : ("device-online" as const);
   const { companyId, company, loading: companyLoading, refreshAuthoritativePlan, allCompanies } = useCompany();
   /** User country picker — plan amounts is currency me convert dikhenge. */
   const [priceCountry, setPriceCountry] = useState("");
@@ -595,6 +792,8 @@ export default function BillingPage() {
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
   /** Gateway for paid-plan renew (proration): matches Basic checkout — admin/history get separate rows per gateway. */
   const [prorationGateway, setProrationGateway] = useState<"stripe" | "khalti" | "esewa">("stripe");
+  /** Must tick Terms before renew/upgrade gateway pay. */
+  const [billingPayTermsAccepted, setBillingPayTermsAccepted] = useState(false);
   /** Bank Settings + env merge — kaunse gateway initiate / plan-change chala sakte hain. */
   const [gatewayAvailability, setGatewayAvailability] = useState<BillingGatewayAvailability | null>(null);
   /** "Just change plan" pehle AlertDialog — seedha Stripe/page na khule (user request). */
@@ -617,7 +816,7 @@ export default function BillingPage() {
   /** Paid footer: fetch statement API — preview (Print) ya file save (Download). */
   const [printStatementBusy, setPrintStatementBusy] = useState(false);
   const [downloadStatementBusy, setDownloadStatementBusy] = useState(false);
-  const [localDemoPlanBusy, setLocalDemoPlanBusy] = useState(false);
+  const [onlineDemoPlanBusy, setOnlineDemoPlanBusy] = useState(false);
   /** Super Admin `app_settings/billing` — paid→cheaper paid downgrade policy. */
   const { planDowngradeEnabled, loading: billingPolicyLoading } = useBillingPolicyFlags();
   const formatBillingDate = useCallback(
@@ -750,7 +949,8 @@ export default function BillingPage() {
       doc(firestore, "app_settings", "plans"),
       (docSnap) => {
         if (docSnap.exists()) {
-          const mergedPlans = mergeAppSettingsPlansDoc(docSnap.data() as Record<string, unknown>);
+          const raw = docSnap.data() as Record<string, unknown>;
+          const mergedPlans = mergeAppSettingsPlansDoc(raw);
           setPlans(mergedPlans);
           writeCachedPlansList(mergedPlans);
           if (docSnap.metadata.fromCache) void fetchServerPlanCatalog();
@@ -1240,7 +1440,7 @@ export default function BillingPage() {
         title: enabled ? "Auto renew on" : "Auto renew off",
         description: enabled
           ? "Stripe will charge your saved card for the next billing cycles. If a charge fails, you may get 3 extra days and an alert here."
-          : "Stripe will not auto-renew after this period ends. Use Continue — pay on this page before your access expires.",
+          : "Stripe will not auto-renew after this period ends. Renew manually with pay with … on this page before your access expires.",
       });
     } catch (e: unknown) {
       toast({
@@ -1255,14 +1455,27 @@ export default function BillingPage() {
 
   const allFeaturesConfig = BILLING_FEATURES;
 
-  /** Feature cell: number / Unlimited / Yes–No; max devices = effective count (multi off → 1) bina side tick. */
+  /** Feature cell: number / Unlimited / None; max devices = effective count (multi off → 1) bina side tick. */
   const getFeatureValue = (
     plan: Plan,
     key: EntitlementKey
   ): { text: string; enabled: boolean } => {
     const value = plan.entitlements[key];
+    const allowOnline = plan.entitlements.allowFirebaseOnlineCompanies === true;
 
-    // Online + Local column dono me `0` = Unlimited (billing table — admin PlanDetails placeholders ke saath align).
+    // Allow online OFF → online-bucket rows always "None" (even if legacy store still has -1).
+    if (!allowOnline && isOnlineEntitlementCapKey(key)) {
+      return { text: "None", enabled: false };
+    }
+
+    const formatCap = (raw: unknown): { text: string; enabled: boolean } => {
+      const n = typeof raw === "number" ? raw : Number(raw);
+      if (isUnlimitedEntitlementCap(n)) return { text: "Unlimited", enabled: true };
+      if (!Number.isFinite(n) || isZeroEntitlementCap(n)) return { text: "None", enabled: false };
+      return { text: String(n), enabled: n > 0 };
+    };
+
+    // Caps: 0 = none; -1 = unlimited; >0 = hard cap (admin PlanDetails / enforce jaisa).
     if (
       key === "dailyVoucherLimit" ||
       key === "monthlyVoucherLimit" ||
@@ -1272,21 +1485,17 @@ export default function BillingPage() {
       key === "maxAttachmentRestorePerMonth" ||
       key === "maxLocalToOnlineAttachmentMB"
     ) {
-      const enabled = value !== 0;
-      const text = value === 0 ? "Unlimited" : String(value);
-      return { text, enabled: true };
+      return formatCap(value);
     }
 
-    // Admin/plan chart: `0` GB = treat as unlimited cap for display (vouchers jaisa).
+    // GB caps: 0 = none; -1 = unlimited.
     if (
       key === "maxAttachmentsGB" ||
       key === "maxAttachmentsGBLocal" ||
       key === "maxStorageGB" ||
       key === "maxStorageGBLocal"
     ) {
-      const n = typeof value === "number" ? value : Number(value);
-      if (n === 0) return { text: "Unlimited", enabled: true };
-      return { text: String(n), enabled: n > 0 };
+      return formatCap(value);
     }
 
     // Multi-device band = single device (`useDeviceLimit` jaisa); sirf number — sync on/off alag row `hasMultiDeviceSync`.
@@ -1295,10 +1504,9 @@ export default function BillingPage() {
         key === "maxDevicesLocal"
           ? (plan.entitlements.maxDevicesLocal ?? plan.entitlements.maxDevices)
           : plan.entitlements.maxDevices;
-      const stored = Math.max(1, Number(raw) || 1);
       const multi = plan.entitlements.hasMultiDeviceSync === true;
-      const effective = multi ? stored : 1;
-      return { text: String(effective), enabled: true };
+      if (!multi) return { text: "1", enabled: true };
+      return formatCap(raw);
     }
 
     if (typeof value === "boolean") {
@@ -1306,8 +1514,7 @@ export default function BillingPage() {
     }
 
     if (typeof value === "number") {
-      const enabled = value > 0;
-      return { text: String(value), enabled };
+      return formatCap(value);
     }
 
     return { text: "No", enabled: false };
@@ -1428,13 +1635,13 @@ export default function BillingPage() {
     user,
   ]);
 
-  /** pocket-ledger.com band ho to owner local SQLite + cache par Pro Plus demo (100 din). */
-  const handleLocalDemoProPlusPlan = useCallback(async () => {
+  /** SuperAdmin-configured demo — server writes the expiry, never this device's SQLite only. */
+  const handleOnlineDemoPlan = useCallback(async (plan: Plan) => {
     if (!user?.uid) {
       toast({
         variant: "destructive",
         title: "Sign in required",
-        description: "Sign in as the company owner to use the local demo plan.",
+        description: "Sign in as the company owner to activate a demo.",
       });
       return;
     }
@@ -1442,31 +1649,39 @@ export default function BillingPage() {
       toast({
         variant: "destructive",
         title: "Owner only",
-        description: "Only the company owner can activate the local demo plan.",
+        description: "Only the company owner can activate a demo.",
       });
       return;
     }
-    setLocalDemoPlanBusy(true);
+    setOnlineDemoPlanBusy(true);
     try {
-      const extraIds = [companyId, billingFirestoreCompanyId].filter(
-        (id): id is string => Boolean(String(id || "").trim())
-      );
-      const result = await applyLocalDemoProPlusPlan(user.uid, { extraCompanyIds: extraIds });
-      if (result.ok === false) {
+      const token = await user.getIdToken();
+      const res = await fetch(getBillingApiUrl("/api/company/activate-plan-demo"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ companyId: billingFirestoreCompanyId, planId: plan.id }),
+      });
+      const result = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        expiryMs?: number;
+        days?: number;
+        error?: string;
+      };
+      if (!res.ok || !result.ok || !result.expiryMs) {
         toast({
           variant: "destructive",
           title: "Demo plan not applied",
           description:
-            result.reason === "no_company"
-              ? "No local company found on this device. Open a company first, then try again."
-              : "Could not update the local plan on this device.",
+            result.error === "demo_renew_not_allowed"
+              ? "This demo already ended. Super Admin has not allowed another demo period."
+              : result.error || "The online demo could not be activated.",
         });
         return;
       }
       const expiryDate = new Date(result.expiryMs);
       toast({
-        title: "Pro Plus demo activated (local)",
-        description: `This device: Pro Plus for ${LOCAL_DEMO_PLAN_DAYS} days (until ${formatBillingDate(expiryDate)}). No pocket-ledger.com server needed.`,
+        title: `${plan.name} demo activated`,
+        description: `Online demo active for ${result.days ?? plan.demo?.days ?? 0} days (until ${formatBillingDate(expiryDate)}).`,
       });
     } catch (e: unknown) {
       toast({
@@ -1475,14 +1690,13 @@ export default function BillingPage() {
         description: e instanceof Error ? e.message : String(e),
       });
     } finally {
-      setLocalDemoPlanBusy(false);
+      setOnlineDemoPlanBusy(false);
     }
   }, [
     billingFirestoreCompanyId,
-    companyId,
     formatBillingDate,
     isBillingOwner,
-    user?.uid,
+    user,
   ]);
 
   const hasActiveStripeSubscription = useMemo(
@@ -1583,7 +1797,7 @@ export default function BillingPage() {
   }
 
   return (
-    <div className="relative left-1/2 w-[calc(100vw-4px)] max-w-[calc(100vw-4px)] -translate-x-1/2 box-border py-4 sm:left-auto sm:w-[calc(100%-10px)] sm:max-w-[calc(100vw-10px)] sm:translate-x-0 sm:mx-[5px] sm:py-6">
+    <div className="relative left-1/2 w-[calc(100vw-4px)] max-w-[calc(100vw-4px)] -translate-x-1/2 box-border py-4 sm:left-auto sm:w-[calc(100%-10px)] sm:max-w-[calc(100vw-10px)] sm:translate-x-0 sm:mx-[5px] sm:py-6 flex flex-col min-h-[calc(100dvh-5rem)] gap-6">
       <Card className={cn("w-full max-w-none shadow-sm", BILLING_OUTLINE_CLASS)}>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1597,21 +1811,24 @@ export default function BillingPage() {
               <Download className="mr-2 h-4 w-4" />
               Download PDF
             </Button>
-            {isBillingOwner ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                disabled={localDemoPlanBusy || companyLoading}
-                onClick={() => void handleLocalDemoProPlusPlan()}
-                title="Local only — activates Pro Plus on this device for 100 days without pocket-ledger.com"
-              >
-                {localDemoPlanBusy ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : null}
-                Demo: Pro Plus ({LOCAL_DEMO_PLAN_DAYS}d local)
-              </Button>
-            ) : null}
+            {isBillingOwner
+              ? plans
+                  .filter((plan) => !plan.isFree && plan.demo?.enabled === true)
+                  .map((plan) => (
+                    <Button
+                      key={`demo-${plan.id}`}
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={onlineDemoPlanBusy || companyLoading || billingOfflineBlock}
+                      onClick={() => void handleOnlineDemoPlan(plan)}
+                      title={`Online demo — ${plan.name} for ${plan.demo?.days ?? 0} days`}
+                    >
+                      {onlineDemoPlanBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      Demo: {plan.name} ({plan.demo?.days ?? 0}d)
+                    </Button>
+                  ))
+              : null}
             </div>
           </div>
         </CardHeader>
@@ -1755,7 +1972,9 @@ export default function BillingPage() {
                               key={`${p.id}-${feature.key}-mobile`}
                               className="flex items-start justify-between gap-3 border-b-2 border-foreground/25 pb-1 text-sm"
                             >
-                              <span className="text-muted-foreground">{feature.label}</span>
+                              <span className="min-w-0 flex-1 text-muted-foreground">
+                                <BillingFeatureLabelWithInfo helpKey={feature.key} label={feature.label} />
+                              </span>
                               <span className="font-medium text-right inline-flex items-center justify-end gap-1">
                                 {boolIcons ? (
                                   enabled ? (
@@ -1777,7 +1996,22 @@ export default function BillingPage() {
               </div>
               <div className={cn("rounded-lg p-3 space-y-2", BILLING_OUTLINE_CLASS)}>
                 {/* Mobile action panel: parity with desktop "Term & action" row. */}
-                <p className="text-sm font-medium">Term &amp; action</p>
+                <p className="text-sm font-medium">
+                  <BillingFeatureLabelWithInfo helpKey="term-action" label="Term & action" />
+                </p>
+                {isPaidCompany ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => {
+                      document.getElementById("billing-addons")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }}
+                  >
+                    Buy User/device
+                  </Button>
+                ) : null}
                 {(() => {
                   const p = selectedMobilePlan;
                   const change = classifyPlanChange(currentPlanId, p.id);
@@ -1790,24 +2024,14 @@ export default function BillingPage() {
                     }
                     return (
                       <div className="space-y-2">
-                        <Select
+                        <BillingTermSelectWithInfo
                           value={colTerms[p.id]}
                           onValueChange={(v) => {
                             setSelectedPlanId(p.id);
-                            setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }));
+                            setColTerms((prev) => ({ ...prev, [p.id]: v }));
                           }}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Term" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {BILLING_TERM_OPTIONS.map((opt) => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                          tip={billingTermStackTip(p.name, colTerms[p.id])}
+                        />
                         {/* Mobile: ek hi column dikhta hai — credit / net yahin (desktop jaisa breakdown). */}
                         {(() => {
                           const curRow = plans.find((x) => x.id === currentPlanId);
@@ -1821,7 +2045,6 @@ export default function BillingPage() {
                             targetYearly: p.price.yearly,
                             term: colTerms[p.id],
                           });
-                          const termDaysAdd = termAddedDaysRounded(colTerms[p.id]);
                           const remainingMsRenew =
                             expiryMs != null && Number.isFinite(expiryMs) ? Math.max(0, expiryMs - nowMs) : 0;
                           const renewLedger = renewColumnFrozenUsageAndCreditDaysLeft({
@@ -1842,14 +2065,6 @@ export default function BillingPage() {
                             : renewLedger.frozenUsageNpr;
                           return (
                             <>
-                              <p className="text-xs text-muted-foreground leading-snug">
-                                This term adds about{" "}
-                                <strong className="tabular-nums text-foreground">{termDaysAdd}</strong>{" "}
-                                {termDaysAdd === 1 ? "day" : "days"} of{" "}
-                                <span className="font-medium">{p.name}</span> access. After payment, this time is{" "}
-                                <strong className="text-foreground">added on top of</strong> the Balance days you already
-                                have left.
-                              </p>
                               <div className="flex flex-col items-center gap-1.5">
                                 <div className={PRORATION_PILL_CREDIT_CLASS}>
                                   <span>
@@ -1875,7 +2090,7 @@ export default function BillingPage() {
                           );
                         })()}
                         {/* Sirf current paid column: Stripe subscription + webhook grace. */}
-                        <div className="flex items-start gap-2 rounded-md border border-border/70 px-2 py-2 text-left">
+                        <div className="flex items-center gap-2 rounded-md border border-border/70 px-2 py-2 text-left">
                           <Checkbox
                             id="billing-auto-renew-mobile"
                             checked={autoRenewCheckboxChecked}
@@ -1887,19 +2102,13 @@ export default function BillingPage() {
                             }
                             onCheckedChange={(v) => void handleBillingAutoRenewChange(v === true)}
                           />
-                          <div className="grid gap-0.5 leading-snug min-w-0">
-                            <Label
-                              htmlFor="billing-auto-renew-mobile"
-                              className="text-xs font-medium cursor-pointer leading-tight"
-                            >
-                              Auto renew
-                            </Label>
-                            <p className="text-[10px] text-muted-foreground">
-                              {hasActiveStripeSubscription
-                                ? "On: Stripe renews automatically with your saved card. Off: no auto-renew after this period — renew manually with Continue — pay."
-                                : "Subscribe with Stripe recurring billing first; one-time renewals here do not use this toggle."}
-                            </p>
-                          </div>
+                          <Label
+                            htmlFor="billing-auto-renew-mobile"
+                            className="min-w-0 text-xs font-medium cursor-pointer leading-tight"
+                          >
+                            Auto renew
+                          </Label>
+                          <AutoRenewInfoButton hasStripeSubscription={hasActiveStripeSubscription} />
                         </div>
                         <RadioGroup
                           value={prorationGateway}
@@ -1952,14 +2161,30 @@ export default function BillingPage() {
                             eSewa
                           </Label>
                         </RadioGroup>
-                        <Button
-                          type="button"
-                          className="w-full"
-                          disabled={loadPay || !companyId || billingOfflineBlock || !prorationPayEnabled}
-                          onClick={() => handleProratedPay(p.id)}
-                        >
-                          {loadPay ? <Loader2 className="h-4 w-4 animate-spin" /> : `Continue — pay with ${prorationGateway}`}
-                        </Button>
+                        <BillingTermsAndPayRow
+                          termsId="proration-terms-mobile"
+                          termsAccepted={billingPayTermsAccepted}
+                          onTermsAcceptedChange={setBillingPayTermsAccepted}
+                          payDisabled={!companyId || billingOfflineBlock || !prorationPayEnabled}
+                          onPay={() => void handleProratedPay(p.id)}
+                          payLabel={`pay with ${prorationGateway}`}
+                          loading={loadPay}
+                        />
+                        {isPaidCompany ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="w-full"
+                            onClick={() => {
+                              document
+                                .getElementById("billing-addons")
+                                ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                            }}
+                          >
+                            Buy User/device
+                          </Button>
+                        ) : null}
                       </div>
                     );
                   }
@@ -2006,24 +2231,14 @@ export default function BillingPage() {
                   if (!p.isFree && isPaidCompany) {
                     return (
                       <div className="space-y-2">
-                        <Select
+                        <BillingTermSelectWithInfo
                           value={colTerms[p.id]}
                           onValueChange={(v) => {
                             setSelectedPlanId(p.id);
-                            setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }));
+                            setColTerms((prev) => ({ ...prev, [p.id]: v }));
                           }}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Term" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {BILLING_TERM_OPTIONS.map((opt) => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                          tip={billingTermStackTip(p.name, colTerms[p.id])}
+                        />
                         {(() => {
                           const curRow = plans.find((x) => x.id === currentPlanId);
                           if (!curRow || curRow.isFree) return null;
@@ -2036,8 +2251,6 @@ export default function BillingPage() {
                             targetYearly: p.price.yearly,
                             term: colTerms[p.id],
                           });
-                          const termDaysAdd = termAddedDaysRounded(colTerms[p.id]);
-                          const daysLeftCurrentPlan = daysLeftRounded(nowMs, expiryMs);
                           const remainingMsMob = expiryMs != null && Number.isFinite(expiryMs) ? Math.max(0, expiryMs - nowMs) : 0;
                           const renewLedgerMob = renewColumnFrozenUsageAndCreditDaysLeft({
                             nowMs,
@@ -2053,14 +2266,6 @@ export default function BillingPage() {
                           const creditDaysPinkRenewMob = creditDaysEquivalentAtTargetYearly(q.creditNpr, curRow.price.yearly);
                           return (
                             <>
-                              <p className="text-xs text-muted-foreground leading-snug">
-                                This term adds about{" "}
-                                <strong className="tabular-nums text-foreground">{termDaysAdd}</strong>{" "}
-                                {termDaysAdd === 1 ? "day" : "days"} of{" "}
-                                <span className="font-medium">{p.name}</span> access. After payment, this time is{" "}
-                                <strong className="text-foreground">added on top of</strong> the Balance days you already
-                                have left.
-                              </p>
                               {billingShowUpgradePathParagraph(change) ? (
                                 <p className="text-[11px] text-muted-foreground leading-snug">
                                   Upgrade: {curRow.name} usage stays on {curRow.name}; on {p.name} usage starts at zero.
@@ -2161,21 +2366,11 @@ export default function BillingPage() {
                   if (!p.isFree && currentPlanId === "basic") {
                     return (
                       <div className="space-y-2">
-                        <Select
+                        <BillingTermSelectWithInfo
                           value={colTerms[p.id]}
-                          onValueChange={(v) => setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }))}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Term" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {BILLING_TERM_OPTIONS.map((opt) => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                          onValueChange={(v) => setColTerms((prev) => ({ ...prev, [p.id]: v }))}
+                          tip={billingNewSubscriberTermTip(p.name, colTerms[p.id])}
+                        />
                         <Button type="button" className="w-full" onClick={() => setSelectedPlanId(p.id)}>
                           Subscribe to {p.name} below
                         </Button>
@@ -2281,7 +2476,7 @@ export default function BillingPage() {
                 {/* Pricing rows — monthly / yearly / save (country-converted) */}
                 <TableRow>
                   <TableCell className="min-w-0 font-medium whitespace-normal break-words px-2 py-2 align-middle">
-                    Monthly
+                    <BillingFeatureLabelWithInfo helpKey="price-monthly" label="Monthly" />
                   </TableCell>
                   {plans.map((p) => (
                     <TableCell
@@ -2303,7 +2498,7 @@ export default function BillingPage() {
                 </TableRow>
                 <TableRow>
                   <TableCell className="min-w-0 font-medium whitespace-normal break-words px-2 py-2 align-middle">
-                    Yearly
+                    <BillingFeatureLabelWithInfo helpKey="price-yearly" label="Yearly" />
                   </TableCell>
                   {plans.map((p) => (
                     <TableCell
@@ -2325,7 +2520,7 @@ export default function BillingPage() {
                 </TableRow>
                 <TableRow>
                   <TableCell className="min-w-0 font-medium whitespace-normal break-words px-2 py-2 align-middle text-green-700 dark:text-green-500">
-                    Save
+                    <BillingFeatureLabelWithInfo helpKey="price-save" label="Save" />
                   </TableCell>
                   {plans.map((p) => (
                     <TableCell
@@ -2348,7 +2543,7 @@ export default function BillingPage() {
                 {allFeaturesConfig.map((feature) => (
                   <TableRow key={feature.key}>
                     <TableCell className="min-w-0 max-w-[22%] font-medium whitespace-normal break-words align-middle !whitespace-normal px-2 py-2">
-                      {feature.label}
+                      <BillingFeatureLabelWithInfo helpKey={feature.key} label={feature.label} />
                     </TableCell>
                     {plans.map((p) => {
                       const { text, enabled } = getFeatureValue(p, feature.key);
@@ -2386,7 +2581,24 @@ export default function BillingPage() {
               <TableFooter>
                 <TableRow>
                   <TableCell className="align-top text-muted-foreground text-sm min-w-0 max-w-[22%] whitespace-normal break-words !whitespace-normal px-2 py-3">
-                    Term &amp; action
+                    <div className="flex flex-col items-stretch gap-2">
+                      <BillingFeatureLabelWithInfo helpKey="term-action" label="Term & action" />
+                      {isPaidCompany ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="w-full max-w-[200px]"
+                          onClick={() => {
+                            document
+                              .getElementById("billing-addons")
+                              ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                          }}
+                        >
+                          Buy User/device
+                        </Button>
+                      ) : null}
+                    </div>
                   </TableCell>
                   {plans.map((p) => {
                     const isSelected = p.id === selectedPlanId;
@@ -2408,7 +2620,6 @@ export default function BillingPage() {
                             targetYearly: p.price.yearly,
                             term: colTerms[p.id],
                           });
-                          const termDaysAdd = termAddedDaysRounded(colTerms[p.id]);
                           // Current plan column: hamesha apni Credit/Usage dikhao — warna Pro select karte hi Advance ki pills gayab (user confusion).
                           const showLiveProrationAmounts = p.id === selectedPlanId || p.id === currentPlanId;
                           const daysLeftCurrentPlan = daysLeftRounded(nowMs, expiryMs);
@@ -2438,14 +2649,6 @@ export default function BillingPage() {
                             : renewLedgerDesk.frozenUsageNpr;
                           return (
                             <>
-                              <p className="text-xs text-muted-foreground leading-snug">
-                                This term adds about{" "}
-                                <strong className="tabular-nums text-foreground">{termDaysAdd}</strong>{" "}
-                                {termDaysAdd === 1 ? "day" : "days"} of{" "}
-                                <span className="font-medium">{p.name}</span> access. After payment, this time is{" "}
-                                <strong className="text-foreground">added on top of</strong> the Balance days you already
-                                have left.
-                              </p>
                               {billingShowUpgradePathParagraph(change) ? (
                                 <p className="text-[11px] text-muted-foreground leading-snug">
                                   Upgrade path: your remaining{" "}
@@ -2547,26 +2750,16 @@ export default function BillingPage() {
                       footerInner =
                         isPaidCompany ? (
                           <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">
-                            <Select
+                            <BillingTermSelectWithInfo
                               value={colTerms[p.id]}
                               onValueChange={(v) => {
                                 setSelectedPlanId(p.id);
-                                setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }));
+                                setColTerms((prev) => ({ ...prev, [p.id]: v }));
                               }}
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue placeholder="Term" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {BILLING_TERM_OPTIONS.map((opt) => (
-                                  <SelectItem key={opt.value} value={opt.value}>
-                                    {opt.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                              tip={billingTermStackTip(p.name, colTerms[p.id])}
+                            />
                             {prorationHint}
-                            <div className="flex items-start gap-2 rounded-md border border-border/70 px-2 py-2 text-left">
+                            <div className="flex items-center gap-2 rounded-md border border-border/70 px-2 py-2 text-left">
                               <Checkbox
                                 id="billing-auto-renew-desk"
                                 checked={autoRenewCheckboxChecked}
@@ -2578,19 +2771,13 @@ export default function BillingPage() {
                                 }
                                 onCheckedChange={(v) => void handleBillingAutoRenewChange(v === true)}
                               />
-                              <div className="grid gap-0.5 leading-snug min-w-0">
-                                <Label
-                                  htmlFor="billing-auto-renew-desk"
-                                  className="text-xs font-medium cursor-pointer leading-tight"
-                                >
-                                  Auto renew
-                                </Label>
-                                <p className="text-[10px] text-muted-foreground">
-                                  {hasActiveStripeSubscription
-                                    ? "On: Stripe renews automatically with your saved card. Off: no auto-renew after this period — renew manually with Continue — pay."
-                                    : "Subscribe with Stripe recurring billing first; one-time renewals here do not use this toggle."}
-                                </p>
-                              </div>
+                              <Label
+                                htmlFor="billing-auto-renew-desk"
+                                className="min-w-0 text-xs font-medium cursor-pointer leading-tight"
+                              >
+                                Auto renew
+                              </Label>
+                              <AutoRenewInfoButton hasStripeSubscription={hasActiveStripeSubscription} />
                             </div>
                             {/* Renew: same gateways as new subscription — each payment row in admin shows gateway separately. */}
                             <RadioGroup
@@ -2644,19 +2831,31 @@ export default function BillingPage() {
                                 eSewa
                               </Label>
                             </RadioGroup>
-                            <Button
-                              type="button"
-                              size="sm"
-                              className="w-full"
-                              disabled={loadPay || !companyId || billingOfflineBlock || !prorationPayEnabled}
-                              onClick={() => handleProratedPay(p.id)}
-                            >
-                              {loadPay ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                `Continue — pay with ${prorationGateway}`
-                              )}
-                            </Button>
+                            <BillingTermsAndPayRow
+                              termsId={`proration-terms-${p.id}`}
+                              termsAccepted={billingPayTermsAccepted}
+                              onTermsAcceptedChange={setBillingPayTermsAccepted}
+                              payDisabled={!companyId || billingOfflineBlock || !prorationPayEnabled}
+                              onPay={() => void handleProratedPay(p.id)}
+                              payLabel={`pay with ${prorationGateway}`}
+                              loading={loadPay}
+                              buttonSize="sm"
+                            />
+                            {isPaidCompany ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="w-full"
+                                onClick={() => {
+                                  document
+                                    .getElementById("billing-addons")
+                                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                                }}
+                              >
+                                Buy User/device
+                              </Button>
+                            ) : null}
                           </div>
                         ) : (
                           <Button type="button" variant="outline" disabled className="w-full max-w-[220px]">
@@ -2725,24 +2924,14 @@ export default function BillingPage() {
                     } else if (!p.isFree && isPaidCompany) {
                       footerInner = (
                         <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">
-                          <Select
+                          <BillingTermSelectWithInfo
                             value={colTerms[p.id]}
                             onValueChange={(v) => {
                               setSelectedPlanId(p.id);
-                              setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }));
+                              setColTerms((prev) => ({ ...prev, [p.id]: v }));
                             }}
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue placeholder="Term" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {BILLING_TERM_OPTIONS.map((opt) => (
-                                <SelectItem key={opt.value} value={opt.value}>
-                                  {opt.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                            tip={billingTermStackTip(p.name, colTerms[p.id])}
+                          />
                           {prorationHint}
                           <Button
                             type="button"
@@ -2787,35 +2976,13 @@ export default function BillingPage() {
                     } else if (!p.isFree && currentPlanId === "basic") {
                       footerInner = (
                         <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">
-                          <Select
+                          <BillingTermSelectWithInfo
                             value={colTerms[p.id]}
                             onValueChange={(v) =>
-                              setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }))
+                              setColTerms((prev) => ({ ...prev, [p.id]: v }))
                             }
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue placeholder="Term" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {BILLING_TERM_OPTIONS.map((opt) => (
-                                <SelectItem key={opt.value} value={opt.value}>
-                                  {opt.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          {(() => {
-                            const basicRow = plans.find((x) => x.id === "basic");
-                            const termDaysAdd = termAddedDaysRounded(colTerms[p.id]);
-                            return (
-                              <p className="text-xs text-muted-foreground text-center leading-snug">
-                                On this term, new subscribers get about{" "}
-                                <strong className="tabular-nums text-foreground">{termDaysAdd}</strong>{" "}
-                                {termDaysAdd === 1 ? "day" : "days"} of{" "}
-                                <span className="font-medium">{p.name}</span> access from the payment date.
-                              </p>
-                            );
-                          })()}
+                            tip={billingNewSubscriberTermTip(p.name, colTerms[p.id])}
+                          />
                           <Button
                             type="button"
                             variant={isSelected ? "default" : "outline"}
@@ -2865,65 +3032,6 @@ export default function BillingPage() {
               networkOnline={billingNavigatorOnline}
               gatewayAvailability={gatewayAvailability}
             />
-          ) : !showMobileCheckoutSection && isPaidCompany ? (
-            <div className="mt-8 border-t pt-6 space-y-4">
-              <p className="text-sm text-muted-foreground">
-                You are on a paid plan — use the term dropdowns and Stripe actions in the table above to renew, upgrade
-                (prorated), or downgrade.
-              </p>
-              {/* Paid plan footer: T&amp;C + Statement tab + PDF Download (left) / Print (in-app overlay). */}
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" asChild>
-                  <Link href="/billing/terms" target="_blank" rel="noopener noreferrer">
-                    Terms &amp; Conditions
-                  </Link>
-                </Button>
-                <Button variant="outline" size="sm" asChild>
-                  <Link href="/billing/statement" target="_blank" rel="noopener noreferrer">
-                    Statement
-                  </Link>
-                </Button>
-                {/* Download = same pdfmake doc — seedha file; Print = `showInAppPdfPreview` (dono owner + online). */}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={
-                    billingStatementFooterPdfBusy ||
-                    billingOfflineBlock ||
-                    !isBillingOwner ||
-                    !String(billingFirestoreCompanyId).trim()
-                  }
-                  onClick={() => void handleDownloadStatementFromBillingFooter()}
-                >
-                  {downloadStatementBusy ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
-                  ) : (
-                    <Download className="mr-2 h-4 w-4" aria-hidden />
-                  )}
-                  Download
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={
-                    billingStatementFooterPdfBusy ||
-                    billingOfflineBlock ||
-                    !isBillingOwner ||
-                    !String(billingFirestoreCompanyId).trim()
-                  }
-                  onClick={() => void handlePrintStatementFromBillingFooter()}
-                >
-                  {printStatementBusy ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
-                  ) : (
-                    <Printer className="mr-2 h-4 w-4" aria-hidden />
-                  )}
-                  Print
-                </Button>
-              </div>
-            </div>
           ) : null}
 
           {showMobileCheckoutSection && (
@@ -3023,6 +3131,67 @@ export default function BillingPage() {
           </AlertDialog>
         </CardContent>
       </Card>
+
+      {isPaidCompany ? (
+        <div className="mt-auto w-full space-y-4 border-t pt-6">
+          <p className="text-sm text-muted-foreground">
+            You are on a paid plan — use the term dropdowns and Stripe actions in the table above to renew, upgrade
+            (prorated), or downgrade.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/billing/statement" target="_blank" rel="noopener noreferrer">
+                Statement
+              </Link>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={
+                billingStatementFooterPdfBusy ||
+                billingOfflineBlock ||
+                !isBillingOwner ||
+                !String(billingFirestoreCompanyId).trim()
+              }
+              onClick={() => void handleDownloadStatementFromBillingFooter()}
+            >
+              {downloadStatementBusy ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+              ) : (
+                <Download className="mr-2 h-4 w-4" aria-hidden />
+              )}
+              Download
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={
+                billingStatementFooterPdfBusy ||
+                billingOfflineBlock ||
+                !isBillingOwner ||
+                !String(billingFirestoreCompanyId).trim()
+              }
+              onClick={() => void handlePrintStatementFromBillingFooter()}
+            >
+              {printStatementBusy ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+              ) : (
+                <Printer className="mr-2 h-4 w-4" aria-hidden />
+              )}
+              Print
+            </Button>
+          </div>
+          <BillingAddOnPurchaseCard
+            userId={user?.uid ?? ""}
+            companyId={billingFirestoreCompanyId}
+            initialKind={addonInitialKind}
+            networkOnline={billingNavigatorOnline}
+            gatewayAvailability={gatewayAvailability}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

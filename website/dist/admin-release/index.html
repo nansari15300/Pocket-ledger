@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Release upload — Pocket Ledger</title>
+  <meta name="robots" content="noindex,nofollow" />
+  <link rel="stylesheet" href="../styles.css" />
+  <style>
+    .admin-card { max-width: 44rem; }
+    .row { margin: 0.85rem 0; }
+    .row label { display: block; font-weight: 700; margin-bottom: 0.35rem; }
+    .status { margin-top: 1rem; font-size: 0.95rem; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: #b42318; }
+    progress { width: 100%; }
+    .who { color: var(--muted); font-size: 0.9rem; }
+    .admin-list { list-style: none; padding: 0; margin: 0.5rem 0 0; }
+    .admin-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.45rem 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 0.92rem;
+    }
+    .outdated-meta { color: var(--muted); font-size: 0.82rem; }
+    .btn-danger {
+      border-color: #f3c0bb;
+      color: #b42318;
+      background: #fff;
+    }
+    .btn-danger:hover { background: #fff5f4; }
+    .path-box {
+      margin-top: 0.75rem;
+      padding: 0.75rem 0.9rem;
+      border-radius: 10px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      font-size: 0.85rem;
+      color: var(--muted);
+      word-break: break-all;
+    }
+    .add-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .add-row input { flex: 1; min-width: 12rem; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap nav">
+      <a class="brand" href="../">
+        <span class="brand-mark" aria-hidden="true"></span>
+        Pocket Ledger
+      </a>
+      <div class="nav-links">
+        <span class="who" id="who"></span>
+        <button type="button" class="btn btn-outline btn-sm" id="outBtn" hidden>Sign out</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="page-hero">
+      <div class="wrap">
+        <h1>Upload installers</h1>
+        <p>
+          Hidden page for release admins. EXE / APK go to
+          <strong>Firebase Storage</strong> (not Firestore) under
+          <strong>public-releases/YYYY-MM-DD/</strong>.
+        </p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="wrap admin-card">
+        <div class="content-block" id="authBox">
+          <p style="margin-top:0">Sign in with an allowed Google account (super admin / release admin).</p>
+          <button type="button" class="btn btn-primary" id="googleBtn">Sign in with Google</button>
+        </div>
+
+        <div class="content-block" id="uploadBox" hidden>
+          <div class="path-box" id="storagePathHint">
+            Upload target: Firebase Storage → public-releases/
+          </div>
+
+          <div class="row">
+            <label for="dateField">Date folder</label>
+            <input id="dateField" type="date" />
+          </div>
+          <div class="row">
+            <label for="exeFile">Windows EXE</label>
+            <input id="exeFile" type="file" accept=".exe" />
+          </div>
+          <div class="row">
+            <label for="windowsVersion">Windows version</label>
+            <input id="windowsVersion" type="text" inputmode="decimal" placeholder="e.g. 1.0.1" />
+          </div>
+          <div class="row">
+            <label for="apkFile">Android APK</label>
+            <input id="apkFile" type="file" accept=".apk" />
+          </div>
+          <div class="row">
+            <label for="androidVersion">Android version</label>
+            <input id="androidVersion" type="text" inputmode="decimal" placeholder="e.g. 1.0.1" />
+          </div>
+          <div class="row">
+            <label for="playStoreUrl">Google Play Store link (optional)</label>
+            <input id="playStoreUrl" type="url" placeholder="https://play.google.com/store/apps/details?id=…" style="width:100%" />
+          </div>
+          <button type="button" class="btn btn-primary" id="publishBtn">Upload to Firebase Storage</button>
+          <progress id="progress" max="100" value="0" hidden></progress>
+
+          <hr style="margin:1.5rem 0;border:0;border-top:1px solid var(--line)" />
+
+          <h3 style="margin:0 0 0.35rem;font-size:1rem">Outdated releases</h3>
+          <p style="margin:0;color:var(--muted);font-size:0.88rem">
+            Builds older than the latest + last 5 (6 kept for Downloads). Delete removes files from Firebase Storage permanently.
+          </p>
+          <ul class="admin-list" id="outdatedList"></ul>
+          <p id="outdatedEmpty" style="margin:0.5rem 0 0;color:var(--muted);font-size:0.88rem" hidden>
+            No outdated builds yet.
+          </p>
+
+          <hr style="margin:1.5rem 0;border:0;border-top:1px solid var(--line)" />
+
+          <h3 style="margin:0 0 0.35rem;font-size:1rem">Release admins</h3>
+          <p style="margin:0;color:var(--muted);font-size:0.88rem">
+            Owner <strong>nansari15300@gmail.com</strong> cannot be removed. Added users can upload EXE/APK too.
+          </p>
+          <ul class="admin-list" id="adminList"></ul>
+          <div class="row add-row" style="margin-top:0.75rem">
+            <input id="newAdminEmail" type="email" placeholder="user@gmail.com" />
+            <button type="button" class="btn btn-outline btn-sm" id="addAdminBtn">Add user</button>
+          </div>
+        </div>
+        <p class="status" id="status"></p>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
+  <script src="../js/firebase-config.js"></script>
+  <script src="./allowlist.js"></script>
+  <script src="../js/release-admin.js"></script>
+</body>
+</html>

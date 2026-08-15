@@ -155,7 +155,14 @@ export async function convertPdfFirstPageToImage(
 
   const page = await pdf.getPage(1);
   const viewport = page.getViewport({ scale: 1.0 });
-  const scale = Math.min(effectiveMaxWidth / viewport.width, 2.0);
+  /**
+   * Target raster width ≈ maxWidth CSS px.
+   * Old hard cap of 2.0 left portal/gallery previews soft on HiDPI (600–1100 CSS box × 2–3 DPR).
+   * Small thumbs stay ≤2×; portal/large maxWidth can go sharper.
+   */
+  const maxScale =
+    effectiveMaxWidth >= 1600 ? 4 : effectiveMaxWidth >= 1100 ? 3.25 : effectiveMaxWidth >= 800 ? 2.75 : 2;
+  const scale = Math.min(effectiveMaxWidth / viewport.width, maxScale);
   const scaledViewport = page.getViewport({ scale });
 
   const canvas = document.createElement("canvas");

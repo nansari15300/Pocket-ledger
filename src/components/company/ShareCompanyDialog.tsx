@@ -20,7 +20,7 @@ import {
   deleteField,
 } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
+import { numericEntitlement, companyStorageIsLocal, isAtOrOverEntitlementCap, type PlanId } from "@/config/plans";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
@@ -228,7 +228,7 @@ export function ShareCompanyDialog({
             }
 
             const plan = getPlanFromPlans(livePlans, (company.planId as PlanId) || undefined);
-            const maxUsers = numericEntitlement(plan.entitlements, "maxUsers", companyStorageIsLocal(company.storageOption)) || 1;
+            const maxUsers = numericEntitlement(plan.entitlements, "maxUsers", companyStorageIsLocal(company.storageOption));
             const superAdminEmails = new Set(getSuperAdminEmails().map((e) => e.toLowerCase().trim()));
             const ownerEmailNorm = (company.ownerEmail || "").toLowerCase().trim();
             const sharedExcludingSuperAdminAndOwner = (company.sharedWithEmails || []).filter(
@@ -238,7 +238,7 @@ export function ShareCompanyDialog({
               }
             );
             const currentMembers = 1 + sharedExcludingSuperAdminAndOwner.length;
-            if (currentMembers >= maxUsers) {
+            if (isAtOrOverEntitlementCap(currentMembers, maxUsers)) {
                 toast({
                     variant: "destructive",
                     title: "Plan limit reached",

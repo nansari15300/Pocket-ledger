@@ -1,0 +1,19 @@
+{
+  "_comment": "Copy these rewrites into firebase.json hosting.rewrites after you have the App Hosting Cloud Run serviceId. Also set WEB_APP_BASE_PATH=/app in apphosting.yaml.",
+  "rewrites": [
+    {
+      "source": "/app",
+      "run": {
+        "serviceId": "REPLACE_WITH_APP_HOSTING_BACKEND_SERVICE_ID",
+        "region": "us-central1"
+      }
+    },
+    {
+      "source": "/app/**",
+      "run": {
+        "serviceId": "REPLACE_WITH_APP_HOSTING_BACKEND_SERVICE_ID",
+        "region": "us-central1"
+      }
+    }
+  ]
+}

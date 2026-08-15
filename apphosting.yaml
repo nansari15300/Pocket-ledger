@@ -3,6 +3,14 @@ schemaVersion: "v1"
 
 # Firebase Console me set kiye secrets tabhi server (API routes) par milenge jab yahan RUNTIME declare hon.
 environmentVariables:
+  # Hosted web app under /app (pair with Hosting: website at `/`, rewrite `/app/**` here).
+  # EXE/APK static builds never set this — they stay at `/`.
+  - variable: WEB_APP_BASE_PATH
+    value: "/app"
+    availability: ["BUILD", "RUNTIME"]
+  - variable: NEXT_PUBLIC_WEB_APP_BASE_PATH
+    value: "/app"
+    availability: ["BUILD", "RUNTIME"]
   - variable: NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
     availability: ["BUILD", "RUNTIME"]
   - variable: STRIPE_SECRET_KEY

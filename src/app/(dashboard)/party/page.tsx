@@ -68,6 +68,7 @@ import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { appendPreservedModalQueryToHref } from "@/lib/modalUrlSync";
+import { browserHistoryHref } from "@/lib/webAppBasePath";
 import { consumeMasterDetailSidebarListNav } from "@/lib/masterDetailSidebarNav";
 import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesPartyLedger";
@@ -250,7 +251,7 @@ function PartyPageContent() {
     // Pehle URL + memory clear — phir selected null (sync effect purani ?selected= se detail na khole)
     if (typeof window !== "undefined") {
       try {
-        window.history.replaceState(window.history.state, "", href);
+        window.history.replaceState(window.history.state, "", browserHistoryHref(href));
         const raw = localStorage.getItem("partyPageState");
         if (raw) {
           const parsed = JSON.parse(raw) as { selections?: Record<string, string> };
@@ -587,7 +588,7 @@ function PartyPageContent() {
           : masterDetailListHref("party");
     if (typeof window !== "undefined") {
       try {
-        window.history.replaceState(window.history.state, "", href);
+        window.history.replaceState(window.history.state, "", browserHistoryHref(href));
         const raw = localStorage.getItem("partyPageState");
         if (raw) {
           const parsed = JSON.parse(raw) as { selections?: Record<string, string> };
@@ -920,7 +921,7 @@ function PartyPageContent() {
     // replaceState pehle — URL effect ko turant sahi id mile (1-click-late bug fix)
     if (typeof window !== "undefined") {
       try {
-        window.history.replaceState(window.history.state, "", path);
+        window.history.replaceState(window.history.state, "", browserHistoryHref(path));
       } catch {
         /* ignore */
       }

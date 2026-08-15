@@ -99,6 +99,10 @@ import { HistoryDialog } from "@/components/vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
 import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
+import {
+  BillWiseAutoLinkPromptDialog,
+  usePartyBillWiseAutoLinkPrompt,
+} from "@/components/vouchers/BillWiseAutoLinkPrompt";
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
@@ -279,7 +283,9 @@ export function PartyDetails({
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } =
     useDate();
-  const { vouchers, processedParties, journalAccountNames: voucherJournalAccountNames } = useVouchers();
+  const { vouchers, vouchersAll, processedParties, journalAccountNames: voucherJournalAccountNames } = useVouchers();
+  // Auto link must see every DR/CR row of the party, not just the current view filter.
+  const vouchersForAutoLink = vouchersAll?.length ? vouchersAll : vouchers;
   const handlePartyUpdated = useMasterEntityLivePatch<Party>({
     collection: "parties",
     entityId: initialParty.id,
@@ -470,6 +476,32 @@ export function PartyDetails({
   const [localFetchedUserNames, setLocalFetchedUserNames] = useState<Record<string, string>>({});
   const { user, customUser } = useAuth();
   const isLocalMode = isLocalOnlyMode();
+  const isCompanyAdmin = React.useMemo(() => {
+    const role = String(customUser?.role || "").trim();
+    if (role === "CompanyAdmin" || role === "SuperAdmin" || role === "owner") return true;
+    if (!company || !user) return false;
+    if (company.ownerId && user.uid && company.ownerId === user.uid) return true;
+    const ownerEmail = String((company as any).ownerEmail || "").trim().toLowerCase();
+    const email = String(user.email || "").trim().toLowerCase();
+    return !!ownerEmail && !!email && ownerEmail === email;
+  }, [customUser?.role, company, user]);
+
+  const autoLinkPrompt = usePartyBillWiseAutoLinkPrompt({
+    enabled: isCompanyAdmin && !!party?.id && party.id !== "all" && !(party as any).isSystemAccount,
+    companyId,
+    userId: user?.uid || (isLocalMode && companyId ? "local" : null),
+    ledgerId: party?.id,
+    ledgerName: party?.name,
+    ledgerKind: "party",
+    vouchers: vouchersForAutoLink,
+  });
+  const openBillWiseAutoLink = React.useCallback(() => {
+    if (autoLinkPrompt.proposal) {
+      autoLinkPrompt.setOpen(true);
+      return;
+    }
+    toast.info("No eligible unlinked bill-wise payment found for this ledger.");
+  }, [autoLinkPrompt.proposal, autoLinkPrompt.setOpen]);
 
   // Always seed current user's display name so own transactions never fall back to raw UID.
   useEffect(() => {
@@ -948,6 +980,18 @@ export function PartyDetails({
     onBack?.();
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, historyVoucher, linkPaymentVoucher, linkAdvancesVoucher, closeModalInUrl, onBack]);
 
+  const autoLinkPromptUi =
+    companyId && (user?.uid || isLocalMode) ? (
+      <BillWiseAutoLinkPromptDialog
+        open={autoLinkPrompt.open}
+        onOpenChange={autoLinkPrompt.setOpen}
+        proposal={autoLinkPrompt.proposal}
+        companyId={companyId}
+        userId={user?.uid || "local"}
+        vouchers={vouchersForAutoLink}
+      />
+    ) : null;
+
   if (isMobile) {
     const isReportMobileChrome = mobileFooterVariant === "report";
     const hideReportPartyPicker = isReportMobileChrome && (isAllVouchersView || party.id === "all");
@@ -1128,7 +1172,7 @@ export function PartyDetails({
                       adjustmentTarget: { id: party.id, entityType: "party", name: party.name },
                     }}
                   >
-                    <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
+                    <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-[27px] min-h-[27px] text-xs")} title="Adjust Balance">
                       <AdjustBalancePillLabel />
                     </Button>
                   </AddVoucherDialog>
@@ -1402,6 +1446,7 @@ export function PartyDetails({
             }}
           />
         )}
+        {autoLinkPromptUi}
       </>
     );
   }
@@ -1409,6 +1454,7 @@ export function PartyDetails({
   return (
     <>
       {party?.id && <EntityAlarmPopup context="Party" entityId={party.id} />}
+      {autoLinkPromptUi}
       <div className="h-full min-h-full flex flex-col overflow-hidden">
         {/* Header: identity + pills ek hi gap (pill gap); Party name chhoti width pe max 2 line (avatar h-12), pattika height nahi badhe */}
         <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
@@ -1472,7 +1518,6 @@ export function PartyDetails({
                 onClick={toggleUnapprovedOnly}
               />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                <div className="flex items-center gap-1.5 flex-shrink-0">
                   <BsDatePicker
                     isRange
                     valueAD={dateRange}
@@ -1480,10 +1525,8 @@ export function PartyDetails({
                     transactionDates={transactionDates}
                     className={cn("w-auto", LEDGER_HEADER_PILL_CN)}
                   />
-                </div>
               )}
               {(dateSystem === 'AD' || dateSystem === 'Both') && (
-                <div className="flex items-center gap-1.5 flex-shrink-0">
                   <Popover open={isDesktopCalendarOpen} onOpenChange={setIsDesktopCalendarOpen}>
                     <PopoverTrigger asChild>
                       <Button
@@ -1546,7 +1589,6 @@ export function PartyDetails({
                     />
                   </PopoverContent>
                 </Popover>
-                </div>
               )}
               {isFilterActive && (
                 // Header par BS/AD alag clear buttons hatakar single clear button rakha gaya.
@@ -1581,6 +1623,17 @@ export function PartyDetails({
               <Button variant="outline" size="icon" className={LEDGER_HEADER_PILL_ICON_CN} onClick={handlePrint} data-theme-detail="print">
                 <Printer className="h-3.5 w-3.5" />
               </Button>
+              {isCompanyAdmin ? (
+                <Button
+                  type="button"
+                  variant="chromePill"
+                  size="sm"
+                  className={LEDGER_HEADER_PILL_CN}
+                  onClick={openBillWiseAutoLink}
+                >
+                  Link for Bill Wise
+                </Button>
+              ) : null}
             </div>
           </div>
         </div>
@@ -1648,7 +1701,7 @@ export function PartyDetails({
                       adjustmentTarget: { id: party.id, entityType: "party", name: party.name },
                     }}
                   >
-                    <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
+                    <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-[27px] min-h-[27px] text-xs")} title="Adjust Balance">
                       <AdjustBalancePillLabel />
                     </Button>
                   </AddVoucherDialog>

@@ -1,0 +1,352 @@
+/* Demo 2 — laptop / tablet / phone mockups (pure CSS, vector-sharp) */
+
+/* Blue band hugs the devices: only 5px above and below the mockups. */
+.hero-devices {
+  padding: 5px 0;
+}
+.hero-devices .hero-grid {
+  grid-template-columns: 0.95fr 1.35fr;
+  align-items: center;
+  gap: 2rem;
+}
+/* Copy column keeps its own breathing room while devices touch the band edges. */
+.hero-devices .hero-grid > div:first-child {
+  padding: 3rem 0;
+}
+
+.device-stage {
+  position: relative;
+  min-height: clamp(320px, 33vw, 460px);
+  padding: 0;
+}
+
+.device {
+  position: absolute;
+  background: linear-gradient(160deg, #48525f 0%, #2a3340 18%, #1a2130 62%, #10151f 100%);
+  box-shadow:
+    0 2px 0 rgba(255, 255, 255, 0.16) inset,
+    0 -1px 0 rgba(0, 0, 0, 0.5) inset,
+    0 30px 70px rgba(2, 10, 25, 0.5),
+    0 6px 18px rgba(2, 10, 25, 0.35);
+}
+
+/* Glass glare over every screen */
+.laptop-screen::after,
+.tablet-screen::after,
+.phone-screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    108deg,
+    rgba(255, 255, 255, 0.42) 0%,
+    rgba(255, 255, 255, 0.1) 22%,
+    rgba(255, 255, 255, 0) 46%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  mix-blend-mode: screen;
+  opacity: 0.5;
+}
+
+/* Laptop */
+.laptop {
+  left: 0;
+  top: 0;
+  width: 92%;
+  border-radius: 10px 10px 5px 5px;
+  padding: 6px 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+/* Webcam */
+.laptop::before {
+  content: "";
+  position: absolute;
+  top: 1.5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 35% 35%, #7d8ea3, #10151f 70%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.laptop-screen {
+  position: relative;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #fff;
+  aspect-ratio: 16 / 10;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+.laptop-base {
+  position: absolute;
+  left: -8.5%;
+  right: -8.5%;
+  bottom: -13px;
+  height: 13px;
+  border-radius: 0 0 12px 12px;
+  background: linear-gradient(180deg, #e8eef6 0%, #c8d3e0 42%, #93a1b4 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 16px 26px rgba(2, 10, 25, 0.4);
+}
+/* Trackpad lip notch */
+.laptop-base::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 14%;
+  height: 5px;
+  border-radius: 0 0 999px 999px;
+  background: linear-gradient(180deg, #97a5b8, #7d8b9e);
+}
+
+/* Tablet */
+.tablet {
+  right: 0;
+  top: 4%;
+  width: 37%;
+  border-radius: 15px;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+.tablet::before {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 35% 35%, #7d8ea3, #10151f 70%);
+}
+.tablet-screen {
+  position: relative;
+  border-radius: 11px;
+  overflow: hidden;
+  background: #fff;
+  aspect-ratio: 3 / 4;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+
+/* Phone — golden frame */
+.phone {
+  left: 24%;
+  bottom: 0;
+  width: 23%;
+  border-radius: 22px;
+  padding: 3px;
+  border: 1px solid rgba(255, 238, 186, 0.55);
+  background: linear-gradient(160deg, #f7e3a8 0%, #d9ad55 22%, #a97c2d 58%, #7d5717 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 249, 224, 0.65) inset,
+    0 -1px 0 rgba(90, 60, 12, 0.6) inset,
+    0 26px 60px rgba(2, 10, 25, 0.5),
+    0 6px 16px rgba(2, 10, 25, 0.35);
+  z-index: 3;
+}
+/* Side buttons */
+.phone::before,
+.phone::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #f0d79b, #a97f31);
+}
+.phone::before {
+  top: 24%;
+  height: 8%;
+}
+.phone::after {
+  top: 36%;
+  height: 13%;
+}
+.phone-screen {
+  position: relative;
+  border-radius: 19px;
+  overflow: hidden;
+  background: #fff;
+  aspect-ratio: 9 / 18;
+  box-shadow: 0 0 0 1px rgba(93, 62, 13, 0.55);
+}
+/* Dynamic-island style notch sits on the screen, like a real phone */
+.phone-notch {
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  width: 34%;
+  height: 8px;
+  margin: 0;
+  border-radius: 999px;
+  background: #0d1420;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* Shared fake UI — small, crisp, vector text */
+.ui {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  color: #16233a;
+  font-size: 8.5px;
+  line-height: 1.35;
+  letter-spacing: -0.005em;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.ui-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 5px 7px;
+  background: linear-gradient(180deg, #f2f7ff, #e6efff);
+  border-bottom: 1px solid #d7e0ea;
+  font-weight: 700;
+}
+.ui-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.ui-brand .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2.5px;
+  background: linear-gradient(145deg, #3a8bfd, #1b4f9c);
+}
+.ui-tabs { display: inline-flex; gap: 3px; }
+.ui-tabs i {
+  width: 13px;
+  height: 4px;
+  border-radius: 999px;
+  background: #c6d6ea;
+}
+.ui-tabs i.on { background: #2f80ed; width: 18px; }
+
+.ui-body { flex: 1; display: flex; min-height: 0; }
+.ui-body.column { flex-direction: column; padding: 6px; gap: 5px; }
+
+.ui-side {
+  width: 21%;
+  padding: 6px 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: #f4f8fd;
+  border-right: 1px solid #e2e9f2;
+}
+.ui-side span {
+  height: 5px;
+  border-radius: 999px;
+  background: #d6e2f1;
+}
+.ui-side span.on { background: #2f80ed; }
+
+.ui-main {
+  flex: 1;
+  padding: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ui-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.ui-kpis.two { grid-template-columns: repeat(2, 1fr); }
+.kpi {
+  border: 1px solid #e2e9f2;
+  border-radius: 5px;
+  padding: 4px 5px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.kpi.wide { align-items: flex-start; }
+.kpi b { font-size: 9.5px; letter-spacing: -0.01em; }
+.kpi small { color: #6b7a8d; font-size: 7px; }
+
+.ui-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 34%;
+  padding: 6px;
+  border: 1px solid #e2e9f2;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #fbfdff, #f2f7fd);
+}
+.ui-chart span {
+  flex: 1;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(180deg, #6aa9ff, #2f80ed);
+}
+
+.ui-rows { display: flex; flex-direction: column; gap: 3px; }
+.ui-rows div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 3px 5px;
+  border: 1px solid #eaeff6;
+  border-radius: 4px;
+  background: #fff;
+}
+.ui-rows em { font-style: normal; color: #61708a; }
+.ui-rows b { font-size: 8px; }
+
+.chip {
+  border-radius: 999px;
+  padding: 1px 5px;
+  font-size: 7px;
+  font-weight: 700;
+}
+.chip.ok { background: #e8f8f1; color: #1f9d6a; }
+.chip.warn { background: #fff4e5; color: #b86a00; }
+
+.fab {
+  align-self: flex-end;
+  margin-top: auto;
+  width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 700;
+  background: #2f80ed;
+  box-shadow: 0 5px 12px rgba(47, 128, 237, 0.4);
+}
+
+.ui.compact { font-size: 8px; }
+.ui.tiny { font-size: 7px; }
+.ui.tiny .ui-top { padding: 9px 6px 4px; }
+.ui.tiny .ui-body.column { padding: 5px; gap: 4px; }
+
+@media (max-width: 980px) {
+  .hero-devices .hero-grid { grid-template-columns: 1fr; gap: 1.25rem; }
+  .hero-devices .hero-grid > div:first-child { padding: 2rem 0 0; }
+  .device-stage { min-height: clamp(300px, 58vw, 420px); }
+}
+
+@media (max-width: 620px) {
+  .device-stage { min-height: 52vw; }
+  .laptop { width: 86%; padding: 4px 4px 6px; }
+  .tablet { width: 36%; top: 12%; padding: 4px; }
+  .phone { width: 23%; left: 20%; padding: 3px; }
+  .ui { font-size: 7px; }
+  .ui.compact { font-size: 6.5px; }
+  .ui.tiny { font-size: 6px; }
+}

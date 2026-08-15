@@ -27,7 +27,10 @@ export function consumeMasterDetailSidebarListNav(routeKey: MasterDetailListRout
 
 /** `/party` → `party` — sidebar list-only navigation */
 export function masterDetailRouteKeyFromPath(pathname: string): MasterDetailListRouteKey | null {
-  const p = (pathname || "").replace(/\/+$/, "").toLowerCase();
+  let p = (pathname || "").replace(/\/+$/, "").toLowerCase();
+  // Gateway/hosted web: address bar is `/app/party` while Next hooks use `/party`.
+  if (p === "/app") p = "/";
+  else if (p.startsWith("/app/")) p = p.slice(4) || "/";
   if (p === "/party") return "party";
   if (p === "/bank-cash") return "bank-cash";
   if (p === "/staff") return "staff";

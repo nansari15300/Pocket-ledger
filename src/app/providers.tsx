@@ -71,6 +71,7 @@ import { PlDeltaExportDevBridge } from "@/components/settings/PlDeltaExportDevBr
 import { PlServerGateRefreshBootstrap } from "@/components/settings/PlServerGateRefreshBootstrap";
 import { PlServerHostAttachmentDeltaBootstrap } from "@/components/settings/PlServerHostAttachmentDeltaBootstrap";
 import { PlServerCompanyDetectionAuditRunner } from "@/components/PlServerCompanyDetectionAuditRunner";
+import { ReleaseUpdateCheck } from "@/components/ReleaseUpdateCheck";
 import { primeLocalFileRefMetaRuntimeCache } from "@/lib/localPendingFiles";
 import { isPerfDebugEnabled } from "@/lib/perfDebug";
 import { ensureClientRandomUUIDPolyfill } from "@/lib/clientRandomUUID";
@@ -154,6 +155,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <LocalCompanySqliteWarmBootstrap />
                 <LiveMirrorFolderMissingDialog />
                 <AppAlertDialog />
+                <ReleaseUpdateCheck />
                 <PresenceManager />
                 <PrintLogoPreloader />
                 <DateProvider>

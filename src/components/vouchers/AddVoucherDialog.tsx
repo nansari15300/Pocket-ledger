@@ -14,7 +14,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import { CalendarDays, Loader2, RotateCcw, Settings, X } from "lucide-react";
 import {
   DropdownMenu,
@@ -46,11 +46,12 @@ import { InterCompanyVoucherForm } from "@/components/inter-company/InterCompany
 import { InterCompanyPayModeInfoButton } from "@/components/inter-company/InterCompanyPayModeInfoButton";
 import type { InterCompanyRibbonTab } from "@/components/inter-company/InterCompanyRibbonNav";
 import { isInterCompanyVoucherEditDeleteBlocked } from "@/lib/interCompany/interCompanyVoucherHydrate";
-import { useCompany, CompanyContext } from "@/hooks/useCompany";
+import { useCompany, CompanyContext, type Company } from "@/hooks/useCompany";
 import {
   listCompaniesForVoucherCopyTo,
   PL_SERVER_ACCESS_CONTEXT_EVENT,
 } from "@/lib/plServerAccessContext";
+import { partitionCompaniesForSelector } from "@/lib/companyStorageKind";
 import usePermissions from "@/hooks/usePermissions";
 import { routeHasVoucherFormMastersLoaded, useVouchers, VoucherProvider } from "@/hooks/useVouchers";
 import { determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
@@ -1004,6 +1005,46 @@ function VoucherDialogDateSystemSwitcher({ className }: { className?: string }) 
   );
 }
 
+/**
+ * Voucher header company dropdown — same Local / Server / Online buckets as CompanySelector.
+ */
+function VoucherCopyCompanySelectOptions({
+  companies,
+}: {
+  companies: Array<{ id: string; name: string } & Record<string, unknown>>;
+}) {
+  const buckets = useMemo(
+    () => partitionCompaniesForSelector(companies as Company[]),
+    [companies]
+  );
+  const byName = (a: { name?: string; id?: string }, b: { name?: string; id?: string }) =>
+    String(a.name || a.id).localeCompare(String(b.name || b.id), undefined, { sensitivity: "base" });
+  const sections = [
+    { key: "local", label: "Local", list: [...buckets.localTabCompanies].sort(byName) },
+    { key: "server", label: "Server", list: [...buckets.serverTabCompanies].sort(byName) },
+    { key: "online", label: "Online", list: [...buckets.onlineTabCompanies].sort(byName) },
+  ] as const;
+
+  return (
+    <>
+      {sections.map((sec) =>
+        sec.list.length === 0 ? null : (
+          <SelectGroup key={sec.key}>
+            <SelectLabel className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+              {sec.label}
+            </SelectLabel>
+            {sec.list.map((c) => (
+              <SelectItem key={c.id} value={c.id}>
+                {c.name}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        )
+      )}
+    </>
+  );
+}
+
 function VoucherDialogContent({ 
   voucher, 
   defaultVoucherData, 
@@ -1079,7 +1120,7 @@ function VoucherDialogContent({
   ledgerOpeningBalanceOutstanding?: number,
   ledgerBooksOpeningBalanceSigned?: number,
   targetCompanyId?: string,
-  targetCompanyOptions?: Array<{ id: string; name: string }>,
+  targetCompanyOptions?: Array<{ id: string; name: string } & Record<string, unknown>>,
   onTargetCompanyChange?: (companyId: string) => void,
   formInstanceKey?: string | number,
   copySaveTargetCompanyId?: string,
@@ -1319,11 +1360,7 @@ function VoucherDialogContent({
                 <SelectValue placeholder="Company" />
               </SelectTrigger>
               <SelectContent>
-                {(targetCompanyOptions || []).map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
+                <VoucherCopyCompanySelectOptions companies={targetCompanyOptions || []} />
               </SelectContent>
             </Select>
             ) : null}
@@ -2480,6 +2517,9 @@ export function AddVoucherDialog(props: any) {
    * Form ke andar amount/wagaira ab bhi local `allocations` se band rehte hain.
    */
   const isEditLockedByLinks = !!voucherForDialogChrome?.id && hasLinks;
+  /** IC: bill-wise link amount lock rakho, lekin hard “edit disabled” banner mat dikhao — apni side attach/Save open. */
+  const showLinkEditLockBanner =
+    isEditLockedByLinks && String(voucherForDialogChrome?.type || "") !== "inter_company";
 
   /** IC: target copy / source approved — dialog bhi view-only (ledger "View" jaisa). */
   const interCompanyViewOnly = useMemo(() => {
@@ -4134,19 +4174,19 @@ export function AddVoucherDialog(props: any) {
       <DialogHeader
         className={cn(
           "border-b bg-[#b8c8f5] dark:bg-[#7a8ed8] text-gray-900 dark:text-white flex flex-col justify-center shrink-0 relative z-20",
-          isDesktop ? cn("p-0", (isEditLockedByLinks || historyBlocksEdit) && "min-h-[unset]") : "px-2 py-1.5 pb-1.5 gap-1",
+          isDesktop ? cn("p-0", (showLinkEditLockBanner || historyBlocksEdit) && "min-h-[unset]") : "px-2 py-1.5 pb-1.5 gap-1",
         )}
       >
         {isDesktop ? (
           <div
             className={cn(
               "cursor-grab active:cursor-grabbing select-none",
-              (isEditLockedByLinks || historyBlocksEdit) && "min-h-[unset]",
+              (showLinkEditLockBanner || historyBlocksEdit) && "min-h-[unset]",
             )}
             onMouseDown={handleDragStart}
           >
             <div className="flex flex-col justify-center px-3 py-2 md:px-4 md:py-2">
-              {isEditLockedByLinks ? (
+              {showLinkEditLockBanner ? (
                 // 3-equal wing grid: beechna ribbon header ke geometric center rahe — company dropdown width se shift na ho.
                 // Company to Company badge center me mat rakho (edit-lock banner se ribbon ke niche chala jata tha) — BS ke left.
                 <div className="grid min-h-[2.75rem] w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3">
@@ -4179,11 +4219,7 @@ export function AddVoucherDialog(props: any) {
                           <SelectValue placeholder="Company" />
                         </SelectTrigger>
                         <SelectContent>
-                          {copyToCompanies.map((c) => (
-                            <SelectItem key={c.id} value={c.id}>
-                              {c.name}
-                            </SelectItem>
-                          ))}
+                          <VoucherCopyCompanySelectOptions companies={copyToCompanies} />
                         </SelectContent>
                       </Select>
                     ) : null}
@@ -4217,11 +4253,7 @@ export function AddVoucherDialog(props: any) {
                           <SelectValue placeholder="Company" />
                         </SelectTrigger>
                         <SelectContent>
-                          {copyToCompanies.map((c) => (
-                            <SelectItem key={c.id} value={c.id}>
-                              {c.name}
-                            </SelectItem>
-                          ))}
+                          <VoucherCopyCompanySelectOptions companies={copyToCompanies} />
                         </SelectContent>
                       </Select>
                     ) : null}
@@ -4232,7 +4264,7 @@ export function AddVoucherDialog(props: any) {
                   </div>
                 </div>
               )}
-              {historyBlocksEdit && !isEditLockedByLinks && (
+              {historyBlocksEdit && !showLinkEditLockBanner && (
                 <div
                   className={cn(
                     "mt-2 w-full max-w-full mx-auto bg-amber-600 rounded-md flex items-center justify-center self-center",
@@ -4263,7 +4295,7 @@ export function AddVoucherDialog(props: any) {
               </div>
               <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-1.5">
                 {interCompanyPayModeHeaderBadge}
-                {isEditLockedByLinks && (
+                {showLinkEditLockBanner && (
                   <div className="min-w-0 max-w-[min(100%,14rem)] rounded-full border border-gray-300/80 bg-gray-200 px-2 py-1.5">
                     <p className="m-0 text-center text-[10px] font-semibold leading-snug text-[#ff0000]">
                       To Edit Unlink Linked trxn 1st
@@ -4297,7 +4329,7 @@ export function AddVoucherDialog(props: any) {
                 ) : null}
               </div>
             </div>
-            {historyBlocksEdit && !isEditLockedByLinks && (
+            {historyBlocksEdit && !showLinkEditLockBanner && (
               <div className="mt-1 w-full max-w-full mx-auto bg-amber-600 rounded-md flex items-center justify-center self-center px-2 py-1">
                 <p className="font-semibold text-center text-white m-0 text-[11px] leading-snug">
                   Voucher history is full. Clear history in History dialog to edit and save changes.
@@ -4622,7 +4654,7 @@ export function AddVoucherDialog(props: any) {
           onEffectiveLinksChange={(v) => setEffectiveHasLinksFromForm(v === undefined ? null : v)}
           onClearEffectiveLinksOnTabChange={clearEffectiveLinksOnTabChange}
           targetCompanyId={targetCompanyId}
-          targetCompanyOptions={copyToCompanies.map((c) => ({ id: c.id, name: c.name }))}
+          targetCompanyOptions={copyToCompanies}
           onTargetCompanyChange={handleLedgerHeaderCompanyChange}
           formInstanceKey={`${copyDraftSeedVersion}-${missingEditVoucherNumberVersion}`}
           // Multi-company: create / edit / copy sab par header company dropdown.

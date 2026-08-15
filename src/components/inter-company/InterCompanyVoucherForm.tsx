@@ -500,8 +500,10 @@ export function InterCompanyVoucherForm({
     String(role) === "owner" ||
     customUser?.role === "CompanyAdmin" ||
     customUser?.role === "SuperAdmin";
-  const fieldsDisabled =
-    editingDisabled || isInterCompanyEditLocked || (!!displayVoucher?.id && deleteDisabledWhenLinked);
+  /** Bill-wise links: amount/accounts lock — attachments + Save apni company side pe open rehte hain. */
+  const linkedLocksCoreFields = !!displayVoucher?.id && deleteDisabledWhenLinked;
+  const coreEditBlocked = editingDisabled || isInterCompanyEditLocked;
+  const fieldsDisabled = coreEditBlocked || linkedLocksCoreFields;
 
   const buildIcExtrasSig = useCallback(
     (args: {
@@ -1123,12 +1125,13 @@ export function InterCompanyVoucherForm({
     : icViewerSide === "target"
       ? fieldsDisabled
       : !(canEditOtherSideAccounts || targetCompanyRematched);
+  // Own-side attach: bill-wise link se mat band karo — local/owned company files + share tick open.
   const sourceAttachDisabled = !hasPersistedIc
-    ? fieldsDisabled
-    : icViewerSide !== "source" || fieldsDisabled;
+    ? coreEditBlocked
+    : icViewerSide !== "source" || coreEditBlocked;
   const targetAttachDisabled = !hasPersistedIc
-    ? fieldsDisabled
-    : icViewerSide !== "target" || fieldsDisabled;
+    ? coreEditBlocked
+    : icViewerSide !== "target" || coreEditBlocked;
   /** Footer — IC ab Edit Trxn; lock nahi */
   const isIcFooterViewOnly = false;
 
@@ -1402,12 +1405,18 @@ export function InterCompanyVoucherForm({
     shareTargetAttachmentsWithSource !== savedShareTargetAttachmentsWithSource ||
     postTargetAsJournal !== savedPostTargetAsJournal;
 
+  /**
+   * Bill-wise linked: core fields RO, lekin apni side attachment Save allow.
+   * `sourceSideDisabled` linked hone par true ho sakta hai — Save us case me mat roko.
+   */
   const ownSideSaveBlocked =
-    hasPersistedIc
+    coreEditBlocked ||
+    (hasPersistedIc
       ? icViewerSide === "target"
-        ? targetSideDisabled
-        : sourceSideDisabled
-      : fieldsDisabled;
+        ? targetSideDisabled && !linkedLocksCoreFields
+        : sourceSideDisabled && !linkedLocksCoreFields
+      : fieldsDisabled);
+  const ownSideFooterEditingDisabled = ownSideSaveBlocked;
 
   const processAndSave = async (opts?: IcSaveOpts) => {
     // Apni side editable hona zaroori — bina tick ke source-view par target RO tha to purana guard Save rok deta tha
@@ -2709,7 +2718,7 @@ export function InterCompanyVoucherForm({
                   }
                 : (displayVoucher as { id?: string; isApproved?: boolean } | undefined)
             }
-            editingDisabled={icViewerSide === "target" ? targetSideDisabled : sourceSideDisabled}
+            editingDisabled={ownSideFooterEditingDisabled}
             isEditViewOnly={isIcFooterViewOnly}
             isCompanyAdmin={isCompanyAdmin && !isInterCompanyEditLocked}
             deleteDisabledWhenLinked={deleteDisabledWhenLinked}
