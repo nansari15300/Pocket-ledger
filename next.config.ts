@@ -8,12 +8,18 @@ const isDevBuild = process.env.NODE_ENV !== "production";
 /**
  * Hosted web + local gateway: `WEB_APP_BASE_PATH=/app` → …/app/dashboard …
  * - `npm run dev` (gateway) sets this automatically.
- * - App Hosting sets it via apphosting.yaml.
+ * - App Hosting: production non-static always `/app` (website at `/` via Firebase Hosting).
+ *   Console env overrides that clear the yaml value must not drop the app back to `/`.
  * EXE/APK static export must stay at `/` (never set with STATIC_BUILD=1).
- * Marketing site: `website/` at domain / localhost root.
+ * Opt out only with `WEB_APP_BASE_PATH=0`.
  */
-const webAppBasePath =
-  !isStaticBuild && process.env.WEB_APP_BASE_PATH === "/app" ? "/app" : undefined;
+const rawWebAppBasePath = String(process.env.WEB_APP_BASE_PATH || "").trim();
+const webAppBasePath = (() => {
+  if (isStaticBuild || rawWebAppBasePath === "0") return undefined;
+  if (rawWebAppBasePath === "/app") return "/app";
+  if (!isDevBuild) return "/app";
+  return undefined;
+})();
 
 /** `/~offline` precache busting — git nahi ho to UUID (Firebase CI safe). */
 function serwistOfflineRevision(): string {
