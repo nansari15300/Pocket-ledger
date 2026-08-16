@@ -30,13 +30,28 @@ releases/latest.json
 
 Then `localhost:3000/downloads` buttons use those local paths.
 
-## Live Firebase publish
+## Live Firebase publish (single domain, same shape as localhost)
 
-1. Open `https://pocket-ledger.com/admin-release/` (or localhost same path).
-2. Sign in as owner `nansari15300@gmail.com` (or another release admin).
-3. Optional: **Add user** on the page (saved to Storage `public-releases/admins.json`).
-4. Enter EXE/APK version → optional Play Store URL → Upload.
-5. Files go to **Firebase Storage** (not Firestore): `public-releases/YYYY-MM-DD/` + `latest.json`.
+| URL | Serves |
+|-----|--------|
+| `https://pocket-ledger.com/` | Marketing site (`website/dist` via Firebase Hosting) |
+| `https://pocket-ledger.com/app` | Next app (Hosting rewrite → App Hosting Cloud Run) |
+
+1. App Hosting keeps `WEB_APP_BASE_PATH=/app` (see `apphosting.yaml`) — git push rebuilds the app under `/app`.
+2. Deploy Hosting (website + `/app` rewrite):
+
+```bash
+npm run website:build
+firebase deploy --only hosting --project studio-5452513410-a3f5b
+```
+
+3. Custom domain `pocket-ledger.com` must be connected to **Firebase Hosting** (site `studio-5452513410-a3f5b`), not only App Hosting — otherwise root still shows the app.
+
+4. Open `https://pocket-ledger.com/admin-release/` (or localhost same path).
+5. Sign in as owner `nansari15300@gmail.com` (or another release admin).
+6. Optional: **Add user** on the page (saved to Storage `public-releases/admins.json`).
+7. Enter EXE/APK version → optional Play Store URL → Upload.
+8. Files go to **Firebase Storage** (not Firestore): `public-releases/YYYY-MM-DD/` + `latest.json`.
 
 Deploy storage rules: `firebase deploy --only storage`
 

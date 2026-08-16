@@ -79,6 +79,22 @@
         "destination": "/app/reports/:splat",
         "type": 301
       }
+    ],
+    "rewrites": [
+      {
+        "source": "/app",
+        "run": {
+          "serviceId": "pocket-ledger",
+          "region": "asia-southeast1"
+        }
+      },
+      {
+        "source": "/app/**",
+        "run": {
+          "serviceId": "pocket-ledger",
+          "region": "asia-southeast1"
+        }
+      }
     ]
   }
 }

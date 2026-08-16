@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useRef, Suspense, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, Suspense, Fragment, type ReactNode } from "react";
 import { toast } from "@/hooks/use-toast";
 import {
   DEFAULT_PLANS,
@@ -167,32 +167,59 @@ function maxJoinedTierStartMsAmongOwnerPeers(
   return best;
 }
 
-/** Shared feature order for table, mobile cards, and PDF export. */
-const BILLING_FEATURES: { key: EntitlementKey; label: string }[] = [
-  // User request: company limits pehle — "per owner account" scope table ke top par clear.
+/** Shared feature order for table, mobile cards, and PDF export.
+ * Online block → thick separator → offline/local block → shared (both).
+ */
+const BILLING_FEATURES_ONLINE: { key: EntitlementKey; label: string }[] = [
   { key: "maxCompanies", label: "Max Companies (online)" },
-  { key: "maxCompaniesLocal", label: "Max Companies (local)" },
   { key: "maxUsers", label: "Max Users (online)" },
-  { key: "maxUsersLocal", label: "Max Users (local)" },
-  // Devices — number only (tick alag row `hasMultiDeviceSync`).
   { key: "maxDevices", label: "Max devices (online)" },
   { key: "hasMultiDeviceSync", label: "Multi device sync" },
-  { key: "maxDevicesLocal", label: "Max devices (local)" },
   { key: "dailyVoucherLimit", label: "Daily Vouchers (online)" },
-  { key: "dailyVoucherLimitLocal", label: "Daily Vouchers (local)" },
   { key: "monthlyVoucherLimit", label: "Monthly Vouchers (online)" },
-  { key: "monthlyVoucherLimitLocal", label: "Monthly Vouchers (local)" },
   { key: "maxAttachmentsGB", label: "Attachments GB (online)" },
-  { key: "maxAttachmentsGBLocal", label: "Attachments GB (local)" },
   { key: "maxStorageGB", label: "Storage GB (online)" },
+  { key: "maxLocalToOnlineAttachmentMB", label: "Local→cloud attachments (MB)" },
+];
+
+const BILLING_FEATURES_OFFLINE: { key: EntitlementKey; label: string }[] = [
+  { key: "maxCompaniesLocal", label: "Max Companies (local)" },
+  { key: "maxUsersLocal", label: "Max Users (local)" },
+  { key: "maxDevicesLocal", label: "Max devices (local)" },
+  { key: "dailyVoucherLimitLocal", label: "Daily Vouchers (local)" },
+  { key: "monthlyVoucherLimitLocal", label: "Monthly Vouchers (local)" },
+  { key: "maxAttachmentsGBLocal", label: "Attachments GB (local)" },
   { key: "maxStorageGBLocal", label: "Storage GB (local)" },
+];
+
+const BILLING_FEATURES_SHARED: { key: EntitlementKey; label: string }[] = [
   { key: "maxAttachmentBackupPerMonth", label: "Attachment backups / month" },
   { key: "maxAttachmentRestorePerMonth", label: "Attachment restores / month" },
-  { key: "maxLocalToOnlineAttachmentMB", label: "Local→cloud attachments (MB)" },
   { key: "hasRoleBasedAccess", label: "Role-based access" },
   { key: "hasAuditLogs", label: "Audit logs" },
   { key: "hasPrioritySupport", label: "Priority support" },
 ];
+
+const BILLING_FEATURES: { key: EntitlementKey; label: string }[] = [
+  ...BILLING_FEATURES_ONLINE,
+  ...BILLING_FEATURES_OFFLINE,
+  ...BILLING_FEATURES_SHARED,
+];
+
+/** Insert thick online/offline divider before this feature index. */
+const BILLING_ONLINE_OFFLINE_SPLIT_INDEX = BILLING_FEATURES_ONLINE.length;
+const BILLING_OFFLINE_FEATURES_END_INDEX =
+  BILLING_ONLINE_OFFLINE_SPLIT_INDEX + BILLING_FEATURES_OFFLINE.length;
+
+/** Max companies (online/local) None → that scope’s whole column block looks deactivated. */
+function isBillingFeatureScopeDeactivated(featureIdx: number, onlineCompaniesOn: boolean, offlineCompaniesOn: boolean): boolean {
+  if (featureIdx < BILLING_ONLINE_OFFLINE_SPLIT_INDEX) return !onlineCompaniesOn;
+  if (featureIdx < BILLING_OFFLINE_FEATURES_END_INDEX) return !offlineCompaniesOn;
+  return false;
+}
+
+const BILLING_SCOPE_DEACTIVATED_CELL_CLASS = "opacity-40 bg-muted/50 text-muted-foreground";
+const BILLING_SCOPE_DEACTIVATED_ICON_CLASS = "text-muted-foreground opacity-70";
 
 /** Billing table/mobile: ✓/✗ wale rows (hasMultiDeviceSync = "Multi device sync" alag row). */
 const BILLING_BOOLEAN_ICON_KEYS: EntitlementKey[] = [
@@ -208,7 +235,7 @@ const BILLING_OUTLINE_CLASS = "border-2 border-foreground/30";
 
 /** Features column header — company vs account scope (English). */
 const BILLING_FEATURES_SCOPE_NOTE_EN =
-  "Per company: users, daily/monthly vouchers, attachment & storage GB, and registered devices apply to each company on this plan. Per owner account: max companies (online/local) is the total number of companies you may create. Online vs local rows match each company’s cloud-linked vs device-local storage mode.";
+  "Per company: users, daily/monthly vouchers, attachment & storage GB, and registered devices apply to each company on this plan. Per owner account: max companies (online/local) is the total number of companies you may create. Table lists all online features first, then offline/local features (thick line in between).";
 
 /** Khalti success_url may already include `?pendingId=` — append token/amount with `&` when needed. */
 function withKhaltiProrationReturnParams(returnUrl: string, token: string, amount: number): string {
@@ -1177,9 +1204,16 @@ function BillingPageInner() {
       doc.line(left, top + headerH + rowH, left + tableW, top + headerH + rowH);
 
       // Feature rows with horizontal grid lines (0.4 ≈ outer 0.8 ka aadha).
+      // Thick rule between online block and offline/local block.
       BILLING_FEATURES.forEach((feature, featureIdx) => {
         const rowTop = top + headerH + rowH + featureIdx * rowH;
         const rowTextY = rowTop + rowH - 6;
+        if (featureIdx === BILLING_ONLINE_OFFLINE_SPLIT_INDEX) {
+          // Normal grid ~0.4; +~1px only (not a heavy bar).
+          doc.setLineWidth(0.75);
+          doc.line(left, rowTop, left + tableW, rowTop);
+          doc.setLineWidth(0.4);
+        }
         doc.setFont("helvetica", "normal");
         doc.setFontSize(9);
         doc.text(feature.label, left + 6, rowTextY);
@@ -1978,29 +2012,73 @@ function BillingPageInner() {
                         />
                       </div>
                       <div className="mt-3 space-y-2">
-                        {allFeaturesConfig.map((feature) => {
+                        {allFeaturesConfig.map((feature, featureIdx) => {
                           const { text, enabled } = getFeatureValue(p, feature.key);
                           const boolIcons = BILLING_BOOLEAN_ICON_KEYS.includes(feature.key);
+                          const onlineCompaniesOn = getFeatureValue(p, "maxCompanies").enabled;
+                          const offlineCompaniesOn = getFeatureValue(p, "maxCompaniesLocal").enabled;
+                          const scopeDeactivated = isBillingFeatureScopeDeactivated(
+                            featureIdx,
+                            onlineCompaniesOn,
+                            offlineCompaniesOn
+                          );
                           return (
-                            <div
-                              key={`${p.id}-${feature.key}-mobile`}
-                              className="flex items-start justify-between gap-3 border-b-2 border-foreground/25 pb-1 text-sm"
-                            >
-                              <span className="min-w-0 flex-1 text-muted-foreground">
-                                <BillingFeatureLabelWithInfo helpKey={feature.key} label={feature.label} />
-                              </span>
-                              <span className="font-medium text-right inline-flex items-center justify-end gap-1">
-                                {boolIcons ? (
-                                  enabled ? (
-                                    <Check className="h-5 w-5 shrink-0 text-green-500" aria-hidden />
-                                  ) : (
-                                    <X className="h-5 w-5 shrink-0 text-red-500" aria-hidden />
-                                  )
-                                ) : (
-                                  <span className="tabular-nums">{text}</span>
+                            <Fragment key={`${p.id}-${feature.key}-mobile`}>
+                              {featureIdx === BILLING_ONLINE_OFFLINE_SPLIT_INDEX ? (
+                                <div
+                                  className="h-[2px] bg-foreground/55 my-1"
+                                  role="separator"
+                                  aria-label="Online features above, offline features below"
+                                />
+                              ) : null}
+                              <div
+                                className={cn(
+                                  "flex items-start justify-between gap-3 border-b-2 border-foreground/25 pb-1 text-sm rounded-sm px-1",
+                                  scopeDeactivated && BILLING_SCOPE_DEACTIVATED_CELL_CLASS
                                 )}
-                              </span>
-                            </div>
+                                title={
+                                  scopeDeactivated
+                                    ? featureIdx < BILLING_ONLINE_OFFLINE_SPLIT_INDEX
+                                      ? "Online service not available on this plan (Max Companies online: None)"
+                                      : "Offline service not available on this plan (Max Companies local: None)"
+                                    : undefined
+                                }
+                              >
+                                <span className="min-w-0 flex-1 text-muted-foreground">
+                                  <BillingFeatureLabelWithInfo helpKey={feature.key} label={feature.label} />
+                                </span>
+                                <span className="font-medium text-right inline-flex items-center justify-end gap-1">
+                                  {boolIcons ? (
+                                    enabled ? (
+                                      <Check
+                                        className={cn(
+                                          "h-5 w-5 shrink-0",
+                                          scopeDeactivated ? BILLING_SCOPE_DEACTIVATED_ICON_CLASS : "text-green-500"
+                                        )}
+                                        aria-hidden
+                                      />
+                                    ) : (
+                                      <X
+                                        className={cn(
+                                          "h-5 w-5 shrink-0",
+                                          scopeDeactivated ? BILLING_SCOPE_DEACTIVATED_ICON_CLASS : "text-red-500"
+                                        )}
+                                        aria-hidden
+                                      />
+                                    )
+                                  ) : (
+                                    <span
+                                      className={cn(
+                                        "tabular-nums",
+                                        (!enabled || scopeDeactivated) && text !== "Unlimited" && "text-muted-foreground"
+                                      )}
+                                    >
+                                      {text}
+                                    </span>
+                                  )}
+                                </span>
+                              </div>
+                            </Fragment>
                           );
                         })}
                       </div>
@@ -2554,42 +2632,83 @@ function BillingPageInner() {
                     </TableCell>
                   ))}
                 </TableRow>
-                {allFeaturesConfig.map((feature) => (
-                  <TableRow key={feature.key}>
-                    <TableCell className="min-w-0 max-w-[22%] font-medium whitespace-normal break-words align-middle !whitespace-normal px-2 py-2">
-                      <BillingFeatureLabelWithInfo helpKey={feature.key} label={feature.label} />
-                    </TableCell>
-                    {plans.map((p) => {
-                      const { text, enabled } = getFeatureValue(p, feature.key);
-                      const isSelected = p.id === selectedPlanId;
-                      return (
+                {allFeaturesConfig.map((feature, featureIdx) => (
+                  <Fragment key={feature.key}>
+                    {featureIdx === BILLING_ONLINE_OFFLINE_SPLIT_INDEX ? (
+                      <TableRow className="hover:bg-transparent border-0">
                         <TableCell
-                          key={`${p.id}-${feature.key}`}
-                          className={cn(
-                            "min-w-0 max-w-[19.5%] text-center whitespace-normal break-words align-middle !whitespace-normal px-2 py-2",
-                            isSelected && "bg-muted"
-                          )}
+                          colSpan={plans.length + 1}
+                          className="p-0 border-0"
                         >
-                          {BILLING_BOOLEAN_ICON_KEYS.includes(feature.key) ? (
-                            enabled ? (
-                              <Check className="h-5 w-5 mx-auto text-green-500 shrink-0" />
-                            ) : (
-                              <X className="h-5 w-5 mx-auto text-red-500 shrink-0" />
-                            )
-                          ) : (
-                            <span
-                              className={cn(
-                                "inline-block max-w-full break-words",
-                                !enabled && text !== "Unlimited" && "text-muted-foreground"
-                              )}
-                            >
-                              {text}
-                            </span>
-                          )}
+                          <div
+                            className="h-[2px] bg-foreground/55"
+                            role="separator"
+                            aria-label="Online features above, offline features below"
+                          />
                         </TableCell>
-                      );
-                    })}
-                  </TableRow>
+                      </TableRow>
+                    ) : null}
+                    <TableRow>
+                      <TableCell className="min-w-0 max-w-[22%] font-medium whitespace-normal break-words align-middle !whitespace-normal px-2 py-2">
+                        <BillingFeatureLabelWithInfo helpKey={feature.key} label={feature.label} />
+                      </TableCell>
+                      {plans.map((p) => {
+                        const { text, enabled } = getFeatureValue(p, feature.key);
+                        const isSelected = p.id === selectedPlanId;
+                        const onlineCompaniesOn = getFeatureValue(p, "maxCompanies").enabled;
+                        const offlineCompaniesOn = getFeatureValue(p, "maxCompaniesLocal").enabled;
+                        const scopeDeactivated = isBillingFeatureScopeDeactivated(
+                          featureIdx,
+                          onlineCompaniesOn,
+                          offlineCompaniesOn
+                        );
+                        return (
+                          <TableCell
+                            key={`${p.id}-${feature.key}`}
+                            className={cn(
+                              "min-w-0 max-w-[19.5%] text-center whitespace-normal break-words align-middle !whitespace-normal px-2 py-2",
+                              isSelected && "bg-muted",
+                              scopeDeactivated && BILLING_SCOPE_DEACTIVATED_CELL_CLASS
+                            )}
+                            title={
+                              scopeDeactivated
+                                ? featureIdx < BILLING_ONLINE_OFFLINE_SPLIT_INDEX
+                                  ? "Online service not available on this plan (Max Companies online: None)"
+                                  : "Offline service not available on this plan (Max Companies local: None)"
+                                : undefined
+                            }
+                          >
+                            {BILLING_BOOLEAN_ICON_KEYS.includes(feature.key) ? (
+                              enabled ? (
+                                <Check
+                                  className={cn(
+                                    "h-5 w-5 mx-auto shrink-0",
+                                    scopeDeactivated ? BILLING_SCOPE_DEACTIVATED_ICON_CLASS : "text-green-500"
+                                  )}
+                                />
+                              ) : (
+                                <X
+                                  className={cn(
+                                    "h-5 w-5 mx-auto shrink-0",
+                                    scopeDeactivated ? BILLING_SCOPE_DEACTIVATED_ICON_CLASS : "text-red-500"
+                                  )}
+                                />
+                              )
+                            ) : (
+                              <span
+                                className={cn(
+                                  "inline-block max-w-full break-words",
+                                  (!enabled || scopeDeactivated) && text !== "Unlimited" && "text-muted-foreground"
+                                )}
+                              >
+                                {text}
+                              </span>
+                            )}
+                          </TableCell>
+                        );
+                      })}
+                    </TableRow>
+                  </Fragment>
                 ))}
               </TableBody>
               <TableFooter>

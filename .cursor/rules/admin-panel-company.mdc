@@ -1,0 +1,28 @@
+---
+description: Admin Panel Company — isolated accounting product; never modify normal company code
+alwaysApply: true
+---
+
+# Admin Panel Company (hard rule)
+
+Before working on Admin Panel Company, Admin “Company” menu, subscription accounting, or future PL Server Gold admin accounting, read `AGENTS.md` and `docs/ADMIN_PANEL_COMPANY_AGENT_RULES.md`.
+
+## Hard boundaries
+
+- Normal company code is read-only for this feature. Do **not** edit normal company UI, `useCompany`, normal `companies/` paths, or normal write/sync helpers.
+- Put feature code only in:
+  - `src/adminPanelCompany/**`
+  - `src/lib/adminPanelCompany/**`
+  - `src/lib/adminPanelAccounting/**`
+  - `src/app/(admin)/admin/company/**`
+  - `src/app/api/admin/company/**`
+  - AdminShell wiring only when needed to rename/link Agents → Company.
+- Data must live under `admin_panel_companies/{tenantId}/…`, never under `companies/{id}/…`.
+- Copy required normal-company UI into the isolated tree before editing; never “share” by changing normal modules.
+- Keep backup/restore, PDF portal, online sync, and PL Server frozen unless the user explicitly asks to change that area.
+
+## Product direction
+
+- One Admin Panel Company for Pocket Ledger's own books: subscriber parties, subscription sales, bank/staff/tax/expense, and agent commission.
+- Auto payment entries must be idempotent and system-generated; allow manual adjustments only in the isolated Admin Panel Company UI.
+- Future PL Server Gold uses a local `tenantId` / `licenseId` shape with its own Admin Panel Company. Do not implement Gold installation or licensing unless explicitly requested.

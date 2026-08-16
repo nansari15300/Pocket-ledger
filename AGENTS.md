@@ -172,6 +172,37 @@ When the human asks for PL Server fixes (including “make PL like online”):
 - Preserve local-first PL Server behavior.
 - Do not edit frozen Online Company Sync paths while doing PL work.
 
+## Admin Panel Company (hard — every AI)
+
+**Any agent working on Admin Panel Company / Admin “Company” menu / admin subscription ledger / future PL Server Gold admin accounting must read this section (and `docs/ADMIN_PANEL_COMPANY_AGENT_RULES.md`, plus `.cursor/rules/admin-panel-company.mdc` when present) before editing.**
+
+### Product intent
+
+- One **Admin Panel Company** ledger for Pocket Ledger’s own books (subscribers as parties, subscription payments as sales, agents/commission, bank/staff/tax/expense).
+- **Zero edits** to normal company product code: copy UI into an isolated folder, then edit only the copy.
+- Data root: Firestore/Storage **`admin_panel_companies/{tenantId}/…`**, never normal `companies/{id}/…`.
+- Future **PL Server Gold**: local host gets its own Admin Panel + Admin Panel Company; platform SuperAdmin email remains the cloud owner. Reserve `tenantId`/`licenseId` shape; do not build Gold install/license unless asked.
+
+### Allowed paths (create / edit here)
+
+- `src/adminPanelCompany/**`
+- `src/lib/adminPanelCompany/**`
+- `src/lib/adminPanelAccounting/**`
+- `src/app/(admin)/admin/company/**` (and Agents→Company entry wiring in admin shell **only as needed**)
+- `src/app/api/admin/company/**`
+- `.cursor/rules/admin-panel-company.mdc` (this rule)
+
+### Do not
+
+- Edit normal company ledger UI, `useCompany` company flows, or normal `companies/` write paths to “support” Admin Panel Company — **copy instead**.
+- Put Admin Panel Company documents under `companies/`.
+- Touch frozen Backup / PDF portal / Online sync / PL Server paths for this feature unless the human explicitly asks for that area.
+- Weaken this rule by “sharing” helpers that force changes to normal company modules.
+
+### If the human explicitly asks to change normal company code for Admin Panel Company
+
+- Prefer copy-isolate first; only edit normal company paths if that same message clearly overrides this rule.
+
 ## Cursor note
 
 Cursor rules under `.cursor/rules/` should stay aligned with this `AGENTS.md`.

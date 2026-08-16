@@ -20,11 +20,13 @@ import {
 import { cn } from '@/lib/utils'
 import { isAdminPanelDevPreview } from '@/lib/adminDevPreview'
 import { FirebaseLedgerSyncModeSwitch } from '@/components/layout/FirebaseLedgerSyncModeSwitch'
+import { AdminPanelCompanyShell } from "@/adminPanelCompany/components/AdminPanelCompanyShell";
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   const devPreview = isAdminPanelDevPreview();
   const pathname = usePathname()
   const { isOpen, isMobile, setIsOpen } = useSidebar()
+  const isAdminPanelCompanyRoute = pathname === "/admin/company" || pathname.startsWith("/admin/company/");
 
   // Local/static app me global Firestore network band hota hai — admin sirf online server data use kare.
   useEffect(() => {
@@ -41,7 +43,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
       { href: "/admin/features", label: "Add/Remove Features", icon: ListTree },
       { href: "/admin/bank-settings", label: "Payment Gateway", icon: Landmark },
       { href: "/admin/payments", label: "Subscription Payments", icon: CreditCard },
-      { href: "/admin/agents", label: "Agents", icon: UserCog },
+      { href: "/admin/company", label: "Company", icon: UserCog },
       { href: "/admin/backup", label: "Backup & Restore", icon: Database },
       { href: "/admin/logs", label: "Logs", icon: FileClock },
       { href: "/admin/recycle-bin", label: "Recycle Bin", icon: Trash2 },
@@ -64,6 +66,11 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
       </SidebarMenuButton>
     </Link>
   )
+
+  // Isolated Admin Panel Company intentionally does not mount normal company/dashboard code.
+  if (isAdminPanelCompanyRoute) {
+    return <AdminPanelCompanyShell>{children}</AdminPanelCompanyShell>;
+  }
 
   // Admin borders/tables: `AdminRouteChrome` → `html.pl-admin-route` (globals.css), yahan extra class zaroori nahi.
   return (
