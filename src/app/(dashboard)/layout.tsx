@@ -58,6 +58,7 @@ import { PendingAttachmentSyncBridge } from "@/components/vouchers/PendingAttach
 import { BackupRunGlobalBanner } from "@/components/settings/BackupRunGlobalBanner";
 import { RestoreCloudPushGlobalBanner } from "@/components/RestoreCloudPushGlobalBanner";
 import { AutoBackupScheduler } from "@/components/settings/AutoBackupScheduler";
+import { WebAppOnlineAccessGate } from "@/components/auth/WebAppOnlineAccessGate";
 import { collection, doc, getDocs, getDoc, onSnapshot, deleteDoc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase"; // device-limit overlay: companies/{id}/devices + users lookup
 import { Settings, Monitor, Trash2, Loader2 } from "lucide-react";
@@ -983,20 +984,22 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   return (
-    <MobileViewProvider>
-      <SidebarProvider>
-        <DashboardProvider>
-          {/* Global preview switch: Off / Hover / Click — attachments + profile plan menu */}
-          <FileHoverPreviewProvider>
-            {/* Overlay LayoutContent ke bahar: `/company` jaisi bare routes par bhi trace dikhai de */}
-            <DashboardDocumentTitleSync />
-            <PrefetchDashboardChunk />
-            <ElectronTabStripSyncBridge />
-            <PlNavDebugOnDeviceOverlay />
-            <LayoutContent>{children}</LayoutContent>
-          </FileHoverPreviewProvider>
-        </DashboardProvider>
-      </SidebarProvider>
-    </MobileViewProvider>
+    <WebAppOnlineAccessGate>
+      <MobileViewProvider>
+        <SidebarProvider>
+          <DashboardProvider>
+            {/* Global preview switch: Off / Hover / Click — attachments + profile plan menu */}
+            <FileHoverPreviewProvider>
+              {/* Overlay LayoutContent ke bahar: `/company` jaisi bare routes par bhi trace dikhai de */}
+              <DashboardDocumentTitleSync />
+              <PrefetchDashboardChunk />
+              <ElectronTabStripSyncBridge />
+              <PlNavDebugOnDeviceOverlay />
+              <LayoutContent>{children}</LayoutContent>
+            </FileHoverPreviewProvider>
+          </DashboardProvider>
+        </SidebarProvider>
+      </MobileViewProvider>
+    </WebAppOnlineAccessGate>
   );
 }
