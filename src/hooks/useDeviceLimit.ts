@@ -22,7 +22,7 @@ const runCheckRef = { current: (() => Promise.resolve()) as () => void | Promise
 
 export function useDeviceLimit() {
   const { companyId, company, allCompanies } = useCompany();
-  const { user } = useAuth();
+  const { user, customUser } = useAuth();
   const livePlans = useLivePlans();
   const [isOffline, setIsOffline] = useState<boolean>(false);
   const [ownerAddons, setOwnerAddons] = useState<PurchasedPlanAddOns>(EMPTY_PURCHASED_PLAN_ADDONS);
@@ -104,10 +104,12 @@ export function useDeviceLimit() {
     const isOwner =
       !!company && (company.ownerId === user?.uid || (user?.email && company.ownerEmail === user.email));
 
-    // Owner: account-level best owned plan (header / billing jaisa). Shared user: isi company ka planId (owner subscription pool).
-    const companyPlanIdNormalized: PlanId = normalizePlanIdForClient(company?.planId);
-    const accountPlanId = resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId);
-    const planIdForDeviceSlots = isOwner ? accountPlanId : companyPlanIdNormalized;
+    // Device allowance belongs to the signed-in account and is shared across every company
+    // they use; the company owner still owns voucher quotas and company-level permissions.
+    const planIdForDeviceSlots = normalizePlanIdForClient(
+      customUser?.accountCanonicalPlanId ||
+        resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId)
+    );
     const plan = getPlanFromPlans(livePlans, planIdForDeviceSlots);
     const hasMultiDeviceSync = plan.entitlements.hasMultiDeviceSync === true;
     const localCompany = isOfflineCompanyStorage(company);
@@ -124,6 +126,7 @@ export function useDeviceLimit() {
         userCanUseMultiDevice,
         isOwner,
         wasKicked,
+        accountScoped: true,
       })
         .then(async (r) => {
           if (cancelled) return;
@@ -210,6 +213,7 @@ export function useDeviceLimit() {
     livePlans,
     isOffline,
     allCompanies.length,
+    customUser?.accountCanonicalPlanId,
     Boolean(company),
     ownerAddons.extraDevicesOnline,
     ownerAddons.extraDevicesLocal,
@@ -226,9 +230,10 @@ export function useDeviceLimit() {
     if (!companyId || !user?.uid || !company) return;
     const isOwner =
       !!company && (company.ownerId === user.uid || (user.email && company.ownerEmail === user.email));
-    const companyPlanIdNormalized: PlanId = normalizePlanIdForClient(company?.planId);
-    const accountPlanId = resolveEffectiveAccountPlanId(allCompanies, user.uid, company?.planId);
-    const planIdForDeviceSlots = isOwner ? accountPlanId : companyPlanIdNormalized;
+    const planIdForDeviceSlots = normalizePlanIdForClient(
+      customUser?.accountCanonicalPlanId ||
+        resolveEffectiveAccountPlanId(allCompanies, user.uid, company?.planId)
+    );
     const plan = getPlanFromPlans(livePlans, planIdForDeviceSlots);
     const hasMultiDeviceSync = plan.entitlements.hasMultiDeviceSync === true;
     const localCompany = isOfflineCompanyStorage(company);
@@ -236,7 +241,7 @@ export function useDeviceLimit() {
     const maxDevices = hasMultiDeviceSync ? planMaxDevices : 1;
     await replaceMyOtherDevicesAndRegister(companyId, user.uid, maxDevices);
     runCheckRef.current?.();
-  }, [companyId, user?.uid, company, livePlans, allCompanies, ownerAddons]);
+  }, [companyId, user?.uid, company, livePlans, allCompanies, ownerAddons, customUser?.accountCanonicalPlanId]);
 
   const clearKickedAndRefresh = useCallback((): Promise<void> => {
     if (!companyId) return Promise.resolve();

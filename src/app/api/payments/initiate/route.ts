@@ -84,8 +84,8 @@ type Body = {
   amount: number; // in smallest unit for gateway
   currency: string;
   userId: string;
-  /** Active company to attach payment + plan upgrade (Stripe webhook). */
-  companyId: string;
+  /** Optional legacy/display context. Subscription ownership is the user account. */
+  companyId?: string;
   billingCycle: "monthly" | "yearly";
   /** When billingCycle is yearly: 1–10 (total term length for Stripe recurring / amount). */
   periodYears?: number;
@@ -122,12 +122,10 @@ export async function POST(req: NextRequest) {
         ? body.billingRegion
         : "nepal";
 
-    if (!companyId?.trim()) {
-      throw new Error("companyId is required for checkout.");
-    }
     if (!userId?.trim()) {
       throw new Error("userId is required for checkout.");
     }
+    const billingCompanyId = String(companyId || "").trim();
 
     const intent = billingIntent ?? "subscribe";
     const periodYears =
@@ -216,7 +214,7 @@ export async function POST(req: NextRequest) {
               userId,
               planId,
               gateway,
-              companyId: companyId.trim(),
+              companyId: billingCompanyId,
               billingCycle,
               billingIntent: intent,
               periodYears: String(periodYears),
@@ -225,7 +223,7 @@ export async function POST(req: NextRequest) {
             subscription_data: {
               metadata: {
                 userId,
-                companyId: companyId.trim(),
+                companyId: billingCompanyId,
                 planId,
                 gateway,
                 billingCycle,
@@ -252,7 +250,7 @@ export async function POST(req: NextRequest) {
             metadata: {
               userId,
               planId,
-              companyId: companyId.trim(),
+              companyId: billingCompanyId,
               billingCycle,
               billingIntent: intent,
               periodYears: String(periodYears),
@@ -268,7 +266,7 @@ export async function POST(req: NextRequest) {
         const product_code = keys.esewaMerchantCode;
         const total_amount_in_rupees = amountNpr;
         await db.collection(PENDING_SUBSCRIPTION_CHECKOUTS_COLLECTION).doc(transaction_uuid).set({
-          companyId: companyId.trim(),
+          companyId: billingCompanyId || null,
           userId: userId.trim(),
           planId,
           gateway: "esewa",
@@ -311,7 +309,7 @@ export async function POST(req: NextRequest) {
             metadata: {
               userId,
               planId,
-              companyId: companyId.trim(),
+              companyId: billingCompanyId || null,
               billingCycle,
               billingIntent: intent,
               periodYears: String(periodYears),

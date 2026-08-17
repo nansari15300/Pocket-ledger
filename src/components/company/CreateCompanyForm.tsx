@@ -135,9 +135,16 @@ export function CreateCompanyForm({
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const livePlans = useLivePlans();
   const accountPlanId = useMemo(
-    () => resolveEffectiveAccountPlanId(companyRowsForCreate, user?.uid, company?.planId),
-    [companyRowsForCreate, user?.uid, company?.planId]
+    () =>
+      customUser?.accountCanonicalPlanId
+        ? (customUser.accountCanonicalPlanId as PlanId)
+        : resolveEffectiveAccountPlanId(companyRowsForCreate, user?.uid, company?.planId),
+    [customUser?.accountCanonicalPlanId, companyRowsForCreate, user?.uid, company?.planId]
   );
+  const accountPlanExpiryMs =
+    typeof customUser?.accountCanonicalPlanExpiryMs === "number"
+      ? customUser.accountCanonicalPlanExpiryMs
+      : null;
   const canAddAvatar = useMemo(() => {
     return getPlanFromPlans(livePlans, accountPlanId).entitlements.canAddAvatar === true;
   }, [accountPlanId, livePlans]);
@@ -259,7 +266,7 @@ export function CreateCompanyForm({
 
   async function onSubmit(values: FormValues) {
     // Submit waqt latest slot count — doosre tab me company banne par bhi sahi branch
-    const planIdForSlots = resolveEffectiveAccountPlanId(companyRowsForCreate, user?.uid, company?.planId);
+    const planIdForSlots = accountPlanId;
     const maxO = maxOnlineCompaniesForPlan(planIdForSlots, getPlanFromPlans(livePlans, planIdForSlots));
     const usedO = user?.uid ? countOnlineCompanySlotsForOwner(companyRowsForCreate, user.uid) : 0;
     const freeOnlineSlotNow = maxO > 0 && usedO < maxO;
@@ -318,7 +325,7 @@ export function CreateCompanyForm({
       );
       const ownedSnap = await getDocs(ownedQuery);
       const ownedCount = ownedSnap.size;
-      const planId: PlanId = ownedCount === 0 ? "basic" : (ownedSnap.docs[0]?.data()?.planId as PlanId) || "basic";
+      const planId: PlanId = accountPlanId;
       const plan = getPlanFromPlans(livePlans, planId);
       const maxCompanies = numericEntitlement(plan.entitlements, "maxCompanies", false);
       if (isAtOrOverEntitlementCap(ownedCount, maxCompanies)) {
@@ -480,8 +487,13 @@ export function CreateCompanyForm({
           sharedWithEmailsLower: sharedWithEmailsLowerFromList(
             [effectiveUserEmail].filter(Boolean) as string[]
           ),
-          planId: "basic",
-          planExpiry: expiryDate.toISOString(),
+          planId: accountPlanId,
+          planOwnerUid: effectiveUserId,
+          accountPlanAuthorityVersion: 1,
+          planExpiry:
+            accountPlanId !== "basic" && accountPlanExpiryMs != null
+              ? new Date(accountPlanExpiryMs).toISOString()
+              : expiryDate.toISOString(),
           isDeleted: false,
           // Sirf jab company password set ho + admin row bhi bani ho — warna galat username doc par na save ho.
           adminUsername:
@@ -525,8 +537,13 @@ export function CreateCompanyForm({
               sharedWithEmailsLower: sharedWithEmailsLowerFromList(sharedWithEmails),
             };
           })(),
-          planId: "basic",
-          planExpiry: Timestamp.fromDate(expiryDate),
+          planId: accountPlanId,
+          planOwnerUid: effectiveUserId,
+          accountPlanAuthorityVersion: 1,
+          planExpiry:
+            accountPlanId !== "basic" && accountPlanExpiryMs != null
+              ? Timestamp.fromMillis(accountPlanExpiryMs)
+              : Timestamp.fromDate(expiryDate),
         });
         // Static/APK: SQLite registry row abhi banao taaki `initializeCompanyDataClient` → `writeEntity` (outbox) path chale, web cloud flow same.
         if (isStaticAppBuild()) {
@@ -563,8 +580,13 @@ export function CreateCompanyForm({
                 sharedWithEmailsLower: sharedWithEmailsLowerFromList(sharedWithEmails),
               };
             })(),
-            planId: "basic",
-            planExpiry: expiryDate.toISOString(),
+            planId: accountPlanId,
+            planOwnerUid: effectiveUserId,
+            accountPlanAuthorityVersion: 1,
+            planExpiry:
+              accountPlanId !== "basic" && accountPlanExpiryMs != null
+                ? new Date(accountPlanExpiryMs).toISOString()
+                : expiryDate.toISOString(),
             isDeleted: false,
             syncedFromCloud: true,
             syncPolicy: "online",

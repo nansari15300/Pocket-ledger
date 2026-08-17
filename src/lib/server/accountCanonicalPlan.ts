@@ -1,7 +1,8 @@
 /**
- * Account-level plan mirror:
- * - **Companies → user:** `reconcileOwnerCompaniesPlanWithDriftHeal` — owned rows me max tier pick kar `users/{uid}` + mismatch companies patch.
- * - **User → companies:** `syncOwnedCompaniesFromUserDocCanonicalPlan` — console / manual `accountCanonical*` edit ke baad sab `companies` align (SuperAdmin API).
+ * Account-level plan authority:
+ * - `users/{uid}.accountCanonical*` is the subscription source of truth.
+ * - Owned company rows are compatibility projections for existing sync/offline clients.
+ * - Legacy company-first accounts are migrated lazily on their first reconciliation.
  */
 import * as admin from "firebase-admin";
 import { normalizePlanIdForClient, planTierIndex, type PlanId } from "@/config/plans";
@@ -67,13 +68,18 @@ function companyDiffersFromCanon(d: Record<string, unknown>, canon: AccountPlanC
 }
 
 /** Firestore `companies/*` patch — `canon` se align (Basic par expiry/stripe hatao). */
-export function buildCompanyPatchFromAccountCanon(canon: AccountPlanCanon): Record<string, unknown> {
+export function buildCompanyPatchFromAccountCanon(
+  canon: AccountPlanCanon,
+  ownerUid?: string
+): Record<string, unknown> {
   const planUpgradedAt = admin.firestore.Timestamp.fromMillis(canon.planUpgradedAtMs);
   const patch: Record<string, unknown> = {
     planId: canon.planId,
     planUpgradedAt,
     planUpgradedAtMs: canon.planUpgradedAtMs,
+    accountPlanAuthorityVersion: 1,
   };
+  if (ownerUid?.trim()) patch.planOwnerUid = ownerUid.trim();
   if (canon.planId === "basic") {
     patch.planExpiry = admin.firestore.FieldValue.delete();
     patch.planExpiryMs = admin.firestore.FieldValue.delete();
@@ -105,6 +111,7 @@ export async function persistAccountCanonicalPlanDoc(
     .doc(oid)
     .set(
       {
+        accountPlanAuthorityVersion: 1,
         accountCanonicalPlanId: canon.planId,
         accountCanonicalPlanExpiryMs: canon.planExpiryMs,
         accountCanonicalPlanUpgradedAtMs: canon.planUpgradedAtMs,
@@ -116,9 +123,35 @@ export async function persistAccountCanonicalPlanDoc(
     );
 }
 
+/** Grant/renew an account subscription and project it to every company the account owns. */
+export async function grantAccountCanonicalPlan(
+  db: admin.firestore.Firestore,
+  ownerUid: string,
+  canon: AccountPlanCanon,
+  source: string
+): Promise<{ companiesPatched: number }> {
+  const oid = ownerUid.trim();
+  if (!oid) return { companiesPatched: 0 };
+
+  await persistAccountCanonicalPlanDoc(db, oid, canon);
+  await db.collection("users").doc(oid).collection("billing_payments").doc(`${source}:${canon.planUpgradedAtMs}`).set(
+    {
+      planId: canon.planId,
+      planExpiryMs: canon.planExpiryMs,
+      source,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  const patch = buildCompanyPatchFromAccountCanon(canon, oid);
+  const companiesPatched = await applyOwnerPlanMirrorBatched(db, oid, () => patch);
+  return { companiesPatched };
+}
+
 /**
- * Owner ki saari companies + user doc — drift heal (sync-plan / admin save ke baad call).
- * Returns patched company count (0 = already aligned).
+ * Legacy migration + projection repair. Existing account authority always wins; only accounts
+ * without `accountCanonicalPlanId` are seeded from their legacy owned company rows.
  */
 export async function reconcileOwnerCompaniesPlanWithDriftHeal(
   db: admin.firestore.Firestore,
@@ -127,21 +160,24 @@ export async function reconcileOwnerCompaniesPlanWithDriftHeal(
   const oid = ownerUid.trim();
   if (!oid) return { companiesPatched: 0 };
 
+  const userSnap = await db.collection("users").doc(oid).get();
+  const existingCanon = userSnap.exists
+    ? accountPlanCanonFromUserDocFields(userSnap.data() as Record<string, unknown>)
+    : null;
   const snap = await db.collection("companies").where("ownerId", "==", oid).get();
-  if (snap.empty) return { companiesPatched: 0 };
-
   const rows = snap.docs.map((d) => ({ id: d.id, data: d.data() as Record<string, unknown> }));
-  const canon = pickAccountPlanCanonFromCompanySnapshots(rows);
+  const canon = existingCanon ?? pickAccountPlanCanonFromCompanySnapshots(rows);
   if (!canon) return { companiesPatched: 0 };
 
   await persistAccountCanonicalPlanDoc(db, oid, canon);
+  if (snap.empty) return { companiesPatched: 0 };
 
   let companiesPatched = 0;
   await applyOwnerPlanMirrorBatched(db, oid, (docId) => {
     const row = rows.find((r) => r.id === docId);
     if (!row || !companyDiffersFromCanon(row.data, canon)) return {};
     companiesPatched++;
-    return buildCompanyPatchFromAccountCanon(canon);
+    return buildCompanyPatchFromAccountCanon(canon, oid);
   });
 
   return { companiesPatched };
@@ -202,7 +238,7 @@ export async function syncOwnedCompaniesFromUserDocCanonicalPlan(
     const row = rows.find((r) => r.id === docId);
     if (!row || !companyDiffersFromCanon(row.data, canon)) return {};
     companiesPatched++;
-    return buildCompanyPatchFromAccountCanon(canon);
+    return buildCompanyPatchFromAccountCanon(canon, oid);
   });
 
   await persistAccountCanonicalPlanDoc(db, oid, canon);

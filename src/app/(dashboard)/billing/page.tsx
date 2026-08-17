@@ -545,15 +545,6 @@ function CheckoutForm({
       toast({ variant: "destructive", title: "Sign in required", description: "Please log in to complete payment." });
       return;
     }
-    if (!companyId.trim()) {
-      toast({
-        variant: "destructive",
-        title: "Select a company",
-        description: "Choose a company from the sidebar before paying so your plan attaches to the right account.",
-      });
-      return;
-    }
-
     setIsLoading(true);
     try {
       // Online-only: server route JSON; optional NEXT_PUBLIC_BILLING_API_ORIGIN for static shell → hosted API
@@ -774,7 +765,7 @@ export default function BillingPage() {
 }
 
 function BillingPageInner() {
-  const { user } = useAuth();
+  const { user, customUser } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const addonQuery = String(searchParams.get("addon") || "").toLowerCase();
@@ -787,6 +778,7 @@ function BillingPageInner() {
           ? ("device-local" as const)
           : ("device-online" as const);
   const { companyId, company, loading: companyLoading, refreshAuthoritativePlan, allCompanies } = useCompany();
+  const hasSelectedCompany = Boolean(String(companyId || "").trim());
   /** User country picker — plan amounts is currency me convert dikhenge. */
   const [priceCountry, setPriceCountry] = useState("");
   useEffect(() => {
@@ -892,23 +884,13 @@ function BillingPageInner() {
     [dateSystem, formatDate, dateFormatBS]
   );
 
-  // Shared users must not open billing (plan purchase applies to owner account only).
-  useEffect(() => {
-    if (companyLoading) return;
-    if (company && company.isOwned === false) {
-      router.replace("/dashboard");
-      toast({
-        variant: "destructive",
-        title: "Billing unavailable",
-        description: "Only the company owner can manage plans and payments.",
-      });
-    }
-  }, [company, companyLoading, router]);
-
-  /** Isi company ka merged `company.planId` — `resolveEffectiveAccountPlanId` doosri owned company ka Pro Plus yahan mix kar deta tha jab Firestore is row par basic ho. */
+  /** Account plan owns subscriptions. Legacy company plan is fallback until migration is complete. */
   const currentPlanId = useMemo(
-    (): PlanId => normalizePlanIdForClient(company?.planId),
-    [company?.planId]
+    (): PlanId =>
+      normalizePlanIdForClient(
+        customUser?.accountCanonicalPlanId || company?.planId
+      ),
+    [customUser?.accountCanonicalPlanId, company?.planId]
   );
 
   const billingFrozenLedger = useMemo(
@@ -1922,6 +1904,12 @@ function BillingPageInner() {
                 New payments and server-side plan changes need internet. Your plan on this device stays on the last
                 synced subscription and unlock session until you reconnect.
               </p>
+            </div>
+          ) : null}
+          {!hasSelectedCompany ? (
+            <div className="mx-auto mb-4 max-w-5xl rounded-lg border border-primary/25 bg-primary/5 px-4 py-3 text-sm text-muted-foreground">
+              You are viewing your account plan. You can subscribe before creating a company; the plan will apply
+              to every company you own. Shared companies continue to use their owner&apos;s plan.
             </div>
           ) : null}
           {isPaidCompany && billingRenewFailureMessage ? (

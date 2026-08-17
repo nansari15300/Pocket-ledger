@@ -1,6 +1,6 @@
 "use client";
 
-import { doc, getDoc, setDoc, getDocs, collection, deleteDoc, serverTimestamp, query, orderBy, writeBatch } from "firebase/firestore";
+import { doc, getDoc, setDoc, getDocs, collection, collectionGroup, deleteDoc, serverTimestamp, query, orderBy, where, writeBatch } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { resolveDeviceSlotForCompanyWrite } from "@/lib/deviceSlotForUserDevices";
@@ -183,7 +183,13 @@ export async function registerDeviceAndCheckLimit(
   userId: string,
   maxDevices: number,
   hasMultiDeviceSync: boolean,
-  options?: { userCanUseMultiDevice?: boolean; isOwner?: boolean; wasKicked?: boolean }
+  options?: {
+    userCanUseMultiDevice?: boolean;
+    isOwner?: boolean;
+    wasKicked?: boolean;
+    /** Count physical device IDs across all companies for this user, not once per company. */
+    accountScoped?: boolean;
+  }
 ): Promise<DeviceLimitResult> {
   // Caps: 0 = none; -1 = unlimited; >0 = hard limit. Multi-sync off → single device.
   if (!hasMultiDeviceSync) {
@@ -199,9 +205,12 @@ export async function registerDeviceAndCheckLimit(
 
   const deviceType = typeof navigator !== "undefined" && /Mobile|Android|iPhone|iPad|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ? "mobile" : "desktop";
 
-  const [companySnap, allDevicesSnap] = await Promise.all([
+  const [companySnap, allDevicesSnap, accountDevicesSnap] = await Promise.all([
     getDoc(doc(firestore, "companies", companyId)),
     getDocs(collection(firestore, "companies", companyId, "devices")),
+    options?.accountScoped
+      ? getDocs(query(collectionGroup(firestore, "devices"), where("userId", "==", userId)))
+      : Promise.resolve(null),
   ]);
   const companyData = companySnap.data();
   // Prefer caller's value (from company context, real-time) so ON takes effect immediately; fallback to Firestore
@@ -211,8 +220,10 @@ export async function registerDeviceAndCheckLimit(
       : (companyData?.userCanUseMultiDevice !== false);
   const isOwner = options?.isOwner === true;
 
-  const totalCount = allDevicesSnap.size;
+  const accountDeviceIds = new Set(accountDevicesSnap?.docs.map((d) => d.id) ?? []);
+  const totalCount = options?.accountScoped ? accountDeviceIds.size : allDevicesSnap.size;
   const existing = allDevicesSnap.docs.find((d) => d.id === deviceId);
+  const existingForQuota = options?.accountScoped ? accountDeviceIds.has(deviceId) : Boolean(existing);
   const myOtherDevices = allDevicesSnap.docs.filter((d) => d.data()?.userId === userId && d.id !== deviceId);
 
   // Kicked device: do not auto re-add; show message so user can Switch company / Logout / Rejoin
@@ -239,8 +250,8 @@ export async function registerDeviceAndCheckLimit(
 
   // Exact 0 devices: keep existing registration; block new devices.
   if (!unlimited && cap < 1) {
-    if (existing) {
-      const prevData = existing.data() as { deviceSlot?: unknown };
+    if (existing || existingForQuota) {
+      const prevData = existing?.data() as { deviceSlot?: unknown } | undefined;
       const prevSlot =
         typeof prevData?.deviceSlot === "number" && Number.isFinite(prevData.deviceSlot)
           ? Math.floor(prevData.deviceSlot)
@@ -283,11 +294,11 @@ export async function registerDeviceAndCheckLimit(
   }
 
   // Slot full: if User Can Use Multi Device = Off and shared user has other devices, do not allow (no-permission)
-  if (!unlimited && totalCount >= cap && !userCanUseMultiDevice && !isOwner && myOtherDevices.length >= 1) {
+  if (!unlimited && !existingForQuota && totalCount >= cap && !userCanUseMultiDevice && !isOwner && myOtherDevices.length >= 1) {
     return { allowed: false, count: totalCount, limit: limitForUi, isNewDevice: true, singleDeviceOnly: true, noPermissionNewDevice: true };
   }
 
-  if (!unlimited && totalCount >= cap) {
+  if (!unlimited && !existingForQuota && totalCount >= cap) {
     const replaceOffer = !isOwner && myOtherDevices.length >= 1;
     return { allowed: false, count: totalCount, limit: limitForUi, isNewDevice: true, replaceOffer: replaceOffer || undefined };
   }
@@ -300,7 +311,12 @@ export async function registerDeviceAndCheckLimit(
     deviceSlot: deviceSlotNew,
     ...(deviceLabel ? { deviceLabel } : {}),
   });
-  return { allowed: true, count: totalCount + 1, limit: limitForUi, isNewDevice: true };
+  return {
+    allowed: true,
+    count: existingForQuota ? totalCount : totalCount + 1,
+    limit: limitForUi,
+    isNewDevice: !existingForQuota,
+  };
 }
 
 export async function replaceMyOtherDevicesAndRegister(

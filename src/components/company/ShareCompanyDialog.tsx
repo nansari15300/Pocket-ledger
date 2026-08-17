@@ -30,6 +30,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Company as CompanyData } from "@/hooks/useCompany";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
@@ -72,6 +73,7 @@ export function ShareCompanyDialog({
   const [showPassword, setShowPassword] = useState(false);
   const livePlans = useLivePlans();
   const { reloadLocalCompanyRegistry, triggerSync } = useCompany();
+  const { user, customUser } = useAuth();
 
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : internalIsOpen;
   const setOpen = parentOnOpenChange !== undefined ? parentOnOpenChange : setInternalIsOpen;
@@ -227,17 +229,40 @@ export function ShareCompanyDialog({
               return;
             }
 
-            const plan = getPlanFromPlans(livePlans, (company.planId as PlanId) || undefined);
+            // Users are an account-wide allowance: count unique invitees across every company
+            // owned by this account, not only the currently selected company.
+            const ownerUid = String(currentData?.ownerId || company.ownerId || user?.uid || "").trim();
+            const [ownerUserSnap, ownedCompaniesSnap] = await Promise.all([
+              ownerUid ? getDoc(doc(firestore, "users", ownerUid)) : Promise.resolve(null),
+              ownerUid
+                ? getDocs(query(collection(firestore, "companies"), where("ownerId", "==", ownerUid)))
+                : Promise.resolve(null),
+            ]);
+            const ownerUserData = ownerUserSnap?.exists()
+              ? (ownerUserSnap.data() as Record<string, unknown>)
+              : null;
+            const accountPlanId = String(
+              ownerUserData?.accountCanonicalPlanId ||
+                (ownerUid === user?.uid ? customUser?.accountCanonicalPlanId : "") ||
+                company.planId ||
+                "basic"
+            ) as PlanId;
+            const plan = getPlanFromPlans(livePlans, accountPlanId);
             const maxUsers = numericEntitlement(plan.entitlements, "maxUsers", companyStorageIsLocal(company.storageOption));
             const superAdminEmails = new Set(getSuperAdminEmails().map((e) => e.toLowerCase().trim()));
-            const ownerEmailNorm = (company.ownerEmail || "").toLowerCase().trim();
-            const sharedExcludingSuperAdminAndOwner = (company.sharedWithEmails || []).filter(
-              (email) => {
-                const e = (email || "").toLowerCase().trim();
-                return !superAdminEmails.has(e) && e !== ownerEmailNorm;
+            const memberEmails = new Set<string>();
+            const ownerEmailNorm = String(currentData?.ownerEmail || company.ownerEmail || "").toLowerCase().trim();
+            if (ownerEmailNorm) memberEmails.add(ownerEmailNorm);
+            for (const row of ownedCompaniesSnap?.docs ?? []) {
+              const data = row.data() as { sharedWithEmails?: unknown; ownerEmail?: unknown };
+              const companyOwnerEmail = String(data.ownerEmail || ownerEmailNorm).toLowerCase().trim();
+              if (companyOwnerEmail) memberEmails.add(companyOwnerEmail);
+              for (const email of Array.isArray(data.sharedWithEmails) ? data.sharedWithEmails : []) {
+                const normalized = String(email || "").toLowerCase().trim();
+                if (normalized && !superAdminEmails.has(normalized)) memberEmails.add(normalized);
               }
-            );
-            const currentMembers = 1 + sharedExcludingSuperAdminAndOwner.length;
+            }
+            const currentMembers = memberEmails.size;
             if (isAtOrOverEntitlementCap(currentMembers, maxUsers)) {
                 toast({
                     variant: "destructive",

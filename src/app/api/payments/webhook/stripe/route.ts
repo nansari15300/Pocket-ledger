@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { getAdminDb } from "@/lib/firebaseAdmin";
 import * as admin from "firebase-admin";
+import { normalizePlanIdForClient } from "@/config/plans";
+import { grantAccountCanonicalPlan } from "@/lib/server/accountCanonicalPlan";
 import {
   fulfillStripeCheckoutSessionCompleted,
   getStripeForPaymentsMerged,
@@ -35,8 +37,8 @@ export async function POST(req: NextRequest) {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
       const result = await fulfillStripeCheckoutSessionCompleted(stripe, session, db);
-      if (result.ok === false && result.reason === "missing_companyId") {
-        console.warn("[stripe webhook] checkout.session.completed — missing companyId", session.id);
+      if (result.ok === false) {
+        console.warn("[stripe webhook] checkout.session.completed failed", result.reason, session.id);
       }
       return NextResponse.json({ received: true });
     }
@@ -53,10 +55,36 @@ export async function POST(req: NextRequest) {
       const { subscription: sub, endMs } = period;
       const meta = sub.metadata || {};
       const companyId = meta.companyId?.trim();
-      if (!companyId) return NextResponse.json({ received: true });
+      const subscriptionUserId = meta.userId?.trim();
+      if (!subscriptionUserId) return NextResponse.json({ received: true });
 
       const planExpiry = admin.firestore.Timestamp.fromMillis(endMs);
       const isFirstSubscriptionInvoice = invoice.billing_reason === "subscription_create";
+      let accountOwnerUid = subscriptionUserId;
+      if (companyId) {
+        const companySnap = await db.collection("companies").doc(companyId).get();
+        accountOwnerUid = String(companySnap.data()?.ownerId || subscriptionUserId).trim();
+      }
+      const userPlan = await db.collection("users").doc(accountOwnerUid).get();
+      const planId = normalizePlanIdForClient(
+        String(meta.planId || userPlan.data()?.accountCanonicalPlanId || "basic")
+      );
+      if (planId !== "basic") {
+        await grantAccountCanonicalPlan(
+          db,
+          accountOwnerUid,
+          {
+            planId,
+            planExpiryMs: endMs,
+            planUpgradedAtMs: Date.now(),
+            stripeCustomerId: typeof sub.customer === "string" ? sub.customer : null,
+            stripeSubscriptionId: subId,
+          },
+          `stripe_invoice_paid:${invoice.id}`
+        );
+      }
+      if (!companyId) return NextResponse.json({ received: true });
+
       await db.collection("companies").doc(companyId).update({
         planExpiry,
         planExpiryMs: endMs,

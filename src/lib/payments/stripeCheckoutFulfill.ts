@@ -13,8 +13,7 @@ import {
   parseAddonItemsFromCheckoutMetadata,
 } from "@/lib/payments/addonCheckoutApply";
 import { findOwnedCompanyIdForUser } from "@/lib/payments/resolveStripeFirestoreCompany";
-import { applyOwnerPlanMirrorBatched } from "@/lib/server/mirrorOwnerCompanyPlanBilling";
-import { persistAccountCanonicalPlanDoc } from "@/lib/server/accountCanonicalPlan";
+import { grantAccountCanonicalPlan } from "@/lib/server/accountCanonicalPlan";
 import type { VerifiedLocalPlanApplyPayload } from "@/lib/payments/localStripePlanApplyTypes";
 import {
   SUBSCRIPTION_TERM_KEYS_FOR_CHECKOUT,
@@ -311,7 +310,53 @@ export async function fulfillStripeCheckoutSessionCompleted(
   const billingIntent = (metadata.billingIntent?.trim() || "subscribe") as "donation" | "subscribe";
 
   if (!companyId) {
-    return { ok: false as const, reason: "missing_companyId" };
+    if (!userId || !planId || !PAID_PLAN_IDS.has(planId as PlanId)) {
+      return { ok: false as const, reason: "missing_account_subscription_metadata" };
+    }
+    const upgrade = await shouldUpgradeCompanyAfterCheckout(stripe, session, planId, billingIntent);
+    if (!upgrade) return { ok: true as const };
+
+    const stripeCustomerId =
+      typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+    const stripeSubscriptionId =
+      typeof session.subscription === "string" ? session.subscription : session.subscription?.id ?? null;
+    let planExpiryMs: number | null = null;
+    if (session.mode === "subscription" && stripeSubscriptionId) {
+      planExpiryMs = await getSubscriptionCurrentPeriodEndMs(stripe, stripeSubscriptionId);
+    }
+    planExpiryMs ??= planExpiryMsFallbackFromCheckoutMetadata(metadata);
+    if (planExpiryMs == null) return { ok: false as const, reason: "missing_plan_expiry" };
+
+    const tierSwitchMs = Date.now();
+    await grantAccountCanonicalPlan(
+      db,
+      userId,
+      {
+        planId: normalizePlanIdForClient(planId),
+        planExpiryMs,
+        planUpgradedAtMs: tierSwitchMs,
+        stripeCustomerId,
+        stripeSubscriptionId,
+      },
+      `stripe_subscribe:${session.id}`
+    );
+    await db.collection("users").doc(userId).collection("billing_payments").doc(session.id).set(
+      {
+        paymentId: session.id,
+        planId,
+        amount: session.amount_total != null ? session.amount_total / 100 : 0,
+        currency: session.currency || "usd",
+        gateway: "stripe",
+        status: session.payment_status,
+        billingIntent,
+        stripeCustomerId,
+        stripeSubscriptionId,
+        planExpiryMs,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return { ok: true as const };
   }
 
   // `companyId` checkout pe selected ho sakta hai lekin sirf local SQLite me — Firestore me owner ki company resolve karo.
@@ -413,17 +458,16 @@ export async function fulfillStripeCheckoutSessionCompleted(
   if (stripeSubscriptionId) patch.stripeSubscriptionId = stripeSubscriptionId;
 
   if (ownerId) {
-    await applyOwnerPlanMirrorBatched(db, ownerId, () => patch);
     if (planId && PAID_PLAN_IDS.has(planId as PlanId)) {
       const pid = normalizePlanIdForClient(planId);
       const expiryCanon = planExpiryMs ?? (planExpiry ? planExpiry.toMillis() : null);
-      await persistAccountCanonicalPlanDoc(db, ownerId, {
+      await grantAccountCanonicalPlan(db, ownerId, {
         planId: pid,
         planExpiryMs: expiryCanon,
         planUpgradedAtMs: tierSwitchMs,
         stripeCustomerId: stripeCustomerId ?? null,
         stripeSubscriptionId: stripeSubscriptionId ?? null,
-      });
+      }, `stripe_subscribe:${session.id}`);
     }
   } else {
     await companyRef.update(patch);

@@ -116,7 +116,7 @@ export async function POST(req: NextRequest) {
 
     const applied = await applyNewSubscriptionCheckoutToFirestore({
       db,
-      companyId: String(p.companyId),
+      companyId: typeof p.companyId === "string" ? p.companyId : null,
       userId: String(p.userId),
       paymentId: pendingId,
       gateway: "khalti",

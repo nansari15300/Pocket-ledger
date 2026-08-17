@@ -5,14 +5,14 @@ import * as admin from "firebase-admin";
 import { normalizePlanIdForClient, type PlanId } from "@/config/plans";
 import { PAID_PLAN_IDS } from "@/lib/payments/stripeCheckoutFulfill";
 import { findOwnedCompanyIdForUser } from "@/lib/payments/resolveStripeFirestoreCompany";
-import { applyOwnerPlanMirrorBatched } from "@/lib/server/mirrorOwnerCompanyPlanBilling";
-import { persistAccountCanonicalPlanDoc } from "@/lib/server/accountCanonicalPlan";
+import { grantAccountCanonicalPlan } from "@/lib/server/accountCanonicalPlan";
 import { termDurationMs, type SubscriptionTermKey } from "@/lib/subscriptionPlanMath";
 import type { VerifiedLocalPlanApplyPayload } from "@/lib/payments/localStripePlanApplyTypes";
 
 export type ApplySubscriptionCheckoutInput = {
   db: admin.firestore.Firestore;
-  companyId: string;
+  /** Optional legacy/display context. A new account may subscribe before creating any company. */
+  companyId?: string | null;
   userId: string;
   paymentId: string;
   gateway: "khalti" | "esewa";
@@ -35,7 +35,7 @@ export async function applyNewSubscriptionCheckoutToFirestore(
 ): Promise<ApplySubscriptionCheckoutResult> {
   const {
     db,
-    companyId,
+    companyId: rawCompanyId,
     userId,
     paymentId,
     gateway,
@@ -46,7 +46,24 @@ export async function applyNewSubscriptionCheckoutToFirestore(
     billingIntent,
   } = input;
 
+  const companyId = String(rawCompanyId || "").trim();
+
   if (billingIntent === "donation") {
+    if (!companyId) {
+      await db.collection("users").doc(userId).collection("billing_payments").doc(paymentId).set(
+        {
+          paymentId,
+          amount: amountNpr,
+          currency: currency.toLowerCase(),
+          gateway,
+          status: "completed",
+          billingIntent: "donation",
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      return { ok: true };
+    }
     const primaryRef = db.collection("companies").doc(companyId);
     let effectiveCompanyId = companyId;
     let companySnap = await primaryRef.get();
@@ -82,6 +99,24 @@ export async function applyNewSubscriptionCheckoutToFirestore(
     return { ok: false, reason: "invalid_planId" };
   }
 
+  const planExpiryMs = Date.now() + termDurationMs(subscriptionTermKey);
+  const tierSwitchMs = Date.now();
+  if (!companyId) {
+    await grantAccountCanonicalPlan(
+      db,
+      userId,
+      {
+        planId: targetPlanId,
+        planExpiryMs,
+        planUpgradedAtMs: tierSwitchMs,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+      },
+      `${gateway}_subscribe:${paymentId}`
+    );
+    return { ok: true };
+  }
+
   const primaryRef = db.collection("companies").doc(companyId);
   let effectiveCompanyId = companyId;
   let companySnap = await primaryRef.get();
@@ -112,9 +147,7 @@ export async function applyNewSubscriptionCheckoutToFirestore(
     return { ok: true, mirrorLocal };
   }
 
-  const planExpiryMs = Date.now() + termDurationMs(subscriptionTermKey);
   const planExpiry = admin.firestore.Timestamp.fromMillis(planExpiryMs);
-  const tierSwitchMs = Date.now();
   const planUpgradedAtTs = admin.firestore.Timestamp.fromMillis(tierSwitchMs);
 
   await paymentRef.set(
@@ -146,16 +179,13 @@ export async function applyNewSubscriptionCheckoutToFirestore(
   const cdata = companySnap.data() as { ownerId?: string } | undefined;
   const ownerId = String(cdata?.ownerId ?? userId ?? "").trim();
   if (ownerId) {
-    await applyOwnerPlanMirrorBatched(db, ownerId, (docId) =>
-      docId === effectiveCompanyId ? patch : { planId: targetPlanId, planExpiry, planExpiryMs, planUpgradedAt: planUpgradedAtTs, planUpgradedAtMs: tierSwitchMs }
-    );
-    await persistAccountCanonicalPlanDoc(db, ownerId, {
+    await grantAccountCanonicalPlan(db, ownerId, {
       planId: targetPlanId,
       planExpiryMs,
       planUpgradedAtMs: tierSwitchMs,
       stripeCustomerId: null,
       stripeSubscriptionId: null,
-    });
+    }, `${gateway}_subscribe:${paymentId}`);
   } else {
     await db.collection("companies").doc(effectiveCompanyId).update(patch);
   }
