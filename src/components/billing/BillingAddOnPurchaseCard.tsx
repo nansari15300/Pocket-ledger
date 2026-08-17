@@ -23,6 +23,7 @@ import {
   type PurchasedPlanAddOns,
 } from "@/lib/planAddOns";
 import { getBillingApiUrl } from "@/lib/billingApiOrigin";
+import { browserHistoryHref } from "@/lib/webAppBasePath";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -257,13 +258,13 @@ export function BillingAddOnPurchaseCard({
         form.action = data.url;
         const fields: Record<string, string> = {
           amount: String(data.amount),
-          failure_url: data.failUrl || `${window.location.origin}/billing?addon=cancel`,
+          failure_url: data.failUrl || `${window.location.origin}${browserHistoryHref("/billing?addon=cancel")}`,
           product_delivery_charge: "0",
           product_service_charge: "0",
           product_code: data.merchantCode,
           signature: data.signature,
           signed_field_names: data.signedFieldNames || "total_amount,transaction_uuid,product_code",
-          success_url: data.successUrl || `${window.location.origin}/billing/addon/esewa`,
+          success_url: data.successUrl || `${window.location.origin}${browserHistoryHref("/billing/addon/esewa")}`,
           tax_amount: "0",
           total_amount: String(data.amount),
           transaction_uuid: data.oid,

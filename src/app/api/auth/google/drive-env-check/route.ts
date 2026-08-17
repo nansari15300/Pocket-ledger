@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextRequest } from "next/server";
+import { resolveGoogleOAuthRedirectUri } from "@/lib/server/googleOAuthCredentials";
 import { verifyBearerUid } from "@/lib/localCloudSync/server/apiAuth";
 import { driveHostedApiJson, driveHostedApiOptions } from "@/lib/server/driveHostedApiCors";
 
@@ -30,7 +31,7 @@ function buildSafeEnvDiagnostics() {
     // Effective server client id source visible rahe, taaki env fallback se rollout verify ho sake.
     effective_google_oauth_client_id_present: hasClientId || hasWebClientId,
     // Callback preview se Google Console redirect URI match turant compare ho sake.
-    oauth_callback_preview: appUrl ? `${appUrl}/api/auth/callback/google` : null,
+    oauth_callback_preview: resolveGoogleOAuthRedirectUri(),
   };
 }
 

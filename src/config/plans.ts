@@ -107,6 +107,12 @@ export type EntitlementKey =
   | "maxLocalToOnlineAttachmentMB"
   /** Online Firestore companies (`storageOption: firebase`) — off = create/edit me local/online choice hide. */
   | "allowFirebaseOnlineCompanies"
+  /** Google Drive sync for device-local companies. */
+  | "googleDriveSyncEnabled"
+  /** Per owner: local companies that may actively sync to Google Drive. 0 = none; -1 = unlimited. */
+  | "maxGoogleDriveSyncCompanies"
+  /** Per Drive-synced company: owner + shared Drive users. 0 = no sharing; -1 = unlimited. */
+  | "maxGoogleDriveSyncUsers"
   /** EXE LAN server (Settings → Server) — share local companies on network. */
   | "allowLocalAppServer";
 
@@ -272,6 +278,9 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxLocalToOnlineAttachmentMB: 0,
       savedAccountSwitchEnabled: false,
       allowFirebaseOnlineCompanies: false,
+      googleDriveSyncEnabled: false,
+      maxGoogleDriveSyncCompanies: 0,
+      maxGoogleDriveSyncUsers: 0,
       allowLocalAppServer: false,
     },
     features: [
@@ -328,6 +337,10 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxLocalToOnlineAttachmentMB: 500,
       savedAccountSwitchEnabled: true,
       allowFirebaseOnlineCompanies: true,
+      googleDriveSyncEnabled: true,
+      maxGoogleDriveSyncCompanies: 1,
+      // Same as maxUsersLocal — Drive share cannot exceed local company users.
+      maxGoogleDriveSyncUsers: 5,
       allowLocalAppServer: true,
     },
     features: [
@@ -386,6 +399,9 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxLocalToOnlineAttachmentMB: 2000,
       savedAccountSwitchEnabled: true,
       allowFirebaseOnlineCompanies: true,
+      googleDriveSyncEnabled: true,
+      maxGoogleDriveSyncCompanies: 3,
+      maxGoogleDriveSyncUsers: 50, // = maxUsersLocal
       allowLocalAppServer: true,
     },
     features: [
@@ -443,6 +459,9 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxLocalToOnlineAttachmentMB: 5000,
       savedAccountSwitchEnabled: true,
       allowFirebaseOnlineCompanies: true,
+      googleDriveSyncEnabled: true,
+      maxGoogleDriveSyncCompanies: 10,
+      maxGoogleDriveSyncUsers: 100, // = maxUsersLocal
       allowLocalAppServer: true,
     },
     features: [
@@ -514,6 +533,8 @@ export function limitFor(
     | "maxAttachmentBackupPerMonth"
     | "maxAttachmentRestorePerMonth"
     | "maxLocalToOnlineAttachmentMB"
+    | "maxGoogleDriveSyncCompanies"
+    | "maxGoogleDriveSyncUsers"
   >
 ): number {
   const p = getPlan(planId);

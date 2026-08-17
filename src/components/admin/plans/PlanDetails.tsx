@@ -87,6 +87,9 @@ const entitlementLabels: Partial<Record<EntitlementKey, string>> = {
     savedAccountSwitchEnabled: "Saved account switch (APK/EXE quick login)",
     attachmentBackupRestoreEnabled: "Attachment backup & restore (embed files in .plbp)",
     allowFirebaseOnlineCompanies: "Online company (Firebase / Firestore sync)",
+    googleDriveSyncEnabled: "Google Drive sync",
+    maxGoogleDriveSyncCompanies: "Max Google Drive sync companies",
+    maxGoogleDriveSyncUsers: "Google Drive users",
 };
 
 export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
@@ -692,6 +695,78 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                 />
                             </div>
                         )}
+                    </div>
+
+                    <div className="md:col-span-2 lg:col-span-3 rounded-lg border border-emerald-300 bg-emerald-50/50 p-3 space-y-3">
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <Switch
+                                id={`${plan.id}-googleDriveSyncEnabled`}
+                                checked={!!editablePlan.entitlements.googleDriveSyncEnabled}
+                                onCheckedChange={(checked) => {
+                                    handleEntitlementChange("googleDriveSyncEnabled", checked);
+                                    if (!checked) {
+                                        handleEntitlementChange("maxGoogleDriveSyncCompanies", 0);
+                                        handleEntitlementChange("maxGoogleDriveSyncUsers", 0);
+                                    } else {
+                                        if (Number(editablePlan.entitlements.maxGoogleDriveSyncCompanies ?? 0) <= 0) {
+                                            handleEntitlementChange("maxGoogleDriveSyncCompanies", 1);
+                                        }
+                                        if (Number(editablePlan.entitlements.maxGoogleDriveSyncUsers ?? 0) <= 0) {
+                                            handleEntitlementChange("maxGoogleDriveSyncUsers", 1);
+                                        }
+                                    }
+                                }}
+                            />
+                            <Label htmlFor={`${plan.id}-googleDriveSyncEnabled`} className="flex-1">
+                                {entitlementLabels.googleDriveSyncEnabled}
+                            </Label>
+                            <PlanRuleInfo tip="Set the Google Drive sync entitlement for this plan. The limits below use 0 = none, -1 = unlimited." />
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            Google Drive sync is separate from Firebase online sync. Company count is per owner account; user count is owner + Drive-shared users for each synced local company.
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                                <Label htmlFor={`${plan.id}-maxGoogleDriveSyncCompanies`} className="text-xs text-muted-foreground">
+                                    {entitlementLabels.maxGoogleDriveSyncCompanies}
+                                </Label>
+                                <Input
+                                    id={`${plan.id}-maxGoogleDriveSyncCompanies`}
+                                    type="number"
+                                    min={-1}
+                                    value={String(Number(editablePlan.entitlements.maxGoogleDriveSyncCompanies ?? 0))}
+                                    onChange={(e) => {
+                                        const n = parseInt(e.target.value, 10);
+                                        handleEntitlementChange(
+                                            "maxGoogleDriveSyncCompanies",
+                                            !Number.isFinite(n) ? 0 : n < 0 ? -1 : n
+                                        );
+                                    }}
+                                    placeholder="-1 = unlimited"
+                                    disabled={!editablePlan.entitlements.googleDriveSyncEnabled}
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <Label htmlFor={`${plan.id}-maxGoogleDriveSyncUsers`} className="text-xs text-muted-foreground">
+                                    {entitlementLabels.maxGoogleDriveSyncUsers}
+                                </Label>
+                                <Input
+                                    id={`${plan.id}-maxGoogleDriveSyncUsers`}
+                                    type="number"
+                                    min={-1}
+                                    value={String(Number(editablePlan.entitlements.maxGoogleDriveSyncUsers ?? 0))}
+                                    onChange={(e) => {
+                                        const n = parseInt(e.target.value, 10);
+                                        handleEntitlementChange(
+                                            "maxGoogleDriveSyncUsers",
+                                            !Number.isFinite(n) ? 0 : n < 0 ? -1 : n
+                                        );
+                                    }}
+                                    placeholder="-1 = unlimited"
+                                    disabled={!editablePlan.entitlements.googleDriveSyncEnabled}
+                                />
+                            </div>
+                        </div>
                     </div>
 
                     <div className="flex items-center gap-2 p-3 border rounded-lg bg-muted/30 col-span-1 md:col-span-2 flex-wrap">

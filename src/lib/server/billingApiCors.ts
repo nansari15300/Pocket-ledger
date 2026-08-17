@@ -35,20 +35,25 @@ function getAllowedBillingCorsOrigin(req: NextRequest): string | null {
 
 /** Middleware matcher — static client cross-origin billing + local Drive sync APIs. */
 export function isPocketLedgerBillingApiCorsPath(pathname: string): boolean {
-  if (pathname.startsWith("/api/billing/")) return true;
-  if (pathname.startsWith("/api/local-cloud-sync/")) return true;
-  if (pathname.startsWith("/api/auth/google/")) return true;
-  if (pathname === "/api/auth/pl-firebase-handoff") return true;
-  if (pathname.startsWith("/api/payments/webhook/")) return false;
-  if (pathname.startsWith("/api/payments/")) return true;
+  // Next `basePath=/app` → middleware pathname is `/app/api/...`
+  const p =
+    pathname === "/app" || pathname.startsWith("/app/")
+      ? pathname.slice("/app".length) || "/"
+      : pathname;
+  if (p.startsWith("/api/billing/")) return true;
+  if (p.startsWith("/api/local-cloud-sync/")) return true;
+  if (p.startsWith("/api/auth/google/")) return true;
+  if (p === "/api/auth/pl-firebase-handoff") return true;
+  if (p.startsWith("/api/payments/webhook/")) return false;
+  if (p.startsWith("/api/payments/")) return true;
   return (
-    pathname === "/api/company/sync-plan" ||
-    pathname === "/api/company/downgrade-plan" ||
-    pathname === "/api/company/repair-stripe-plan-expiry" ||
-    pathname === "/api/company/billing-auto-renew" ||
-    pathname === "/api/company/billing-payments-statement" ||
-    pathname === "/api/company/recycle-bin-finalize" ||
-    pathname === "/api/admin/recycle-bin/delete-company"
+    p === "/api/company/sync-plan" ||
+    p === "/api/company/downgrade-plan" ||
+    p === "/api/company/repair-stripe-plan-expiry" ||
+    p === "/api/company/billing-auto-renew" ||
+    p === "/api/company/billing-payments-statement" ||
+    p === "/api/company/recycle-bin-finalize" ||
+    p === "/api/admin/recycle-bin/delete-company"
   );
 }
 

@@ -10,10 +10,12 @@ export function CloudSyncHelpPopover({
   label,
   description,
   hasError,
+  side = "top",
 }: {
   label: string;
   description: ReactNode;
   hasError?: boolean;
+  side?: "top" | "bottom" | "left" | "right";
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -38,7 +40,7 @@ export function CloudSyncHelpPopover({
         </button>
       </PopoverTrigger>
       <PopoverContent
-        side="top"
+        side={side}
         align="start"
         collisionPadding={12}
         className="z-[10050] max-w-[min(22rem,calc(100vw-2rem))] p-3 text-xs leading-relaxed text-foreground"

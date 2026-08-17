@@ -44,27 +44,14 @@ function syncAndroidZoomViewportCompensation(scale: number): void {
     root.removeAttribute("data-pl-app-ui-zoom-shell");
     root.style.removeProperty("--pl-screen-h");
     root.style.removeProperty("--pl-screen-w");
-    root.style.removeProperty("min-height");
-    root.style.removeProperty("height");
-    root.style.removeProperty("min-width");
-    root.style.removeProperty("overflow");
-    body.style.removeProperty("min-height");
-    body.style.removeProperty("height");
-    body.style.removeProperty("overflow");
     return;
   }
 
-  // `zoom` se layout chhota dikhta hai — height/width badha kar visual 100dvh/100vw bhara rakho.
+  // Zoom only the dashboard shell. Dialog/popover portals mount under <body>,
+  // so their size and viewport-centred position stay at the device default.
   root.dataset.plAppUiZoomShell = "android-zoom";
   root.style.setProperty("--pl-screen-h", `calc(100dvh / ${scale})`);
   root.style.setProperty("--pl-screen-w", `calc(100vw / ${scale})`);
-  root.style.minHeight = `calc(100dvh / ${scale})`;
-  root.style.height = `calc(100dvh / ${scale})`;
-  root.style.minWidth = `calc(100vw / ${scale})`;
-  root.style.overflow = "hidden";
-  body.style.minHeight = "100%";
-  body.style.height = "100%";
-  body.style.overflow = "hidden";
 }
 
 /** Capacitor APK / iOS shell: poori UI zoom — Android `zoom`, iOS base `font-size` (rem scale). */
@@ -83,7 +70,7 @@ export function applyAppUiZoom(scale: number): number {
     syncAndroidZoomViewportCompensation(1);
   } else if (isCapacitorNativeApp()) {
     root.style.fontSize = "";
-    root.style.zoom = String(clamped);
+    root.style.zoom = "";
     syncAndroidZoomViewportCompensation(clamped);
   } else {
     root.style.fontSize = "";

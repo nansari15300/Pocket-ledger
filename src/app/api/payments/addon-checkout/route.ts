@@ -11,7 +11,7 @@ import {
   type GatewayKeys,
 } from "@/ai/flows/gateway-keys";
 import { getAdminDb } from "@/lib/firebaseAdmin";
-import { getPublicAppOriginForPaymentRedirects } from "@/lib/checkoutPublicOrigin";
+import { getPublicAppHrefForPaymentRedirects } from "@/lib/checkoutPublicOrigin";
 import {
   PENDING_ADDON_PURCHASES_COLLECTION,
   PENDING_ADDON_PURCHASE_TTL_MS,
@@ -143,8 +143,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const origin = getPublicAppOriginForPaymentRedirects(req);
-
     if (gateway === "khalti" || gateway === "esewa") {
       const pendingId = uuidv4();
       const expiresAt = admin.firestore.Timestamp.fromMillis(Date.now() + PENDING_ADDON_PURCHASE_TTL_MS);
@@ -173,7 +171,10 @@ export async function POST(req: NextRequest) {
           amount: amountMinor,
           product_identity: pendingId,
           product_name: productName,
-          returnUrl: `${origin}/billing/addon/khalti?pendingId=${encodeURIComponent(pendingId)}`,
+          returnUrl: getPublicAppHrefForPaymentRedirects(
+            req,
+            `/billing/addon/khalti?pendingId=${encodeURIComponent(pendingId)}`
+          ),
         });
       }
 
@@ -190,8 +191,8 @@ export async function POST(req: NextRequest) {
         url: getEsewaEpayV2FormUrl(product_code),
         amount: amountNpr,
         oid: pendingId,
-        successUrl: `${origin}/billing/addon/esewa`,
-        failUrl: `${origin}/billing?addon=cancel`,
+        successUrl: getPublicAppHrefForPaymentRedirects(req, "/billing/addon/esewa"),
+        failUrl: getPublicAppHrefForPaymentRedirects(req, "/billing?addon=cancel"),
         merchantCode: product_code,
         signature,
         signedFieldNames: "total_amount,transaction_uuid,product_code",
@@ -219,8 +220,8 @@ export async function POST(req: NextRequest) {
           },
         },
       ],
-      success_url: `${origin}/billing?addon=success`,
-      cancel_url: `${origin}/billing?addon=cancel`,
+      success_url: getPublicAppHrefForPaymentRedirects(req, "/billing?addon=success"),
+      cancel_url: getPublicAppHrefForPaymentRedirects(req, "/billing?addon=cancel"),
       metadata: {
         addonPurchase: "true",
         addonItems: addonItemsPacked,

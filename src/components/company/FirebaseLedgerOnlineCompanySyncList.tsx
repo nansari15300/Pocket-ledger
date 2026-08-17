@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Check, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -23,6 +23,10 @@ import { requestAttachmentUiRefresh } from "@/lib/attachmentLoadReady";
 type Props = {
   companies: Company[];
   compact?: boolean;
+  /** Full-page selector: list grows into leftover space before scrolling. */
+  fillHeight?: boolean;
+  /** Shown left of Save (e.g. Log out + Create New Company). */
+  leadingActions?: ReactNode;
   activeCompanyId?: string | null;
   onSelectCompany?: (company: Company) => void;
   onLogoutCompany?: (companyId: string) => void;
@@ -47,6 +51,8 @@ function draftsFromCompanies(companies: Company[]): DraftMap {
 export function FirebaseLedgerOnlineCompanySyncList({
   companies,
   compact = false,
+  fillHeight = false,
+  leadingActions,
   activeCompanyId,
   onSelectCompany,
   onLogoutCompany,
@@ -189,18 +195,29 @@ export function FirebaseLedgerOnlineCompanySyncList({
     : "grid-cols-[minmax(14rem,1fr)_3.25rem_3.25rem]";
 
   return (
-    <div className="space-y-2">
+    <div className={cn("space-y-2", fillHeight && "flex h-full min-h-0 flex-col")}>
       {!syncEnabled ? (
-        <p className="rounded-md border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900">
+        <p className="shrink-0 rounded-md border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900">
           Cloud data sync is OFF. Showing cached SQLite online companies only; Data / Files ticks are
           inactive until the main Cloud data sync switch is ON.
         </p>
       ) : null}
-      <div className="-mx-0.5 overflow-x-auto overscroll-x-contain pb-0.5">
-        <div className={cn("min-w-[18rem] space-y-1.5", compact ? "min-w-[20rem]" : "min-w-[24rem]")}>
+      <div
+        className={cn(
+          "-mx-0.5 overflow-x-auto overscroll-x-contain pb-0.5",
+          fillHeight && "min-h-0 flex-1"
+        )}
+      >
+        <div
+          className={cn(
+            "min-w-[18rem] space-y-1.5",
+            compact ? "min-w-[20rem]" : "min-w-[24rem]",
+            fillHeight && "flex h-full min-h-0 flex-col"
+          )}
+        >
           <div
             className={cn(
-              "grid items-center gap-1 border-b border-border/60 px-1 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground",
+              "grid shrink-0 items-center gap-1 border-b border-border/60 px-1 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground",
               headerCols
             )}
           >
@@ -208,7 +225,12 @@ export function FirebaseLedgerOnlineCompanySyncList({
             <span className="text-center">Data</span>
             <span className="text-center">Files</span>
           </div>
-          <div className="max-h-56 space-y-1 overflow-y-auto pr-0.5">
+          <div
+            className={cn(
+              "space-y-1 overflow-y-auto pr-0.5",
+              fillHeight ? "min-h-0 flex-1" : "max-h-56"
+            )}
+          >
             {companies.map((company) => {
               const id = String(company.id || "").trim();
               const entry = draft[id] ?? emptyEntry();
@@ -275,15 +297,16 @@ export function FirebaseLedgerOnlineCompanySyncList({
           </div>
         </div>
       </div>
-      <p className="px-1 text-[10px] leading-snug text-muted-foreground">
-        <strong>Data</strong> — cloud download/upload for masters &amp; vouchers. Untick keeps Local
-        SQLite on screen (offline). <strong>Files</strong> — attachment upload/download (needs Data).
-        Default off until you tick and Save. Same on web, EXE, APK, iOS.
-      </p>
-      <div className="flex justify-end px-1">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 px-1">
+        {leadingActions ? (
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">{leadingActions}</div>
+        ) : (
+          <div className="min-w-0 flex-1" />
+        )}
         <Button
           type="button"
           size={compact ? "sm" : "default"}
+          className="shrink-0"
           disabled={!syncEnabled || !dirty || saving}
           onClick={onSave}
         >

@@ -15,8 +15,13 @@
   }
 }
 
-/* Capacitor Android UI zoom: `html { zoom }` layout chhota karta hai — shell height badha kar screen bhari rakho */
+/* Capacitor Android UI zoom: zoom only dashboard content. Radix dialogs/popovers
+   portal to <body>, so they retain the default screen size and centre position. */
 html[data-pl-app-ui-zoom-shell="android-zoom"] #app-container {
+  zoom: var(--pl-app-ui-zoom, 1);
+  width: var(--pl-screen-w, 100vw) !important;
+  max-width: var(--pl-screen-w, 100vw) !important;
+  min-width: var(--pl-screen-w, 100vw) !important;
   height: var(--pl-screen-h, 100dvh) !important;
   max-height: var(--pl-screen-h, 100dvh) !important;
   min-height: var(--pl-screen-h, 100dvh) !important;

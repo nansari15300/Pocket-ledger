@@ -88,8 +88,6 @@ import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { disarmDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { AppSidebarZoomControls } from "@/components/layout/AppSidebarZoomControls";
-import { FirebaseLedgerDataSyncSidebarSwitch } from "@/components/layout/FirebaseLedgerDataSyncSidebarSwitch";
-import { FirebaseLedgerSyncModeSwitch } from "@/components/layout/FirebaseLedgerSyncModeSwitch";
 
 
 type MenuItem = {
@@ -856,10 +854,6 @@ export function AppSidebar() {
                 {isOpen ? (
                   <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Account</p>
                 ) : null}
-                <div className="mb-0.5 space-y-0.5">
-                  <FirebaseLedgerDataSyncSidebarSwitch sidebarOpen={isOpen} />
-                  <FirebaseLedgerSyncModeSwitch sidebarOpen={isOpen} />
-                </div>
                 <SidebarMenu className="gap-0.5 py-1">{visibleBottomMenuItems.map(renderBottomNavRow)}</SidebarMenu>
               </div>
               {/* User request: profile/user card ko green tone me dikhana */}

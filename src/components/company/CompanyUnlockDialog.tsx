@@ -22,7 +22,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/hooks/use-toast";
 import { CompanyUnlockContextPickers } from "@/components/company/CompanyUnlockContextPickers";
 import { RememberCompanyPasswordDurationSelect } from "@/components/company/RememberCompanyPasswordDurationSelect";
-import { FirebaseLedgerDataSyncInlineSwitch } from "@/components/layout/FirebaseLedgerDataSyncSidebarSwitch";
 import {
   grantOpenLocalCompanySession,
   isOfflineCompanyStorage,
@@ -434,11 +433,6 @@ export function CompanyUnlockDialog({
               </>
             ) : (
               <>
-                {activeCompany &&
-                !isOfflineCompanyStorage(activeCompany) &&
-                !isServerGateCompany(activeCompany) ? (
-                  <FirebaseLedgerDataSyncInlineSwitch />
-                ) : null}
                 {activeCompany && showCompanyUserNameField(activeCompany, user?.email) && (
                   <div className="space-y-1.5">
                     <Label htmlFor="unlock-dialog-username">Company username</Label>

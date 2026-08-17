@@ -36,8 +36,31 @@ export function resolveGoogleOAuthRedirectUri(): string {
   const appUrl = String(
     process.env.NEXT_PUBLIC_APP_URL ?? process.env.NEXT_PUBLIC_BASE_URL ?? ""
   ).trim();
-  const base = appUrl || POCKET_LEDGER_PRODUCTION_APP_URL;
-  return `${base.replace(/\/+$/, "")}/api/auth/callback/google`;
+  const base = (appUrl || POCKET_LEDGER_PRODUCTION_APP_URL).replace(/\/+$/, "");
+  // Hosted Next is under `/app`; avoid `/app/app` if env already includes it.
+  if (/\/app$/i.test(base)) {
+    return `${base}/api/auth/callback/google`;
+  }
+  try {
+    const host = new URL(/^https?:\/\//i.test(base) ? base : `https://${base}`).hostname;
+    if (
+      host === "pocket-ledger.com" ||
+      host === "www.pocket-ledger.com" ||
+      host === "pocketledger.com" ||
+      host === "www.pocketledger.com" ||
+      host.endsWith(".pocket-ledger.com") ||
+      host.endsWith(".pocketledger.com")
+    ) {
+      return `${base}/app/api/auth/callback/google`;
+    }
+  } catch {
+    /* fall through */
+  }
+  const envBase = String(process.env.NEXT_PUBLIC_WEB_APP_BASE_PATH || "").trim();
+  if (envBase === "/app") {
+    return `${base}/app/api/auth/callback/google`;
+  }
+  return `${base}/api/auth/callback/google`;
 }
 
 /** googleapis OAuth2 client — Drive connect + token refresh dono ke liye. */

@@ -193,6 +193,9 @@ const BILLING_FEATURES_OFFLINE: { key: EntitlementKey; label: string }[] = [
 ];
 
 const BILLING_FEATURES_SHARED: { key: EntitlementKey; label: string }[] = [
+  { key: "googleDriveSyncEnabled", label: "Google Drive sync" },
+  { key: "maxGoogleDriveSyncCompanies", label: "Google Drive sync companies" },
+  { key: "maxGoogleDriveSyncUsers", label: "Google Drive users" },
   { key: "maxAttachmentBackupPerMonth", label: "Attachment backups / month" },
   { key: "maxAttachmentRestorePerMonth", label: "Attachment restores / month" },
   { key: "hasRoleBasedAccess", label: "Role-based access" },
@@ -228,6 +231,7 @@ const BILLING_BOOLEAN_ICON_KEYS: EntitlementKey[] = [
   "hasAuditLogs",
   "hasPrioritySupport",
   "attachmentBackupRestoreEnabled",
+  "googleDriveSyncEnabled",
 ];
 
 /** Bahar wale boxes: user ne “bold” maanga — `border-2` + thoda dark outline (patle 1.5px se zyada dikhe). */
@@ -1510,9 +1514,18 @@ function BillingPageInner() {
   ): { text: string; enabled: boolean } => {
     const value = plan.entitlements[key];
     const allowOnline = plan.entitlements.allowFirebaseOnlineCompanies === true;
+    const driveSyncOn = plan.entitlements.googleDriveSyncEnabled === true;
 
     // Allow online OFF → online-bucket rows always "None" (even if legacy store still has -1).
     if (!allowOnline && isOnlineEntitlementCapKey(key)) {
+      return { text: "None", enabled: false };
+    }
+
+    // Drive sync OFF → company/user caps always "None" (0 must not become Unlimited).
+    if (
+      !driveSyncOn &&
+      (key === "maxGoogleDriveSyncCompanies" || key === "maxGoogleDriveSyncUsers")
+    ) {
       return { text: "None", enabled: false };
     }
 

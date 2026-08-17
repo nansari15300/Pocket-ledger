@@ -15,6 +15,7 @@
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { joinPocketLedgerOriginAndPath } from "@/lib/webAppBasePath";
 
 /** Static export par env miss ho to plan/checkout POST yahi production origin par jaayein. */
 export const POCKET_LEDGER_HOSTED_API_ORIGIN = "https://pocket-ledger.com";
@@ -112,7 +113,10 @@ export function resolveHostedApiAbsoluteUrl(apiPathOrUrl: string): string {
     ) {
       try {
         const u = new URL(raw);
-        return `${normalizeBillingOrigin(POCKET_LEDGER_HOSTED_API_ORIGIN)}${u.pathname}${u.search}`;
+        return joinPocketLedgerOriginAndPath(
+          normalizeBillingOrigin(POCKET_LEDGER_HOSTED_API_ORIGIN),
+          `${u.pathname}${u.search}`
+        );
       } catch {
         return normalizeBillingOrigin(POCKET_LEDGER_HOSTED_API_ORIGIN);
       }
@@ -120,19 +124,29 @@ export function resolveHostedApiAbsoluteUrl(apiPathOrUrl: string): string {
     if (typeof window !== "undefined" && shouldForceHostedBillingApiOrigin() && isLoopbackBillingOrigin(raw)) {
       try {
         const u = new URL(raw);
-        return `${normalizeBillingOrigin(POCKET_LEDGER_HOSTED_API_ORIGIN)}${u.pathname}${u.search}`;
+        return joinPocketLedgerOriginAndPath(
+          normalizeBillingOrigin(POCKET_LEDGER_HOSTED_API_ORIGIN),
+          `${u.pathname}${u.search}`
+        );
       } catch {
         return normalizeBillingOrigin(POCKET_LEDGER_HOSTED_API_ORIGIN);
       }
     }
-    return raw;
+    // Already absolute — still rewrite pocket-ledger.com `/api` → `/app/api`
+    try {
+      const u = new URL(raw);
+      return joinPocketLedgerOriginAndPath(u.origin, `${u.pathname}${u.search}${u.hash}`);
+    } catch {
+      return raw;
+    }
   }
   const path = raw.startsWith("/") ? raw : `/${raw}`;
   let origin = getBillingApiBaseOrigin();
   if (!origin) {
     origin = normalizeBillingOrigin(POCKET_LEDGER_HOSTED_API_ORIGIN);
   }
-  return `${origin}${path}`;
+  // Hosted site: marketing owns `/`; Next APIs are under `/app/api/...`
+  return joinPocketLedgerOriginAndPath(origin, path);
 }
 
 export function getBillingApiUrl(apiPath: string): string {

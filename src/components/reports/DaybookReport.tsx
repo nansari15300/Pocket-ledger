@@ -106,7 +106,13 @@ interface DaybookReportProps {
 
 
 export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
-    const { vouchers, processedAccounts: accounts, processedParties, userNames: vouchersUserNames } = useVouchers();
+    const {
+      vouchers,
+      processedAccounts: accounts,
+      processedParties,
+      journalAccountNames: voucherJournalAccountNames,
+      userNames: vouchersUserNames,
+    } = useVouchers();
     const { company, companyId } = useCompany();
     const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
     const { can } = usePermissions();
@@ -165,11 +171,16 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
 
     const fetchAccountName = useCallback(async (accountId: string): Promise<string> => {
         if (!companyId) return 'Unknown Account';
-        
-        // Check cache first
-        if (journalAccountNames[accountId]) {
-            return journalAccountNames[accountId];
-        }
+
+        // VoucherProvider has already hydrated these master names for the
+        // dashboard. Reuse them instead of repeating Firestore lookups while
+        // opening Daybook.
+        const cachedName =
+          journalAccountNames[accountId] ??
+          voucherJournalAccountNames[accountId] ??
+          userNames[accountId] ??
+          vouchersUserNames[accountId];
+        if (cachedName) return cachedName;
 
         const collectionsToSearch = ['parties', 'bank_accounts', 'staff', 'items', 'expense_accounts', 'taxes', 'users'];
         const nameFields = ['name', 'accountName', 'name', 'name', 'name', 'name', 'displayName'];
@@ -217,7 +228,14 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
         
         setJournalAccountNames(prev => ({...prev, [accountId]: 'Unknown Account'}));
         return 'Unknown Account';
-    }, [companyId, journalAccountNames, userNames, setUserNames]);
+    }, [
+      companyId,
+      journalAccountNames,
+      userNames,
+      voucherJournalAccountNames,
+      vouchersUserNames,
+      setUserNames,
+    ]);
 
 
     const loadJournalAccountNames = useCallback(async (vouchersToLoad: Voucher[]) => {
@@ -225,32 +243,34 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
         vouchersToLoad.forEach(v => {
             // Note: linked party/account/staff/item ka naam resolve karne ke liye entityId bhi fetch karo
             const noteEntityId = (v as any).type === "note" ? (v as any).entityId : undefined;
-            if (noteEntityId && !journalAccountNames[noteEntityId]) accountIdsToFetch.add(noteEntityId);
+            if (noteEntityId && !journalAccountNames[noteEntityId] && !voucherJournalAccountNames[noteEntityId]) accountIdsToFetch.add(noteEntityId);
             if (v.type === 'journal' || v.type === 'contra' || v.type === 'payment_in' || v.type === 'payment_out' || v.type === 'direct_income' || v.type === 'direct_expense' || v.type === 'sale' || v.type === 'purchase') {
                 (v.entries || []).forEach((entry: any) => {
-                    if (entry.accountId && !journalAccountNames[entry.accountId]) accountIdsToFetch.add(entry.accountId);
+                    if (entry.accountId && !journalAccountNames[entry.accountId] && !voucherJournalAccountNames[entry.accountId]) accountIdsToFetch.add(entry.accountId);
                 });
-                if(v.fromAccountId && !journalAccountNames[v.fromAccountId]) accountIdsToFetch.add(v.fromAccountId);
-                if(v.toAccountId && !journalAccountNames[v.toAccountId]) accountIdsToFetch.add(v.toAccountId);
-                if(v.partyId && !journalAccountNames[v.partyId]) accountIdsToFetch.add(v.partyId);
-                if(v.staffId && !journalAccountNames[v.staffId]) accountIdsToFetch.add(v.staffId);
-                if(v.accountId && !journalAccountNames[v.accountId]) accountIdsToFetch.add(v.accountId);
-                if((v as any).expenseAccountId && !journalAccountNames[(v as any).expenseAccountId]) accountIdsToFetch.add((v as any).expenseAccountId);
-                if((v as any).incomeAccountId && !journalAccountNames[(v as any).incomeAccountId]) accountIdsToFetch.add((v as any).incomeAccountId);
-                 if((v as any).userId && !userNames[(v as any).userId]) {
+                if(v.fromAccountId && !journalAccountNames[v.fromAccountId] && !voucherJournalAccountNames[v.fromAccountId]) accountIdsToFetch.add(v.fromAccountId);
+                if(v.toAccountId && !journalAccountNames[v.toAccountId] && !voucherJournalAccountNames[v.toAccountId]) accountIdsToFetch.add(v.toAccountId);
+                if(v.partyId && !journalAccountNames[v.partyId] && !voucherJournalAccountNames[v.partyId]) accountIdsToFetch.add(v.partyId);
+                if(v.staffId && !journalAccountNames[v.staffId] && !voucherJournalAccountNames[v.staffId]) accountIdsToFetch.add(v.staffId);
+                if(v.accountId && !journalAccountNames[v.accountId] && !voucherJournalAccountNames[v.accountId]) accountIdsToFetch.add(v.accountId);
+                if((v as any).expenseAccountId && !journalAccountNames[(v as any).expenseAccountId] && !voucherJournalAccountNames[(v as any).expenseAccountId]) accountIdsToFetch.add((v as any).expenseAccountId);
+                if((v as any).incomeAccountId && !journalAccountNames[(v as any).incomeAccountId] && !voucherJournalAccountNames[(v as any).incomeAccountId]) accountIdsToFetch.add((v as any).incomeAccountId);
+                 if((v as any).userId && !userNames[(v as any).userId] && !vouchersUserNames[(v as any).userId]) {
                     fetchAccountName((v as any).userId).then(name => setUserNames(prev => ({...prev, [(v as any).userId]: name})))
                 }
             }
         });
         
         if (accountIdsToFetch.size > 0) {
-            const newNames: Record<string, string> = {};
-            for (const accountId of Array.from(accountIdsToFetch)) {
-                newNames[accountId] = await fetchAccountName(accountId);
-            }
+            const entries = await Promise.all(
+              Array.from(accountIdsToFetch).map(async (accountId) =>
+                [accountId, await fetchAccountName(accountId)] as const
+              )
+            );
+            const newNames = Object.fromEntries(entries);
             setJournalAccountNames(prev => ({...prev, ...newNames}));
         }
-    }, [fetchAccountName, journalAccountNames, userNames]);
+    }, [fetchAccountName, journalAccountNames, userNames, voucherJournalAccountNames, vouchersUserNames]);
 
 
     useEffect(() => {

@@ -100,6 +100,42 @@ export const BILLING_FEATURE_HELP: Partial<Record<BillingHelpKey, BillingHelpCop
       ne: `प्रति लोकल कम्पनी: यन्त्र-लोकल कम्पनीमा मालिक + साझा/लोकल-लगइन प्रयोगकर्ता। ${CAP_NOTE}`,
     },
   },
+  googleDriveSyncEnabled: {
+    title: {
+      en: "Google Drive sync",
+      hi: "Google Drive सिंक",
+      ne: "Google Drive सिंक",
+    },
+    body: {
+      en: "Allows device-local companies to sync their ledger and permitted attachments to the owner’s Google Drive. This is separate from Firebase online company sync.",
+      hi: "डिवाइस-लोकल कंपनियों को मालिक के Google Drive में लेजर और अनुमति वाली अटैचमेंट सिंक करने देता है। यह Firebase ऑनलाइन कंपनी सिंक से अलग है।",
+      ne: "डिभाइस-लोकल कम्पनीलाई मालिकको Google Drive मा लेजर र अनुमति भएका attachment sync गर्न दिन्छ। यो Firebase online company sync भन्दा अलग हो।",
+    },
+  },
+  maxGoogleDriveSyncCompanies: {
+    title: {
+      en: "Google Drive sync companies",
+      hi: "Google Drive सिंक कंपनियाँ",
+      ne: "Google Drive sync कम्पनीहरू",
+    },
+    body: {
+      en: `Per owner account: how many device-local companies may have Google Drive sync enabled at the same time. ${CAP_NOTE}`,
+      hi: `प्रति मालिक खाता: कितनी डिवाइस-लोकल कंपनियों में एक समय पर Google Drive सिंक चालू हो सकता है। ${CAP_NOTE}`,
+      ne: `प्रति मालिक खाता: कति डिभाइस-लोकल कम्पनीमा एकै समयमा Google Drive sync चालू हुन सक्छ। ${CAP_NOTE}`,
+    },
+  },
+  maxGoogleDriveSyncUsers: {
+    title: {
+      en: "Google Drive users",
+      hi: "Google Drive उपयोगकर्ता",
+      ne: "Google Drive प्रयोगकर्ता",
+    },
+    body: {
+      en: `Per Drive-synced local company: owner plus Google Drive-shared users. Matches the plan’s max local users. ${CAP_NOTE}`,
+      hi: `प्रति Drive-सिंक लोकल कंपनी: मालिक और Google Drive से साझा किये उपयोगकर्ता। प्लान के अधिकतम लोकल उपयोगकर्ताओं से मेल खाता है। ${CAP_NOTE}`,
+      ne: `प्रति Drive-sync स्थानीय कम्पनी: मालिक र Google Drive बाट साझा भएका प्रयोगकर्ता। योजनाको अधिकतम स्थानीय प्रयोगकर्तासँग मिल्छ। ${CAP_NOTE}`,
+    },
+  },
   maxDevices: {
     title: {
       en: "Max devices (online)",

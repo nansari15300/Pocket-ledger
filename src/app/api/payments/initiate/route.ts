@@ -20,7 +20,7 @@ import {
   SUBSCRIPTION_TERM_KEYS_FOR_CHECKOUT,
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
-import { getPublicAppOriginForPaymentRedirects } from "@/lib/checkoutPublicOrigin";
+import { getPublicAppHrefForPaymentRedirects } from "@/lib/checkoutPublicOrigin";
 import {
   PENDING_SUBSCRIPTION_CHECKOUTS_COLLECTION,
   PENDING_SUBSCRIPTION_CHECKOUT_TTL_MS,
@@ -171,7 +171,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const appOrigin = getPublicAppOriginForPaymentRedirects(req);
     const db = getAdminDb();
     const amountNpr = chargeMinor / 100;
     const adminResult = await getGatewayKeysFromAdmin();
@@ -208,8 +207,11 @@ export async function POST(req: NextRequest) {
                 quantity: 1,
             },
             ],
-            success_url: `${appOrigin}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${appOrigin}/billing/cancel`,
+            success_url: getPublicAppHrefForPaymentRedirects(
+              req,
+              "/billing/success?session_id={CHECKOUT_SESSION_ID}"
+            ),
+            cancel_url: getPublicAppHrefForPaymentRedirects(req, "/billing/cancel"),
             metadata: {
               userId,
               planId,
@@ -246,7 +248,7 @@ export async function POST(req: NextRequest) {
             currency: checkoutCurrency,
             product_identity: planId,
             product_name: `Plan ${planId}`,
-            returnUrl: `${appOrigin}/billing/khalti/success`,
+            returnUrl: getPublicAppHrefForPaymentRedirects(req, "/billing/khalti/success"),
             metadata: {
               userId,
               planId,
@@ -301,8 +303,8 @@ export async function POST(req: NextRequest) {
             url: eSewaUrl,
             amount: total_amount_in_rupees,
             oid: transaction_uuid,
-            successUrl: `${appOrigin}/billing/esewa/success`,
-            failUrl: `${appOrigin}/billing/cancel`,
+            successUrl: getPublicAppHrefForPaymentRedirects(req, "/billing/esewa/success"),
+            failUrl: getPublicAppHrefForPaymentRedirects(req, "/billing/cancel"),
             merchantCode: product_code,
             signature,
             signedFieldNames: "total_amount,transaction_uuid,product_code",

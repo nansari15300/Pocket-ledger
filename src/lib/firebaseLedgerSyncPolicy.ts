@@ -3,9 +3,7 @@
 /**
  * Effective Firebase ledger sync policy (single gate for web / EXE / APK / iOS).
  *
- * Device preference today: sidebar deltaa/live switch → `firebaseLedgerSyncMode`.
- * Future: admin plan settings can force mode / disable cloud sync without rewriting call sites —
- * set `FIREBASE_LEDGER_SYNC_PLAN_OVERRIDE` (or later fetch plan flags into that hook).
+ * Live Firebase listeners are the product default across web, EXE, APK, and iOS.
  *
  * Rules:
  * - deltaa (`local`): SQLite + outbox transport; NO collection `onSnapshot`; only `_pl_change_log` live feed.
@@ -31,11 +29,15 @@ export type FirebaseLedgerSyncPlanOverride = {
 };
 
 /**
- * Future admin/plan hook. Keep null until plan settings wire this.
- * Example later: return { syncMode: "local", allowUserModeSwitch: false } for a plan.
+ * Global product policy. The mode switch is intentionally hidden, so old device
+ * preferences cannot keep a client on delta mode.
  */
 export function getFirebaseLedgerSyncPlanOverride(): FirebaseLedgerSyncPlanOverride | null {
-  return null;
+  return {
+    syncMode: "full_online",
+    cloudDataSyncAllowed: true,
+    allowUserModeSwitch: false,
+  };
 }
 
 export type FirebaseLedgerSyncPolicy = {

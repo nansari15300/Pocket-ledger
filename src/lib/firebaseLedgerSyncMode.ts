@@ -6,15 +6,13 @@
  * can later override via `getFirebaseLedgerSyncPlanOverride()` without rewriting call sites.
  */
 
-import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
-
 export type FirebaseLedgerSyncMode = "local" | "full_online";
 
 export const FIREBASE_LEDGER_SYNC_MODE_STORAGE_KEY = "pl_firebase_ledger_sync_mode_v1";
 export const FIREBASE_LEDGER_SYNC_MODE_CHANGED_EVENT = "pl-firebase-ledger-sync-mode-changed";
 
 function defaultFirebaseLedgerSyncMode(): FirebaseLedgerSyncMode {
-  return isEmbeddedOfflinePreloadClient() ? "local" : "full_online";
+  return "full_online";
 }
 
 let cachedMode: FirebaseLedgerSyncMode | null = null;

@@ -701,6 +701,8 @@ export function DashboardPageContent() {
   const visibleCardBeforeChartsRef = useRef<string>("financial-summaries");
   /** Footer tab panels: ek baar mount ke baad hide/show — All↔Daybook remount freeze hatane ke liye. */
   const dashboardKeepAlivePanelsRef = useRef<Set<string>>(new Set());
+  /** All tab first paint ke baad heavy report panels mount karo — APK par tab open blank/freeze na lage. */
+  const [allHeavyPanelsReady, setAllHeavyPanelsReady] = useState(false);
   /** Desktop: rail `w-64` open / `w-16` collapsed — footer `fixed` inset is sidebar ke hisaab se shift hona chahiye. */
   const { isOpen: sidebarRailOpen } = useSidebar();
   const [greeting, setGreeting] = useState('');
@@ -719,6 +721,12 @@ export function DashboardPageContent() {
   const isReportsEnabled = useFeatureAccess('reports');
 
   const transactionDates = useMemo(() => vouchers.map(v => safeToDate(v.date)).filter(Boolean) as Date[], [vouchers]);
+
+  useEffect(() => {
+    if (visibleCard !== "all" || allHeavyPanelsReady) return;
+    const timer = window.setTimeout(() => setAllHeavyPanelsReady(true), 120);
+    return () => window.clearTimeout(timer);
+  }, [allHeavyPanelsReady, visibleCard]);
 
   // Open voucher in edit mode when navigating from alert link (dashboard?editVoucher=id&companyId=cid)
   useEffect(() => {
@@ -2030,7 +2038,8 @@ export function DashboardPageContent() {
   );
 
   const renderDashboardContent = () => {
-    const shouldShow = (cardId: string) => visibleCard === 'all' || visibleCard === cardId;
+    const shouldShow = (cardId: string) =>
+      visibleCard === cardId || (visibleCard === "all" && allHeavyPanelsReady);
     // All↔Daybook: remount mat — pehli baar dikhne ke baad CSS hide (TransactionsTable/Daybook wapas mat banao).
     const showFinancial = visibleCard === "all" || visibleCard === "financial-summaries";
     const showCharts = visibleCard === "dashboard-charts";

@@ -19,13 +19,13 @@ export const FIREBASE_LEDGER_DATA_SYNC_STORAGE_KEY = "pl_firebase_ledger_data_sy
 export const FIREBASE_LEDGER_DATA_SYNC_CHANGED_EVENT = "pl-firebase-ledger-data-sync-changed";
 
 /**
- * Build-time force: `true` = hamesha band, `false` = hamesha chalu, `null` = UI/localStorage.
- * Temporary admin lock ke liye; normal use me `null` rakho.
+ * Product default: cloud ledger sync is always on in every client.
+ * `false` ignores any older per-device OFF preference.
  */
-export const FIREBASE_LEDGER_DATA_SYNC_DISABLED_FORCE: boolean | null = null;
+export const FIREBASE_LEDGER_DATA_SYNC_DISABLED_FORCE: boolean | null = false;
 
-/** First visit default — sync OFF (disabled=true). */
-const DEFAULT_DISABLED = true;
+/** First visit default — sync ON. */
+const DEFAULT_DISABLED = false;
 
 export const FIREBASE_LEDGER_DATA_SYNC_DISABLED_MESSAGE =
   "Firebase company data sync is temporarily disabled — local SQLite only.";

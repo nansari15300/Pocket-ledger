@@ -33,7 +33,7 @@ import {
   PENDING_PLAN_CHANGES_COLLECTION,
   PENDING_PLAN_CHANGE_TTL_MS,
 } from "@/lib/payments/planChangeApply";
-import { getPublicAppOriginForPaymentRedirects } from "@/lib/checkoutPublicOrigin";
+import { getPublicAppHrefForPaymentRedirects } from "@/lib/checkoutPublicOrigin";
 import { applyOwnerPlanMirrorBatched } from "@/lib/server/mirrorOwnerCompanyPlanBilling";
 import { persistAccountCanonicalPlanDoc } from "@/lib/server/accountCanonicalPlan";
 
@@ -391,8 +391,6 @@ export async function POST(req: NextRequest) {
         expiresAt,
       });
 
-      const appOrigin = getPublicAppOriginForPaymentRedirects(req);
-
       if (gateway === "khalti") {
         if (!keys.khaltiPublicKey) {
           await pendingRef.delete().catch(() => {});
@@ -405,7 +403,10 @@ export async function POST(req: NextRequest) {
           amount: Math.round(quote.netNpr * 100),
           product_identity: pendingId,
           product_name: `Plan renew: ${currentPlanId} → ${targetPlanId}`,
-          returnUrl: `${appOrigin}/billing/plan-change/khalti?pendingId=${encodeURIComponent(pendingId)}`,
+          returnUrl: getPublicAppHrefForPaymentRedirects(
+            req,
+            `/billing/plan-change/khalti?pendingId=${encodeURIComponent(pendingId)}`
+          ),
           quote,
         });
       }
@@ -427,8 +428,8 @@ export async function POST(req: NextRequest) {
         url: eSewaUrl,
         amount: total_amount_in_rupees,
         oid: pendingId,
-        successUrl: `${appOrigin}/billing/plan-change/esewa`,
-        failUrl: `${appOrigin}/billing/cancel`,
+        successUrl: getPublicAppHrefForPaymentRedirects(req, "/billing/plan-change/esewa"),
+        failUrl: getPublicAppHrefForPaymentRedirects(req, "/billing/cancel"),
         merchantCode: product_code,
         signature,
         signedFieldNames: "total_amount,transaction_uuid,product_code",
@@ -443,7 +444,6 @@ export async function POST(req: NextRequest) {
     }
 
     const stripe = new Stripe(keys.stripeSecretKey, { apiVersion: "2025-12-15.clover" as any });
-    const appOrigin = getPublicAppOriginForPaymentRedirects(req);
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
@@ -459,8 +459,11 @@ export async function POST(req: NextRequest) {
           quantity: 1,
         },
       ],
-      success_url: `${appOrigin}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${appOrigin}/billing/cancel`,
+      success_url: getPublicAppHrefForPaymentRedirects(
+        req,
+        "/billing/success?session_id={CHECKOUT_SESSION_ID}"
+      ),
+      cancel_url: getPublicAppHrefForPaymentRedirects(req, "/billing/cancel"),
       metadata: {
         planChange: "true",
         companyId,

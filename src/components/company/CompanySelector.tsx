@@ -2,7 +2,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Building2, PlusCircle, Share2, UserPlus, ChevronDown, KeyRound, Eye, EyeOff, Loader2, Check, LogOut, Server, Wifi } from "lucide-react";
 import { PlServerOnlineStatusDot } from "@/components/pl/PlServerOnlineStatusDot";
 import { useRouter } from "next/navigation";
@@ -70,8 +70,8 @@ import {
   saveOfflineUnlockSession,
 } from "@/lib/offlineCompanyUnlockRemember";
 import { RememberCompanyPasswordDurationSelect } from "@/components/company/RememberCompanyPasswordDurationSelect";
-import { FirebaseLedgerDataSyncInlineSwitch } from "@/components/layout/FirebaseLedgerDataSyncSidebarSwitch";
 import { FirebaseLedgerOnlineCompanySyncList } from "@/components/company/FirebaseLedgerOnlineCompanySyncList";
+import { CloudSyncHelpPopover } from "@/components/company/CloudSyncHelpPopover";
 import {
   readCloudCompanyPasswordUnlockPreferenceDays,
   readCloudCompanyPasswordUnlockSession,
@@ -1370,33 +1370,40 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       <div className="flex h-dvh max-h-dvh min-h-0 items-center justify-center overflow-hidden bg-background p-3 sm:p-4">
         <Card className="flex h-[90dvh] max-h-[90dvh] w-full max-w-2xl flex-col overflow-hidden">
           <CardHeader className="shrink-0 space-y-1 pb-3">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex flex-col gap-1">
               <div className="min-w-0">
-                <CardTitle className="font-headline text-2xl">Select a Company</CardTitle>
+                <CardTitle className="font-headline flex items-center gap-2 text-2xl">
+                  <span>Select a Company</span>
+                  <CloudSyncHelpPopover
+                    side="bottom"
+                    label="Company sync tips"
+                    description={
+                      <>
+                        <p>
+                          <strong>Data</strong> — cloud download/upload for masters and vouchers.
+                          Untick keeps Local SQLite on screen (offline).
+                        </p>
+                        <p>
+                          <strong>Files</strong> — attachment upload/download (needs Data).
+                          Unticked companies stay on this device until you tick and Save.
+                        </p>
+                      </>
+                    }
+                  />
+                </CardTitle>
                 <CardDescription>
-                  Choose which company you want to work on, or create a new one.
+                  Choose a company to continue.
                 </CardDescription>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="shrink-0 self-end sm:self-start"
-                onClick={() => void handleLogout()}
-                aria-label="Log out"
-              >
-                <LogOut className="mr-2 h-4 w-4" />
-                Log out
-              </Button>
             </div>
           </CardHeader>
-          <CardContent className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-1">
+          <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden pr-1">
             <Tabs
               value={listTab}
               onValueChange={(v) => handleListTabChange(v as CompanyListTab)}
-              className="w-full"
+              className="flex min-h-0 flex-1 flex-col"
             >
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full shrink-0 grid-cols-3">
                 <TabsTrigger value="local">
                   Local{localList.length > 0 ? ` (${localList.length})` : ""}
                 </TabsTrigger>
@@ -1408,7 +1415,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                 </TabsTrigger>
               </TabsList>
               {listTab === "local" ? (
-              <TabsContent value="local" className="mt-4 space-y-4">
+              <TabsContent value="local" className="mt-4 min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain">
                 {localList.length > 0 ? (
                   <div className="space-y-5">
                     {myLocalDisplay.length > 0 ? (
@@ -1487,7 +1494,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
               </TabsContent>
               ) : null}
               {listTab === "server" ? (
-              <TabsContent value="server" className="mt-4 space-y-4">
+              <TabsContent value="server" className="mt-4 min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain">
                 <div className="space-y-3 rounded-lg border bg-muted/10 p-3">
                   <div className="flex items-center gap-2">
                     <Server className="h-4 w-4 text-muted-foreground" />
@@ -1617,23 +1624,64 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
               </TabsContent>
               ) : null}
               {listTab === "online" ? (
-              <TabsContent value="online" className="mt-4 space-y-4">
+              <TabsContent value="online" className="mt-4 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
                 <FirebaseLedgerOnlineCompanySyncList
+                  fillHeight
                   companies={onlineList}
                   activeCompanyId={companyId}
                   onSelectCompany={(c) => void handleSelectCompany(c)}
                   onLogoutCompany={handleLogoutCompany}
+                  leadingActions={
+                    <>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleLogout()}
+                        aria-label="Log out"
+                      >
+                        <LogOut className="mr-2 h-4 w-4" />
+                        Log out
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => router.push("/company/create")}
+                      >
+                        <PlusCircle className="mr-2 h-4 w-4" />
+                        Create New Company
+                      </Button>
+                    </>
+                  }
                 />
               </TabsContent>
               ) : null}
             </Tabs>
+            {listTab !== "online" ? (
+              <div className="mt-3 flex shrink-0 flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleLogout()}
+                  aria-label="Log out"
+                >
+                  <LogOut className="mr-2 h-4 w-4" />
+                  Log out
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => router.push("/company/create")}
+                >
+                  <PlusCircle className="mr-2 h-4 w-4" />
+                  Create New Company
+                </Button>
+              </div>
+            ) : null}
           </CardContent>
-          <CardFooter className="shrink-0 flex flex-col sm:flex-row gap-2 justify-center border-t bg-card pt-4">
-            <Button type="button" variant="outline" onClick={() => router.push("/company/create")}>
-              <PlusCircle className="mr-2 h-4 w-4" />
-              Create New Company
-            </Button>
-          </CardFooter>
         </Card>
       </div>
 
@@ -1782,11 +1830,6 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                 </>
               ) : (
                 <>
-                  {companyToUnlock &&
-                  !isOfflineCompanyStorage(companyToUnlock) &&
-                  !isServerGateCompany(companyToUnlock) ? (
-                    <FirebaseLedgerDataSyncInlineSwitch />
-                  ) : null}
                   {companyToUnlock && showCompanyUserNameField(companyToUnlock, user?.email) && (
                     <div className="space-y-1.5">
                       <Label htmlFor="cs-unlock-username">Company username</Label>
@@ -3060,11 +3103,6 @@ export function CompanyActions({
                 </>
               ) : (
                 <>
-                  {companyToUnlock &&
-                  !isOfflineCompanyStorage(companyToUnlock) &&
-                  !isServerGateCompany(companyToUnlock) ? (
-                    <FirebaseLedgerDataSyncInlineSwitch />
-                  ) : null}
                   {companyToUnlock && showCompanyUserNameField(companyToUnlock, user?.email) && (
                     <div className="space-y-1.5">
                       <Label htmlFor="ca-unlock-username">Company username</Label>

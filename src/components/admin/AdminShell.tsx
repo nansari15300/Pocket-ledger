@@ -19,7 +19,6 @@ import {
 } from '../ui/sidebar'
 import { cn } from '@/lib/utils'
 import { isAdminPanelDevPreview } from '@/lib/adminDevPreview'
-import { FirebaseLedgerSyncModeSwitch } from '@/components/layout/FirebaseLedgerSyncModeSwitch'
 import { AdminPanelCompanyShell } from "@/adminPanelCompany/components/AdminPanelCompanyShell";
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
@@ -97,7 +96,6 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           </SidebarMenu>
         </SidebarContent>
         <SidebarFooter className="gap-2">
-          <FirebaseLedgerSyncModeSwitch sidebarOpen={isOpen} compact />
           <Link href="/dashboard" onClick={() => { if (isMobile) setIsOpen(false); }}>
             <Button variant="outline" className="w-full">
               <ArrowLeft className={cn(isOpen && "mr-2", "h-4 w-4")} />
