@@ -4,6 +4,7 @@
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
 import { interCompanyUsesConduitParty } from "@/lib/interCompany/interCompanyPostingLegs";
 import { isInterCompanyPeerPendingChange } from "@/lib/interCompany/interCompanyPeerPending";
+import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
 
 const VALID_ENTITY_KINDS = new Set<InterCompanyEntityKind>([
   "party",
@@ -31,6 +32,29 @@ export function readInterCompanyLink(voucher: Record<string, unknown> | null | u
     peerVoucherId: String(link.peerVoucherId),
     role: link.role,
   };
+}
+
+function dedupeAttachmentUrls(list: string[]): string[] {
+  const seen = new Set<string>();
+  return list.filter((u) => {
+    const s = String(u || "").trim();
+    if (!s || seen.has(s)) return false;
+    seen.add(s);
+    return true;
+  });
+}
+
+/**
+ * IC edit box — pehle `interCompanyOwnFileUrls`; empty/missing ho to `fileUrls`
+ * (txn row dikhe, form khaali na ho).
+ */
+export function readInterCompanyOwnFileUrls(
+  voucher: Record<string, unknown> | null | undefined
+): string[] {
+  if (!voucher) return [];
+  const own = normalizeFileUrlsField(voucher.interCompanyOwnFileUrls);
+  if (own.length > 0) return dedupeAttachmentUrls(own);
+  return dedupeAttachmentUrls(normalizeFileUrlsField(voucher.fileUrls));
 }
 
 /** Is voucher copy par logged-in company source (sent) ya target (received) — Payment Out / In label ke liye */

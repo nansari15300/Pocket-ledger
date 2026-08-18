@@ -68,6 +68,50 @@ function attachmentUrlsFingerprint(urls: readonly string[]): string {
   return urls.map((u) => String(u || "").trim()).filter(Boolean).join("\x1e");
 }
 
+const MASTER_ATTACHMENT_SCALAR_KEYS = ["fileUrl", "avatarUrl", "logoUrl"] as const;
+const MASTER_ATTACHMENT_COLLECTIONS = new Set([
+  "parties",
+  "bank_accounts",
+  "staff",
+  "taxes",
+  "expense_accounts",
+  "items",
+]);
+
+function isClearedMasterAttachmentScalar(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value !== "string") return false;
+  const s = value.trim();
+  if (!s) return true;
+  const low = s.toLowerCase();
+  return low === "null" || low === "undefined" || low === "none" || low === "n/a";
+}
+
+function scalarAttachmentFingerprint(value: unknown): string {
+  if (isClearedMasterAttachmentScalar(value)) return "";
+  return String(value || "").trim();
+}
+
+/** EXE/APK outbox merge: empty master avatar must `deleteField` — `null` merge miss se web par purani photo reh jati hai. */
+function applyMasterAttachmentFieldsForFirestoreMerge(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>
+): void {
+  for (const key of MASTER_ATTACHMENT_SCALAR_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+    if (isClearedMasterAttachmentScalar(source[key])) {
+      target[key] = deleteField();
+    } else {
+      target[key] = source[key];
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "documentFileUrls")) {
+    target.documentFileUrls = Array.isArray(source.documentFileUrls)
+      ? source.documentFileUrls.filter((u): u is string => typeof u === "string" && Boolean(u.trim()))
+      : [];
+  }
+}
+
 /** Soft-delete outbox flush remirrors; permanent purge must hard-wipe local again. */
 async function applyLocalMirrorAfterOutboxFlush(params: {
   companyId: string;
@@ -106,92 +150,189 @@ async function mirrorCompanyDocAfterOutboxFlush(
   writtenFields?: Record<string, unknown> | null
 ): Promise<void> {
   await mirrorCompanyDocToBrowserDb(companyId, collectionName, docId);
-  if (collectionName !== "vouchers") return;
+  const payloadObj =
+    outboxPayload && typeof outboxPayload === "object"
+      ? (outboxPayload as Record<string, unknown>)
+      : null;
   const source =
-    writtenFields && Object.prototype.hasOwnProperty.call(writtenFields, "fileUrls")
-      ? writtenFields
-      : outboxPayload && typeof outboxPayload === "object"
-        ? (outboxPayload as Record<string, unknown>)
-        : null;
-  if (!source || !Object.prototype.hasOwnProperty.call(source, "fileUrls")) return;
+    writtenFields && typeof writtenFields === "object" ? writtenFields : payloadObj;
 
-  const intended = normalizeFileUrlsField(source.fileUrls);
-  const intendedFp = attachmentUrlsFingerprint(intended);
+  if (collectionName === "vouchers") {
+    const voucherSource =
+      writtenFields && Object.prototype.hasOwnProperty.call(writtenFields, "fileUrls")
+        ? writtenFields
+        : payloadObj;
+    if (!voucherSource || !Object.prototype.hasOwnProperty.call(voucherSource, "fileUrls")) return;
+
+    const intended = normalizeFileUrlsField(voucherSource.fileUrls);
+    const intendedFp = attachmentUrlsFingerprint(intended);
+    const { upsertCompanyDocInBrowserDb, notifyBrowserDbCollectionUpdated } = await import(
+      "@/lib/localCompanyDocMirror"
+    );
+
+    const local = await getCompanyDocFromBrowserDb(companyId, collectionName, docId, { includeDeleted: true });
+    const localFp = attachmentUrlsFingerprint(normalizeFileUrlsField(local?.fileUrls));
+    const localUf =
+      local?.unassignedFile && typeof local.unassignedFile === "object"
+        ? String((local.unassignedFile as { url?: string }).url || "").trim()
+        : "";
+    if (local && (localFp !== intendedFp || (intended.length === 0 && Boolean(localUf)))) {
+      await upsertCompanyDocInBrowserDb(
+        companyId,
+        collectionName,
+        docId,
+        {
+          ...(local as Record<string, unknown>),
+          fileUrls: intended,
+          files: [],
+          unassignedFile: null,
+          id: docId,
+        },
+        { notify: true, force: true, skipPlanMutationGate: true }
+      );
+      notifyBrowserDbCollectionUpdated(companyId, collectionName);
+    }
+
+    try {
+      const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
+      const fsCompanyId =
+        String((reg as Record<string, unknown> | null)?.authoritativeCompanyId || companyId).trim() || companyId;
+      const ref = doc(firestore, `companies/${fsCompanyId}/vouchers`, docId);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) return;
+      const remote = snap.data() as Record<string, unknown>;
+      const remoteFp = attachmentUrlsFingerprint(normalizeFileUrlsField(remote.fileUrls));
+      const remoteUf =
+        remote.unassignedFile && typeof remote.unassignedFile === "object"
+          ? String((remote.unassignedFile as { url?: string }).url || "").trim()
+          : "";
+      if (process.env.NODE_ENV !== "production") {
+        void import("@/lib/attachmentDeleteTrace").then((m) =>
+          m.traceAttachmentUrlsChange({
+            source: "outbox.postFlush.firestoreReadback",
+            companyId,
+            voucherId: docId,
+            prevUrls: intended,
+            nextUrls: normalizeFileUrlsField(remote.fileUrls),
+            extra: { hadUnassignedFile: Boolean(remoteUf), remoteMatchesIntent: remoteFp === intendedFp && !remoteUf },
+          })
+        );
+      }
+      if (remoteFp === intendedFp && !remoteUf) return;
+      await setDoc(
+        ref,
+        {
+          fileUrls: intended,
+          files: [],
+          unassignedFile: deleteField(),
+          id: docId,
+        },
+        { merge: true }
+      );
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[QUEUE_FLUSH] attachment enforce after bounce", {
+          companyId,
+          docId,
+          intendedCount: intended.length,
+          remoteCount: normalizeFileUrlsField(remote.fileUrls).length,
+          hadUnassignedFile: Boolean(remoteUf),
+        });
+      }
+    } catch (e) {
+      console.warn("[localVoucherOutbox] post-flush attachment enforce failed", e);
+    }
+    return;
+  }
+
+  if (!MASTER_ATTACHMENT_COLLECTIONS.has(collectionName) || !source) return;
+  const hasExplicitScalar = MASTER_ATTACHMENT_SCALAR_KEYS.some((k) =>
+    Object.prototype.hasOwnProperty.call(source, k)
+  );
+  const hasExplicitDocs = Object.prototype.hasOwnProperty.call(source, "documentFileUrls");
+  const hasExplicitFileUrls = Object.prototype.hasOwnProperty.call(source, "fileUrls");
+  if (!hasExplicitScalar && !hasExplicitDocs && !hasExplicitFileUrls) return;
+
+  const intendedDocs = hasExplicitDocs
+    ? Array.isArray(source.documentFileUrls)
+      ? source.documentFileUrls.filter((u): u is string => typeof u === "string" && Boolean(u.trim()))
+      : []
+    : null;
+  const intendedFileUrls = hasExplicitFileUrls ? normalizeFileUrlsField(source.fileUrls) : null;
+
   const { upsertCompanyDocInBrowserDb, notifyBrowserDbCollectionUpdated } = await import(
     "@/lib/localCompanyDocMirror"
   );
-
   const local = await getCompanyDocFromBrowserDb(companyId, collectionName, docId, { includeDeleted: true });
-  const localFp = attachmentUrlsFingerprint(normalizeFileUrlsField(local?.fileUrls));
-  const localUf =
-    local?.unassignedFile && typeof local.unassignedFile === "object"
-      ? String((local.unassignedFile as { url?: string }).url || "").trim()
-      : "";
-  if (local && (localFp !== intendedFp || (intended.length === 0 && Boolean(localUf)))) {
-    await upsertCompanyDocInBrowserDb(
-      companyId,
-      collectionName,
-      docId,
-      {
-        ...(local as Record<string, unknown>),
-        fileUrls: intended,
-        files: [],
-        unassignedFile: null,
-        id: docId,
-      },
-      { notify: true, force: true, skipPlanMutationGate: true }
-    );
-    notifyBrowserDbCollectionUpdated(companyId, collectionName);
+  if (local) {
+    let localMismatch = false;
+    const patch: Record<string, unknown> = { ...(local as Record<string, unknown>), id: docId };
+    for (const key of MASTER_ATTACHMENT_SCALAR_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+      const intended = isClearedMasterAttachmentScalar(source[key]) ? null : String(source[key] || "").trim();
+      const have = scalarAttachmentFingerprint(local[key]);
+      if (have !== (intended || "")) {
+        patch[key] = intended;
+        localMismatch = true;
+      }
+    }
+    if (intendedDocs && attachmentUrlsFingerprint(normalizeFileUrlsField(local.documentFileUrls)) !== attachmentUrlsFingerprint(intendedDocs)) {
+      patch.documentFileUrls = intendedDocs;
+      localMismatch = true;
+    }
+    if (
+      intendedFileUrls &&
+      attachmentUrlsFingerprint(normalizeFileUrlsField(local.fileUrls)) !== attachmentUrlsFingerprint(intendedFileUrls)
+    ) {
+      patch.fileUrls = intendedFileUrls;
+      localMismatch = true;
+    }
+    if (localMismatch) {
+      await upsertCompanyDocInBrowserDb(companyId, collectionName, docId, patch, {
+        notify: true,
+        force: true,
+        skipPlanMutationGate: true,
+      });
+      notifyBrowserDbCollectionUpdated(companyId, collectionName, { immediate: true, source: "local_write" });
+    }
   }
 
-  // Firestore me abhi bhi purani list / unassignedFile → force patch (delete bounce band).
   try {
     const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
     const fsCompanyId =
       String((reg as Record<string, unknown> | null)?.authoritativeCompanyId || companyId).trim() || companyId;
-    const ref = doc(firestore, `companies/${fsCompanyId}/vouchers`, docId);
+    const ref = doc(firestore, `companies/${fsCompanyId}/${collectionName}`, docId);
     const snap = await getDoc(ref);
     if (!snap.exists()) return;
     const remote = snap.data() as Record<string, unknown>;
-    const remoteFp = attachmentUrlsFingerprint(normalizeFileUrlsField(remote.fileUrls));
-    const remoteUf =
-      remote.unassignedFile && typeof remote.unassignedFile === "object"
-        ? String((remote.unassignedFile as { url?: string }).url || "").trim()
-        : "";
-    if (process.env.NODE_ENV !== "production") {
-      void import("@/lib/attachmentDeleteTrace").then((m) =>
-        m.traceAttachmentUrlsChange({
-          source: "outbox.postFlush.firestoreReadback",
-          companyId,
-          voucherId: docId,
-          prevUrls: intended,
-          nextUrls: normalizeFileUrlsField(remote.fileUrls),
-          extra: { hadUnassignedFile: Boolean(remoteUf), remoteMatchesIntent: remoteFp === intendedFp && !remoteUf },
-        })
-      );
+    const firestorePatch: Record<string, unknown> = {};
+    let remoteMismatch = false;
+    for (const key of MASTER_ATTACHMENT_SCALAR_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+      const intendedCleared = isClearedMasterAttachmentScalar(source[key]);
+      const remoteFp = scalarAttachmentFingerprint(remote[key]);
+      const intendedFp = intendedCleared ? "" : String(source[key] || "").trim();
+      if (remoteFp === intendedFp) continue;
+      firestorePatch[key] = intendedCleared ? deleteField() : source[key];
+      remoteMismatch = true;
     }
-    if (remoteFp === intendedFp && !remoteUf) return;
-    await setDoc(
-      ref,
-      {
-        fileUrls: intended,
-        files: [],
-        unassignedFile: deleteField(),
-        id: docId,
-      },
-      { merge: true }
-    );
-    if (process.env.NODE_ENV !== "production") {
-      console.warn("[QUEUE_FLUSH] attachment enforce after bounce", {
-        companyId,
-        docId,
-        intendedCount: intended.length,
-        remoteCount: normalizeFileUrlsField(remote.fileUrls).length,
-        hadUnassignedFile: Boolean(remoteUf),
-      });
+    if (intendedDocs) {
+      const remoteDocs = normalizeFileUrlsField(remote.documentFileUrls);
+      if (attachmentUrlsFingerprint(remoteDocs) !== attachmentUrlsFingerprint(intendedDocs)) {
+        firestorePatch.documentFileUrls = intendedDocs;
+        remoteMismatch = true;
+      }
     }
+    if (intendedFileUrls) {
+      const remoteFiles = normalizeFileUrlsField(remote.fileUrls);
+      if (attachmentUrlsFingerprint(remoteFiles) !== attachmentUrlsFingerprint(intendedFileUrls)) {
+        firestorePatch.fileUrls = intendedFileUrls;
+        remoteMismatch = true;
+      }
+    }
+    if (!remoteMismatch) return;
+    await setDoc(ref, firestorePatch, { merge: true });
   } catch (e) {
-    console.warn("[localVoucherOutbox] post-flush attachment enforce failed", e);
+    console.warn("[localVoucherOutbox] post-flush master attachment enforce failed", e);
   }
 }
 
@@ -813,6 +954,7 @@ async function flushVoucherOutboxImpl(options?: FlushVoucherOutboxOptions): Prom
           updateDoc.files = [];
           updateDoc.unassignedFile = deleteField();
         }
+        applyMasterAttachmentFieldsForFirestoreMerge(updateDoc, docFieldsToWrite);
         txnPayload = {
           mode: "merge",
           doc: updateDoc,

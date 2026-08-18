@@ -4582,9 +4582,8 @@ export function AddVoucherDialog(props: any) {
     if (!companyId || !effectiveVoucher?.id) return null;
     const row = effectiveVoucher as Record<string, unknown>;
     const link = readInterCompanyLink(row);
-    const shared = row.interCompanyShareAttachmentsWithPeer === true;
     const interCompanyPeer =
-      shared && link?.peerCompanyId && link?.peerVoucherId
+      link?.peerCompanyId && link?.peerVoucherId
         ? {
             peerCompanyId: String(link.peerCompanyId),
             peerVoucherId: String(link.peerVoucherId),

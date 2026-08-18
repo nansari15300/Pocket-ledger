@@ -656,6 +656,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
     }
     if (JSON.stringify(incoming) === JSON.stringify(cur)) return;
+    // Other-device / live snapshot lag: empty parent list se edit tiles khaki/blank mat karo.
+    const explicitEmptyFileUrls =
+      Object.prototype.hasOwnProperty.call(voucher, "fileUrls") &&
+      Array.isArray(voucher.fileUrls) &&
+      voucher.fileUrls.length === 0;
+    if (!snap && cur.length > 0 && incoming.length === 0 && !explicitEmptyFileUrls) {
+      return;
+    }
     if (cur.length > incoming.length || (cur.length > 0 && incoming.length === 0)) {
       void import("@/lib/attachmentDeleteTrace").then((m) =>
         m.logAttachWipe({
@@ -2862,11 +2870,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <div className="flex flex-wrap gap-4">
                       {files.map((file, index) => (
                         <FilePreview 
-                          key={index} 
+                          key={typeof file === "string" ? file : `${file.name}-${file.size}-${index}`} 
                           file={file} 
-                          attachmentCompanyId={ctxCompanyId ?? undefined}
+                          attachmentCompanyId={companyId || undefined}
                           attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
+                          allowPreviewWhenDisabled
                           onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                           className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                         />

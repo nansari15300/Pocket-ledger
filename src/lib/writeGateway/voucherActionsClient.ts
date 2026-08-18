@@ -1391,6 +1391,49 @@ async function syncInterCompanySourceApprovedToPeerTarget(
   await patchVoucherFields(link.peerCompanyId, link.peerVoucherId, {
     interCompanySourceApproved: true,
   });
+  dispatchVoucherLivePatch(link.peerCompanyId, link.peerVoucherId, {
+    id: link.peerVoucherId,
+    interCompanySourceApproved: true,
+  });
+}
+
+type ApproveVoucherHistoryOptions = {
+  skipUiNotify?: boolean;
+  /** Recursion guard — source/target pair approve. */
+  skipPeerApprove?: boolean;
+};
+
+/**
+ * IC: ek company/entity pe Approve → linked copy bhi approve (party vs bank / source vs target).
+ */
+async function approveInterCompanyPeerCopy(
+  voucher: Record<string, unknown>,
+  approvedByUserId: string,
+  approvedByName?: string | null,
+  options?: ApproveVoucherHistoryOptions
+): Promise<void> {
+  if (options?.skipPeerApprove === true) return;
+  if (String(voucher?.type || "") !== "inter_company") return;
+  const link = readInterCompanyLink(voucher);
+  if (!link?.peerCompanyId || !link?.peerVoucherId) return;
+  if (interCompanyVoucherViewerSide(voucher) === "source") {
+    await syncInterCompanySourceApprovedToPeerTarget(voucher);
+  }
+  try {
+    await approveVoucherWithHistory(link.peerCompanyId, link.peerVoucherId, approvedByUserId, approvedByName, {
+      skipUiNotify: options?.skipUiNotify,
+      skipPeerApprove: true,
+    });
+    dispatchVoucherLivePatch(link.peerCompanyId, link.peerVoucherId, {
+      id: link.peerVoucherId,
+      isApproved: true,
+      approvedByUserId,
+      approvedByUserName: approvedByName || approvedByUserId,
+      ...(interCompanyVoucherViewerSide(voucher) === "source" ? { interCompanySourceApproved: true } : {}),
+    });
+  } catch (e) {
+    console.warn("[approve] inter-company peer copy", e);
+  }
 }
 
 /** Local mirror pe approve persist (local-only APK + Firebase mode offline fallback). */
@@ -1399,7 +1442,7 @@ async function approveVoucherLocalPersist(
   voucherId: string,
   approvedByUserId: string,
   approvedByName?: string | null,
-  options?: { skipUiNotify?: boolean }
+  options?: ApproveVoucherHistoryOptions
 ): Promise<void> {
   const resolved = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId);
   if (!resolved) throw new Error("Voucher not found.");
@@ -1450,6 +1493,7 @@ async function approveVoucherLocalPersist(
   if (interCompanyVoucherViewerSide(payload) === "source") {
     await syncInterCompanySourceApprovedToPeerTarget(payload);
   }
+  await approveInterCompanyPeerCopy(payload, approvedByUserId, approvedByName, options);
 }
 
 /**
@@ -2342,7 +2386,7 @@ export async function approveVoucherWithHistory(
   voucherId: string,
   approvedByUserId: string,
   approvedByName?: string | null,
-  options?: { skipUiNotify?: boolean }
+  options?: ApproveVoucherHistoryOptions
 ): Promise<void> {
   if (!companyId || !voucherId || !approvedByUserId) {
     throw new Error("Missing required approval parameters.");
@@ -2354,12 +2398,19 @@ export async function approveVoucherWithHistory(
   const localResolved = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId);
   // Save & Approve create already embeds isApproved — skip FS race ("Voucher not found").
   if (localResolved?.voucher?.isApproved === true) {
+    await approveInterCompanyPeerCopy(
+      localResolved.voucher as Record<string, unknown>,
+      approvedByUserId,
+      approvedByName,
+      options
+    );
     return;
   }
   // Prefer SQLite whenever the row exists (new create often not on Firestore yet).
   if (localResolved) {
     await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName, {
       skipUiNotify,
+      skipPeerApprove: options?.skipPeerApprove,
     });
     if (!skipUiNotify) {
       void flushVoucherOutbox().catch(() => undefined);
@@ -2423,6 +2474,7 @@ export async function approveVoucherWithHistory(
         if (interCompanyVoucherViewerSide(approvedRow) === "source") {
           await syncInterCompanySourceApprovedToPeerTarget(approvedRow);
         }
+        await approveInterCompanyPeerCopy(approvedRow, approvedByUserId, approvedByName, options);
       }
       approvedViaFs = true;
       break;
@@ -2436,6 +2488,7 @@ export async function approveVoucherWithHistory(
       if (localResolved) {
         await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName, {
           skipUiNotify,
+          skipPeerApprove: options?.skipPeerApprove,
         });
         if (!skipUiNotify) {
           void flushVoucherOutbox().catch(() => undefined);
@@ -2459,6 +2512,7 @@ export async function approveVoucherWithHistory(
   if (localResolved) {
     await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName, {
       skipUiNotify,
+      skipPeerApprove: options?.skipPeerApprove,
     });
     if (!skipUiNotify) {
       void flushVoucherOutbox().catch(() => undefined);

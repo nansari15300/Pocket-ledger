@@ -1485,7 +1485,9 @@ export const VoucherProvider = ({
         if (!prevAlive.length || !hasWarmLedgerDataRef.current) {
           return applyLocalApprovalHoldToVoucherList(prevAlive, next as any[]) as any;
         }
-        return mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any;
+        const merged = mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any[];
+        // Warm sqlite/lite projection `isApproved` drop karta tha — party approve ke baad bank/staff pink reh jata.
+        return applyLocalApprovalHoldToVoucherList(prevAlive, merged) as any;
       });
       if (collectionPath && !cancelled && loadEpoch === companyDataLoadEpochRef.current) {
         warmSqliteCollectionPathsRef.current.add(collectionPath);
@@ -2160,7 +2162,9 @@ export const VoucherProvider = ({
         if (!prevAlive.length || !hasWarmLedgerDataRef.current) {
           return applyLocalApprovalHoldToVoucherList(prevAlive, next as any[]) as any;
         }
-        return mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any;
+        const merged = mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any[];
+        // Warm sqlite/lite projection `isApproved` drop karta tha — party approve ke baad bank/staff pink reh jata.
+        return applyLocalApprovalHoldToVoucherList(prevAlive, merged) as any;
       });
       if (collectionPath && !cancelled && loadEpoch === companyDataLoadEpochRef.current) {
         warmSqliteCollectionPathsRef.current.add(collectionPath);
@@ -2288,7 +2292,9 @@ export const VoucherProvider = ({
         if (!prevAlive.length || !hasWarmLedgerDataRef.current) {
           return applyLocalApprovalHoldToVoucherList(prevAlive, next as any[]) as any;
         }
-        return mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any;
+        const merged = mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any[];
+        // Warm sqlite/lite projection `isApproved` drop karta tha — party approve ke baad bank/staff pink reh jata.
+        return applyLocalApprovalHoldToVoucherList(prevAlive, merged) as any;
       });
       if (collectionPath && !cancelled && loadEpoch === companyDataLoadEpochRef.current) {
         warmSqliteCollectionPathsRef.current.add(collectionPath);

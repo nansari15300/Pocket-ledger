@@ -62,6 +62,56 @@ function isHttpsAttachmentRef(u: unknown): boolean {
   return typeof u === "string" && /^https?:\/\//i.test(u.trim());
 }
 
+function isClearedMasterAttachmentScalar(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value !== "string") return false;
+  const s = value.trim();
+  if (!s) return true;
+  const low = s.toLowerCase();
+  return low === "null" || low === "undefined" || low === "none" || low === "n/a";
+}
+
+/**
+ * Bank/party/staff profile pics live in `fileUrl` (not voucher `fileUrls`).
+ * EXE/APK SQLite used to keep stale HTTPS after web/other-device clear because
+ * empty remote was treated as "don't wipe". Newer remote with no HTTPS must clear.
+ */
+function mergeMasterAttachmentScalars(
+  out: Record<string, unknown>,
+  remote: Record<string, unknown>,
+  local: Record<string, unknown>,
+  localMs: number,
+  remoteMs: number
+): void {
+  for (const key of ["fileUrl", "avatarUrl", "logoUrl"] as const) {
+    const r = remote[key];
+    const l = local[key];
+    const hasLocalKey = Object.prototype.hasOwnProperty.call(local, key);
+    if (hasLocalKey && localMs >= remoteMs) {
+      if (isClearedMasterAttachmentScalar(l)) {
+        out[key] = null;
+        continue;
+      }
+      if (isLocalFileRef(String(l || "")) && isHttpsAttachmentRef(r)) out[key] = r;
+      else out[key] = l;
+      continue;
+    }
+    if (isHttpsAttachmentRef(r)) {
+      out[key] = r;
+      continue;
+    }
+    if (isLocalFileRef(String(l || ""))) {
+      out[key] = l;
+      continue;
+    }
+    if (remoteMs > localMs || !hasLocalKey) {
+      out[key] = null;
+    } else if (isHttpsAttachmentRef(l)) {
+      out[key] = l;
+    }
+  }
+}
+
 function docAttachmentEditTimeMs(row: Record<string, unknown> | null | undefined): number {
   if (!row) return 0;
   for (const key of ["lastEditedAt", "updatedAt", "createdAt"] as const) {
@@ -206,21 +256,7 @@ function mergeDocAttachmentFieldsPreferRemote(
     out.files = [];
     out.unassignedFile = null;
   }
-  for (const key of ["fileUrl", "avatarUrl"] as const) {
-    const r = remote[key];
-    const l = local[key];
-    const hasLocalKey = Object.prototype.hasOwnProperty.call(local, key);
-    if (hasLocalKey && localMs >= remoteMs) {
-      if (!l) {
-        out[key] = l ?? null;
-        continue;
-      }
-      if (isLocalFileRef(String(l || "")) && isHttpsAttachmentRef(r)) out[key] = r;
-      else out[key] = l;
-      continue;
-    }
-    if (isHttpsAttachmentRef(r) && (isLocalFileRef(String(l || "")) || !l)) out[key] = r;
-  }
+  mergeMasterAttachmentScalars(out, remote, local, localMs, remoteMs);
   if (process.env.NODE_ENV !== "production") {
     const afterUrls = Array.isArray(out.fileUrls) ? (out.fileUrls as unknown[]) : [];
     void import("@/lib/attachmentDeleteTrace").then((m) => {
@@ -376,23 +412,7 @@ function mergeDocAttachmentFieldsForPull(
     out.files = [];
     out.unassignedFile = null;
   }
-  for (const key of ["fileUrl", "avatarUrl"] as const) {
-    const r = remote[key];
-    const l = local[key];
-    const hasLocalKey = Object.prototype.hasOwnProperty.call(local, key);
-    if (hasLocalKey && localMs >= remoteMs) {
-      if (!l) {
-        out[key] = l ?? null;
-        continue;
-      }
-      if (isLocalFileRef(String(l || "")) && isHttpsAttachmentRef(r)) out[key] = r;
-      else out[key] = l;
-      continue;
-    }
-    if (isHttpsAttachmentRef(r)) out[key] = r;
-    else if (isHttpsAttachmentRef(l)) out[key] = l;
-    else if (isLocalFileRef(String(l || ""))) out[key] = l;
-  }
+  mergeMasterAttachmentScalars(out, remote, local, localMs, remoteMs);
   if (process.env.NODE_ENV !== "production") {
     const afterUrls = Array.isArray(out.fileUrls) ? (out.fileUrls as unknown[]) : [];
     void import("@/lib/attachmentDeleteTrace").then((m) => {

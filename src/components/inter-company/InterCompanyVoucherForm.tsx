@@ -81,10 +81,13 @@ import {
   readInterCompanyCompanyBankId,
   readInterCompanyEntityLabelSnapshot,
   readInterCompanyLink,
+  readInterCompanyOwnFileUrls,
   resolveInterCompanyBankIdsForEdit,
   resolveInterCompanyEditCompanyIds,
   interCompanyVoucherViewerSide,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
+import { pickDefaultInterCompanyClearingBankId } from "@/lib/interCompany/interCompanyEntityLookup";
+import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { fetchInterCompanyBankEntityDetail } from "@/lib/interCompany/fetchInterCompanyEntities";
 import { getNextInterCompanyVoucherNumber } from "@/lib/interCompany/nextInterCompanyVoucherNumber";
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
@@ -731,26 +734,18 @@ export function InterCompanyVoucherForm({
         return true;
       });
     };
-    const readOwnFileUrls = (r: Record<string, unknown>): string[] => {
-      const ownRaw = r.interCompanyOwnFileUrls;
-      const legacyRaw = r.fileUrls;
-      return dedupeStrings(
-        Array.isArray(ownRaw) ? (ownRaw as string[]) : Array.isArray(legacyRaw) ? (legacyRaw as string[]) : []
-      );
-    };
 
-    // Own side attachments — is doc ka apna fileUrls; reversal attachments (agar hain) bhi jode
+    // Own side attachments — empty `interCompanyOwnFileUrls` par `fileUrls` fallback (txn row vs edit mismatch)
     const rev = row.interCompanyReversal as { attachmentUrls?: string[] } | undefined;
     const ownFiles = dedupeStrings([
-      ...readOwnFileUrls(row),
+      ...readInterCompanyOwnFileUrls(row),
       ...(Array.isArray(rev?.attachmentUrls) ? rev!.attachmentUrls! : []),
     ]);
+    // Empty list se post-save form wipe mat karo — peer fetch / already-set File state rakho
     if (isTargetDoc) {
-      setTargetFiles(ownFiles);
-      setSourceFiles([]);
-    } else {
+      if (ownFiles.length > 0) setTargetFiles(ownFiles);
+    } else if (ownFiles.length > 0) {
       setSourceFiles(ownFiles);
-      setTargetFiles([]);
     }
 
     const shareSourceRaw = row.interCompanyShareAttachmentsWithPeer;
@@ -786,6 +781,17 @@ export function InterCompanyVoucherForm({
         } catch {
           /* offline */
         }
+        if (!peer) {
+          try {
+            peer = (await getCompanyDocFromBrowserDb(
+              link.peerCompanyId,
+              "vouchers",
+              link.peerVoucherId
+            )) as Record<string, unknown> | null;
+          } catch {
+            /* local miss */
+          }
+        }
       }
       if (peer) {
         const peerDenorm = resolveInterCompanyBankIdsForEdit(peer);
@@ -807,13 +813,13 @@ export function InterCompanyVoucherForm({
         let sourceFilesNext = isTargetDoc ? ([] as string[]) : ownFiles;
         let targetFilesNext = isTargetDoc ? ownFiles : ([] as string[]);
         if (peer) {
-          const peerOwnFiles = readOwnFileUrls(peer);
+          const peerOwnFiles = readInterCompanyOwnFileUrls(peer);
           if (isTargetDoc) {
-            setSourceFiles(peerOwnFiles);
-            sourceFilesNext = peerOwnFiles;
+            if (peerOwnFiles.length > 0) setSourceFiles(peerOwnFiles);
+            sourceFilesNext = peerOwnFiles.length > 0 ? peerOwnFiles : sourceFilesNext;
           } else {
-            setTargetFiles(peerOwnFiles);
-            targetFilesNext = peerOwnFiles;
+            if (peerOwnFiles.length > 0) setTargetFiles(peerOwnFiles);
+            targetFilesNext = peerOwnFiles.length > 0 ? peerOwnFiles : targetFilesNext;
           }
         }
         setIcExtrasBaseline(
@@ -1015,6 +1021,29 @@ export function InterCompanyVoucherForm({
     voucherRow,
     targetCompanyBankId,
     hydratedTargetBankExtra,
+  ]);
+
+  const isNewIcVoucher = !displayVoucher?.id && !savedSourceId;
+
+  useEffect(() => {
+    if (!isNewIcVoucher || sourceEntitiesLoading) return;
+    if (String(sourceCompanyBankId || "").trim()) return;
+    const id = pickDefaultInterCompanyClearingBankId(sourceEntitiesRaw);
+    if (id) setSourceCompanyBankId(id);
+  }, [isNewIcVoucher, sourceEntitiesLoading, sourceCompanyBankId, sourceEntitiesRaw]);
+
+  useEffect(() => {
+    if (!isNewIcVoucher || targetEntitiesLoading) return;
+    if (!String(targetEntitiesCompanyId || "").trim()) return;
+    if (String(targetCompanyBankId || "").trim()) return;
+    const id = pickDefaultInterCompanyClearingBankId(targetEntitiesRaw);
+    if (id) setTargetCompanyBankId(id);
+  }, [
+    isNewIcVoucher,
+    targetEntitiesLoading,
+    targetEntitiesCompanyId,
+    targetCompanyBankId,
+    targetEntitiesRaw,
   ]);
 
   // Edit: saved bank id entities list me na ho to Firestore se naam/A/c No combobox ke liye
@@ -2333,11 +2362,23 @@ export function InterCompanyVoucherForm({
     }
     const nextShareSource = side === "source" ? nextValue : shareSourceAttachmentsWithPeer;
     const nextShareTarget = side === "target" ? nextValue : shareTargetAttachmentsWithSource;
+    const sourceHasUnsavedFiles = sourceFiles.some((f) => f instanceof File);
+    const targetHasUnsavedFiles = targetFiles.some((f) => f instanceof File);
+    if (
+      (side === "source" && sourceHasUnsavedFiles) ||
+      (side === "target" && targetHasUnsavedFiles)
+    ) {
+      return;
+    }
+    const sourceOwnFileUrls = sourceFiles.filter((f): f is string => typeof f === "string");
+    const targetOwnFileUrls = targetFiles.filter((f): f is string => typeof f === "string");
+    if (nextValue === true) {
+      const own = side === "source" ? sourceOwnFileUrls : targetOwnFileUrls;
+      if (own.length === 0) return;
+    }
     const toastId = toast.loading("Saving attachment share…");
     setIsLoading(true);
     try {
-      const sourceOwnFileUrls = sourceFiles.filter((f): f is string => typeof f === "string");
-      const targetOwnFileUrls = targetFiles.filter((f): f is string => typeof f === "string");
       const shareResult = await reconcileAndPatchInterCompanyAttachmentSharing({
         sourceCompanyId: sourceCompanyIdForShare,
         sourceVoucherId: sourceVoucherIdForShare,
@@ -2591,6 +2632,13 @@ export function InterCompanyVoucherForm({
           checkboxLabel="Show my attachment on other side"
           checkboxId="ic-share-source-attachments-with-peer"
           companyId={sourceCompanyIdForAttachBox}
+          peerPreviewFiles={shareTargetAttachmentsWithSource ? targetFiles : []}
+          peerPreviewCompanyId={targetCompanyIdForAttachBox}
+          peerPreviewVoucherId={
+            icViewerSide === "target"
+              ? String(displayVoucher?.id || peerTargetVoucherId || "")
+              : String(peerTargetVoucherId || icLink?.peerVoucherId || "")
+          }
         />
         <div className={cn(interCompanyNarrationCardClass, "min-w-0")}>
           <FormField
@@ -2633,6 +2681,13 @@ export function InterCompanyVoucherForm({
           checkboxLabel="Show my attachment on other side"
           checkboxId="ic-share-target-attachments-with-peer"
           companyId={targetCompanyIdForAttachBox}
+          peerPreviewFiles={shareSourceAttachmentsWithPeer ? sourceFiles : []}
+          peerPreviewCompanyId={sourceCompanyIdForAttachBox}
+          peerPreviewVoucherId={
+            icViewerSide === "source"
+              ? String(displayVoucher?.id || savedSourceId || "")
+              : String(savedSourceId || icLink?.peerVoucherId || "")
+          }
         />
       </div>
 

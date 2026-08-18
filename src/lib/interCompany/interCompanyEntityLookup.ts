@@ -145,4 +145,12 @@ export function filterInterCompanyClearingBankEntities(
   return clearing;
 }
 
+/** New IC voucher — pehla (ya akela) Is-clearing bank/cash auto-select. */
+export function pickDefaultInterCompanyClearingBankId(
+  entities: InterCompanyEntityDetail[]
+): string {
+  const clearing = filterInterCompanyClearingBankEntities(entities);
+  return String(clearing[0]?.id || "").trim();
+}
+
 export { isSearchableInterCompanyPhone, normalizeInterCompanyPhone, interCompanyPhonesMatch };

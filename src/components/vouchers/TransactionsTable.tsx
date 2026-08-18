@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import type { StockView, Item } from "@/components/items/types";
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Filter, MoreVertical, CheckSquare, MousePointerClick, Printer, Pencil, X } from "lucide-react";
+import { Filter, MoreVertical, CheckSquare, MousePointerClick, Printer, Pencil, X, CheckCircle, CheckCheck } from "lucide-react";
 import { txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import { scrollTransactionSelectedRowIntoView } from "@/lib/ledgerScrollToSelection";
 import {
@@ -372,7 +372,7 @@ export function TransactionsTable({
   onStatementCheckRowFocus,
   spendWiseGroupPrint,
 }: TransactionsTableProps) {
-  const { company, companyId } = useCompany();
+  const { company, companyId, effectiveNotificationSettings } = useCompany();
   const voucherAttachmentUiOpts = useMemo(() => voucherAttachmentUiOptionsForCompany(company), [company]);
   const [filesTickEpoch, setFilesTickEpoch] = useState(0);
   useEffect(() => {
@@ -1408,7 +1408,7 @@ export function TransactionsTable({
   }
 
   // File column: `usePermissions` local/SQLite company par plan cache miss ya "basic" par bhi `canAddFileImagePdf` boost karta hai — seedha plan se mat lo
-  const { canAddFileImagePdf } = usePermissions();
+  const { can, canAddFileImagePdf } = usePermissions();
   const showFileColumn = canAddFileImagePdf === true;
   const showCol = (key: string) => visibleColumns == null || visibleColumns[key] !== false;
   const showFileBySelection = showFileColumn && showCol("file");
@@ -2212,7 +2212,7 @@ export function TransactionsTable({
                 </span>
               ) : null}
             </div>
-            <div className={cn("relative flex shrink-0 items-center justify-end font-bold text-sm", showFileBySelection && "pl-8", mainAmountClass)}>
+            <div className={cn("relative flex shrink-0 items-center justify-end gap-1 font-bold text-sm", showFileBySelection && "pl-8", mainAmountClass)}>
               {showFileBySelection ? (
                 <div className="absolute left-0 top-1/2 -translate-y-1/2">
                   <MobileTransactionFilePreview
@@ -2222,6 +2222,43 @@ export function TransactionsTable({
                 </div>
               ) : null}
               <span>{amount > 0 ? renderHighlightedMobileAmountOrQty(amount) : "-"}</span>
+              {can("approve_transactions") &&
+              effectiveNotificationSettings?.approve?.on !== false &&
+              effectiveNotificationSettings?.approve?.onTransaction !== false &&
+              (isPendingApproval || showApproveAllOnPage) ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="ml-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-foreground/80 hover:bg-muted"
+                      aria-label="Approve"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <MoreVertical className="h-4 w-4" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44" onClick={(e) => e.stopPropagation()}>
+                    {isPendingApproval ? (
+                      <DropdownMenuItem
+                        onClick={() => effectiveOnApproveVoucher?.(t)}
+                        className="flex items-center gap-2"
+                      >
+                        <CheckCircle className="h-3.5 w-3.5" />
+                        Approve
+                      </DropdownMenuItem>
+                    ) : null}
+                    {showApproveAllOnPage ? (
+                      <DropdownMenuItem
+                        onClick={() => void handleApproveAllVisible()}
+                        className="flex items-center gap-2"
+                      >
+                        <CheckCheck className="h-3.5 w-3.5" />
+                        Approve All
+                      </DropdownMenuItem>
+                    ) : null}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
             </div>
           </div>
           <div className="flex justify-between items-start gap-2 min-w-0 mt-0.5">
@@ -2334,6 +2371,23 @@ export function TransactionsTable({
     // Mobile transaction list: 4px vertical gap between cards for cleaner scanability.
     return (
       <div className={cn("w-full min-w-0 space-y-1 pb-4 overflow-hidden", context === "daybook" ? "" : "px-0.5")}>
+        {can("approve_transactions") &&
+        effectiveNotificationSettings?.approve?.on !== false &&
+        effectiveNotificationSettings?.approve?.onTransaction !== false &&
+        showApproveAllOnPage ? (
+          <div className="flex justify-end px-0.5">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1.5 text-xs"
+              onClick={() => void handleApproveAllVisible()}
+            >
+              <CheckCheck className="h-3.5 w-3.5" />
+              Approve All
+            </Button>
+          </div>
+        ) : null}
         {showLedgerOpeningRows && (
           <>
             {/* Date filter + master OB: pehla card (stacked); search slot sirf neeche wale card par */}

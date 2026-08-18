@@ -3,13 +3,14 @@
 /**
  * Inter Company voucher — optional file attachments (source voucher par save).
  */
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { PlusCircle } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { RestrictedFileUploader } from "@/components/ui/RestrictedFileUploader";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { FilePreview } from "@/components/vouchers/FilePreview";
+import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
 import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
@@ -45,6 +46,10 @@ type Props = {
   allowPreviewWhenDisabled?: boolean;
   /** Image compress cap: online 100KB vs local/PL/Drive 150KB */
   companyId?: string | null;
+  /** Other side ne "Show my attachment on other side" tick kiya — yahan read-only preview */
+  peerPreviewFiles?: FileEntry[];
+  peerPreviewCompanyId?: string | null;
+  peerPreviewVoucherId?: string | null;
 };
 
 export function InterCompanyVoucherAttachments({
@@ -62,8 +67,25 @@ export function InterCompanyVoucherAttachments({
   checkboxId = "ic-share-attachments-with-peer",
   allowPreviewWhenDisabled = true,
   companyId = null,
+  peerPreviewFiles = [],
+  peerPreviewCompanyId = null,
+  peerPreviewVoucherId = null,
 }: Props) {
   const stringFileUrls = files.filter((f): f is string => typeof f === "string");
+  const peerStringUrls = peerPreviewFiles.filter((f): f is string => typeof f === "string");
+  const previewClientUrls = [...stringFileUrls, ...peerStringUrls];
+  const peerFallback = useMemo(() => {
+    const cid = String(peerPreviewCompanyId || "").trim();
+    const vid = String(peerPreviewVoucherId || "").trim();
+    if (!cid) return null;
+    return {
+      companyId: cid,
+      voucherId: vid || cid,
+      interCompanyPeer: vid
+        ? { peerCompanyId: cid, peerVoucherId: vid }
+        : { peerCompanyId: cid, peerVoucherId: cid },
+    };
+  }, [peerPreviewCompanyId, peerPreviewVoucherId]);
   const { toast } = useToast();
   const { fileAttachmentLimits, allowAttachments } = usePermissions();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -105,10 +127,10 @@ export function InterCompanyVoucherAttachments({
         <div className="flex flex-wrap gap-3">
           {files.map((file, idx) => (
             <FilePreview
-              key={`${idx}-${typeof file === "string" ? file : file.name}`}
+              key={`own-${idx}-${typeof file === "string" ? file : file.name}`}
               file={file}
               allowPreviewWhenDisabled={allowPreviewWhenDisabled}
-              attachmentClientFileUrls={stringFileUrls}
+              attachmentClientFileUrls={previewClientUrls}
               attachmentCompanyId={companyId ?? undefined}
               onRemove={
                 canAttach && fileAttachmentLimits.allowDelete
@@ -120,6 +142,26 @@ export function InterCompanyVoucherAttachments({
               }
             />
           ))}
+          {peerPreviewFiles.map((file, idx) => {
+            const preview = (
+              <FilePreview
+                file={file}
+                allowPreviewWhenDisabled
+                attachmentClientFileUrls={previewClientUrls}
+                attachmentCompanyId={peerPreviewCompanyId ?? companyId ?? undefined}
+              />
+            );
+            return peerFallback ? (
+              <VoucherAttachmentFallbackContext.Provider
+                key={`peer-${idx}-${typeof file === "string" ? file : file.name}`}
+                value={peerFallback}
+              >
+                {preview}
+              </VoucherAttachmentFallbackContext.Provider>
+            ) : (
+              <div key={`peer-${idx}-${typeof file === "string" ? file : file.name}`}>{preview}</div>
+            );
+          })}
           {canAttach && files.length < fileAttachmentLimits.maxFileCount ? (
             <>
               <AttachmentHoldPasteSurface
