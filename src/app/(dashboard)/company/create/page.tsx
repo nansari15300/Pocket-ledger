@@ -6,6 +6,8 @@ import { useCompany } from "@/hooks/useCompany";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { CreateCompanyDialog } from "@/components/company/CreateCompanyDialog";
+import { useCreateCompanyAvailability } from "@/hooks/useCreateCompanyAvailability";
+import { Button } from "@/components/ui/button";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
@@ -26,6 +28,8 @@ function CreateCompanyPageLoading() {
 
 function CreateCompanyPageContent() {
   const { user, loading: authLoading } = useAuth();
+  const { availability: createCompanyAvailability, loading: createAvailabilityLoading } =
+    useCreateCompanyAvailability();
   /** `loading`: registry hydrate — iske pehle khali list mat maanho; `companyId` orphan ho sakta hai (list 0 par bhi) → /company bounce loop. */
   const { setCompanyId, allCompanies, loading: companyContextLoading } = useCompany();
   const router = useRouter();
@@ -64,7 +68,9 @@ function CreateCompanyPageContent() {
       }
       setCheckingCompanies(false);
       initialHydrateDoneRef.current = true;
-      setIsDialogOpen(true);
+      if (createCompanyAvailability.canCreateAny) {
+        setIsDialogOpen(true);
+      }
       return;
     }
 
@@ -84,7 +90,9 @@ function CreateCompanyPageContent() {
       setCheckingCompanies(false);
       initialHydrateDoneRef.current = true;
       setUserHasCompanies(hasCompanies);
-      setIsDialogOpen(true);
+      if (createCompanyAvailability.canCreateAny) {
+        setIsDialogOpen(true);
+      }
     };
 
     const ownedQuery = query(collection(firestore, "companies"), where("ownerId", "==", user.uid));
@@ -154,7 +162,7 @@ function CreateCompanyPageContent() {
       registerCompanyPickerFirestoreDetach(null);
       cleanupListeners();
     };
-  }, [user, authLoading, router, companyContextLoading]);
+  }, [user, authLoading, router, companyContextLoading, createCompanyAvailability.canCreateAny]);
 
   const explicitReturnTo = searchParams.get("returnTo")?.trim();
 
@@ -188,8 +196,25 @@ function CreateCompanyPageContent() {
   };
 
   // Show loading while checking companies
-  if (checkingCompanies || authLoading) {
+  if (checkingCompanies || authLoading || createAvailabilityLoading) {
     return <CreateCompanyPageLoading />;
+  }
+
+  if (!createCompanyAvailability.canCreateAny) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <div className="max-w-md space-y-4 rounded-lg border bg-card p-6 text-center shadow-sm">
+          <h1 className="text-lg font-semibold">Company creation unavailable</h1>
+          <p className="text-sm text-muted-foreground">
+            {createCompanyAvailability.blockReason ||
+              "You cannot create a company with your current plan and account settings."}
+          </p>
+          <Button type="button" variant="outline" onClick={() => router.replace("/company")}>
+            Back to companies
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (

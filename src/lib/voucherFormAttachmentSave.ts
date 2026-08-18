@@ -24,7 +24,7 @@ import {
 import { resolveFormAttachmentUrlsForEditSave } from "@/lib/formAttachmentEditHelper";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 import {
-  isFirebaseLedgerCompanyAttachmentSyncEnabled,
+  isFirebaseLedgerCompanyAttachmentUploadEnabled,
 } from "@/lib/firebaseLedgerCompanySyncPrefs";
 
 /**
@@ -52,7 +52,7 @@ export function isStandardWebBrowserClient(): boolean {
 /** Local / Drive sync company — web par Firebase materialize mat karo (syncPendingFiles / Drive cycle). */
 async function shouldSkipWebFirebaseMaterializeForCompany(companyId: string): Promise<boolean> {
   if (isFirebaseLedgerDataSyncDisabled()) return true;
-  if (!isFirebaseLedgerCompanyAttachmentSyncEnabled(companyId)) return true;
+  if (!isFirebaseLedgerCompanyAttachmentUploadEnabled(companyId)) return true;
   const cid = String(companyId || "").trim();
   if (!cid) return true;
   const { apkCloudCompanyUsesSqliteFirstWrites } = await import("@/lib/apkOnlineFirestoreWritePolicy");
@@ -97,7 +97,7 @@ export async function materializeVoucherAttachmentsInSavePayload(params: {
   if (isFirebaseLedgerDataSyncDisabled()) return;
   const cid = String(params.companyId || "").trim();
   if (!cid) return;
-  if (!isFirebaseLedgerCompanyAttachmentSyncEnabled(cid)) return;
+  if (!isFirebaseLedgerCompanyAttachmentUploadEnabled(cid)) return;
   if (!isStandardWebBrowserClient()) return;
   if (typeof navigator !== "undefined" && !navigator.onLine) return;
   const rawUrls = Array.isArray(params.data.fileUrls)

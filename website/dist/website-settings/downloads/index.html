@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Download analytics — Pocket Ledger</title>
+  <meta name="robots" content="noindex,nofollow" />
+  <link rel="stylesheet" href="../../styles.css" />
+  <link rel="stylesheet" href="../../css/website-settings.css" />
+  <style>
+    .who { color: var(--muted); font-size: 0.9rem; }
+    .status { margin-top: 1rem; font-size: 0.95rem; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: #b42318; }
+    .stat-grid {
+      display: grid;
+      gap: 0.75rem;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-bottom: 1.25rem;
+    }
+    @media (min-width: 720px) {
+      .stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    }
+    .stat-box {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.85rem;
+      background: #fff;
+    }
+    .stat-box .label { font-size: 0.78rem; color: var(--muted); }
+    .stat-box .value { font-size: 1.55rem; font-weight: 800; }
+    table.ws-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    table.ws-table th,
+    table.ws-table td {
+      text-align: left;
+      padding: 0.45rem 0.35rem;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    table.ws-table th { color: var(--muted); font-weight: 700; font-size: 0.8rem; }
+    .split { display: grid; gap: 1.25rem; }
+    @media (min-width: 900px) {
+      .split { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body class="website-settings-page" data-ws-active="downloads">
+  <header class="site-header">
+    <div class="wrap nav">
+      <a class="brand" href="../../">
+        <span class="brand-mark" aria-hidden="true"></span>
+        Pocket Ledger
+      </a>
+      <div class="nav-links">
+        <span class="who" id="who"></span>
+        <button type="button" class="btn btn-outline btn-sm" id="outBtn" hidden>Sign out</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="ws-shell">
+    <div id="websiteSettingsNav"></div>
+    <main class="ws-main">
+      <section class="page-hero">
+        <div class="wrap">
+          <h1>Download analytics</h1>
+          <p>EXE / APK / Play Store clicks from the public Downloads page.</p>
+        </div>
+      </section>
+      <section class="section">
+        <div class="wrap ws-card">
+          <div class="content-block" id="authBox">
+            <p style="margin-top:0">Sign in with a Super Admin Google account.</p>
+            <button type="button" class="btn btn-primary" id="googleBtn">Sign in with Google</button>
+          </div>
+          <div class="content-block" id="adminBox" hidden>
+            <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
+              <button type="button" class="btn btn-outline btn-sm" id="refreshBtn">Refresh</button>
+            </div>
+            <div class="stat-grid">
+              <div class="stat-box"><div class="label">Total</div><div class="value" id="statTotal">…</div></div>
+              <div class="stat-box"><div class="label">Windows EXE</div><div class="value" id="statWindows">…</div></div>
+              <div class="stat-box"><div class="label">Android APK</div><div class="value" id="statAndroid">…</div></div>
+              <div class="stat-box"><div class="label">Play Store</div><div class="value" id="statPlay">…</div></div>
+            </div>
+            <div class="split">
+              <div>
+                <h3 style="margin:0 0 0.5rem;font-size:1rem">By country</h3>
+                <table class="ws-table">
+                  <thead><tr><th>Country</th><th>Downloads</th></tr></thead>
+                  <tbody id="countryBody"></tbody>
+                </table>
+              </div>
+              <div>
+                <h3 style="margin:0 0 0.5rem;font-size:1rem">Recent clicks</h3>
+                <table class="ws-table">
+                  <thead><tr><th>When</th><th>Platform</th><th>Country</th><th>Version</th></tr></thead>
+                  <tbody id="recentBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <p class="status" id="status"></p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+  <script src="../../js/firebase-config.js"></script>
+  <script src="../../js/website-settings-nav.js"></script>
+  <script src="../../js/website-settings-auth.js"></script>
+  <script src="../../js/website-downloads-admin.js"></script>
+</body>
+</html>

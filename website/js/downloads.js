@@ -81,6 +81,7 @@
       btn.removeAttribute("href");
       btn.setAttribute("aria-disabled", "true");
       btn.classList.add("is-disabled");
+      btn.removeAttribute("data-track-platform");
       meta.textContent = isLocalHost()
         ? "Not staged yet — run npm run website:stage-releases"
         : "Not published yet — upload from /admin-release/";
@@ -89,6 +90,12 @@
     btn.classList.remove("is-disabled");
     btn.removeAttribute("aria-disabled");
     btn.setAttribute("href", item.url);
+    btn.setAttribute("data-track-platform", kind === "windows" ? "windows" : "android");
+    if (item.version) btn.setAttribute("data-track-version", String(item.version));
+    else btn.removeAttribute("data-track-version");
+    if (item.file) btn.setAttribute("data-track-file", String(item.file));
+    else btn.removeAttribute("data-track-file");
+    btn.setAttribute("data-track-source", String(source || ""));
     var bits = [];
     if (item.file) bits.push(item.file);
     if (item.version) bits.push("v" + item.version);
@@ -96,6 +103,40 @@
     if (source === "local") bits.push("local path");
     if (source === "firebase") bits.push("Firebase");
     meta.textContent = bits.join(" · ");
+  }
+
+  function trackDownload(platform, extras) {
+    try {
+      var payload = {
+        platform: platform,
+        version: (extras && extras.version) || "",
+        fileName: (extras && extras.fileName) || "",
+        source: (extras && extras.source) || "",
+      };
+      void fetch("/app/api/public/download-events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        keepalive: true,
+        cache: "no-store",
+      });
+    } catch (_) {
+      /* analytics must never block download */
+    }
+  }
+
+  function bindDownloadTracking() {
+    document.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!target || !target.closest) return;
+      var link = target.closest("a[data-track-platform]");
+      if (!link || link.getAttribute("aria-disabled") === "true") return;
+      trackDownload(link.getAttribute("data-track-platform"), {
+        version: link.getAttribute("data-track-version") || "",
+        fileName: link.getAttribute("data-track-file") || "",
+        source: link.getAttribute("data-track-source") || "",
+      });
+    });
   }
 
   function setupVersionSelect(kind, entries, source) {
@@ -180,7 +221,11 @@
       if (playUrl) {
         playBtn.href = playUrl;
         playBtn.hidden = false;
+        playBtn.setAttribute("data-track-platform", "play");
+        playBtn.setAttribute("data-track-source", source);
       }
     }
   });
+
+  bindDownloadTracking();
 })();

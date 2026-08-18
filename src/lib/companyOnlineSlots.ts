@@ -3,6 +3,10 @@
 import type { Entitlements, Plan, PlanId } from "@/config/plans";
 import { getPlan, numericEntitlement, isUnlimitedEntitlementCap } from "@/config/plans";
 import { planAllowsFirebaseOnline } from "@/lib/planSyncEntitlements";
+import {
+  effectiveEntitlementCapWithAddOns,
+  type PurchasedPlanAddOns,
+} from "@/lib/planAddOns";
 
 /**
  * Kitni cloud-linked (storage ≠ local) companies allow hain — upload/create ke liye.
@@ -86,12 +90,17 @@ export function countLocalCompanySlotsForOwner(
 export function maxOnlineCompaniesForPlan(
   planId: PlanId | string | null | undefined,
   /** `app_settings/plans` merge — pass karo taaki admin `maxCompanies` / `maxOnlineCompanies` sahi reflect ho */
-  livePlan?: Plan | null
+  livePlan?: Plan | null,
+  /** Purchased company-slot add-ons (account owner). */
+  addons?: PurchasedPlanAddOns | null
 ): number {
   const id = ((planId && String(planId)) as PlanId) || "basic";
   const plan = livePlan ?? getPlan(id);
   if (!planAllowsFirebaseOnline(id, plan)) return 0;
-  return maxOnlineSlotsFromEntitlements(plan.entitlements);
+  const base = maxOnlineSlotsFromEntitlements(plan.entitlements);
+  if (!addons) return base;
+  if (!Number.isFinite(base) || base === Number.POSITIVE_INFINITY) return base;
+  return effectiveEntitlementCapWithAddOns(base, addons.extraCompaniesOnline);
 }
 
 /** Current company local hai aur upload ke baad online count limit ke andar aa sakta hai. */
@@ -108,9 +117,10 @@ export function canUploadOneMoreOnline(
   candidateId: string,
   /** Jab set ho: sirf is owner ki owned online rows ginti (account-level slots). */
   ownerUid?: string | null,
-  livePlan?: Plan | null
+  livePlan?: Plan | null,
+  addons?: PurchasedPlanAddOns | null
 ): { ok: boolean; max: number; current: number } {
-  const max = maxOnlineCompaniesForPlan(planId, livePlan);
+  const max = maxOnlineCompaniesForPlan(planId, livePlan, addons);
   const currentOnline =
     ownerUid?.trim() != null && ownerUid.trim() !== ""
       ? countOnlineCompanySlotsForOwner(allCompanies, ownerUid.trim())
@@ -118,5 +128,6 @@ export function canUploadOneMoreOnline(
   const candidate = allCompanies.find((c) => c.id === candidateId);
   const wasOnline = candidate ? isCompanyOnlineSlot(candidate) : false;
   const currentAfter = wasOnline ? currentOnline : currentOnline + 1;
-  return { ok: currentAfter <= max, max, current: currentOnline };
+  const unlimited = !Number.isFinite(max) || max === Number.POSITIVE_INFINITY || max < 0;
+  return { ok: unlimited || currentAfter <= max, max, current: currentOnline };
 }

@@ -26,6 +26,8 @@ import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 import { browserHistoryHref } from "@/lib/webAppBasePath";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import type { Plan } from "@/config/plans";
+import { planAllowsFirebaseOnline } from "@/lib/planSyncEntitlements";
 
 type GatewayAvailability = { stripe: boolean; khalti: boolean; esewa: boolean };
 type PayGateway = "stripe" | "khalti" | "esewa";
@@ -37,6 +39,8 @@ type Props = {
   initialKind?: AddonKind | "device" | "user";
   networkOnline?: boolean;
   gatewayAvailability?: GatewayAvailability | null;
+  /** Current account plan from Billing. Online add-ons require Firebase online-company access. */
+  currentPlan?: Plan | null;
 };
 
 type AddonScope = "online" | "local";
@@ -49,10 +53,14 @@ function clampQty(n: unknown): number {
   return Math.min(20, Math.max(0, Math.floor(Number(n) || 0)));
 }
 
-function kindsForScope(scope: AddonScope): { device: AddonKind; user: AddonKind } {
+function kindsForScope(scope: AddonScope): {
+  device: AddonKind;
+  user: AddonKind;
+  company: AddonKind;
+} {
   return scope === "local"
-    ? { device: "device-local", user: "user-local" }
-    : { device: "device-online", user: "user-online" };
+    ? { device: "device-local", user: "user-local", company: "company-local" }
+    : { device: "device-online", user: "user-online", company: "company-online" };
 }
 
 function firstAvailableGateway(ga: GatewayAvailability | null, preferred: PayGateway): PayGateway {
@@ -77,6 +85,7 @@ export function BillingAddOnPurchaseCard({
   initialKind = "device-online",
   networkOnline = true,
   gatewayAvailability = null,
+  currentPlan = null,
 }: Props) {
   const [offer, setOffer] = useState<DeviceUserAddOnOffer>(DEFAULT_DEVICE_USER_ADDON_OFFER);
   const [owned, setOwned] = useState<PurchasedPlanAddOns>({
@@ -84,13 +93,17 @@ export function BillingAddOnPurchaseCard({
     extraDevicesLocal: 0,
     extraUsersOnline: 0,
     extraUsersLocal: 0,
+    extraCompaniesOnline: 0,
+    extraCompaniesLocal: 0,
     expiryMs: null,
   });
   const [scope, setScope] = useState<AddonScope>(() => scopeFromKind(normalizeAddonKind(initialKind)));
   const [deviceQty, setDeviceQty] = useState(0);
   const [userQty, setUserQty] = useState(0);
+  const [companyQty, setCompanyQty] = useState(0);
   const [gateway, setGateway] = useState<PayGateway>("stripe");
   const [busy, setBusy] = useState(false);
+  const onlineAddOnsAllowed = planAllowsFirebaseOnline(currentPlan?.id, currentPlan);
 
   useEffect(() => {
     const next = normalizeAddonKind(initialKind);
@@ -98,11 +111,23 @@ export function BillingAddOnPurchaseCard({
     if (next.startsWith("user")) {
       setUserQty(1);
       setDeviceQty(0);
+      setCompanyQty(0);
+    } else if (next.startsWith("company")) {
+      setCompanyQty(1);
+      setDeviceQty(0);
+      setUserQty(0);
     } else {
       setDeviceQty(1);
       setUserQty(0);
+      setCompanyQty(0);
     }
   }, [initialKind]);
+
+  useEffect(() => {
+    if (!onlineAddOnsAllowed && scope === "online") {
+      setScope("local");
+    }
+  }, [onlineAddOnsAllowed, scope]);
 
   useEffect(() => {
     setGateway((prev) => firstAvailableGateway(gatewayAvailability, prev));
@@ -142,9 +167,11 @@ export function BillingAddOnPurchaseCard({
   const kinds = kindsForScope(scope);
   const deviceUnit = unitPriceForAddonKind(offer, kinds.device);
   const userUnit = unitPriceForAddonKind(offer, kinds.user);
+  const companyUnit = unitPriceForAddonKind(offer, kinds.company);
   const deviceLine = deviceUnit * deviceQty;
   const userLine = userUnit * userQty;
-  const total = deviceLine + userLine;
+  const companyLine = companyUnit * companyQty;
+  const total = deviceLine + userLine + companyLine;
 
   const stripeOk = gatewayAvailability == null || gatewayAvailability.stripe;
   const khaltiOk = gatewayAvailability == null || gatewayAvailability.khalti;
@@ -166,11 +193,19 @@ export function BillingAddOnPurchaseCard({
       toast({ variant: "destructive", title: "Select a company", description: "Choose a company first." });
       return;
     }
-    if (total <= 0 || (deviceQty <= 0 && userQty <= 0)) {
+    if (scope === "online" && !onlineAddOnsAllowed) {
+      toast({
+        variant: "destructive",
+        title: "Online add-ons unavailable",
+        description: "Your current plan does not include an online company. Upgrade your plan before buying online add-ons.",
+      });
+      return;
+    }
+    if (total <= 0 || (deviceQty <= 0 && userQty <= 0 && companyQty <= 0)) {
       toast({
         variant: "destructive",
         title: "Quantity required",
-        description: "Enter quantity for device and/or user (at least one).",
+        description: "Enter quantity for device, user, and/or company slot (at least one).",
       });
       return;
     }
@@ -182,6 +217,7 @@ export function BillingAddOnPurchaseCard({
     const items: { kind: AddonKind; quantity: number }[] = [];
     if (deviceQty > 0) items.push({ kind: kinds.device, quantity: deviceQty });
     if (userQty > 0) items.push({ kind: kinds.user, quantity: userQty });
+    if (companyQty > 0) items.push({ kind: kinds.company, quantity: companyQty });
 
     setBusy(true);
     try {
@@ -294,6 +330,7 @@ export function BillingAddOnPurchaseCard({
   const payLabelParts: string[] = [];
   if (deviceQty > 0) payLabelParts.push(`${deviceQty} ${addonKindLabel(kinds.device, deviceQty)}`);
   if (userQty > 0) payLabelParts.push(`${userQty} ${addonKindLabel(kinds.user, userQty)}`);
+  if (companyQty > 0) payLabelParts.push(`${companyQty} ${addonKindLabel(kinds.company, companyQty)}`);
   const paySuffix = payLabelParts.length > 0 ? payLabelParts.join(" + ") : "set quantity";
 
   return (
@@ -301,8 +338,8 @@ export function BillingAddOnPurchaseCard({
       <CardHeader className="pb-3">
         <CardTitle className="text-lg">Add-on service</CardTitle>
         <CardDescription>
-          Extra online/local devices and users for the rest of your current plan period. Renewing the plan requires
-          buying add-ons again for the new period. Set quantities for both in one checkout.
+          Extra online/local devices, users, and company slots for the rest of your current plan period. Renewing the
+          plan requires buying add-ons again for the new period. Set quantities in one checkout.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -311,7 +348,9 @@ export function BillingAddOnPurchaseCard({
           <span className="font-medium text-foreground">{owned.extraDevicesOnline}</span>, local devices{" "}
           <span className="font-medium text-foreground">{owned.extraDevicesLocal}</span>, online users{" "}
           <span className="font-medium text-foreground">{owned.extraUsersOnline}</span>, local users{" "}
-          <span className="font-medium text-foreground">{owned.extraUsersLocal}</span>
+          <span className="font-medium text-foreground">{owned.extraUsersLocal}</span>, online company slots{" "}
+          <span className="font-medium text-foreground">{owned.extraCompaniesOnline}</span>, local company slots{" "}
+          <span className="font-medium text-foreground">{owned.extraCompaniesLocal}</span>
           {owned.expiryMs != null ? (
             <>
               {" "}
@@ -322,14 +361,22 @@ export function BillingAddOnPurchaseCard({
 
         <Tabs value={scope} onValueChange={(v) => setScope(v === "local" ? "local" : "online")}>
           <TabsList className="w-fit">
-            <TabsTrigger value="online" className="px-4">
-              Online
-            </TabsTrigger>
+            {onlineAddOnsAllowed ? (
+              <TabsTrigger value="online" className="px-4">
+                Online
+              </TabsTrigger>
+            ) : null}
             <TabsTrigger value="local" className="px-4">
               Local
             </TabsTrigger>
           </TabsList>
         </Tabs>
+        {!onlineAddOnsAllowed ? (
+          <p className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-muted-foreground">
+            Online add-ons are available only when your current plan includes at least one online company. Upgrade your
+            plan to enable them.
+          </p>
+        ) : null}
 
         <div className="w-fit max-w-full overflow-x-auto rounded-md border">
           <table className="w-auto text-sm">
@@ -377,6 +424,24 @@ export function BillingAddOnPurchaseCard({
                   />
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">Rs. {userLine}</td>
+              </tr>
+              <tr className="border-b">
+                <td className="px-3 py-2 font-medium whitespace-nowrap">
+                  {scope === "local" ? "Local company slot" : "Online company slot"}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">Rs. {companyUnit}</td>
+                <td className="px-3 py-2">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={20}
+                    className="h-8 w-16"
+                    value={companyQty}
+                    onChange={(e) => setCompanyQty(clampQty(e.target.value))}
+                    aria-label={`${scope} company slot quantity`}
+                  />
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">Rs. {companyLine}</td>
               </tr>
               <tr className="bg-muted/20">
                 <td className="px-3 py-2 font-semibold" colSpan={3}>

@@ -2592,6 +2592,27 @@ export function TransactionsTable({
             />
           );
         })()}
+        {!hideFooter ? (
+          <Card className="p-2.5 min-w-0 overflow-hidden bg-card border-2 border-emerald-300/85 dark:border-emerald-800/50 shadow-sm">
+            <div className="flex min-w-0 items-center gap-2">
+              {closingBalanceActions ? (
+                <div
+                  className="min-w-0 shrink-0"
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                >
+                  {closingBalanceActions}
+                </div>
+              ) : null}
+              {!hideBalanceColumn ? (
+                <div className="ml-auto flex min-w-0 items-center justify-end gap-1.5">
+                  <span className="shrink-0 text-xs font-semibold text-muted-foreground">Closing Balance</span>
+                  <span className="shrink-0 text-sm">{formatFooterBalance(displayClosingBalance)}</span>
+                </div>
+              ) : null}
+            </div>
+          </Card>
+        ) : null}
       </div>
     );
   }

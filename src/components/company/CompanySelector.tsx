@@ -27,6 +27,12 @@ import type { Company as CompanyData } from "@/hooks/useCompany";
 import { cn } from "@/lib/utils";
 import { logoutFromCompanyOnThisDevice } from "@/lib/logoutFromCompany";
 import { useAuth } from "@/hooks/useAuth";
+import { useCachedFeatureConfig } from "@/hooks/useCachedFeatureConfig";
+import { useCreateCompanyAvailability } from "@/hooks/useCreateCompanyAvailability";
+import {
+  resolveVisibleCompanySelectorTab,
+  visibleCompanySelectorTabs,
+} from "@/lib/companySelectorTabFeatures";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -170,6 +176,7 @@ function CompanySelectorTabBar({
   onlineCount,
   serverCount,
   compact,
+  visibleTabs,
 }: {
   value: CompanyListTab;
   onChange: (tab: CompanyListTab) => void;
@@ -177,6 +184,7 @@ function CompanySelectorTabBar({
   onlineCount: number;
   serverCount: number;
   compact?: boolean;
+  visibleTabs: CompanyListTab[];
 }) {
   const tabBtn = (tab: CompanyListTab, label: string, count: number) => (
     <button
@@ -197,6 +205,16 @@ function CompanySelectorTabBar({
       {count > 0 ? ` (${count})` : ""}
     </button>
   );
+  const counts: Record<CompanyListTab, number> = {
+    local: localCount,
+    server: serverCount,
+    online: onlineCount,
+  };
+  const labels: Record<CompanyListTab, string> = {
+    local: "Local",
+    server: "Server",
+    online: "Online",
+  };
   return (
     <div
       className={cn(
@@ -204,9 +222,7 @@ function CompanySelectorTabBar({
         compact && "mb-1"
       )}
     >
-      {tabBtn("local", "Local", localCount)}
-      {tabBtn("server", "Server", serverCount)}
-      {tabBtn("online", "Online", onlineCount)}
+      {visibleTabs.map((tab) => tabBtn(tab, labels[tab], counts[tab]))}
     </div>
   );
 }
@@ -490,6 +506,13 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   const router = useRouter();
   const pathname = usePathname();
   const { user, customUser } = useAuth();
+  const { featureConfig } = useCachedFeatureConfig();
+  const { availability: createCompanyAvailability } = useCreateCompanyAvailability();
+  const canCreateAnyCompany = createCompanyAvailability.canCreateAny;
+  const visibleStorageTabs = useMemo(
+    () => visibleCompanySelectorTabs(featureConfig),
+    [featureConfig]
+  );
   const isSuperAdminByEmail = useMemo(() => {
     const e = (user?.email || "").toLowerCase().trim();
     if (!e) return false;
@@ -1258,17 +1281,23 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   }, []);
 
   useEffect(() => {
+    if (!visibleStorageTabs.includes(listTab)) {
+      setListTab(resolveVisibleCompanySelectorTab(featureConfig, defaultSelectorTab(companyId, buckets)));
+    }
+  }, [visibleStorageTabs, listTab, featureConfig, companyId, buckets]);
+
+  useEffect(() => {
     if (!originReady || !onPlServerOrigin || originTabSyncedRef.current || manualListTabRef.current) return;
     originTabSyncedRef.current = true;
-    setListTab(defaultSelectorTab(companyId, buckets));
-  }, [originReady, onPlServerOrigin, buckets, companyId]);
+    setListTab(resolveVisibleCompanySelectorTab(featureConfig, defaultSelectorTab(companyId, buckets)));
+  }, [originReady, onPlServerOrigin, buckets, companyId, featureConfig]);
 
   useEffect(() => {
     if (prevCompanyIdForTabRef.current === companyId) return;
     prevCompanyIdForTabRef.current = companyId;
     if (manualListTabRef.current) return;
-    setListTab(defaultSelectorTab(companyId, buckets));
-  }, [companyId, buckets]);
+    setListTab(resolveVisibleCompanySelectorTab(featureConfig, defaultSelectorTab(companyId, buckets)));
+  }, [companyId, buckets, featureConfig]);
 
   const handleLogout = () => {
     requestEmbeddedLogout();
@@ -1384,8 +1413,8 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                           Untick keeps Local SQLite on screen (offline).
                         </p>
                         <p>
-                          <strong>Files</strong> — attachment upload/download (needs Data).
-                          Unticked companies stay on this device until you tick and Save.
+                          <strong>Files</strong> — attachment download from cloud (needs Data). Untick stops
+                          download only; newly added files still upload when Data is on.
                         </p>
                       </>
                     }
@@ -1403,16 +1432,31 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
               onValueChange={(v) => handleListTabChange(v as CompanyListTab)}
               className="flex min-h-0 flex-1 flex-col"
             >
-              <TabsList className="grid w-full shrink-0 grid-cols-3">
-                <TabsTrigger value="local">
-                  Local{localList.length > 0 ? ` (${localList.length})` : ""}
-                </TabsTrigger>
-                <TabsTrigger value="server">
-                  Server{serverList.length > 0 ? ` (${serverList.length})` : ""}
-                </TabsTrigger>
-                <TabsTrigger value="online">
-                  Online{onlineList.length > 0 ? ` (${onlineList.length})` : ""}
-                </TabsTrigger>
+              <TabsList
+                className={cn(
+                  "grid w-full shrink-0",
+                  visibleStorageTabs.length === 1
+                    ? "grid-cols-1"
+                    : visibleStorageTabs.length === 2
+                      ? "grid-cols-2"
+                      : "grid-cols-3"
+                )}
+              >
+                {visibleStorageTabs.includes("local") ? (
+                  <TabsTrigger value="local">
+                    Local{localList.length > 0 ? ` (${localList.length})` : ""}
+                  </TabsTrigger>
+                ) : null}
+                {visibleStorageTabs.includes("server") ? (
+                  <TabsTrigger value="server">
+                    Server{serverList.length > 0 ? ` (${serverList.length})` : ""}
+                  </TabsTrigger>
+                ) : null}
+                {visibleStorageTabs.includes("online") ? (
+                  <TabsTrigger value="online">
+                    Online{onlineList.length > 0 ? ` (${onlineList.length})` : ""}
+                  </TabsTrigger>
+                ) : null}
               </TabsList>
               {listTab === "local" ? (
               <TabsContent value="local" className="mt-4 min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain">
@@ -1643,15 +1687,17 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                         <LogOut className="mr-2 h-4 w-4" />
                         Log out
                       </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => router.push("/company/create")}
-                      >
-                        <PlusCircle className="mr-2 h-4 w-4" />
-                        Create New Company
-                      </Button>
+                      {canCreateAnyCompany ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => router.push("/company/create")}
+                        >
+                          <PlusCircle className="mr-2 h-4 w-4" />
+                          Create New Company
+                        </Button>
+                      ) : null}
                     </>
                   }
                 />
@@ -1670,15 +1716,17 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                   <LogOut className="mr-2 h-4 w-4" />
                   Log out
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => router.push("/company/create")}
-                >
-                  <PlusCircle className="mr-2 h-4 w-4" />
-                  Create New Company
-                </Button>
+                {canCreateAnyCompany ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => router.push("/company/create")}
+                  >
+                    <PlusCircle className="mr-2 h-4 w-4" />
+                    Create New Company
+                  </Button>
+                ) : null}
               </div>
             ) : null}
           </CardContent>
@@ -1954,6 +2002,13 @@ export function CompanyActions({
 }) {
   const router = useRouter();
   const { user } = useAuth();
+  const { featureConfig } = useCachedFeatureConfig();
+  const { availability: createCompanyAvailability } = useCreateCompanyAvailability();
+  const canCreateAnyCompany = createCompanyAvailability.canCreateAny;
+  const visibleStorageTabs = useMemo(
+    () => visibleCompanySelectorTabs(featureConfig),
+    [featureConfig]
+  );
   const { companyId, setCompanyId, clearCompanyId, triggerSync, reloadLocalCompanyRegistry, company: contextCompany, allCompaniesRegistry } = useCompany();
   const handleLogoutCompany = useCallback((id: string) => {
     logoutFromCompanyOnThisDevice(id, user);
@@ -2528,10 +2583,16 @@ export function CompanyActions({
   }, []);
 
   useEffect(() => {
+    if (!visibleStorageTabs.includes(listTab)) {
+      setListTab(resolveVisibleCompanySelectorTab(featureConfig, defaultSelectorTab(companyId, buckets)));
+    }
+  }, [visibleStorageTabs, listTab, featureConfig, companyId, buckets]);
+
+  useEffect(() => {
     if (!originReady || !onPlServerOrigin || originTabSyncedRefHeader.current || manualListTabRef.current) return;
     originTabSyncedRefHeader.current = true;
-    setListTab(defaultSelectorTab(companyId, buckets));
-  }, [originReady, onPlServerOrigin, buckets, companyId]);
+    setListTab(resolveVisibleCompanySelectorTab(featureConfig, defaultSelectorTab(companyId, buckets)));
+  }, [originReady, onPlServerOrigin, buckets, companyId, featureConfig]);
 
   useEffect(() => {
     if (uploadLocked) return;
@@ -2665,6 +2726,7 @@ export function CompanyActions({
                 localCount={localList.length}
                 serverCount={serverList.length}
                 onlineCount={onlineList.length}
+                visibleTabs={visibleStorageTabs}
               />
               {listTab === "local" ? (
                 localList.length === 0 ? (
@@ -2928,11 +2990,15 @@ export function CompanyActions({
               )}
             </DropdownMenuGroup>
           <DropdownMenuSeparator />
-          <DropdownMenuGroup>
-             <DropdownMenuItem onSelect={() => router.push("/company/create")}>
+          {canCreateAnyCompany ? (
+            <DropdownMenuGroup>
+              <DropdownMenuItem onSelect={() => router.push("/company/create")}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 <span>Add Company</span>
-             </DropdownMenuItem>
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          ) : null}
+          <DropdownMenuGroup>
               {activeCompany && activeCompany.isOwned && (
                 <DropdownMenuItem
                   onSelect={() =>

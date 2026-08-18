@@ -19,7 +19,7 @@ export type FirebaseLedgerCompanySyncEntry = {
   selected: boolean;
   /** Ledger / SQLite doc sync (no attachment files). Default off until user ticks + Save. */
   data: boolean;
-  /** Attachment file upload/download — requires Data. */
+  /** Attachment file download / prefetch — requires Data + Files tick. */
   attachments: boolean;
 };
 
@@ -132,8 +132,19 @@ export function isFirebaseLedgerCompanyDataSyncEnabled(companyId: string): boole
   return getFirebaseLedgerCompanySyncEntry(companyId).data === true;
 }
 
-/** Requires Data; attachment file sync only when Files is ticked. */
+/**
+ * Company Selector Files tick — attachment download / prefetch / network fetch of existing cloud files.
+ * Untick does NOT block uploading newly added local files (see upload helper).
+ */
 export function isFirebaseLedgerCompanyAttachmentSyncEnabled(companyId: string): boolean {
   if (!isFirebaseLedgerCompanyDataSyncEnabled(companyId)) return false;
   return getFirebaseLedgerCompanySyncEntry(companyId).attachments === true;
+}
+
+/**
+ * New/local attachment upload to cloud — requires Data tick only.
+ * Files untick stops download; uploads of newly added files still allowed.
+ */
+export function isFirebaseLedgerCompanyAttachmentUploadEnabled(companyId: string): boolean {
+  return isFirebaseLedgerCompanyDataSyncEnabled(companyId);
 }

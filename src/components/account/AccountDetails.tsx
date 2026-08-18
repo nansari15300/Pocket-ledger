@@ -106,6 +106,7 @@ import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { AdjustBalancePillLabel } from "../vouchers/AdjustBalancePillLabel";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { LedgerFooterCheckboxPill, LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
@@ -912,8 +913,23 @@ export function AccountDetails({
                 periodDr={ledgerPageStats.periodDrForPage}
                 periodCr={ledgerPageStats.periodCrForPage}
                 closingBalance={ledgerPageStats.closingForPage}
-                hideFooter
                 scrollOnlyTransactions
+                closingBalanceActions={
+                  account.id !== "all" ? (
+                    <AddVoucherDialog
+                      defaultTab="adjustment"
+                      allowedTabs={["adjustment"]}
+                      defaultVoucherData={{
+                        defaultTab: "adjustment",
+                        adjustmentTarget: { id: account.id, entityType: "account", name: account.accountName },
+                      }}
+                    >
+                      <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
+                        <AdjustBalancePillLabel />
+                      </Button>
+                    </AddVoucherDialog>
+                  ) : null
+                }
                 transactionCardSearchHighlight={mobileSearchTerm}
                 {...statementCheck.tableProps}
               />
@@ -1199,6 +1215,22 @@ export function AccountDetails({
               periodDr={ledgerPageStats.periodDrForPage}
               periodCr={ledgerPageStats.periodCrForPage}
               closingBalance={ledgerPageStats.closingForPage}
+              closingBalanceActions={
+                account.id !== "all" ? (
+                  <AddVoucherDialog
+                    defaultTab="adjustment"
+                    allowedTabs={["adjustment"]}
+                    defaultVoucherData={{
+                      defaultTab: "adjustment",
+                      adjustmentTarget: { id: account.id, entityType: "account", name: account.accountName },
+                    }}
+                  >
+                    <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
+                      <AdjustBalancePillLabel />
+                    </Button>
+                  </AddVoucherDialog>
+                ) : null
+              }
             
               {...statementCheck.tableProps}/>
           </div>

@@ -20,7 +20,13 @@ import {
   deleteField,
 } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { numericEntitlement, companyStorageIsLocal, isAtOrOverEntitlementCap, type PlanId } from "@/config/plans";
+import { type PlanId } from "@/config/plans";
+import {
+  collectAccountWideShareMemberEmails,
+  formatShareUserCapMessage,
+  resolveAccountShareUserCap,
+  wouldBlockNewShareInvite,
+} from "@/lib/accountShareUserCap";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
@@ -31,7 +37,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { Company as CompanyData } from "@/hooks/useCompany";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
-import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import {
@@ -248,26 +253,28 @@ export function ShareCompanyDialog({
                 "basic"
             ) as PlanId;
             const plan = getPlanFromPlans(livePlans, accountPlanId);
-            const maxUsers = numericEntitlement(plan.entitlements, "maxUsers", companyStorageIsLocal(company.storageOption));
-            const superAdminEmails = new Set(getSuperAdminEmails().map((e) => e.toLowerCase().trim()));
-            const memberEmails = new Set<string>();
-            const ownerEmailNorm = String(currentData?.ownerEmail || company.ownerEmail || "").toLowerCase().trim();
-            if (ownerEmailNorm) memberEmails.add(ownerEmailNorm);
-            for (const row of ownedCompaniesSnap?.docs ?? []) {
-              const data = row.data() as { sharedWithEmails?: unknown; ownerEmail?: unknown };
-              const companyOwnerEmail = String(data.ownerEmail || ownerEmailNorm).toLowerCase().trim();
-              if (companyOwnerEmail) memberEmails.add(companyOwnerEmail);
-              for (const email of Array.isArray(data.sharedWithEmails) ? data.sharedWithEmails : []) {
-                const normalized = String(email || "").toLowerCase().trim();
-                if (normalized && !superAdminEmails.has(normalized)) memberEmails.add(normalized);
-              }
-            }
-            const currentMembers = memberEmails.size;
-            if (isAtOrOverEntitlementCap(currentMembers, maxUsers)) {
+            const maxUsers = resolveAccountShareUserCap(
+              plan,
+              company.storageOption,
+              ownerUserData
+            );
+            const memberEmails = collectAccountWideShareMemberEmails({
+              ownerEmail: String(currentData?.ownerEmail || company.ownerEmail || ""),
+              ownedCompanyRows: (ownedCompaniesSnap?.docs ?? []).map((row) =>
+                row.data() as { sharedWithEmails?: unknown; ownerEmail?: unknown }
+              ),
+            });
+            if (
+              wouldBlockNewShareInvite({
+                memberEmails,
+                inviteEmail: values.email,
+                maxUsers,
+              })
+            ) {
                 toast({
                     variant: "destructive",
                     title: "Plan limit reached",
-                    description: `This plan allows up to ${maxUsers} user${maxUsers === 1 ? "" : "s"}. Upgrade to add more.`,
+                    description: formatShareUserCapMessage(maxUsers),
                 });
                 setIsLoading(false);
                 return;

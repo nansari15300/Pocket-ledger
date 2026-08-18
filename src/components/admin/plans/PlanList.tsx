@@ -320,6 +320,40 @@ export function PlanList({
             />
           </div>
 
+          <div className="space-y-1.5">
+            <Label htmlFor="addon-price-company-online">Online company slot (NPR)</Label>
+            <Input
+              id="addon-price-company-online"
+              type="number"
+              min={0}
+              step={1}
+              value={addonDraft.pricePerCompanyOnlineNpr}
+              onChange={(e) =>
+                setAddonDraft((prev) => ({
+                  ...prev,
+                  pricePerCompanyOnlineNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                }))
+              }
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="addon-price-company-local">Local company slot (NPR)</Label>
+            <Input
+              id="addon-price-company-local"
+              type="number"
+              min={0}
+              step={1}
+              value={addonDraft.pricePerCompanyLocalNpr}
+              onChange={(e) =>
+                setAddonDraft((prev) => ({
+                  ...prev,
+                  pricePerCompanyLocalNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                }))
+              }
+            />
+          </div>
+
           <Button
             type="button"
             size="sm"

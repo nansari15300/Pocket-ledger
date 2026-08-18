@@ -40,5 +40,6 @@ export const config = {
     "/api/company/billing-payments-statement",
     "/api/company/recycle-bin-finalize",
     "/api/admin/recycle-bin/delete-company",
+    "/api/ads/:path*",
   ],
 };

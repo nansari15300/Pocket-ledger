@@ -1,0 +1,52 @@
+/* Shared light shell for website-only settings (not app Admin Panel). */
+body.website-settings-page {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--paper, #f6f7f9);
+}
+.ws-shell {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr);
+  min-height: calc(100vh - 3.5rem);
+}
+.ws-side {
+  background: #fff;
+  border-right: 1px solid var(--line);
+  padding: 1rem 0.75rem 1.5rem;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: calc(100vh - 3.5rem);
+  overflow: auto;
+}
+.ws-side-title {
+  font-weight: 800;
+  font-size: 0.95rem;
+  padding: 0.35rem 0.65rem 0.85rem;
+}
+.ws-side a {
+  display: block;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 0.15rem;
+}
+.ws-side a:hover { background: var(--paper); }
+.ws-side a.is-active {
+  background: #e8f0ff;
+  color: #1d4ed8;
+}
+.ws-main { min-width: 0; }
+.ws-card { max-width: 52rem; }
+@media (max-width: 860px) {
+  .ws-shell { grid-template-columns: 1fr; }
+  .ws-side {
+    position: static;
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}

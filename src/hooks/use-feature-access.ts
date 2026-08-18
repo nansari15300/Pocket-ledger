@@ -5,26 +5,30 @@ import { useCompany } from "./useCompany";
 import { useAuth } from "./useAuth";
 import { getCompanyPlanExpiryMsFromDoc } from "@/lib/companyPlanExpiryMs";
 import { normalizePlanIdForClient } from "@/config/plans";
+import { useTemporaryFeatureUnlock } from "@/hooks/useTemporaryFeatureUnlock";
 
-export function useFeatureAccess(featureKey: string) {
+/** Plan / company-settings gate only — no rewarded-ad overlay. */
+export function usePlanFeatureAllowed(featureKey: string) {
   const { company } = useCompany();
   const { customUser } = useAuth();
-  
-  if (customUser?.role === 'SuperAdmin') return true;
+
+  if (customUser?.role === "SuperAdmin") return true;
 
   if (!company) return false;
 
   const planId = normalizePlanIdForClient((company as { planId?: string }).planId);
-  // Basic has no paid window. Paid / online-demo rows may carry `planExpiry`
-  // and/or `planExpiryMs` — use the shared parser so demo users are not treated
-  // as expired just because only the millis field is present.
   if (planId !== "basic") {
     const expiryMs = getCompanyPlanExpiryMsFromDoc(company);
     if (expiryMs == null || Date.now() > expiryMs) return false;
   }
 
-  const settings = (company as any).settings || {};
-  
-  // Default to true if the feature key is not explicitly set to false
+  const settings = (company as { settings?: Record<string, unknown> }).settings || {};
+
   return settings[featureKey] !== false;
+}
+
+export function useFeatureAccess(featureKey: string) {
+  const planAllowed = usePlanFeatureAllowed(featureKey);
+  const temporarilyUnlocked = useTemporaryFeatureUnlock(featureKey);
+  return planAllowed || temporarilyUnlocked;
 }

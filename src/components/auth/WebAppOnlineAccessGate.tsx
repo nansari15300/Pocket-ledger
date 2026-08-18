@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { signOut } from "firebase/auth";
 import { CloudOff, Download, Loader2, LogOut, RefreshCw, ShieldCheck, TrendingUp } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
@@ -10,7 +10,10 @@ import { webAppBasePath } from "@/lib/webAppBasePath";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { pullSharedOnlineCompaniesFromFirestore } from "@/lib/sharedCompaniesFirestorePull";
 import { Button } from "@/components/ui/button";
+
+const SESSION_ALLOW_KEY = "pl.webAppOnlineAccess.allowed";
 
 /**
  * Hosted browser use is reserved for Firebase Online plan holders and users who
@@ -23,6 +26,8 @@ export function WebAppOnlineAccessGate({ children }: { children: React.ReactNode
   const [checking, setChecking] = useState(true);
   const [allowed, setAllowed] = useState(false);
   const [checkNonce, setCheckNonce] = useState(0);
+  const [denyDetail, setDenyDetail] = useState<string | null>(null);
+  const allowedRef = useRef(false);
 
   const isEmbeddedApp = useMemo(
     () => isStaticAppBuild() || isCapacitorNativeApp() || isElectronDesktopApp(),
@@ -30,6 +35,19 @@ export function WebAppOnlineAccessGate({ children }: { children: React.ReactNode
   );
   // Billing must remain reachable so an ineligible browser account can upgrade.
   const billingRoute = pathname === "/billing" || Boolean(pathname?.startsWith("/billing/"));
+  const userUid = user?.uid || "";
+  const userEmail = user?.email || "";
+
+  useEffect(() => {
+    allowedRef.current = allowed;
+  }, [allowed]);
+
+  // Direct dashboard URLs must never show the plan/share denial screen before
+  // authentication. `/` is the app's login page (under hosted `/app` too).
+  useEffect(() => {
+    if (isEmbeddedApp || billingRoute || authLoading || userUid) return;
+    router.replace("/");
+  }, [authLoading, billingRoute, isEmbeddedApp, router, userUid]);
 
   useEffect(() => {
     if (isEmbeddedApp || billingRoute) {
@@ -41,28 +59,102 @@ export function WebAppOnlineAccessGate({ children }: { children: React.ReactNode
       setChecking(true);
       return;
     }
-    if (!user) {
+    if (!userUid) {
       setChecking(false);
       setAllowed(true);
       return;
     }
 
     let cancelled = false;
-    setChecking(true);
-    setAllowed(false);
+    // Keep prior allow while rechecking so Party / sidebar nav does not flash the deny screen.
+    if (!allowedRef.current) {
+      try {
+        if (sessionStorage.getItem(SESSION_ALLOW_KEY) === userUid) {
+          setAllowed(true);
+          allowedRef.current = true;
+        }
+      } catch {
+        /* ignore */
+      }
+      setChecking(true);
+    }
 
     void (async () => {
       try {
-        const token = await user.getIdToken();
+        const tokenUser = auth.currentUser;
+        if (!tokenUser) {
+          if (!cancelled && !allowedRef.current) setAllowed(false);
+          return;
+        }
+        const token = await tokenUser.getIdToken();
         const res = await fetch(`${webAppBasePath()}/api/auth/web-access`, {
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
         });
-        const data = (await res.json()) as { allowed?: boolean };
+        let data: { allowed?: boolean; reason?: string; error?: string; sharedCompanyCount?: number } = {};
+        try {
+          data = (await res.json()) as typeof data;
+        } catch {
+          data = { error: "non_json_response" };
+        }
         if (cancelled) return;
-        setAllowed(res.ok && data.allowed === true);
+
+        let ok = res.ok && data.allowed === true;
+
+        // Server miss / deploy lag / email-array casing: same Firestore share queries the
+        // company selector uses — if client can see shared companies, allow web access.
+        if (!ok) {
+          try {
+            const shared = await pullSharedOnlineCompaniesFromFirestore(
+              tokenUser.email || userEmail || null
+            );
+            if (shared.length > 0) {
+              ok = true;
+              data = { ...data, allowed: true, reason: "shared_online_company_client", sharedCompanyCount: shared.length };
+            }
+          } catch {
+            /* keep server result */
+          }
+        }
+
+        setAllowed(ok);
+        allowedRef.current = ok;
+        setDenyDetail(
+          ok
+            ? null
+            : data.error
+              ? `Check failed: ${data.error}`
+              : data.sharedCompanyCount === 0
+                ? "No shared Online Company invitation found for this email."
+                : null
+        );
+        try {
+          if (ok) sessionStorage.setItem(SESSION_ALLOW_KEY, userUid);
+          else sessionStorage.removeItem(SESSION_ALLOW_KEY);
+        } catch {
+          /* ignore */
+        }
       } catch {
-        if (!cancelled) setAllowed(false);
+        if (!cancelled) {
+          // Last chance: client-visible shares.
+          try {
+            const shared = await pullSharedOnlineCompaniesFromFirestore(userEmail || null);
+            if (shared.length > 0) {
+              setAllowed(true);
+              allowedRef.current = true;
+              setDenyDetail(null);
+              try {
+                sessionStorage.setItem(SESSION_ALLOW_KEY, userUid);
+              } catch {
+                /* ignore */
+              }
+              return;
+            }
+          } catch {
+            /* ignore */
+          }
+          if (!allowedRef.current) setAllowed(false);
+        }
       } finally {
         if (!cancelled) setChecking(false);
       }
@@ -71,13 +163,26 @@ export function WebAppOnlineAccessGate({ children }: { children: React.ReactNode
     return () => {
       cancelled = true;
     };
-  }, [authLoading, billingRoute, checkNonce, isEmbeddedApp, user]);
+    // Stabilize on uid/email — useAuth often replaces the user object identity on profile merge.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: user object identity is unstable
+  }, [authLoading, billingRoute, checkNonce, isEmbeddedApp, userUid, userEmail]);
 
   const retry = useCallback(() => setCheckNonce((value) => value + 1), []);
 
-  if (isEmbeddedApp || billingRoute || !user) return <>{children}</>;
+  if (isEmbeddedApp || billingRoute) return <>{children}</>;
 
-  if (checking) {
+  if (!user) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-background p-6">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Opening sign in…
+        </div>
+      </div>
+    );
+  }
+
+  if (checking && !allowed) {
     return (
       <div className="flex min-h-dvh items-center justify-center bg-background p-6">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -93,8 +198,16 @@ export function WebAppOnlineAccessGate({ children }: { children: React.ReactNode
   return (
     <main className="flex min-h-dvh items-center justify-center bg-muted/25 p-4">
       <section className="w-full max-w-lg rounded-xl border bg-background p-6 shadow-sm sm:p-8">
-        <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300">
-          <CloudOff className="h-6 w-6" />
+        <div className="mb-5 flex items-center gap-3">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300">
+            <CloudOff className="h-6 w-6" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">Signed in as</p>
+            <p className="truncate text-sm font-medium" title={user.email || undefined}>
+              {user.email || "Current account"}
+            </p>
+          </div>
         </div>
         <h1 className="text-xl font-semibold tracking-tight">Web access is not available for this account</h1>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
@@ -102,6 +215,9 @@ export function WebAppOnlineAccessGate({ children }: { children: React.ReactNode
           shared with this account. The Pocket Ledger web app is available only to users with an
           active Online Company plan or a shared Online Company invitation.
         </p>
+        {denyDetail ? (
+          <p className="mt-3 text-xs text-amber-800 dark:text-amber-200">{denyDetail}</p>
+        ) : null}
         <div className="mt-5 rounded-lg border bg-muted/40 p-4 text-sm leading-6 text-muted-foreground">
           To continue with a local company, please download the Windows desktop app or Android app.
           To use the web app, upgrade to a plan that includes Online Company access, or ask your

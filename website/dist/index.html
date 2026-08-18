@@ -18,10 +18,17 @@
       <nav class="nav-links" aria-label="Main">
         <a href="./">Home</a>
         <a href="./#features">Features</a>
+        <a href="./#videos">Videos</a>
+        <a href="./#pricing">Pricing</a>
         <a href="./downloads/">Downloads</a>
         <a href="./company/">Company</a>
       </nav>
-      <a class="btn btn-primary btn-sm" href="/app">Go to App</a>
+      <div class="marketing-auth-actions">
+        <button type="button" class="btn btn-outline btn-sm" id="marketingLoginBtn">Sign in</button>
+        <button type="button" class="btn btn-outline btn-sm is-auth-hidden" id="marketingSettingsBtn" hidden aria-hidden="true">Website Settings</button>
+        <button type="button" class="btn btn-outline btn-sm is-auth-hidden" id="marketingLogoutBtn" hidden aria-hidden="true">Sign out</button>
+        <a class="btn btn-primary btn-sm" href="/app" id="goToAppBtn">Go to App</a>
+      </div>
     </div>
   </header>
 
@@ -205,6 +212,40 @@
       </div>
     </section>
 
+    <section class="section videos-section" id="videos" aria-labelledby="videos-title">
+      <div class="wrap">
+        <span class="section-kicker">Learn &amp; events</span>
+        <h2 id="videos-title">How to use Pocket Ledger</h2>
+        <p class="lead">Tutorials, learning clips and event videos from YouTube, Facebook and TikTok.</p>
+        <div class="videos-tools" role="search">
+          <label class="videos-search">
+            <span class="sr-only">Search videos</span>
+            <input id="videosSearch" type="search" placeholder="Search videos…" autocomplete="off" />
+          </label>
+          <div class="videos-categories" id="videosCategories" aria-label="Video categories"></div>
+        </div>
+        <p class="videos-status" id="videosStatus" aria-live="polite">Loading videos…</p>
+        <div class="videos-platforms" id="videosGrid"></div>
+      </div>
+    </section>
+
+    <section class="section pricing-section" id="pricing" aria-labelledby="pricing-title">
+      <div class="wrap pricing-wrap">
+        <div class="pricing-heading">
+          <div>
+            <span class="section-kicker">Plans &amp; pricing</span>
+            <h2 id="pricing-title">Choose the plan that fits your books</h2>
+            <p class="lead">Live prices and included features from Pocket Ledger billing. Updates made by the Super Admin appear here automatically.</p>
+          </div>
+        </div>
+        <p class="pricing-status" id="pricingStatus" aria-live="polite">Preparing live plan comparison…</p>
+      </div>
+      <div class="pricing-fullbleed">
+        <div class="pricing-table-scroll" id="pricingGrid" aria-live="polite"></div>
+        <p class="pricing-note wrap">Taxes and payment options are confirmed inside the app before checkout.</p>
+      </div>
+    </section>
+
     <section class="section alt">
       <div class="wrap">
         <div class="cta-band">
@@ -228,5 +269,12 @@
       </div>
     </div>
   </footer>
+  <script src="./js/pricing.js"></script>
+  <script src="./js/videos.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+  <script src="./js/firebase-config.js"></script>
+  <script src="./js/website-auth.js"></script>
 </body>
 </html>

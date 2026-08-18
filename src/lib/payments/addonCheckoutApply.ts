@@ -45,6 +45,10 @@ function fieldForKind(kind: AddonKind): string {
       return "addonExtraUsersOnline";
     case "user-local":
       return "addonExtraUsersLocal";
+    case "company-online":
+      return "addonExtraCompaniesOnline";
+    case "company-local":
+      return "addonExtraCompaniesLocal";
   }
 }
 

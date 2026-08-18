@@ -144,6 +144,22 @@ export type DisplaySettings = {
     calendarDateSystem?: "AD" | "BS" | "Both";
 };
 
+/** Owner-controlled profile-plan rows that shared users may see for this company. Missing = visible. */
+export type SharedUserProfilePlanRows = Partial<
+  Record<
+    | "allStorage"
+    | "dailyVoucher"
+    | "monthlyVoucher"
+    | "onlineSlots"
+    | "localSlots"
+    | "usersDevices"
+    | "attachments"
+    | "storage"
+    | "expiry",
+    boolean
+  >
+>;
+
 /** Per-type notification visibility: master on/off + where to show (entity pages, list pages, transaction rows). */
 export type NotificationTypeSettings = {
     on?: boolean;
@@ -274,6 +290,8 @@ export type Company = {
     interCompanyCompanyCode?: string;
     /** Approve & message notification on/off and where to show (entity, list, transaction). */
     notificationSettings?: NotificationSettings;
+    /** Profile plan rows the company owner allows shared users to see. Missing rows stay visible. */
+    sharedUserProfilePlanRows?: SharedUserProfilePlanRows;
     /** Tracked usage for plan limits (bytes). */
     attachmentsUsedBytes?: number;
     storageUsedBytes?: number;

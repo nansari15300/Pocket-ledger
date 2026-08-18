@@ -7,6 +7,10 @@ import usePermissions from "@/hooks/usePermissions";
 import Link from "next/link";
 import { Lock, UploadCloud } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { WatchAdUnlockCard } from "@/components/ads/WatchAdUnlockCard";
+import { useAdSettings } from "@/hooks/useAdSettings";
+import { useTemporaryFeatureUnlock } from "@/hooks/useTemporaryFeatureUnlock";
+import { findUnlockOfferByFeatureId, isFeatureLockScreenTicked } from "@/lib/ads/adFeatureMap";
 
 interface RestrictedFileUploaderProps {
   children: React.ReactNode;
@@ -15,10 +19,21 @@ interface RestrictedFileUploaderProps {
 export const RestrictedFileUploader: React.FC<RestrictedFileUploaderProps> = ({ 
   children,
 }) => {
-  const { company, loading } = useCompany();
+  const { loading } = useCompany();
   const { allowAttachments, fileAttachmentLimits, canAddFileImagePdf } = usePermissions();
+  const { adsEnabled, settings } = useAdSettings();
+  const attachmentsUnlocked = useTemporaryFeatureUnlock("attachments");
+  const attachmentOffer = findUnlockOfferByFeatureId(settings, "attachments");
+  const showAdUnlock =
+    adsEnabled &&
+    Boolean(attachmentOffer) &&
+    isFeatureLockScreenTicked(settings, "attachments");
 
   if (loading) return <div className="h-20 w-full bg-muted animate-pulse rounded-md" />;
+
+  if (attachmentsUnlocked) {
+    return <>{children}</>;
+  }
 
   // Check permission-based attachment settings (plan first, then role)
   if (!allowAttachments || fileAttachmentLimits.maxFileCount === 0) {
@@ -45,6 +60,9 @@ export const RestrictedFileUploader: React.FC<RestrictedFileUploaderProps> = ({
             "File attachments are not allowed for your role."
           )}
         </p>
+        {blockedByPlan && showAdUnlock ? (
+          <WatchAdUnlockCard featureId="attachments" className="mt-2 w-full max-w-sm text-left" />
+        ) : null}
       </div>
     );
   }

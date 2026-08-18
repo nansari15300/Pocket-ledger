@@ -47,6 +47,10 @@ import { IC_ALERTS_CHANGED } from "@/lib/interCompany/interCompanyAlerts";
 import { interCompanySystemJoinAlertVisibleForCompany } from "@/lib/interCompany/interCompanySystemJoinRequest";
 import { usePendingInterCompanySystemJoinCount } from "@/lib/interCompany/usePendingInterCompanySystemJoinCount";
 import { messagesSidebarNavBadgeClassName } from "@/lib/messagesChrome";
+import {
+  COMPANY_STORAGE_TAB_FEATURE,
+  COMPANY_STORAGE_TAB_FEATURE_LABEL,
+} from "@/lib/companySelectorTabFeatures";
 
 import {
   Sidebar,
@@ -120,7 +124,7 @@ const allMenuItems: MenuItem[] = [
 const bottomMenuItems: MenuItem[] = [
     { id: 'messages', href: "/messages", label: "Messages", icon: Mail },
     { id: 'drive-sync', href: settingsViewHref("local_cloud_sync"), label: "Google Drive sync", icon: Cloud },
-    { id: 'billing', href: "/billing", label: "Billing & Plans", icon: CreditCard, permission: "configure_company_settings" },
+    { id: 'billing', href: "/billing", label: "Billing & Plans", icon: CreditCard },
     { id: 'distributor-signup', href: "/distributor-signup", label: "Be a Distributor", icon: UserPlus },
     { id: 'backup', href: "/backup", label: "Backup & Restore", icon: Database, permissionAny: ["export_data", "import_data"] },
     { id: 'import-export', href: "/import-export", label: "Import/Export", icon: Table, permissionAny: ["export_data", "import_data"] },
@@ -133,7 +137,10 @@ export type Feature = {
     label: string;
 }
 
-export const ALL_FEATURES: Feature[] = [...allMenuItems, ...bottomMenuItems].map(item => ({ id: item.id, label: item.label }));
+export const ALL_FEATURES: Feature[] = [
+  ...[...allMenuItems, ...bottomMenuItems].map((item) => ({ id: item.id, label: item.label })),
+  { id: COMPANY_STORAGE_TAB_FEATURE.parent, label: COMPANY_STORAGE_TAB_FEATURE_LABEL },
+];
 
 
 function filterByPermission<T extends { permission?: Permission; permissionAny?: Permission[] }>(
@@ -557,22 +564,17 @@ export function AppSidebar() {
     return combinedDashboardNavItems[combinedDashboardNavItems.length - 1]?.id ?? null;
   }, [combinedDashboardNavItems]);
 
-  // Hide Billing & Plans for shared company access — only owner buys / upgrades subscription.
   const visibleBottomMenuItems = React.useMemo(() => {
-    const hideBilling = company != null && company.isOwned === false;
-    const stripBilling = (items: typeof bottomMenuItems) =>
-      hideBilling ? items.filter((item) => item.id !== "billing") : items;
-
-    if (!featureConfig) return filterByPermission(stripBilling(bottomMenuItems), can);
-    const byFeature = stripBilling(bottomMenuItems).filter((item) => {
+    const byFeature = (!featureConfig ? bottomMenuItems : bottomMenuItems.filter((item) => {
+      if (item.id === "billing") return true;
       if (item.id === "distributor-signup" && customUser?.role === "Distributor") {
         return false;
       }
       if (item.id === "import-export") return true;
       return featureConfig[item.id] !== false;
-    });
-    return filterByPermission(byFeature, can);
-  }, [featureConfig, customUser, can, company]);
+    }));
+    return byFeature.filter((item) => item.id === "billing" || filterByPermission([item], can).length > 0);
+  }, [featureConfig, customUser, can]);
 
   /** Ek nav row — merged primary list + pehle jaisa pending badge / Reports pill */
   function renderMainNavRow(item: MenuItem) {

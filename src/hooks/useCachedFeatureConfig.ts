@@ -29,6 +29,10 @@ const OFFLINE_BASE_FEATURE_CONFIG: Record<string, boolean> = {
   "import-export": true,
   "recycle-bin": true,
   settings: true,
+  "company-storage-tabs": true,
+  company_tab_local: true,
+  company_tab_server: true,
+  company_tab_online: true,
 };
 
 function readCachedFeatureConfig(): Record<string, boolean> | null {

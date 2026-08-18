@@ -1,5 +1,5 @@
 /**
- * Device / user add-ons — Super Admin unit prices + owner-purchased extra slots.
+ * Device / user / company add-ons — Super Admin unit prices + owner-purchased extra slots.
  * Online vs local priced separately. Slots last until plan expiry (renewal re-charges).
  */
 
@@ -9,7 +9,13 @@ import {
   type Plan,
 } from "@/config/plans";
 
-export type AddonKind = "device-online" | "device-local" | "user-online" | "user-local";
+export type AddonKind =
+  | "device-online"
+  | "device-local"
+  | "user-online"
+  | "user-local"
+  | "company-online"
+  | "company-local";
 
 export type DeviceUserAddOnOffer = {
   enabled: boolean;
@@ -17,6 +23,8 @@ export type DeviceUserAddOnOffer = {
   pricePerDeviceLocalNpr: number;
   pricePerUserOnlineNpr: number;
   pricePerUserLocalNpr: number;
+  pricePerCompanyOnlineNpr: number;
+  pricePerCompanyLocalNpr: number;
 };
 
 export const DEFAULT_DEVICE_USER_ADDON_OFFER: DeviceUserAddOnOffer = {
@@ -25,6 +33,8 @@ export const DEFAULT_DEVICE_USER_ADDON_OFFER: DeviceUserAddOnOffer = {
   pricePerDeviceLocalNpr: 400,
   pricePerUserOnlineNpr: 300,
   pricePerUserLocalNpr: 250,
+  pricePerCompanyOnlineNpr: 1000,
+  pricePerCompanyLocalNpr: 800,
 };
 
 export type PurchasedPlanAddOns = {
@@ -32,6 +42,8 @@ export type PurchasedPlanAddOns = {
   extraDevicesLocal: number;
   extraUsersOnline: number;
   extraUsersLocal: number;
+  extraCompaniesOnline: number;
+  extraCompaniesLocal: number;
   /** Align with company/user planExpiryMs — after this, extras are ignored. */
   expiryMs: number | null;
 };
@@ -41,6 +53,8 @@ export const EMPTY_PURCHASED_PLAN_ADDONS: PurchasedPlanAddOns = {
   extraDevicesLocal: 0,
   extraUsersOnline: 0,
   extraUsersLocal: 0,
+  extraCompaniesOnline: 0,
+  extraCompaniesLocal: 0,
   expiryMs: null,
 };
 
@@ -57,6 +71,10 @@ export function sanitizeDeviceUserAddOnOffer(raw: unknown): DeviceUserAddOnOffer
     typeof o.pricePerDeviceNpr === "number" ? o.pricePerDeviceNpr : DEFAULT_DEVICE_USER_ADDON_OFFER.pricePerDeviceOnlineNpr;
   const legacyUser =
     typeof o.pricePerUserNpr === "number" ? o.pricePerUserNpr : DEFAULT_DEVICE_USER_ADDON_OFFER.pricePerUserOnlineNpr;
+  const legacyCompany =
+    typeof o.pricePerCompanyNpr === "number"
+      ? o.pricePerCompanyNpr
+      : DEFAULT_DEVICE_USER_ADDON_OFFER.pricePerCompanyOnlineNpr;
   return {
     enabled: o.enabled === true,
     pricePerDeviceOnlineNpr: floorNonNeg(
@@ -74,6 +92,14 @@ export function sanitizeDeviceUserAddOnOffer(raw: unknown): DeviceUserAddOnOffer
     pricePerUserLocalNpr: floorNonNeg(
       o.pricePerUserLocalNpr,
       floorNonNeg(legacyUser, DEFAULT_DEVICE_USER_ADDON_OFFER.pricePerUserLocalNpr)
+    ),
+    pricePerCompanyOnlineNpr: floorNonNeg(
+      o.pricePerCompanyOnlineNpr,
+      floorNonNeg(legacyCompany, DEFAULT_DEVICE_USER_ADDON_OFFER.pricePerCompanyOnlineNpr)
+    ),
+    pricePerCompanyLocalNpr: floorNonNeg(
+      o.pricePerCompanyLocalNpr,
+      floorNonNeg(legacyCompany, DEFAULT_DEVICE_USER_ADDON_OFFER.pricePerCompanyLocalNpr)
     ),
   };
 }
@@ -101,6 +127,10 @@ export function unitPriceForAddonKind(offer: DeviceUserAddOnOffer, kind: AddonKi
       return offer.pricePerUserOnlineNpr;
     case "user-local":
       return offer.pricePerUserLocalNpr;
+    case "company-online":
+      return offer.pricePerCompanyOnlineNpr;
+    case "company-local":
+      return offer.pricePerCompanyLocalNpr;
   }
 }
 
@@ -115,6 +145,10 @@ export function addonKindLabel(kind: AddonKind, qty = 1): string {
       return `online user${plural}`;
     case "user-local":
       return `local user${plural}`;
+    case "company-online":
+      return `online company slot${plural}`;
+    case "company-local":
+      return `local company slot${plural}`;
   }
 }
 
@@ -123,8 +157,9 @@ export function normalizeAddonKind(raw: unknown): AddonKind {
   if (s === "device-local" || s === "device_local") return "device-local";
   if (s === "user-online" || s === "user_online") return "user-online";
   if (s === "user-local" || s === "user_local") return "user-local";
+  if (s === "company-online" || s === "company_online" || s === "company") return "company-online";
+  if (s === "company-local" || s === "company_local") return "company-local";
   if (s === "user") return "user-online";
-  if (s === "device-local") return "device-local";
   // legacy "device" → online
   return "device-online";
 }
@@ -147,6 +182,7 @@ export function parsePurchasedPlanAddOns(
   }
   const legacyDevices = Math.max(0, Math.floor(Number(raw.addonExtraDevices) || 0));
   const legacyUsers = Math.max(0, Math.floor(Number(raw.addonExtraUsers) || 0));
+  const legacyCompanies = Math.max(0, Math.floor(Number(raw.addonExtraCompanies) || 0));
   return {
     extraDevicesOnline: Math.max(
       0,
@@ -158,6 +194,11 @@ export function parsePurchasedPlanAddOns(
       Math.floor(Number(raw.addonExtraUsersOnline) || legacyUsers || 0)
     ),
     extraUsersLocal: Math.max(0, Math.floor(Number(raw.addonExtraUsersLocal) || 0)),
+    extraCompaniesOnline: Math.max(
+      0,
+      Math.floor(Number(raw.addonExtraCompaniesOnline) || legacyCompanies || 0)
+    ),
+    extraCompaniesLocal: Math.max(0, Math.floor(Number(raw.addonExtraCompaniesLocal) || 0)),
     expiryMs,
   };
 }
@@ -204,5 +245,22 @@ export function planUserCapWithAddOns(
       ? Math.max(0, Math.floor(raw))
       : 1;
   const extra = localCompany ? addons.extraUsersLocal : addons.extraUsersOnline;
+  return effectiveEntitlementCapWithAddOns(planCap, extra);
+}
+
+export function planCompanyCapWithAddOns(
+  plan: Plan,
+  localCompany: boolean,
+  addons: PurchasedPlanAddOns
+): number {
+  const raw = localCompany
+    ? Number(plan.entitlements.maxCompaniesLocal ?? plan.entitlements.maxCompanies)
+    : Number(plan.entitlements.maxCompanies);
+  const planCap = isUnlimitedEntitlementCap(raw)
+    ? -1
+    : Number.isFinite(raw)
+      ? Math.max(0, Math.floor(raw))
+      : 1;
+  const extra = localCompany ? addons.extraCompaniesLocal : addons.extraCompaniesOnline;
   return effectiveEntitlementCapWithAddOns(planCap, extra);
 }

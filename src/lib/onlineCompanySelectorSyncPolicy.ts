@@ -4,15 +4,16 @@
  * Data tick OFF = no cloud download/upload for masters/vouchers (outbox / pull / change-feed).
  * Local SQLite already on device still shows in UI (offline work).
  *
- * Files tick OFF = no attachment network upload/download; already-downloaded device
- * cache / `local:` still open. Voucher Attach Files UI + local add/save still allowed
- * (role/plan only) — Files tick is NOT a role block.
+ * Files tick OFF = no attachment download/prefetch of existing cloud files; already-downloaded
+ * device cache / local: still open. Newly added files may still upload when Data is on.
+ * Voucher Attach Files UI + local add/save still allowed (role/plan only) — Files tick is NOT a role block.
  *
  * Local / Server companies do not use these ticks.
  */
 import {
   getFirebaseLedgerCompanySyncEntry,
   isFirebaseLedgerCompanyAttachmentSyncEnabled,
+  isFirebaseLedgerCompanyAttachmentUploadEnabled,
   isFirebaseLedgerCompanyDataSyncEnabled,
 } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
@@ -55,8 +56,8 @@ export function isOnlineCompanyLedgerCloudSyncAllowed(
 }
 
 /**
- * Attachment network download/upload for Online companies (Company Selector Files tick).
- * Does NOT gate voucher Attach Files UI / local add — only cloud transfer.
+ * Attachment download for Online companies (Company Selector Files tick).
+ * Does NOT gate voucher Attach Files UI / local add — only cloud download of existing files.
  * Local/Server → allowed. Global cloud sync OFF → treat as local (no cloud transfer gate).
  */
 export function isOnlineCompanyFilesUiAllowed(
@@ -70,18 +71,35 @@ export function isOnlineCompanyFilesUiAllowed(
   if (company != null && companyUsesOnlineSelectorSyncTicks(company)) {
     return isFirebaseLedgerCompanyAttachmentSyncEnabled(id);
   }
-  // No company row: Data tick on ⇒ Files tick required for network; else don't block unknown/local.
+  // No company row: Data tick on ⇒ Files tick required for download; else don't block unknown/local.
   const entry = getFirebaseLedgerCompanySyncEntry(id);
   if (entry.data === true) return entry.attachments === true;
   return true;
 }
 
-/** Alias — network download/upload for attachments (not local-cache open). */
+/** Alias — network download for attachments (not local-cache open, not new-file upload). */
 export function isOnlineCompanyAttachmentNetworkAllowed(
   companyId: string,
   company?: OnlineSelectorSyncCompany
 ): boolean {
   return isOnlineCompanyFilesUiAllowed(companyId, company);
+}
+
+/** New attachment upload to cloud — Data tick; Files untick does not block. */
+export function isOnlineCompanyAttachmentUploadAllowed(
+  companyId: string,
+  company?: OnlineSelectorSyncCompany
+): boolean {
+  const id = String(companyId || "").trim();
+  if (!id) return false;
+  if (company != null && !companyUsesOnlineSelectorSyncTicks(company)) return true;
+  if (isFirebaseLedgerDataSyncDisabled()) return true;
+  if (company != null && companyUsesOnlineSelectorSyncTicks(company)) {
+    return isFirebaseLedgerCompanyAttachmentUploadEnabled(id);
+  }
+  const entry = getFirebaseLedgerCompanySyncEntry(id);
+  if (entry.data === true) return true;
+  return true;
 }
 
 /** Dashboard / ledger status ribbon for Online company Data / Files ticks. */
@@ -119,7 +137,7 @@ export function getOnlineCompanySyncStatusRibbon(
   if (!entry.attachments) {
     return {
       show: true,
-      message: "Data is updating online. File updates are disabled.",
+      message: "Data is updating online. File download is off; new file uploads still go to cloud.",
     };
   }
   return { show: false, message: "" };

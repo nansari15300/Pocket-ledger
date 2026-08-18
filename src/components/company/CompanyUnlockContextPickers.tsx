@@ -14,13 +14,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  availableUnlockTabs,
   unlockTabCompanies,
 } from "@/lib/companySelectorGateLabel";
 import {
   partitionCompaniesForUnlockDialog,
   type CompanyListTab,
 } from "@/lib/companyStorageKind";
+import { useCachedFeatureConfig } from "@/hooks/useCachedFeatureConfig";
+import {
+  resolveVisibleCompanySelectorTab,
+  visibleCompanySelectorTabs,
+} from "@/lib/companySelectorTabFeatures";
 
 const TAB_LABELS: Record<CompanyListTab, string> = {
   local: "Local",
@@ -47,12 +51,19 @@ export function CompanyUnlockContextPickers({
   /** Gate page se khuli company — auto-switch mat karo. */
   pinCompanyId?: string | null;
 }) {
+  const { featureConfig } = useCachedFeatureConfig();
   const buckets = useMemo(() => partitionCompaniesForUnlockDialog(companies), [companies]);
-  const tabs = useMemo(() => availableUnlockTabs(), []);
+  const tabs = useMemo(() => visibleCompanySelectorTabs(featureConfig), [featureConfig]);
   const tabCompanies = useMemo(
     () => unlockTabCompanies(buckets, unlockTab),
     [buckets, unlockTab]
   );
+
+  useEffect(() => {
+    if (!tabs.includes(unlockTab)) {
+      onUnlockTabChange(resolveVisibleCompanySelectorTab(featureConfig, unlockTab));
+    }
+  }, [tabs, unlockTab, featureConfig, onUnlockTabChange]);
 
   // Gate tab aur company state sync — galat bucket ki company mat dikhao.
   useEffect(() => {

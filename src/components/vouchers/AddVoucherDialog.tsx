@@ -52,6 +52,8 @@ import {
   PL_SERVER_ACCESS_CONTEXT_EVENT,
 } from "@/lib/plServerAccessContext";
 import { partitionCompaniesForSelector } from "@/lib/companyStorageKind";
+import { useCachedFeatureConfig } from "@/hooks/useCachedFeatureConfig";
+import { visibleCompanySelectorTabs } from "@/lib/companySelectorTabFeatures";
 import usePermissions from "@/hooks/usePermissions";
 import { routeHasVoucherFormMastersLoaded, useVouchers, VoucherProvider } from "@/hooks/useVouchers";
 import { determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
@@ -1013,17 +1015,24 @@ function VoucherCopyCompanySelectOptions({
 }: {
   companies: Array<{ id: string; name: string } & Record<string, unknown>>;
 }) {
+  const { featureConfig } = useCachedFeatureConfig();
+  const visibleTabs = useMemo(
+    () => visibleCompanySelectorTabs(featureConfig),
+    [featureConfig]
+  );
   const buckets = useMemo(
     () => partitionCompaniesForSelector(companies as Company[]),
     [companies]
   );
   const byName = (a: { name?: string; id?: string }, b: { name?: string; id?: string }) =>
     String(a.name || a.id).localeCompare(String(b.name || b.id), undefined, { sensitivity: "base" });
-  const sections = [
-    { key: "local", label: "Local", list: [...buckets.localTabCompanies].sort(byName) },
-    { key: "server", label: "Server", list: [...buckets.serverTabCompanies].sort(byName) },
-    { key: "online", label: "Online", list: [...buckets.onlineTabCompanies].sort(byName) },
-  ] as const;
+  const sections = (
+    [
+      { key: "local" as const, label: "Local", list: [...buckets.localTabCompanies].sort(byName) },
+      { key: "server" as const, label: "Server", list: [...buckets.serverTabCompanies].sort(byName) },
+      { key: "online" as const, label: "Online", list: [...buckets.onlineTabCompanies].sort(byName) },
+    ] as const
+  ).filter((sec) => visibleTabs.includes(sec.key));
 
   return (
     <>

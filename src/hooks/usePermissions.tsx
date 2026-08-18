@@ -21,6 +21,7 @@ import { PL_SERVER_COMPANY_META_UPDATED_EVENT } from "@/lib/plServerCompanyMetaS
 import { logPlPerm, resolvePermissionConfigSource, summarizePermissionDateLimits, companyUsesDeviceOrPlPermissionConfig, companyRolesAuthorityExcludesFirebase } from "@/lib/permissionConfigSource";
 import { findLocalCompanyUserRowForAppUser, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
+import { useAdWallet } from "@/hooks/useAdWallet";
 
 /** Offline company SQLite session — ye role Firebase owner se alag ho sakta hai (same email owner + staff login). */
 function isLocalStorageCompany(c: { storageOption?: string } | null | undefined): boolean {
@@ -200,6 +201,8 @@ const usePermissions = () => {
     const { customUser } = useAuth();
     const { company, allCompanies, localCompanyRegistryEpoch } = useCompany();
     const livePlans = useLivePlans();
+    const { isFeatureTemporarilyUnlocked } = useAdWallet();
+    const attachmentsAdUnlock = isFeatureTemporarilyUnlocked("attachments");
     /** Local unlock ke baad localStorage role turant useMemo me aaye (same-tab me storage event nahi aata). */
     const [localAuthEpoch, setLocalAuthEpoch] = useState(0);
     const [plServerMetaEpoch, setPlServerMetaEpoch] = useState(0);
@@ -542,6 +545,18 @@ const usePermissions = () => {
         ) {
           canAddAvatar = true;
         }
+
+        if (
+          attachmentsAdUnlock &&
+          role !== "viewer" &&
+          config.allowAttachments !== false
+        ) {
+          canAddFileImagePdf = true;
+          planMaxFiles = Math.max(
+            planMaxFiles,
+            Math.min(10, Math.max(1, Number(roleFileLimits.maxFileCount) || 3))
+          );
+        }
         const cappedMax = canAddFileImagePdf && planMaxFiles > 0
           ? Math.min(roleFileLimits.maxFileCount, planMaxFiles)
           : 0;
@@ -590,7 +605,7 @@ const usePermissions = () => {
             permissionConfigSourceKey: configSource,
         };
 
-    }, [customUser, company, allCompanies, livePlans, localAuthEpoch, localCompanyRegistryEpoch, plServerMetaEpoch, sqlitePermissionConfig, sqliteLocalCompanyUsers]);
+    }, [customUser, company, allCompanies, livePlans, localAuthEpoch, localCompanyRegistryEpoch, plServerMetaEpoch, sqlitePermissionConfig, sqliteLocalCompanyUsers, attachmentsAdUnlock]);
 
     return permissions;
 };

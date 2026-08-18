@@ -823,8 +823,26 @@ service cloud.firestore {
      * @path /app_settings/{docId}
      */
     match /app_settings/{docId} {
-      allow read: if isSignedIn();
+      // The public marketing site listens to this catalog for live plan names, prices and feature copy.
+      // Keep every other global setting signed-in only.
+      allow read: if docId == 'plans' || docId == 'website_videos' || isSignedIn();
       allow write: if isAdmin();
+    }
+
+    /**
+     * Website Downloads page click analytics — write/read only via Admin SDK APIs.
+     * @path /download_events/{eventId}
+     */
+    match /download_events/{eventId} {
+      allow read, write: if false;
+    }
+
+    /**
+     * Rewarded-ad wallet — client never writes; Admin SDK /api/ads/reward-sync only.
+     * @path /ad_wallets/{uid}
+     */
+    match /ad_wallets/{uid} {
+      allow read, write: if false;
     }
 
     /**

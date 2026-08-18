@@ -46,6 +46,7 @@ export function isPocketLedgerBillingApiCorsPath(pathname: string): boolean {
   if (p === "/api/auth/pl-firebase-handoff") return true;
   if (p.startsWith("/api/payments/webhook/")) return false;
   if (p.startsWith("/api/payments/")) return true;
+  if (p.startsWith("/api/ads/")) return true;
   return (
     p === "/api/company/sync-plan" ||
     p === "/api/company/downgrade-plan" ||

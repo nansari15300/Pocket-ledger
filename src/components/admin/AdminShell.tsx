@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect } from "react";
 import { enterAdminFirestoreOnline, leaveAdminFirestoreOnline } from "@/lib/adminFirestoreNetwork";
-import { LayoutDashboard, Users, FileClock, Settings, ArrowLeft, FileDigit, ListTree, Landmark, CreditCard, UserCog, Trash2, Database } from 'lucide-react'
+import { LayoutDashboard, Users, FileClock, Settings, ArrowLeft, FileDigit, ListTree, Landmark, CreditCard, UserCog, Trash2, Database, Megaphone } from 'lucide-react'
 import { Button } from '../ui/button'
 import { AdminHeader } from './AdminHeader'
 import {
@@ -40,6 +40,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
       { href: "/admin/users", label: "Users", icon: Users },
       { href: "/admin/plans", label: "Plans", icon: FileDigit },
       { href: "/admin/features", label: "Add/Remove Features", icon: ListTree },
+      { href: "/admin/ad-settings", label: "Ad Settings", icon: Megaphone },
       { href: "/admin/bank-settings", label: "Payment Gateway", icon: Landmark },
       { href: "/admin/payments", label: "Subscription Payments", icon: CreditCard },
       { href: "/admin/company", label: "Company", icon: UserCog },
@@ -49,7 +50,12 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
       { href: "/admin/settings", label: "Global Settings", icon: Settings },
   ]
   
-  const NavLink = ({ href, label, icon: Icon }: { href: string; label: string, icon: React.ElementType }) => (
+  const NavLink = ({ href, label, icon: Icon }: { href: string; label: string, icon: React.ElementType }) => {
+    const isActive =
+      href === "/admin"
+        ? pathname === "/admin"
+        : pathname === href || pathname.startsWith(`${href}/`);
+    return (
     <Link
       href={href}
       onClick={() => {
@@ -57,14 +63,15 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
       }}
     >
       <SidebarMenuButton
-        isActive={pathname === href}
+        isActive={isActive}
         tooltip={label}
       >
         <Icon className="h-5 w-5" />
         {isOpen && <span>{label}</span>}
       </SidebarMenuButton>
     </Link>
-  )
+    );
+  }
 
   // Isolated Admin Panel Company intentionally does not mount normal company/dashboard code.
   if (isAdminPanelCompanyRoute) {

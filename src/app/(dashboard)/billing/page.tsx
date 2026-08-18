@@ -52,6 +52,7 @@ import { useBillingRegionPricing } from "@/hooks/useBillingRegionPricing";
 import { PlanPricingBreakdown, PlanPricingLineCell } from "@/components/billing/PlanPricingBreakdown";
 import { BillingFeatureLabelWithInfo } from "@/components/billing/BillingFeatureInfoButton";
 import { BillingAddOnPurchaseCard } from "@/components/billing/BillingAddOnPurchaseCard";
+import { AdBillingPointsCard } from "@/components/ads/AdBillingPointsCard";
 import { CountrySearchCombobox } from "@/components/shared/CountrySearchCombobox";
 import type { BillingRegionId } from "@/lib/billingRegions";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -119,11 +120,6 @@ function formatFreePlanCrossedPrice(
   formatPlanTermPrice: (p: Plan, t: SubscriptionTermKey) => string
 ): string {
   return formatTermPriceFromKey(plan, termKey, formatPlanTermPrice);
-}
-
-function checkoutAmountNpr(plan: Plan, termKey: SubscriptionTermKey, donationAmount: number): number {
-  if (plan.isFree) return donationAmount;
-  return grossPriceNpr(termKey, plan.price.monthly, plan.price.yearly);
 }
 
 /** Safe Date extractor for Firestore Timestamp / Date / millis / ISO values. */
@@ -290,17 +286,15 @@ type CheckoutFormProps = {
   termKey: SubscriptionTermKey;
   userId: string;
   companyId: string;
-  billingIntent: "donation" | "subscribe";
   /** Checkout region + formatter — server `/api/payments/initiate` ke saath match. */
   billingRegion: BillingRegionId;
-  formatPlanTermPrice: (plan: Plan, termKey: SubscriptionTermKey) => string;
   getCheckoutForPlan: (plan: Plan, termKey: SubscriptionTermKey) => {
     amountMinor: number;
     currency: string;
     gross: number;
     symbol: string;
   };
-  /** false = subscribe/donate API disabled — user ko “back online” copy. */
+  /** false = subscribe API disabled — user ko “back online” copy. */
   networkOnline?: boolean;
   /** Server keys miss par gateway radio band — initiate route jaisa. */
   gatewayAvailability?: BillingGatewayAvailability | null;
@@ -489,9 +483,7 @@ function CheckoutForm({
   termKey,
   userId,
   companyId,
-  billingIntent,
   billingRegion,
-  formatPlanTermPrice,
   getCheckoutForPlan,
   networkOnline = true,
   gatewayAvailability = null,
@@ -503,14 +495,12 @@ function CheckoutForm({
     setGateway((prev) => firstAvailableBillingGateway(gatewayAvailability, prev));
   }, [gatewayAvailability]);
   const [isLoading, setIsLoading] = useState(false);
-  const [donationAmount, setDonationAmount] = useState(100);
 
-  const isFreePlan = plan.isFree;
+  if (plan.isFree) return null;
+
   const checkout = getCheckoutForPlan(plan, termKey);
-  const amountInMinor = isFreePlan
-    ? Math.round(donationAmount * 100)
-    : checkout.amountMinor;
-  const checkoutCurrency = isFreePlan ? "npr" : checkout.currency;
+  const amountInMinor = checkout.amountMinor;
+  const checkoutCurrency = checkout.currency;
   const stripeOk = gatewayAvailability == null || gatewayAvailability.stripe;
   const khaltiOk = gatewayAvailability == null || gatewayAvailability.khalti;
   const esewaOk = gatewayAvailability == null || gatewayAvailability.esewa;
@@ -528,15 +518,15 @@ function CheckoutForm({
       toast({
         variant: "destructive",
         title: "Offline",
-        description: "Back online to subscribe or donate.",
+        description: "Back online to subscribe.",
       });
       return;
     }
-    if (isFreePlan && amountInMinor <= 0) {
+    if (amountInMinor <= 0) {
       toast({
         variant: "destructive",
         title: "Invalid Amount",
-        description: "Please enter a valid amount to proceed.",
+        description: "Please choose a paid plan to proceed.",
       });
       return;
     }
@@ -564,7 +554,7 @@ function CheckoutForm({
             return m != null ? Math.min(10, Math.max(1, parseInt(m[1], 10))) : 1;
           })(),
           subscriptionTermKey: termKey,
-          billingIntent,
+          billingIntent: "subscribe",
         }),
         headers: { "Content-Type": "application/json" },
       });
@@ -644,29 +634,11 @@ function CheckoutForm({
         ? gatewayAvailability.khalti
         : gatewayAvailability.esewa);
 
-  const payLabel = isFreePlan
-    ? `Donate ${formatPlanTermPrice({ ...plan, price: { monthly: donationAmount, yearly: donationAmount } } as Plan, "monthly")}`
-    : `pay with ${gateway}`;
+  const payLabel = `pay with ${gateway}`;
 
   return (
     <div className="mt-8 border-t pt-8">
-      {isFreePlan ? (
-        <h3 className="text-xl font-semibold mb-4">Support Us with a Donation (Optional)</h3>
-      ) : (
-        <h3 className="text-xl font-semibold mb-4">Select Payment Method</h3>
-      )}
-      {isFreePlan && (
-        <div className="mb-6 max-w-sm">
-          <Label htmlFor="donation-amount">Donation Amount (NPR)</Label>
-          <Input
-            id="donation-amount"
-            type="number"
-            value={donationAmount}
-            onChange={(e) => setDonationAmount(Number(e.target.value))}
-            placeholder="e.g., 100"
-          />
-        </div>
-      )}
+      <h3 className="text-xl font-semibold mb-4">Select Payment Method</h3>
       <RadioGroup value={gateway} onValueChange={(val) => setGateway(val as "stripe" | "khalti" | "esewa")} className="flex flex-wrap items-center gap-4 mb-6">
         <Label
           htmlFor="stripe"
@@ -774,9 +746,13 @@ function BillingPageInner() {
       ? ("user-online" as const)
       : addonQuery === "user-local"
         ? ("user-local" as const)
-        : addonQuery === "device-local"
-          ? ("device-local" as const)
-          : ("device-online" as const);
+        : addonQuery === "company" || addonQuery === "company-online"
+          ? ("company-online" as const)
+          : addonQuery === "company-local"
+            ? ("company-local" as const)
+            : addonQuery === "device-local"
+              ? ("device-local" as const)
+              : ("device-online" as const);
   const { companyId, company, loading: companyLoading, refreshAuthoritativePlan, allCompanies } = useCompany();
   const hasSelectedCompany = Boolean(String(companyId || "").trim());
   /** User country picker — plan amounts is currency me convert dikhenge. */
@@ -1807,12 +1783,11 @@ function BillingPageInner() {
     [billingFrozenLedger, currentPlanId, plans]
   );
 
-  /** Paid accounts: plan changes only via table (no donation / free checkout block below). */
-  const showStandardCheckout =
-    !isPaidCompany && (!selectedPlanDetails.isFree || selectedPlanId === "basic");
+  /** Paid accounts: plan changes only via table (no free-plan checkout below). */
+  const showStandardCheckout = !isPaidCompany && !selectedPlanDetails.isFree;
   const selectedMobilePlan = plans[mobilePlanIndex] ?? selectedPlanDetails;
-  /** Mobile basic users: checkout card must follow selected tab so paid plans can subscribe from phone too. */
-  const showMobileCheckoutSection = isMobile && !isPaidCompany;
+  /** Mobile: checkout only when a paid plan tab is selected. */
+  const showMobileCheckoutSection = isMobile && !isPaidCompany && !selectedMobilePlan.isFree;
 
   if (loading || !selectedPlanDetails || billingPolicyLoading) {
     return (
@@ -1876,6 +1851,7 @@ function BillingPageInner() {
           </div>
         </CardHeader>
         <CardContent>
+          <AdBillingPointsCard />
           {/* Country choose → saare plan columns converted amount + symbol */}
           <div className="mb-4 max-w-md space-y-2">
             <Label htmlFor="billing-price-country">View prices in country</Label>
@@ -2113,7 +2089,7 @@ function BillingPageInner() {
 
                   if (p.id === currentPlanId) {
                     if (!isPaidCompany) {
-                      return <p className="text-xs text-muted-foreground">Current plan. You can donate below if you want.</p>;
+                      return <p className="text-xs text-muted-foreground">Current plan. Choose a paid plan to upgrade.</p>;
                     }
                     return (
                       <div className="space-y-2">
@@ -3159,9 +3135,7 @@ function BillingPageInner() {
               termKey={colTerms[selectedPlanId]}
               userId={user?.uid ?? ""}
               companyId={billingFirestoreCompanyId}
-              billingIntent={selectedPlanDetails.isFree ? "donation" : "subscribe"}
               billingRegion={billingRegion}
-              formatPlanTermPrice={formatPlanTermPrice}
               getCheckoutForPlan={getCheckoutForPlan}
               networkOnline={billingNavigatorOnline}
               gatewayAvailability={gatewayAvailability}
@@ -3175,9 +3149,7 @@ function BillingPageInner() {
               termKey={colTerms[selectedMobilePlan.id]}
               userId={user?.uid ?? ""}
               companyId={billingFirestoreCompanyId}
-              billingIntent={selectedMobilePlan.isFree ? "donation" : "subscribe"}
               billingRegion={billingRegion}
-              formatPlanTermPrice={formatPlanTermPrice}
               getCheckoutForPlan={getCheckoutForPlan}
               networkOnline={billingNavigatorOnline}
               gatewayAvailability={gatewayAvailability}
@@ -3323,6 +3295,7 @@ function BillingPageInner() {
             initialKind={addonInitialKind}
             networkOnline={billingNavigatorOnline}
             gatewayAvailability={gatewayAvailability}
+            currentPlan={plans.find((plan) => plan.id === currentPlanId) ?? null}
           />
         </div>
       ) : null}

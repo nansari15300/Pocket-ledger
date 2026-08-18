@@ -75,6 +75,7 @@ import {
 } from "@/config/plans";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { Badge } from "../ui/badge";
+import { Checkbox } from "../ui/checkbox";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { planSyncFailureUserMessage } from "@/lib/companyPlanServerSync";
 import { cn } from "@/lib/utils";
@@ -100,6 +101,15 @@ import {
   countOnlineCompanySlotsForOwner,
   maxOnlineCompaniesForPlan,
 } from "@/lib/companyOnlineSlots";
+import {
+  EMPTY_PURCHASED_PLAN_ADDONS,
+  parsePurchasedPlanAddOns,
+  planDeviceCapWithAddOns,
+  planUserCapWithAddOns,
+  type PurchasedPlanAddOns,
+} from "@/lib/planAddOns";
+import { doc, onSnapshot } from "firebase/firestore";
+import { firestore } from "@/lib/firebase";
 import { GlobalFileHoverPreviewSwitch } from "@/components/layout/GlobalFileHoverPreviewSwitch";
 import { useFileHoverPreview } from "@/contexts/FileHoverPreviewContext";
 import { CopyLedgerHeaderButton } from "@/components/ledger/CopyLedgerHeaderButton";
@@ -110,6 +120,7 @@ import { getCompanyPlanExpiryMsFromDoc } from "@/lib/companyPlanExpiryMs";
 import { HeaderAttachmentPrefetchStrip } from "@/components/layout/HeaderAttachmentPrefetchStrip";
 import { HeaderBackupActivityStrip } from "@/components/layout/HeaderBackupActivityStrip";
 import { gateHttpGet } from "@/lib/gates/gateServerFetch";
+import { updateCompanyRootFirestore } from "@/lib/writeGateway/companyRootFirestore";
 
 /** Electron desktop: header quick-action buttons strip collapsed — `main.js` View menu se bhi toggle */
 const PL_DESKTOP_QUICK_ACTIONS_KEY = "pl-desktop-header-quick-actions-collapsed";
@@ -635,20 +646,29 @@ type ProfileStatTone = keyof typeof PROFILE_STAT_TONE_CLASSES;
 const PROFILE_PLAN_STAT_PILL_LAYOUT =
   "flex w-full max-w-full min-w-0 flex-wrap items-center gap-x-1 rounded-full border-2 px-2.5 py-0.5 text-left text-xs font-normal tabular-nums leading-tight text-black shadow-sm dark:text-black";
 
-function ProfilePlanStatPill({ tone, children }: { tone: ProfileStatTone; children: React.ReactNode }) {
+function ProfilePlanStatPill({
+  tone,
+  children,
+  end,
+}: {
+  tone: ProfileStatTone;
+  children: React.ReactNode;
+  end?: React.ReactNode;
+}) {
   return (
     <div className={cn(PROFILE_PLAN_STAT_PILL_LAYOUT, PROFILE_STAT_TONE_CLASSES[tone])}>
       {/* Lambi label/value dropdown width ke andar wrap */}
       <span className="min-w-0 flex-1 break-words">{children}</span>
+      {end ? <span className="ml-auto shrink-0">{end}</span> : null}
     </div>
   );
 }
 
 function UserProfileButton() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, customUser } = useAuth();
   const { requestEmbeddedLogout } = useEmbeddedLogout();
-  const { company, allCompanies, refreshAuthoritativePlan } = useCompany();
+  const { company, allCompanies, refreshAuthoritativePlan, triggerSync } = useCompany();
   const { displaySymbol } = useDisplayCurrency();
   const { toast } = useToast();
   const { isOnline } = useOnlineStatus();
@@ -660,6 +680,10 @@ function UserProfileButton() {
   const [profileNowMs, setProfileNowMs] = useState(() => Date.now());
   /** Avatar menu: manual Firestore → local plan sync (SQLite/cache align). */
   const [planManualSyncing, setPlanManualSyncing] = useState(false);
+  const [selfAddons, setSelfAddons] = useState<PurchasedPlanAddOns>(EMPTY_PURCHASED_PLAN_ADDONS);
+  const [companyOwnerAddons, setCompanyOwnerAddons] =
+    useState<PurchasedPlanAddOns>(EMPTY_PURCHASED_PLAN_ADDONS);
+  const [profileRowsSaving, setProfileRowsSaving] = useState(false);
   /** Delayed close so mouse can move from avatar to portaled menu without flashing shut. */
   const profileHoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -692,6 +716,41 @@ function UserProfileButton() {
   );
 
   useEffect(() => () => clearProfileHoverClose(), [clearProfileHoverClose]);
+
+  useEffect(() => {
+    const uid = String(user?.uid || "").trim();
+    if (!uid) {
+      setSelfAddons(EMPTY_PURCHASED_PLAN_ADDONS);
+      return;
+    }
+    const unsub = onSnapshot(
+      doc(firestore, "users", uid),
+      (snap) => {
+        setSelfAddons(parsePurchasedPlanAddOns(snap.exists() ? (snap.data() as Record<string, unknown>) : null));
+      },
+      () => setSelfAddons(EMPTY_PURCHASED_PLAN_ADDONS)
+    );
+    return () => unsub();
+  }, [user?.uid]);
+
+  useEffect(() => {
+    const ownerUid = String(company?.ownerId || "").trim();
+    const selfUid = String(user?.uid || "").trim();
+    if (!ownerUid || ownerUid === selfUid) {
+      setCompanyOwnerAddons(EMPTY_PURCHASED_PLAN_ADDONS);
+      return;
+    }
+    const unsub = onSnapshot(
+      doc(firestore, "users", ownerUid),
+      (snap) => {
+        setCompanyOwnerAddons(
+          parsePurchasedPlanAddOns(snap.exists() ? (snap.data() as Record<string, unknown>) : null)
+        );
+      },
+      () => setCompanyOwnerAddons(EMPTY_PURCHASED_PLAN_ADDONS)
+    );
+    return () => unsub();
+  }, [company?.ownerId, user?.uid]);
 
   const getInitials = (name: string | null | undefined) => {
     if (!name) return "U";
@@ -782,9 +841,11 @@ function UserProfileButton() {
   // Shared / no-owned fallback ke liye aggregate; **owner + apni company** par badge & caps = `selectedCompanyPlan*` (Billing page jaisa — doosri owned row ka pro-plus yahan mix na ho).
   const userUid = user?.uid ?? "";
   const userEmail = user?.email ?? "";
-  const accountPlanId = userUid
-    ? resolveEffectiveAccountPlanId(allCompanies, userUid, company?.planId)
-    : ((company?.planId as PlanId) || "basic");
+  const accountPlanId: PlanId = normalizePlanIdForClient(
+    customUser?.accountCanonicalPlanId ||
+      (userUid ? resolveEffectiveAccountPlanId(allCompanies, userUid, company?.planId) : null) ||
+      "basic"
+  );
   const selectedCompanyPlanId: PlanId = company && userUid
     ? resolvePlanIdForActiveCompany(company, allCompanies, userUid, userEmail)
     : normalizePlanIdForClient(company?.planId);
@@ -803,10 +864,91 @@ function UserProfileButton() {
   const isSelectedCompanyOwned =
     !!company &&
     (company.ownerId === userUid || (!!userEmail && company.ownerEmail === userEmail));
+  const sharedUserProfileRows = company?.sharedUserProfilePlanRows ?? {};
+  const isSharedUserProfileRowVisible = useCallback(
+    (
+      row:
+        | "allStorage"
+        | "dailyVoucher"
+        | "monthlyVoucher"
+        | "onlineSlots"
+        | "localSlots"
+        | "usersDevices"
+        | "attachments"
+        | "storage"
+        | "expiry"
+    ) => sharedUserProfileRows[row] !== false,
+    [sharedUserProfileRows]
+  );
+  const setSharedUserProfileRowVisible = useCallback(
+    async (
+      row:
+        | "allStorage"
+        | "dailyVoucher"
+        | "monthlyVoucher"
+        | "onlineSlots"
+        | "localSlots"
+        | "usersDevices"
+        | "attachments"
+        | "storage"
+        | "expiry",
+      visible: boolean
+    ) => {
+      if (!company || !isSelectedCompanyOwned || profileRowsSaving) return;
+      const companyFirestoreId = String(company.authoritativeCompanyId || company.id || "").trim();
+      if (!companyFirestoreId) return;
+      const nextRows = { ...sharedUserProfileRows, [row]: visible };
+      setProfileRowsSaving(true);
+      try {
+        await updateCompanyRootFirestore(companyFirestoreId, {
+          sharedUserProfilePlanRows: nextRows,
+        });
+        triggerSync();
+      } catch {
+        toast({
+          title: "Could not save shared-user profile setting",
+          description: "Please check your connection and try again.",
+          variant: "destructive",
+        });
+      } finally {
+        setProfileRowsSaving(false);
+      }
+    },
+    [
+      company,
+      isSelectedCompanyOwned,
+      profileRowsSaving,
+      sharedUserProfileRows,
+      toast,
+      triggerSync,
+    ]
+  );
+  const sharedUserRowToggle = (
+    row:
+      | "allStorage"
+      | "dailyVoucher"
+      | "monthlyVoucher"
+      | "onlineSlots"
+      | "localSlots"
+      | "usersDevices"
+      | "attachments"
+      | "storage"
+      | "expiry"
+  ) => (
+    <Checkbox
+      aria-label={`Show ${row} on Users`}
+      checked={isSharedUserProfileRowVisible(row)}
+      disabled={profileRowsSaving}
+      onCheckedChange={(checked) => void setSharedUserProfileRowVisible(row, checked === true)}
+    />
+  );
 
+  /** No owned company → account SKU (or Basic). Owned → best owned SKU. */
   const ownedOnlyPlanId: PlanId = (() => {
-    const best = userUid ? highestPlanIdAmongOwnedCompanies(allCompanies, userUid) : null;
-    return best ?? "basic";
+    if (!userUid) return "basic";
+    const best = highestPlanIdAmongOwnedCompanies(allCompanies, userUid);
+    if (best) return best;
+    return accountPlanId;
   })();
 
   /** Shared company: aapke account ka best owned SKU; **khud ki company** open ho to isi row ka `planId` (Firestore/Billing ke saath match). */
@@ -846,11 +988,10 @@ function UserProfileButton() {
     ? Number.POSITIVE_INFINITY
     : Math.max(0, totalMaxStorMB - userStorUsedMB);
   const maxStorGB = accountMaxStorGB;
-  const showAttQuota = maxAttGB > 0 || isUnlimitedEntitlementCap(maxAttGB);
-  const showStorQuota = maxStorGB > 0 || isUnlimitedEntitlementCap(maxStorGB);
   const onlineSlotMax = maxOnlineCompaniesForPlan(
     selectedCompanyPlanId,
-    getPlanFromPlans(livePlans, selectedCompanyPlanId)
+    getPlanFromPlans(livePlans, selectedCompanyPlanId),
+    isSelectedCompanyOwned ? selfAddons : companyOwnerAddons
   );
   const onlineSlotUsed =
     user?.uid != null && user.uid !== "" ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0;
@@ -858,44 +999,89 @@ function UserProfileButton() {
   const selectedCompanyCanUpgradeToPaidTier = getNextPaidUpgrade(selectedCompanyPlanId) != null;
 
   const ownedPlanLive = getPlanFromPlans(livePlans, ownedOnlyPlanId);
-  const ownedMaxUsersOnlineRaw = numericEntitlement(ownedPlanLive.entitlements, "maxUsers", false);
-  const ownedMaxUsersLocalRaw = numericEntitlement(ownedPlanLive.entitlements, "maxUsers", true);
-  const ownedMaxUsersOnline = isUnlimitedEntitlementCap(ownedMaxUsersOnlineRaw)
-    ? Number.POSITIVE_INFINITY
-    : Math.max(0, ownedMaxUsersOnlineRaw);
-  const ownedMaxUsersLocal = isUnlimitedEntitlementCap(ownedMaxUsersLocalRaw)
-    ? Number.POSITIVE_INFINITY
-    : Math.max(0, ownedMaxUsersLocalRaw);
-  const ownedOnlineSlotMax = maxOnlineCompaniesForPlan(ownedOnlyPlanId, ownedPlanLive);
+  const ownedOnlineSlotMax = maxOnlineCompaniesForPlan(ownedOnlyPlanId, ownedPlanLive, selfAddons);
 
-  /** Shared: "Your account" = best owned tier; zero-owned shared = active company's owner plan (not account cache). */
-  const sharedProfilePlanId: PlanId =
-    hasOwnedCompanies
-      ? ownedOnlyPlanId
-      : !isSelectedCompanyOwned
-        ? selectedCompanyPlanId
-        : accountPlanId;
+  /** Shared / no-company: always show user's own account plan (Basic when nothing purchased). */
+  const sharedProfilePlanId: PlanId = hasOwnedCompanies ? ownedOnlyPlanId : accountPlanId;
+  const sharedProfilePlanLive = getPlanFromPlans(livePlans, sharedProfilePlanId);
   const sharedProfilePlanName =
     DEFAULT_PLANS[sharedProfilePlanId]?.name ?? String(sharedProfilePlanId);
   const sharedProfileCanUpgrade = getNextPaidUpgrade(sharedProfilePlanId) != null;
+  const myAccountUsersOnlineRaw = planUserCapWithAddOns(sharedProfilePlanLive, false, selfAddons);
+  const myAccountUsersLocalRaw = planUserCapWithAddOns(sharedProfilePlanLive, true, selfAddons);
+  const myAccountDevicesOnlineRaw = planDeviceCapWithAddOns(sharedProfilePlanLive, false, selfAddons);
+  const myAccountDevicesLocalRaw = planDeviceCapWithAddOns(sharedProfilePlanLive, true, selfAddons);
+  const myAccountMaxUsersOnline = isUnlimitedEntitlementCap(myAccountUsersOnlineRaw)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, myAccountUsersOnlineRaw);
+  const myAccountMaxUsersLocal = isUnlimitedEntitlementCap(myAccountUsersLocalRaw)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, myAccountUsersLocalRaw);
+  const myAccountMaxDevicesOnline = isUnlimitedEntitlementCap(myAccountDevicesOnlineRaw)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, myAccountDevicesOnlineRaw);
+  const myAccountMaxDevicesLocal = isUnlimitedEntitlementCap(myAccountDevicesLocalRaw)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, myAccountDevicesLocalRaw);
+  const myAccountAttGBOnline = numericEntitlement(
+    sharedProfilePlanLive.entitlements,
+    "maxAttachmentsGB",
+    false
+  );
+  const myAccountAttGBLocal = numericEntitlement(
+    sharedProfilePlanLive.entitlements,
+    "maxAttachmentsGB",
+    true
+  );
+  const myAccountStorGBOnline = numericEntitlement(
+    sharedProfilePlanLive.entitlements,
+    "maxStorageGB",
+    false
+  );
+  const myAccountStorGBLocal = numericEntitlement(
+    sharedProfilePlanLive.entitlements,
+    "maxStorageGB",
+    true
+  );
+  const myAccountAttGB = maxEntitlementCap(myAccountAttGBOnline, myAccountAttGBLocal);
+  const myAccountStorGB = maxEntitlementCap(myAccountStorGBOnline, myAccountStorGBLocal);
 
   const selectedCompanyPlanLive = getPlanFromPlans(livePlans, selectedCompanyPlanId);
-  const selectedCompanyMaxDevicesRaw = Number(selectedCompanyPlanLive.entitlements.maxDevices);
-  const selectedCompanyMaxDevices =
-    selectedCompanyPlanLive.entitlements.hasMultiDeviceSync === true
-      ? isUnlimitedEntitlementCap(selectedCompanyMaxDevicesRaw)
-        ? Number.POSITIVE_INFINITY
-        : Math.max(0, Number.isFinite(selectedCompanyMaxDevicesRaw) ? selectedCompanyMaxDevicesRaw : 0)
-      : 1;
+  const selectedCompanyAddons = isSelectedCompanyOwned ? selfAddons : companyOwnerAddons;
   const thisCompanyStorageLocal = company ? companyStorageIsLocal(company.storageOption) : false;
-  const thisCompanyMaxUsersRaw = numericEntitlement(
-    selectedCompanyPlanLive.entitlements,
-    "maxUsers",
-    thisCompanyStorageLocal
+  const selectedCompanyMaxDevicesRaw = planDeviceCapWithAddOns(
+    selectedCompanyPlanLive,
+    thisCompanyStorageLocal,
+    selectedCompanyAddons
+  );
+  const selectedCompanyMaxDevices = isUnlimitedEntitlementCap(selectedCompanyMaxDevicesRaw)
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, selectedCompanyMaxDevicesRaw);
+  const thisCompanyMaxUsersRaw = planUserCapWithAddOns(
+    selectedCompanyPlanLive,
+    thisCompanyStorageLocal,
+    selectedCompanyAddons
   );
   const thisCompanyMaxUsers = isUnlimitedEntitlementCap(thisCompanyMaxUsersRaw)
     ? Number.POSITIVE_INFINITY
     : Math.max(0, thisCompanyMaxUsersRaw);
+  const ownerPlanOnlineSlotMax = maxOnlineCompaniesForPlan(
+    selectedCompanyPlanId,
+    selectedCompanyPlanLive,
+    selectedCompanyAddons
+  );
+  const ownerPlanLocalSlotMax = numericEntitlement(
+    selectedCompanyPlanLive.entitlements,
+    "maxCompanies",
+    true
+  );
+  const ownerPlanHasAddOns =
+    selectedCompanyAddons.extraUsersOnline > 0 ||
+    selectedCompanyAddons.extraUsersLocal > 0 ||
+    selectedCompanyAddons.extraDevicesOnline > 0 ||
+    selectedCompanyAddons.extraDevicesLocal > 0 ||
+    selectedCompanyAddons.extraCompaniesOnline > 0 ||
+    selectedCompanyAddons.extraCompaniesLocal > 0;
 
   /** Profile card: plan voucher caps — `numericEntitlement` + company local flag (Billing matrix jaisa). */
   const dailyVoucherPlanCap = numericEntitlement(
@@ -907,6 +1093,16 @@ function UserProfileButton() {
     selectedCompanyPlanLive.entitlements,
     "monthlyVoucherLimit",
     storageIsLocal
+  );
+  const ownerPlanDailyVoucherCap = numericEntitlement(
+    selectedCompanyPlanLive.entitlements,
+    "dailyVoucherLimit",
+    thisCompanyStorageLocal
+  );
+  const ownerPlanMonthlyVoucherCap = numericEntitlement(
+    selectedCompanyPlanLive.entitlements,
+    "monthlyVoucherLimit",
+    thisCompanyStorageLocal
   );
   /** Offline SQLite-first companies count vs `maxCompaniesLocal` (online slot ke parallel). */
   const localCompanySlotMax = numericEntitlement(selectedCompanyPlanLive.entitlements, "maxCompanies", true);
@@ -930,6 +1126,233 @@ function UserProfileButton() {
   );
 
   if (!user) return null;
+
+  const formatGbOnlineLocal = (onlineGB: number, localGB: number) => {
+    const onlineLabel = isUnlimitedEntitlementCap(onlineGB)
+      ? "Unlimited"
+      : `${formatEntitlementCapLabel(onlineGB)} GB`;
+    const localLabel = isUnlimitedEntitlementCap(localGB)
+      ? "Unlimited"
+      : `${formatEntitlementCapLabel(localGB)} GB`;
+    return `${onlineLabel} online · ${localLabel} local`;
+  };
+
+  const renderMyAccountPlanStats = () => (
+    <div className="mt-1.5 flex w-full min-w-0 flex-col gap-[5px]">
+      <ProfilePlanStatPill tone="attachments">
+        Attachments: {formatGbOnlineLocal(myAccountAttGBOnline, myAccountAttGBLocal)}
+        {hasOwnedCompanies ? (
+          <>
+            {" "}
+            · {attUsedMB.toFixed(0)} MB used
+            {!isUnlimitedEntitlementCap(maxAttGB) ? ` / ${attFreeMB.toFixed(0)} MB free` : ""}
+          </>
+        ) : null}
+      </ProfilePlanStatPill>
+      <ProfilePlanStatPill tone="storage">
+        Storage: {formatGbOnlineLocal(myAccountStorGBOnline, myAccountStorGBLocal)}
+        {userStorageUsedBytes != null ? (
+          <>
+            {" "}
+            · {userStorUsedMB.toFixed(0)} MB used
+            {!isUnlimitedEntitlementCap(myAccountStorGB) && hasOwnedCompanies
+              ? ` / ${storFreeMB.toFixed(0)} MB free`
+              : ""}
+          </>
+        ) : null}
+      </ProfilePlanStatPill>
+      <ProfilePlanStatPill tone="usersDevices">
+        Sync devices: {formatEntitlementCapLabel(myAccountMaxDevicesOnline)} online
+        {myAccountMaxDevicesLocal !== myAccountMaxDevicesOnline
+          ? ` · ${formatEntitlementCapLabel(myAccountMaxDevicesLocal)} local`
+          : ""}
+      </ProfilePlanStatPill>
+      <ProfilePlanStatPill tone="usersDevices">
+        Max users: {formatEntitlementCapLabel(myAccountMaxUsersOnline)} online
+        {myAccountMaxUsersLocal !== myAccountMaxUsersOnline
+          ? ` · ${formatEntitlementCapLabel(myAccountMaxUsersLocal)} local`
+          : ""}
+      </ProfilePlanStatPill>
+    </div>
+  );
+
+  /**
+   * Same plan rows for company owner + shared users.
+   * Owner: all rows + "Show on Users" toggles.
+   * Shared: only rows owner left ticked (same labels/format).
+   */
+  const renderSelectedCompanyPlanRows = (opts: {
+    withToggles: boolean;
+    forSharedUser: boolean;
+  }) => {
+    const { withToggles, forSharedUser } = opts;
+    const allow = (row: Parameters<typeof isSharedUserProfileRowVisible>[0]) =>
+      !forSharedUser || isSharedUserProfileRowVisible(row);
+    const end = (row: Parameters<typeof isSharedUserProfileRowVisible>[0]) =>
+      withToggles ? sharedUserRowToggle(row) : undefined;
+
+    const companyAttUsedBytes = Number((company as Company | null)?.attachmentsUsedBytes ?? 0);
+    const companyStorUsedBytes = Number((company as Company | null)?.storageUsedBytes ?? 0);
+    const rowAttUsedMB = forSharedUser
+      ? (companyAttUsedBytes / 1e9) * GB_TO_MB
+      : attUsedMB;
+    const rowAttCapGB = forSharedUser
+      ? numericEntitlement(
+          selectedCompanyPlanLive.entitlements,
+          "maxAttachmentsGB",
+          thisCompanyStorageLocal
+        )
+      : maxAttGB;
+    const rowAttFreeMB = isUnlimitedEntitlementCap(rowAttCapGB)
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, rowAttCapGB * GB_TO_MB - rowAttUsedMB);
+    const rowStorUsedMB = forSharedUser
+      ? companyStorUsedBytes / (1024 * 1024)
+      : userStorUsedMB;
+    const rowStorCapGB = forSharedUser
+      ? numericEntitlement(
+          selectedCompanyPlanLive.entitlements,
+          "maxStorageGB",
+          thisCompanyStorageLocal
+        )
+      : maxStorGB;
+    const rowStorFreeMB = isUnlimitedEntitlementCap(rowStorCapGB)
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, rowStorCapGB * GB_TO_MB - rowStorUsedMB);
+    const rowShowAtt = rowAttCapGB > 0 || isUnlimitedEntitlementCap(rowAttCapGB);
+    const rowShowStor = rowStorCapGB > 0 || isUnlimitedEntitlementCap(rowStorCapGB);
+    const rowStorageLocal = forSharedUser ? thisCompanyStorageLocal : storageIsLocal;
+    const rowDailyCap = forSharedUser ? ownerPlanDailyVoucherCap : dailyVoucherPlanCap;
+    const rowMonthlyCap = forSharedUser ? ownerPlanMonthlyVoucherCap : monthlyVoucherPlanCap;
+    const rowOnlineSlotMax = forSharedUser ? ownerPlanOnlineSlotMax : onlineSlotMax;
+    const rowLocalSlotMax = forSharedUser ? ownerPlanLocalSlotMax : localCompanySlotMax;
+    const rowHasAddOns = forSharedUser
+      ? ownerPlanHasAddOns
+      : selfAddons.extraUsersOnline > 0 ||
+        selfAddons.extraUsersLocal > 0 ||
+        selfAddons.extraDevicesOnline > 0 ||
+        selfAddons.extraDevicesLocal > 0;
+
+    return (
+      <div className="mt-1.5 flex w-full min-w-0 flex-col gap-[5px]">
+        {allow("allStorage") ? (
+          <ProfilePlanStatPill tone="companyStorage" end={end("allStorage")}>
+            All storage:{" "}
+            {rowStorageLocal ? "Device local (offline-first)" : "Online (cloud-linked)"}
+            {rowShowStor ? (
+              <>
+                <span aria-hidden className="mx-0.5 opacity-90">
+                  ·
+                </span>
+                {forSharedUser || userStorageUsedBytes != null ? (
+                  <>
+                    {isUnlimitedEntitlementCap(rowStorCapGB)
+                      ? "Unlimited"
+                      : `${rowStorFreeMB.toFixed(0)} MB left`}
+                  </>
+                ) : (
+                  <>… MB left</>
+                )}
+              </>
+            ) : null}
+          </ProfilePlanStatPill>
+        ) : null}
+        {allow("dailyVoucher") ? (
+          <ProfilePlanStatPill tone="dailyVoucher" end={end("dailyVoucher")}>
+            Daily vouchers (plan cap): {formatEntitlementCapLabel(rowDailyCap)} /day
+          </ProfilePlanStatPill>
+        ) : null}
+        {allow("monthlyVoucher") ? (
+          <ProfilePlanStatPill tone="monthlyVoucher" end={end("monthlyVoucher")}>
+            Monthly vouchers (plan cap): {formatEntitlementCapLabel(rowMonthlyCap)} /month
+          </ProfilePlanStatPill>
+        ) : null}
+        {allow("onlineSlots") && rowOnlineSlotMax > 0 ? (
+          <ProfilePlanStatPill tone="onlineSlots" end={end("onlineSlots")}>
+            Online company slots (cloud-linked):{" "}
+            {forSharedUser ? (
+              formatEntitlementCapLabel(rowOnlineSlotMax)
+            ) : (
+              <>
+                {onlineSlotUsed} / {formatEntitlementCapLabel(rowOnlineSlotMax)}
+              </>
+            )}
+          </ProfilePlanStatPill>
+        ) : null}
+        {allow("localSlots") &&
+        (forSharedUser
+          ? rowLocalSlotMax > 0 || isUnlimitedEntitlementCap(rowLocalSlotMax)
+          : !!user?.uid) ? (
+          <ProfilePlanStatPill tone="offlineSlots" end={end("localSlots")}>
+            Offline / local company slots:{" "}
+            {forSharedUser ? (
+              formatEntitlementCapLabel(rowLocalSlotMax)
+            ) : (
+              <>
+                {localCompanySlotUsed} / {formatEntitlementCapLabel(rowLocalSlotMax)}
+              </>
+            )}
+          </ProfilePlanStatPill>
+        ) : null}
+        {allow("usersDevices") ? (
+          <ProfilePlanStatPill tone="usersDevices" end={end("usersDevices")}>
+            Max users / devices (this company): {formatEntitlementCapLabel(thisCompanyMaxUsers)}{" "}
+            users · {formatEntitlementCapLabel(selectedCompanyMaxDevices)} devices
+            {rowHasAddOns ? <span className="opacity-80"> (plan + add-ons)</span> : null}
+          </ProfilePlanStatPill>
+        ) : null}
+        {allow("attachments") && rowShowAtt ? (
+          <ProfilePlanStatPill tone="attachments" end={end("attachments")}>
+            Attachments: {rowAttUsedMB.toFixed(0)} MB used /{" "}
+            {isUnlimitedEntitlementCap(rowAttCapGB)
+              ? "Unlimited"
+              : `${rowAttFreeMB.toFixed(0)} MB free`}
+          </ProfilePlanStatPill>
+        ) : null}
+        {allow("storage") && rowShowStor ? (
+          <ProfilePlanStatPill tone="storage" end={end("storage")}>
+            Storage:{" "}
+            {forSharedUser || userStorageUsedBytes != null ? rowStorUsedMB.toFixed(0) : "…"} MB
+            used /{" "}
+            {forSharedUser || userStorageUsedBytes != null
+              ? isUnlimitedEntitlementCap(rowStorCapGB)
+                ? "Unlimited"
+                : `${rowStorFreeMB.toFixed(0)} MB free`
+              : "… MB free"}
+          </ProfilePlanStatPill>
+        ) : null}
+        {allow("expiry") &&
+          company?.planExpiry &&
+          (() => {
+            const raw = company.planExpiry;
+            const expiryDate =
+              typeof raw?.toDate === "function"
+                ? raw.toDate()
+                : raw?.seconds
+                  ? new Date(raw.seconds * 1000)
+                  : null;
+            if (!expiryDate) return null;
+            const expiryMs =
+              profileProrationExpiryMs ??
+              (Number.isFinite(expiryDate.getTime()) ? expiryDate.getTime() : null);
+            const expiredPlan = expiryMs != null && expiryMs <= profileNowMs;
+            return (
+              <ProfilePlanStatPill tone="expiry" end={end("expiry")}>
+                Expires on: {format(expiryDate, "MMM d, yyyy")}
+                {expiredPlan ? (
+                  <>
+                    <span aria-hidden className="mx-0.5 opacity-90">
+                      ·
+                    </span>
+                    <span>Expired</span>
+                  </>
+                ) : null}
+              </ProfilePlanStatPill>
+            );
+          })()}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -969,17 +1392,58 @@ function UserProfileButton() {
           onMouseLeave={profileHoverOpenEnabled ? scheduleProfileHoverClose : undefined}
         >
           {!company ? (
-            <DropdownMenuLabel className="font-normal px-3 pt-3 pb-2">
-              <div className="flex flex-col space-y-0.5">
-                <p className="text-sm font-medium leading-none truncate">{user.displayName}</p>
-                <p className="text-xs leading-none text-muted-foreground break-words">{user.email}</p>
-              </div>
-            </DropdownMenuLabel>
+            <div className="w-full max-w-full px-0 py-0 space-y-0">
+              <ProfileDropdownPlanCard
+                borderClassName="border-green-500"
+                tone="emerald"
+                roundedClassName="rounded-t-lg rounded-b-lg"
+              >
+                <div>
+                  {user.displayName ? (
+                    <p className="text-sm font-medium text-foreground break-words leading-snug mb-1">
+                      {user.displayName}
+                    </p>
+                  ) : null}
+                  {user.email ? (
+                    <p className="text-xs text-muted-foreground break-words leading-snug mb-3">{user.email}</p>
+                  ) : null}
+                  <div className="text-xs text-muted-foreground mb-1">Your plan</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <Badge variant="secondary" className="shrink-0">{sharedProfilePlanName}</Badge>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs shrink-0"
+                      onClick={() => {
+                        clearProfileHoverClose();
+                        setProfileOpen(false);
+                        router.push("/billing");
+                      }}
+                    >
+                      {sharedProfileCanUpgrade ? "Upgrade" : "Billing"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1.5">
+                    No company selected yet. Account defaults to Basic until you create or buy a plan.
+                  </p>
+                  {renderMyAccountPlanStats()}
+                  <DropdownMenuSeparator className="my-2" />
+                  <DropdownMenuItem
+                    onClick={handleLogout}
+                    className="py-2.5 px-2 mx-0 rounded-md cursor-pointer w-full focus:bg-accent/80"
+                  >
+                    <LogOut className="mr-2 h-4 w-4 shrink-0" />
+                    <span>Log out</span>
+                  </DropdownMenuItem>
+                </div>
+              </ProfileDropdownPlanCard>
+            </div>
           ) : null}
 
           {company ? (
               <div className="w-full max-w-full px-0 py-0 space-y-0">
-                {/* Plan: owned company = single block; shared company = your account vs this company (owner plan). */}
+                {/* Plan: owned company = single block; shared company = one card (your plan top, shared company below). */}
                 {isSelectedCompanyOwned ? (
                 <ProfileDropdownPlanCard
                   borderClassName="border-green-500"
@@ -1029,110 +1493,18 @@ function UserProfileButton() {
                   </div>
                   {/* Sab stats vertical pills — expiry sabse niche; Balance / Usage upar */}
                   {/* Pills ke beech fixed 5px vertical gap */}
-                  <div className="mt-1.5 flex w-full min-w-0 flex-col gap-[5px]">
-                    {/* Sirf company owner: Billing page jaisa Balance / Usage pills — shared company card me nahi. */}
-                    {!selectedCompanyPlanLive.isFree ? (
+                  <div className="mt-2 pr-0.5 text-right text-[11px] text-muted-foreground">Show on Users</div>
+                  {/* Balance / Usage owner-only; baaki rows shared renderer se (same as shared user). */}
+                  {!selectedCompanyPlanLive.isFree ? (
+                    <div className="mt-1.5 flex w-full min-w-0 flex-col gap-[5px]">
                       <RenewProrationPills
                         plan={selectedCompanyPlanLive}
                         currentExpiryMs={profileProrationExpiryMs}
                         currencySymbol={displaySymbol}
                       />
-                    ) : null}
-                    <ProfilePlanStatPill tone="companyStorage">
-                      {/* Label: account-wide storage mode + baaki MB — "All storage" user-facing copy. */}
-                      All storage:{" "}
-                      {storageIsLocal ? "Device local (offline-first)" : "Online (cloud-linked)"}
-                      {/* Plan par storage cap ho to yahin total baaki MB — neeche Storage pill jaisa `storFreeMB`. */}
-                      {showStorQuota ? (
-                        <>
-                          <span aria-hidden className="mx-0.5 opacity-90">
-                            ·
-                          </span>
-                          {userStorageUsedBytes != null ? (
-                            <>
-                              {isUnlimitedEntitlementCap(maxStorGB)
-                                ? "Unlimited"
-                                : `${storFreeMB.toFixed(0)} MB left`}
-                            </>
-                          ) : (
-                            <>… MB left</>
-                          )}
-                        </>
-                      ) : null}
-                    </ProfilePlanStatPill>
-                    <ProfilePlanStatPill tone="dailyVoucher">
-                      Daily vouchers (plan cap):{" "}
-                      {formatEntitlementCapLabel(dailyVoucherPlanCap)} /day
-                    </ProfilePlanStatPill>
-                    <ProfilePlanStatPill tone="monthlyVoucher">
-                      Monthly vouchers (plan cap):{" "}
-                      {formatEntitlementCapLabel(monthlyVoucherPlanCap)} /month
-                    </ProfilePlanStatPill>
-                    {onlineSlotMax > 0 && user?.uid ? (
-                      <ProfilePlanStatPill tone="onlineSlots">
-                        Online company slots (cloud-linked): {onlineSlotUsed} /{" "}
-                        {formatEntitlementCapLabel(onlineSlotMax)}
-                      </ProfilePlanStatPill>
-                    ) : null}
-                    {user?.uid ? (
-                      <ProfilePlanStatPill tone="offlineSlots">
-                        Offline / local company slots: {localCompanySlotUsed} /{" "}
-                        {formatEntitlementCapLabel(localCompanySlotMax)}
-                      </ProfilePlanStatPill>
-                    ) : null}
-                    <ProfilePlanStatPill tone="usersDevices">
-                      Max users / devices (this company): {formatEntitlementCapLabel(thisCompanyMaxUsers)}{" "}
-                      users · {formatEntitlementCapLabel(selectedCompanyMaxDevices)} devices
-                    </ProfilePlanStatPill>
-                    {showAttQuota ? (
-                      <ProfilePlanStatPill tone="attachments">
-                        Attachments: {attUsedMB.toFixed(0)} MB used /{" "}
-                        {isUnlimitedEntitlementCap(maxAttGB)
-                          ? "Unlimited"
-                          : `${attFreeMB.toFixed(0)} MB free`}
-                      </ProfilePlanStatPill>
-                    ) : null}
-                    {showStorQuota ? (
-                      <ProfilePlanStatPill tone="storage">
-                        Storage:{" "}
-                        {userStorageUsedBytes != null ? userStorUsedMB.toFixed(0) : "…"} MB used /{" "}
-                        {userStorageUsedBytes != null
-                          ? isUnlimitedEntitlementCap(maxStorGB)
-                            ? "Unlimited"
-                            : `${storFreeMB.toFixed(0)} MB free`
-                          : "… MB free"}
-                      </ProfilePlanStatPill>
-                    ) : null}
-                    {company?.planExpiry && (() => {
-                      const raw = company.planExpiry;
-                      const expiryDate =
-                        typeof raw?.toDate === "function"
-                          ? raw.toDate()
-                          : raw?.seconds
-                            ? new Date(raw.seconds * 1000)
-                            : null;
-                      if (!expiryDate) return null;
-                      const expiryMs =
-                        profileProrationExpiryMs ??
-                        (Number.isFinite(expiryDate.getTime()) ? expiryDate.getTime() : null);
-                      const nowMsExp = profileNowMs;
-                      // Pill par sirf expiry date — din count Balance/Usage pills mein; yahan past date = Expired.
-                      const expiredPlan = expiryMs != null && expiryMs <= nowMsExp;
-                      return (
-                        <ProfilePlanStatPill tone="expiry">
-                          Expires on: {format(expiryDate, "MMM d, yyyy")}
-                          {expiredPlan ? (
-                            <>
-                              <span aria-hidden className="mx-0.5 opacity-90">
-                                ·
-                              </span>
-                              <span>Expired</span>
-                            </>
-                          ) : null}
-                        </ProfilePlanStatPill>
-                      );
-                    })()}
-                  </div>
+                    </div>
+                  ) : null}
+                  {renderSelectedCompanyPlanRows({ withToggles: true, forSharedUser: false })}
                   <DropdownMenuSeparator className="my-2" />
                   <DropdownMenuItem
                     onClick={handleLogout}
@@ -1148,7 +1520,7 @@ function UserProfileButton() {
                   <ProfileDropdownPlanCard
                     borderClassName="border-green-500"
                     tone="emerald"
-                    roundedClassName="rounded-t-lg rounded-b-none"
+                    roundedClassName="rounded-t-lg rounded-b-lg"
                   >
                   <div>
                     {user.displayName ? (
@@ -1157,9 +1529,7 @@ function UserProfileButton() {
                     {user.email ? (
                       <p className="text-xs text-muted-foreground break-words leading-snug mb-3">{user.email}</p>
                     ) : null}
-                    <div className="text-xs text-muted-foreground mb-1">
-                      {hasOwnedCompanies ? "Your account" : "Plan while using this company"}
-                    </div>
+                    <div className="text-xs text-muted-foreground mb-1">Your plan</div>
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <Badge variant="secondary" className="shrink-0">{sharedProfilePlanName}</Badge>
@@ -1170,7 +1540,7 @@ function UserProfileButton() {
                           className="h-7 w-7 shrink-0"
                           title="Sync plan from server"
                           aria-label="Sync plan from server"
-                          disabled={!isOnline || planManualSyncing || !company}
+                          disabled={!isOnline || planManualSyncing}
                           onClick={(e) => {
                             e.preventDefault();
                             void handleManualPlanSync();
@@ -1195,8 +1565,7 @@ function UserProfileButton() {
                     </div>
                     {!hasOwnedCompanies ? (
                       <p className="text-xs text-muted-foreground mt-1.5">
-                        You don&apos;t own a company yet. Limits in this workspace follow this company&apos;s
-                        subscription (see &quot;This company (shared)&quot; below).
+                        No owned company yet — account stays on Basic until you create one or buy a plan.
                       </p>
                     ) : null}
                     {ownedPlanExpiryCompany?.planExpiry && (() => {
@@ -1221,7 +1590,6 @@ function UserProfileButton() {
                         </div>
                       );
                     })()}
-                    {/* Online slots sirf jab aapki khud ki companies hon — shared-only par 0/9 galat signal tha. */}
                     {hasOwnedCompanies && ownedOnlineSlotMax > 0 && user?.uid ? (
                       <div className="text-xs text-muted-foreground mt-1.5">
                         Your online company slots:{" "}
@@ -1231,81 +1599,44 @@ function UserProfileButton() {
                         </span>
                       </div>
                     ) : null}
-                    {hasOwnedCompanies ? (
-                      <div className="text-xs text-muted-foreground mt-1.5">
-                        Max users per company (your plan):{" "}
-                        <span className="font-medium text-foreground">
-                          {formatEntitlementCapLabel(ownedMaxUsersOnline)}
-                        </span>{" "}
-                        online
-                        {ownedMaxUsersLocal !== ownedMaxUsersOnline ? (
-                          <>
-                            ,{" "}
-                            <span className="font-medium text-foreground">
-                              {formatEntitlementCapLabel(ownedMaxUsersLocal)}
-                            </span>{" "}
-                            local
-                          </>
-                        ) : null}
+                    {renderMyAccountPlanStats()}
+                    <DropdownMenuSeparator className="my-2" />
+                    <div className="space-y-1.5">
+                      <div className="text-xs text-muted-foreground">Shared company</div>
+                      <div className="text-xs font-medium text-foreground break-words" title={company.name}>
+                        {company.name}
                       </div>
-                    ) : null}
-                    {hasOwnedCompanies && (showAttQuota || showStorQuota) ? (
-                      <div className="text-xs text-muted-foreground mt-1.5 space-y-1">
-                        {showAttQuota ? (
-                          <div>
-                            Attachments (your companies):{" "}
-                            <span className="font-medium text-foreground">{attUsedMB.toFixed(0)}</span> MB used /{" "}
-                            <span className="font-medium text-foreground">
-                              {isUnlimitedEntitlementCap(maxAttGB) ? "Unlimited" : `${attFreeMB.toFixed(0)} MB free`}
-                            </span>
-                          </div>
-                        ) : null}
-                        {showStorQuota ? (
-                          <div>
-                            Storage (your account):{" "}
-                            <span className="font-medium text-foreground">
-                              {userStorageUsedBytes != null ? userStorUsedMB.toFixed(0) : "…"}
-                            </span>{" "}
-                            MB used /{" "}
-                            <span className="font-medium text-foreground">
-                              {userStorageUsedBytes != null
-                                ? isUnlimitedEntitlementCap(maxStorGB)
-                                  ? "Unlimited"
-                                  : `${storFreeMB.toFixed(0)} MB free`
-                                : "…"}
-                            </span>
-                          </div>
-                        ) : null}
+                      {(company.ownerEmail || company.ownerId) ? (
+                        <div className="text-xs text-muted-foreground break-words">
+                          Shared id:{" "}
+                          <span className="font-medium text-foreground">
+                            {company.ownerEmail || company.ownerId}
+                          </span>
+                        </div>
+                      ) : null}
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="text-xs text-muted-foreground">Owner plan</span>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Badge variant="outline" className="shrink-0 text-xs">{selectedCompanyPlanName}</Badge>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-7 w-7 shrink-0"
+                            title="Sync owner plan from server"
+                            aria-label="Sync owner plan from server"
+                            disabled={!isOnline || planManualSyncing || !company}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              void handleManualPlanSync("sharedOwner");
+                            }}
+                          >
+                            <RefreshCw className={cn("h-3.5 w-3.5", planManualSyncing && "animate-spin")} />
+                          </Button>
+                        </div>
                       </div>
-                    ) : null}
-                    {!hasOwnedCompanies && (showAttQuota || showStorQuota) ? (
-                      <div className="text-xs text-muted-foreground mt-1.5 space-y-1">
-                        {showAttQuota ? (
-                          <div>
-                            Attachments: <span className="font-medium text-foreground">{attUsedMB.toFixed(0)}</span> MB used /{" "}
-                            <span className="font-medium text-foreground">
-                              {isUnlimitedEntitlementCap(maxAttGB) ? "Unlimited" : `${attFreeMB.toFixed(0)} MB free`}
-                            </span>
-                          </div>
-                        ) : null}
-                        {showStorQuota ? (
-                          <div>
-                            Storage:{" "}
-                            <span className="font-medium text-foreground">
-                              {userStorageUsedBytes != null ? userStorUsedMB.toFixed(0) : "…"}
-                            </span>{" "}
-                            MB used /{" "}
-                            <span className="font-medium text-foreground">
-                              {userStorageUsedBytes != null
-                                ? isUnlimitedEntitlementCap(maxStorGB)
-                                  ? "Unlimited"
-                                  : `${storFreeMB.toFixed(0)} MB free`
-                                : "…"}
-                            </span>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
+                      {renderSelectedCompanyPlanRows({ withToggles: false, forSharedUser: true })}
+                    </div>
                     <DropdownMenuSeparator className="my-2" />
                     <DropdownMenuItem
                       onClick={handleLogout}
@@ -1316,64 +1647,9 @@ function UserProfileButton() {
                     </DropdownMenuItem>
                   </div>
                   </ProfileDropdownPlanCard>
-                  <ProfileDropdownPlanCard
-                    borderClassName="border-blue-500"
-                    tone="sky"
-                    roundedClassName="rounded-b-lg rounded-t-none"
-                  >
-                  <div className="space-y-1.5">
-                    <div className="text-xs text-muted-foreground">This company (shared)</div>
-                    <div className="text-xs font-medium text-foreground break-words" title={company.name}>
-                      {company.name}
-                    </div>
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <span className="text-xs text-muted-foreground">Owner plan</span>
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <Badge variant="outline" className="shrink-0 text-xs">{selectedCompanyPlanName}</Badge>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="h-7 w-7 shrink-0"
-                          title="Sync owner plan from server"
-                          aria-label="Sync owner plan from server"
-                          disabled={!isOnline || planManualSyncing || !company}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            void handleManualPlanSync("sharedOwner");
-                          }}
-                        >
-                          <RefreshCw className={cn("h-3.5 w-3.5", planManualSyncing && "animate-spin")} />
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Sync devices (owner plan): up to{" "}
-                      <span className="font-medium text-foreground">
-                        {formatEntitlementCapLabel(selectedCompanyMaxDevices)}
-                      </span>
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Max users (this company):{" "}
-                      <span className="font-medium text-foreground">
-                        {formatEntitlementCapLabel(thisCompanyMaxUsers)}
-                      </span>
-                    </div>
-                  </div>
-                  </ProfileDropdownPlanCard>
                 </div>
                 )}
               </div>
-          ) : null}
-
-          {!company ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleLogout} className="py-2.5 px-3 mx-0 rounded-none cursor-pointer w-full">
-                <LogOut className="mr-2 h-4 w-4 shrink-0" />
-                <span>Log out</span>
-              </DropdownMenuItem>
-            </>
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>

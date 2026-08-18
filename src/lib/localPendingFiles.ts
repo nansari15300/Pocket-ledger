@@ -35,7 +35,7 @@ import { shouldUseLocalCloudSync, isEligibleLocalDriveSyncCompanyRow } from "@/l
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
-import { isFirebaseLedgerCompanyAttachmentSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
+import { isFirebaseLedgerCompanyAttachmentUploadEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import {
   companyIdFromStoragePathPrefix,
   buildPendingAttachmentStorageObjectPath,
@@ -1797,7 +1797,7 @@ export async function syncPendingFiles(): Promise<{
   let lastError: string | undefined;
   for (const item of pending) {
     const itemCompanyId = resolvePendingPayloadCompanyId(item);
-    if (itemCompanyId && !isFirebaseLedgerCompanyAttachmentSyncEnabled(itemCompanyId)) continue;
+    if (itemCompanyId && !isFirebaseLedgerCompanyAttachmentUploadEnabled(itemCompanyId)) continue;
     const result = await syncOnePendingFile(item);
     if (result.success) {
       synced++;
@@ -1875,7 +1875,7 @@ export async function syncPendingFilesForCompany(
   if (!driveSync && isFirebaseLedgerDataSyncDisabled()) {
     return { synced: 0, uploaded: 0, failed: 0 };
   }
-  if (!driveSync && !isFirebaseLedgerCompanyAttachmentSyncEnabled(cid)) {
+  if (!driveSync && !isFirebaseLedgerCompanyAttachmentUploadEnabled(cid)) {
     return { synced: 0, uploaded: 0, failed: 0 };
   }
   const items = await listPendingFilesForCompany(cid);

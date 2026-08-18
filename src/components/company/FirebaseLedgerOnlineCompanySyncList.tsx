@@ -19,6 +19,7 @@ import {
 } from "@/lib/firebaseLedgerDataSyncDisabled";
 import { runOfflineFullWarmSync } from "@/lib/offlineFullWarmSync";
 import { requestAttachmentUiRefresh } from "@/lib/attachmentLoadReady";
+import { isSharedOnlineCompany } from "@/lib/companyStorageKind";
 
 type Props = {
   companies: Company[];
@@ -183,7 +184,7 @@ export function FirebaseLedgerOnlineCompanySyncList({
       toast({
         title: "Online sync saved",
         description:
-          "Data = cloud download/upload for masters & vouchers. Untick keeps Local SQLite on screen (offline). Files = attachment upload/download.",
+          "Data = cloud download/upload for masters & vouchers. Untick keeps Local SQLite on screen (offline). Files = attachment download only (needs Data). Untick Files still allows uploading newly added files.",
       });
     } finally {
       setSaving(false);
@@ -193,6 +194,106 @@ export function FirebaseLedgerOnlineCompanySyncList({
   const headerCols = compact
     ? "grid-cols-[minmax(11rem,1fr)_2.75rem_2.75rem]"
     : "grid-cols-[minmax(14rem,1fr)_3.25rem_3.25rem]";
+
+  const myCompanies = useMemo(() => companies.filter((c) => c.isOwned === true), [companies]);
+  const sharedCompanies = useMemo(
+    () => companies.filter((c) => c.isOwned !== true && isSharedOnlineCompany(c)),
+    [companies]
+  );
+  const otherCompanies = useMemo(() => {
+    const seen = new Set(
+      [...myCompanies, ...sharedCompanies].map((c) => String(c.id || "").trim()).filter(Boolean)
+    );
+    return companies.filter((c) => {
+      const id = String(c.id || "").trim();
+      return id && !seen.has(id);
+    });
+  }, [companies, myCompanies, sharedCompanies]);
+
+  const renderCompanyRow = (company: Company) => {
+    const id = String(company.id || "").trim();
+    const entry = draft[id] ?? emptyEntry();
+    const ownerHint =
+      company.isOwned !== true
+        ? String(company.ownerEmail || "").trim()
+        : "";
+    return (
+      <div
+        key={id}
+        className={cn(
+          "grid items-center gap-1 rounded-md border bg-background px-1 py-1",
+          headerCols
+        )}
+      >
+        <div className="flex min-w-0 items-center gap-1">
+          <button
+            type="button"
+            className="min-w-0 flex-1 text-left text-xs font-medium hover:underline"
+            title={company.name}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onSelectCompany?.(company);
+            }}
+          >
+            <span className="block whitespace-normal break-words leading-snug">
+              {company.name}
+            </span>
+            {ownerHint ? (
+              <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">
+                Shared by {ownerHint}
+              </span>
+            ) : null}
+            {activeCompanyId === company.id ? (
+              <Check className="mt-0.5 inline h-3.5 w-3.5 shrink-0 text-green-600" />
+            ) : null}
+          </button>
+          {onLogoutCompany ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0"
+              title="Log out from company"
+              onClick={() => onLogoutCompany(company.id)}
+            >
+              <LogOut className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
+        </div>
+        <div className="flex justify-center">
+          <Checkbox
+            id={`fb-sync-data-${id}`}
+            checked={entry.data}
+            disabled={!syncEnabled}
+            onCheckedChange={(v) => setDataTick(id, v === true)}
+            aria-label={`Sync data for ${company.name}`}
+          />
+        </div>
+        <div className="flex justify-center">
+          <Checkbox
+            id={`fb-sync-files-${id}`}
+            checked={entry.attachments}
+            disabled={!syncEnabled || !entry.data}
+            onCheckedChange={(v) => setFilesTick(id, v === true)}
+            aria-label={`Sync attachment files for ${company.name}`}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  const renderSection = (title: string, rows: Company[]) => {
+    if (rows.length === 0) return null;
+    return (
+      <div className="space-y-1">
+        <h3 className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          {title}
+        </h3>
+        {rows.map(renderCompanyRow)}
+      </div>
+    );
+  };
 
   return (
     <div className={cn("space-y-2", fillHeight && "flex h-full min-h-0 flex-col")}>
@@ -227,73 +328,13 @@ export function FirebaseLedgerOnlineCompanySyncList({
           </div>
           <div
             className={cn(
-              "space-y-1 overflow-y-auto pr-0.5",
+              "space-y-3 overflow-y-auto pr-0.5",
               fillHeight ? "min-h-0 flex-1" : "max-h-56"
             )}
           >
-            {companies.map((company) => {
-              const id = String(company.id || "").trim();
-              const entry = draft[id] ?? emptyEntry();
-              return (
-                <div
-                  key={id}
-                  className={cn(
-                    "grid items-center gap-1 rounded-md border bg-background px-1 py-1",
-                    headerCols
-                  )}
-                >
-                  <div className="flex min-w-0 items-center gap-1">
-                    <button
-                      type="button"
-                      className="min-w-0 flex-1 text-left text-xs font-medium hover:underline"
-                      title={company.name}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        onSelectCompany?.(company);
-                      }}
-                    >
-                      <span className="block whitespace-normal break-words leading-snug">
-                        {company.name}
-                      </span>
-                      {activeCompanyId === company.id ? (
-                        <Check className="mt-0.5 inline h-3.5 w-3.5 shrink-0 text-green-600" />
-                      ) : null}
-                    </button>
-                    {onLogoutCompany ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 shrink-0"
-                        title="Log out from company"
-                        onClick={() => onLogoutCompany(company.id)}
-                      >
-                        <LogOut className="h-3.5 w-3.5" />
-                      </Button>
-                    ) : null}
-                  </div>
-                  <div className="flex justify-center">
-                    <Checkbox
-                      id={`fb-sync-data-${id}`}
-                      checked={entry.data}
-                      disabled={!syncEnabled}
-                      onCheckedChange={(v) => setDataTick(id, v === true)}
-                      aria-label={`Sync data for ${company.name}`}
-                    />
-                  </div>
-                  <div className="flex justify-center">
-                    <Checkbox
-                      id={`fb-sync-files-${id}`}
-                      checked={entry.attachments}
-                      disabled={!syncEnabled || !entry.data}
-                      onCheckedChange={(v) => setFilesTick(id, v === true)}
-                      aria-label={`Sync attachment files for ${company.name}`}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+            {renderSection("My companies", myCompanies)}
+            {renderSection("Shared with me", sharedCompanies)}
+            {renderSection("Online companies", otherCompanies)}
           </div>
         </div>
       </div>

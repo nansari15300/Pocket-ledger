@@ -307,7 +307,40 @@ const CompanyByCountryCard = ({ allUsers, allCompanies, allVouchers, loading, da
     );
 };
 
-const ALL_VOUCHER_TYPES = ['sale', 'purchase', 'payment_in', 'payment_out', 'contra', 'journal', 'add_salary', 'note', 'direct_income', 'direct_expense'];
+/** Admin dashboard — har voucher type ka card (AddVoucher + recycle/print me jo types milte hain). */
+const ADMIN_VOUCHER_SUMMARY_TYPES: ReadonlyArray<{ id: string; label: string }> = [
+  { id: "sale", label: "Sale" },
+  { id: "purchase", label: "Purchase" },
+  { id: "payment_in", label: "Payment In" },
+  { id: "payment_out", label: "Payment Out" },
+  { id: "pay_salary", label: "Pay Salary" },
+  { id: "contra", label: "Contra" },
+  { id: "journal", label: "Journal" },
+  { id: "adjustment", label: "Adjustment" },
+  { id: "add_salary", label: "Add Salary" },
+  { id: "note", label: "Note" },
+  { id: "direct_income", label: "Direct Income" },
+  { id: "direct_expense", label: "Direct Expense" },
+  { id: "production", label: "Production" },
+  { id: "inter_company", label: "Inter Company" },
+  { id: "quotation", label: "Quotation" },
+  { id: "sales_return", label: "Sale Return" },
+  { id: "purchase_return", label: "Purchase Return" },
+  { id: "credit_note", label: "Credit Note" },
+  { id: "debit_note", label: "Debit Note" },
+  { id: "stock_in", label: "Stock In" },
+  { id: "stock_out", label: "Stock Out" },
+];
+
+const ADMIN_VOUCHER_SUMMARY_TYPE_IDS = new Set(ADMIN_VOUCHER_SUMMARY_TYPES.map((row) => row.id));
+
+/** Journal add_salary / payment_out pay_salary subType buckets — baaki `type`. */
+function adminVoucherSummaryKey(voucher: { type?: string; subType?: string }): string | null {
+  const sub = String(voucher.subType || "").trim();
+  if (sub === "add_salary" || sub === "pay_salary") return sub;
+  const type = String(voucher.type || "").trim();
+  return type || null;
+}
 
 const EntitySummaryCard = ({ companies, vouchers, dateRange, loading, vouchersError, currentUserEmail }: { companies: any[], vouchers: any[], dateRange: DateRange | undefined, loading: boolean; vouchersError?: string | null; currentUserEmail?: string | null }) => {
     const { vouchers: filteredVouchers, ignoredBrokenRange } = useMemo(
@@ -317,11 +350,13 @@ const EntitySummaryCard = ({ companies, vouchers, dateRange, loading, vouchersEr
 
     const voucherStats = useMemo(() => {
         const stats: Record<string, number> = {};
-        ALL_VOUCHER_TYPES.forEach(type => stats[type] = 0); // Initialize all to 0
-        filteredVouchers.forEach(voucher => {
-            const type = voucher.subType || voucher.type;
-            if (type && ALL_VOUCHER_TYPES.includes(type)) {
-                stats[type] = (stats[type] || 0) + 1;
+        ADMIN_VOUCHER_SUMMARY_TYPES.forEach((row) => {
+            stats[row.id] = 0;
+        });
+        filteredVouchers.forEach((voucher) => {
+            const key = adminVoucherSummaryKey(voucher);
+            if (key && ADMIN_VOUCHER_SUMMARY_TYPE_IDS.has(key)) {
+                stats[key] = (stats[key] || 0) + 1;
             }
         });
         stats.total = filteredVouchers.length;
@@ -363,11 +398,11 @@ const EntitySummaryCard = ({ companies, vouchers, dateRange, loading, vouchersEr
                     </div>
                 </div>
                 <div className="pt-4 border-t">
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
-                        {ALL_VOUCHER_TYPES.map((type) => (
-                            <div key={type} className="text-center p-2 rounded-lg bg-muted/50 border">
-                                <p className="text-[10px] font-semibold text-muted-foreground capitalize truncate">{type.replace(/_/g, ' ')}</p>
-                                <p className="text-lg font-bold">{voucherStats[type] || 0}</p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+                        {ADMIN_VOUCHER_SUMMARY_TYPES.map((row) => (
+                            <div key={row.id} className="text-center p-2 rounded-lg bg-muted/50 border">
+                                <p className="text-[10px] font-semibold text-muted-foreground truncate">{row.label}</p>
+                                <p className="text-lg font-bold">{voucherStats[row.id] || 0}</p>
                             </div>
                         ))}
                     </div>

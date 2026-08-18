@@ -58,14 +58,14 @@ import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
-import { getNextPaidUpgrade, numericEntitlement, companyStorageIsLocal, isUnlimitedEntitlementCap, formatEntitlementCapLabel, type PlanId } from "@/config/plans";
+import { getNextPaidUpgrade, numericEntitlement, companyStorageIsLocal, isUnlimitedEntitlementCap, isAtOrOverEntitlementCap, formatEntitlementCapLabel, type PlanId } from "@/config/plans";
+import { collectAccountWideShareMemberEmails } from "@/lib/accountShareUserCap";
 import {
   EMPTY_PURCHASED_PLAN_ADDONS,
   parsePurchasedPlanAddOns,
   planUserCapWithAddOns,
   type PurchasedPlanAddOns,
 } from "@/lib/planAddOns";
-import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import {
   COMPANY_PERMISSION_ROLE_OPTIONS,
   COMPANY_SHARE_ROLE_OPTIONS,
@@ -388,10 +388,12 @@ export function ManageShare() {
   );
   const activePlan = useMemo(() => getPlanFromPlans(livePlans, effectivePlanId), [livePlans, effectivePlanId]);
   const [ownerAddons, setOwnerAddons] = useState<PurchasedPlanAddOns>(EMPTY_PURCHASED_PLAN_ADDONS);
+  const [accountWideUserCount, setAccountWideUserCount] = useState(0);
   useEffect(() => {
     const ownerUid = String(companyData?.ownerId || user?.uid || "").trim();
     if (!ownerUid) {
       setOwnerAddons(EMPTY_PURCHASED_PLAN_ADDONS);
+      setAccountWideUserCount(0);
       return;
     }
     const unsub = onSnapshot(
@@ -403,6 +405,34 @@ export function ManageShare() {
     );
     return () => unsub();
   }, [companyData?.ownerId, user?.uid]);
+  useEffect(() => {
+    const ownerUid = String(companyData?.ownerId || user?.uid || "").trim();
+    if (!ownerUid) {
+      setAccountWideUserCount(0);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const ownedSnap = await getDocs(
+          query(collection(firestore, "companies"), where("ownerId", "==", ownerUid))
+        );
+        if (cancelled) return;
+        const memberEmails = collectAccountWideShareMemberEmails({
+          ownerEmail: companyData?.ownerEmail,
+          ownedCompanyRows: ownedSnap.docs.map((row) =>
+            row.data() as { sharedWithEmails?: unknown; ownerEmail?: unknown }
+          ),
+        });
+        setAccountWideUserCount(memberEmails.size);
+      } catch {
+        if (!cancelled) setAccountWideUserCount(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyData?.ownerId, companyData?.ownerEmail, user?.uid, companyData?.sharedWithEmails]);
   const planAllowsFileAttachment = activePlan.entitlements.canAddFileImagePdf === true;
   const planMaxFilesPerVoucher = Math.max(0, Number(activePlan.entitlements.maxVoucherFileCount) || 0);
   const maxUsersPerPlanRaw = planUserCapWithAddOns(
@@ -428,23 +458,7 @@ export function ManageShare() {
     );
     return nextMax > planMaxFilesPerVoucher;
   }, [nextPaidUpgradePlanId, livePlans, planMaxFilesPerVoucher]);
-  const currentUserCount = useMemo(() => {
-    if (!companyData) return 0;
-    const ownerEmailNorm = (companyData.ownerEmail || "").toLowerCase().trim();
-    const superAdminEmails = new Set(getSuperAdminEmails().map((e) => e.toLowerCase().trim()));
-    const revoked = new Set(optimisticRevokedEmails.map((e) => e.toLowerCase().trim()));
-    const sharedCount = (companyData.sharedWithEmails || []).filter((email) => {
-      const e = (email || "").toLowerCase().trim();
-      return (
-        !!e &&
-        e !== ownerEmailNorm &&
-        !superAdminEmails.has(e) &&
-        !revoked.has(e)
-      );
-    }).length;
-    return 1 + sharedCount;
-  }, [companyData, optimisticRevokedEmails]);
-  const isUserLimitReached = currentUserCount >= maxUsersPerPlan;
+  const isUserLimitReached = isAtOrOverEntitlementCap(accountWideUserCount, maxUsersPerPlan);
 
 const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: number) => {
       if (selectedRoleForPermissions === 'owner') return;
@@ -1022,7 +1036,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   <span className="text-xs text-muted-foreground">
-                    Users: {currentUserCount}/{formatEntitlementCapLabel(maxUsersPerPlan)}
+                    Users: {accountWideUserCount}/{formatEntitlementCapLabel(maxUsersPerPlan)}
                   </span>
                   {isUserLimitReached && (
                     <span className="text-xs text-amber-700">

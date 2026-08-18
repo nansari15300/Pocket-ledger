@@ -149,12 +149,7 @@ export async function POST(req: NextRequest) {
       chargeMinor = regional.amountMinor;
       checkoutCurrency = regional.currency;
     } else if (intent === "donation") {
-      if (billingRegion !== "nepal") {
-        throw new Error("Donations are only supported in NPR (Nepal region).");
-      }
-      chargeMinor = Math.round(Number(amount) || 0);
-      checkoutCurrency = "npr";
-      if (chargeMinor <= 0) throw new Error("Invalid donation amount.");
+      throw new Error("Donations are no longer supported.");
     }
 
     if (gateway === "khalti" || gateway === "esewa") {

@@ -50,8 +50,8 @@ import { generateUniqueInterCompanyAccountNo } from "@/lib/interCompany/interCom
 import { generateUniqueInterCompanyCompanyCode } from "@/lib/interCompany/interCompanyCompanyCode";
 import { CompanyInterCompanyCodeField } from "@/components/inter-company/CompanyInterCompanyCodeField";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
-import { numericEntitlement, isAtOrOverEntitlementCap, type PlanId } from "@/config/plans";
-import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { isAtOrOverEntitlementCap, isUnlimitedEntitlementCap, type PlanId } from "@/config/plans";
+import { planCompanyCapWithAddOns } from "@/lib/planAddOns";
 import { countOnlineCompanySlotsForOwner, maxOnlineCompaniesForPlan } from "@/lib/companyOnlineSlots";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
 import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
@@ -59,9 +59,10 @@ import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { upsertLocalCompany } from "@/lib/localCompanyStore";
 import { type LocalCompanyUserRecord, upsertUserInList } from "@/lib/localCompanyUsers";
 import { PlServerShareUserDialog } from "@/components/company/PlServerShareUserDialog";
-import { planAllowsFirebaseOnline } from "@/lib/planSyncEntitlements";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+import { useCreateCompanyAvailability } from "@/hooks/useCreateCompanyAvailability";
+import { resolveCreateStorageMode } from "@/lib/createCompanyAvailability";
 
 const formSchema = z
   .object({
@@ -125,6 +126,25 @@ export function CreateCompanyForm({
   const router = useRouter();
   const { toast } = useToast();
   const { user, customUser } = useAuth();
+  const {
+    availability,
+    accountPlanId,
+    ownerAddons,
+  } = useCreateCompanyAvailability();
+  const {
+    showCompanyTypeChoice,
+    showLocalTypeRow,
+    showOnlineTypeRow,
+    canCreateAny,
+    canCreateLocal,
+    canCreateOnline,
+    maxOnlineSlots,
+    usedOnlineSlots,
+    maxLocalSlots,
+    usedLocalSlots,
+    blockReason,
+    defaultStorageMode,
+  } = availability;
   // `company` = abhi selected company (plan hint); owned list se highest tier — pehle hamesha "basic" plan check tha
   const { setCompanyId, allCompanies, allCompaniesRegistry, company, reloadLocalCompanyRegistry, adoptNewLocalCompany } = useCompany();
   /** Gate-filtered `allCompanies` se alag — create form me local + online dono count/plan ke liye. */
@@ -134,39 +154,22 @@ export function CreateCompanyForm({
   );
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const livePlans = useLivePlans();
-  const accountPlanId = useMemo(
-    () =>
-      customUser?.accountCanonicalPlanId
-        ? (customUser.accountCanonicalPlanId as PlanId)
-        : resolveEffectiveAccountPlanId(companyRowsForCreate, user?.uid, company?.planId),
-    [customUser?.accountCanonicalPlanId, companyRowsForCreate, user?.uid, company?.planId]
-  );
-  const accountPlanExpiryMs =
-    typeof customUser?.accountCanonicalPlanExpiryMs === "number"
-      ? customUser.accountCanonicalPlanExpiryMs
-      : null;
   const canAddAvatar = useMemo(() => {
     return getPlanFromPlans(livePlans, accountPlanId).entitlements.canAddAvatar === true;
   }, [accountPlanId, livePlans]);
 
-  const accountPlan = useMemo(
-    () => getPlanFromPlans(livePlans, accountPlanId),
-    [accountPlanId, livePlans]
-  );
-  const allowFirebaseOnline = planAllowsFirebaseOnline(accountPlanId, accountPlan);
-  const maxOnlineSlots = useMemo(
-    () => maxOnlineCompaniesForPlan(accountPlanId, accountPlan),
-    [accountPlanId, accountPlan]
-  );
-  const usedOnlineSlots = useMemo(
-    () => (user?.uid ? countOnlineCompanySlotsForOwner(companyRowsForCreate, user.uid) : 0),
-    [companyRowsForCreate, user?.uid]
-  );
-  /** Online company creation only; slot guard still applies. */
-  const hasFreeOnlineSlot = allowFirebaseOnline && maxOnlineSlots > 0 && usedOnlineSlots < maxOnlineSlots;
-  const showCompanyTypeChoice = Boolean(user?.uid);
   const [storageMode, setStorageMode] = useState<"local" | "online">("local");
-  const willCreateAsLocal = !showCompanyTypeChoice || !allowFirebaseOnline || storageMode === "local";
+
+  useEffect(() => {
+    setStorageMode((prev) => resolveCreateStorageMode(availability, prev));
+  }, [availability]);
+
+  const resolvedCreateStorageMode = resolveCreateStorageMode(availability, storageMode);
+  const willCreateAsLocal = resolvedCreateStorageMode === "local";
+  const accountPlanExpiryMs =
+    typeof customUser?.accountCanonicalPlanExpiryMs === "number"
+      ? customUser.accountCanonicalPlanExpiryMs
+      : null;
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -267,9 +270,14 @@ export function CreateCompanyForm({
   async function onSubmit(values: FormValues) {
     // Submit waqt latest slot count — doosre tab me company banne par bhi sahi branch
     const planIdForSlots = accountPlanId;
-    const maxO = maxOnlineCompaniesForPlan(planIdForSlots, getPlanFromPlans(livePlans, planIdForSlots));
+    const maxO = maxOnlineCompaniesForPlan(
+      planIdForSlots,
+      getPlanFromPlans(livePlans, planIdForSlots),
+      ownerAddons
+    );
     const usedO = user?.uid ? countOnlineCompanySlotsForOwner(companyRowsForCreate, user.uid) : 0;
-    const freeOnlineSlotNow = maxO > 0 && usedO < maxO;
+    const freeOnlineSlotNow =
+      maxO === Number.POSITIVE_INFINITY || (Number.isFinite(maxO) && maxO > 0 && usedO < maxO);
     const createAsLocalOnly = willCreateAsLocal;
 
     if (!user?.uid) {
@@ -278,6 +286,33 @@ export function CreateCompanyForm({
         title: "Authentication Error",
         // Login is required even in local-only mode so plan/settings can sync per user.
         description: "Please login first to create a company.",
+      });
+      return;
+    }
+
+    if (!canCreateAny) {
+      toast({
+        variant: "destructive",
+        title: "Company creation unavailable",
+        description: blockReason || "Company creation is not available on your account.",
+      });
+      return;
+    }
+
+    if (createAsLocalOnly && !canCreateLocal) {
+      toast({
+        variant: "destructive",
+        title: "Offline companies unavailable",
+        description: blockReason || "Local company creation is not available.",
+      });
+      return;
+    }
+
+    if (!createAsLocalOnly && !canCreateOnline) {
+      toast({
+        variant: "destructive",
+        title: "Online companies unavailable",
+        description: blockReason || "Online company creation is not available.",
       });
       return;
     }
@@ -327,12 +362,14 @@ export function CreateCompanyForm({
       const ownedCount = ownedSnap.size;
       const planId: PlanId = accountPlanId;
       const plan = getPlanFromPlans(livePlans, planId);
-      const maxCompanies = numericEntitlement(plan.entitlements, "maxCompanies", false);
+      const maxCompanies = planCompanyCapWithAddOns(plan, false, ownerAddons);
       if (isAtOrOverEntitlementCap(ownedCount, maxCompanies)) {
         toast({
           variant: "destructive",
           title: "Plan limit reached",
-          description: `Your plan allows up to ${maxCompanies} compan${maxCompanies === 1 ? "y" : "ies"}. Upgrade to create more.`,
+          description: isUnlimitedEntitlementCap(maxCompanies)
+            ? "Company limit reached."
+            : `Your plan allows up to ${maxCompanies} compan${maxCompanies === 1 ? "y" : "ies"}. Buy a company slot add-on or upgrade.`,
         });
         return;
       }
@@ -344,12 +381,14 @@ export function CreateCompanyForm({
       // Pehli SQLite row ka planId mat use karo — wo "basic" reh sakta hai jab Pro+ kisi aur company par ho; account-level SKU `planIdForSlots` pehle hi resolve hai.
       const planId: PlanId = planIdForSlots;
       const plan = getPlanFromPlans(livePlans, planId);
-      const maxLocalCompanies = numericEntitlement(plan.entitlements, "maxCompanies", true);
+      const maxLocalCompanies = planCompanyCapWithAddOns(plan, true, ownerAddons);
       if (isAtOrOverEntitlementCap(localCount, maxLocalCompanies)) {
         toast({
           variant: "destructive",
           title: "Plan limit reached",
-          description: `Your plan allows up to ${maxLocalCompanies} local compan${maxLocalCompanies === 1 ? "y" : "ies"}. Upgrade to create more.`,
+          description: isUnlimitedEntitlementCap(maxLocalCompanies)
+            ? "Local company limit reached."
+            : `Your plan allows up to ${maxLocalCompanies} local compan${maxLocalCompanies === 1 ? "y" : "ies"}. Buy a company slot add-on or upgrade.`,
         });
         return;
       }
@@ -647,6 +686,11 @@ export function CreateCompanyForm({
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6" autoComplete="off">
+        {!canCreateAny && blockReason ? (
+          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-muted-foreground">
+            {blockReason}
+          </div>
+        ) : null}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-4">
           <FormField
             control={form.control}
@@ -809,48 +853,35 @@ export function CreateCompanyForm({
             <Label className="text-sm font-medium text-foreground">Company type</Label>
             <p className="text-xs text-muted-foreground">
               Offline companies stay on this device (SQLite). Online companies sync to Firestore and count toward your
-              plan&apos;s online company slots ({usedOnlineSlots}/{maxOnlineSlots || "—"} used).
+              plan&apos;s online company slots ({usedOnlineSlots}/{maxOnlineSlots || "—"} used). Local slots:{" "}
+              {usedLocalSlots}/{maxLocalSlots || "—"}.
             </p>
             <RadioGroup
               value={storageMode}
               onValueChange={(v) => setStorageMode(v as "local" | "online")}
               className="grid gap-2"
             >
-              <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
-                <RadioGroupItem value="local" id="create-storage-local" className="mt-0.5" />
-                <span>
-                  <span className="font-medium text-foreground">Offline (this device)</span> — local SQLite; best for
-                  single-PC / no cloud sync.
-                </span>
-              </label>
-              <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
-                <RadioGroupItem
-                  value="online"
-                  id="create-storage-online"
-                  className="mt-0.5"
-                  disabled={!allowFirebaseOnline || !hasFreeOnlineSlot}
-                />
-                <span className={!allowFirebaseOnline || !hasFreeOnlineSlot ? "text-muted-foreground" : ""}>
-                  <span className="font-medium text-foreground">Online (Firestore)</span> — cloud company; other
-                  devices can sync when signed in with access.
-                </span>
-              </label>
+              {showLocalTypeRow ? (
+                <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
+                  <RadioGroupItem value="local" id="create-storage-local" className="mt-0.5" />
+                  <span>
+                    <span className="font-medium text-foreground">Offline (this device)</span> — local SQLite; best for
+                    single-PC / no cloud sync.
+                  </span>
+                </label>
+              ) : null}
+              {showOnlineTypeRow ? (
+                <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
+                  <RadioGroupItem value="online" id="create-storage-online" className="mt-0.5" />
+                  <span>
+                    <span className="font-medium text-foreground">Online (Firestore)</span> — cloud company; other
+                    devices can sync when signed in with access.
+                  </span>
+                </label>
+              ) : null}
             </RadioGroup>
-            {!allowFirebaseOnline ? (
-              <p className="text-xs text-muted-foreground">
-                Online companies need a plan with cloud sync. Upgrade at Billing to enable the online option.
-              </p>
-            ) : null}
           </div>
         ) : null}
-
-        {!willCreateAsLocal && !hasFreeOnlineSlot && (
-          <p className="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 p-2 text-xs text-muted-foreground">
-            {maxOnlineSlots === 0
-              ? "Companies are cloud-sync only. Upgrade your plan at Billing to create a company."
-              : `All ${maxOnlineSlots} online slot${maxOnlineSlots === 1 ? " is" : "s are"} in use (${usedOnlineSlots}/${maxOnlineSlots}). Upgrade or remove an online company first.`}
-          </p>
-        )}
 
         <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
           {/* Admin security section highlight: password protection controls grouped in separate color. */}
@@ -1125,7 +1156,9 @@ export function CreateCompanyForm({
               isLoading ||
               isFileProcessing ||
               !form.formState.isValid ||
-              (storageMode === "online" && !hasFreeOnlineSlot)
+              !canCreateAny ||
+              (willCreateAsLocal && !canCreateLocal) ||
+              (!willCreateAsLocal && !canCreateOnline)
             }
           >
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
