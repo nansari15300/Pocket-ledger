@@ -35,6 +35,7 @@ import {
 } from "@/lib/voucherLocalAttachmentUpload";
 import {
   applyVoucherAttachmentsAfterFormSave,
+  finalizeVoucherAttachmentsAfterFormSave,
   voucherAttachmentFieldsForSave,
 } from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
@@ -580,11 +581,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       );
 
       if (companyId && result?.id) {
-        const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+        const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
           companyId,
           voucherId: result.id,
           rawFileUrls: existingFileUrls,
           storageFolder: "production",
+          previousUrls: initialFilesRef.current,
         });
         initialFilesRef.current = [...persistedUrls];
         setFiles(persistedUrls);
@@ -1169,6 +1171,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <FilePreview
                           key={index}
                           file={file}
+                          attachmentCompanyId={companyId || undefined}
                           attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         attachmentReusePlaceKey={voucher?.id ? `vouchers/${voucher.id}` : null}
                           onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}

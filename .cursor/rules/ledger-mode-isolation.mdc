@@ -1,0 +1,46 @@
+---
+description: Online vs Local/Drive vs PL Server logic must stay in separate ledgerModes folders; UI shared; copy-before-edit.
+alwaysApply: true
+---
+
+# Ledger mode isolation (Online / Local·Drive / PL Server)
+
+Read **`docs/LEDGER_MODE_ARCHITECTURE.md`** before any voucher sync, attachment, master save, or write-gateway work.
+
+## Hard rules
+
+1. **Three modes, three logic homes** — never mix in one function:
+   - **Online (Firebase):** `src/lib/ledgerModes/online/**` — cloud companies, SQLite-first + Firestore outbox, Storage HTTPS attachments.
+   - **Local · Drive:** `src/lib/ledgerModes/localDrive/**` — device SQLite, `local:` / `drive:` refs, Google Drive engine.
+   - **PL Server:** `src/lib/ledgerModes/plServer/**` — adapters only; **do not edit** frozen `src/lib/plServer*.ts`, `electron/*plServer*`, PL settings components unless the human explicitly asks.
+
+2. **UI stays shared** — `src/components/**` keeps one screen per feature. Forms call `resolveLedgerMode(company)` then the mode adapter. No deep `if (plServer) … else if (online) …` blocks in UI — move to mode folder.
+
+3. **Copy → move → edit** — If logic for one mode still lives in a shared file (`writeGateway`, `voucherActionsClient`, `localVoucherOutbox`):
+   - Copy the mode-specific branch into the correct `ledgerModes/{mode}/` file.
+   - Leave the original as a thin dispatch import.
+   - Do **not** change behaviour for other modes in the same edit.
+
+4. **Online attachment contract** (when human asks to fix online sync):
+   - Local save first (SQLite + pending bytes).
+   - Flush to Firestore when online; queue when offline.
+   - **Never** write empty `fileUrls` to Firestore because hydrate failed.
+   - **Delete wins** — explicit delete must reach all clients.
+   - Timestamp merge for conflicts.
+
+5. **Frozen areas** (see root `AGENTS.md`) — online Firestore listener paths, PL Server paths, backup/restore, PDF portal remain frozen unless the human **explicitly** overrides in that message.
+
+6. **No “shared helper” that forces all modes to change** — duplicate minimally per mode instead of editing frozen normal-company modules.
+
+## When implementing
+
+- New online-only fix → `ledgerModes/online/` only (+ `ledgerModes/shared/` if truly neutral).
+- Drive/local-only → `ledgerModes/localDrive/` only.
+- PL Server → wrapper in `ledgerModes/plServer/` importing frozen modules.
+
+## Test matrix (online attachment changes)
+
+- EXE add file → dev web shows without refresh.
+- Dev web add file → EXE shows without refresh.
+- Dev delete file → EXE removes (no generic ghost icon).
+- Note, Payment Out, Journal at minimum.

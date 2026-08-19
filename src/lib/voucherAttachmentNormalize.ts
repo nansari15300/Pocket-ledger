@@ -1,6 +1,8 @@
 "use client";
 
 import { shouldStripTransientVoucherAttachmentUrls, type CompanyStorageRow } from "@/lib/companyStorageKind";
+import { isLocalFileRef } from "@/lib/localPendingFiles";
+import { canResolveLocalFileRefsOnThisDevice } from "@/lib/canResolveLocalFileRefs";
 
 /** Backup / restore / Firestore — `fileUrls` kabhi string, kabhi array; UI hamesha array expect karta hai. */
 export function normalizeFileUrlsField(val: unknown): string[] {
@@ -56,6 +58,16 @@ export function withoutTransientVoucherAttachmentUrls(urls: readonly string[]): 
   return dedupeVoucherAttachmentUrlList(urls.filter((u) => !isTransientVoucherAttachmentUrl(u)));
 }
 
+/** Hosted web: `local:` IndexedDB nahi — broken FILE/JPG tile mat dikhao. EXE/APK keep. */
+export function withoutUnresolvableLocalFileRefs(urls: readonly string[]): string[] {
+  if (canResolveLocalFileRefsOnThisDevice()) {
+    return urls.map((u) => String(u || "").trim()).filter(Boolean);
+  }
+  return urls
+    .map((u) => String(u || "").trim())
+    .filter((u) => u && !isLocalFileRef(u));
+}
+
 /** Ledger File column + edit dialog — `fileUrls` array/string + legacy `unassignedFile.url`. */
 export function getVoucherAttachmentUrlsForUi(
   row: { fileUrls?: unknown; unassignedFile?: unknown } | null | undefined,
@@ -74,9 +86,9 @@ export function getVoucherAttachmentUrlsForUi(
     }
   }
   if (options?.stripTransientAttachments) {
-    return withoutTransientVoucherAttachmentUrls(urls);
+    urls = withoutTransientVoucherAttachmentUrls(urls);
   }
-  return urls;
+  return withoutUnresolvableLocalFileRefs(urls);
 }
 
 /**
@@ -140,6 +152,7 @@ export function voucherAttachmentUrlsForFormState(
       const s = String(entry || "").trim();
       if (!s || seen.has(s)) continue;
       if (options?.stripTransientAttachments && isTransientVoucherAttachmentUrl(s)) continue;
+      if (!canResolveLocalFileRefsOnThisDevice() && isLocalFileRef(s)) continue;
       seen.add(s);
       out.push(s);
     }

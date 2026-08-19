@@ -553,7 +553,7 @@ export default function DashboardPage() {
   const { company, companyId } = useCompany();
   const { can } = usePermissions();
   const { user } = useAuth();
-  const { vouchers, loading: vouchersLoading, processedItems, processedParties, processedStaff, processedTaxes, processedAccounts, expenseAccounts } = useVouchers();
+  const { vouchers, loading: vouchersLoading, processedItems, processedParties, processedStaff, processedTaxes, processedAccounts, expenseAccounts, journalAccountNames: voucherJournalAccountNames } = useVouchers();
   const [showFab, setShowFab] = useState(true);
   const lastScrollY = useRef(0);
   const hideFabTimeout = useRef<NodeJS.Timeout | null>(null);
@@ -698,21 +698,7 @@ export default function DashboardPage() {
     };
   }, []);
 
-  const journalAccountNames = useMemo(() => {
-    const allEntities = [
-        ...processedParties,
-        ...processedAccounts,
-        ...processedStaff,
-        ...processedTaxes,
-        ...expenseAccounts,
-        ...processedItems,
-    ];
-    const nameMap: Record<string, string> = {};
-    allEntities.forEach(e => {
-        nameMap[e.id] = (e as any).accountName || (e as any).name;
-    });
-    return nameMap;
-  }, [processedParties, processedAccounts, processedStaff, processedTaxes, expenseAccounts, processedItems]);
+  const journalAccountNames = voucherJournalAccountNames;
 
   const fetchUserName = React.useCallback(
     async (userId: string): Promise<string> => {

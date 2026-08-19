@@ -65,9 +65,7 @@ import { loadVoucherDataForDeletePreCheck, resolveVoucherDeleteBackdateDate, vou
 import {
   apkEmbeddedSqliteFirstWritesPreferred,
   preferLocalLedgerReads,
-  shouldAutoFlushOutboxAfterEnqueue,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
-import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
 import {
   appendLocalOnlyVoucherFilesToUrls,
   shouldDeferStorageIncrementUntilPendingUpload,
@@ -76,13 +74,12 @@ import {
 import {
   incomingVoucherFileUrlsLookStaleVersusSaved,
   isLocalToRemoteAttachmentUpgrade,
-  materializeVoucherFileUrlsForWebSave,
   normalizeFormFileUrlsForSave,
   applyVoucherAttachmentsAfterFormSave,
+  finalizeVoucherAttachmentsAfterFormSave,
   uploadVoucherAttachmentFileToFirebase,
   voucherAttachmentFieldsForSave,
 } from "@/lib/voucherFormAttachmentSave";
-import { readVoucherEditAttachmentContext } from "@/lib/formAttachmentEditHelper";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useSearchParams } from "next/navigation";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
@@ -1278,6 +1275,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
     }
     if (JSON.stringify(incoming) === JSON.stringify(cur)) return;
+    // Missing `fileUrls` key (lag) — tiles khaki na hon. Explicit `[]` = other device / this save deleted.
+    const explicitEmptyFileUrls =
+      Object.prototype.hasOwnProperty.call(voucher, "fileUrls") &&
+      Array.isArray(voucher.fileUrls) &&
+      voucher.fileUrls.length === 0;
+    if (!snap && cur.length > 0 && incoming.length === 0 && !explicitEmptyFileUrls) {
+      return;
+    }
     if (cur.length > incoming.length || (cur.length > 0 && incoming.length === 0)) {
       void import("@/lib/attachmentDeleteTrace").then((m) =>
         m.logAttachWipe({
@@ -1293,7 +1298,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     setFiles(incoming);
     initialFilesRef.current = [...incoming];
-  }, [voucher?.id, voucher?.fileUrls, savedVoucherId, files, _isFileDirty, companyId]);
+    setSavePdfAsImage(shouldSuggestPdfAsImage(incoming));
+  }, [voucher?.id, voucher?.fileUrls, voucher?.unassignedFile?.url, savedVoucherId, files, _isFileDirty, companyId]);
 
   useEffect(() => {
     if ((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled) {
@@ -1443,6 +1449,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const { 
         date, 
         files: formFiles, 
+        fileUrls: _ignoredFormFileUrls,
         updatedAt, 
         createdAt, 
         history, 
@@ -1464,40 +1471,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         companyId,
         savePdfAsImage,
       });
-      
-      // Web save: PL/local markers ko payload se pehle HTTPS me promote karo (offline/embedded par as-is rehta hai).
-      const editVoucherId = idArgForFirestore ?? voucher?.id ?? null;
-      const editAttachmentCtx =
-        editVoucherId && companyId
-          ? await readVoucherEditAttachmentContext(companyId, editVoucherId)
-          : null;
-      const fileUrlsForSave = await materializeVoucherFileUrlsForWebSave({
-        companyId,
-        voucherIdHint: editVoucherId,
-        storageFolder: String(voucherType),
-        rawUrls: normalizeFormFileUrlsForSave(filesForSave.filter(f => typeof f === "string") as string[]),
-        editBaselineUrls: editAttachmentCtx?.baselineUrls,
-        editOldDocRemoteUrls: editAttachmentCtx?.remoteUrls,
-      });
 
-      const submissionData: any = {
-        ...restOfData,
-        date: date.toISOString(),
-        amount: cleanAmount,
-        total: cleanAmount,
-        // Save payload me web-online case me HTTPS urls prefer karo.
-        fileUrls: fileUrlsForSave,
-        type: voucherType
-      };
-      if (voucherType === 'payment_in') {
-        submissionData.allocations = allocations ?? [];
-      }
-  
-      const sanitizedData = JSON.parse(JSON.stringify(submissionData));
-      if (!idArgForFirestore) delete (sanitizedData as { id?: string }).id;
+      // Journal/Note path: existing string URLs + new File upload/stage, then attach to payload.
+      let fileUrls: string[] = normalizeFormFileUrlsForSave(
+        filesForSave.filter((f): f is string => typeof f === "string")
+      );
       let preGeneratedVoucherId: string | undefined;
+      const newFilesToUpload = filesForSave.filter((f) => typeof f !== "string") as File[];
 
-      const newFilesToUpload = filesForSave.filter(f => typeof f !== 'string') as File[];
       if (newFilesToUpload.length > 0) {
         const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
         const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes }, company?.storageOption);
@@ -1506,12 +1487,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           setIsLoading(false);
           return;
         }
-        // EXE (Electron) ya offline: IndexedDB local stage → syncPendingFiles background me Firebase upload.
-        // Web browser (online): seedha Firebase Storage pe upload → HTTPS URL turant Firestore me.
-        const isElectronExe = typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("electron");
-        const isOffline = typeof navigator !== "undefined" && !navigator.onLine;
-        const useLocalStaging = isElectronExe || isOffline || await shouldStageNewVoucherFilesAsLocalPending(companyId);
-        if (useLocalStaging) {
+        if (await shouldStageNewVoucherFilesAsLocalPending(companyId)) {
           const voucherIdForLocalAttachments =
             isEditingAndConverting && voucher?.id
               ? null
@@ -1520,14 +1496,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             await appendLocalOnlyVoucherFilesToUrls({
               companyId,
               storageFolder: String(voucherType),
-              existingFileUrls: sanitizedData.fileUrls as string[],
+              existingFileUrls: fileUrls,
               newFiles: newFilesToUpload,
               maxFileCount: fileAttachmentLimits.maxFileCount,
               existingVoucherId: voucherIdForLocalAttachments,
             });
-          sanitizedData.fileUrls = merged;
+          fileUrls = merged;
           if (preGen) preGeneratedVoucherId = preGen;
-          // Counter flush-time par (`syncPendingFiles`) — yahan Firestore `updateDoc` await se save hang na ho.
           if (!shouldDeferStorageIncrementUntilPendingUpload()) {
             try {
               await incrementCompanyStorage(companyId, {
@@ -1539,35 +1514,41 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             }
           }
         } else {
-          // Web browser online: direct Firebase HTTPS — Firestore me local/PL URL kabhi nahi.
           for (const file of newFilesToUpload) {
-            if (sanitizedData.fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
+            if (fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
             const url = await uploadVoucherAttachmentFileToFirebase({
               companyId,
               voucherType,
               file,
             });
-            sanitizedData.fileUrls.push(url);
+            fileUrls.push(url);
             await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
           }
         }
       }
 
-      Object.assign(
-        sanitizedData,
-        voucherAttachmentFieldsForSave(
-          (Array.isArray(sanitizedData.fileUrls) ? sanitizedData.fileUrls : []).filter(
-            (u: unknown): u is string => typeof u === "string"
-          )
-        )
-      );
+      const submissionData: any = {
+        ...restOfData,
+        date: date.toISOString(),
+        amount: cleanAmount,
+        total: cleanAmount,
+        type: voucherType
+      };
+      if (voucherType === 'payment_in') {
+        submissionData.allocations = allocations ?? [];
+      }
+  
+      const sanitizedData = JSON.parse(JSON.stringify(submissionData));
+      if (!idArgForFirestore) delete (sanitizedData as { id?: string }).id;
+      delete sanitizedData.fileUrls;
+      delete sanitizedData.files;
+      delete sanitizedData.unassignedFile;
+      Object.assign(sanitizedData, voucherAttachmentFieldsForSave(fileUrls));
   
       const isEdit = !!voucher?.id && !originalVoucherIdToDelete;
       const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
       // Save se pehle snapshot — outbox flush / 409 mirror purani fileUrls form me wapas na laaye.
-      savedFileUrlsSnapshotRef.current = (
-        Array.isArray(sanitizedData.fileUrls) ? sanitizedData.fileUrls : []
-      ).filter((u: unknown): u is string => typeof u === "string" && Boolean(String(u).trim()));
+      savedFileUrlsSnapshotRef.current = fileUrls.filter((u) => Boolean(String(u).trim()));
       const savedDoc = await saveVoucher(
         companyId,
         user.uid,
@@ -1602,9 +1583,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             ? sanitizedData.allocations
             : null;
         const previousBillWiseAllocations = Array.isArray(voucher?.allocations) ? voucher.allocations : [];
-        const rawFileUrlsForPostSave = (sanitizedData.fileUrls || []).filter(
-          (u: unknown): u is string => typeof u === "string"
-        );
         const needsBillWiseLinkSync =
           !!(billWiseAllocations && companyId && docId) &&
           hasBillWiseAllocationSyncWork(billWiseAllocations, previousBillWiseAllocations);
@@ -1625,24 +1603,32 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
         setIsLoading(false);
 
+        if (!saveAndNew) {
+          onVoucherAction?.("saved", false, docId ?? undefined);
+        }
+
+        if (companyId && docId) {
+          try {
+            const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
+              companyId,
+              voucherId: docId,
+              rawFileUrls: fileUrls,
+              storageFolder: String(voucherType),
+              previousUrls: initialFilesRef.current,
+            });
+            savedFileUrlsSnapshotRef.current = [...persistedUrls];
+            setFiles(persistedUrls);
+            initialFilesRef.current = [...persistedUrls];
+          } catch (attachErr) {
+            console.warn("[CreatePaymentInForm] post-save attachment finalize", attachErr);
+          }
+        }
+
         const bgProgressId = needsBackgroundSync ? showVoucherBackgroundProgress("Saving links…") : null;
 
         const postSaveTail = async () => {
           let bgSyncPartialFailure = false;
           try {
-            // Empty list bhi apply — warna remove-all ke baad stale parent fileUrls UI me wapas aa jate.
-            if (docId && companyId) {
-              const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
-                companyId,
-                voucherId: docId,
-                rawFileUrls: rawFileUrlsForPostSave,
-                storageFolder: String(voucherType),
-              });
-              savedFileUrlsSnapshotRef.current = [...persistedUrls];
-              setFiles(persistedUrls);
-              initialFilesRef.current = persistedUrls;
-            }
-
             if (spendWisePending && docId && user?.uid) {
               const currentlyLinkedIds = new Set(spendWiseLinkedRowIds);
               const allAffectedIds = new Set([...currentlyLinkedIds, ...spendWisePending.ids]);
@@ -1694,12 +1680,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 voucherId: a.voucherId,
                 amount: getAllocationTotal(a),
               }));
-            }
-
-            if (shouldAutoFlushOutboxAfterEnqueue()) {
-              void flushVoucherOutbox().catch((err) => {
-                console.warn("[CreatePaymentInForm] post-save outbox flush", err);
-              });
             }
 
             if (bgProgressId) {
@@ -1825,7 +1805,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         };
 
         if (!saveAndNew) {
-          onVoucherAction?.("saved", false, docId ?? undefined);
           void postSaveTail().catch((err) => {
             console.error("[CreatePaymentInForm] post-save tail", err);
             sonnerToast.error("Receipt saved — finishing steps pending", {
@@ -2755,8 +2734,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <div className="flex flex-wrap gap-4">
                     {files.map((file, index) => (
                       <FilePreview
-                        key={index}
+                        key={typeof file === "string" ? file : `${file.name}-${file.size}-${index}`}
                         file={file}
+                        attachmentCompanyId={companyId || undefined}
                         attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                         onRemove={

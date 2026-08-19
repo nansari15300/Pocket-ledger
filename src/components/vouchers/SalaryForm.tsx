@@ -67,7 +67,7 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
+import { applyVoucherAttachmentsAfterFormSave, finalizeVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
@@ -1725,6 +1725,22 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
       if (savedDoc && savedDoc.id) {
           markCopiedDraftPersisted();
           if (isMounted.current) setSavedVoucherIdRef(savedDoc.id);
+          if (companyId) {
+            try {
+              const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
+                companyId,
+                voucherId: savedDoc.id,
+                rawFileUrls: allFileUrls,
+                storageFolder: "salary",
+                previousUrls: initialFilesRef.current,
+              });
+              if (!isMounted.current) return;
+              initialFilesRef.current = [...persistedUrls];
+              setFiles(persistedUrls);
+            } catch (attachErr) {
+              console.warn("[SalaryForm] post-save attachment finalize", attachErr);
+            }
+          }
           // Bill-wise links are local-first; push them only after the salary voucher itself exists/saves successfully.
           if (!isPaymentMode) {
             await syncSalaryBillWiseLinks(savedDoc.id);
@@ -1740,17 +1756,6 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
           }
       } else {
           throw new Error("Failed to save voucher and get ID.");
-      }
-
-      if (companyId && savedDoc.id) {
-        const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
-          companyId,
-          voucherId: savedDoc.id,
-          rawFileUrls: allFileUrls,
-          storageFolder: "salary",
-        });
-        initialFilesRef.current = [...persistedUrls];
-        setFiles(persistedUrls);
       }
 
         sonnerToast.success("Voucher saved successfully!", { id: toastId });
@@ -2773,6 +2778,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                             <FilePreview
                               key={index}
                               file={file}
+                              attachmentCompanyId={companyId || undefined}
                               attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}

@@ -121,6 +121,7 @@ import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
 import {
   applyVoucherAttachmentsAfterFormSave,
+  finalizeVoucherAttachmentsAfterFormSave,
   uploadVoucherAttachmentFileToFirebase,
   voucherAttachmentFieldsForSave,
 } from "@/lib/voucherFormAttachmentSave";
@@ -1369,36 +1370,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
 
         if (docId && companyId) {
-          void applyVoucherAttachmentsAfterFormSave({
-            companyId,
-            voucherId: docId,
-            rawFileUrls: ((finalData.fileUrls as string[]) || existingFileUrls).filter(
-              (u): u is string => typeof u === "string" && Boolean(String(u).trim())
-            ),
-            storageFolder: "sale",
-          }).then((persistedUrls) => {
-            if (!isMounted.current) return;
+          const rawUrls = ((finalData.fileUrls as string[]) || existingFileUrls).filter(
+            (u): u is string => typeof u === "string" && Boolean(String(u).trim())
+          );
+          try {
+            const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
+              companyId,
+              voucherId: docId,
+              rawFileUrls: rawUrls,
+              storageFolder: "sale",
+              previousUrls: initialFilesRef.current,
+            });
+            if (!isMounted.current) return null;
             savedFileUrlsSnapshotRef.current = [...persistedUrls];
-            if (process.env.NODE_ENV !== "production") {
-              void import("@/lib/attachmentDeleteTrace").then((m) => {
-                m.markAttachmentDeleteIntent({
-                  companyId,
-                  voucherId: docId,
-                  intendedUrls: persistedUrls,
-                  source: "CreateSaleForm.afterSave.setFiles",
-                });
-                m.traceAttachmentUrlsChange({
-                  source: "CreateSaleForm.afterSave.setFiles",
-                  companyId,
-                  voucherId: docId,
-                  prevUrls: existingFileUrls,
-                  nextUrls: persistedUrls,
-                });
-              });
-            }
             setFiles(persistedUrls);
             initialFilesRef.current = persistedUrls;
-          });
+          } catch (attachErr) {
+            console.warn("[CreateSaleForm] post-save attachment finalize", attachErr);
+          }
         }
 
         // Baaki linkage / alerts / print background — Save & Close par dialog turant band (Firestore row already persisted).
@@ -3506,6 +3495,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <FilePreview 
                               key={index} 
                               file={file} 
+                              attachmentCompanyId={companyId || undefined}
                               attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
@@ -3808,6 +3798,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               <FilePreview 
                                 key={index} 
                                 file={file} 
+                                attachmentCompanyId={companyId || undefined}
                                 attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                                 onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}

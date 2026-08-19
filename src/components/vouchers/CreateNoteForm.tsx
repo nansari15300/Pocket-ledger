@@ -56,7 +56,8 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
+import { applyVoucherAttachmentsAfterFormSave, finalizeVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
+import { useVoucherAttachmentPostSaveSync } from "@/hooks/useVoucherAttachmentPostSaveSync";
 import { toast as sonnerToast } from "sonner";
 import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -189,6 +190,8 @@ export function CreateNoteForm({
     [allowAttachments, fileAttachmentLimits.maxFileCount, fileAttachmentLimits.allowPDF, files]
   );
   const initialFilesRef = useRef<string[]>([]);
+  const savedFileUrlsSnapshotRef = useRef<string[] | null>(null);
+  const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   /** Edit: Sale/Payment jaisa — same `voucher.id` par live snapshot se bar-bar reset mat (attachments delete wipe) */
   const lastResetVoucherIdRef = useRef<string | undefined>(undefined);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -311,6 +314,19 @@ export function CreateNoteForm({
       setSavePdfAsImage(false);
     }
   }, [voucher, form]);
+
+  useVoucherAttachmentPostSaveSync({
+    traceSource: "CreateNoteForm",
+    companyId,
+    voucher,
+    savedVoucherId,
+    files,
+    setFiles,
+    initialFilesRef,
+    savedFileUrlsSnapshotRef,
+    isFileDirty: _isFileDirty,
+    setSavePdfAsImage,
+  });
 
   useEffect(() => {
     if (!companyId) return;
@@ -605,6 +621,7 @@ export function CreateNoteForm({
 
         const isEdit = !!voucher?.id;
         const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
+        savedFileUrlsSnapshotRef.current = fileUrls.filter((u) => Boolean(String(u).trim()));
         const result = await saveVoucher(
           companyId,
           user.uid,
@@ -615,6 +632,7 @@ export function CreateNoteForm({
         );
 
         const docId = result?.id;
+        if (docId) setSavedVoucherId(docId);
         const approveBanner = !!(approveAfterSave && docId);
         // Save & Close: dialog turant band — approve/print background (`postSaveTail`).
         if (approveBanner) {
@@ -635,15 +653,20 @@ export function CreateNoteForm({
         }
 
         if (companyId && docId) {
-          void applyVoucherAttachmentsAfterFormSave({
-            companyId,
-            voucherId: docId,
-            rawFileUrls: fileUrls,
-            storageFolder: "note",
-          }).then((persistedUrls) => {
+          try {
+            const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
+              companyId,
+              voucherId: docId,
+              rawFileUrls: fileUrls,
+              storageFolder: "note",
+              previousUrls: initialFilesRef.current,
+            });
             initialFilesRef.current = [...persistedUrls];
+            savedFileUrlsSnapshotRef.current = [...persistedUrls];
             setFiles(persistedUrls);
-          });
+          } catch (attachErr) {
+            console.warn("[CreateNoteForm] post-save attachment finalize", attachErr);
+          }
         }
 
         const postSaveTail = async () => {
@@ -1006,6 +1029,7 @@ export function CreateNoteForm({
                         <FilePreview 
                           key={idx} 
                           file={file} 
+                          attachmentCompanyId={companyId || undefined}
                           attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         attachmentReusePlaceKey={voucher?.id ? `vouchers/${voucher.id}` : null}
                           onRemove={

@@ -74,6 +74,7 @@ import {
 } from "@/lib/voucherLocalAttachmentUpload";
 import {
   applyVoucherAttachmentsAfterFormSave,
+  finalizeVoucherAttachmentsAfterFormSave,
   uploadVoucherAttachmentFileToFirebase,
   voucherAttachmentFieldsForSave,
 } from "@/lib/voucherFormAttachmentSave";
@@ -1180,11 +1181,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             (u): u is string => typeof u === "string" && Boolean(String(u).trim())
           );
           try {
-            const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+            const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
               companyId,
               voucherId: docId,
               rawFileUrls: rawUrls,
               storageFolder: "purchase",
+              previousUrls: initialFilesRef.current,
             });
             if (isMounted.current) {
               savedFileUrlsSnapshotRef.current = [...persistedUrls];
@@ -2947,9 +2949,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         {/* When linked: add/remove disabled; existing files stay clickable to open. Filter by file identity (not index) so remove works reliably. */}
                         <div className="flex flex-wrap items-start gap-2 px-[2px]">
                           {files.map((file, index) => (
-                            <FilePreview 
-                              key={typeof file === "string" ? file : `file-${index}`} 
-                              file={file} 
+                            <FilePreview
+                              key={typeof file === "string" ? file : `file-${index}`}
+                              file={file}
+                              attachmentCompanyId={companyId || undefined}
                               attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
@@ -3247,9 +3250,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         {/* When linked: add/remove disabled; existing files stay clickable to open. Filter by file identity (not index) so remove works reliably. */}
                         <div className="flex flex-wrap items-start gap-4">
                           {files.map((file, index) => (
-                            <FilePreview 
-                              key={typeof file === "string" ? file : `file-${index}`} 
-                              file={file} 
+                            <FilePreview
+                              key={typeof file === "string" ? file : `file-${index}`}
+                              file={file}
+                              attachmentCompanyId={companyId || undefined}
                               attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}

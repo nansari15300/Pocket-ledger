@@ -85,7 +85,9 @@ import {
 } from "@/lib/fiscalPartitionRows";
 import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
-import { resolveLedgerTransactionUserDisplayName } from "@/lib/ledgerUserColumnDisplay";
+import { resolveLedgerTransactionUserDisplayName, buildActiveRecurringTriggerVoucherIdSet } from "@/lib/ledgerUserColumnDisplay";
+import { isRecurringVoucherGenerationEnabled } from "@/lib/recurringVoucherSettings";
+import { useRecurringAccrualTemplates } from "@/hooks/useDashboardRecurringAccrual";
 import {
   prewarmHoverPreviewHttpsUrls,
   prewarmVisibleAttachmentRefsForInstantOpen,
@@ -373,6 +375,15 @@ export function TransactionsTable({
   spendWiseGroupPrint,
 }: TransactionsTableProps) {
   const { company, companyId, effectiveNotificationSettings } = useCompany();
+  const recurringCompanyEnabled = isRecurringVoucherGenerationEnabled(company);
+  const { templates: recurringTemplates } = useRecurringAccrualTemplates(
+    companyId ?? undefined,
+    recurringCompanyEnabled,
+  );
+  const activeRecurringTriggerVoucherIds = useMemo(
+    () => (recurringCompanyEnabled ? buildActiveRecurringTriggerVoucherIdSet(recurringTemplates) : null),
+    [recurringCompanyEnabled, recurringTemplates],
+  );
   const voucherAttachmentUiOpts = useMemo(() => voucherAttachmentUiOptionsForCompany(company), [company]);
   const [filesTickEpoch, setFilesTickEpoch] = useState(0);
   useEffect(() => {
@@ -1642,7 +1653,7 @@ export function TransactionsTable({
         <TableCell className="max-w-[180px] truncate text-muted-foreground" />
       )}
       {showCol("user") && context !== "note" && (
-        <TableCell className={ensureMinGaps ? "min-w-[85px] px-[5px]" : undefined} />
+        <TableCell className={ensureMinGaps ? "min-w-[148px] px-[5px]" : undefined} />
       )}
     </>
   );
@@ -1801,7 +1812,7 @@ export function TransactionsTable({
     if (showCol("voucherNo")) w.push(105);
     if (context === "daybook") w.push(120);
     if (isItemPartyContext && showItemPartyColumn) w.push(90);
-    if (showCol("user") && context !== "note") w.push(85);
+    if (showCol("user") && context !== "note") w.push(148);
     if (showFileBySelection) w.push(44);
     if (showCol("dr") && !hideDebitColumn) w.push(100);
     if (showCol("cr") && !hideCreditColumn) w.push(100);
@@ -2706,7 +2717,7 @@ export function TransactionsTable({
           {context === 'daybook' && renderHeaderWithFilter("accounts", "Accounts", false, ensureMinGaps ? 120 : undefined)}
           {/* Item + Item-group page: Party header visibility follows Columns dropdown toggle. */}
           {isItemPartyContext && showItemPartyColumn && <TableHead className="font-semibold p-0" style={ensureMinGaps ? { minWidth: "90px" } : undefined}>Party</TableHead>}
-          {showCol("user") && context !== 'note' && renderHeaderWithFilter("user", "User", false, ensureMinGaps ? 85 : undefined)}
+          {showCol("user") && context !== 'note' && renderHeaderWithFilter("user", "User", false, ensureMinGaps ? 148 : undefined)}
           {showFileBySelection && renderFileHeaderWithFilter()}
           {showCol("dr") && !hideDebitColumn && renderHeaderWithFilter("debit", debitHeaderLabel, true, ensureMinGaps ? 100 : undefined)}
           {showCol("cr") && !hideCreditColumn && renderHeaderWithFilter("credit", creditHeaderLabel, true, ensureMinGaps ? 100 : undefined)}
@@ -2992,6 +3003,7 @@ export function TransactionsTable({
                                           highlightPendingApproval={highlightPendingApproval}
                                           syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
                                           onSyncNow={handleSyncVoucherNow}
+                                          activeRecurringTriggerVoucherIds={activeRecurringTriggerVoucherIds}
                                           textSearchHighlight={rowTextSearchHighlight}
                                           columnFilters={filters}
                                           {...getSpendWiseRowMenuProps(t)}
@@ -3067,6 +3079,7 @@ export function TransactionsTable({
                           highlightPendingApproval={highlightPendingApproval}
                           syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
                           onSyncNow={handleSyncVoucherNow}
+                          activeRecurringTriggerVoucherIds={activeRecurringTriggerVoucherIds}
                           textSearchHighlight={rowTextSearchHighlight}
                           columnFilters={filters}
                           {...getSpendWiseRowMenuProps(t)}
@@ -3146,6 +3159,7 @@ export function TransactionsTable({
                         highlightPendingApproval={highlightPendingApproval}
                         syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
                         onSyncNow={handleSyncVoucherNow}
+                        activeRecurringTriggerVoucherIds={activeRecurringTriggerVoucherIds}
                         textSearchHighlight={rowTextSearchHighlight}
                         columnFilters={filters}
                         {...getSpendWiseRowMenuProps(t)}

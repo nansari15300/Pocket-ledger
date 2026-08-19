@@ -41,15 +41,46 @@ export function isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(t: unknown):
   return o.recurringMeta?.generationKind === "recurring_bs_monthly";
 }
 
-/** Auto recurring switch indicator: sirf current trigger/source voucher par dikhao. */
+/** Enabled recurring templates se abhi active trigger voucher ids — dashboard "N vouchers triggering" jaisa. */
+export function buildActiveRecurringTriggerVoucherIdSet(
+  templates: ReadonlyArray<{ tpl: { cloneSourceVoucherId?: string | null; sourceVoucherId?: string | null } }>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const { tpl } of templates) {
+    const id = String(tpl.cloneSourceVoucherId || tpl.sourceVoucherId || "").trim();
+    if (id) out.add(id);
+  }
+  return out;
+}
+
+/**
+ * Auto recurring switch: sirf wahi voucher jiska recurring ab ON / active trigger hai.
+ * Purane auto-generated rows "Auto" dikhte hain par switch nahi — unka `isActiveTriggerSource` false
+ * ya `activeTriggerSourceVoucherId` kisi naye voucher ki taraf point karta hai.
+ */
 export function isActiveRecurringTriggerVoucherForLedgerSwitch(t: unknown): boolean {
-  const o = t as { id?: string; recurringMeta?: { generationKind?: string; isActiveTriggerSource?: boolean; activeTriggerSourceVoucherId?: string | null } } | null | undefined;
+  const o = t as { id?: string; recurringMeta?: { isActiveTriggerSource?: boolean; activeTriggerSourceVoucherId?: string | null } } | null | undefined;
   if (!o || typeof o !== "object") return false;
   const meta = o?.recurringMeta;
-  if (meta?.isActiveTriggerSource === true) return true;
+  if (meta?.isActiveTriggerSource !== true) return false;
   const activeId = String(meta?.activeTriggerSourceVoucherId || "").trim();
   const id = String(o?.id || "").trim();
   return !!activeId && !!id && activeId === id;
+}
+
+/**
+ * PC/web/EXE ledger User column — active trigger par hi green ON switch.
+ * Templates milne par `cloneSourceVoucherId` source of truth (stale voucher meta par switch nahi).
+ */
+export function shouldShowAutoRecurringSwitchInLedgerUserCell(
+  t: unknown,
+  activeTriggerIds?: ReadonlySet<string> | null,
+): boolean {
+  const id = String((t as { id?: string })?.id || "").trim();
+  if (activeTriggerIds && id) {
+    return activeTriggerIds.has(id);
+  }
+  return isActiveRecurringTriggerVoucherForLedgerSwitch(t);
 }
 
 /** Ledger / mobile card User column — stable naam, "Auto" sirf recurring BS-month par. */

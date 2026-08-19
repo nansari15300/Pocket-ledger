@@ -437,7 +437,8 @@ export function subscribeVoucherLivePatch(
 export function dispatchVoucherAttachmentSaved(
   companyId: string,
   voucherId: string,
-  fileUrls: readonly string[]
+  fileUrls: readonly string[],
+  options?: { previousUrls?: readonly string[] }
 ): void {
   const urls = fileUrls.filter((u): u is string => typeof u === "string" && Boolean(String(u).trim()));
   void import("@/lib/attachmentDeleteTrace").then((m) => {
@@ -446,6 +447,7 @@ export function dispatchVoucherAttachmentSaved(
       companyId,
       voucherId,
       intendedUrls: urls,
+      previousUrls: options?.previousUrls,
       source: "dispatchVoucherAttachmentSaved",
     });
     if (process.env.NODE_ENV !== "production") {
@@ -470,6 +472,8 @@ export async function applyVoucherAttachmentsAfterFormSave(params: {
   voucherId: string;
   rawFileUrls: readonly string[];
   storageFolder: string;
+  /** Edit save se pehle ki list — delete intent / blockedUrls ke liye. */
+  previousUrls?: readonly string[];
 }): Promise<string[]> {
   const cid = String(params.companyId || "").trim();
   const vid = String(params.voucherId || "").trim();
@@ -490,7 +494,33 @@ export async function applyVoucherAttachmentsAfterFormSave(params: {
       return u;
     })
   );
-  dispatchVoucherAttachmentSaved(cid, vid, persisted);
+  dispatchVoucherAttachmentSaved(cid, vid, persisted, {
+    previousUrls: params.previousUrls,
+  });
+  return persisted;
+}
+
+/**
+ * Har voucher form: save ke turant baad attachment cache patch + outbox flush (cross-device snapshot).
+ * `void apply…` mat chhodna — dialog band hone se pehle await karo.
+ */
+export async function finalizeVoucherAttachmentsAfterFormSave(params: {
+  companyId: string;
+  voucherId: string;
+  rawFileUrls: readonly string[];
+  storageFolder: string;
+  previousUrls?: readonly string[];
+}): Promise<string[]> {
+  const persisted = await applyVoucherAttachmentsAfterFormSave(params);
+  try {
+    const { shouldAutoFlushOutboxAfterEnqueue } = await import("@/lib/apkOnlineFirestoreWritePolicy");
+    if (shouldAutoFlushOutboxAfterEnqueue()) {
+      const { flushVoucherOutbox } = await import("@/lib/localVoucherOutbox");
+      await flushVoucherOutbox();
+    }
+  } catch (err) {
+    console.warn("[finalizeVoucherAttachmentsAfterFormSave] outbox flush", err);
+  }
   return persisted;
 }
 

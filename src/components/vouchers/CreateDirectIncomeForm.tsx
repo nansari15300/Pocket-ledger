@@ -63,7 +63,7 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
+import { applyVoucherAttachmentsAfterFormSave, finalizeVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -477,11 +477,12 @@ export function CreatePaymentInForm({
       }
 
       if (companyId && docId) {
-        const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+        const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
           companyId,
           voucherId: docId,
           rawFileUrls: (submissionData.fileUrls as string[]) || [],
           storageFolder: String(voucherType),
+          previousUrls: initialFilesRef.current,
         });
         initialFilesRef.current = [...persistedUrls];
         setFiles(persistedUrls);
@@ -911,6 +912,7 @@ export function CreatePaymentInForm({
                     <FilePreview 
                       key={index} 
                       file={file} 
+                      attachmentCompanyId={companyId || undefined}
                       attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                       onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}

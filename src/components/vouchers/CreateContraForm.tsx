@@ -40,7 +40,7 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
+import { applyVoucherAttachmentsAfterFormSave, finalizeVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase, voucherAttachmentFieldsForSave } from "@/lib/voucherFormAttachmentSave";
 import { toast as sonnerToast } from "sonner";
 import {
   completeVoucherBackgroundProgress,
@@ -1038,6 +1038,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
       }
 
+      Object.assign(
+        submissionData,
+        voucherAttachmentFieldsForSave(
+          (Array.isArray(submissionData.fileUrls) ? submissionData.fileUrls : []).filter(
+            (u: unknown): u is string => typeof u === "string"
+          )
+        )
+      );
+
       if (!idArgForFirestore) delete (submissionData as { id?: string }).id;
 
       const isEditForApprove = !!voucher?.id && !originalVoucherIdToDelete;
@@ -1073,8 +1082,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const approveBanner = !!(approveAfterSave && docId);
         const spendWisePending = pendingLinkedPaymentOut;
         const spendWiseLinkedRowIds = spendWiseLinkedToMeRows.map((r) => r.id);
-        const rawFileUrlsForPostSave = (submissionData.fileUrls as string[]).filter(
-          (u): u is string => typeof u === "string" && Boolean(String(u).trim())
+        const contraFileUrls = (Array.isArray(submissionData.fileUrls) ? submissionData.fileUrls : []).filter(
+          (u: unknown): u is string => typeof u === "string" && Boolean(String(u).trim())
         );
         const needsBackgroundSync = !!(spendWisePending && user?.uid);
 
@@ -1090,6 +1099,26 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           );
         }
         setIsLoading(false);
+
+        if (!saveAndNew) {
+          onVoucherAction?.("saved", false, docId);
+        }
+
+        if (companyId && docId) {
+          try {
+            const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
+              companyId,
+              voucherId: docId,
+              rawFileUrls: contraFileUrls,
+              storageFolder: "contra",
+              previousUrls: initialFilesRef.current,
+            });
+            setFiles(persistedUrls);
+            initialFilesRef.current = persistedUrls;
+          } catch (attachErr) {
+            console.warn("[CreateContraForm] post-save attachment finalize", attachErr);
+          }
+        }
 
         const bgProgressId = needsBackgroundSync ? showVoucherBackgroundProgress("Saving links…") : null;
 
@@ -1127,17 +1156,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 linkedOpeningBalanceAccountId: openingLinked > 0 ? spendWiseOutAccountId : null,
               });
               setPendingLinkedPaymentOut(null);
-            }
-
-            if (companyId && docId && _isFileDirty) {
-              const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
-                companyId,
-                voucherId: docId,
-                rawFileUrls: rawFileUrlsForPostSave,
-                storageFolder: "contra",
-              });
-              setFiles(persistedUrls);
-              initialFilesRef.current = persistedUrls;
             }
 
             if (bgProgressId) {
@@ -1220,7 +1238,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         };
 
         if (!saveAndNew) {
-          onVoucherAction?.("saved", false, docId);
           void postSaveTail().catch((err) => {
             console.error("[CreateContraForm] post-save tail", err);
             sonnerToast.error("Contra saved — finishing steps pending", {
@@ -1849,8 +1866,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       <div className="flex flex-wrap gap-4">
                         {files.map((file, index) => (
                           <FilePreview
-                            key={index}
+                            key={typeof file === "string" ? file : `${file.name}-${file.size}-${index}`}
                             file={file}
+                            attachmentCompanyId={companyId || undefined}
                             attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                             onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}

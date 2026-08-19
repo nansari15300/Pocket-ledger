@@ -621,7 +621,7 @@ export function DashboardPageContent() {
   const { user } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { vouchers, loading: vouchersLoading, processedItems, processedParties, processedStaff, processedTaxes, processedAccounts, expenseAccounts } = useVouchers();
+  const { vouchers, loading: vouchersLoading, processedItems, processedParties, processedStaff, processedTaxes, processedAccounts, expenseAccounts, journalAccountNames: voucherJournalAccountNames } = useVouchers();
   const pendingEditVoucherRef = useRef<{ companyId: string; voucherId: string } | null>(null);
   const [showFab, setShowFab] = useState(true);
   const lastScrollY = useRef(0);
@@ -858,21 +858,7 @@ export function DashboardPageContent() {
     };
   }, []);
 
-  const journalAccountNames = useMemo(() => {
-    const allEntities = [
-        ...processedParties,
-        ...processedAccounts,
-        ...processedStaff,
-        ...processedTaxes,
-        ...expenseAccounts,
-        ...processedItems,
-    ];
-    const nameMap: Record<string, string> = {};
-    allEntities.forEach(e => {
-        nameMap[e.id] = (e as any).accountName || (e as any).name;
-    });
-    return nameMap;
-  }, [processedParties, processedAccounts, processedStaff, processedTaxes, expenseAccounts, processedItems]);
+  const journalAccountNames = voucherJournalAccountNames;
 
   const fetchUserName = React.useCallback(
     async (userId: string): Promise<string> => {

@@ -100,10 +100,11 @@ import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
 import {
   applyVoucherAttachmentsAfterFormSave,
-  incomingVoucherFileUrlsLookStaleVersusSaved,
+  finalizeVoucherAttachmentsAfterFormSave,
   uploadVoucherAttachmentFileToFirebase,
   voucherAttachmentFieldsForSave,
 } from "@/lib/voucherFormAttachmentSave";
+import { useVoucherAttachmentPostSaveSync } from "@/hooks/useVoucherAttachmentPostSaveSync";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccountDialog";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
@@ -640,47 +641,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 }, [voucher, form, isEditingAndConverting, isFormDirty, allAccountsWithEntity]);
 
   // Outbox flush / Firestore snapshot: `local:` → HTTPS parent `voucher.fileUrls` update; stale snapshot ignore.
-  useEffect(() => {
-    if (!voucher?.id || savedVoucherId !== voucher.id) return;
-    const hasUnsavedFilePick = files.some((f) => f instanceof File);
-    if (hasUnsavedFilePick) return;
-    if (_isFileDirty) return;
-    const incoming = voucherAttachmentUrlsForFormState(voucher).filter((f): f is string => typeof f === "string");
-    const cur = files.filter((f): f is string => typeof f === "string");
-    const snap = savedFileUrlsSnapshotRef.current;
-    if (snap) {
-      if (incomingVoucherFileUrlsLookStaleVersusSaved(snap, incoming)) return;
-      // Empty snap mat clear — flush mirror purani HTTPS wapas laaye to reject rahe.
-      if (snap.length > 0 && JSON.stringify(incoming) === JSON.stringify(snap)) {
-        savedFileUrlsSnapshotRef.current = null;
-      }
-    }
-    if (JSON.stringify(incoming) === JSON.stringify(cur)) return;
-    // Other-device / live snapshot lag: empty parent list se edit tiles khaki/blank mat karo.
-    const explicitEmptyFileUrls =
-      Object.prototype.hasOwnProperty.call(voucher, "fileUrls") &&
-      Array.isArray(voucher.fileUrls) &&
-      voucher.fileUrls.length === 0;
-    if (!snap && cur.length > 0 && incoming.length === 0 && !explicitEmptyFileUrls) {
-      return;
-    }
-    if (cur.length > incoming.length || (cur.length > 0 && incoming.length === 0)) {
-      void import("@/lib/attachmentDeleteTrace").then((m) =>
-        m.logAttachWipe({
-          source: "CreateJournalForm.voucherFileUrlsEffect",
-          reason: "form_sync_shrunk_from_voucher_prop",
-          companyId: companyId ?? undefined,
-          voucherId: voucher?.id,
-          beforeUrls: cur,
-          afterUrls: incoming,
-          extra: { _isFileDirty, snap: snap ?? null },
-        })
-      );
-    }
-    setFiles(incoming);
-    initialFilesRef.current = [...incoming];
-    setSavePdfAsImage(shouldSuggestPdfAsImage(incoming));
-  }, [voucher?.id, voucher?.fileUrls, voucher?.unassignedFile?.url, savedVoucherId, files, _isFileDirty, companyId]);
+  useVoucherAttachmentPostSaveSync({
+    traceSource: "CreateJournalForm",
+    companyId,
+    voucher,
+    savedVoucherId,
+    files,
+    setFiles,
+    initialFilesRef,
+    savedFileUrlsSnapshotRef,
+    isFileDirty: _isFileDirty,
+    setSavePdfAsImage,
+  });
 
   /** Recon sync / compare: scoped accounts load hone ke baad pre-filled accountId ka label + entityType sync */
   useEffect(() => {
@@ -1867,17 +1839,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
 
         if (companyId && docId) {
-          void applyVoucherAttachmentsAfterFormSave({
-            companyId,
-            voucherId: docId,
-            rawFileUrls: fileUrls,
-            storageFolder: "journal",
-          }).then((persistedUrls) => {
-            if (!isMounted.current) return;
+          try {
+            const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
+              companyId,
+              voucherId: docId,
+              rawFileUrls: fileUrls,
+              storageFolder: "journal",
+              previousUrls: initialFilesRef.current,
+            });
             savedFileUrlsSnapshotRef.current = [...persistedUrls];
             setFiles(persistedUrls);
             initialFilesRef.current = [...persistedUrls];
-          });
+          } catch (attachErr) {
+            console.warn("[CreateJournalForm] post-save attachment finalize", attachErr);
+          }
         }
 
         const postSaveTail = async () => {

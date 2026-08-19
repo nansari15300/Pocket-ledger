@@ -150,10 +150,11 @@ export async function shouldStageNewVoucherFilesAsLocalPending(companyId: string
   if (isClientNavigatorOffline()) return true;
   // Embedded shells (EXE/APK/static): keep local pending pipeline.
   if (isElectronDesktopApp() || isCapacitorNativeApp() || isStaticAppBuild()) return true;
-  // Local SQLite ledger company (web dev Firebase mode): attachments device pe — Firestore company root mat chhedo.
-  if (await apkCloudCompanyUsesSqliteFirstWrites(String(companyId || "").trim())) return true;
-  // Standard web browser online + cloud Firestore company: direct Storage upload + HTTPS URL.
+  // Hosted web online: hamesha Firebase HTTPS — sqlite-first online company par bhi `local:` mat stage
+  // (warna 2nd file web pe invisible / delete cross-device stale rehta hai).
   if (typeof navigator !== "undefined" && navigator.onLine) return false;
+  // Offline embedded / non-web: sqlite-first companies local stage.
+  if (await apkCloudCompanyUsesSqliteFirstWrites(String(companyId || "").trim())) return true;
   // Legacy explicit toggle can force immediate upload mode in non-web contexts.
   if (voucherAttachmentFirestoreImmediateUploadEnabled()) return false;
   return apkCloudCompanyUsesSqliteFirstWrites(String(companyId || "").trim());

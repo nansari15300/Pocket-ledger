@@ -44,7 +44,6 @@ import {
 } from "@/lib/serverBackupEncryption";
 import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
 import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
-import { mergeVoucherFileUrlsForEditDialog } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import {
   hydrateVoucherLocalAttachmentsForServer,
@@ -66,6 +65,57 @@ function isFirestoreAlreadyExistsError(e: unknown): boolean {
 
 function attachmentUrlsFingerprint(urls: readonly string[]): string {
   return urls.map((u) => String(u || "").trim()).filter(Boolean).join("\x1e");
+}
+
+/** Web/other devices cannot resolve `local:` — never persist those refs to Firestore. */
+function cloudSafeVoucherFileUrls(urls: readonly string[]): string[] {
+  return urls.filter((u) => typeof u === "string" && u.trim() && !isLocalFileRef(u));
+}
+
+function stripLocalFileRefsFromFirestoreDoc(docFields: Record<string, unknown>): Record<string, unknown> {
+  const walk = (v: unknown): unknown => {
+    if (typeof v === "string") return isLocalFileRef(v) ? "" : v;
+    if (Array.isArray(v)) {
+      return v
+        .map(walk)
+        .filter((x) => x !== "" && x != null);
+    }
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      if (v instanceof Date) return v;
+      if (typeof (v as { toDate?: unknown }).toDate === "function") return v;
+      const o = v as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(o)) {
+        const next = walk(o[k]);
+        if (k === "unassignedFile" && next && typeof next === "object") {
+          const uf = next as Record<string, unknown>;
+          const url = typeof uf.url === "string" ? uf.url.trim() : "";
+          if (!url || isLocalFileRef(url)) {
+            out[k] = null;
+            continue;
+          }
+        }
+        out[k] = next;
+      }
+      return out;
+    }
+    return v;
+  };
+  const stripped = walk(docFields) as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(stripped, "fileUrls")) {
+    stripped.fileUrls = cloudSafeVoucherFileUrls(normalizeFileUrlsField(stripped.fileUrls));
+    stripped.files = [];
+    stripped.unassignedFile = null;
+  }
+  for (const key of MASTER_ATTACHMENT_SCALAR_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(stripped, key)) continue;
+    const raw = stripped[key];
+    if (typeof raw === "string" && isLocalFileRef(raw)) stripped[key] = "";
+  }
+  if (Object.prototype.hasOwnProperty.call(stripped, "documentFileUrls")) {
+    stripped.documentFileUrls = cloudSafeVoucherFileUrls(normalizeFileUrlsField(stripped.documentFileUrls));
+  }
+  return stripped;
 }
 
 const MASTER_ATTACHMENT_SCALAR_KEYS = ["fileUrl", "avatarUrl", "logoUrl"] as const;
@@ -101,13 +151,17 @@ function applyMasterAttachmentFieldsForFirestoreMerge(
     if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
     if (isClearedMasterAttachmentScalar(source[key])) {
       target[key] = deleteField();
+    } else if (typeof source[key] === "string" && isLocalFileRef(String(source[key]))) {
+      target[key] = deleteField();
     } else {
       target[key] = source[key];
     }
   }
   if (Object.prototype.hasOwnProperty.call(source, "documentFileUrls")) {
     target.documentFileUrls = Array.isArray(source.documentFileUrls)
-      ? source.documentFileUrls.filter((u): u is string => typeof u === "string" && Boolean(u.trim()))
+      ? source.documentFileUrls.filter(
+          (u): u is string => typeof u === "string" && Boolean(u.trim()) && !isLocalFileRef(u)
+        )
       : [];
   }
 }
@@ -164,7 +218,16 @@ async function mirrorCompanyDocAfterOutboxFlush(
         : payloadObj;
     if (!voucherSource || !Object.prototype.hasOwnProperty.call(voucherSource, "fileUrls")) return;
 
-    const intended = normalizeFileUrlsField(voucherSource.fileUrls);
+    const rawIntended = normalizeFileUrlsField(voucherSource.fileUrls);
+    const hadLocalRefs = rawIntended.some((u) => isLocalFileRef(u));
+    const intended = cloudSafeVoucherFileUrls(rawIntended);
+    const explicitEmptySave =
+      Object.prototype.hasOwnProperty.call(voucherSource, "fileUrls") &&
+      Array.isArray(voucherSource.fileUrls) &&
+      rawIntended.length === 0;
+    // Pending hydrate only: payload still all-`local:` — Firestore pe purani HTTPS mat [] se clobber.
+    // Explicit `fileUrls: []` (user delete) hamesha enforce — ghost URL / generic tile rokne ke liye.
+    if (hadLocalRefs && intended.length === 0 && !explicitEmptySave) return;
     const intendedFp = attachmentUrlsFingerprint(intended);
     const { upsertCompanyDocInBrowserDb, notifyBrowserDbCollectionUpdated } = await import(
       "@/lib/localCompanyDocMirror"
@@ -640,14 +703,27 @@ export type FlushVoucherOutboxOptions = {
 
 /** Parallel enqueue → double flush → REST `already-exists` (409) on `_pl_ledger_idem`. */
 let flushVoucherOutboxInFlight: Promise<{ ok: number; failed: number }> | null = null;
+/** Enqueue during an in-flight flush used to join that promise and never send the new row (journal files stuck on EXE). */
+let flushVoucherOutboxQueued = false;
 
 export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): Promise<{ ok: number; failed: number }> {
   if (flushVoucherOutboxInFlight) {
+    flushVoucherOutboxQueued = true;
     return flushVoucherOutboxInFlight;
   }
-  flushVoucherOutboxInFlight = flushVoucherOutboxImpl(options).finally(() => {
-    flushVoucherOutboxInFlight = null;
-  });
+  flushVoucherOutboxInFlight = (async () => {
+    let last = { ok: 0, failed: 0 };
+    try {
+      do {
+        flushVoucherOutboxQueued = false;
+        const round = await flushVoucherOutboxImpl(options);
+        last = { ok: last.ok + round.ok, failed: round.failed };
+      } while (flushVoucherOutboxQueued);
+      return last;
+    } finally {
+      flushVoucherOutboxInFlight = null;
+    }
+  })();
   return flushVoucherOutboxInFlight;
 }
 
@@ -783,15 +859,15 @@ async function flushVoucherOutboxImpl(options?: FlushVoucherOutboxOptions): Prom
         String((reg as Record<string, unknown>).authoritativeCompanyId || row.company_id).trim() || row.company_id;
       let docFieldsToWrite = docFields as Record<string, unknown>;
       const outboxHadExplicitFileUrls = Object.prototype.hasOwnProperty.call(docFieldsToWrite, "fileUrls");
+      let outboxOmitVoucherFileUrlsFromFirestoreWrite = false;
+      const outboxPayloadFileUrlsForAttachGuard = outboxHadExplicitFileUrls
+        ? normalizeFileUrlsField(docFieldsToWrite.fileUrls)
+        : [];
       // Recycle-bin "Delete Permanently" — hard remove. Soft delete (`op:delete` alone) stays a tombstone.
       const isPermanentHardPurge =
         row.op === "delete" && docFieldsToWrite.plPermanentlyPurged === true;
       if (row.collection_name === "vouchers") {
         try {
-          const mirrorRow = await getCompanyDocFromBrowserDb(row.company_id, "vouchers", row.doc_id, {
-            includeDeleted: true,
-          });
-          const mirrorUrls = normalizeFileUrlsField(mirrorRow?.fileUrls);
           const payloadUrls = normalizeFileUrlsField(docFieldsToWrite.fileUrls);
           // Explicit empty / trimmed list from save must stay — do not revive from mirror HTTPS.
           if (outboxHadExplicitFileUrls && payloadUrls.length === 0) {
@@ -800,15 +876,6 @@ async function flushVoucherOutboxImpl(options?: FlushVoucherOutboxOptions): Prom
               fileUrls: [],
               files: [],
               unassignedFile: null,
-            };
-          } else if (
-            mirrorUrls.length > 0 &&
-            payloadUrls.some((u) => isLocalFileRef(u)) &&
-            mirrorUrls.some((u) => typeof u === "string" && u.startsWith("http"))
-          ) {
-            docFieldsToWrite = {
-              ...docFieldsToWrite,
-              fileUrls: mergeVoucherFileUrlsForEditDialog(payloadUrls, mirrorUrls),
             };
           } else if (payloadUrls.length > 0 && !Array.isArray(docFieldsToWrite.fileUrls)) {
             docFieldsToWrite = { ...docFieldsToWrite, fileUrls: payloadUrls };
@@ -848,10 +915,38 @@ async function flushVoucherOutboxImpl(options?: FlushVoucherOutboxOptions): Prom
           const skipAttachHydrate =
             apkEmbeddedSqliteFirstWritesPreferred() && isDeviceLocalCompany(reg);
           if (!skipAttachHydrate) {
-            docFieldsToWrite = await hydrateVoucherLocalAttachmentsForServer(fsCompanyId, docFieldsToWrite);
+            docFieldsToWrite = await hydrateVoucherLocalAttachmentsForServer(fsCompanyId, {
+              ...docFieldsToWrite,
+              id: String(docFieldsToWrite.id || row.doc_id || "").trim() || row.doc_id,
+            });
+          }
+          if (outboxHadExplicitFileUrls) {
+            const { resolveOnlineOutboxVoucherFileUrlsAfterHydrate } = await import(
+              "@/lib/ledgerModes/online/outboxAttachmentFlush"
+            );
+            const resolution = resolveOnlineOutboxVoucherFileUrlsAfterHydrate({
+              payloadFileUrls: outboxPayloadFileUrlsForAttachGuard,
+              hydratedFileUrls: docFieldsToWrite.fileUrls,
+              cloudSafe: cloudSafeVoucherFileUrls,
+            });
+            if (resolution.omitFileUrlsFromFirestoreWrite) {
+              outboxOmitVoucherFileUrlsFromFirestoreWrite = true;
+              const { fileUrls: _omitUrls, files: _omitFiles, unassignedFile: _omitUf, ...rest } =
+                docFieldsToWrite;
+              docFieldsToWrite = rest;
+            } else {
+              docFieldsToWrite = {
+                ...docFieldsToWrite,
+                fileUrls: resolution.fileUrls ?? [],
+                files: [],
+                unassignedFile: null,
+              };
+            }
           }
         } else {
-          docFieldsToWrite = await hydratePendingLocalFileRefsDeep(fsCompanyId, docFieldsToWrite);
+          docFieldsToWrite = stripLocalFileRefsFromFirestoreDoc(
+            await hydratePendingLocalFileRefsDeep(fsCompanyId, docFieldsToWrite)
+          );
         }
       }
       const ref = doc(firestore, `companies/${fsCompanyId}/${row.collection_name}`, row.doc_id);
@@ -949,7 +1044,10 @@ async function flushVoucherOutboxImpl(options?: FlushVoucherOutboxOptions): Prom
           updatedAt: serverTimestamp(),
         };
         // merge:true + missing `fileUrls` / leftover `unassignedFile` = delete undo on server.
-        if (outboxHadExplicitFileUrls || Object.prototype.hasOwnProperty.call(docFieldsToWrite, "fileUrls")) {
+        if (
+          !outboxOmitVoucherFileUrlsFromFirestoreWrite &&
+          (outboxHadExplicitFileUrls || Object.prototype.hasOwnProperty.call(docFieldsToWrite, "fileUrls"))
+        ) {
           updateDoc.fileUrls = normalizeFileUrlsField(docFieldsToWrite.fileUrls);
           updateDoc.files = [];
           updateDoc.unassignedFile = deleteField();

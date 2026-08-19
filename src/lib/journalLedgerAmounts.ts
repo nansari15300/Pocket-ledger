@@ -16,6 +16,34 @@ function toLedgerAmount(n: unknown): number {
   return Number.isFinite(x) ? x : 0;
 }
 
+export type JournalVoucherLeg = {
+  accountId?: unknown;
+  accountName?: unknown;
+  debit?: unknown;
+  credit?: unknown;
+};
+
+/** Journal/adjustment — Firestore `entries[]` ya draft `lines[]` ko ek shape me lao (Recent / particulars). */
+export function getJournalVoucherLegs(v: Record<string, unknown> | null | undefined): JournalVoucherLeg[] {
+  if (!v) return [];
+  if (Array.isArray(v.entries) && (v.entries as unknown[]).length > 0) {
+    return v.entries as JournalVoucherLeg[];
+  }
+  if (Array.isArray(v.lines) && (v.lines as unknown[]).length > 0) {
+    return (v.lines as Array<Record<string, unknown>>).map((line) => {
+      const isCredit = String(line.type || "").toLowerCase() === "credit";
+      const amt = toLedgerAmount(line.amount);
+      return {
+        accountId: line.accountId,
+        accountName: line.accountName,
+        debit: isCredit ? 0 : amt,
+        credit: isCredit ? amt : 0,
+      };
+    });
+  }
+  return [];
+}
+
 /**
  * Journal ledger — ek hi accountId Dr + Cr alag lines par ho sakta hai; saari matching entries jod kar Dr/Cr nikalo.
  */

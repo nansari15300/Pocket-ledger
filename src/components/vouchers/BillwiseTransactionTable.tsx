@@ -366,7 +366,7 @@ export function BillwiseTransactionTable({
             {showCol("type") && renderHeaderWithFilter("type", "Type", false, ensureMinGaps ? 75 : undefined)}
             {showCol("voucherNo") && renderHeaderWithFilter("voucherNumber", "Voucher No.", false, ensureMinGaps ? 105 : undefined)}
             {context === "daybook" && renderHeaderWithFilter("accounts", "Accounts", false, ensureMinGaps ? 120 : undefined)}
-            {showCol("user") && context !== "note" && renderHeaderWithFilter("user", "User", false, ensureMinGaps ? 85 : undefined)}
+            {showCol("user") && context !== "note" && renderHeaderWithFilter("user", "User", false, ensureMinGaps ? 148 : undefined)}
             {showCol("dr") && !hideDebitColumn && renderHeaderWithFilter("debit", stockView === "amount" ? "Debit" : "In", true, ensureMinGaps ? 100 : undefined)}
             {showCol("cr") && !hideCreditColumn && renderHeaderWithFilter("credit", stockView === "amount" ? "Credit" : "Out", true, ensureMinGaps ? 100 : undefined)}
             {showCol("status") && (

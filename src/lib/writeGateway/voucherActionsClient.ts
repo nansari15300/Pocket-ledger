@@ -410,7 +410,8 @@ async function hydrateLocalAttachmentsInPayloadIfOnline(
 function dispatchSavedVoucherAttachmentUrls(
   companyId: string,
   voucherId: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  options?: { previousUrls?: readonly string[] }
 ): void {
   // Empty `[]` bhi dispatch — warna remove-all ke baad useVouchers cache purani HTTPS URLs rakhta hai
   // aur form/ledger ~500ms baad file wapas dikha deta hai.
@@ -420,7 +421,9 @@ function dispatchSavedVoucherAttachmentUrls(
     : [];
   // `local:` pending — form `applyVoucherAttachmentsAfterFormSave` resolve ke baad dispatch karega (duplicate upload avoid).
   if (urls.some((u) => isLocalFileRef(u))) return;
-  dispatchVoucherAttachmentSaved(companyId, voucherId, urls);
+  dispatchVoucherAttachmentSaved(companyId, voucherId, urls, {
+    previousUrls: options?.previousUrls,
+  });
 }
 
 /** Firestore company root: `planExpiry` Timestamp ya `planExpiryMs` — tier overlay + cache ke saath expiry compare */
@@ -804,13 +807,19 @@ export async function patchVoucherFields(
   }
   const schedulePatchAttachmentCleanup = (finalPayload: Record<string, unknown>): void => {
     if (!patchEditAttachmentCtx) return;
+    const finalUrls = normalizeFileUrlsField(finalPayload.fileUrls);
     finalizeFormAttachmentEditAfterSave({
       companyId,
       entityId: voucherId,
       voucherType: String(finalPayload.type || "").trim() || undefined,
       baselineUrls: patchEditAttachmentCtx.baselineUrls,
-      finalUrls: normalizeFileUrlsField(finalPayload.fileUrls),
+      finalUrls,
       oldDocRemoteUrls: patchEditAttachmentCtx.remoteUrls,
+    });
+    if (!Object.prototype.hasOwnProperty.call(finalPayload, "fileUrls")) return;
+    if (finalUrls.some((u) => isLocalFileRef(u))) return;
+    dispatchVoucherAttachmentSaved(companyId, voucherId, finalUrls, {
+      previousUrls: patchEditAttachmentCtx.baselineUrls,
     });
   };
   if (sqliteFirst) {
@@ -873,6 +882,7 @@ export async function patchVoucherFields(
         }
         await removeOutboxRowsForCompanyDoc(companyId, "vouchers", voucherId);
         await mirrorVoucherDocToBrowserDb(companyId, voucherId);
+        schedulePatchAttachmentCleanup(payload);
         return;
       } catch (e) {
         if (isLikelyOfflineFirestoreError(e)) {
@@ -896,6 +906,7 @@ export async function patchVoucherFields(
             }
             await removeOutboxRowsForCompanyDoc(companyId, "vouchers", voucherId);
             await mirrorVoucherDocToBrowserDb(companyId, voucherId);
+            schedulePatchAttachmentCleanup(payload);
             return;
           } catch (e2) {
             if (isLikelyOfflineFirestoreError(e2)) {
@@ -1760,7 +1771,9 @@ export async function saveVoucher(
     void flushOrQueuePlServerVoucherAttachmentsAfterLocalSave(writeCompanyIdLocal, mergedLocal);
     await enqueueVoucherOutbox(writeCompanyIdLocal, "update", voucherId!, mergedLocal);
     scheduleBrowserDbPersistAfterWrite();
-    dispatchSavedVoucherAttachmentUrls(writeCompanyIdLocal, voucherId!, mergedLocal);
+    dispatchSavedVoucherAttachmentUrls(writeCompanyIdLocal, voucherId!, mergedLocal, {
+      previousUrls: voucherEditAttachmentCtx?.baselineUrls,
+    });
     const cleanupCtx = mergeAttachmentCleanupContexts(
       voucherEditAttachmentCtx,
       readVoucherAttachmentBaselineFromRow(existingLocal as Record<string, unknown> | null)
@@ -2092,6 +2105,9 @@ export async function saveVoucher(
     return { id: voucherId! };
   }
   await mirrorVoucherDocToBrowserDb(companyId, voucherId!);
+  dispatchSavedVoucherAttachmentUrls(companyId, voucherId!, cleanVoucherData, {
+    previousUrls: voucherEditAttachmentCtx?.baselineUrls,
+  });
   scheduleVoucherAttachmentCleanupIfNeeded(cleanVoucherData.fileUrls);
   return { id: voucherId! };
 }

@@ -324,14 +324,7 @@ function rowMissingVoucherAttachmentFields(prevRow: any, mergedRow: any): boolea
     return false;
   }
   // Partial trim (3→2): fuller incoming list is NOT a missing-field upgrade.
-  if (
-    Object.prototype.hasOwnProperty.call(prevRow, "fileUrls") &&
-    Array.isArray(prevRow.fileUrls) &&
-    prevUrls.length > 0 &&
-    nextUrls.length > prevUrls.length
-  ) {
-    return false;
-  }
+  // (Removed: blocked cross-device partial add when nextUrls.length > prevUrls.length.)
   return voucherAttachmentUiFingerprint(prevRow) !== voucherAttachmentUiFingerprint(mergedRow);
 }
 
@@ -2690,6 +2683,9 @@ export const VoucherProvider = ({
           });
           (v.entries || []).forEach((e: any) => {
             if (e.accountId) idsToFetch.add(e.accountId);
+          });
+          (v.lines || []).forEach((line: any) => {
+            if (line?.accountId) idsToFetch.add(line.accountId);
           });
         });
 

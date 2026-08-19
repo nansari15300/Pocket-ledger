@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { collection, doc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
-import { uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
 import { toast } from "sonner";
 import { ArrowDown, ArrowUp, CheckCircle, History, Loader2, PlusCircle, Printer, Trash2 } from "lucide-react";
 
@@ -68,6 +67,18 @@ import {
 } from "@/lib/appendCompressedVoucherAttachments";
 import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
+import {
+  finalizeVoucherAttachmentsAfterFormSave,
+  uploadVoucherAttachmentFileToFirebase,
+  voucherAttachmentFieldsForSave,
+  normalizeFormFileUrlsForSave,
+} from "@/lib/voucherFormAttachmentSave";
+import {
+  appendLocalOnlyVoucherFilesToUrls,
+  shouldDeferStorageIncrementUntilPendingUpload,
+  shouldStageNewVoucherFilesAsLocalPending,
+} from "@/lib/voucherLocalAttachmentUpload";
+import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 
 type AdjustmentTarget = {
@@ -367,15 +378,58 @@ export function CreateAdjustmentForm({
         companyId,
         savePdfAsImage,
       });
-      const fileUrls = filesForSave.filter((f): f is string => typeof f === "string");
+      let fileUrls = normalizeFormFileUrlsForSave(
+        filesForSave.filter((f): f is string => typeof f === "string")
+      );
       const newFiles = filesForSave.filter((f): f is File => f instanceof File);
-      for (const file of newFiles) {
-        const url = await uploadVoucherAttachmentFileToFirebase({
+      if (newFiles.length > 0) {
+        const totalNewBytes = newFiles.reduce((s, f) => s + (f.size || 0), 0);
+        const limitCheck = await checkStorageLimit(
           companyId,
-          voucherType: "adjustment",
-          file,
-        });
-        fileUrls.push(url);
+          company?.planId,
+          { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes },
+          company?.storageOption
+        );
+        if (!limitCheck.allowed) {
+          toast.error("Storage limit reached.", { id: toastId, description: limitCheck.message });
+          setIsLoading(false);
+          return;
+        }
+        if (await shouldStageNewVoucherFilesAsLocalPending(companyId)) {
+          const { fileUrls: merged } = await appendLocalOnlyVoucherFilesToUrls({
+            companyId,
+            storageFolder: "adjustment",
+            existingFileUrls: fileUrls,
+            newFiles,
+            maxFileCount: fileAttachmentLimits.maxFileCount,
+            existingVoucherId: voucher?.id ?? null,
+          });
+          fileUrls = merged;
+          if (!shouldDeferStorageIncrementUntilPendingUpload()) {
+            try {
+              await incrementCompanyStorage(companyId, {
+                attachmentsBytes: totalNewBytes,
+                storageBytes: totalNewBytes,
+              });
+            } catch {
+              /* offline */
+            }
+          }
+        } else {
+          for (const file of newFiles) {
+            if (fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
+            const url = await uploadVoucherAttachmentFileToFirebase({
+              companyId,
+              voucherType: "adjustment",
+              file,
+            });
+            fileUrls.push(url);
+            await incrementCompanyStorage(companyId, {
+              attachmentsBytes: file.size,
+              storageBytes: file.size,
+            });
+          }
+        }
       }
       const saved = await saveVoucher(
         companyId,
@@ -391,16 +445,35 @@ export function CreateAdjustmentForm({
           adjustmentTarget: selectedTarget,
           adjustmentExpenseAccountId: adjustmentExpenseId,
           entries,
-          fileUrls,
+          ...voucherAttachmentFieldsForSave(fileUrls),
         },
         voucher?.id,
         approveAfterSave ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined
       );
       setSavedVoucherId(saved.id);
-      initialFilesRef.current = fileUrls;
       initialTargetRef.current = selectedTarget;
-      setFiles(fileUrls);
-      setSavePdfAsImage(shouldSuggestPdfAsImage(fileUrls));
+      if (companyId && saved.id) {
+        try {
+          const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
+            companyId,
+            voucherId: saved.id,
+            rawFileUrls: fileUrls,
+            storageFolder: "adjustment",
+            previousUrls: initialFilesRef.current,
+          });
+          initialFilesRef.current = persistedUrls;
+          setFiles(persistedUrls);
+          setSavePdfAsImage(shouldSuggestPdfAsImage(persistedUrls));
+        } catch (attachErr) {
+          console.warn("[CreateAdjustmentForm] post-save attachment finalize", attachErr);
+          initialFilesRef.current = fileUrls;
+          setFiles(fileUrls);
+        }
+      } else {
+        initialFilesRef.current = fileUrls;
+        setFiles(fileUrls);
+        setSavePdfAsImage(shouldSuggestPdfAsImage(fileUrls));
+      }
       toast.success("Adjustment saved.", { id: toastId, duration: 1200 });
       if (printAfter && typeof window !== "undefined") {
         window.setTimeout(() => window.print(), 250);
@@ -612,6 +685,7 @@ export function CreateAdjustmentForm({
                     <FilePreview
                       key={`${typeof file === "string" ? file : file.name}-${index}`}
                       file={file}
+                      attachmentCompanyId={companyId || undefined}
                       attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                       onRemove={

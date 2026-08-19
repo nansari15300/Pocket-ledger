@@ -1,3 +1,6 @@
+import { isLocalFileRef } from "@/lib/localPendingFiles";
+import { canResolveLocalFileRefsOnThisDevice } from "@/lib/canResolveLocalFileRefs";
+
 /**
  * Party / staff / bank / tax list avatar + hover portal:
  * kabhi-kabhi Firestore/SQLite me `fileUrl` string `"null"` / khali save ho jata — bina file ke bhi PDF preview spinner.
@@ -8,5 +11,7 @@ export function trimEntityFileUrlForPreview(raw: string | null | undefined): str
   if (!u) return null;
   const low = u.toLowerCase();
   if (low === "null" || low === "undefined" || low === "none" || low === "n/a") return null;
+  // Hosted web cannot resolve EXE IndexedDB `local:` — hide instead of broken FILE tile.
+  if (!canResolveLocalFileRefsOnThisDevice() && isLocalFileRef(u)) return null;
   return u;
 }

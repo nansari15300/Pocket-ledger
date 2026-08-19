@@ -43,6 +43,7 @@ import { getBlobFromAttachmentRefPreferLocalFirst } from "@/lib/attachmentPrevie
 import { tryResolveInterCompanyPeerAttachmentUrl } from "@/lib/interCompany/interCompanyAttachmentPeerResolve";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { canResolveLocalFileRefsOnThisDevice } from "@/lib/canResolveLocalFileRefs";
 import { isWebBrowserAttachmentLazyLoad } from "@/lib/webAttachmentLazyLoadPolicy";
 import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import {
@@ -3464,6 +3465,14 @@ export function FilePreview({
         attachmentCompanyId={attachmentCompanyId}
       />
     );
+
+  if (
+    typeof normalizedPreviewFile === "string" &&
+    isLocalFileRef(normalizedPreviewFile) &&
+    !canResolveLocalFileRefsOnThisDevice()
+  ) {
+    return null;
+  }
 
   if (attachmentBlockedByCrossCompanyPolicy) {
     return (

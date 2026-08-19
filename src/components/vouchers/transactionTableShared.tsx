@@ -41,11 +41,12 @@ import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { companyRequiresLocalAttachmentUrlsOnly } from "@/lib/staticAttachmentDisplayUrl";
 import { getVoucherAttachmentUrlsForUi, voucherAttachmentUiOptionsForCompany } from "@/lib/voucherAttachmentNormalize";
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
+import { getJournalVoucherLegs } from "@/lib/journalLedgerAmounts";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
 import {
-  isActiveRecurringTriggerVoucherForLedgerSwitch,
   isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay,
   resolveLedgerTransactionUserDisplayName,
+  shouldShowAutoRecurringSwitchInLedgerUserCell,
 } from "@/lib/ledgerUserColumnDisplay";
 import { isInterCompanyVoucherEditDeleteBlocked } from "@/lib/interCompany/interCompanyVoucherHydrate";
 
@@ -369,9 +370,18 @@ export const getDisplayType = (t: any) => {
   return t.type.replace(/_/g, " ");
 };
 
-/** Journal + Adjustment — multi-leg vouchers using `entries[]` (Recent / ledger opposite labels). */
+/** Journal + Adjustment — multi-leg vouchers (`entries[]` ya `lines[]`). */
 function isJournalOrAdjustmentEntries(t: any): boolean {
-  return (t.type === "journal" || t.type === "adjustment") && Array.isArray(t.entries);
+  if (t?.type !== "journal" && t?.type !== "adjustment") return false;
+  return getJournalVoucherLegs(t).length > 0;
+}
+
+function journalEntryAccountLabel(e: any, names: Record<string, string>): string {
+  const fromEntry = String(e?.accountName ?? "").trim();
+  if (fromEntry) return fromEntry;
+  const id = e?.accountId;
+  if (!id) return "N/A";
+  return names[String(id)] || "—";
 }
 
 function journalLikeEntriesFallbackLabel(t: any): string {
@@ -544,8 +554,9 @@ export const getParticularsText = (t: any, names: Record<string, string> = {}) =
     return accountName && accountName !== "N/A" ? `To: ${toAccountName} (via ${accountName})` : `To: ${toAccountName}`;
   }
   if (isJournalOrAdjustmentEntries(t)) {
-    const dr = t.entries.filter((e: any) => e.debit > 0).map((e: any) => `Dr: ${getName(e.accountId)}`);
-    const cr = t.entries.filter((e: any) => e.credit > 0).map((e: any) => `Cr: ${getName(e.accountId)}`);
+    const legs = getJournalVoucherLegs(t);
+    const dr = legs.filter((e) => (Number(e.debit) || 0) > 0).map((e) => `Dr: ${journalEntryAccountLabel(e, names)}`);
+    const cr = legs.filter((e) => (Number(e.credit) || 0) > 0).map((e) => `Cr: ${journalEntryAccountLabel(e, names)}`);
     return [...dr, ...cr].join(", ");
   }
   if (t.type === "note") return `Note for: ${getNoteLinkedEntityLabel(t, names)}`;
@@ -1173,6 +1184,8 @@ export const TransactionRow = React.memo(
     onPrintRow,
     syncInFlight = false,
     onSyncNow,
+    /** Enabled recurring templates se active trigger ids — switch sirf in par (dashboard jaisa). */
+    activeRecurringTriggerVoucherIds = null,
   }: any) => {
     const { company } = useCompany();
     const localLedgerOnly = companyRequiresLocalAttachmentUrlsOnly(company);
@@ -1492,10 +1505,19 @@ export const TransactionRow = React.memo(
           </TableCell>
         )}
         {showCol("user") && context !== "note" && (
-          <TableCell className={cn("max-w-[150px] min-w-[120px] overflow-hidden", ensureMinGaps && "px-[5px]")}>
+          <TableCell
+            className={cn(
+              ensureMinGaps && "px-[5px]",
+              !isMobileView && shouldShowAutoRecurringSwitchInLedgerUserCell(transaction)
+                ? "min-w-[148px] max-w-[180px]"
+                : "max-w-[150px] min-w-[120px] overflow-hidden",
+            )}
+          >
             {(() => {
-              const isAutoRecurringRow = isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(transaction);
-              const showAutoRecurringSwitch = isActiveRecurringTriggerVoucherForLedgerSwitch(transaction);
+              const showAutoRecurringSwitch = shouldShowAutoRecurringSwitchInLedgerUserCell(
+                transaction,
+                activeRecurringTriggerVoucherIds,
+              );
               // PC / web / EXE table: Auto recurring ON → user name + switch (mobile = text only).
               if (!isMobileView && showAutoRecurringSwitch) {
                 return (

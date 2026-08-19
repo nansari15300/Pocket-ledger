@@ -142,8 +142,8 @@ export function shouldPreserveClearedVoucherAttachments(
  * Empty intent must NOT block every future paste/add — only revive of the
  * URLs that were present when the user cleared (`blockedUrls`).
  *
- * Non-empty intent + empty/shorter candidate → also preserve (stale pull wipe
- * after Note/edit save was clearing fileUrls ~1s later).
+ * Non-empty intent + empty/shorter candidate → preserve only ~4s (stale pull
+ * right after this device's save). After that, other-device add/delete wins.
  */
 export function shouldPreserveIntendedVoucherAttachments(
   companyId: string,
@@ -164,7 +164,10 @@ export function shouldPreserveIntendedVoucherAttachments(
       blocked.every((u) => candidate.includes(u)) && candidate.length >= blocked.length;
     return onlyBlocked || staleFullList;
   }
-  // Recent save had files — don't let empty/shorter stale pull wipe them.
+  // Recent save had files — block only the short stale-empty/full-list bounce after *this* device's save.
+  // 15min lock was hiding EXE/APK deletes (and extra files) on web after a web add.
+  const NON_EMPTY_INTENT_STALE_GRACE_MS = 4_000;
+  if (Date.now() - intent.atMs > NON_EMPTY_INTENT_STALE_GRACE_MS) return false;
   if (candidate.length < intent.urls.length) return true;
   if (candidate.length > intent.urls.length) return true;
   const intendedSet = new Set(intent.urls);

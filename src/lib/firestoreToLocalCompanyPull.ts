@@ -240,13 +240,19 @@ function mergeDocAttachmentFieldsPreferRemote(
       continue;
     }
 
-    // Shorter local HTTPS (no pending) beats longer remote even when remote timestamp is stale-ahead.
-    if (hasLocalKey && !lHasLocal && lArr.length > 0 && lArr.length < rArr.length) {
+    // Same-device outbox lag: shorter local beats longer stale remote — not when remote is newer (other tab/user).
+    if (hasLocalKey && !lHasLocal && lArr.length > 0 && lArr.length < rArr.length && localMs >= remoteMs) {
       out[key] = local[key];
       continue;
     }
 
+    if (remoteMs > localMs && !lHasLocal) {
+      out[key] = remote[key];
+      continue;
+    }
+
     if (rHttps.length > lHttps.length) out[key] = remote[key];
+    else if (lHttps.length > rHttps.length && localMs >= remoteMs) out[key] = local[key];
     else if (rHttps.length === lHttps.length && rArr.some(isHttpsAttachmentRef) && lHasLocal) {
       out[key] = upgradeLocalAttachmentListFromRemote(lArr, rArr);
     }
@@ -393,14 +399,21 @@ function mergeDocAttachmentFieldsForPull(
       continue;
     }
 
-    // HTTPS-only local trim vs longer remote — timestamp lag pe bhi local jeete.
-    if (hasLocalKey && !lHasLocal && lArr.length > 0 && lArr.length < rArr.length) {
+    // Same-device outbox lag: shorter local beats longer stale remote — not when remote is newer (other tab/user).
+    if (hasLocalKey && !lHasLocal && lArr.length > 0 && lArr.length < rArr.length && localMs >= remoteMs) {
       out[key] = local[key];
       continue;
     }
 
-    if (lHttps.length > rHttps.length) {
+    if (remoteMs > localMs && !lHasLocal) {
+      out[key] = remote[key];
+      continue;
+    }
+
+    if (lHttps.length > rHttps.length && localMs >= remoteMs) {
       out[key] = local[key];
+    } else if (rHttps.length > lHttps.length) {
+      out[key] = remote[key];
     } else if (rHttps.length === 0 && lHasLocal) {
       out[key] = local[key];
     } else if (lHasLocal && rHttps.length > 0) {

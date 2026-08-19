@@ -166,26 +166,30 @@ export function FirebaseLedgerOnlineCompanySyncList({
       }
       replaceFirebaseLedgerCompanySyncEntries(entriesToSave);
       requestAttachmentUiRefresh();
-      const selectedCompanies = companies.filter((company) => {
-        const id = String(company.id || "").trim();
-        return id && draft[id]?.data === true;
-      });
-      if (syncEnabled && selectedCompanies.length > 0 && typeof navigator !== "undefined" && navigator.onLine) {
-        for (const company of selectedCompanies) {
-          await runOfflineFullWarmSync({
-            company,
-            localCompanyId: String(company.id || "").trim(),
-            includeAttachmentPrefetch: draft[String(company.id || "").trim()]?.attachments === true,
-            skipWarmBootstrapFlag: true,
-          }).catch(() => null);
-        }
-      }
       setDirty(false);
       toast({
         title: "Online sync saved",
         description:
           "Data = cloud download/upload for masters & vouchers. Untick keeps Local SQLite on screen (offline). Files = attachment download only (needs Data). Untick Files still allows uploading newly added files.",
       });
+      const selectedCompanies = companies.filter((company) => {
+        const id = String(company.id || "").trim();
+        return id && draft[id]?.data === true;
+      });
+      // Prefs are already saved. Full warm/prefetch can take minutes or hang — never block the Save button.
+      if (syncEnabled && selectedCompanies.length > 0 && typeof navigator !== "undefined" && navigator.onLine) {
+        void (async () => {
+          for (const company of selectedCompanies) {
+            const id = String(company.id || "").trim();
+            await runOfflineFullWarmSync({
+              company,
+              localCompanyId: id,
+              includeAttachmentPrefetch: draft[id]?.attachments === true,
+              skipWarmBootstrapFlag: true,
+            }).catch(() => null);
+          }
+        })();
+      }
     } finally {
       setSaving(false);
     }

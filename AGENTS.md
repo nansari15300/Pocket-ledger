@@ -203,6 +203,18 @@ When the human asks for PL Server fixes (including “make PL like online”):
 
 - Prefer copy-isolate first; only edit normal company paths if that same message clearly overrides this rule.
 
+## Ledger mode isolation (Online / Local·Drive / PL Server)
+
+**Read `docs/LEDGER_MODE_ARCHITECTURE.md` and `.cursor/rules/ledger-mode-isolation.mdc` before voucher sync, attachment, master save, or write-gateway work.**
+
+- **UI shared** (`src/components/**`) — one Dashboard, one Party ledger, one voucher form per type.
+- **Logic split** into `src/lib/ledgerModes/online/`, `localDrive/`, `plServer/` (+ `shared/` for neutral types only).
+- **Online companies:** SQLite-first save → outbox flush to Firestore when online; queue when offline; timestamp merge; **delete wins**; attachments promote `local:` → Storage HTTPS before cloud doc write.
+- **PL Server / pure local:** frozen product paths stay as-is; new code uses `ledgerModes/plServer/` or `localDrive/` adapters only.
+- **Migration rule:** copy mode-specific code out of shared files before editing; never fix online by changing PL Server or Drive internals in the same diff.
+
+Human explicitly requested online attachment/sync fixes (Aug 2026) — that overrides the casual “do not touch online sync” freeze for **attachment pipeline + outbox hydrate + form parity** only, scoped to `ledgerModes/online/` and minimal wiring.
+
 ## Cursor note
 
 Cursor rules under `.cursor/rules/` should stay aligned with this `AGENTS.md`.
