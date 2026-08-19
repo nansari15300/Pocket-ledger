@@ -2,7 +2,7 @@
  * Ledger mode router — UI/forms call this instead of branching on company flags.
  * See docs/LEDGER_MODE_ARCHITECTURE.md
  */
-import type { Company } from "@/lib/types";
+import type { Company } from "@/hooks/useCompany";
 
 export type LedgerMode = "online" | "localDrive" | "plServer";
 
