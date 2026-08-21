@@ -437,8 +437,7 @@ export function JoinSharedLocalCompanyPanel({
         </div>
       ) : !invitesEverLoaded ? (
         <p className="text-sm text-muted-foreground py-2">
-          Click <strong>Refresh list</strong> to search Google Drive for shared Pocket Ledger companies. (Automatic scan
-          is off to save Drive API quota.)
+          Click <strong>Refresh list</strong> to search Google Drive for shared Pocket Ledger companies.
         </p>
       ) : !hasAnyInvites ? (
         <p className="text-sm text-muted-foreground py-2">

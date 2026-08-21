@@ -48,7 +48,10 @@
     "storage:cors": "node scripts/apply-firebase-storage-cors.cjs",
     "website:build": "node scripts/build-website.cjs",
     "website:serve": "node scripts/serve-website.cjs",
-    "website:stage-releases": "node scripts/stage-website-releases.cjs"
+    "website:stage-releases": "node scripts/stage-website-releases.cjs",
+    "release:bump": "node scripts/bump-release-version.cjs",
+    "release:publish": "node scripts/release-publish.cjs",
+    "release:publish:fast": "node scripts/release-publish.cjs --skip-static"
   },
   "dependencies": {
     "@capacitor-community/admob": "^6.2.0",

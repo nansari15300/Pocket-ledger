@@ -50,6 +50,7 @@ const TYPES = {
   ".txt": "text/plain; charset=utf-8",
   ".exe": "application/octet-stream",
   ".apk": "application/vnd.android.package-archive",
+  ".aab": "application/octet-stream",
   ".wasm": "application/wasm",
 };
 
@@ -154,7 +155,7 @@ function serveRelease(req, res) {
     "Content-Type": TYPES[ext] || "application/octet-stream",
     "Content-Length": String(st.size),
   };
-  if (ext === ".exe" || ext === ".apk") {
+  if (ext === ".exe" || ext === ".apk" || ext === ".aab") {
     headers["Content-Disposition"] =
       "attachment; filename=\"" + name.replace(/"/g, "") + "\"; filename*=UTF-8''" + encodeURIComponent(name);
   }

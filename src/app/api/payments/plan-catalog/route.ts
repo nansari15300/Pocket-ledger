@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebaseAdmin";
-import { mergeAppSettingsPlansDoc } from "@/lib/mergeAppSettingsPlans";
+import {
+  mergeAppSettingsPlansDoc,
+  sanitizePlanForFirestoreWrite,
+} from "@/lib/mergeAppSettingsPlans";
+import { plansVisibleOnBillingPage } from "@/config/plans";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +16,7 @@ export async function GET() {
     const db = getAdminDb();
     const snap = await db.doc("app_settings/plans").get();
     const raw = snap.exists ? (snap.data() as Record<string, unknown>) : undefined;
-    const plans = mergeAppSettingsPlansDoc(raw);
+    const plans = plansVisibleOnBillingPage(mergeAppSettingsPlansDoc(raw));
     return NextResponse.json(
       { plans, source: "server" as const },
       {

@@ -35,6 +35,7 @@ import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { LocalCloudSyncSettingsPage } from "@/components/settings/LocalCloudSyncSettingsPage";
 import { LocalAppServerSettings } from "@/components/settings/LocalAppServerSettings";
 import { MyRoleButton } from "@/components/settings/MyRoleButton";
+import { CheckForUpdateSettingsRow } from "@/components/settings/CheckForUpdateSettingsRow";
 import { isLocalAppServerSettingsNavVisible } from "@/lib/localAppServerDevPreview";
 import { settingsViewHref } from "@/lib/appNavHref";
 import type { UserRole } from "@/hooks/usePermissions";
@@ -471,8 +472,7 @@ function SettingsPageContent() {
         [openSettingsListSheet]
     );
 
-    const renderNavButtons = (onPick?: () => void) => (
-        // Native scroll — Radix ScrollArea vertical track (~10px) nav list ko daen se patla dikhaata tha
+    const renderNavList = (onPick?: () => void) => (
         <ul className="list-none space-y-1 py-1 w-full min-w-0" data-theme-list="account-list">
             {navItemsForUi.map((item) => {
                 const isActive = activeView === item.id;
@@ -495,15 +495,31 @@ function SettingsPageContent() {
         </ul>
     );
 
-    /** Stall dauran poori list ek saath — adhuri nav + galat highlight na dikhe */
-    const renderSettingsNavArea = (onPick?: () => void) =>
+    const renderFixedUpdateRow = () => (
+        <div
+            className={cn(
+                "flex-shrink-0 border-t border-black/15 pt-2 pb-1 dark:border-white/15",
+                SETTINGS_NAV_INSET_X
+            )}
+        >
+            <CheckForUpdateSettingsRow />
+        </div>
+    );
+
+    /** Nav list scrolls; Check for update stays pinned at bottom (EXE + APK). */
+    const renderSettingsNavColumn = (onPick?: () => void) =>
         settingsNavStall ? (
             <div className={cn("flex flex-col items-center justify-center gap-2 py-12 text-center text-sm text-muted-foreground", SETTINGS_NAV_INSET_X)}>
                 <Loader2 className="h-6 w-6 shrink-0 animate-spin" aria-hidden />
                 <span>Loading settings menu…</span>
             </div>
         ) : (
-            renderNavButtons(onPick)
+            <>
+                <div className={cn("min-h-0 flex-1 overflow-y-auto overflow-x-hidden", SETTINGS_NAV_INSET_X)}>
+                    {renderNavList(onPick)}
+                </div>
+                {renderFixedUpdateRow()}
+            </>
         );
 
     if (companyId && !company) {
@@ -621,8 +637,8 @@ function SettingsPageContent() {
                     <div className={cn("flex-shrink-0 py-3", SETTINGS_LIST_HEADER_RULE, SETTINGS_NAV_INSET_X)}>
                         {renderSettingsListHeader()}
                     </div>
-                    <div className={cn("min-h-0 flex-1 overflow-y-auto overflow-x-hidden", SETTINGS_NAV_INSET_X)}>
-                        {renderSettingsNavArea()}
+                    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                        {renderSettingsNavColumn()}
                     </div>
                 </div>
             );
@@ -705,13 +721,8 @@ function SettingsPageContent() {
                                     <MyRoleButton onJumpToEditor={jumpMyRoleToEditor} />
                                 </div>
                             </SheetHeader>
-                            <div
-                                className={cn(
-                                    "relative z-10 min-h-0 flex-1 overflow-y-auto overflow-x-hidden pointer-events-auto touch-manipulation",
-                                    SETTINGS_NAV_INSET_X
-                                )}
-                            >
-                                {renderSettingsNavArea(() => setSettingsListOpen(false))}
+                            <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden pointer-events-auto touch-manipulation">
+                                {renderSettingsNavColumn(() => setSettingsListOpen(false))}
                             </div>
                         </div>
                     </SheetContent>
@@ -729,9 +740,8 @@ function SettingsPageContent() {
               <div className={cn("flex-shrink-0 pb-3 pt-1", SETTINGS_LIST_HEADER_RULE, SETTINGS_NAV_INSET_X)}>
                 {renderSettingsListHeader()}
               </div>
-              {/* `scrollbar-gutter:stable` yahan mat — hamesha daen taraf ~scrollbar jitni khali strip (list chhoti ho tab bhi); main pane par stable rakha shake ke liye */}
-              <div className={cn("min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto", SETTINGS_NAV_INSET_X)}>
-                {renderSettingsNavArea()}
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                {renderSettingsNavColumn()}
               </div>
             </div>
           </aside>

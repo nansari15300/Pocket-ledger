@@ -19,6 +19,12 @@ export type AddonKind =
 
 export type DeviceUserAddOnOffer = {
   enabled: boolean;
+  /** @deprecated use billingOnlineVisible / billingLocalVisible */
+  hiddenFromBilling?: boolean;
+  /** Switch off = hide Online tab on Billing (purchased slots stay active). */
+  billingOnlineVisible?: boolean;
+  /** Switch off = hide Local/Offline tab on Billing (purchased slots stay active). */
+  billingLocalVisible?: boolean;
   pricePerDeviceOnlineNpr: number;
   pricePerDeviceLocalNpr: number;
   pricePerUserOnlineNpr: number;
@@ -63,6 +69,30 @@ function floorNonNeg(n: unknown, fallback: number): number {
   return Math.max(0, Math.floor(Number.isFinite(v) ? v : fallback));
 }
 
+function resolveAddonBillingScopeVisible(
+  o: Record<string, unknown>,
+  scope: "online" | "local"
+): boolean {
+  const key = scope === "online" ? "billingOnlineVisible" : "billingLocalVisible";
+  const specific = o[key];
+  if (typeof specific === "boolean") return specific;
+  if (o.hiddenFromBilling === true) return false;
+  return true;
+}
+
+export function isAddonScopeVisibleOnBilling(
+  offer: DeviceUserAddOnOffer,
+  scope: "online" | "local"
+): boolean {
+  if (!offer.enabled) return false;
+  if (scope === "online") return offer.billingOnlineVisible !== false;
+  return offer.billingLocalVisible !== false;
+}
+
+export function hasAnyAddonScopeVisibleOnBilling(offer: DeviceUserAddOnOffer): boolean {
+  return isAddonScopeVisibleOnBilling(offer, "online") || isAddonScopeVisibleOnBilling(offer, "local");
+}
+
 export function sanitizeDeviceUserAddOnOffer(raw: unknown): DeviceUserAddOnOffer {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_DEVICE_USER_ADDON_OFFER };
   const o = raw as Record<string, unknown>;
@@ -77,6 +107,8 @@ export function sanitizeDeviceUserAddOnOffer(raw: unknown): DeviceUserAddOnOffer
       : DEFAULT_DEVICE_USER_ADDON_OFFER.pricePerCompanyOnlineNpr;
   return {
     enabled: o.enabled === true,
+    billingOnlineVisible: resolveAddonBillingScopeVisible(o, "online"),
+    billingLocalVisible: resolveAddonBillingScopeVisible(o, "local"),
     pricePerDeviceOnlineNpr: floorNonNeg(
       o.pricePerDeviceOnlineNpr,
       floorNonNeg(legacyDevice, DEFAULT_DEVICE_USER_ADDON_OFFER.pricePerDeviceOnlineNpr)

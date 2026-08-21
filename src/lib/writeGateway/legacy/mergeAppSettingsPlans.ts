@@ -32,7 +32,10 @@ function omitUndefinedDeep(value: unknown): unknown {
 
 /** Admin Save: `setDoc` se pehle plan object — invalid data error avoid. */
 export function sanitizePlanForFirestoreWrite(plan: Plan): Record<string, unknown> {
-  const cleaned = omitUndefinedDeep(plan as unknown as Record<string, unknown>);
+  const cleaned = omitUndefinedDeep({
+    ...(plan as unknown as Record<string, unknown>),
+    hiddenFromBilling: plan.hiddenFromBilling === true,
+  });
   return (cleaned ?? {}) as Record<string, unknown>;
 }
 
@@ -140,6 +143,7 @@ export function mergeAppSettingsPlansDoc(raw: Record<string, unknown> | null | u
       ...(firestorePlan?.limitedTimeOfferDate != null
         ? { limitedTimeOfferDate: firestorePlan.limitedTimeOfferDate }
         : {}),
+      hiddenFromBilling: firestorePlan?.hiddenFromBilling === true,
     } as Plan;
 
     if (raw.entitlementCapConvention !== "zero_means_none") {

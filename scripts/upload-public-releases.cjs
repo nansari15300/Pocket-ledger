@@ -7,7 +7,11 @@
  */
 const fs = require("fs");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const { spawnSync, execSync } = require("child_process");
+const {
+  fetchReleaseSettings,
+  buildReleaseRotation,
+} = require("./release-settings.cjs");
 
 const projectRoot = path.join(__dirname, "..");
 const bucket = process.env.FIREBASE_STORAGE_BUCKET || "studio-5452513410-a3f5b.firebasestorage.app";
@@ -44,15 +48,14 @@ function gsutilBin() {
   return "gsutil";
 }
 
+function shellQuote(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
 function gsutil(args) {
   const cmd = gsutilBin();
-  // Windows .cmd shims need cmd.exe — spawnSync EINVAL on .cmd directly.
-  const r =
-    process.platform === "win32"
-      ? spawnSync("cmd.exe", ["/c", cmd, ...args], { stdio: "inherit", windowsHide: true })
-      : spawnSync(cmd, args, { stdio: "inherit" });
-  if (r.error) throw r.error;
-  if (r.status !== 0) throw new Error(`gsutil ${args.join(" ")} failed (${r.status})`);
+  const line = [shellQuote(cmd), ...args.map(shellQuote)].join(" ");
+  execSync(line, { stdio: "inherit", windowsHide: true });
 }
 
 function fetchJson(url) {
@@ -75,36 +78,41 @@ function fetchJson(url) {
   });
 }
 
-function sameRelease(a, b) {
-  if (!a || !b) return false;
-  return (
-    String(a.date || "") === String(b.date || "") &&
-    String(a.windows?.url || "") === String(b.windows?.url || "") &&
-    String(a.android?.url || "") === String(b.android?.url || "")
-  );
+function deleteStorageEntry(entry) {
+  if (!entry) return;
+  for (const item of [entry.windows, entry.android]) {
+    if (!item) continue;
+    if (item.path) {
+      try {
+        gsutil(["rm", "-f", `${gsUri}/${item.path}`]);
+      } catch (_) {
+        /* already gone */
+      }
+    }
+  }
 }
 
-function buildRotation(prev, next) {
-  const MAX_OLD = 5;
-  const candidates = [];
-  if (prev && (prev.windows || prev.android) && !sameRelease(prev, next)) {
-    candidates.push({ date: prev.date || "", windows: prev.windows || null, android: prev.android || null });
-  }
-  for (const entry of Array.isArray(prev?.history) ? prev.history : []) {
-    if (!entry || sameRelease(entry, next)) continue;
-    if (candidates.some((e) => sameRelease(e, entry))) continue;
-    candidates.push({ date: entry.date || "", windows: entry.windows || null, android: entry.android || null });
-  }
-  const history = candidates.slice(0, MAX_OLD);
-  const spilled = candidates.slice(MAX_OLD);
-  const outdated = [];
-  for (const entry of spilled.concat(Array.isArray(prev?.outdated) ? prev.outdated : [])) {
-    if (!entry || sameRelease(entry, next)) continue;
-    if (history.some((e) => sameRelease(e, entry))) continue;
-    if (outdated.some((e) => sameRelease(e, entry))) continue;
-    outdated.push({ date: entry.date || "", windows: entry.windows || null, android: entry.android || null });
-  }
-  return { history, outdated };
+function uploadAndroidFile(localDir, date, fileName, androidVersion) {
+  const local = path.join(localDir, fileName);
+  const objectPath = `${prefix}/android/${date}/${fileName}`;
+  console.log("[upload-public-releases] Upload Android →", objectPath);
+  gsutil([
+    "-h",
+    "Content-Type:application/vnd.android.package-archive",
+    "cp",
+    local,
+    `${gsUri}/${objectPath}`,
+  ]);
+  const st = fs.statSync(local);
+  return {
+    file: fileName,
+    url: publicUrl(objectPath),
+    path: objectPath,
+    version: androidVersion,
+    format: "apk",
+    bytes: st.size,
+    sizeLabel: bytesLabel(st.size),
+  };
 }
 
 async function main() {
@@ -121,16 +129,30 @@ async function main() {
     process.env.WINDOWS_RELEASE_VERSION ||
     require(path.join(projectRoot, "electron", "package.json")).version ||
     "1.0.0";
-  const androidVersion = process.env.ANDROID_RELEASE_VERSION || "1.0.0";
+  const androidVersion =
+    process.env.ANDROID_RELEASE_VERSION ||
+    (() => {
+      try {
+        const ts = fs.readFileSync(path.join(projectRoot, "src/config/releaseVersion.ts"), "utf8");
+        const m = ts.match(/ANDROID_APP_VERSION = "([^"]+)"/);
+        if (m) return m[1];
+      } catch {
+        /* ignore */
+      }
+      return "1.0.0";
+    })();
 
   const files = fs.readdirSync(localDir);
-  const exeName = files.find((n) => n.toLowerCase().endsWith(".exe"));
+  const exeName =
+    files.find((n) => n.toLowerCase().endsWith(".exe") && n.includes(` ${windowsVersion}.exe`)) ||
+    files.find((n) => n.toLowerCase().endsWith(".exe"));
   const apkName = files.find((n) => n.toLowerCase().endsWith(".apk"));
   if (!exeName && !apkName) {
     console.error("[upload-public-releases] No EXE/APK in", localDir);
     process.exit(1);
   }
 
+  const settings = await fetchReleaseSettings(bucket);
   const prev = await fetchJson(publicUrl(`${prefix}/latest.json`));
   const latest = { date, stagedAt: new Date().toISOString(), windows: null, android: null };
   if (prev) {
@@ -140,7 +162,7 @@ async function main() {
 
   if (exeName) {
     const local = path.join(localDir, exeName);
-    const objectPath = `${prefix}/${date}/${exeName}`;
+    const objectPath = `${prefix}/windows/${date}/${exeName}`;
     console.log("[upload-public-releases] Upload EXE →", objectPath);
     gsutil(["-h", "Content-Type:application/x-msdownload", "cp", local, `${gsUri}/${objectPath}`]);
     const st = fs.statSync(local);
@@ -155,24 +177,25 @@ async function main() {
   }
 
   if (apkName) {
-    const local = path.join(localDir, apkName);
-    const objectPath = `${prefix}/${date}/${apkName}`;
-    console.log("[upload-public-releases] Upload APK →", objectPath);
-    gsutil(["-h", "Content-Type:application/vnd.android.package-archive", "cp", local, `${gsUri}/${objectPath}`]);
-    const st = fs.statSync(local);
-    latest.android = {
-      file: apkName,
-      url: publicUrl(objectPath),
-      path: objectPath,
-      version: androidVersion,
-      bytes: st.size,
-      sizeLabel: bytesLabel(st.size),
-    };
+    latest.android = uploadAndroidFile(localDir, date, apkName, androidVersion);
   }
 
-  const rotation = buildRotation(prev, latest);
+  if (prev?.android?.playStoreUrl) {
+    latest.android = latest.android || {};
+    latest.android.playStoreUrl = prev.android.playStoreUrl;
+  }
+  if (prev?.playStoreUrl) {
+    latest.playStoreUrl = prev.playStoreUrl;
+  }
+
+  const rotation = buildReleaseRotation(prev, latest, settings);
   latest.history = rotation.history;
   latest.outdated = rotation.outdated;
+
+  for (const entry of rotation.deleteEntries || []) {
+    console.log("[upload-public-releases] Auto-delete outdated →", entry.date || "unknown");
+    deleteStorageEntry(entry);
+  }
 
   const manifestLocal = path.join(projectRoot, "releases", "latest-firebase.json");
   fs.writeFileSync(manifestLocal, `${JSON.stringify(latest, null, 2)}\n`);

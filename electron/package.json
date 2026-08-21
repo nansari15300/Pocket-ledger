@@ -1,6 +1,6 @@
 {
   "name": "pocket-ledger-electron",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "private": true,
   "main": "main.js",
   "scripts": {
@@ -40,6 +40,7 @@
       "tab-strip.js",
       "tab-strip-preload.js",
       "app-content-preload.js",
+      "desktopReleaseUpdate.js",
       {
         "from": "../out",
         "to": "out",

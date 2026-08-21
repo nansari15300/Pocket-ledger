@@ -14,6 +14,8 @@ import KhaltiCheckout from "khalti-checkout-web";
 import {
   DEFAULT_DEVICE_USER_ADDON_OFFER,
   addonKindLabel,
+  hasAnyAddonScopeVisibleOnBilling,
+  isAddonScopeVisibleOnBilling,
   normalizeAddonKind,
   parsePurchasedPlanAddOns,
   readDeviceUserAddOnOfferFromPlansDoc,
@@ -124,6 +126,14 @@ export function BillingAddOnPurchaseCard({
   }, [initialKind]);
 
   useEffect(() => {
+    if (!isAddonScopeVisibleOnBilling(offer, "online") && scope === "online") {
+      setScope("local");
+    } else if (!isAddonScopeVisibleOnBilling(offer, "local") && scope === "local") {
+      setScope("online");
+    }
+  }, [offer, scope]);
+
+  useEffect(() => {
     if (!onlineAddOnsAllowed && scope === "online") {
       setScope("local");
     }
@@ -163,6 +173,14 @@ export function BillingAddOnPurchaseCard({
       </Card>
     );
   }
+
+  if (!hasAnyAddonScopeVisibleOnBilling(offer)) {
+    return null;
+  }
+
+  const onlineTabVisible =
+    isAddonScopeVisibleOnBilling(offer, "online") && onlineAddOnsAllowed;
+  const localTabVisible = isAddonScopeVisibleOnBilling(offer, "local");
 
   const kinds = kindsForScope(scope);
   const deviceUnit = unitPriceForAddonKind(offer, kinds.device);
@@ -359,19 +377,24 @@ export function BillingAddOnPurchaseCard({
           ) : null}
         </p>
 
-        <Tabs value={scope} onValueChange={(v) => setScope(v === "local" ? "local" : "online")}>
+        <Tabs
+          value={scope}
+          onValueChange={(v) => setScope(v === "local" ? "local" : "online")}
+        >
           <TabsList className="w-fit">
-            {onlineAddOnsAllowed ? (
+            {onlineTabVisible ? (
               <TabsTrigger value="online" className="px-4">
                 Online
               </TabsTrigger>
             ) : null}
-            <TabsTrigger value="local" className="px-4">
-              Local
-            </TabsTrigger>
+            {localTabVisible ? (
+              <TabsTrigger value="local" className="px-4">
+                Local / Offline
+              </TabsTrigger>
+            ) : null}
           </TabsList>
         </Tabs>
-        {!onlineAddOnsAllowed ? (
+        {!onlineAddOnsAllowed && isAddonScopeVisibleOnBilling(offer, "online") ? (
           <p className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-muted-foreground">
             Online add-ons are available only when your current plan includes at least one online company. Upgrade your
             plan to enable them.

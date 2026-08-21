@@ -1,119 +1,182 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import {
+  androidDownloadAndInstallUpdate,
+  canAndroidInAppUpdate,
+} from "@/lib/androidReleaseUpdate";
+import {
+  canElectronAutoInstallUpdate,
+  electronDownloadAndInstallUpdate,
+  formatUpdateDownloadProgress,
+  subscribeElectronUpdateDownloadProgress,
+} from "@/lib/electronReleaseUpdate";
+import {
+  checkForReleaseUpdate,
+  RELEASE_UPDATE_FOUND_EVENT,
+  RELEASE_UPDATE_MANUAL_CHECK_EVENT,
+  type ReleaseUpdateInfo,
+} from "@/lib/releaseUpdateCheck";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
-import { ANDROID_APP_VERSION, DESKTOP_APP_VERSION } from "@/config/releaseVersion";
 
-type ReleaseItem = {
-  version?: string;
-  url?: string;
-  playStoreUrl?: string;
-};
+function ReleaseUpdateBanner({
+  update,
+  onDismiss,
+}: {
+  update: ReleaseUpdateInfo;
+  onDismiss: () => void;
+}) {
+  const [phase, setPhase] = useState<"idle" | "downloading" | "launching" | "error">("idle");
+  const [progressLabel, setProgressLabel] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [playStoreFlow, setPlayStoreFlow] = useState(false);
+  const electronAutoInstall = canElectronAutoInstallUpdate();
+  const androidInAppUpdate = canAndroidInAppUpdate();
 
-type ReleaseManifest = {
-  date?: string;
-  windows?: ReleaseItem | null;
-  android?: ReleaseItem | null;
-};
+  useEffect(() => {
+    if (!electronAutoInstall) return;
+    return subscribeElectronUpdateDownloadProgress(({ received, total, reused }) => {
+      if (reused) {
+        setProgressLabel("Installer ready…");
+        return;
+      }
+      setProgressLabel(formatUpdateDownloadProgress(received, total));
+    });
+  }, [electronAutoInstall]);
 
-const DAILY_CHECK_KEY = "pl-release-update-check-v1";
-const RELEASE_BUCKET = "studio-5452513410-a3f5b.firebasestorage.app";
-const RELEASE_PREFIX = "public-releases/latest.json";
+  const onInstall = useCallback(async () => {
+    if (update.kind === "android" && androidInAppUpdate) {
+      setPhase("downloading");
+      setErrorMessage("");
+      setProgressLabel("Downloading…");
+      const result = await androidDownloadAndInstallUpdate(update, ({ received, total, reused }) => {
+        if (reused) {
+          setProgressLabel("Opening installer…");
+          return;
+        }
+        setProgressLabel(formatUpdateDownloadProgress(received, total));
+      });
+      if (!result.ok) {
+        setPhase("error");
+        setErrorMessage(result.error || "Could not start the update.");
+        return;
+      }
+      setPlayStoreFlow(Boolean(result.playStore));
+      setPhase("launching");
+      setProgressLabel(result.playStore ? "Opening Play Store…" : "Opening installer…");
+      return;
+    }
 
-function compareVersions(a: string, b: string): number {
-  const left = String(a || "0").split(/[.-]/).map((part) => Number(part) || 0);
-  const right = String(b || "0").split(/[.-]/).map((part) => Number(part) || 0);
-  const size = Math.max(left.length, right.length);
-  for (let i = 0; i < size; i += 1) {
-    const delta = (left[i] ?? 0) - (right[i] ?? 0);
-    if (delta !== 0) return delta;
-  }
-  return 0;
-}
+    if (update.kind === "desktop" && electronAutoInstall) {
+      setPhase("downloading");
+      setErrorMessage("");
+      setProgressLabel("Downloading…");
+      const result = await electronDownloadAndInstallUpdate(update);
+      if (!result.ok) {
+        setPhase("error");
+        setErrorMessage(result.error || "Could not start the update.");
+        return;
+      }
+      setPhase("launching");
+      setProgressLabel("Starting installer…");
+      return;
+    }
 
-function todayKey(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+    window.location.assign(update.url);
+  }, [androidInAppUpdate, electronAutoInstall, update]);
 
-function latestReleaseUrl(): string {
-  return `https://firebasestorage.googleapis.com/v0/b/${RELEASE_BUCKET}/o/${encodeURIComponent(
-    RELEASE_PREFIX
-  )}?alt=media`;
+  const busy = phase === "downloading" || phase === "launching";
+  const inAppInstall = (update.kind === "android" && androidInAppUpdate) || electronAutoInstall;
+  const actionLabel =
+    phase === "launching"
+      ? playStoreFlow
+        ? "Play Store…"
+        : "Installing…"
+      : phase === "downloading"
+        ? progressLabel || "Downloading…"
+        : inAppInstall
+          ? "Install update"
+          : "Download update";
+
+  return (
+    <div className="fixed bottom-4 left-4 right-4 z-[200] mx-auto flex max-w-xl flex-col gap-2 rounded-xl border border-sky-300 bg-white px-4 py-3 text-sm shadow-xl dark:border-sky-600 dark:bg-slate-950">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="font-medium text-slate-900 dark:text-slate-100">
+          Pocket Ledger {update.version} is available.
+        </span>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            className="text-slate-500 underline underline-offset-2 disabled:opacity-50"
+            onClick={onDismiss}
+            disabled={busy}
+          >
+            Later
+          </button>
+          <button
+            type="button"
+            className="rounded-full bg-sky-600 px-3 py-1.5 font-semibold text-white hover:bg-sky-700 disabled:opacity-70"
+            onClick={() => void onInstall()}
+            disabled={busy}
+          >
+            {actionLabel}
+          </button>
+        </div>
+      </div>
+      {phase === "error" && errorMessage ? (
+        <p className="text-xs text-red-600 dark:text-red-400">{errorMessage}</p>
+      ) : null}
+      {phase === "launching" && update.kind === "desktop" && electronAutoInstall ? (
+        <p className="text-xs text-muted-foreground">
+          The installer will open and Pocket Ledger will close. Follow the setup steps to finish.
+        </p>
+      ) : null}
+      {phase === "launching" && update.kind === "android" && androidInAppUpdate && !playStoreFlow ? (
+        <p className="text-xs text-muted-foreground">
+          Tap <strong>Install</strong> on the Android screen to finish the update.
+        </p>
+      ) : null}
+      {phase === "launching" && playStoreFlow ? (
+        <p className="text-xs text-muted-foreground">Complete the update in the Play Store.</p>
+      ) : null}
+    </div>
+  );
 }
 
 /**
- * EXE/APK only: at most one Firebase release check each calendar day.
- * Existing signed server-plan / offline-license sync remains the license authority.
+ * EXE/APK only: daily auto check + manual check from Settings shows this banner.
  */
 export function ReleaseUpdateCheck() {
-  const [update, setUpdate] = useState<{ version: string; url: string; kind: "desktop" | "android" } | null>(
-    null
-  );
+  const [update, setUpdate] = useState<ReleaseUpdateInfo | null>(null);
 
-  useEffect(() => {
-    const desktop = isElectronDesktopApp();
-    const android = isCapacitorNativeApp();
-    if (!desktop && !android) return;
-    if (typeof navigator !== "undefined" && !navigator.onLine) return;
-
-    try {
-      if (window.localStorage.getItem(DAILY_CHECK_KEY) === todayKey()) return;
-      window.localStorage.setItem(DAILY_CHECK_KEY, todayKey());
-    } catch {
-      // Storage can be unavailable; a check is still safe.
-    }
-
-    let cancelled = false;
-    void fetch(latestReleaseUrl(), { cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Release check failed: ${response.status}`);
-        return (await response.json()) as ReleaseManifest;
-      })
-      .then((manifest) => {
-        if (cancelled) return;
-        const item = desktop ? manifest.windows : manifest.android;
-        const installed = desktop ? DESKTOP_APP_VERSION : ANDROID_APP_VERSION;
-        const targetUrl = desktop ? item?.url : item?.playStoreUrl || item?.url;
-        const available = String(item?.version || "").trim();
-        if (!available || !targetUrl || compareVersions(available, installed) <= 0) return;
-        setUpdate({
-          version: available,
-          url: targetUrl,
-          kind: desktop ? "desktop" : "android",
-        });
-      })
-      .catch(() => {
-        // Update checks must never block an offline/local app.
-      });
-
-    return () => {
-      cancelled = true;
-    };
+  const runCheck = useCallback(async (force: boolean) => {
+    if (!isElectronDesktopApp() && !isCapacitorNativeApp()) return;
+    const result = await checkForReleaseUpdate({ force });
+    if (result.status === "update") setUpdate(result.update);
   }, []);
 
+  useEffect(() => {
+    if (!isElectronDesktopApp() && !isCapacitorNativeApp()) return;
+    void runCheck(false);
+  }, [runCheck]);
+
+  useEffect(() => {
+    const onManual = () => {
+      void runCheck(true);
+    };
+    const onFound = (event: Event) => {
+      const detail = (event as CustomEvent<ReleaseUpdateInfo>).detail;
+      if (detail?.version && detail?.url) setUpdate(detail);
+    };
+    window.addEventListener(RELEASE_UPDATE_MANUAL_CHECK_EVENT, onManual);
+    window.addEventListener(RELEASE_UPDATE_FOUND_EVENT, onFound);
+    return () => {
+      window.removeEventListener(RELEASE_UPDATE_MANUAL_CHECK_EVENT, onManual);
+      window.removeEventListener(RELEASE_UPDATE_FOUND_EVENT, onFound);
+    };
+  }, [runCheck]);
+
   if (!update) return null;
-  return (
-    <div className="fixed bottom-4 left-4 right-4 z-[200] mx-auto flex max-w-xl flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-300 bg-white px-4 py-3 text-sm shadow-xl dark:border-sky-600 dark:bg-slate-950">
-      <span className="font-medium text-slate-900 dark:text-slate-100">
-        Pocket Ledger {update.version} is available.
-      </span>
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          className="text-slate-500 underline underline-offset-2"
-          onClick={() => setUpdate(null)}
-        >
-          Later
-        </button>
-        <button
-          type="button"
-          className="rounded-full bg-sky-600 px-3 py-1.5 font-semibold text-white hover:bg-sky-700"
-          onClick={() => window.location.assign(update.url)}
-        >
-          {update.kind === "android" ? "Update Android" : "Download update"}
-        </button>
-      </div>
-    </div>
-  );
+  return <ReleaseUpdateBanner update={update} onDismiss={() => setUpdate(null)} />;
 }

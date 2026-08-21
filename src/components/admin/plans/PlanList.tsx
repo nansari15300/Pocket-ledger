@@ -43,6 +43,7 @@ interface PlanListProps {
   ) => Promise<boolean>;
   deviceUserAddOns?: DeviceUserAddOnOffer;
   onSaveDeviceUserAddOns?: (offer: DeviceUserAddOnOffer) => Promise<boolean>;
+  onTogglePlanBillingVisibility?: (plan: Plan, showOnBilling: boolean) => Promise<void>;
 }
 
 export function PlanList({
@@ -53,7 +54,9 @@ export function PlanList({
   onSaveOnlineDemo,
   deviceUserAddOns = DEFAULT_DEVICE_USER_ADDON_OFFER,
   onSaveDeviceUserAddOns,
+  onTogglePlanBillingVisibility,
 }: PlanListProps) {
+  const [visibilityBusyId, setVisibilityBusyId] = useState<PlanId | null>(null);
   const [draft, setDraft] = useState<OnlineDemoOffer>(onlineDemo);
   const [addonDraft, setAddonDraft] = useState<DeviceUserAddOnOffer>(deviceUserAddOns);
   const [existingDemoAction, setExistingDemoAction] = useState<"retain" | "reset" | "replace">(
@@ -91,7 +94,7 @@ export function PlanList({
   };
 
   return (
-    <ScrollArea className="h-full border rounded-lg">
+    <ScrollArea className="h-full border rounded-lg" listChrome>
       <div className="pl-master-list-ul">
         {plans.map((plan) => (
           <Card
@@ -105,16 +108,46 @@ export function PlanList({
             )}
             onClick={() => onSelectPlan(plan)}
           >
-            <div className="flex justify-between items-center">
-              <div>
+            <div className="flex justify-between items-center gap-2">
+              <div className="min-w-0">
                 <p className="font-semibold">{plan.name}</p>
                 <p className="text-xs text-muted-foreground">{plan.tagline}</p>
               </div>
-              {plan.highlight && <Badge>Popular</Badge>}
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                {plan.highlight ? <Badge>Popular</Badge> : null}
+                {plan.hiddenFromBilling ? (
+                  <Badge variant="outline" className="text-[10px]">
+                    Hidden
+                  </Badge>
+                ) : null}
+              </div>
             </div>
             <div className="flex gap-4 mt-2 pt-2 border-t">
               <p className="text-sm font-medium">{formatPrice(plan, "monthly")}</p>
               <p className="text-sm font-medium">{formatPrice(plan, "yearly")}</p>
+            </div>
+            <div
+              className="flex items-center gap-2 mt-2 pt-2 border-t"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Checkbox
+                id={`plan-show-billing-${plan.id}`}
+                checked={plan.hiddenFromBilling !== true}
+                disabled={visibilityBusyId === plan.id || !onTogglePlanBillingVisibility}
+                onCheckedChange={(checked) => {
+                  if (!onTogglePlanBillingVisibility) return;
+                  setVisibilityBusyId(plan.id);
+                  void onTogglePlanBillingVisibility(plan, checked === true).finally(() =>
+                    setVisibilityBusyId(null)
+                  );
+                }}
+              />
+              <Label
+                htmlFor={`plan-show-billing-${plan.id}`}
+                className="text-xs font-normal leading-snug cursor-pointer"
+              >
+                Show on billing page
+              </Label>
             </div>
           </Card>
         ))}
@@ -243,7 +276,7 @@ export function PlanList({
 
           <div className="flex items-center justify-between gap-3">
             <Label htmlFor="addon-service-enabled" className="text-sm">
-              Enabled
+              Enabled (master)
             </Label>
             <Switch
               id="addon-service-enabled"
@@ -252,107 +285,147 @@ export function PlanList({
             />
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="addon-price-device-online">Online device (NPR)</Label>
-            <Input
-              id="addon-price-device-online"
-              type="number"
-              min={0}
-              step={1}
-              value={addonDraft.pricePerDeviceOnlineNpr}
-              onChange={(e) =>
-                setAddonDraft((prev) => ({
-                  ...prev,
-                  pricePerDeviceOnlineNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
-                }))
-              }
-            />
+          <div className="rounded-md border border-sky-300/70 bg-background/70 p-2.5 space-y-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold">Online add-ons</p>
+                <p className="text-[11px] text-muted-foreground">Device · user · company (online)</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Label htmlFor="addon-online-billing-visible" className="text-xs font-normal">
+                  Show on billing
+                </Label>
+                <Switch
+                  id="addon-online-billing-visible"
+                  checked={addonDraft.billingOnlineVisible !== false}
+                  onCheckedChange={(visible) =>
+                    setAddonDraft((prev) => ({ ...prev, billingOnlineVisible: visible }))
+                  }
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="addon-price-device-online">Online device (NPR)</Label>
+              <Input
+                id="addon-price-device-online"
+                type="number"
+                min={0}
+                step={1}
+                value={addonDraft.pricePerDeviceOnlineNpr}
+                onChange={(e) =>
+                  setAddonDraft((prev) => ({
+                    ...prev,
+                    pricePerDeviceOnlineNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="addon-price-user-online">Online user (NPR)</Label>
+              <Input
+                id="addon-price-user-online"
+                type="number"
+                min={0}
+                step={1}
+                value={addonDraft.pricePerUserOnlineNpr}
+                onChange={(e) =>
+                  setAddonDraft((prev) => ({
+                    ...prev,
+                    pricePerUserOnlineNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="addon-price-company-online">Online company slot (NPR)</Label>
+              <Input
+                id="addon-price-company-online"
+                type="number"
+                min={0}
+                step={1}
+                value={addonDraft.pricePerCompanyOnlineNpr}
+                onChange={(e) =>
+                  setAddonDraft((prev) => ({
+                    ...prev,
+                    pricePerCompanyOnlineNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                  }))
+                }
+              />
+            </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="addon-price-device-local">Local device (NPR)</Label>
-            <Input
-              id="addon-price-device-local"
-              type="number"
-              min={0}
-              step={1}
-              value={addonDraft.pricePerDeviceLocalNpr}
-              onChange={(e) =>
-                setAddonDraft((prev) => ({
-                  ...prev,
-                  pricePerDeviceLocalNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
-                }))
-              }
-            />
+          <div className="rounded-md border border-emerald-300/70 bg-background/70 p-2.5 space-y-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold">Offline / Local add-ons</p>
+                <p className="text-[11px] text-muted-foreground">Device · user · company (local)</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Label htmlFor="addon-local-billing-visible" className="text-xs font-normal">
+                  Show on billing
+                </Label>
+                <Switch
+                  id="addon-local-billing-visible"
+                  checked={addonDraft.billingLocalVisible !== false}
+                  onCheckedChange={(visible) =>
+                    setAddonDraft((prev) => ({ ...prev, billingLocalVisible: visible }))
+                  }
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="addon-price-device-local">Local device (NPR)</Label>
+              <Input
+                id="addon-price-device-local"
+                type="number"
+                min={0}
+                step={1}
+                value={addonDraft.pricePerDeviceLocalNpr}
+                onChange={(e) =>
+                  setAddonDraft((prev) => ({
+                    ...prev,
+                    pricePerDeviceLocalNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="addon-price-user-local">Local user (NPR)</Label>
+              <Input
+                id="addon-price-user-local"
+                type="number"
+                min={0}
+                step={1}
+                value={addonDraft.pricePerUserLocalNpr}
+                onChange={(e) =>
+                  setAddonDraft((prev) => ({
+                    ...prev,
+                    pricePerUserLocalNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="addon-price-company-local">Local company slot (NPR)</Label>
+              <Input
+                id="addon-price-company-local"
+                type="number"
+                min={0}
+                step={1}
+                value={addonDraft.pricePerCompanyLocalNpr}
+                onChange={(e) =>
+                  setAddonDraft((prev) => ({
+                    ...prev,
+                    pricePerCompanyLocalNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                  }))
+                }
+              />
+            </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="addon-price-user-online">Online user (NPR)</Label>
-            <Input
-              id="addon-price-user-online"
-              type="number"
-              min={0}
-              step={1}
-              value={addonDraft.pricePerUserOnlineNpr}
-              onChange={(e) =>
-                setAddonDraft((prev) => ({
-                  ...prev,
-                  pricePerUserOnlineNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
-                }))
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="addon-price-user-local">Local user (NPR)</Label>
-            <Input
-              id="addon-price-user-local"
-              type="number"
-              min={0}
-              step={1}
-              value={addonDraft.pricePerUserLocalNpr}
-              onChange={(e) =>
-                setAddonDraft((prev) => ({
-                  ...prev,
-                  pricePerUserLocalNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
-                }))
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="addon-price-company-online">Online company slot (NPR)</Label>
-            <Input
-              id="addon-price-company-online"
-              type="number"
-              min={0}
-              step={1}
-              value={addonDraft.pricePerCompanyOnlineNpr}
-              onChange={(e) =>
-                setAddonDraft((prev) => ({
-                  ...prev,
-                  pricePerCompanyOnlineNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
-                }))
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="addon-price-company-local">Local company slot (NPR)</Label>
-            <Input
-              id="addon-price-company-local"
-              type="number"
-              min={0}
-              step={1}
-              value={addonDraft.pricePerCompanyLocalNpr}
-              onChange={(e) =>
-                setAddonDraft((prev) => ({
-                  ...prev,
-                  pricePerCompanyLocalNpr: Math.max(0, Math.floor(Number(e.target.value) || 0)),
-                }))
-              }
-            />
-          </div>
+          <p className="text-[11px] text-muted-foreground leading-snug">
+            Turn off a section&apos;s switch to hide that tab on Billing only — existing purchased add-ons stay valid.
+          </p>
 
           <Button
             type="button"

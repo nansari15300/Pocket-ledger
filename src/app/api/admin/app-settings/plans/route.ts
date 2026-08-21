@@ -129,6 +129,7 @@ export async function POST(req: NextRequest) {
       seedDefaults?: boolean;
       planId?: string;
       plan?: Record<string, unknown>;
+      planBillingVisibility?: { planId?: string; hiddenFromBilling?: boolean };
       onlineDemo?: OnlineDemoOffer;
       deviceUserAddOns?: DeviceUserAddOnOffer;
       /** Only used when a SuperAdmin turns a demo off (or replaces days). */
@@ -182,6 +183,23 @@ export async function POST(req: NextRequest) {
         { merge: true }
       );
       return NextResponse.json({ ok: true, deviceUserAddOns: nextOffer });
+    }
+
+    const visibility = body?.planBillingVisibility;
+    if (visibility != null && typeof visibility === "object") {
+      const planId = String(visibility.planId || "").trim();
+      if (!isPlanId(planId)) {
+        return NextResponse.json({ error: "planBillingVisibility.planId invalid" }, { status: 400 });
+      }
+      const hiddenFromBilling = visibility.hiddenFromBilling === true;
+      await ref.set(
+        {
+          [planId]: { hiddenFromBilling },
+          entitlementCapConvention: "zero_means_none",
+        },
+        { merge: true }
+      );
+      return NextResponse.json({ ok: true, planId, hiddenFromBilling });
     }
 
     const planId = body?.planId;

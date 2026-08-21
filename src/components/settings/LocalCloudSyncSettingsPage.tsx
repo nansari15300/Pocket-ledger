@@ -126,7 +126,7 @@ function LocalCompaniesOnDeviceCard({ companies, syncCompanyId, onSelect }: Loca
           </table>
         ) : (
           <p className="p-3 text-sm text-muted-foreground">
-            No local company on this device yet. Create one or restore from Drive (left tab).
+            No local company on this device yet. Create one or restore from Drive (right tab).
           </p>
         )}
       </div>
@@ -141,7 +141,7 @@ export function LocalCloudSyncSettingsPage() {
   const [sqliteLocalPickerRows, setSqliteLocalPickerRows] = useState<
     Array<{ id: string; name?: string; driveSyncEnabled?: boolean }>
   >([]);
-  const [mobileTopTab, setMobileTopTab] = useState<"drive" | "local">("drive");
+  const [mobileTopTab, setMobileTopTab] = useState<"drive" | "local">("local");
 
   const refreshSqliteLocalPickerRows = useCallback(async () => {
     const rows = await listLocalCompanies();
@@ -252,25 +252,25 @@ export function LocalCloudSyncSettingsPage() {
         className="shrink-0 lg:hidden"
       >
         <TabsList className="grid h-auto w-full grid-cols-2 gap-1 rounded-md border border-black bg-emerald-50/80 p-1 dark:bg-emerald-950/35">
-          <TabsTrigger value="drive" className={MOBILE_TOP_TAB_CLASS}>
-            Join from Drive
-          </TabsTrigger>
           <TabsTrigger value="local" className={MOBILE_TOP_TAB_CLASS}>
             This device
           </TabsTrigger>
+          <TabsTrigger value="drive" className={MOBILE_TOP_TAB_CLASS}>
+            Join from Drive
+          </TabsTrigger>
         </TabsList>
-        <TabsContent value="drive" className="mt-3 focus-visible:outline-none">
-          <JoinSharedLocalCompanyPanel {...joinPanelProps} />
-        </TabsContent>
         <TabsContent value="local" className="mt-3 focus-visible:outline-none">
           <LocalCompaniesOnDeviceCard {...localPickerProps} />
+        </TabsContent>
+        <TabsContent value="drive" className="mt-3 focus-visible:outline-none">
+          <JoinSharedLocalCompanyPanel {...joinPanelProps} />
         </TabsContent>
       </Tabs>
 
       {/* PC — 2 columns */}
       <div className="hidden lg:grid lg:grid-cols-2 lg:gap-4 lg:items-stretch shrink-0">
-        <JoinSharedLocalCompanyPanel {...joinPanelProps} />
         <LocalCompaniesOnDeviceCard {...localPickerProps} />
+        <JoinSharedLocalCompanyPanel {...joinPanelProps} />
       </div>
 
       {company && !syncCompany ? (

@@ -25,12 +25,18 @@
       </nav>
       <div class="marketing-auth-actions">
         <button type="button" class="btn btn-outline btn-sm" id="marketingLoginBtn">Sign in</button>
-        <button type="button" class="btn btn-outline btn-sm is-auth-hidden" id="marketingSettingsBtn" hidden aria-hidden="true">Website Settings</button>
+        <button type="button" class="btn btn-outline btn-sm is-auth-hidden" id="marketingSettingsBtn" hidden aria-hidden="true">Admin Panel</button>
         <button type="button" class="btn btn-outline btn-sm is-auth-hidden" id="marketingLogoutBtn" hidden aria-hidden="true">Sign out</button>
         <a class="btn btn-primary btn-sm" href="/app" id="goToAppBtn">Go to App</a>
       </div>
     </div>
   </header>
+
+  <div class="marketing-notice" id="marketingNoticeBanner" hidden aria-hidden="true" role="status">
+    <div class="wrap">
+      <p id="marketingNoticeText"></p>
+    </div>
+  </div>
 
   <main>
     <section class="hero hero-devices">
@@ -53,37 +59,25 @@
 
         <div class="device-stage" aria-hidden="true">
           <div class="device laptop">
-            <div class="laptop-screen">
-              <div class="ui">
-                <div class="ui-top">
-                  <span class="ui-brand"><i class="dot"></i> Pocket Ledger</span>
-                  <span class="ui-tabs"><i></i><i></i><i></i><i class="on"></i></span>
+            <div class="laptop-screen laptop-screen-real">
+              <div
+                class="device-carousel device-carousel-wide device-carousel-laptop"
+                data-hero-carousel
+                aria-roledescription="carousel"
+                aria-label="Pocket Ledger desktop screenshots"
+                tabindex="0"
+              >
+                <button type="button" class="device-carousel-btn prev" aria-label="Previous screenshot">‹</button>
+                <div class="device-carousel-viewport">
+                  <div class="device-carousel-track">
+                    <figure class="device-carousel-slide is-landscape"><img src="./assets/mobile-demo/04-pc-dashboard.png" width="1024" height="662" alt="Dashboard demo" loading="eager" decoding="async" /></figure>
+                    <figure class="device-carousel-slide is-landscape"><img src="./assets/mobile-demo/05-pc-staff.png" width="1024" height="658" alt="Staff ledger demo" loading="lazy" decoding="async" /></figure>
+                  </div>
                 </div>
-                <div class="ui-body">
-                  <div class="ui-side">
-                    <span></span><span></span><span class="on"></span><span></span><span></span><span></span>
-                  </div>
-                  <div class="ui-main">
-                    <div class="ui-kpis">
-                      <div class="kpi"><b>12.5k</b><small>Sale</small></div>
-                      <div class="kpi"><b>6.8k</b><small>Purchase</small></div>
-                      <div class="kpi"><b>4.2k</b><small>Payment In</small></div>
-                    </div>
-                    <div class="ui-chart">
-                      <span style="height:38%"></span>
-                      <span style="height:62%"></span>
-                      <span style="height:47%"></span>
-                      <span style="height:78%"></span>
-                      <span style="height:55%"></span>
-                      <span style="height:88%"></span>
-                      <span style="height:41%"></span>
-                    </div>
-                    <div class="ui-rows">
-                      <div><em>INV-1042</em><b>+ 12,500</b></div>
-                      <div><em>PYMT-318</em><b>+ 4,200</b></div>
-                      <div><em>BILL-077</em><b>− 6,800</b></div>
-                    </div>
-                  </div>
+                <button type="button" class="device-carousel-btn next" aria-label="Next screenshot">›</button>
+                <div class="device-carousel-dots" role="tablist" aria-label="Choose screenshot">
+                  <button type="button" class="device-carousel-dot is-active" role="tab" aria-label="Dashboard" aria-selected="true"></button>
+                  <button type="button" class="device-carousel-dot" role="tab" aria-label="Staff" aria-selected="false"></button>
                 </div>
               </div>
             </div>
@@ -91,43 +85,59 @@
           </div>
 
           <div class="device tablet">
-            <div class="tablet-screen">
-              <div class="ui compact">
-                <div class="ui-top">
-                  <span class="ui-brand"><i class="dot"></i> Daybook</span>
-                  <span class="chip ok">Synced</span>
+            <div class="tablet-screen tablet-screen-real">
+              <div
+                class="device-carousel"
+                data-hero-carousel
+                aria-roledescription="carousel"
+                aria-label="Pocket Ledger tablet screenshots"
+                tabindex="0"
+              >
+                <button type="button" class="device-carousel-btn prev" aria-label="Previous screenshot">‹</button>
+                <div class="device-carousel-viewport">
+                  <div class="device-carousel-track">
+                    <figure class="device-carousel-slide is-portrait"><img src="./assets/mobile-demo/01-daybook.png" width="524" height="1024" alt="Daybook demo" loading="eager" decoding="async" /></figure>
+                    <figure class="device-carousel-slide is-landscape"><img src="./assets/mobile-demo/04-pc-dashboard.png" width="1024" height="662" alt="Dashboard demo" loading="lazy" decoding="async" /></figure>
+                    <figure class="device-carousel-slide is-portrait"><img src="./assets/mobile-demo/02-parties.png" width="524" height="1024" alt="Parties demo" loading="lazy" decoding="async" /></figure>
+                    <figure class="device-carousel-slide is-landscape"><img src="./assets/mobile-demo/05-pc-staff.png" width="1024" height="658" alt="Staff ledger demo" loading="lazy" decoding="async" /></figure>
+                    <figure class="device-carousel-slide is-portrait"><img src="./assets/mobile-demo/03-party-detail.png" width="524" height="1024" alt="Party detail demo" loading="lazy" decoding="async" /></figure>
+                  </div>
                 </div>
-                <div class="ui-body column">
-                  <div class="ui-kpis two">
-                    <div class="kpi"><b>18.9k</b><small>In</small></div>
-                    <div class="kpi"><b>9.4k</b><small>Out</small></div>
-                  </div>
-                  <div class="ui-rows">
-                    <div><em>Party</em><b>32</b></div>
-                    <div><em>Staff</em><b>8</b></div>
-                    <div><em>Bank</em><b>4</b></div>
-                    <div><em>Tax</em><b>3</b></div>
-                  </div>
+                <button type="button" class="device-carousel-btn next" aria-label="Next screenshot">›</button>
+                <div class="device-carousel-dots" role="tablist" aria-label="Choose screenshot">
+                  <button type="button" class="device-carousel-dot is-active" role="tab" aria-label="Daybook" aria-selected="true"></button>
+                  <button type="button" class="device-carousel-dot" role="tab" aria-label="Dashboard" aria-selected="false"></button>
+                  <button type="button" class="device-carousel-dot" role="tab" aria-label="Parties" aria-selected="false"></button>
+                  <button type="button" class="device-carousel-dot" role="tab" aria-label="Staff" aria-selected="false"></button>
+                  <button type="button" class="device-carousel-dot" role="tab" aria-label="Party detail" aria-selected="false"></button>
                 </div>
               </div>
             </div>
           </div>
 
           <div class="device phone">
-            <div class="phone-screen">
+            <div class="phone-screen phone-screen-real">
               <div class="phone-notch"></div>
-              <div class="ui tiny">
-                <div class="ui-top">
-                  <span class="ui-brand"><i class="dot"></i> Ledger</span>
-                </div>
-                <div class="ui-body column">
-                  <div class="kpi wide"><b>+ 12,500</b><small>Today sale</small></div>
-                  <div class="ui-rows">
-                    <div><em>INV-1042</em><b>12,500</b></div>
-                    <div><em>PYMT-318</em><b>4,200</b></div>
-                    <div><em>SAL-019</em><span class="chip warn">Link</span></div>
+              <div
+                class="device-carousel device-carousel-phone"
+                data-hero-carousel
+                aria-roledescription="carousel"
+                aria-label="Pocket Ledger mobile screenshots"
+                tabindex="0"
+              >
+                <button type="button" class="device-carousel-btn prev" aria-label="Previous screenshot">‹</button>
+                <div class="device-carousel-viewport">
+                  <div class="device-carousel-track">
+                    <figure class="device-carousel-slide is-portrait"><img src="./assets/mobile-demo/01-daybook.png" width="524" height="1024" alt="Daybook demo" loading="eager" decoding="async" /></figure>
+                    <figure class="device-carousel-slide is-portrait"><img src="./assets/mobile-demo/02-parties.png" width="524" height="1024" alt="Parties demo" loading="lazy" decoding="async" /></figure>
+                    <figure class="device-carousel-slide is-portrait"><img src="./assets/mobile-demo/03-party-detail.png" width="524" height="1024" alt="Party detail demo" loading="lazy" decoding="async" /></figure>
                   </div>
-                  <div class="fab">+</div>
+                </div>
+                <button type="button" class="device-carousel-btn next" aria-label="Next screenshot">›</button>
+                <div class="device-carousel-dots" role="tablist" aria-label="Choose screenshot">
+                  <button type="button" class="device-carousel-dot is-active" role="tab" aria-label="Daybook" aria-selected="true"></button>
+                  <button type="button" class="device-carousel-dot" role="tab" aria-label="Parties" aria-selected="false"></button>
+                  <button type="button" class="device-carousel-dot" role="tab" aria-label="Party detail" aria-selected="false"></button>
                 </div>
               </div>
             </div>
@@ -143,6 +153,75 @@
       <span>Local / PL Server</span>
       <span>Cloud sync</span>
     </div>
+
+    <section class="section section-trust" id="your-data" aria-labelledby="trust-title">
+      <div class="wrap">
+        <article class="trust-card">
+          <span class="section-kicker">Your books, your devices</span>
+          <h2 id="trust-title">Keep the ledger on your phone and PC — not on someone else’s server</h2>
+          <p class="trust-lead">
+            Many business owners hesitate to move accounts online because the risks feel real: books sitting on a remote
+            server you do not control, bill photos uploaded to unknown storage, one wrong click or one breach and years
+            of party balances and tax records could be copied, leaked, or held hostage. Pocket Ledger is built for teams
+            who want modern multi-device work without handing the crown jewels to a faceless cloud.
+          </p>
+
+          <div class="trust-server-banner" role="note">
+            <h3>Your PC can be <em>your</em> server — at home or on a VPS</h3>
+            <p>
+              Pick one Windows PC (or a small machine you control), turn on <strong>PL Server</strong>, and that box
+              becomes <strong>your owned server</strong> — not ours, not a shared SaaS pool. Keep it under your desk at
+              home, in the back office, or on a <strong>VPS you rent</strong>; the books and attachments stay on storage
+              you chose. Staff open Pocket Ledger on any laptop, desktop, tablet, or phone — in the shop, at home, or
+              travelling — and work <strong>as if it were online</strong>, while the master copy remains on your machine.
+              Remote access, local safety: your data on your PC, your rules, your backup.
+            </p>
+          </div>
+
+          <div class="trust-grid">
+            <div class="trust-pillar">
+              <h3>Local-first by default</h3>
+              <p>
+                Your company data lives in a database on your Windows PC, Android phone, or tablet — the same device you
+                already trust for WhatsApp, photos, and daily work. Open the app, enter vouchers, run reports: the books
+                are physically with you, not pooled in a shared SaaS bucket next to thousands of strangers.
+              </p>
+            </div>
+            <div class="trust-pillar">
+              <h3>Attachments stay under your control</h3>
+              <p>
+                Scans and camera captures are stored as part of your company backup on your machine (or on storage you
+                choose). You are not forced to push every invoice image to a public upload pipeline just to keep working.
+                Fewer unknown copies means fewer places for data to leak.
+              </p>
+            </div>
+            <div class="trust-pillar">
+              <h3>Multi-device without surrendering ownership</h3>
+              <p>
+                Need the counter on a phone and the accountant on a desktop? Host <strong>PL Server</strong> on your PC
+                (home or VPS), share companies on your LAN or over the internet, and let every device stay in sync — or
+                use <strong>Google Drive</strong> you already own. Optional cloud company only when you explicitly want
+                it. Same ledgers on every screen; the file still answers to you.
+              </p>
+            </div>
+            <div class="trust-pillar">
+              <h3>No “wrong hands” by design</h3>
+              <p>
+                We do not monetise your transaction history. We do not train models on your party names. Your backup
+                file (.plbp) is yours to copy to a USB, NAS, or safe — restore anywhere, anytime. If a device is lost,
+                your data does not automatically scatter across the internet; it stays where you put it until you decide
+                otherwise.
+              </p>
+            </div>
+          </div>
+          <p class="trust-close">
+            <strong>Bottom line:</strong> one PC as your private server — home or VPS — books on your disk, team on any
+            device, remote like online without giving your ledger to a stranger’s cloud. Less fear of servers. Less fear
+            of risky uploads. More confidence that your numbers stay in the right hands: yours.
+          </p>
+        </article>
+      </div>
+    </section>
 
     <section class="section" id="features">
       <div class="wrap">
@@ -261,7 +340,10 @@
 
   <footer>
     <div class="wrap footer-row">
-      <div>© Pocket Ledger</div>
+      <div>
+        © Pocket Ledger Solutions Pvt. Ltd.<br />
+        <span class="footer-sub">Inaruwa 6, Sunsari, Nepal · Product: <strong>Pocket Ledger</strong></span>
+      </div>
       <div class="footer-links">
         <a href="./downloads/">Downloads</a>
         <a href="./company/">Company</a>
@@ -270,6 +352,8 @@
     </div>
   </footer>
   <script src="./js/pricing.js"></script>
+  <script src="./js/hero-device-carousel.js"></script>
+  <script src="./js/website-notice.js"></script>
   <script src="./js/videos.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>

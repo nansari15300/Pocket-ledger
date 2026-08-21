@@ -113,7 +113,10 @@ import {
 import { runAutoBackupQueue, loadAutoBackupCompanyPickerRows, companyHasAutoBackupPassword, syncAutoBackupCompanyIdsWithEligible } from "@/lib/autoBackupRunner";
 import { AutoBackupDriveUploadDialog } from "@/components/settings/AutoBackupDriveUploadDialog";
 import { buildAutoBackupRelativeDir } from "@/lib/autoBackupPath";
-import { isDeviceLocalCompany, partitionCompaniesForSelector, type CompanyListTab } from "@/lib/companyStorageKind";
+import { isDeviceLocalCompany, partitionCompaniesForSelector, filterCompaniesForSelectorPartition, filterOnlineTabCompaniesForSelector, type CompanyListTab } from "@/lib/companyStorageKind";
+import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
+import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
+import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import {
   getOnlineCompanyBackupTickGate,
   companyUsesOnlineSelectorSyncTicks,
@@ -664,6 +667,12 @@ export function BackupRestore() {
   const { user, customUser } = useAuth();
   const { toast } = useToast();
   const { can } = usePermissions();
+  const isSuperAdminByEmail = useMemo(() => {
+    const e = (user?.email || "").toLowerCase().trim();
+    if (!e) return false;
+    return getSuperAdminEmails().some((x) => (x || "").toLowerCase().trim() === e);
+  }, [user?.email]);
+  const isSuperAdminUser = customUser?.role === "SuperAdmin" || isSuperAdminByEmail;
   const livePlans = useLivePlans();
   const accountPlanId = useMemo(
     () => resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId),
@@ -686,18 +695,35 @@ export function BackupRestore() {
     window.addEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, bump);
     return () => window.removeEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, bump);
   }, []);
+  const autoBackupSelectorCompanies = useMemo(() => {
+    const shareUser = { uid: user?.uid || "", email: user?.email ?? null };
+    const merged = autoBackupCompanyRows.map((c) => ({
+      ...c,
+      isOwned: user?.uid ? resolveCompanyIsOwnedForUser(c, shareUser) : Boolean(c.isOwned),
+    }));
+    return filterCompaniesForSelectorPartition(
+      filterSharedOnlyCompaniesForSuperAdminInMainApp(
+        merged,
+        user ? { uid: user.uid, email: user.email } : null,
+        isSuperAdminUser,
+        pathname
+      )
+    );
+  }, [autoBackupCompanyRows, user, isSuperAdminUser, pathname]);
   const autoBackupCompanyBuckets = useMemo(
-    () => partitionCompaniesForSelector(autoBackupCompanyRows),
-    [autoBackupCompanyRows, onlineSyncPrefsEpoch]
+    () => partitionCompaniesForSelector(autoBackupSelectorCompanies),
+    [autoBackupSelectorCompanies, onlineSyncPrefsEpoch]
   );
   const autoBackupTabCompanies = useMemo(() => {
     if (autoBackupListTab === "server") return autoBackupCompanyBuckets.serverTabCompanies;
-    if (autoBackupListTab === "online") return autoBackupCompanyBuckets.onlineTabCompanies;
+    if (autoBackupListTab === "online") {
+      return filterOnlineTabCompaniesForSelector(autoBackupCompanyBuckets.onlineTabCompanies);
+    }
     return autoBackupCompanyBuckets.localTabCompanies;
   }, [autoBackupListTab, autoBackupCompanyBuckets]);
   const autoBackupEligibleCompanies = useMemo(
-    () => autoBackupCompanyRows.filter((c) => c.isOwned !== false),
-    [autoBackupCompanyRows]
+    () => autoBackupSelectorCompanies.filter((c) => c.isOwned !== false),
+    [autoBackupSelectorCompanies]
   );
   const [autoBackupPrefs, setAutoBackupPrefs] = useState<AutoBackupPrefs>(() => readAutoBackupPrefs());
   const [autoBackupDraft, setAutoBackupDraft] = useState<AutoBackupPrefs>(() => readAutoBackupPrefs());
@@ -1168,21 +1194,24 @@ export function BackupRestore() {
       const rows = await loadAutoBackupCompanyPickerRows(allCompanies, user?.uid, user?.email ?? null);
       if (cancelled) return;
       setAutoBackupCompanyRows(rows);
-      setAutoBackupPrefs((prefs) => {
-        const synced = syncAutoBackupCompanyIdsWithEligible(prefs, rows);
-        if (synced.companyIds.length === prefs.companyIds.length) return prefs;
-        saveAutoBackupPrefs(synced);
-        return synced;
-      });
-      setAutoBackupDraft((draft) => {
-        const synced = syncAutoBackupCompanyIdsWithEligible(draft, rows);
-        return synced.companyIds.length === draft.companyIds.length ? draft : synced;
-      });
     })();
     return () => {
       cancelled = true;
     };
   }, [allCompanies, user?.uid, user?.email]);
+
+  useEffect(() => {
+    setAutoBackupPrefs((prefs) => {
+      const synced = syncAutoBackupCompanyIdsWithEligible(prefs, autoBackupEligibleCompanies);
+      if (synced.companyIds.length === prefs.companyIds.length) return prefs;
+      saveAutoBackupPrefs(synced);
+      return synced;
+    });
+    setAutoBackupDraft((draft) => {
+      const synced = syncAutoBackupCompanyIdsWithEligible(draft, autoBackupEligibleCompanies);
+      return synced.companyIds.length === draft.companyIds.length ? draft : synced;
+    });
+  }, [autoBackupEligibleCompanies]);
 
   useEffect(() => {
     refreshBackupLocationUi();

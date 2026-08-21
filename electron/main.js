@@ -19,6 +19,7 @@ const os = require("os");
 const localAppServer = require("./localAppServer");
 const plTraceLog = require("./plTraceLog");
 const appUpgradeCache = require("./appUpgradeCache");
+const desktopReleaseUpdate = require("./desktopReleaseUpdate");
 const { PL_MIRROR_PROTOCOL_VERSION, evaluateMirrorProtocol } = require("./plMirrorProtocol.cjs");
 
 /** Har app launch par naya id — EXE multi-tab PIN unlock isi session me share (cold start par dubara PIN). */
@@ -2865,6 +2866,31 @@ if (gotSingleInstanceLock) {
       return `${hostname} (${part})`.replace(/\s+/g, " ").trim();
     } catch (_) {
       return "";
+    }
+  });
+
+  ipcMain.handle("pl-release-update-download-install", async (event, payload) => {
+    try {
+      if (!app.isPackaged) {
+        return { ok: false, error: "Updates install only from the packaged EXE." };
+      }
+      const url = String(payload?.url || "").trim();
+      const version = String(payload?.version || "").trim();
+      const sender = event.sender;
+      await desktopReleaseUpdate.downloadAndInstallRelease({
+        app,
+        userDataPath: userDataPath(),
+        url,
+        version,
+        onProgress: (progress) => {
+          try {
+            sender.send("pl-release-update-progress", progress);
+          } catch (_) {}
+        },
+      });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
     }
   });
 

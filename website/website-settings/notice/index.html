@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Website Notice — Pocket Ledger</title>
+  <meta name="robots" content="noindex,nofollow" />
+  <link rel="stylesheet" href="../../styles.css" />
+  <link rel="stylesheet" href="../../css/website-settings.css" />
+  <style>
+    .who { color: var(--muted); font-size: 0.9rem; }
+    .row { margin: 0.85rem 0; }
+    .row label { display: block; font-weight: 700; margin-bottom: 0.35rem; }
+    .status { margin-top: 1rem; font-size: 0.95rem; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: #b42318; }
+    .notice-textarea {
+      width: min(42rem, 100%);
+      min-height: 8rem;
+      padding: 0.75rem 0.85rem;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      font: inherit;
+      line-height: 1.45;
+      resize: vertical;
+    }
+    .check-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.55rem;
+      margin-top: 0.75rem;
+    }
+    .hint {
+      margin: 0.35rem 0 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+      max-width: 42rem;
+    }
+  </style>
+</head>
+<body class="website-settings-page" data-ws-active="notice">
+  <header class="site-header">
+    <div class="wrap nav">
+      <a class="brand" href="../../">
+        <span class="brand-mark" aria-hidden="true"></span>
+        Pocket Ledger
+      </a>
+      <div class="nav-links">
+        <span class="who" id="who"></span>
+        <button type="button" class="btn btn-outline btn-sm" id="outBtn" hidden>Sign out</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="ws-shell">
+    <div id="websiteSettingsNav"></div>
+    <main class="ws-main">
+      <section class="page-hero">
+        <div class="wrap">
+          <h1>Website notice</h1>
+          <p>Type a short message for visitors on the marketing homepage.</p>
+        </div>
+      </section>
+      <section class="section">
+        <div class="wrap ws-card">
+          <div class="content-block" id="authBox">
+            <p style="margin-top:0">Sign in with a Super Admin Google account.</p>
+            <button type="button" class="btn btn-primary" id="googleBtn">Sign in with Google</button>
+          </div>
+          <div class="content-block" id="adminBox" hidden>
+            <div class="row">
+              <label for="noticeMessage">Message</label>
+              <textarea id="noticeMessage" class="notice-textarea" placeholder="Example: New Windows build available — see Downloads."></textarea>
+              <p class="hint">Shown in a banner at the top of pocket-ledger.com. Line breaks are kept.</p>
+            </div>
+            <div class="check-row">
+              <input id="noticeEnabled" type="checkbox" />
+              <label for="noticeEnabled" style="margin:0;font-weight:600">Show on website</label>
+              <button type="button" class="btn btn-primary btn-sm" id="saveNoticeBtn" style="margin-left:auto">Save notice</button>
+            </div>
+          </div>
+          <p class="status" id="status"></p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+  <script src="../../js/firebase-config.js"></script>
+  <script src="../../js/website-settings-nav.js"></script>
+  <script src="../../js/website-settings-auth.js"></script>
+  <script src="../../js/website-notice-admin.js"></script>
+</body>
+</html>

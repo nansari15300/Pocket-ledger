@@ -1,7 +1,6 @@
 (function () {
   var LOCAL_MANIFEST = "/releases/latest.json";
-  var MAX_OLD = 5;
-  var MAX_KEEP = MAX_OLD + 1;
+  var cachedSettings = { downloadsMaxOld: 5 };
 
   function isLocalHost() {
     var h = location.hostname;
@@ -22,30 +21,62 @@
     );
   }
 
+  function firebaseSettingsUrl() {
+    var cfg = window.POCKET_LEDGER_FIREBASE || {};
+    var bucket = cfg.storageBucket || "";
+    var prefix = window.POCKET_LEDGER_RELEASE_PREFIX || "public-releases";
+    if (!bucket) return "";
+    return (
+      "https://firebasestorage.googleapis.com/v0/b/" +
+      bucket +
+      "/o/" +
+      encodeURIComponent(prefix + "/release-settings.json") +
+      "?alt=media"
+    );
+  }
+
+  function normalizeSettings(raw) {
+    return typeof window.normalizeReleaseSettings === "function"
+      ? window.normalizeReleaseSettings(raw)
+      : { downloadsMaxOld: 5, outdatedPolicy: "keep", outdatedMaxKeep: 20 };
+  }
+
+  function maxKeep() {
+    return cachedSettings.downloadsMaxOld + 1;
+  }
+
   function $(id) {
     return document.getElementById(id);
   }
 
   function sameRelease(a, b) {
+    if (typeof window.sameReleaseEntry === "function") return window.sameReleaseEntry(a, b);
     if (!a || !b) return false;
-    var aw = a.windows && a.windows.url;
-    var bw = b.windows && b.windows.url;
-    var aa = a.android && a.android.url;
-    var ba = b.android && b.android.url;
     return (
       String(a.date || "") === String(b.date || "") &&
-      String(aw || "") === String(bw || "") &&
-      String(aa || "") === String(ba || "")
+      String(a.windows && a.windows.url || "") === String(b.windows && b.windows.url || "") &&
+      String(a.android && a.android.url || "") === String(b.android && b.android.url || "")
     );
+  }
+
+  function isApkAndroid(item) {
+    return typeof window.isApkAndroidRelease === "function"
+      ? window.isApkAndroidRelease(item)
+      : Boolean(item && item.url && item.format !== "aab");
+  }
+
+  function pickApkEntry(data) {
+    if (!data || !data.android) return null;
+    return isApkAndroid(data.android) ? data.android : null;
   }
 
   function keptEntries(data) {
     var out = [];
-    if (data && (data.windows || data.android)) {
+    if (data && (data.windows || pickApkEntry(data))) {
       out.push({
         date: data.date || "",
         windows: data.windows || null,
-        android: data.android || null,
+        android: pickApkEntry(data),
         latest: true,
       });
     }
@@ -59,11 +90,11 @@
       out.push({
         date: entry.date || "",
         windows: entry.windows || null,
-        android: entry.android || null,
+        android: pickApkEntry(entry),
         latest: false,
       });
     });
-    return out.slice(0, MAX_KEEP);
+    return out.slice(0, maxKeep());
   }
 
   function optionLabel(entry, kind) {
@@ -91,6 +122,9 @@
     btn.removeAttribute("aria-disabled");
     btn.setAttribute("href", item.url);
     btn.setAttribute("data-track-platform", kind === "windows" ? "windows" : "android");
+    if (kind === "android") {
+      btn.textContent = "Download APK";
+    }
     if (item.version) btn.setAttribute("data-track-version", String(item.version));
     else btn.removeAttribute("data-track-version");
     if (item.file) btn.setAttribute("data-track-file", String(item.file));
@@ -146,6 +180,19 @@
     var options = entries.filter(function (e) {
       return e[kind] && e[kind].url;
     });
+    var seen = {};
+    options = options.filter(function (e) {
+      var item = e[kind];
+      var key =
+        String(item.version || "") +
+        "|" +
+        String(e.date || "") +
+        "|" +
+        String(item.file || item.url || "");
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
 
     select.innerHTML = "";
     if (!options.length) {
@@ -178,6 +225,18 @@
     return res.json();
   }
 
+  async function loadSettings() {
+    if (isLocalHost()) return cachedSettings;
+    var url = firebaseSettingsUrl();
+    if (!url) return cachedSettings;
+    try {
+      cachedSettings = normalizeSettings(await fetchJson(url));
+    } catch (_) {
+      cachedSettings = normalizeSettings(null);
+    }
+    return cachedSettings;
+  }
+
   async function loadManifest() {
     if (isLocalHost()) {
       try {
@@ -197,7 +256,8 @@
     }
   }
 
-  loadManifest().then(function (pack) {
+  Promise.all([loadSettings(), loadManifest()]).then(function (results) {
+    var pack = results[1];
     var data = pack.data || {};
     var source = pack.source;
     var note = $("releaseNote");

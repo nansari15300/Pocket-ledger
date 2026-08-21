@@ -3,7 +3,7 @@
 
   /**
    * Light website-only nav (no app Admin Panel menus).
-   * Page sets: <body data-ws-active="release|videos|downloads">
+   * Page sets: <body data-ws-active="release|videos|downloads|notice">
    */
   function navHtml(active) {
     function item(key, href, label) {
@@ -12,11 +12,12 @@
       return '<a' + cls + ' href="' + href + '"' + cur + ">" + label + "</a>";
     }
     return (
-      '<aside class="ws-side" aria-label="Website settings">' +
-        '<div class="ws-side-title">Website Settings</div>' +
+      '<aside class="ws-side" aria-label="Admin panel">' +
+        '<div class="ws-side-title">Admin Panel</div>' +
         item("release", "/admin-release/", "Release upload") +
         item("videos", "/website-settings/videos/", "Website Videos") +
         item("downloads", "/website-settings/downloads/", "Download analytics") +
+        item("notice", "/website-settings/notice/", "Notice") +
         '<a href="/">← Back to website</a>' +
       "</aside>"
     );

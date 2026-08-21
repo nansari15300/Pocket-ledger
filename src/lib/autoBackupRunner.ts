@@ -17,6 +17,7 @@ import {
   startCompanyBackupRun,
 } from "@/lib/companyBackupRunner";
 import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore";
+import { isLocalSelectorCompanyRow } from "@/lib/companyStorageKind";
 import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 import { getOnlineCompanyBackupTickGate } from "@/lib/onlineCompanySelectorSyncPolicy";
@@ -234,6 +235,7 @@ export async function loadAutoBackupCompanyPickerRows(
       user
     );
     if (!merged) continue;
+    if (!isLocalSelectorCompanyRow(merged)) continue;
     seen.add(id);
     out.push(merged);
   }

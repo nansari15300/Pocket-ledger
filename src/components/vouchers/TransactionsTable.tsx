@@ -1023,10 +1023,8 @@ export function TransactionsTable({
   const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 0.4) : 0;
   const isNumberAnimationEnabled = animationSettings?.numbers?.enabled === true;
   const numberAnimationDuration = isNumberAnimationEnabled ? (animationSettings?.numbers?.duration ?? 2.5) : 0;
-  /** Framer `layout` on `<tr>` mis-projects row menu on account/user columns — party/staff/statement safe. */
-  const useTxnRowLayoutAnimation =
-    isRowAnimationEnabled &&
-    (hasSpendWiseGroups || context !== "account");
+  /** Row reorder animation — bank statement (short txn) same as party/staff when settings enabled. */
+  const useTxnRowLayoutAnimation = isRowAnimationEnabled;
   /** Date filter par popLayout purani row positions preserve karta hai — spend-wise list neeche chipak jati hai. */
   const spendWiseListAnimateKey = useMemo(() => {
     if (!ledgerDateFilterActive) return "spend-wise-all";

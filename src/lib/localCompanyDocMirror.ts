@@ -582,6 +582,8 @@ export type UpsertCompanyBrowserOptions = {
   skipCloudSyncEnqueue?: boolean;
   /** Background Drive purge/relocate repatch — infinite loop roko */
   skipDriveAttachmentSideEffects?: boolean;
+  /** Demo company bulk install — first-save commit hook skip */
+  skipDemoSaveHook?: boolean;
 };
 
 /** User-origin SQLite writes: JSON `lastEditedAt` / `updatedAt` bump — P2P export merge ke liye (column `updatedAt` kaafi nahi). */

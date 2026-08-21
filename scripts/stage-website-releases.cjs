@@ -1,18 +1,33 @@
 /**
- * Copy the current EXE + APK into releases/YYYY-MM-DD/ (not every build dump).
+ * Copy the current EXE + APK into releases/YYYY-MM-DD/ (AAB copied locally for Play Console only).
  * Writes releases/latest.json so localhost:3000/downloads can serve local paths.
  *
  *   npm run website:stage-releases
  */
 const fs = require("fs");
 const path = require("path");
+const {
+  readLocalReleaseSettings,
+  buildReleaseRotation,
+} = require("./release-settings.cjs");
 
 const projectRoot = path.join(__dirname, "..");
 const releasesRoot = path.join(projectRoot, "releases");
 const windowsVersion =
   process.env.WINDOWS_RELEASE_VERSION ||
   String(require(path.join(projectRoot, "electron", "package.json")).version || "1.0.0");
-const androidVersion = process.env.ANDROID_RELEASE_VERSION || "1.0.0";
+  const androidVersion =
+    process.env.ANDROID_RELEASE_VERSION ||
+    (() => {
+      try {
+        const ts = fs.readFileSync(path.join(projectRoot, "src/config/releaseVersion.ts"), "utf8");
+        const m = ts.match(/ANDROID_APP_VERSION = "([^"]+)"/);
+        if (m) return m[1];
+      } catch {
+        /* ignore */
+      }
+      return "1.0.0";
+    })();
 const playStoreUrl = String(process.env.PLAY_STORE_URL || "").trim();
 
 function todayStamp() {
@@ -59,21 +74,7 @@ function bytesLabel(n) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-const MAX_OLD = 5;
 const latestPath = path.join(releasesRoot, "latest.json");
-
-function sameRelease(a, b) {
-  if (!a || !b) return false;
-  const aw = a.windows && a.windows.url;
-  const bw = b.windows && b.windows.url;
-  const aa = a.android && a.android.url;
-  const ba = b.android && b.android.url;
-  return (
-    String(a.date || "") === String(b.date || "") &&
-    String(aw || "") === String(bw || "") &&
-    String(aa || "") === String(ba || "")
-  );
-}
 
 function readPrevManifest() {
   try {
@@ -82,41 +83,6 @@ function readPrevManifest() {
   } catch {
     return null;
   }
-}
-
-function buildRotation(prev, next) {
-  const candidates = [];
-  if (prev && (prev.windows || prev.android) && !sameRelease(prev, next)) {
-    candidates.push({
-      date: prev.date || "",
-      windows: prev.windows || null,
-      android: prev.android || null,
-    });
-  }
-  const prior = Array.isArray(prev && prev.history) ? prev.history : [];
-  for (const entry of prior) {
-    if (!entry || sameRelease(entry, next)) continue;
-    if (candidates.some((e) => sameRelease(e, entry))) continue;
-    candidates.push({
-      date: entry.date || "",
-      windows: entry.windows || null,
-      android: entry.android || null,
-    });
-  }
-  const history = candidates.slice(0, MAX_OLD);
-  const spilled = candidates.slice(MAX_OLD);
-  const outdated = [];
-  for (const entry of spilled.concat(Array.isArray(prev && prev.outdated) ? prev.outdated : [])) {
-    if (!entry || sameRelease(entry, next)) continue;
-    if (history.some((e) => sameRelease(e, entry))) continue;
-    if (outdated.some((e) => sameRelease(e, entry))) continue;
-    outdated.push({
-      date: entry.date || "",
-      windows: entry.windows || null,
-      android: entry.android || null,
-    });
-  }
-  return { history, outdated };
 }
 
 const date = process.env.RELEASE_DATE || todayStamp();
@@ -130,7 +96,12 @@ const exe = newestMatch(
     !/uninstaller|blockmap/i.test(f.name)
 );
 
-const apk = newestMatch(
+const aab = newestMatch(
+  [path.join(projectRoot, "android", "app", "build", "outputs", "bundle", "release")],
+  (f) => f.name.toLowerCase().endsWith(".aab")
+);
+
+const apkFile = newestMatch(
   [
     path.join(projectRoot, "android", "app", "build", "outputs", "apk"),
     path.join(projectRoot, "android", "app", "release"),
@@ -139,6 +110,7 @@ const apk = newestMatch(
 );
 
 const prev = readPrevManifest();
+const settings = readLocalReleaseSettings(projectRoot);
 const manifest = {
   date,
   stagedAt: new Date().toISOString(),
@@ -161,23 +133,36 @@ if (exe) {
   console.warn("[stage-releases] No Windows EXE found (build electron first).");
 }
 
-if (apk) {
-  copyInto(destDir, apk);
-  manifest.android = {
-    file: apk.name,
-    url: `/releases/${date}/${apk.name}`,
+function stageAndroidArtifact(destDir, file) {
+  copyInto(destDir, file);
+  const entry = {
+    file: file.name,
+    url: `/releases/${date}/${file.name}`,
     version: androidVersion,
-    bytes: apk.size,
-    sizeLabel: bytesLabel(apk.size),
-    source: path.relative(projectRoot, apk.full).replace(/\\/g, "/"),
+    format: "apk",
+    bytes: file.size,
+    sizeLabel: bytesLabel(file.size),
+    source: path.relative(projectRoot, file.full).replace(/\\/g, "/"),
   };
-  if (playStoreUrl) manifest.android.playStoreUrl = playStoreUrl;
-  console.log("[stage-releases] APK  →", path.join(destDir, apk.name));
-} else {
-  console.warn("[stage-releases] No Android APK found (assemble release/debug first).");
+  if (playStoreUrl) entry.playStoreUrl = playStoreUrl;
+  return entry;
 }
 
-const rotation = buildRotation(prev, manifest);
+if (apkFile) {
+  manifest.android = stageAndroidArtifact(destDir, apkFile);
+  console.log("[stage-releases] APK  →", path.join(destDir, apkFile.name));
+} else {
+  console.warn("[stage-releases] No Android APK found (run gradlew assembleRelease).");
+}
+
+if (aab) {
+  copyInto(destDir, aab);
+  console.log("[stage-releases] AAB  →", path.join(destDir, aab.name), "(local only, not in manifest)");
+} else {
+  console.warn("[stage-releases] No Android AAB found (run gradlew bundleRelease).");
+}
+
+const rotation = buildReleaseRotation(prev, manifest, settings);
 manifest.history = rotation.history;
 manifest.outdated = rotation.outdated;
 
@@ -190,4 +175,4 @@ console.log(
   manifest.outdated.length
 );
 console.log("[stage-releases] Dev download: http://localhost:3000/downloads/");
-if (!exe && !apk) process.exitCode = 1;
+if (!exe && !apkFile && !aab) process.exitCode = 1;

@@ -39,6 +39,10 @@ import {
 import { PlanList } from "@/components/admin/plans/PlanList";
 import { PlanDetails } from "@/components/admin/plans/PlanDetails";
 import { BillingRegionalSettings } from "@/components/admin/plans/BillingRegionalSettings";
+import { withWebAppBasePath } from "@/lib/webAppBasePath";
+
+/** Dev gateway: Next API lives under `/app/api`, not marketing root `/api`. */
+const ADMIN_PLANS_API = withWebAppBasePath("/api/admin/app-settings/plans");
 
 export default function PlansPage() {
     useAdminAccess(['SuperAdmin']);
@@ -151,7 +155,7 @@ export default function PlansPage() {
         setSeedBusy(true);
         try {
             const token = await user.getIdToken();
-            const res = await fetch("/api/admin/app-settings/plans", {
+            const res = await fetch(ADMIN_PLANS_API, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
                 body: JSON.stringify({ seedDefaults: true }),
@@ -230,7 +234,7 @@ export default function PlansPage() {
             const token = await user.getIdToken();
             const { demo: _d, ...planWithoutDemo } = updatedPlan as Plan & { demo?: unknown };
             const planPayload = sanitizePlanForFirestoreWrite(planWithoutDemo as Plan);
-            const res = await fetch("/api/admin/app-settings/plans", {
+            const res = await fetch(ADMIN_PLANS_API, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
                 body: JSON.stringify({
@@ -282,7 +286,7 @@ export default function PlansPage() {
         }
         try {
             const token = await user.getIdToken();
-            const res = await fetch("/api/admin/app-settings/plans", {
+            const res = await fetch(ADMIN_PLANS_API, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
                 body: JSON.stringify({
@@ -324,7 +328,7 @@ export default function PlansPage() {
         try {
             const token = await user.getIdToken();
             const sanitized = sanitizeDeviceUserAddOnOffer(offer);
-            const res = await fetch("/api/admin/app-settings/plans", {
+            const res = await fetch(ADMIN_PLANS_API, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
                 body: JSON.stringify({ deviceUserAddOns: sanitized }),
@@ -344,6 +348,63 @@ export default function PlansPage() {
                 description: e instanceof Error ? e.message : String(e),
             });
             return false;
+        }
+    };
+
+    const handleTogglePlanBillingVisibility = async (plan: Plan, showOnBilling: boolean) => {
+        const hiddenFromBilling = !showOnBilling;
+        const previous = plan.hiddenFromBilling === true;
+        const updated = { ...plan, hiddenFromBilling };
+        setPlans((prev) => {
+            const next = prev.map((p) => (p.id === updated.id ? updated : p));
+            writeCachedPlansList(next);
+            return next;
+        });
+        setSelectedPlan((prev) => (prev?.id === updated.id ? updated : prev));
+
+        if (!user) {
+            toast({ variant: "destructive", title: "Not signed in", description: "Login required to save visibility." });
+            const reverted = { ...plan, hiddenFromBilling: previous };
+            setPlans((prev) => prev.map((p) => (p.id === reverted.id ? reverted : p)));
+            setSelectedPlan((prev) => (prev?.id === reverted.id ? reverted : prev));
+            return;
+        }
+
+        try {
+            const token = await user.getIdToken();
+            const res = await fetch(ADMIN_PLANS_API, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({
+                    planBillingVisibility: { planId: plan.id, hiddenFromBilling },
+                }),
+            });
+            if (!res.ok) {
+                const j = (await res.json().catch(() => ({}))) as { error?: string };
+                console.warn("[admin/plans] visibility API", res.status, j?.error);
+            }
+            await setDoc(
+                doc(db, "app_settings", "plans"),
+                { [plan.id]: { hiddenFromBilling } },
+                { merge: true }
+            );
+            toast({
+                title: hiddenFromBilling ? "Hidden from billing" : "Visible on billing",
+                description: `${plan.name} billing page listing updated.`,
+            });
+        } catch (e: unknown) {
+            const reverted = { ...plan, hiddenFromBilling: previous };
+            setPlans((prev) => {
+                const next = prev.map((p) => (p.id === reverted.id ? reverted : p));
+                writeCachedPlansList(next);
+                return next;
+            });
+            setSelectedPlan((prev) => (prev?.id === reverted.id ? reverted : prev));
+            toast({
+                variant: "destructive",
+                title: "Visibility save failed",
+                description: e instanceof Error ? e.message : String(e),
+            });
         }
     };
 
@@ -420,6 +481,7 @@ export default function PlansPage() {
                             onSaveOnlineDemo={handleSaveOnlineDemo}
                             deviceUserAddOns={deviceUserAddOns}
                             onSaveDeviceUserAddOns={handleSaveDeviceUserAddOns}
+                            onTogglePlanBillingVisibility={handleTogglePlanBillingVisibility}
                         />
                     </div>
                 </div>

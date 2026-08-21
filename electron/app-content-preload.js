@@ -117,3 +117,14 @@ contextBridge.exposeInMainWorld("plElectronTrace", {
   getRecentLogs: (limit) => ipcRenderer.invoke("pl-trace-get-logs", limit),
   getLogFilePath: () => ipcRenderer.invoke("pl-trace-get-log-file-path"),
 });
+
+/** EXE in-app update: download installer + launch NSIS wizard, then quit so files can replace. */
+contextBridge.exposeInMainWorld("plElectronUpdate", {
+  downloadAndInstall: (payload) => ipcRenderer.invoke("pl-release-update-download-install", payload),
+  onProgress: (callback) => {
+    if (typeof callback !== "function") return () => {};
+    const handler = (_event, payload) => callback(payload || {});
+    ipcRenderer.on("pl-release-update-progress", handler);
+    return () => ipcRenderer.removeListener("pl-release-update-progress", handler);
+  },
+});

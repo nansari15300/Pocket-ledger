@@ -152,6 +152,24 @@ img { max-width: 100%; display: block; }
   opacity: 0.45;
 }
 
+.marketing-notice {
+  background: #fff8e6;
+  border-bottom: 1px solid #f0d78c;
+}
+.marketing-notice[hidden] {
+  display: none !important;
+}
+.marketing-notice .wrap {
+  padding: 0.7rem 0;
+}
+.marketing-notice p {
+  margin: 0;
+  text-align: center;
+  color: #5c4a00;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
 /* Hero */
 .hero {
   background:
@@ -244,6 +262,94 @@ img { max-width: 100%; display: block; }
 
 /* Sections */
 .section { padding: 4rem 0; }
+.section-trust {
+  padding-top: 2.5rem;
+  padding-bottom: 1rem;
+}
+.trust-card {
+  border: 1px solid rgba(29, 78, 216, 0.22);
+  border-radius: 16px;
+  padding: 2rem 1.75rem;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(47, 128, 237, 0.12), transparent 42%),
+    linear-gradient(165deg, #f8fbff 0%, #ffffff 55%, #f4f7fb 100%);
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.06);
+}
+.trust-card .section-kicker { margin-bottom: 0.65rem; }
+.trust-card h2 {
+  margin: 0 0 1rem;
+  font-size: clamp(1.35rem, 2.8vw, 1.85rem);
+  line-height: 1.25;
+  max-width: 46rem;
+}
+.trust-lead {
+  margin: 0 0 1.5rem;
+  color: var(--muted);
+  font-size: 1.02rem;
+  line-height: 1.65;
+  max-width: 52rem;
+}
+.trust-server-banner {
+  margin: 0 0 1.5rem;
+  padding: 1.25rem 1.35rem;
+  border-radius: 14px;
+  border: 2px solid rgba(29, 78, 216, 0.35);
+  background: linear-gradient(135deg, rgba(29, 78, 216, 0.1) 0%, rgba(255, 255, 255, 0.95) 100%);
+}
+.trust-server-banner h3 {
+  margin: 0 0 0.65rem;
+  font-size: clamp(1.05rem, 2.2vw, 1.28rem);
+  line-height: 1.35;
+  color: #1e3a8a;
+}
+.trust-server-banner h3 em {
+  font-style: normal;
+  color: var(--sky);
+  font-weight: 800;
+}
+.trust-server-banner p {
+  margin: 0;
+  font-size: 0.96rem;
+  line-height: 1.62;
+  color: var(--ink);
+}
+.trust-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 1.25rem;
+}
+.trust-pillar {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1rem 1.1rem;
+  background: rgba(255, 255, 255, 0.85);
+}
+.trust-pillar h3 {
+  margin: 0 0 0.45rem;
+  font-size: 1rem;
+  color: var(--ink);
+}
+.trust-pillar p {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.trust-close {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  border-radius: 12px;
+  background: rgba(29, 78, 216, 0.06);
+  border: 1px solid rgba(29, 78, 216, 0.14);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--ink);
+}
+@media (max-width: 720px) {
+  .trust-grid { grid-template-columns: 1fr; }
+  .trust-card { padding: 1.35rem 1.1rem; }
+}
 .section.alt { background: var(--paper); }
 .section h2 {
   margin: 0 0 0.5rem;
@@ -937,6 +1043,185 @@ span.video-star { cursor: default; }
   border-radius: var(--radius);
   padding: 1.25rem;
   margin-bottom: 1rem;
+}
+
+/* Company profile */
+.company-page .company-hero {
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 0%, rgba(47, 128, 237, 0.14), transparent 55%),
+    linear-gradient(180deg, var(--paper) 0%, var(--white) 100%);
+  border-bottom: 1px solid var(--line);
+  padding: 2.75rem 0 2.25rem;
+}
+.company-hero-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.company-logo-card {
+  padding: 1.35rem 1.5rem;
+  border-radius: calc(var(--radius) + 4px);
+  border: 1px solid rgba(47, 128, 237, 0.18);
+  background: var(--white);
+  box-shadow: var(--shadow);
+  max-width: 36rem;
+}
+.company-brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 1.15rem;
+}
+.company-app-icon {
+  width: 96px;
+  height: 96px;
+  border-radius: 22px;
+  flex-shrink: 0;
+  box-shadow: 0 10px 24px rgba(47, 128, 237, 0.28);
+}
+.company-brand-text {
+  min-width: 0;
+}
+.company-brand-name {
+  margin: 0 0 0.35rem;
+  font-size: clamp(1.05rem, 2.4vw, 1.35rem);
+  font-weight: 800;
+  line-height: 1.3;
+  color: var(--navy);
+}
+.company-brand-tag {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+.company-hero-lead {
+  margin: 0;
+  max-width: 44rem;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.65;
+}
+.company-section {
+  padding-top: 2.5rem;
+}
+.company-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.company-card {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.35rem 1.4rem;
+  box-shadow: 0 8px 22px rgba(11, 31, 58, 0.04);
+}
+.company-card-wide {
+  grid-column: 1 / -1;
+}
+.company-card-kicker {
+  display: inline-block;
+  margin-bottom: 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sky);
+}
+.company-card h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.2rem;
+  line-height: 1.35;
+  color: var(--navy);
+}
+.company-card p {
+  margin: 0 0 0.85rem;
+  color: var(--muted);
+  line-height: 1.62;
+}
+.company-card p:last-child {
+  margin-bottom: 0;
+}
+.company-card a:not(.btn) {
+  color: var(--sky);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.company-card .btn {
+  text-decoration: none;
+}
+.company-card .btn-primary {
+  color: var(--white);
+}
+.company-card .btn-outline {
+  color: var(--navy);
+}
+.company-facts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+.company-facts li {
+  display: grid;
+  gap: 0.15rem;
+}
+.company-fact-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.company-fact-value {
+  font-size: 0.98rem;
+  color: var(--ink);
+}
+.company-card-address {
+  background: linear-gradient(135deg, rgba(232, 241, 255, 0.65) 0%, var(--white) 100%);
+  border-color: rgba(47, 128, 237, 0.22);
+}
+.company-address {
+  font-style: normal;
+  margin: 0 0 0.85rem;
+  padding: 1rem 1.1rem;
+  border-radius: 12px;
+  border: 1px dashed rgba(47, 128, 237, 0.35);
+  background: rgba(255, 255, 255, 0.85);
+  line-height: 1.7;
+  color: var(--ink);
+}
+.company-address-note {
+  font-size: 0.88rem;
+}
+.company-services {
+  margin: 0;
+  padding-left: 1.15rem;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.company-services li + li {
+  margin-top: 0.35rem;
+}
+.company-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 1rem !important;
+}
+.footer-sub {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+@media (max-width: 760px) {
+  .company-grid {
+    grid-template-columns: 1fr;
+  }
+  .company-card-wide {
+    grid-column: auto;
+  }
 }
 .download-list {
   display: grid;

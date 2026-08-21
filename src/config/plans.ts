@@ -186,8 +186,15 @@ export interface Plan {
     days: number;
   };
   highlight?: boolean; // For UI emphasis (e.g., popular)
+  /** Super Admin: hide tier from Billing plan matrix — does not revoke active subscribers. */
+  hiddenFromBilling?: boolean;
   entitlements: Entitlements;
   features: string[]; // Human friendly bullets for UI
+}
+
+/** Billing comparison columns — hidden tiers omitted for all users (active subscriptions unchanged). */
+export function plansVisibleOnBillingPage(plans: Plan[]): Plan[] {
+  return plans.filter((p) => p.hiddenFromBilling !== true);
 }
 
 /** Paid tiers that may be offered as the single online demo. */

@@ -13,6 +13,7 @@ import {
   isUnlimitedEntitlementCap,
   isZeroEntitlementCap,
   isOnlineEntitlementCapKey,
+  plansVisibleOnBillingPage,
 } from "@/config/plans";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import {
@@ -869,6 +870,12 @@ function BillingPageInner() {
     [customUser?.accountCanonicalPlanId, company?.planId]
   );
 
+  /** Plan matrix / mobile tabs — Super Admin hidden tiers omitted. */
+  const billingCatalogPlans = useMemo(
+    () => plansVisibleOnBillingPage(plans),
+    [plans]
+  );
+
   const billingFrozenLedger = useMemo(
     () => parseBillingFrozenPlanLedger(company?.billingFrozenUsageLedger),
     [company?.billingFrozenUsageLedger]
@@ -1081,10 +1088,21 @@ function BillingPageInner() {
   }, [user, companyLoading, billingFirestoreCompanyId, company?.stripeSubscriptionId, expiryDate]);
 
   useEffect(() => {
-    if (mobilePlanIndex >= plans.length) {
-      setMobilePlanIndex(Math.max(0, plans.length - 1));
+    if (mobilePlanIndex >= billingCatalogPlans.length) {
+      setMobilePlanIndex(Math.max(0, billingCatalogPlans.length - 1));
     }
-  }, [mobilePlanIndex, plans.length]);
+  }, [mobilePlanIndex, billingCatalogPlans.length]);
+
+  useEffect(() => {
+    if (billingCatalogPlans.length === 0) return;
+    const visible = new Set(billingCatalogPlans.map((p) => p.id));
+    if (!visible.has(selectedPlanId)) {
+      const fallback =
+        billingCatalogPlans.find((p) => p.id === currentPlanId)?.id ??
+        billingCatalogPlans[0]?.id;
+      if (fallback) setSelectedPlanId(fallback);
+    }
+  }, [billingCatalogPlans, selectedPlanId, currentPlanId]);
 
   const handleDownloadPlansPdf = useCallback(async () => {
     try {
@@ -1093,7 +1111,7 @@ function BillingPageInner() {
       // One-page PC-style matrix: feature rows + 4 plan columns with line borders.
       const orderedPlanIds: PlanId[] = ["basic", "advance", "pro", "pro-plus"];
       const exportPlans = orderedPlanIds
-        .map((id) => plans.find((p) => p.id === id))
+        .map((id) => billingCatalogPlans.find((p) => p.id === id))
         .filter((p): p is Plan => p != null);
       if (exportPlans.length === 0) {
         throw new Error("No plan data available.");
@@ -1198,7 +1216,7 @@ function BillingPageInner() {
         description: e instanceof Error ? e.message : "Try again.",
       });
     }
-  }, [colTerms, plans]);
+  }, [colTerms, billingCatalogPlans]);
 
   const expiryMs = expiryDate != null && !Number.isNaN(expiryDate.getTime()) ? expiryDate.getTime() : null;
 
@@ -1785,7 +1803,7 @@ function BillingPageInner() {
 
   /** Paid accounts: plan changes only via table (no free-plan checkout below). */
   const showStandardCheckout = !isPaidCompany && !selectedPlanDetails.isFree;
-  const selectedMobilePlan = plans[mobilePlanIndex] ?? selectedPlanDetails;
+  const selectedMobilePlan = billingCatalogPlans[mobilePlanIndex] ?? selectedPlanDetails;
   /** Mobile: checkout only when a paid plan tab is selected. */
   const showMobileCheckoutSection = isMobile && !isPaidCompany && !selectedMobilePlan.isFree;
 
@@ -1830,7 +1848,7 @@ function BillingPageInner() {
               Download PDF
             </Button>
             {isBillingOwner
-              ? plans
+              ? billingCatalogPlans
                   .filter((plan) => !plan.isFree && plan.demo?.enabled === true)
                   .map((plan) => (
                     <Button
@@ -1941,7 +1959,7 @@ function BillingPageInner() {
             <div className="space-y-3">
               <p className="text-xs text-muted-foreground leading-snug px-0.5">{BILLING_FEATURES_SCOPE_NOTE_EN}</p>
               <div className="flex gap-2 overflow-x-auto pb-1">
-                {plans.map((p, idx) => (
+                {billingCatalogPlans.map((p, idx) => (
                   <Button
                     key={`mobile-tab-${p.id}`}
                     type="button"
@@ -1964,13 +1982,13 @@ function BillingPageInner() {
                   const delta = endX - touchStartX;
                   if (Math.abs(delta) < 40) return;
                   setMobilePlanIndex((prev) => {
-                    if (delta < 0) return Math.min(plans.length - 1, prev + 1);
+                    if (delta < 0) return Math.min(billingCatalogPlans.length - 1, prev + 1);
                     return Math.max(0, prev - 1);
                   });
                 }}
               >
                 {(() => {
-                  const p = plans[mobilePlanIndex] ?? plans[0];
+                  const p = billingCatalogPlans[mobilePlanIndex] ?? billingCatalogPlans[0];
                   if (!p) return null;
                   const isSelected = p.id === selectedPlanId;
                   return (
@@ -2495,7 +2513,7 @@ function BillingPageInner() {
                       </p>
                     </div>
                   </TableHead>
-                  {plans.map((p) => {
+                  {billingCatalogPlans.map((p) => {
                     const isSelected = p.id === selectedPlanId;
                     const offerDate = p.limitedTimeOfferDate ? (p.limitedTimeOfferDate as { toDate: () => Date }).toDate() : null;
                     const isOfferValid = offerDate && offerDate > new Date();
@@ -2547,7 +2565,7 @@ function BillingPageInner() {
                   <TableCell className="min-w-0 font-medium whitespace-normal break-words px-2 py-2 align-middle">
                     <BillingFeatureLabelWithInfo helpKey="price-monthly" label="Monthly" />
                   </TableCell>
-                  {plans.map((p) => (
+                  {billingCatalogPlans.map((p) => (
                     <TableCell
                       key={`${p.id}-price-monthly`}
                       className={cn(
@@ -2569,7 +2587,7 @@ function BillingPageInner() {
                   <TableCell className="min-w-0 font-medium whitespace-normal break-words px-2 py-2 align-middle">
                     <BillingFeatureLabelWithInfo helpKey="price-yearly" label="Yearly" />
                   </TableCell>
-                  {plans.map((p) => (
+                  {billingCatalogPlans.map((p) => (
                     <TableCell
                       key={`${p.id}-price-yearly`}
                       className={cn(
@@ -2591,7 +2609,7 @@ function BillingPageInner() {
                   <TableCell className="min-w-0 font-medium whitespace-normal break-words px-2 py-2 align-middle text-green-700 dark:text-green-500">
                     <BillingFeatureLabelWithInfo helpKey="price-save" label="Save" />
                   </TableCell>
-                  {plans.map((p) => (
+                  {billingCatalogPlans.map((p) => (
                     <TableCell
                       key={`${p.id}-price-save`}
                       className={cn(
@@ -2614,7 +2632,7 @@ function BillingPageInner() {
                     {featureIdx === BILLING_ONLINE_OFFLINE_SPLIT_INDEX ? (
                       <TableRow className="hover:bg-transparent border-0">
                         <TableCell
-                          colSpan={plans.length + 1}
+                          colSpan={billingCatalogPlans.length + 1}
                           className="p-0 border-0"
                         >
                           <div
@@ -2629,7 +2647,7 @@ function BillingPageInner() {
                       <TableCell className="min-w-0 max-w-[22%] font-medium whitespace-normal break-words align-middle !whitespace-normal px-2 py-2">
                         <BillingFeatureLabelWithInfo helpKey={feature.key} label={feature.label} />
                       </TableCell>
-                      {plans.map((p) => {
+                      {billingCatalogPlans.map((p) => {
                         const { text, enabled } = getFeatureValue(p, feature.key);
                         const isSelected = p.id === selectedPlanId;
                         const onlineCompaniesOn = getFeatureValue(p, "maxCompanies").enabled;
@@ -2710,7 +2728,7 @@ function BillingPageInner() {
                       ) : null}
                     </div>
                   </TableCell>
-                  {plans.map((p) => {
+                  {billingCatalogPlans.map((p) => {
                     const isSelected = p.id === selectedPlanId;
                     const change = classifyPlanChange(currentPlanId, p.id);
                     const curPlanRow = plans.find((x) => x.id === currentPlanId);

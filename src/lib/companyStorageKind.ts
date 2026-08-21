@@ -331,6 +331,18 @@ export function partitionCompaniesForSelector(companies: Company[]): SelectorCom
   };
 }
 
+/** CompanySelector `selectorCompanies` — drop server-gate rows before partition. */
+export function filterCompaniesForSelectorPartition(companies: Company[]): Company[] {
+  return dedupeCompaniesById(
+    companies.filter((c): c is Company => c != null && Boolean(c?.id) && !c.isDeleted)
+  ).filter((c) => !isServerGateCompany(c));
+}
+
+/** CompanySelector Online tab — same post-partition filter. */
+export function filterOnlineTabCompaniesForSelector(companies: Company[]): Company[] {
+  return companies.filter((c) => !isServerSelectorCompanyRow(c));
+}
+
 export function defaultSelectorTab(
   companyId: string | null | undefined,
   buckets: SelectorCompanyBuckets
