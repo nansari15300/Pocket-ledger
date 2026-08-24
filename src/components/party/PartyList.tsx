@@ -4,13 +4,15 @@
 import type { Party } from "@/components/party/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils"
-import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
-import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
+import { masterListShellCn, masterListRowUnselectedCn, MASTER_LIST_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN } from "@/lib/masterListChrome";
+import { MasterListNameTooltip, masterListNameMeasureProps } from "@/components/entity/MasterListNameTooltip";
+import { MasterAccountFreezeListBadge } from "@/components/masterAccountFreeze/MasterAccountFreezeListBadge";
+import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
+import { TooltipProvider } from "../ui/tooltip";
 import { useDate } from "@/hooks/useDate";
 import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { MasterListRow } from "@/components/ui/master-list-row";
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/tooltip";
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
@@ -22,18 +24,120 @@ import { EntityListQuickFilterBar,
 import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import { useCompany } from "@/hooks/useCompany";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
-import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
 import { getInterCompanyPartyListTitleLines } from "@/lib/interCompany/interCompanyCounterpartyPartyName";
+import { icPeerCompanyGroupListTitleLines, interCompanyClearingAccountDisplayName } from "@/lib/interCompany/icPeerCompanyGroups";
+import { sortIcMemberParties, sortPartyListRows } from "@/lib/interCompany/partyListRowSort";
+import { partyListRowMatchesSearch } from "@/lib/interCompany/partyListRowSearch";
+import { ChevronDown } from "lucide-react";
+import { toggleGroupListAccordionExpand } from "@/lib/groupListExpand";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
   return name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase();
 };
 
+type IcCompanyChildRowsProps = {
+  companyParty: Party;
+  members: Party[];
+  quickFilter: EntityListQuickFilter;
+  selectedParty: Party | null;
+  selectedIcMemberAccountId: string | null;
+  onSelectMember: (memberId: string) => void;
+  pendingApprovalByPartyId: Record<string, number>;
+  animatePresenceMode: "sync" | "wait" | "popLayout";
+  rowMotionProps: React.ComponentProps<typeof motion.div>;
+  isRowAnimationEnabled: boolean;
+  layoutHoldMs: number;
+  renderCardContent: (
+    rowParty: Party,
+    rowTitleLines: { primary: string; secondary?: string | null },
+    rowBalance: number,
+    rowPendingCount: number,
+    expandControl?: React.ReactNode
+  ) => React.ReactNode;
+  renderRowShell: (
+    rowSelected: boolean,
+    onClick: () => void,
+    content: React.ReactNode,
+    rowHref?: string,
+    rowIcProps?: { "data-pl-ic-company-row": "" }
+  ) => React.ReactNode;
+  icCompanyRowProps?: { "data-pl-ic-company-row": "" };
+};
+
+function IcCompanyChildRows({
+  companyParty,
+  members,
+  quickFilter,
+  selectedParty,
+  selectedIcMemberAccountId,
+  onSelectMember,
+  pendingApprovalByPartyId,
+  animatePresenceMode,
+  rowMotionProps,
+  isRowAnimationEnabled,
+  layoutHoldMs,
+  renderCardContent,
+  renderRowShell,
+  icCompanyRowProps,
+}: IcCompanyChildRowsProps) {
+  const sortedMembers = useMemo(
+    () => sortIcMemberParties(members, quickFilter),
+    [members, quickFilter]
+  );
+  const sortedOrderKey = useMemo(
+    () => masterListOrderKey(sortedMembers.map((member) => member.id)),
+    [sortedMembers]
+  );
+  const { displayRows: displayChildRows, displayOrderKey: childDisplayOrderKey } =
+    useMasterListDisplayRows(sortedMembers, sortedOrderKey, {
+      enabled: isRowAnimationEnabled,
+      holdMs: layoutHoldMs,
+    });
+
+  return (
+    <div className="flex flex-col gap-1">
+      <AnimatePresence mode={animatePresenceMode}>
+        {displayChildRows.map((member) => {
+          const memberSelected =
+            selectedParty?.id === companyParty.id && selectedIcMemberAccountId === member.id;
+          const memberTitle = interCompanyClearingAccountDisplayName(member);
+          const memberPending = pendingApprovalByPartyId[member.id] ?? 0;
+          const memberContent = renderCardContent(
+            member,
+            { primary: memberTitle },
+            Number(member.balance || 0),
+            memberPending
+          );
+          return (
+            <motion.div
+              key={member.id}
+              layoutDependency={childDisplayOrderKey}
+              className="pl-[10px]"
+              {...rowMotionProps}
+            >
+              {renderRowShell(
+                memberSelected,
+                () => onSelectMember(member.id),
+                memberContent,
+                undefined,
+                icCompanyRowProps
+              )}
+            </motion.div>
+          );
+        })}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+export type PartyListSelectOptions = { icMemberAccountId?: string | null };
+
 export const PartyList = React.memo(({
   parties,
   selectedParty,
   onSelectParty,
+  selectedIcMemberAccountId = null,
   searchTerm,
   topPartyId,
   overdueVoucherCount,
@@ -45,7 +149,9 @@ export const PartyList = React.memo(({
 }: {
   parties: Party[];
   selectedParty: Party | null;
-  onSelectParty: (party: Party) => void;
+  onSelectParty: (party: Party, options?: PartyListSelectOptions) => void;
+  /** IC company child account filter — null = company-wide ledger. */
+  selectedIcMemberAccountId?: string | null;
   searchTerm: string;
   /** When set, the party with this id is always shown first (e.g. Overdue Vouchers). */
   topPartyId?: string;
@@ -66,30 +172,18 @@ export const PartyList = React.memo(({
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
   const highlightSearch = searchTerm.trim();
+  const [expandedIcCompanyId, setExpandedIcCompanyId] = useState<string | null>(null);
+
+  const toggleIcCompanyExpanded = useCallback((companyId: string) => {
+    setExpandedIcCompanyId((prev) => toggleGroupListAccordionExpand(prev, companyId));
+  }, []);
 
   const filteredAndSortedParties = useMemo(() => {
-    const toDateMs = (raw: unknown): number => {
-      if (!raw) return 0;
-      if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? 0 : raw.getTime();
-      if (typeof (raw as { toDate?: () => Date }).toDate === "function") {
-        const d = (raw as { toDate: () => Date }).toDate();
-        return Number.isNaN(d.getTime()) ? 0 : d.getTime();
-      }
-      const d = new Date(raw as any);
-      return Number.isNaN(d.getTime()) ? 0 : d.getTime();
-    };
     const isSettled = (bal: number) => Math.abs(Number(bal || 0)) < 1e-6;
     const list = parties || [];
     const filterFn = (party: Party) => {
-      if (!party.name) return false;
-      const title = getInterCompanyPartyListTitleLines(party);
-      const matchesSearch =
-        masterEntityTextMatchesSearch(party.name, searchTerm) ||
-        (title.secondary
-          ? masterEntityTextMatchesSearch(title.secondary, searchTerm)
-          : false);
       const isSystemAccount = (party as any).isSystemAccount === true;
-      if (!matchesSearch || isSystemAccount) return false;
+      if (!partyListRowMatchesSearch(party, searchTerm) || isSystemAccount) return false;
       const bal = Number(party.balance || 0);
       // Footer quick filters: list short/filter from same control on mobile + desktop.
       if (quickFilter === "dr") return bal > 0;
@@ -100,13 +194,7 @@ export const PartyList = React.memo(({
     };
     const pinned = topPartyId ? list.filter((p) => p.id === topPartyId && filterFn(p)) : [];
     const rest = topPartyId ? list.filter((p) => p.id !== topPartyId) : list;
-    const filteredRest = rest
-      .filter(filterFn)
-      .sort((a, b) => {
-        if (quickFilter === "name") return String(a.name || "").localeCompare(String(b.name || ""));
-        if (quickFilter === "date") return toDateMs(b.openingBalanceDate) - toDateMs(a.openingBalanceDate);
-        return Math.abs(Number(b.balance || 0)) - Math.abs(Number(a.balance || 0));
-      });
+    const filteredRest = sortPartyListRows(rest.filter(filterFn), quickFilter);
     return [...pinned, ...filteredRest];
   }, [parties, searchTerm, topPartyId, quickFilter]);
 
@@ -152,107 +240,223 @@ export const PartyList = React.memo(({
           <ul className="pl-master-list-ul">
             <AnimatePresence mode={animatePresenceMode}>
               {displayListRows.map((party) => {
-                const isSelected = selectedParty?.id === party.id;
+                const isIcPeerCompanyGroup = Boolean(
+                  (party as Party & { isIcPeerCompanyGroup?: boolean }).isIcPeerCompanyGroup
+                );
+                const isMainSelected =
+                  selectedParty?.id === party.id && !selectedIcMemberAccountId;
                 const href = getItemHref?.(party);
                 const attachmentPreviewUrl = trimEntityFileUrlForPreview(party.fileUrl);
-                const titleLines = getInterCompanyPartyListTitleLines(party);
-                const cardContent = (
-                  <div className="pl-master-list-row">
-                        {/* बायाँ: avatar + naam (flex-1 truncate — mobile ma amount clip hundaina) */}
-                        <div className="pl-master-list-row-leading">
-                          <div className="relative flex-shrink-0">
-                            {/* Master row: voucher file-column jaisa `AttachmentHoverPortal` — pehle sirf thumbnail tha */}
-                            <EntityFileAttachmentHover
-                              fileUrl={attachmentPreviewUrl}
-                              triggerClassName="inline-flex shrink-0 rounded-full"
-                            >
-                              <ResolvedEntityAvatar
-                                className="h-8 w-8 border text-xs"
-                                companyId={party.companyId}
-                                src={attachmentPreviewUrl ?? undefined}
-                                alt={titleLines.primary}
-                                fallbackText={getInitials(titleLines.primary)}
-                              />
-                            </EntityFileAttachmentHover>
-                            {(pendingApprovalByPartyId[party.id] ?? 0) > 0 && (
-                              <span
-                                className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
-                                style={{ transform: "rotate(45deg) translate(25%, -25%)" }}
-                                aria-label={`${pendingApprovalByPartyId[party.id]} pending approval`}
-                              >
-                                <span style={{ transform: "rotate(-45deg)" }}>{pendingApprovalByPartyId[party.id]}</span>
-                              </span>
-                            )}
-                          </div>
-                          <Tooltip>
-                            {/* asChild hata — motion layout + span ref merge par Radix setRef loop */}
-                            <TooltipTrigger
-                              type="button"
-                              data-pl-list-name=""
-                              onPointerDown={(e) => e.stopPropagation()}
-                              className={cn(masterListNameTriggerCn, titleLines.secondary && "items-start py-0.5")}
-                            >
-                              <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
-                                <span className="block w-full truncate">
-                                  {highlightSearch
-                                    ? highlightQueryInText(titleLines.primary, highlightSearch)
-                                    : titleLines.primary}
-                                </span>
-                                {titleLines.secondary ? (
-                                  <span className="block w-full truncate text-[11px] font-normal leading-tight text-muted-foreground">
-                                    {highlightSearch
-                                      ? highlightQueryInText(titleLines.secondary, highlightSearch)
-                                      : titleLines.secondary}
-                                  </span>
-                                ) : null}
-                              </span>
-                            </TooltipTrigger>
-                            {/* Narrow list column: tooltip niche — amount column se overlap kam */}
-                            <TooltipContent side="bottom" align="start">
-                              <p className="font-medium">{titleLines.primary}</p>
-                              {titleLines.secondary ? (
-                                <p className="text-xs text-muted-foreground">{titleLines.secondary}</p>
-                              ) : null}
-                              {(pendingApprovalByPartyId[party.id] ?? 0) > 0 && (
-                                <p className="text-xs text-muted-foreground">{pendingApprovalByPartyId[party.id]} pending approval</p>
-                              )}
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
+                const titleLines = isIcPeerCompanyGroup
+                  ? icPeerCompanyGroupListTitleLines(party)
+                  : getInterCompanyPartyListTitleLines(party);
+                const pendingApprovalCount =
+                  (party.icMemberParties?.reduce(
+                    (sum, member) => sum + (pendingApprovalByPartyId[member.id] ?? 0),
+                    0
+                  ) ?? 0) || (pendingApprovalByPartyId[party.id] ?? 0);
+                const isExpanded = isIcPeerCompanyGroup && expandedIcCompanyId === party.id;
+                const icMemberParties = party.icMemberParties ?? [];
 
-                        {/* दायाँ भाग: amount par tooltip/ref loop avoid */}
-                        <p
-                          className={cn(
-                            "pl-master-list-row-amount ml-2",
-                            topPartyId && party.id === topPartyId && overdueVoucherCount != null
-                              ? "text-muted-foreground"
-                              : party.balance >= 0 ? "text-green-600" : "text-red-600",
-                            isSelected && !(topPartyId && party.id === topPartyId) && (party.balance >= 0 ? "text-green-700" : "text-red-700")
-                          )}
+                const renderCardContent = (
+                  rowParty: Party,
+                  rowTitleLines: { primary: string; secondary?: string | null },
+                  rowBalance: number,
+                  rowPendingCount: number,
+                  expandControl?: React.ReactNode
+                ) => (
+                  <div className="pl-master-list-row">
+                    <div className="pl-master-list-row-leading">
+                      <div className="relative flex-shrink-0">
+                        <EntityFileAttachmentHover
+                          fileUrl={trimEntityFileUrlForPreview(rowParty.fileUrl)}
+                          triggerClassName="inline-flex shrink-0 rounded-full"
                         >
-                          {topPartyId && party.id === topPartyId && overdueVoucherCount != null
-                            ? `${overdueVoucherCount} voucher${overdueVoucherCount === 1 ? "" : "s"}`
-                            : formatCurrency(party.balance, { showDrCr: true })}
-                        </p>
+                          <ResolvedEntityAvatar
+                            className={MASTER_LIST_AVATAR_CN}
+                            fallbackClassName={MASTER_LIST_AVATAR_FALLBACK_CN}
+                            companyId={rowParty.companyId}
+                            src={trimEntityFileUrlForPreview(rowParty.fileUrl) ?? undefined}
+                            alt={rowTitleLines.primary}
+                            fallbackText={getInitials(rowTitleLines.primary)}
+                          />
+                        </EntityFileAttachmentHover>
+                        {rowPendingCount > 0 && (
+                          <span
+                            className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
+                            style={{ transform: "rotate(45deg) translate(25%, -25%)" }}
+                            aria-label={`${rowPendingCount} pending approval`}
+                          >
+                            <span style={{ transform: "rotate(-45deg)" }}>{rowPendingCount}</span>
+                          </span>
+                        )}
                       </div>
+                      <div className="flex min-w-0 flex-1 items-start gap-0.5 overflow-hidden">
+                        <MasterListNameTooltip
+                          measureKey={`${rowTitleLines.primary}|${rowTitleLines.secondary ?? ""}`}
+                          className={cn(
+                            "min-w-0 flex-1",
+                            rowTitleLines.secondary && "items-start py-0.5"
+                          )}
+                          tooltipContent={
+                            <>
+                              <p className="font-medium">{rowTitleLines.primary}</p>
+                              {rowTitleLines.secondary ? (
+                                <p className="text-xs text-muted-foreground">{rowTitleLines.secondary}</p>
+                              ) : null}
+                              {rowPendingCount > 0 && (
+                                <p className="text-xs text-muted-foreground">
+                                  {rowPendingCount} pending approval
+                                </p>
+                              )}
+                            </>
+                          }
+                        >
+                          <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
+                            <span {...masterListNameMeasureProps()}>
+                              {highlightSearch
+                                ? highlightQueryInText(rowTitleLines.primary, highlightSearch)
+                                : rowTitleLines.primary}
+                            </span>
+                            {rowTitleLines.secondary ? (
+                              <span
+                                {...masterListNameMeasureProps(
+                                  "text-[11px] font-normal leading-tight text-muted-foreground"
+                                )}
+                              >
+                                {highlightSearch
+                                  ? highlightQueryInText(rowTitleLines.secondary, highlightSearch)
+                                  : rowTitleLines.secondary}
+                              </span>
+                            ) : null}
+                            {readMasterAccountFrozen(rowParty) ? (
+                              <MasterAccountFreezeListBadge className="mt-0.5" />
+                            ) : null}
+                          </span>
+                        </MasterListNameTooltip>
+                        {expandControl}
+                      </div>
+                    </div>
+                    <p
+                      className={cn(
+                        "pl-master-list-row-amount ml-2",
+                        topPartyId && rowParty.id === topPartyId && overdueVoucherCount != null
+                          ? "text-muted-foreground"
+                          : rowBalance >= 0
+                            ? "text-green-600"
+                            : "text-red-600"
+                      )}
+                    >
+                      {topPartyId && rowParty.id === topPartyId && overdueVoucherCount != null
+                        ? `${overdueVoucherCount} voucher${overdueVoucherCount === 1 ? "" : "s"}`
+                        : formatCurrency(rowBalance, { showDrCr: true })}
+                    </p>
+                  </div>
                 );
-                const cardClassName = masterListRowUnselectedCn(isSelected);
-                return (
-                  <motion.li key={party.id} layoutDependency={displayOrderKey} {...rowMotionProps}>
-                    {href ? (
-                      // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
+
+                const expandControl = isIcPeerCompanyGroup ? (
+                  <button
+                    type="button"
+                    aria-expanded={isExpanded}
+                    aria-label={isExpanded ? "Collapse accounts" : "Expand accounts"}
+                    className="mt-0.5 shrink-0 self-start rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      toggleIcCompanyExpanded(party.id);
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <ChevronDown
+                      className={cn("h-3.5 w-3.5 transition-transform", !isExpanded && "-rotate-90")}
+                    />
+                  </button>
+                ) : null;
+
+                const cardContent = renderCardContent(
+                  party,
+                  titleLines,
+                  Number(party.balance || 0),
+                  pendingApprovalCount,
+                  expandControl
+                );
+                const cardClassName = masterListRowUnselectedCn(isMainSelected);
+                const icCompanyRowProps = isIcPeerCompanyGroup
+                  ? ({ "data-pl-ic-company-row": "" } as const)
+                  : {};
+
+                const renderRowShell = (
+                  rowSelected: boolean,
+                  onClick: () => void,
+                  content: React.ReactNode,
+                  rowHref?: string,
+                  rowIcProps?: typeof icCompanyRowProps
+                ) => {
+                  const rowClassName = masterListRowUnselectedCn(rowSelected);
+                  if (rowHref) {
+                    return (
                       <Link
                         prefetch={false}
-                        href={href}
-                        onClick={() => onSelectParty(party)}
+                        href={rowHref}
+                        onClick={onClick}
                         className="block min-w-0 max-w-full overflow-hidden"
                       >
-                        <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
+                        <MasterListRow selected={rowSelected} className={rowClassName} {...rowIcProps}>
+                          {content}
+                        </MasterListRow>
                       </Link>
+                    );
+                  }
+                  return (
+                    <MasterListRow
+                      selected={rowSelected}
+                      className={rowClassName}
+                      onClick={onClick}
+                      {...rowIcProps}
+                    >
+                      {content}
+                    </MasterListRow>
+                  );
+                };
+
+                return (
+                  <motion.li key={party.id} layoutDependency={displayOrderKey} {...rowMotionProps}>
+                    {isIcPeerCompanyGroup && isExpanded ? (
+                      <div data-pl-ic-company-group="">
+                        {renderRowShell(
+                          isMainSelected,
+                          () => onSelectParty(party, { icMemberAccountId: null }),
+                          cardContent,
+                          href,
+                          icCompanyRowProps
+                        )}
+                        <IcCompanyChildRows
+                          companyParty={party}
+                          members={icMemberParties}
+                          quickFilter={quickFilter}
+                          selectedParty={selectedParty}
+                          selectedIcMemberAccountId={selectedIcMemberAccountId}
+                          onSelectMember={(memberId) =>
+                            onSelectParty(party, { icMemberAccountId: memberId })
+                          }
+                          pendingApprovalByPartyId={pendingApprovalByPartyId}
+                          animatePresenceMode={animatePresenceMode}
+                          rowMotionProps={rowMotionProps}
+                          isRowAnimationEnabled={isRowAnimationEnabled}
+                          layoutHoldMs={layoutHoldMs}
+                          renderCardContent={renderCardContent}
+                          renderRowShell={renderRowShell}
+                          icCompanyRowProps={{ "data-pl-ic-company-row": "" }}
+                        />
+                      </div>
                     ) : (
-                      <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectParty(party)}>
-                        {cardContent}
-                      </MasterListRow>
+                      renderRowShell(
+                        isMainSelected,
+                        () => onSelectParty(party, { icMemberAccountId: null }),
+                        cardContent,
+                        href,
+                        icCompanyRowProps
+                      )
                     )}
                   </motion.li>
                 );

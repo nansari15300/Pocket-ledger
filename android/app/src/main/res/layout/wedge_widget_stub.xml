@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/wedge_bg"
+    android:gravity="center"
+    android:padding="12dp"
+    android:text="Daybook"
+    android:textColor="#1E3A8A"
+    android:textSize="12sp"
+    android:textStyle="bold" />

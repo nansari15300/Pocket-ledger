@@ -103,6 +103,11 @@ import type { BSDate } from "@/lib/bs-date";
 import { Search } from "lucide-react";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Input } from "../ui/input";
+import { GroupDetailNestedNameHeader } from "@/components/entity/GroupDetailNestedNameHeader";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { EditTaxDialog } from "./EditTaxDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -135,6 +140,7 @@ export function TaxGroupDetails({
   onBack,
   userNames,
   journalAccountNames: journalAccountNamesProp,
+  groupMemberFilterId = null,
 }: {
   group: TaxGroup;
   allGroups: TaxGroup[];
@@ -147,6 +153,7 @@ export function TaxGroupDetails({
   userNames?: Record<string, string>;
   journalAccountNames?: Record<string, string>;
   onBack?: () => void;
+  groupMemberFilterId?: string | null;
 }) {
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company, companyId } = useCompany();
@@ -164,6 +171,17 @@ export function TaxGroupDetails({
     return taxes.filter((t) => t.groupId === group.id);
   }, [taxes, group.id]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
+
+  const selectedMemberTax = useMemo(() => {
+    if (!groupMemberFilterId) return null;
+    return processedTaxes.find((tax) => tax.id === groupMemberFilterId) ?? null;
+  }, [groupMemberFilterId, processedTaxes]);
+
+  const selectedMemberAttachmentUrl = useMemo(
+    () => trimEntityFileUrlForPreview(selectedMemberTax?.fileUrl),
+    [selectedMemberTax?.fileUrl, selectedMemberTax?.id]
+  );
+
   const { balanceMode } = useBalanceMode();
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
@@ -865,27 +883,60 @@ export function TaxGroupDetails({
                 </Button>
               )}
               <div className={LEDGER_HEADER_AVATAR_CN}>
-                <Avatar className="h-12 w-12 text-lg">
-                  <AvatarFallback className="bg-muted text-muted-foreground">
-                    {getInitials(group.name)}
-                  </AvatarFallback>
-                </Avatar>
-                {group.id !== 'ungrouped' && (
-                  <EditTaxGroupDialog
-                    group={group}
-                    allGroups={allGroups}
-                    onGroupUpdated={onGroupUpdated}
-                    onGroupDeleted={onGroupDeleted}
-                    hasAccounts={taxesInGroup.length > 0 || childGroups.length > 0}
-                  >
-                    <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
-                      <Pencil className="h-3 w-3" />
-                    </button>
-                  </EditTaxGroupDialog>
+                {selectedMemberTax ? (
+                  <>
+                    <EntityFileAttachmentHover
+                      fileUrl={selectedMemberAttachmentUrl}
+                      triggerClassName="inline-flex rounded-full"
+                    >
+                      <ResolvedEntityAvatar
+                        className="h-12 w-12 flex-shrink-0 text-lg"
+                        companyId={selectedMemberTax.companyId}
+                        src={selectedMemberAttachmentUrl ?? undefined}
+                        alt={selectedMemberTax.name}
+                        fallbackSlot={<Receipt className="h-6 w-6 text-muted-foreground" />}
+                      />
+                    </EntityFileAttachmentHover>
+                    <EditTaxDialog
+                      tax={selectedMemberTax}
+                      allTaxes={processedTaxes}
+                      onTaxUpdated={onTaxUpdated}
+                      onTaxDeleted={onTaxUpdated}
+                      hasTransactions={processedTransactions.length > 0}
+                    >
+                      <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    </EditTaxDialog>
+                  </>
+                ) : (
+                  <>
+                    <Avatar className="h-12 w-12 text-lg">
+                      <AvatarFallback className="bg-muted text-muted-foreground">
+                        {getInitials(group.name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    {group.id !== "ungrouped" && (
+                      <EditTaxGroupDialog
+                        group={group}
+                        allGroups={allGroups}
+                        onGroupUpdated={onGroupUpdated}
+                        onGroupDeleted={onGroupDeleted}
+                        hasAccounts={taxesInGroup.length > 0 || childGroups.length > 0}
+                      >
+                        <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      </EditTaxGroupDialog>
+                    )}
+                  </>
                 )}
               </div>
               <div className={LEDGER_HEADER_NAME_CARD_CN}>
-                <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
+                <GroupDetailNestedNameHeader
+                  groupName={group.name}
+                  memberName={selectedMemberTax?.name ?? null}
+                />
               </div>
               <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
                 <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
@@ -959,31 +1010,6 @@ export function TaxGroupDetails({
                   <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
                 </Button>
               )}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className={cn("w-[200px] justify-between", LEDGER_HEADER_PILL_CN)}>
-                    <span className="truncate">Members ({taxes.length})</span>
-                    <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-[320px] max-h-72 overflow-y-auto">
-                  {taxes.map(p => (
-                    <DropdownMenuItem key={p.id} disabled>
-                      <div className="flex w-full items-center justify-between gap-3">
-                        <span className="truncate text-left">{p.name}</span>
-                        <span
-                          className={cn(
-                            "shrink-0 text-xs font-semibold tabular-nums",
-                            (Number((p as any).balance) || 0) >= 0 ? "text-green-600" : "text-red-600"
-                          )}
-                        >
-                          {formatCurrency(Number((p as any).balance) || 0, { showDrCr: true })}
-                        </span>
-                      </div>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
               <Button variant="outline" size="sm" onClick={() => handleOpenNoteDialog()} className={LEDGER_HEADER_PILL_CN}>
                 <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>

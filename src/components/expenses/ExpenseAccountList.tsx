@@ -9,6 +9,9 @@ import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { DollarSign, Lock } from "lucide-react";
 import { useDate } from "@/hooks/useDate";
 import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { MasterListNameTooltip } from "@/components/entity/MasterListNameTooltip";
+import { MasterAccountFreezeListBadge } from "@/components/masterAccountFreeze/MasterAccountFreezeListBadge";
+import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -20,8 +23,7 @@ import {
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
 import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows"
-import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
-import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
+import { masterListShellCn, masterListRowUnselectedCn, MASTER_LIST_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN } from "@/lib/masterListChrome";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
 
 interface ExpenseAccountListProps {
@@ -131,7 +133,8 @@ export function ExpenseAccountList({
                               triggerClassName="inline-flex shrink-0 rounded-full"
                             >
                               <ResolvedEntityAvatar
-                                className="h-8 w-8 text-xs"
+                                className={MASTER_LIST_AVATAR_CN}
+                                fallbackClassName={MASTER_LIST_AVATAR_FALLBACK_CN}
                                 companyId={(account as { companyId?: string }).companyId ?? company?.id}
                                 src={attachmentPreviewUrl ?? undefined}
                                 alt={account.name}
@@ -154,22 +157,27 @@ export function ExpenseAccountList({
                               </span>
                             )}
                           </div>
-                          <Tooltip>
-                            <TooltipTrigger
-                              type="button"
-                              data-pl-list-name=""
-                              onPointerDown={(e) => e.stopPropagation()}
-                              className={masterListNameTriggerCn}
-                            >
-                              {highlightSearch ? highlightQueryInText(account.name, highlightSearch) : account.name}
-                            </TooltipTrigger>
-                            <TooltipContent side="right">
-                              <p className="font-medium">{account.name}</p>
-                              {(pendingApprovalByAccountId[account.id] ?? 0) > 0 && (
-                                <p className="text-xs text-muted-foreground">{pendingApprovalByAccountId[account.id]} pending approval</p>
-                              )}
-                            </TooltipContent>
-                          </Tooltip>
+                          <div className="flex min-w-0 flex-col">
+                          <MasterListNameTooltip
+                            measureKey={account.name}
+                            side="right"
+                            tooltipContent={
+                              <>
+                                <p className="font-medium">{account.name}</p>
+                                {(pendingApprovalByAccountId[account.id] ?? 0) > 0 && (
+                                  <p className="text-xs text-muted-foreground">
+                                    {pendingApprovalByAccountId[account.id]} pending approval
+                                  </p>
+                                )}
+                              </>
+                            }
+                          >
+                            {highlightSearch ? highlightQueryInText(account.name, highlightSearch) : account.name}
+                          </MasterListNameTooltip>
+                          {readMasterAccountFrozen(account) ? (
+                            <MasterAccountFreezeListBadge className="mt-0.5" />
+                          ) : null}
+                          </div>
                         </div>
                         <Tooltip>
                           <TooltipTrigger

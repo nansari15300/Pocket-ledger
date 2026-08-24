@@ -83,6 +83,7 @@ const entitlementLabels: Partial<Record<EntitlementKey, string>> = {
     interCompanyVoucherEnabled: "Inter-company voucher",
     maxInterCompanyPartners: "Max joined inter-company partners",
     shareForReconciliationEnabled: "Share for Reconciling (cross-user ledger match)",
+    masterAccountFreezeEnabled: "Freeze master account (party / bank / staff / tax / expense)",
     maxReconciliationLedgers: "Max reconciliation ledgers per user",
     savedAccountSwitchEnabled: "Saved account switch (APK/EXE quick login)",
     attachmentBackupRestoreEnabled: "Attachment backup & restore (embed files in .plbp)",
@@ -766,6 +767,22 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                     disabled={!editablePlan.entitlements.googleDriveSyncEnabled}
                                 />
                             </div>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 p-3 border rounded-lg bg-muted/30 col-span-1 md:col-span-2 flex-wrap">
+                        <div className="flex items-center gap-2 flex-1 min-w-[12rem]">
+                            <Switch
+                                id={`${plan.id}-masterAccountFreezeEnabled`}
+                                checked={!!editablePlan.entitlements.masterAccountFreezeEnabled}
+                                onCheckedChange={(checked) => {
+                                    handleEntitlementChange("masterAccountFreezeEnabled", checked);
+                                }}
+                            />
+                            <Label htmlFor={`${plan.id}-masterAccountFreezeEnabled`} className="text-sm">
+                                {entitlementLabels.masterAccountFreezeEnabled}
+                            </Label>
+                            <PlanRuleInfo tip="When enabled, users with Freeze Master Account permission can lock party, bank, staff, or tax accounts." />
                         </div>
                     </div>
 

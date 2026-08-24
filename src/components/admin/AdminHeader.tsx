@@ -24,11 +24,17 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { useDate } from "@/hooks/useDate";
-import { DateFormatSettingsDialog } from "@/components/settings/DateFormatSettingsDialog";
 import { useCompany } from "@/hooks/useCompany";
-import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { DateFormatSettingsDialog } from "@/components/settings/DateFormatSettingsDialog";
 import { useRouter } from "next/navigation";
 import { SidebarTrigger } from "../ui/sidebar";
+import dynamic from "next/dynamic";
+
+/** Voucher forms are heavy — do not block first /admin compile/render. */
+const AddVoucherDialog = dynamic(
+  () => import("../vouchers/AddVoucherDialog").then((m) => m.AddVoucherDialog),
+  { ssr: false }
+);
 
 
 function ScreenControls() {

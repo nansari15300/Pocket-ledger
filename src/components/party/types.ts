@@ -17,6 +17,9 @@ export type Party = {
   phone?: string;
   email?: string;
   isDeleted?: boolean;
+  /** Owner freeze — no new vouchers; visible disabled in dropdowns. */
+  isFrozen?: boolean;
+  freezeMessage?: string | null;
   isInterCompanyCounterparty?: boolean;
   /** Linked peer company for IC clearing row (`ic_peer_*` / `ic_acct_*`). */
   interCompanyPeerCompanyId?: string;
@@ -28,6 +31,10 @@ export type Party = {
   interCompanyPeerEntityId?: string;
   interCompanyPeerEntityLabel?: string;
   isInterCompanyMirroredEntity?: boolean;
+  /** IC / Ac — company filter view (merged peer company row). */
+  isIcPeerCompanyGroup?: boolean;
+  icPeerCompanyId?: string;
+  icMemberParties?: Party[];
 };
 
 export type Group = {

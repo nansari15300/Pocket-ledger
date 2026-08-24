@@ -18,6 +18,7 @@ const fs = require("fs");
 const os = require("os");
 const localAppServer = require("./localAppServer");
 const plTraceLog = require("./plTraceLog");
+const tabSnapshotRecovery = require("./tabSnapshotRecovery");
 const appUpgradeCache = require("./appUpgradeCache");
 const desktopReleaseUpdate = require("./desktopReleaseUpdate");
 const { PL_MIRROR_PROTOCOL_VERSION, evaluateMirrorProtocol } = require("./plMirrorProtocol.cjs");
@@ -1975,6 +1976,7 @@ function updateBrowserViewBounds(win) {
       activeView.setBounds({ x: 0, y: sh, width: contentWidth, height: innerH });
     }
   }
+  tabSnapshotRecovery.updateSnapshotOverlayBounds(win, { tabStripHeight: sh });
   raiseTabStripToTop(win);
 }
 
@@ -2069,6 +2071,7 @@ function switchToTab(win, index) {
       win.removeBrowserView(prev);
     } catch (_) {}
   }
+  tabSnapshotRecovery.hideOnTabSwitch(win);
   try {
     win.addBrowserView(next);
   } catch (_) {}
@@ -2261,6 +2264,7 @@ async function openNewTab(win, loadUrl) {
   const state = windowTabs.get(win.id);
   if (!state) return;
   state.tabs.push(view);
+  tabSnapshotRecovery.attachTabSnapshotRecovery(win, view, { isPackaged: app.isPackaged });
   switchToTab(win, state.tabs.length - 1);
   try {
     await view.webContents.loadURL(entryUrl);
@@ -2500,6 +2504,12 @@ async function createWindow() {
   }
   // Initialize per-window tab state; each window manages its own tab stack (+ stripView baad me).
   windowTabs.set(win.id, { tabs: [], activeIndex: -1, printMode: PRINT_MODE_FIT_PAGE, stripView: null });
+  tabSnapshotRecovery.initWindowSnapshotRecovery(win, {
+    isPackaged: app.isPackaged,
+    tabStripHeight: TAB_STRIP_HEIGHT,
+    getState: () => windowTabs.get(win.id),
+    raiseTabStrip: raiseTabStripToTop,
+  });
   // Sync BrowserView bounds across all desktop window state changes.
   win.on("resize", () => updateBrowserViewBounds(win));
   win.on("maximize", () => {
@@ -2516,11 +2526,25 @@ async function createWindow() {
     updateBrowserViewBounds(win);
     syncLocalServerTray();
     notifyLiveSyncResume("window_show", win);
+    tabSnapshotRecovery.onWindowForeground(win, "window_show");
   });
-  win.on("focus", () => notifyLiveSyncResume("window_focus", win));
-  win.on("restore", () => notifyLiveSyncResume("window_restore", win));
+  win.on("focus", () => {
+    notifyLiveSyncResume("window_focus", win);
+    tabSnapshotRecovery.onWindowForeground(win, "window_focus");
+  });
+  win.on("restore", () => {
+    notifyLiveSyncResume("window_restore", win);
+    tabSnapshotRecovery.onWindowForeground(win, "window_restore");
+  });
+  win.on("blur", () => {
+    const state = windowTabs.get(win.id);
+    if (!state || state.activeIndex < 0) return;
+    const view = state.tabs[state.activeIndex];
+    if (view) void tabSnapshotRecovery.captureTabSnapshot(view);
+  });
   attachPackagedCloseToTrayBehavior(win);
   win.on("closed", () => {
+    tabSnapshotRecovery.disposeWindowSnapshotRecovery(win);
     const state = windowTabs.get(win.id);
     if (state) {
       if (state.stripView?.webContents && !state.stripView.webContents.isDestroyed()) {
@@ -2613,6 +2637,9 @@ if (gotSingleInstanceLock) {
     void ensureHostSharingRunningAfterLaunch().catch(() => undefined);
     void ensureServerDataBridgeWindow().catch(() => undefined);
     notifyLiveSyncResume("system_resume");
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) tabSnapshotRecovery.onWindowForeground(w, "system_resume");
+    }
   });
 
   ipcMain.handle("pl-google-auth-external", async (_event, options) => {

@@ -11,6 +11,7 @@ import { Users, Briefcase, Receipt, DollarSign, Building } from "lucide-react";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { masterEntityAttachmentPreviewUrl } from "@/lib/masterEntityAttachmentPreviewUrl";
+import { MASTER_LIST_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN } from "@/lib/masterListChrome";
 import { useCompany } from "@/hooks/useCompany";
 
 export type UnifiedPayee = {
@@ -72,7 +73,8 @@ export function UnifiedPayeeList({
                           triggerClassName="inline-flex shrink-0 rounded-full"
                         >
                           <ResolvedEntityAvatar
-                            className="h-8 w-8 text-xs"
+                            className={MASTER_LIST_AVATAR_CN}
+                            fallbackClassName={MASTER_LIST_AVATAR_FALLBACK_CN}
                             companyId={payee.entity?.companyId ?? company?.id}
                             src={attachmentPreviewUrl ?? undefined}
                             alt={payee.name}

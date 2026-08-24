@@ -19,3 +19,26 @@ export const masterListCategoryLabelCn = cn(
 export function masterListRowUnselectedCn(isSelected: boolean, extra?: string) {
   return cn(!isSelected && masterListUnselectedCn, extra);
 }
+
+/** Masters list profile — initials + icon ink (border jaisa green / IC blue). */
+export const MASTER_LIST_PROFILE_INK_CN = "pl-master-list-profile-ink";
+
+/** List row profile circle — globals.css green/blue border+fill (Tailwind class selectors avoid). */
+export const MASTER_LIST_AVATAR_CN = "pl-master-list-avatar h-8 w-8 text-sm";
+export const MASTER_LIST_AVATAR_FALLBACK_CN = cn(
+  "pl-master-list-avatar-fallback",
+  MASTER_LIST_PROFILE_INK_CN
+);
+
+/** List row group icon box — same green/blue as avatar; square rounded-md. */
+export const MASTER_LIST_GROUP_ICON_CN = cn(
+  "pl-master-list-group-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-md border",
+  MASTER_LIST_PROFILE_INK_CN
+);
+
+/** Items tab list — Package icon passive + bada (group Boxes jaisa); box h-8 circle same. */
+export const MASTER_LIST_ITEM_AVATAR_CN = cn(
+  MASTER_LIST_AVATAR_CN,
+  "pl-master-list-item-avatar",
+  MASTER_LIST_PROFILE_INK_CN
+);

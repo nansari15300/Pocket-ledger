@@ -7,8 +7,7 @@ import type { Group } from "@/components/party/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
 import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
-import { MasterListRow } from "@/components/ui/master-list-row";
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/tooltip";
+import { TooltipProvider } from "../ui/tooltip";
 import { useMemo, useState } from "react";
 import {
   EntityListQuickFilterBar,
@@ -16,12 +15,26 @@ import {
 } from "@/components/entity/EntityListQuickFilterBar";
 import { filterAndSortEntityGroups } from "@/lib/entityGroupListQuickFilter";
 import { motion, AnimatePresence } from "framer-motion";
-import Link from "next/link";
-import AnimatedNumber from "../ui/AnimatedNumber";
 import { isSystemParentGroup } from "@/lib/system-groups"
-import { masterListShellCn, masterListRowUnselectedCn, masterListScrollBodyCn, masterListCategoryLabelCn } from "@/lib/masterListChrome";
-import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
+import { masterListShellCn, masterListScrollBodyCn, masterListCategoryLabelCn } from "@/lib/masterListChrome";
+import { groupListChildMemberNameTriggerCn, masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { getAllSystemGroupNames } from "@/lib/system-group-names";
+import { IC_COMPANY_PARTY_GROUP_ID } from "@/lib/interCompany/icPeerCompanyGroups";
+import {
+  IcCompanyGroupTabListTree,
+  type IcCompanyGroupTabSelectOptions,
+} from "@/components/party/IcCompanyGroupTabListTree";
+import type { Party } from "@/components/party/types";
+import { ExpandableGroupListTree } from "@/components/entity/ExpandableGroupListTree";
+import {
+  GroupListExpandNameRow,
+  GroupListMemberRow,
+  renderGroupListRowShell,
+} from "@/components/entity/GroupListMemberRow";
+import type { GroupListSelectOptions } from "@/lib/groupListExpand";
+import { toggleGroupListAccordionExpand } from "@/lib/groupListExpand";
+import { GroupListMemberAvatar } from "@/components/entity/GroupListMemberAvatar";
+import { MasterListGroupIcon } from "@/components/entity/MasterListGroupIcon";
 
 type GroupWithType = Group & { groupType?: 'party' | 'tax' | 'staff' | 'account' | 'expense' | 'item' };
 
@@ -44,11 +57,18 @@ export function PartyGroupList({
   hideQuickFilterBar = false,
   /** Mobile party page: category headers footer me — scroll me sirf cards */
   hideCategoryHeaders = false,
+  icPeerCompanyRows = [],
+  selectedIcPeerCompanyId = null,
+  selectedIcMemberAccountId = null,
+  onSelectIcCompanyGroup,
+  pendingApprovalByPartyId = {},
+  groupMembersByGroupId = {},
+  selectedGroupMemberFilterId = null,
 }: {
   groups: Group[];
   searchTerm: string;
   selectedGroup: Group | null;
-  onSelectGroup: (group: Group) => void;
+  onSelectGroup: (group: Group, options?: GroupListSelectOptions) => void;
   /** When false (e.g. party page), categories are always expanded with no chevron. When true (e.g. report), expand/collapse is shown. */
   collapsible?: boolean;
   /** Pending approval count per group id (only passed when approve notifications on list). */
@@ -59,6 +79,15 @@ export function PartyGroupList({
   onQuickFilterChange?: (next: EntityListQuickFilter) => void;
   hideQuickFilterBar?: boolean;
   hideCategoryHeaders?: boolean;
+  /** Groups tab — IC Company 3-level tree (level 2 peer companies). */
+  icPeerCompanyRows?: Party[];
+  selectedIcPeerCompanyId?: string | null;
+  selectedIcMemberAccountId?: string | null;
+  onSelectIcCompanyGroup?: (options: IcCompanyGroupTabSelectOptions) => void;
+  pendingApprovalByPartyId?: Record<string, number>;
+  /** Groups tab — party members per group for expand tree. */
+  groupMembersByGroupId?: Record<string, Party[]>;
+  selectedGroupMemberFilterId?: string | null;
 }) {
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } =
@@ -67,6 +96,7 @@ export function PartyGroupList({
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
+  const [expandedListNodeId, setExpandedListNodeId] = useState<string | null>(null);
 
   const categories: CategorySection[] = useMemo(() => {
     const sortedFlat = filterAndSortEntityGroups(groups || [], searchTerm, quickFilter);
@@ -180,77 +210,127 @@ export function PartyGroupList({
                     <ul className="pl-master-list-ul w-full">
                       <AnimatePresence mode={animatePresenceMode}>
                       {category.groups.map((group) => {
-                        const isSelected = selectedGroup?.id === group.id;
                         const isSystem = (group as any).isSystemReserved;
+                        const isIcCompanyGroup = group.id === IC_COMPANY_PARTY_GROUP_ID;
+                        const icGroupRowProps = isIcCompanyGroup
+                          ? ({ "data-pl-ic-company-row": "" } as const)
+                          : {};
+                        if (isIcCompanyGroup && onSelectIcCompanyGroup) {
+                          return (
+                            <motion.li key={group.id} className="w-full" layoutDependency={displayOrderKey} {...rowMotionProps}>
+                              <IcCompanyGroupTabListTree
+                                group={group}
+                                icPeerCompanyRows={icPeerCompanyRows}
+                                selectedGroup={selectedGroup}
+                                selectedIcPeerCompanyId={selectedIcPeerCompanyId}
+                                selectedIcMemberAccountId={selectedIcMemberAccountId}
+                                onSelect={onSelectIcCompanyGroup}
+                                quickFilter={quickFilter}
+                                pendingApprovalByGroupId={pendingApprovalByGroupId}
+                                pendingApprovalByPartyId={pendingApprovalByPartyId}
+                                getItemHref={getItemHref}
+                                animatePresenceMode={animatePresenceMode}
+                                rowMotionProps={rowMotionProps}
+                                isRowAnimationEnabled={isRowAnimationEnabled}
+                                layoutHoldMs={layoutHoldMs}
+                                expandedListNodeId={expandedListNodeId}
+                                onExpandedListNodeIdChange={setExpandedListNodeId}
+                              />
+                            </motion.li>
+                          );
+                        }
                         return (
                           <motion.li key={group.id} className="w-full" layoutDependency={displayOrderKey} {...rowMotionProps}>
                             {(() => {
                               const href = getItemHref?.(group);
-                              const cardClassName = masterListRowUnselectedCn(isSelected);
-                              const cardContent = (
-                              <div className="pl-master-list-row">
-                                <div className="pl-master-list-row-leading">
-                                  {/* PartyList jaisa: badge icon ke top-right corner pe, naam ke beech me nahi */}
-                                  <div className="relative flex-shrink-0">
-                                    <div className="h-8 w-8 flex items-center justify-center rounded-md border bg-muted text-muted-foreground">
-                                      {isSystem ? <Lock className="h-4 w-4" /> : <Users className="h-4 w-4" />}
-                                    </div>
-                                    {(pendingApprovalByGroupId[group.id] ?? 0) > 0 && (
-                                      <span
-                                        className="absolute top-0 right-0 flex h-4 w-4 items-center justify-center bg-pink-500 text-[10px] font-bold text-white origin-center"
-                                        style={{ transform: "rotate(45deg) translate(25%, -25%)" }}
-                                        aria-label={`${pendingApprovalByGroupId[group.id]} pending approval`}
-                                      >
-                                        <span style={{ transform: "rotate(-45deg)" }}>
-                                          {pendingApprovalByGroupId[group.id]}
+                              const members = groupMembersByGroupId[group.id] ?? [];
+                              const isGroupSelectedOnly =
+                                selectedGroup?.id === group.id && !selectedGroupMemberFilterId;
+                              const groupPending = pendingApprovalByGroupId[group.id] ?? 0;
+
+                              const renderGroupCard = (expandControl: React.ReactNode | null) => (
+                                <div className="pl-master-list-row">
+                                  <div className="pl-master-list-row-leading">
+                                    <div className="relative flex-shrink-0">
+                                      <MasterListGroupIcon>
+                                        {isSystem ? <Lock className="h-4 w-4" /> : <Users className="h-4 w-4" />}
+                                      </MasterListGroupIcon>
+                                      {groupPending > 0 && (
+                                        <span
+                                          className="absolute top-0 right-0 flex h-4 w-4 items-center justify-center bg-pink-500 text-[10px] font-bold text-white origin-center"
+                                          style={{ transform: "rotate(45deg) translate(25%, -25%)" }}
+                                          aria-label={`${groupPending} pending approval`}
+                                        >
+                                          <span style={{ transform: "rotate(-45deg)" }}>{groupPending}</span>
                                         </span>
-                                      </span>
-                                    )}
-                                  </div>
-                                  <Tooltip>
-                                    {/* asChild hata — motion layout + span ref merge par Radix setRef loop (party groups tab) */}
-                                    <TooltipTrigger
-                                      type="button"
-                                      data-pl-list-name=""
-                                      onPointerDown={(e) => e.stopPropagation()}
-                                      className={cn(masterListNameTriggerCn, "min-w-0 flex-1 text-sm font-semibold")}
-                                    >
-                                      {group.name}
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>{group.name}</p>
-                                      {(pendingApprovalByGroupId[group.id] ?? 0) > 0 && (
-                                        <p className="text-xs text-muted-foreground">
-                                          {pendingApprovalByGroupId[group.id]} pending approval
-                                        </p>
                                       )}
-                                    </TooltipContent>
-                                  </Tooltip>
+                                    </div>
+                                    <GroupListExpandNameRow
+                                      name={group.name}
+                                      expandControl={expandControl}
+                                      pendingCount={groupPending}
+                                      nameTriggerClassName={cn(masterListNameTriggerCn, "min-w-0 flex-1 text-sm font-semibold")}
+                                    />
+                                  </div>
+                                  <p
+                                    className={cn(
+                                      "pl-master-list-row-amount-xs ml-1 rounded px-1",
+                                      group.balance >= 0 ? "text-green-600" : "text-red-600"
+                                    )}
+                                  >
+                                    {formatCurrency(group.balance, { showDrCr: true })}
+                                  </p>
                                 </div>
-                                <p
-                                  className={cn(
-                                    "pl-master-list-row-amount-xs ml-1 rounded px-1",
-                                    group.balance >= 0 ? "text-green-600" : "text-red-600"
-                                  )}
-                                >
-                                  {formatCurrency(group.balance, { showDrCr: true })}
-                                </p>
-                              </div>
                               );
-                              return href ? (
-                                // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
-                                <Link
-                                  prefetch={false}
-                                  href={href}
-                                  onClick={() => onSelectGroup(group)}
-                                  className="block min-w-0 max-w-full overflow-hidden"
-                                >
-                                  <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
-                                </Link>
-                              ) : (
-                                <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectGroup(group)}>
-                                  {cardContent}
-                                </MasterListRow>
+
+                              return (
+                                <ExpandableGroupListTree
+                                  members={members}
+                                  isGroupSelectedOnly={isGroupSelectedOnly}
+                                  selectedMemberId={
+                                    selectedGroup?.id === group.id ? selectedGroupMemberFilterId : null
+                                  }
+                                  expanded={expandedListNodeId === group.id}
+                                  onExpandedChange={() =>
+                                    setExpandedListNodeId((prev) =>
+                                      toggleGroupListAccordionExpand(prev, group.id)
+                                    )
+                                  }
+                                  onSelectGroup={() => onSelectGroup(group, { memberId: null })}
+                                  onSelectMember={(memberId) => onSelectGroup(group, { memberId })}
+                                  quickFilter={quickFilter}
+                                  expandAriaLabel="parties"
+                                  animatePresenceMode={animatePresenceMode}
+                                  rowMotionProps={rowMotionProps}
+                                  isRowAnimationEnabled={isRowAnimationEnabled}
+                                  layoutHoldMs={layoutHoldMs}
+                                  renderGroupRow={({ expandControl }) =>
+                                    renderGroupListRowShell(
+                                      isGroupSelectedOnly,
+                                      () => onSelectGroup(group, { memberId: null }),
+                                      renderGroupCard(expandControl),
+                                      href
+                                    )
+                                  }
+                                  renderMemberRow={(member, memberSelected, onClick) => (
+                                    <GroupListMemberRow
+                                      name={member.name}
+                                      balance={member.balance}
+                                      isSelected={memberSelected}
+                                      onClick={onClick}
+                                      isAccountFrozen={member.isFrozen === true}
+                                      pendingCount={pendingApprovalByPartyId[member.id] ?? 0}
+                                      amountClassName="pl-master-list-row-amount-xs ml-1 rounded px-1"
+                                      leading={
+                                        <GroupListMemberAvatar
+                                          name={member.name}
+                                          fileUrl={member.fileUrl}
+                                          companyId={member.companyId}
+                                        />
+                                      }
+                                    />
+                                  )}
+                                />
                               );
                             })()}
                           </motion.li>

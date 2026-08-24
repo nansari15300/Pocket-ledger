@@ -4,4 +4,7 @@
     <string name="title_activity_main">Pocket Ledger</string>
     <string name="package_name">com.pocketledger.app</string>
     <string name="custom_url_scheme">com.pocketledger.app</string>
+    <string name="wedge_daybook_title">Daybook</string>
+    <string name="wedge_daybook_description">Daily bank and cash summary for selected company</string>
+    <string name="wedge_daybook_empty">No Transactions Found</string>
 </resources>

@@ -14,6 +14,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon, Loader2, Trash2, Upload, FileText, PlusCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { mapPartiesForVoucherCombobox } from "@/lib/masterAccountFreeze/comboboxOptions";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
@@ -671,7 +672,7 @@ export function CreatePaymentInForm({
                       render={({ field }: any) => (
                         <FormItem>
                           <Combobox
-                            options={processedPartiesForSelection.map(p => ({ value: p.id, label: p.name }))}
+                            options={mapPartiesForVoucherCombobox(processedPartiesForSelection)}
                             value={field.value}
                             onChange={(val, newName) => {
                                 if (val === 'add-new') {

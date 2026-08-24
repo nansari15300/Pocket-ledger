@@ -114,7 +114,9 @@ export type EntitlementKey =
   /** Per Drive-synced company: owner + shared Drive users. 0 = no sharing; -1 = unlimited. */
   | "maxGoogleDriveSyncUsers"
   /** EXE LAN server (Settings → Server) — share local companies on network. */
-  | "allowLocalAppServer";
+  | "allowLocalAppServer"
+  /** Plan-wise: freeze party / bank / staff / tax master accounts. */
+  | "masterAccountFreezeEnabled";
 
 export type Entitlements = Record<EntitlementKey, number | boolean>;
 
@@ -289,6 +291,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxGoogleDriveSyncCompanies: 0,
       maxGoogleDriveSyncUsers: 0,
       allowLocalAppServer: false,
+      masterAccountFreezeEnabled: false,
     },
     features: [
       "Unlimited local (offline) companies",
@@ -349,6 +352,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       // Same as maxUsersLocal — Drive share cannot exceed local company users.
       maxGoogleDriveSyncUsers: 5,
       allowLocalAppServer: true,
+      masterAccountFreezeEnabled: true,
     },
     features: [
       "1 online company + unlimited offline",
@@ -410,6 +414,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxGoogleDriveSyncCompanies: 3,
       maxGoogleDriveSyncUsers: 50, // = maxUsersLocal
       allowLocalAppServer: true,
+      masterAccountFreezeEnabled: true,
     },
     features: [
       "3 online companies + unlimited offline",
@@ -470,6 +475,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxGoogleDriveSyncCompanies: 10,
       maxGoogleDriveSyncUsers: 100, // = maxUsersLocal
       allowLocalAppServer: true,
+      masterAccountFreezeEnabled: true,
     },
     features: [
       "10 online companies + unlimited offline",

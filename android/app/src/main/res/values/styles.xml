@@ -23,4 +23,11 @@
         <!-- Splash window bhi force-dark se safe — WebView load se pehle orange/peach tint kabhi mismatch -->
         <item name="android:forceDarkAllowed">false</item>
     </style>
+
+    <!-- Native wedge rotate fullscreen — not Capacitor / MainActivity theme -->
+    <style name="WedgeExpandTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/wedge_bg</item>
+        <item name="android:statusBarColor">@color/wedge_bg</item>
+        <item name="android:navigationBarColor">@color/wedge_bg</item>
+    </style>
 </resources>

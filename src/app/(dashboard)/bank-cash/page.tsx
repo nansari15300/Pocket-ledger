@@ -1,7 +1,7 @@
 
 "use client";
 
-import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import {
@@ -20,6 +20,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { MobileMasterDetailNestedName } from "@/components/entity/MobileMasterDetailNestedName";
 import { mlc } from "@/lib/mobileListChrome";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams, useParams } from "next/navigation";
@@ -53,6 +54,7 @@ import {
   readMasterDetailLocationQuery,
 } from "@/lib/masterDetailTabChange";
 import type { DateRange } from "@/components/ui/ad-calendar";
+import type { GroupListSelectOptions } from "@/lib/groupListExpand";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import usePermissions from "@/hooks/usePermissions";
 
@@ -166,6 +168,7 @@ function BankCashPageContent() {
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [accountDetailsDateRange, setAccountDetailsDateRange] = useState<DateRange | undefined>(undefined);
   const [groupDetailsDateRange, setGroupDetailsDateRange] = useState<DateRange | undefined>(undefined);
+  const [groupMemberFilterId, setGroupMemberFilterId] = useState<string | null>(null);
   /** Mobile: AccountDetails se voucher count — master-detail title row me dikhane ke liye */
   const [bankMobileVoucherStats, setBankMobileVoucherStats] = useState<{ showing: number; total: number } | null>(null);
 
@@ -181,19 +184,30 @@ function BankCashPageContent() {
     setSelected({ ...selectedAccountRaw, ...patch });
   }, [setSelected, selectedAccountRaw]);
   // Account row = `accountName`; group row = `name` — sirf `.name` se bank detail header khali rehta tha
-  const mobileBankCashSelectionLabel = useMemo(() => {
+  const mobileBankCashSelectionLabelClassName = useMemo(() => {
+    if (!selected) return undefined;
+    return masterDetailBalanceToneClass((selected as Account | AccountGroup).balance);
+  }, [selected]);
+  const mobileBankCashSelectionLabel = useMemo((): ReactNode => {
     if (!selected) return null;
     if (activeView !== "groups") {
       const nm = (selected as Account).accountName;
       return nm && String(nm).trim() ? String(nm).trim() : null;
     }
-    const nm = (selected as AccountGroup).name;
+    const group = selected as AccountGroup;
+    if (groupMemberFilterId) {
+      const member = processedAccounts.find((account) => account.id === groupMemberFilterId);
+      return (
+        <MobileMasterDetailNestedName
+          groupName={group.name}
+          memberName={member ? bankAccountDisplayName(member) : null}
+          toneClassName={mobileBankCashSelectionLabelClassName}
+        />
+      );
+    }
+    const nm = group.name;
     return nm && String(nm).trim() ? String(nm).trim() : null;
-  }, [selected, activeView]);
-  const mobileBankCashSelectionLabelClassName = useMemo(() => {
-    if (!selected) return undefined;
-    return masterDetailBalanceToneClass((selected as Account | AccountGroup).balance);
-  }, [selected]);
+  }, [selected, activeView, groupMemberFilterId, processedAccounts, mobileBankCashSelectionLabelClassName]);
   const bankCashMasterDetailTitle = activeView === "groups" ? "Bank Groups" : "Bank & Cash";
   useSyncMasterDetailHeaderId("bank-cash", selectedAccount?.id ?? selectedGroup?.id ?? null);
 
@@ -467,12 +481,17 @@ function BankCashPageContent() {
     return flipLedgerSignedBalance(totalBalance, bankDrCrPerspective);
   }, [activeView, totalBalance, bankDrCrPerspective]);
 
-  const handleSelect = useCallback((item: Account | AccountGroup) => {
+  const handleSelect = useCallback((item: Account | AccountGroup, options?: GroupListSelectOptions) => {
     // Party/Staff jaisa: turant select + location replaceState —
     // warna stale ?selected= / URL effect click ke baad purane account pe snap-back karta hai (refresh pe).
     pendingBankSelectIdRef.current = item.id;
     setSelected(item);
     const isGroup = !("accountName" in item);
+    if (isGroup) {
+      setGroupMemberFilterId(options?.memberId ?? null);
+    } else {
+      setGroupMemberFilterId(null);
+    }
     const path = isGroup
       ? `/bank-cash?view=groups&selected=${encodeURIComponent(item.id)}`
       : activeView === "clearing"
@@ -508,6 +527,11 @@ function BankCashPageContent() {
     return processedAccounts.filter(p => p.groupId === selectedGroup.id);
   }, [selectedGroup, processedAccounts]);
 
+  const accountsForGroupDetails = useMemo(() => {
+    if (!groupMemberFilterId) return accountsForSelectedGroup;
+    return accountsForSelectedGroup.filter((a) => a.id === groupMemberFilterId);
+  }, [accountsForSelectedGroup, groupMemberFilterId]);
+
   const processedAccountGroupsForList = useMemo(() => {
     if (!showOnlyGroupsWithPendingApproval || !showApproveOnList) return processedAccountGroups;
     return processedAccountGroups.filter((g) => (pendingApprovalByAccountGroupId[g.id] ?? 0) > 0);
@@ -517,6 +541,20 @@ function BankCashPageContent() {
     showApproveOnList,
     pendingApprovalByAccountGroupId,
   ]);
+
+  const accountGroupMembersByGroupId = useMemo(() => {
+    const map: Record<string, Account[]> = {};
+    for (const g of processedAccountGroupsForList) {
+      if (g.id === "ungrouped") {
+        map[g.id] = processedAccounts.filter(
+          (acc) => !acc.groupId || acc.groupId === "ungrouped_account"
+        );
+      } else {
+        map[g.id] = processedAccounts.filter((acc) => acc.groupId === g.id);
+      }
+    }
+    return map;
+  }, [processedAccountGroupsForList, processedAccounts]);
 
   // Filtered group count (matches AccountGroupList: search + exclude report-only + exclude system groups)
   const filteredGroupCount = useMemo(() => {
@@ -674,6 +712,9 @@ function BankCashPageContent() {
           selectedGroup={selectedGroup}
           searchTerm={searchTerm}
           pendingApprovalByGroupId={pendingApprovalByAccountGroupId}
+          pendingApprovalByMemberId={pendingApprovalByAccountId}
+          groupMembersByGroupId={accountGroupMembersByGroupId}
+          selectedGroupMemberFilterId={groupMemberFilterId}
           getItemHref={useQueryNav ? getGroupItemHref : undefined}
           quickFilter={groupListQuickFilter}
           onQuickFilterChange={setGroupListQuickFilter}
@@ -699,9 +740,11 @@ function BankCashPageContent() {
       )}
       {activeView === 'groups' && selectedGroup && (
         <AccountGroupDetails
+          key={`${selectedGroup.id}:${groupMemberFilterId ?? "all"}`}
           group={selectedGroup}
           allGroups={processedAccountGroups}
-          accounts={accountsForSelectedGroup}
+          accounts={accountsForGroupDetails}
+          groupMemberFilterId={groupMemberFilterId}
           onGroupUpdated={() => {}}
           onGroupDeleted={() => setSelected(null)}
           onAccountUpdated={handleAccountUpdated}

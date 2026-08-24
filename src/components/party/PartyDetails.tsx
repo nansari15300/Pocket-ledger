@@ -60,13 +60,6 @@ import {
 } from "@/lib/modalUrlSync";
 import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
 import AdCalendar from "@/components/ui/ad-calendar";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
@@ -99,6 +92,15 @@ import { HistoryDialog } from "@/components/vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
 import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
+import { MasterAccountFreezeOwnerToggle } from "@/components/masterAccountFreeze/MasterAccountFreezeOwnerToggle";
+import { MasterAccountFreezeTxnOverlay } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnOverlay";
+import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
+import {
+  PARTY_FREEZE_COLLECTION,
+  partyFreezePatchFromSave,
+} from "@/lib/masterAccountFreeze/partyFreezeAdapter";
+import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
+import { useMasterAccountFreezeFeature } from "@/hooks/useMasterAccountFreezeFeature";
 import {
   BillWiseAutoLinkPromptDialog,
   usePartyBillWiseAutoLinkPrompt,
@@ -162,6 +164,11 @@ import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetail
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { GroupDetailNestedNameHeader } from "@/components/entity/GroupDetailNestedNameHeader";
+import {
+  icPeerCompanyGroupListTitleLines,
+  interCompanyClearingAccountDisplayName,
+} from "@/lib/interCompany/icPeerCompanyGroups";
 // Shared header pill height â€” Party + sab ledger detail/report headers
 import {
   LEDGER_HEADER_RIBBON_WRAP_CN,
@@ -180,7 +187,6 @@ import {
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
-
 const getInitials = (name: string) => {
   if (!name) return "NA";
   return name
@@ -261,6 +267,9 @@ export function PartyDetails({
   /** Reports / dashboard txn-count: PrintÂ·ExcelÂ·Bill wiseÂ·DateÂ·Chart footer (party page Receive/Pay hide). */
   mobileFooterVariant = "ledger",
   mobileReportStickyTitle,
+  /** IC / Ac company filter — is peer company ke saare accounts ka merged ledger. */
+  icGroupMemberParties,
+  icGroupMemberFilterId = null,
 }: {
   party: Party & { saleTotal?: number; purchaseTotal?: number };
   allParties?: Party[];
@@ -277,6 +286,8 @@ export function PartyDetails({
   context?: string;
   onEmbeddedPartyChange?: (partyId: string) => void;
   mobileFooterVariant?: "ledger" | "report";
+  icGroupMemberParties?: Party[];
+  icGroupMemberFilterId?: string | null;
   mobileReportStickyTitle?: string;
 }) {
   const { company, companyId } = useCompany();
@@ -304,12 +315,6 @@ export function PartyDetails({
     if (!processedParties || !initialParty) return initialParty;
     return processedParties.find(p => p.id === initialParty.id) || initialParty;
   }, [processedParties, initialParty]);
-
-  /** Header avatar hover â€” `fileUrl: "null"` / khali par PDF spinner na kholo */
-  const partyHeaderAttachmentUrl = useMemo(
-    () => trimEntityFileUrlForPreview(party.fileUrl),
-    [party.fileUrl, party.id]
-  );
 
   /** Mobile AddVoucher â€” inline `{ partyId }` har render = naya object â†’ dialog `initialVoucherData` + sale form date reset; stable deps */
   const addVoucherDefaultPartyOnly = useMemo(() => ({ partyId: party.id }), [party.id]);
@@ -539,16 +544,194 @@ export function PartyDetails({
     () => ({ ...resolvedJournalAccountNames, ...mergedUserNames }),
     [resolvedJournalAccountNames, mergedUserNames]
   );
+
+  const isIcCompanyGroupView = Boolean(icGroupMemberParties && icGroupMemberParties.length > 0);
+
+  const icGroupFilteredMember = useMemo(() => {
+    if (!isIcCompanyGroupView || !icGroupMemberParties || !icGroupMemberFilterId) return null;
+    return icGroupMemberParties.find((row) => row.id === icGroupMemberFilterId) ?? null;
+  }, [isIcCompanyGroupView, icGroupMemberParties, icGroupMemberFilterId]);
+
+  const headerIdentityParty = icGroupFilteredMember ?? party;
+
+  const icPeerCompanyPrimaryName = useMemo(() => {
+    if (!isIcCompanyGroupView) return null;
+    return icPeerCompanyGroupListTitleLines(party).primary;
+  }, [isIcCompanyGroupView, party]);
+
+  const icMemberDisplayName = useMemo(() => {
+    if (!icGroupFilteredMember) return null;
+    return interCompanyClearingAccountDisplayName(icGroupFilteredMember);
+  }, [icGroupFilteredMember]);
+
+  const headerDisplayTitle = icMemberDisplayName ?? party.name;
+
+  const canShowAdjustBalance =
+    party.id !== "all" && !(party as any).isSystemAccount;
+
+  const { enabled: freezeFeatureEnabled } = useMasterAccountFreezeFeature();
+  const [partyBannerToggleFits, setPartyBannerToggleFits] = useState(true);
+
+  const showAccountFreezeChrome =
+    party.id !== "all" &&
+    !(party as any).isSystemAccount &&
+    (!isIcCompanyGroupView || !!icGroupFilteredMember) &&
+    (freezeFeatureEnabled || readMasterAccountFrozen(party));
+
+  const isPartyFrozen = showAccountFreezeChrome && readMasterAccountFrozen(party);
+  const blockPartyNewTransactions = isPartyFrozen;
+
+  const handleFreezeSaved = useCallback(
+    (patch: { isFrozen: boolean; freezeMessage?: string | null }) => {
+      handlePartyUpdated(partyFreezePatchFromSave(patch));
+    },
+    [handlePartyUpdated]
+  );
+
+  const adjustBalanceTarget = icGroupFilteredMember
+    ? {
+        id: icGroupFilteredMember.id,
+        entityType: "party" as const,
+        name: interCompanyClearingAccountDisplayName(icGroupFilteredMember),
+      }
+    : !isIcCompanyGroupView
+      ? {
+          id: headerIdentityParty.id,
+          entityType: "party" as const,
+          name: party.name,
+        }
+      : undefined;
+
+  const partyFreezeToggle = useMemo(() => {
+    if (!showAccountFreezeChrome || !companyId || !freezeFeatureEnabled) return null;
+    return (
+      <MasterAccountFreezeOwnerToggle
+        companyId={companyId}
+        collection={PARTY_FREEZE_COLLECTION}
+        entityId={headerIdentityParty.id}
+        isFrozen={isPartyFrozen}
+        onSaved={handleFreezeSaved}
+      />
+    );
+  }, [
+    showAccountFreezeChrome,
+    companyId,
+    freezeFeatureEnabled,
+    headerIdentityParty.id,
+    isPartyFrozen,
+    handleFreezeSaved,
+  ]);
+
+  const partyClosingBalanceActions = useMemo(() => {
+    const adjustBalance = canShowAdjustBalance ? (
+      <AddVoucherDialog
+        defaultTab="adjustment"
+        allowedTabs={["adjustment"]}
+        defaultVoucherData={{
+          defaultTab: "adjustment",
+          ...(adjustBalanceTarget ? { adjustmentTarget: adjustBalanceTarget } : {}),
+        }}
+      >
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={blockPartyNewTransactions}
+          className={cn(LEDGER_HEADER_PILL_CN, "!h-[27px] min-h-[27px] text-xs")}
+          title="Adjust Balance"
+        >
+          <AdjustBalancePillLabel />
+        </Button>
+      </AddVoucherDialog>
+    ) : null;
+    if (!isPartyFrozen && !partyFreezeToggle && !adjustBalance) return null;
+    if (isPartyFrozen) {
+      const footerToggle = isMobile && !partyBannerToggleFits ? partyFreezeToggle : null;
+      return (
+        <div className="flex flex-wrap items-center gap-2">
+          {footerToggle}
+          {adjustBalance}
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        {partyFreezeToggle}
+        {adjustBalance}
+      </div>
+    );
+  }, [
+    isPartyFrozen,
+    isMobile,
+    partyBannerToggleFits,
+    partyFreezeToggle,
+    canShowAdjustBalance,
+    adjustBalanceTarget,
+    blockPartyNewTransactions,
+  ]);
+
+  const partyFreezeOverlay = useMemo(() => {
+    if (!showAccountFreezeChrome || !companyId || !isPartyFrozen) return null;
+    return (
+      <MasterAccountFreezeTxnOverlay
+        companyId={companyId}
+        collection={PARTY_FREEZE_COLLECTION}
+        entityId={headerIdentityParty.id}
+        isFrozen={isPartyFrozen}
+        freezeMessage={party.freezeMessage}
+        bannerTopActions={partyFreezeToggle}
+        onBannerToggleFitsChange={setPartyBannerToggleFits}
+        onSaved={(patch) =>
+          handlePartyUpdated(partyFreezePatchFromSave({ isFrozen: true, ...patch }))
+        }
+      />
+    );
+  }, [
+    showAccountFreezeChrome,
+    companyId,
+    isPartyFrozen,
+    headerIdentityParty.id,
+    party.freezeMessage,
+    partyFreezeToggle,
+    handlePartyUpdated,
+  ]);
+
+  /** Header avatar hover — child IC account select par uska photo/initials */
+  const partyHeaderAttachmentUrl = useMemo(
+    () => trimEntityFileUrlForPreview(headerIdentityParty.fileUrl),
+    [headerIdentityParty.fileUrl, headerIdentityParty.id]
+  );
+
+  const icGroupTransactionEntity = useMemo(() => {
+    if (icGroupFilteredMember) return null;
+    if (!isIcCompanyGroupView || !icGroupMemberParties) return null;
+    const openingBalance = icGroupMemberParties.reduce(
+      (sum, row) => sum + (Number(row.openingBalance) || 0),
+      0
+    );
+    return {
+      ...party,
+      items: icGroupMemberParties,
+      openingBalance,
+    };
+  }, [isIcCompanyGroupView, icGroupMemberParties, party, icGroupFilteredMember]);
+
+  const transactionEntity = icGroupFilteredMember ?? icGroupTransactionEntity ?? party;
+  const transactionContext: Context = icGroupFilteredMember
+    ? "party"
+    : icGroupTransactionEntity
+      ? "group"
+      : "party";
+  const ledgerContextId = String(transactionEntity.id || party.id);
   
-  const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(party, "party", dateRange, undefined, allParties, passedTransactions, context, filters, undefined, resolvedJournalAccountNames, mergedUserNames);
+  const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(transactionEntity, transactionContext, dateRange, undefined, allParties, passedTransactions, context, filters, undefined, resolvedJournalAccountNames, mergedUserNames);
 
   // View/period brought-forward can be 0 (date range) while books still have an opening; running balance must
   // start from the same value as the opening row (see TransactionsTable booksOpeningBalance).
   const ledgerOpeningForRunning = useMemo(() => {
-    const master = Number(party?.openingBalance) || 0;
+    const master = Number(transactionEntity?.openingBalance ?? party?.openingBalance) || 0;
     if (Math.abs(openingBalanceForPeriod) < 1e-6 && Math.abs(master) > 1e-6) return master;
     return openingBalanceForPeriod;
-  }, [openingBalanceForPeriod, party?.openingBalance]);
+  }, [openingBalanceForPeriod, transactionEntity?.openingBalance, party?.openingBalance]);
 
   
   // Fetch missing user names directly from Firestore and store in local state
@@ -706,8 +889,8 @@ export function PartyDetails({
     totalPages,
   } = useStatementLedgerCheckModePaging({
     companyId,
-    context: "party",
-    contextId: party.id,
+    context: transactionContext,
+    contextId: ledgerContextId,
     viewMode: balanceMode === "bill_wise" ? "bill_wise" : "statement",
     searchFilteredTransactions,
     rowsPerPage,
@@ -935,7 +1118,7 @@ export function PartyDetails({
   const dateRangeLabel = buildDateRangeText() || "All Time";
   const balanceLabel = headerClosingBalance >= 0 ? "To Receive" : "To Pay";
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
-  const masterPartyOpening = Number(party.openingBalance) || 0;
+  const masterPartyOpening = Number(transactionEntity?.openingBalance ?? party.openingBalance) || 0;
   // Statement: full period opening in Balance. Bill-wise: same as print â€” remaining on OB, status + linked voucher nos.
   const partyOpeningBalanceOutstandingForTable =
     balanceMode === "bill_wise" ? openingBalanceOutstanding : undefined;
@@ -1018,9 +1201,9 @@ export function PartyDetails({
                       </span>
                       <span
                         className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(headerClosingBalance))}
-                        title={party.name}
+                        title={headerDisplayTitle}
                       >
-                        {party.name}
+                        {headerDisplayTitle}
                       </span>
                     </div>
                     <span
@@ -1041,9 +1224,18 @@ export function PartyDetails({
                 <ArrowLeft className="h-3.5 w-3.5" />
               </Button>
               <h1 className="shrink-0 text-base font-bold text-muted-foreground">Party details</h1>
-              <span className="min-w-0 flex-1 truncate text-sm font-medium" title={party.name}>
-                {party.name}
-              </span>
+              {isIcCompanyGroupView && icMemberDisplayName && icPeerCompanyPrimaryName ? (
+                <div className="min-w-0 flex-1">
+                  <GroupDetailNestedNameHeader
+                    groupName={icPeerCompanyPrimaryName}
+                    memberName={icMemberDisplayName}
+                  />
+                </div>
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-sm font-medium" title={headerDisplayTitle}>
+                  {headerDisplayTitle}
+                </span>
+              )}
             </div>
           ) : null}
           {/* Mobile: date/balance/search â€” footer chevron se collapse */}
@@ -1125,10 +1317,14 @@ export function PartyDetails({
                 openingBalance={openingBalanceForPeriod}
               />
             ) : (
+            <MasterAccountFreezeTxnShell
+              className="min-h-[8rem]"
+              overlay={partyFreezeOverlay}
+            >
             <TransactionsTable
               transactions={paginatedTransactions}
-              context="party"
-              contextId={party.id}
+              context={transactionContext}
+              contextId={ledgerContextId}
               openingBalance={desktopPaginationMeta.openingForPage}
               booksOpeningBalance={masterPartyOpening}
               openingBalanceOutstanding={partyOpeningBalanceOutstandingForTable}
@@ -1162,22 +1358,7 @@ export function PartyDetails({
               hideBalanceColumn={false}
               isDateChange={isDateChange}
               scrollOnlyTransactions
-              closingBalanceActions={
-                party.id !== "all" && !(party as any).isSystemAccount ? (
-                  <AddVoucherDialog
-                    defaultTab="adjustment"
-                    allowedTabs={["adjustment"]}
-                    defaultVoucherData={{
-                      defaultTab: "adjustment",
-                      adjustmentTarget: { id: party.id, entityType: "party", name: party.name },
-                    }}
-                  >
-                    <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-[27px] min-h-[27px] text-xs")} title="Adjust Balance">
-                      <AdjustBalancePillLabel />
-                    </Button>
-                  </AddVoucherDialog>
-                ) : null
-              }
+              closingBalanceActions={partyClosingBalanceActions}
               highlightPendingApproval
               statusFilter={statusFilter}
               statusFilterAllChecked={statusFilterAllChecked}
@@ -1186,6 +1367,7 @@ export function PartyDetails({
               statusFilterIdPrefix="party"
               {...statementCheck.tableProps}
             />
+            </MasterAccountFreezeTxnShell>
             )}
             </div>
           </div>
@@ -1243,13 +1425,13 @@ export function PartyDetails({
               { value: "bill_wise", label: "Bill wise" },
             ]}
           />
-          <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("payment_in"); openModalInUrl(); }}>
+          <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" disabled={blockPartyNewTransactions} onClick={() => { if (blockPartyNewTransactions) return; openingModalRef.current = true; setMobileFooterDialogOpen("payment_in"); openModalInUrl(); }}>
             Receive
           </Button>
-          <Button className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("payment_out"); openModalInUrl(); }}>
+          <Button className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium" disabled={blockPartyNewTransactions} onClick={() => { if (blockPartyNewTransactions) return; openingModalRef.current = true; setMobileFooterDialogOpen("payment_out"); openModalInUrl(); }}>
             Pay
           </Button>
-          <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("sale"); openModalInUrl(); }}>
+          <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" disabled={blockPartyNewTransactions} onClick={() => { if (blockPartyNewTransactions) return; openingModalRef.current = true; setMobileFooterDialogOpen("sale"); openModalInUrl(); }}>
             New Sale
           </Button>
           <AddVoucherDialog
@@ -1473,19 +1655,22 @@ export function PartyDetails({
                 >
                   <ResolvedEntityAvatar
                     className="h-12 w-12 text-lg flex-shrink-0"
+                    companyId={headerIdentityParty.companyId}
                     src={partyHeaderAttachmentUrl ?? undefined}
-                    alt={party.name}
-                    fallbackText={getInitials(party.name)}
+                    alt={headerDisplayTitle}
+                    fallbackText={getInitials(headerDisplayTitle)}
                     fallbackSlot={
                       (party as any).isSystemAccount ? <FileDigit className="h-6 w-6 text-muted-foreground" /> : undefined
                     }
                   />
                 </EntityFileAttachmentHover>
-                {party.id !== 'all' && !(party as any).isSystemAccount && (
+                {party.id !== "all" &&
+                  !(party as any).isSystemAccount &&
+                  (!isIcCompanyGroupView || icGroupFilteredMember) && (
                   <EditPartyDialog
-                    party={party}
+                    party={headerIdentityParty}
                     onPartyUpdated={handlePartyUpdated}
-                    onPartyDeleted={() => onPartyDeleted(party.id)}
+                    onPartyDeleted={() => onPartyDeleted(headerIdentityParty.id)}
                     hasTransactions={processedTransactions.length > 0}
                   >
                     <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
@@ -1495,9 +1680,16 @@ export function PartyDetails({
                 )}
               </div>
               <div className={LEDGER_HEADER_NAME_CARD_CN}>
-                <h2 className={LEDGER_HEADER_TITLE_CN} title={party.name}>
-                  {party.name}
-                </h2>
+                {isIcCompanyGroupView && icMemberDisplayName && icPeerCompanyPrimaryName ? (
+                  <GroupDetailNestedNameHeader
+                    groupName={icPeerCompanyPrimaryName}
+                    memberName={icMemberDisplayName}
+                  />
+                ) : (
+                  <h2 className={LEDGER_HEADER_TITLE_CN} title={party.name}>
+                    {party.name}
+                  </h2>
+                )}
               </div>
               <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
                 <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
@@ -1510,8 +1702,10 @@ export function PartyDetails({
             </div>
             {/* Cluster: action pills â€” same gap-1.5 as identity cluster */}
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
-              {party.id !== "all" && !(party as any).isSystemAccount ? (
-                <ReconciliationAccountButton accountId={party.id} />
+              {party.id !== "all" &&
+                !(party as any).isSystemAccount &&
+                (!isIcCompanyGroupView || icGroupFilteredMember) ? (
+                <ReconciliationAccountButton accountId={headerIdentityParty.id} />
               ) : null}
               <LedgerUnapprovedFilterButton
                 active={unapprovedOnly}
@@ -1608,6 +1802,7 @@ export function PartyDetails({
               <Button
                 variant="outline"
                 size="sm"
+                disabled={blockPartyNewTransactions}
                 onClick={() => setIsNoteOpen(true)}
                 className={LEDGER_HEADER_PILL_CN}
                 data-theme-detail="add-note"
@@ -1637,14 +1832,16 @@ export function PartyDetails({
             </div>
           </div>
         </div>
-        {/* Party docs sirf table Opening row File column + Edit party dialog â€” yahan duplicate thumbnail strip nahi */}
+        {/* Party docs sirf table Opening row File column + Edit party dialog — yahan duplicate thumbnail strip nahi */}
         <div className={cn("flex-1 flex flex-col min-h-0", balanceMode === "bill_wise" ? "min-w-0" : "overflow-x-auto scrollbar-slim-dim")}>
           <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
-            {/* Book/Dated opening table row pills; header books line removed */}
+            <MasterAccountFreezeTxnShell
+              overlay={partyFreezeOverlay}
+            >
             <TransactionsTable
               transactions={paginatedTransactions}
-              context="party"
-              contextId={party.id}
+              context={transactionContext}
+              contextId={ledgerContextId}
               openingBalance={desktopPaginationMeta.openingForPage}
               booksOpeningBalance={masterPartyOpening}
               openingBalanceOutstanding={partyOpeningBalanceOutstandingForTable}
@@ -1657,7 +1854,7 @@ export function PartyDetails({
               openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               dateRange={dateRange}
               openingBalanceActions={
-                party.id !== "all" && !(party as any).isSystemAccount ? (
+                party.id !== "all" && !(party as any).isSystemAccount && !isIcCompanyGroupView ? (
                   <EditPartyDialog
                     party={party}
                     onPartyUpdated={handlePartyUpdated}
@@ -1691,22 +1888,7 @@ export function PartyDetails({
               hideBalanceColumn={false}
               isDateChange={isDateChange}
               scrollOnlyTransactions
-              closingBalanceActions={
-                party.id !== "all" && !(party as any).isSystemAccount ? (
-                  <AddVoucherDialog
-                    defaultTab="adjustment"
-                    allowedTabs={["adjustment"]}
-                    defaultVoucherData={{
-                      defaultTab: "adjustment",
-                      adjustmentTarget: { id: party.id, entityType: "party", name: party.name },
-                    }}
-                  >
-                    <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-[27px] min-h-[27px] text-xs")} title="Adjust Balance">
-                      <AdjustBalancePillLabel />
-                    </Button>
-                  </AddVoucherDialog>
-                ) : null
-              }
+              closingBalanceActions={partyClosingBalanceActions}
               highlightPendingApproval
               statusFilter={statusFilter}
               statusFilterAllChecked={statusFilterAllChecked}
@@ -1715,6 +1897,7 @@ export function PartyDetails({
               statusFilterIdPrefix="party"
               {...statementCheck.tableProps}
             />
+            </MasterAccountFreezeTxnShell>
           </div>
         </div>
         {/* Footer: global PC shell â€” LedgerDesktopFooter */}

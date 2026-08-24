@@ -6,6 +6,11 @@ import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { Party, Group } from "@/components/party/types";
+import {
+  IC_COMPANY_PARTY_GROUP_ID,
+  icPeerCompanyGroupListTitleLines,
+  interCompanyClearingAccountDisplayName,
+} from "@/lib/interCompany/icPeerCompanyGroups";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills, LedgerViewModeToggleButton } from "@/components/ui/LedgerViewModePills";
@@ -101,7 +106,11 @@ import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useSyncTempDateRangeFromProp } from "@/hooks/useLedgerDetailDateRange";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { EditGroupDialog } from "./EditGroupDialog";
-import { PartyFilterDropdown } from "./PartyFilterDropdown";
+import { EditPartyDialog } from "./EditPartyDialog";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { GroupDetailNestedNameHeader } from "@/components/entity/GroupDetailNestedNameHeader";
 import {
   Dialog,
   DialogContent,
@@ -112,6 +121,7 @@ import {
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { Checkbox } from "../ui/checkbox";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { AdjustBalancePillLabel } from "../vouchers/AdjustBalancePillLabel";
 import { HistoryDialog } from "../vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "../vouchers/LinkAdvancesToVoucherDialog";
 import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
@@ -232,6 +242,9 @@ export function GroupDetails({
   onDateRangeChange,
   userNames,
   onBack,
+  icGroupPeerCompanyFilterId = null,
+  icGroupMemberFilterId = null,
+  groupMemberFilterId = null,
 }: {
   group: Group;
   allGroups: Group[];
@@ -243,6 +256,9 @@ export function GroupDetails({
   onDateRangeChange: (dateRange: DateRange | undefined) => void;
   userNames: Record<string, string>;
   onBack?: () => void;
+  icGroupPeerCompanyFilterId?: string | null;
+  icGroupMemberFilterId?: string | null;
+  groupMemberFilterId?: string | null;
 }) {
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { balanceMode, setBalanceMode } = useBalanceMode();
@@ -337,6 +353,9 @@ export function GroupDetails({
   useSyncTempDateRangeFromProp(dateRange, setTempDateRange);
 
   // Determine group type
+  const isAutoSyntheticPartyGroup =
+    group.id === "ungrouped" || group.id === IC_COMPANY_PARTY_GROUP_ID;
+
   const groupType = useMemo(() => {
     if ((group as any).groupType) return (group as any).groupType;
     // Check if it's a tax group
@@ -352,17 +371,44 @@ export function GroupDetails({
   }, [group, processedTaxGroups, processedStaffGroups, processedAccountGroups, processedExpenseGroups]);
 
   const partiesInGroup = useMemo(() => {
+    if (group.id === IC_COMPANY_PARTY_GROUP_ID) return allParties;
     if (group.id === "ungrouped")
       // Ungrouped should include both empty groupId and persisted ungrouped id rows.
       return allParties.filter((p) => !p.groupId || p.groupId === "ungrouped_party");
     // Only filter parties if this is a party group
-    if (groupType === 'party') {
+    if (groupType === "party") {
       return allParties.filter((p) => p.groupId === group.id);
     }
     return [];
   }, [allParties, group, groupType]);
 
-  // Get child groups (groups that have this group as parent)
+  const selectedMemberParty = useMemo(() => {
+    if (!groupMemberFilterId || group.id === IC_COMPANY_PARTY_GROUP_ID) return null;
+    return partiesInGroup.find((party) => party.id === groupMemberFilterId) ?? null;
+  }, [groupMemberFilterId, partiesInGroup, group.id]);
+
+  const icHeaderPeerCompany = useMemo(() => {
+    if (group.id !== IC_COMPANY_PARTY_GROUP_ID || !icGroupPeerCompanyFilterId) return null;
+    return partiesInGroup.find((party) => party.id === icGroupPeerCompanyFilterId) ?? null;
+  }, [group.id, icGroupPeerCompanyFilterId, partiesInGroup]);
+
+  const icHeaderMemberAccount = useMemo(() => {
+    if (group.id !== IC_COMPANY_PARTY_GROUP_ID || !icGroupMemberFilterId) return null;
+    const peerMembers = icHeaderPeerCompany?.icMemberParties ?? [];
+    return (
+      peerMembers.find((member) => member.id === icGroupMemberFilterId) ??
+      partiesInGroup.find((party) => party.id === icGroupMemberFilterId) ??
+      null
+    );
+  }, [group.id, icGroupMemberFilterId, icHeaderPeerCompany, partiesInGroup]);
+
+  const headerIdentityParty = selectedMemberParty ?? icHeaderMemberAccount ?? icHeaderPeerCompany ?? null;
+
+  const selectedMemberAttachmentUrl = useMemo(
+    () => trimEntityFileUrlForPreview(headerIdentityParty?.fileUrl),
+    [headerIdentityParty?.fileUrl, headerIdentityParty?.id]
+  );
+
   const childGroups = useMemo(() => {
     return allGroups.filter((g) => (g as any).parentId === group.id);
   }, [allGroups, group]);
@@ -466,8 +512,34 @@ export function GroupDetails({
 
   // Combine parties and accounts for the group
   const allItemsInGroup = useMemo(() => {
-    return [...partiesInGroup, ...accountsInGroup];
-  }, [partiesInGroup, accountsInGroup]);
+    if (group.id === IC_COMPANY_PARTY_GROUP_ID) {
+      let companies = partiesInGroup;
+      if (icGroupPeerCompanyFilterId) {
+        companies = companies.filter((row) => row.id === icGroupPeerCompanyFilterId);
+      }
+      const icLedgerMembers = companies.flatMap((row) => {
+        const members = (row as Party).icMemberParties;
+        const list = members?.length ? members : [row];
+        if (icGroupMemberFilterId) {
+          return list.filter((member) => member.id === icGroupMemberFilterId);
+        }
+        return list;
+      });
+      return [...icLedgerMembers, ...accountsInGroup];
+    }
+    let parties = partiesInGroup;
+    if (groupMemberFilterId) {
+      parties = parties.filter((p) => p.id === groupMemberFilterId);
+    }
+    return [...parties, ...accountsInGroup];
+  }, [
+    group.id,
+    partiesInGroup,
+    accountsInGroup,
+    icGroupPeerCompanyFilterId,
+    icGroupMemberFilterId,
+    groupMemberFilterId,
+  ]);
 
   const isFilterActive =
     dateRange !== undefined || Object.values(filters).some((v) => v);
@@ -593,6 +665,40 @@ export function GroupDetails({
 
   // Use group balance if no date range, otherwise use calculated balance
   const closingBalance = shouldUseGroupBalance ? (group.balance || 0) : calculatedClosingBalance;
+
+  const adjustBalanceTargetParty = icHeaderMemberAccount ?? selectedMemberParty ?? null;
+  const canShowAdjustBalance =
+    groupType === "party" &&
+    group.id !== "ungrouped" &&
+    (group.id === IC_COMPANY_PARTY_GROUP_ID || Boolean(adjustBalanceTargetParty));
+  const adjustBalanceTarget = adjustBalanceTargetParty
+    ? {
+        id: adjustBalanceTargetParty.id,
+        entityType: "party" as const,
+        name: icHeaderMemberAccount
+          ? interCompanyClearingAccountDisplayName(icHeaderMemberAccount)
+          : adjustBalanceTargetParty.name,
+      }
+    : undefined;
+  const adjustBalanceClosingActions = canShowAdjustBalance ? (
+    <AddVoucherDialog
+      defaultTab="adjustment"
+      allowedTabs={["adjustment"]}
+      defaultVoucherData={{
+        defaultTab: "adjustment",
+        ...(adjustBalanceTarget ? { adjustmentTarget: adjustBalanceTarget } : {}),
+      }}
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        className={cn(LEDGER_HEADER_PILL_CN, "!h-[27px] min-h-[27px] text-xs")}
+        title="Adjust Balance"
+      >
+        <AdjustBalancePillLabel />
+      </Button>
+    </AddVoucherDialog>
+  ) : null;
 
   const transactionDates = useMemo(() => {
     const dates = new Set<number>();
@@ -1207,7 +1313,7 @@ export function GroupDetails({
                 placeholder="Select group"
               />
             </div>
-            {group.id !== "ungrouped" && (
+            {!isAutoSyntheticPartyGroup && (
               <EditGroupDialog group={group} allGroups={allGroups} onGroupUpdated={onGroupUpdated} onGroupDeleted={onGroupDeleted} hasAccounts={partiesInGroup.length > 0 || childGroups.length > 0}>
                 <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
                   <Edit className="h-3.5 w-3.5" />
@@ -1274,6 +1380,7 @@ export function GroupDetails({
             hideBalanceColumn={false}
             isDateChange={false}
             scrollOnlyTransactions
+            closingBalanceActions={adjustBalanceClosingActions}
             statusFilter={statusFilter}
             statusFilterAllChecked={statusFilterAllChecked}
             onStatusFilterAll={handleStatusFilterAll}
@@ -1416,27 +1523,70 @@ export function GroupDetails({
               </Button>
             )}
             <div className={LEDGER_HEADER_AVATAR_CN}>
-              <Avatar className="h-12 w-12 text-lg">
-                <AvatarFallback className="bg-muted text-muted-foreground">
-                  {getInitials(group.name)}
-                </AvatarFallback>
-              </Avatar>
-              {group.id !== "ungrouped" && (
-                <EditGroupDialog
-                  group={group}
-                  allGroups={allGroups}
-                  onGroupUpdated={onGroupUpdated}
-                  onGroupDeleted={onGroupDeleted}
-                  hasAccounts={partiesInGroup.length > 0 || childGroups.length > 0}
-                >
-                  <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
-                    <Pencil className="h-3 w-3" />
-                  </button>
-                </EditGroupDialog>
+              {headerIdentityParty ? (
+                <>
+                  <EntityFileAttachmentHover
+                    fileUrl={selectedMemberAttachmentUrl}
+                    triggerClassName="inline-flex rounded-full"
+                  >
+                    <ResolvedEntityAvatar
+                      className="h-12 w-12 flex-shrink-0 text-lg"
+                      companyId={headerIdentityParty.companyId}
+                      src={selectedMemberAttachmentUrl ?? undefined}
+                      alt={headerIdentityParty.name}
+                      fallbackText={getInitials(headerIdentityParty.name)}
+                    />
+                  </EntityFileAttachmentHover>
+                  <EditPartyDialog
+                    party={headerIdentityParty}
+                    onPartyUpdated={onPartyUpdated}
+                    onPartyDeleted={() => onPartyUpdated()}
+                    hasTransactions={processedTransactions.length > 0}
+                  >
+                    <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </EditPartyDialog>
+                </>
+              ) : (
+                <>
+                  <Avatar className="h-12 w-12 text-lg">
+                    <AvatarFallback className="bg-muted text-muted-foreground">
+                      <Users className="h-6 w-6" />
+                    </AvatarFallback>
+                  </Avatar>
+                  {!isAutoSyntheticPartyGroup && (
+                    <EditGroupDialog
+                      group={group}
+                      allGroups={allGroups}
+                      onGroupUpdated={onGroupUpdated}
+                      onGroupDeleted={onGroupDeleted}
+                      hasAccounts={partiesInGroup.length > 0 || childGroups.length > 0}
+                    >
+                      <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    </EditGroupDialog>
+                  )}
+                </>
               )}
             </div>
             <div className={LEDGER_HEADER_NAME_CARD_CN}>
-              <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
+              <GroupDetailNestedNameHeader
+                groupName={group.name}
+                middleName={
+                  group.id === IC_COMPANY_PARTY_GROUP_ID && icHeaderPeerCompany
+                    ? icPeerCompanyGroupListTitleLines(icHeaderPeerCompany).primary
+                    : null
+                }
+                memberName={
+                  group.id === IC_COMPANY_PARTY_GROUP_ID
+                    ? icHeaderMemberAccount
+                      ? interCompanyClearingAccountDisplayName(icHeaderMemberAccount)
+                      : null
+                    : selectedMemberParty?.name ?? null
+                }
+              />
             </div>
             <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
               <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
@@ -1547,36 +1697,6 @@ export function GroupDetails({
                 <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
               </Button>
             )}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  // Trigger compact rakho; sirf dropdown panel wide hoga.
-                  className={cn("w-[200px] justify-between", LEDGER_HEADER_PILL_CN)}
-                  data-theme-detail="members"
-                >
-                  <span className="truncate">Members ({partiesInGroup.length})</span>
-                  <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[320px] max-h-72 overflow-y-auto">
-                {partiesInGroup.map((p) => (
-                  <DropdownMenuItem key={p.id} disabled>
-                    <div className="flex w-full items-center justify-between gap-3">
-                      <span className="truncate text-left">{p.name}</span>
-                      <span
-                        className={cn(
-                          "shrink-0 text-xs font-semibold tabular-nums",
-                          (Number((p as any).balance) || 0) >= 0 ? "text-green-600" : "text-red-600"
-                        )}
-                      >
-                        {formatCurrency(Number((p as any).balance) || 0, { showDrCr: true })}
-                      </span>
-                    </div>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
             <LedgerViewModePills
               value={balanceMode}
               onChange={setBalanceMode}
@@ -1621,7 +1741,7 @@ export function GroupDetails({
             openingBalancePeriodStartDate={desktopLedgerOpeningPeriodStartDate}
             dateRange={dateRange}
             openingBalanceActions={
-              group.id !== "ungrouped" ? (
+              !isAutoSyntheticPartyGroup ? (
                 <EditGroupDialog
                   group={group}
                   allGroups={allGroups}
@@ -1648,6 +1768,7 @@ export function GroupDetails({
             periodCr={desktopPaginationMeta.periodCrForPage}
             closingBalance={desktopPaginationMeta.closingForPage}
             scrollOnlyTransactions
+            closingBalanceActions={adjustBalanceClosingActions}
             statusFilter={statusFilter}
             statusFilterAllChecked={statusFilterAllChecked}
             onStatusFilterAll={handleStatusFilterAll}
@@ -1744,6 +1865,7 @@ export function GroupDetails({
         group={staffGroup}
         allGroups={processedStaffGroups as StaffGroup[]}
         staff={staffInGroup}
+        groupMemberFilterId={groupMemberFilterId}
         onGroupUpdated={onGroupUpdated}
         onGroupDeleted={onGroupDeleted}
         onStaffUpdated={onPartyUpdated}
@@ -1784,6 +1906,7 @@ export function GroupDetails({
         group={taxGroup}
         allGroups={processedTaxGroups as TaxGroup[]}
         taxes={taxesInGroup}
+        groupMemberFilterId={groupMemberFilterId}
         onGroupUpdated={onGroupUpdated}
         onGroupDeleted={onGroupDeleted}
         onTaxUpdated={onPartyUpdated}
@@ -1804,6 +1927,7 @@ export function GroupDetails({
         group={expenseGroup}
         allGroups={processedExpenseGroups as ExpenseGroup[]}
         accounts={expenseAccountsInGroup}
+        groupMemberFilterId={groupMemberFilterId}
         onGroupUpdated={onGroupUpdated}
         onGroupDeleted={onGroupDeleted}
         onAccountUpdated={onPartyUpdated}
@@ -1825,6 +1949,7 @@ export function GroupDetails({
         allGroups={processedItemGroups as ItemGroup[]}
         items={itemsInGroup}
         allItems={processedItems}
+        groupMemberFilterId={groupMemberFilterId}
         onGroupUpdated={onGroupUpdated}
         onGroupDeleted={onGroupDeleted}
         onItemUpdated={onPartyUpdated}

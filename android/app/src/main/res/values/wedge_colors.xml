@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="wedge_bg">#F8FAFC</color>
+    <color name="wedge_toolbar_bg">#DBEAFE</color>
+    <color name="wedge_summary_bg">#EFF6FF</color>
+    <color name="wedge_summary_border">#BFDBFE</color>
+    <color name="wedge_summary_line">#0F172A</color>
+</resources>

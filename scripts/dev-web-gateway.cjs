@@ -94,6 +94,7 @@ const APP_ONLY_FIRST_SEGMENTS = new Set([
   "notes",
   "gallery",
   "messages",
+  "admin",
   "backup",
   "recycle-bin",
   "reconciliation",

@@ -17,6 +17,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(BackupSafPlugin.class);
+        registerPlugin(com.pocketledger.app.wedge.shared.WedgePlugin.class);
         clearWebViewCachesAfterApkUpdate();
         super.onCreate(savedInstanceState);
         // Samsung / Android 13+ WebView: algorithmic force-dark gradients aur border tones browser se alag dikha sakta — explict OFF (styles.xml se saath).

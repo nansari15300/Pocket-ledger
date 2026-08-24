@@ -89,6 +89,10 @@ import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetail
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { EditTaxDialog } from "./EditTaxDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
+import { useMasterAccountFreezeDetailsChrome } from "@/hooks/useMasterAccountFreezeDetailsChrome";
+import { TAX_FREEZE_COLLECTION } from "@/lib/masterAccountFreeze/freezeAdapter";
+import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
@@ -228,6 +232,41 @@ export function TaxDetails({
     collection: "taxes",
     entityId: initialTax.id,
     onUpdated: onTaxUpdated,
+  });
+
+  const taxFreezeEligible = Boolean(tax?.id) && tax.id !== "all";
+  const taxAdjustBalanceActions = tax && taxFreezeEligible ? (
+    <AddVoucherDialog
+      defaultTab="adjustment"
+      allowedTabs={["adjustment"]}
+      defaultVoucherData={{
+        defaultTab: "adjustment",
+        adjustmentTarget: { id: tax.id, entityType: "tax", name: tax.name },
+      }}
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={readMasterAccountFrozen(tax)}
+        className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")}
+        title="Adjust Balance"
+      >
+        <AdjustBalancePillLabel />
+      </Button>
+    </AddVoucherDialog>
+  ) : null;
+
+  const {
+    freezeOverlay: taxFreezeOverlay,
+    closingBalanceActions: taxClosingBalanceActions,
+  } = useMasterAccountFreezeDetailsChrome({
+    companyId,
+    collection: TAX_FREEZE_COLLECTION,
+    entityId: tax?.id ?? "",
+    entity: tax ?? { id: "", name: "", rate: 0, balance: 0, companyId: "", debit: 0, credit: 0 },
+    entityEligible: taxFreezeEligible,
+    onEntityUpdated: handleTaxUpdated,
+    adjustBalanceActions: taxAdjustBalanceActions,
   });
 
   const taxHeaderAttachmentUrl = useMemo(
@@ -843,6 +882,9 @@ export function TaxDetails({
             style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
             <div className={isReportMobileChrome ? "pb-2" : "pb-24"}>
+            <MasterAccountFreezeTxnShell
+              overlay={taxFreezeOverlay}
+            >
             <TransactionsTable
               transactions={mobileTransactions}
               context="tax"
@@ -873,20 +915,7 @@ export function TaxDetails({
               closingBalance={desktopPaginationMeta.closingForPage}
               isTaxContext={isTaxContext ?? true}
               scrollOnlyTransactions
-              closingBalanceActions={
-                <AddVoucherDialog
-                  defaultTab="adjustment"
-                  allowedTabs={["adjustment"]}
-                  defaultVoucherData={{
-                    defaultTab: "adjustment",
-                    adjustmentTarget: { id: tax.id, entityType: "tax", name: tax.name },
-                  }}
-                >
-                  <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
-                      <AdjustBalancePillLabel />
-                    </Button>
-                </AddVoucherDialog>
-              }
+              closingBalanceActions={taxClosingBalanceActions}
               statusFilter={statusFilter}
               statusFilterAllChecked={statusFilterAllChecked}
               onStatusFilterAll={handleStatusFilterAll}
@@ -894,6 +923,7 @@ export function TaxDetails({
               statusFilterIdPrefix="tax"
             
               {...statementCheck.tableProps}/>
+            </MasterAccountFreezeTxnShell>
             </div>
           </div>
           {isReportMobileChrome ? (
@@ -1310,6 +1340,9 @@ export function TaxDetails({
         {/* TABLE AREA - flex layout so table footer (Total / Closing Balance) stays visible */}
         <div className="flex-1 flex flex-col min-h-0 overflow-x-auto">
           <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
+                <MasterAccountFreezeTxnShell
+                  overlay={taxFreezeOverlay}
+                >
                 <TransactionsTable
                   transactions={paginatedTransactions}
                   context="tax"
@@ -1351,22 +1384,10 @@ export function TaxDetails({
                   setActiveFilter={setActiveFilter}
                   isTaxContext={isTaxContext ?? true}
                   scrollOnlyTransactions
-                  closingBalanceActions={
-                    <AddVoucherDialog
-                      defaultTab="adjustment"
-                      allowedTabs={["adjustment"]}
-                      defaultVoucherData={{
-                        defaultTab: "adjustment",
-                        adjustmentTarget: { id: tax.id, entityType: "tax", name: tax.name },
-                      }}
-                    >
-                      <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
-                      <AdjustBalancePillLabel />
-                    </Button>
-                    </AddVoucherDialog>
-                  }
+                  closingBalanceActions={taxClosingBalanceActions}
                   highlightPendingApproval
                 />
+                </MasterAccountFreezeTxnShell>
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">No transactions found for this tax ledger in the selected period.</div>
             )}

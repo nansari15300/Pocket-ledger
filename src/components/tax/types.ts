@@ -16,6 +16,8 @@ export type Tax = {
   openingBalanceNarration?: string;
   documentFileUrls?: string[];
   phone?: string;
+  isFrozen?: boolean;
+  freezeMessage?: string | null;
 };
 
 export type TaxGroup = {

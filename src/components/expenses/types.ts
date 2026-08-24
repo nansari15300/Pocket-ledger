@@ -13,6 +13,8 @@ export type ExpenseAccount = {
     documentFileUrls?: string[];
     phone?: string;
     isDeleted?: boolean;
+    isFrozen?: boolean;
+    freezeMessage?: string | null;
     type?: 'Income' | 'Expense' | 'Salary';
 };
 

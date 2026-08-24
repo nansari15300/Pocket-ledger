@@ -53,6 +53,40 @@
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-3940256099942544~3347511713" />
+
+        <!-- Home screen wedge: Daybook daily summary -->
+        <receiver
+            android:name=".wedge.daybook.DaybookSummaryWedgeProvider"
+            android:exported="true"
+            android:label="@string/wedge_daybook_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.pocketledger.app.WEDGE_DAYBOOK_PREV" />
+                <action android:name="com.pocketledger.app.WEDGE_DAYBOOK_NEXT" />
+                <action android:name="com.pocketledger.app.WEDGE_DAYBOOK_TODAY" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/wedge_summary_widget_info" />
+        </receiver>
+        <service
+            android:name=".wedge.daybook.DaybookWedgeService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS">
+            <intent-filter>
+                <action android:name="android.widget.RemoteViewsService" />
+            </intent-filter>
+        </service>
+        <activity
+            android:name=".wedge.daybook.DaybookWedgeExpandActivity"
+            android:process=":wedge"
+            android:exported="false"
+            android:taskAffinity="com.pocketledger.wedge.expand"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/WedgeExpandTheme" />
     </application>
 
     <!-- Permissions -->

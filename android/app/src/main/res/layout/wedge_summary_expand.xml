@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/wedge_daybook_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/wedge_bg"
+    android:orientation="vertical"
+    android:padding="12dp">
+    <LinearLayout
+        android:id="@+id/wedge_daybook_summary_card"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/wedge_daybook_summary_border"
+        android:orientation="vertical"
+        android:padding="12dp">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:minWidth="14dp"
+                android:text="&#x2139;"
+                android:textColor="#1E3A8A"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="Daily Summary"
+                android:textColor="#1E3A8A"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+            <TextView
+                android:id="@+id/wedge_daybook_company"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/wedge_company_pill_bg"
+                android:ellipsize="end"
+                android:maxWidth="200dp"
+                android:maxLines="1"
+                android:paddingStart="10dp"
+                android:paddingTop="3dp"
+                android:paddingEnd="10dp"
+                android:paddingBottom="3dp"
+                android:text="Pocket Ledger"
+                android:textColor="#1E3A8A"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+            <TextView
+                android:id="@+id/wedge_daybook_rotate"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:gravity="center"
+                android:text="&#x2715;"
+                android:textColor="#64748B"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+        <TextView
+            android:id="@+id/wedge_daybook_subtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="4dp"
+            android:paddingBottom="6dp"
+            android:text="Only showing bank and cash summary."
+            android:textColor="#1D4ED8"
+            android:textSize="10sp" />
+        <RelativeLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+            <ListView
+                android:id="@+id/wedge_summary_list"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@color/wedge_summary_bg"
+                android:clipToPadding="false"
+                android:divider="#00000000"
+                android:dividerHeight="0dp" />
+            <TextView
+                android:id="@+id/wedge_summary_empty"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:padding="16dp"
+                android:text="Open app once for summary"
+                android:textColor="#64748B"
+                android:textSize="12sp" />
+        </RelativeLayout>
+        <LinearLayout
+            android:id="@+id/wedge_daybook_date_nav"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/wedge_date_nav_border"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingTop="6dp">
+            <TextView
+                android:id="@+id/wedge_daybook_prev"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:gravity="center"
+                android:text="&#x2039;"
+                android:textColor="#0D9488"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+            <TextView
+                android:id="@+id/wedge_daybook_day"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:gravity="center"
+                android:maxLines="1"
+                android:textColor="#0F172A"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+            <TextView
+                android:id="@+id/wedge_daybook_next"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:gravity="center"
+                android:text="&#x203A;"
+                android:textColor="#0D9488"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+            <TextView
+                android:id="@+id/wedge_daybook_today"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:background="@drawable/wedge_today_button_bg"
+                android:paddingStart="8dp"
+                android:paddingTop="3dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="3dp"
+                android:text="Today"
+                android:textColor="#0F172A"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

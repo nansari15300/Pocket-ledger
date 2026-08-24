@@ -575,7 +575,7 @@ export async function saveInterCompanyVoucherPair(
   }
 
   const targetPostMode = workTargetPostMode;
-  /** journal = Company→Company (IC Company); payment_in = Account→Account (IC Account). */
+  /** journal = Company→Company; payment_in = Account→Account. Dono IC Account naam + company niche. */
   const clearingMode = targetPostMode === "journal" ? "company" : "account";
 
   const [sourceIcPartyId, targetIcPartyId] = await Promise.all([

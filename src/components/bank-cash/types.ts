@@ -30,6 +30,8 @@ export type Account = {
   allowVoucherMinusBalance?: boolean;
   /** ON: Inter Company voucher clearing account dropdown me dikhe */
   isClearing?: boolean;
+  isFrozen?: boolean;
+  freezeMessage?: string | null;
 };
 
 export type AccountGroup = {

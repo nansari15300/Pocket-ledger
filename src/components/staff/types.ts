@@ -19,6 +19,8 @@ export type Staff = {
   credit: number;
   fileUrl?: string;
   isDeleted?: boolean;
+  isFrozen?: boolean;
+  freezeMessage?: string | null;
 };
 
 export type StaffGroup = {

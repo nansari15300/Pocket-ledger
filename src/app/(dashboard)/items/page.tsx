@@ -3,7 +3,7 @@
 import { ItemList } from "@/components/items/ItemList";
 import ItemDetails from "@/components/items/ItemDetails";
 import { ItemGroupList } from "@/components/items/ItemGroupList";
-import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { getDoc, doc, collection, query, getDocs, where } from "firebase/firestore";
@@ -23,6 +23,7 @@ import { CreateItemGroupDialog } from "@/components/items/CreateItemGroupDialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ItemGroupDetails } from "@/components/items/ItemGroupDetails";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { MobileMasterDetailNestedName } from "@/components/entity/MobileMasterDetailNestedName";
 import { mlc } from "@/lib/mobileListChrome";
 import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
 import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
@@ -32,6 +33,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import type { StockView } from "@/components/items/types";
 import type { Item, ItemGroup } from "@/components/items/types";
 import type { DateRange } from "@/components/ui/ad-calendar";
+import type { GroupListSelectOptions } from "@/lib/groupListExpand";
 import { useVouchers } from "@/hooks/useVouchers";
 import usePermissions from "@/hooks/usePermissions";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -144,6 +146,7 @@ function ItemsPageContent() {
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [groupDetailsDateRange, setGroupDetailsDateRange] = useState<DateRange | undefined>(undefined);
+  const [groupMemberFilterId, setGroupMemberFilterId] = useState<string | null>(null);
   const [userNames, setUserNames] = useState<Record<string, string>>(vouchersUserNames || {});
   
   // Use vouchersUserNames from useVouchers hook as primary source - always sync
@@ -158,15 +161,30 @@ function ItemsPageContent() {
 
   const selectedItem = activeView === "items" ? (selected as Item) : null;
   const selectedItemGroup = activeView === "groups" ? (selected as ItemGroup) : null;
-  const mobileItemsSelectionLabel = useMemo(() => {
-    if (!selected) return null;
-    const name = (selected as Item | ItemGroup).name;
-    return name && String(name).trim() ? String(name).trim() : null;
-  }, [selected]);
   const mobileItemsSelectionLabelClassName = useMemo(() => {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as Item | ItemGroup).balance);
   }, [selected]);
+  const mobileItemsSelectionLabel = useMemo((): ReactNode => {
+    if (!selected) return null;
+    if (activeView !== "groups") {
+      const name = (selected as Item).name;
+      return name && String(name).trim() ? String(name).trim() : null;
+    }
+    const group = selected as ItemGroup;
+    if (groupMemberFilterId) {
+      const member = processedItems.find((item) => item.id === groupMemberFilterId);
+      return (
+        <MobileMasterDetailNestedName
+          groupName={group.name}
+          memberName={member?.name ?? null}
+          toneClassName={mobileItemsSelectionLabelClassName}
+        />
+      );
+    }
+    const name = group.name;
+    return name && String(name).trim() ? String(name).trim() : null;
+  }, [selected, activeView, groupMemberFilterId, processedItems, mobileItemsSelectionLabelClassName]);
   const mobileItemsDetailHeaderAvatar = useMemo(() => {
     if (!isMobile || !selected) return null;
     const selectedEntity = selected as Item | ItemGroup;
@@ -457,12 +475,17 @@ function ItemsPageContent() {
     }).length;
   }, [processedItemGroupsForList, searchTerm]);
 
-  const handleSelect = useCallback((item: Item | ItemGroup) => {
+  const handleSelect = useCallback((item: Item | ItemGroup, options?: GroupListSelectOptions) => {
     pendingItemsSelectIdRef.current = item.id;
     setSelected(item);
     const isItem = "type" in item;
-    if (!isItem) setActiveView("groups");
-    else if (activeView !== "items") setActiveView("items");
+    if (isItem) {
+      setGroupMemberFilterId(null);
+      if (activeView !== "items") setActiveView("items");
+    } else {
+      setGroupMemberFilterId(options?.memberId ?? null);
+      setActiveView("groups");
+    }
     const href = isItem
       ? `/items?selected=${encodeURIComponent(item.id)}`
       : `/items?view=groups&selected=${encodeURIComponent(item.id)}`;
@@ -477,6 +500,23 @@ function ItemsPageContent() {
       router.replace(href, { scroll: false });
     }
   }, [useQueryNav, router, setSelected, activeView, setActiveView]);
+
+  const selectedGroupItemsForDetails = useMemo(() => {
+    if (!groupMemberFilterId) return selectedGroupItems;
+    return selectedGroupItems.filter((i) => i.id === groupMemberFilterId);
+  }, [selectedGroupItems, groupMemberFilterId]);
+
+  const itemGroupMembersByGroupId = useMemo(() => {
+    const map: Record<string, Item[]> = {};
+    for (const g of processedItemGroupsForList) {
+      if (g.id === "ungrouped") {
+        map[g.id] = processedItems.filter((p) => !p.groupId || p.groupId === "ungrouped_item");
+      } else {
+        map[g.id] = processedItems.filter((p) => p.groupId === g.id);
+      }
+    }
+    return map;
+  }, [processedItemGroupsForList, processedItems]);
 
   if (!companyId) {
     return (
@@ -608,10 +648,13 @@ function ItemsPageContent() {
       ) : (
         <ItemGroupList
           groups={processedItemGroupsForList}
-          onSelectGroup={(g) => handleSelect(g)}
+          onSelectGroup={handleSelect}
           selectedGroup={selectedItemGroup}
           searchTerm={searchTerm}
           pendingApprovalByGroupId={pendingApprovalByItemGroupId}
+          pendingApprovalByMemberId={pendingApprovalByItemId}
+          groupMembersByGroupId={itemGroupMembersByGroupId}
+          selectedGroupMemberFilterId={groupMemberFilterId}
           getItemHref={useQueryNav ? (g) => `/items?view=groups&selected=${g.id}` : undefined}
           quickFilter={groupListQuickFilter}
           onQuickFilterChange={setGroupListQuickFilter}
@@ -639,11 +682,12 @@ function ItemsPageContent() {
       )}
       {activeView === "groups" && selectedItemGroup && (
         <ItemGroupDetails
-          key={`group-${selectedItemGroup.id}`}
+          key={`group-${selectedItemGroup.id}:${groupMemberFilterId ?? "all"}`}
           group={selectedItemGroup}
           allGroups={processedItemGroups}
-          items={selectedGroupItems}
+          items={selectedGroupItemsForDetails}
           allItems={processedItems}
+          groupMemberFilterId={groupMemberFilterId}
           onGroupUpdated={() => {}}
           onGroupDeleted={() => setSelected(null)}
           onItemUpdated={() => {}}

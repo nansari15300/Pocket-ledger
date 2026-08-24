@@ -51,6 +51,7 @@ import { PlServerLiveSyncManager } from "@/components/settings/PlServerLiveSyncM
 import { LocalServerShareAutoConnectManager } from "@/components/settings/LocalServerShareAutoConnectManager";
 import { PlServerAuthoritativeReplayManager } from "@/components/PlServerAuthoritativeReplayManager";
 import { FirebaseLedgerDeltaSyncManager } from "@/components/FirebaseLedgerDeltaSyncManager";
+import { DaybookWedgeSyncManager } from "@/components/wedge/DaybookWedgeSyncManager";
 
 /** Local-only app start: sql.js init pehle se — refresh par company turant SQLite se load. */
 function SqlitePrewarmBootstrap() {
@@ -163,6 +164,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                         <DialogBackHandlerProvider>
                             <VoucherProvider>
                                 <VoucherOutboxFlushManager />
+                                <DaybookWedgeSyncManager />
                                 <LocalCompanyCloudSyncManager />
                                 <CapacitorDriveOAuthReturnHandler />
                                 <DriveOAuthReturnBootstrap />

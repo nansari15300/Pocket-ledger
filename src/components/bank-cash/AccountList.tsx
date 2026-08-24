@@ -8,13 +8,14 @@ import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachm
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils"
-import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
-import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
+import { masterListShellCn, masterListRowUnselectedCn, MASTER_LIST_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN } from "@/lib/masterListChrome";
 import { useDate } from "@/hooks/useDate";
 import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { Landmark, Crown } from "lucide-react";
 import { MasterListRow } from "@/components/ui/master-list-row";
-import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip";
+import { MasterListNameTooltip } from "@/components/entity/MasterListNameTooltip";
+import { MasterAccountFreezeListBadge } from "@/components/masterAccountFreeze/MasterAccountFreezeListBadge";
+import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
@@ -149,7 +150,8 @@ export function AccountList({
                         triggerClassName="inline-flex shrink-0 rounded-full"
                       >
                         <ResolvedEntityAvatar
-                          className="h-8 w-8 text-xs"
+                          className={MASTER_LIST_AVATAR_CN}
+                          fallbackClassName={MASTER_LIST_AVATAR_FALLBACK_CN}
                           companyId={account.companyId}
                           src={attachmentPreviewUrl ?? undefined}
                           alt={displayName}
@@ -172,23 +174,27 @@ export function AccountList({
                         </span>
                       )}
                     </div>
-                    <Tooltip>
-                      {/* asChild hata — motion layout + span ref merge par Radix setRef loop */}
-                      <TooltipTrigger
-                        type="button"
-                        data-pl-list-name=""
-                        onPointerDown={(e) => e.stopPropagation()}
-                        className={cn(masterListNameTriggerCn, isSpecial && "text-amber-600")}
-                      >
-                        {highlightSearch ? highlightQueryInText(displayName, highlightSearch) : displayName}
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>{displayName}</p>
-                        {(pendingApprovalByAccountId[account.id] ?? 0) > 0 && (
-                          <p className="text-xs text-muted-foreground">{pendingApprovalByAccountId[account.id]} pending approval</p>
-                        )}
-                      </TooltipContent>
-                    </Tooltip>
+                    <div className="flex min-w-0 flex-col">
+                    <MasterListNameTooltip
+                      measureKey={displayName}
+                      className={isSpecial ? "text-amber-600" : undefined}
+                      tooltipContent={
+                        <>
+                          <p>{displayName}</p>
+                          {(pendingApprovalByAccountId[account.id] ?? 0) > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              {pendingApprovalByAccountId[account.id]} pending approval
+                            </p>
+                          )}
+                        </>
+                      }
+                    >
+                      {highlightSearch ? highlightQueryInText(displayName, highlightSearch) : displayName}
+                    </MasterListNameTooltip>
+                    {readMasterAccountFrozen(account) ? (
+                      <MasterAccountFreezeListBadge className="mt-0.5" />
+                    ) : null}
+                    </div>
                   </div>
                   {/* data-pl-list-balance: mobile list chrome me Dr/Cr color force (globals.css) */}
                   <p

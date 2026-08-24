@@ -7,7 +7,7 @@ import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Edit, Printer, Users, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Columns3, Search, Pencil } from "lucide-react";
+import { Edit, Printer, Users, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Columns3, Search, Pencil, Lock } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
@@ -85,6 +85,11 @@ import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transac
 import usePermissions from "@/hooks/usePermissions";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Input } from "../ui/input";
+import { GroupDetailNestedNameHeader } from "@/components/entity/GroupDetailNestedNameHeader";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { EditExpenseAccountDialog } from "./EditExpenseAccountDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -134,6 +139,7 @@ export function ExpenseGroupDetails({
   onDateRangeChange,
   onBack,
   userNames,
+  groupMemberFilterId = null,
 }: { 
   group: ExpenseGroup, 
   allGroups: ExpenseGroup[],
@@ -145,6 +151,7 @@ export function ExpenseGroupDetails({
   onDateRangeChange: (dateRange: DateRange | undefined) => void;
   userNames?: Record<string, string>;
   onBack?: () => void;
+  groupMemberFilterId?: string | null;
 }) {
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company, companyId } = useCompany();
@@ -160,14 +167,12 @@ export function ExpenseGroupDetails({
   const { can } = usePermissions();
   const accountsInGroup = useMemo(() => {
     if (group.id === "ungrouped") {
-      // Ungrouped should include both empty groupId and persisted ungrouped id rows.
-      const ungroupedRows = processedExpenseAccounts.filter((a) => !a.groupId || a.groupId === "ungrouped_expense");
-      if (ungroupedRows.length > 0) return ungroupedRows as ExpenseAccount[];
       return accounts.filter((a) => !a.groupId || a.groupId === "ungrouped_expense");
     }
-    const fromProcessed = processedExpenseAccounts.filter((a) => a.groupId === group.id);
-    if (fromProcessed.length > 0) return fromProcessed as ExpenseAccount[];
-    return accounts.filter((a) => a.groupId === group.id);
+    if (accounts.length > 0) {
+      return accounts;
+    }
+    return processedExpenseAccounts.filter((a) => a.groupId === group.id);
   }, [processedExpenseAccounts, accounts, group.id]);
   const mobileSearchNames = useMemo(
     () => ({
@@ -178,6 +183,17 @@ export function ExpenseGroupDetails({
     [journalAccountNames, accountsInGroup, userNames]
   );
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
+
+  const selectedMemberAccount = useMemo(() => {
+    if (!groupMemberFilterId) return null;
+    return processedExpenseAccounts.find((account) => account.id === groupMemberFilterId) ?? null;
+  }, [groupMemberFilterId, processedExpenseAccounts]);
+
+  const selectedMemberAttachmentUrl = useMemo(
+    () => trimEntityFileUrlForPreview(selectedMemberAccount?.fileUrl),
+    [selectedMemberAccount?.fileUrl, selectedMemberAccount?.id]
+  );
+
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const ledgerViewMode: LedgerDetailViewMode =
@@ -862,27 +878,68 @@ export function ExpenseGroupDetails({
                 </Button>
               )}
               <div className={LEDGER_HEADER_AVATAR_CN}>
-                <Avatar className="h-12 w-12 text-lg">
-                  <AvatarFallback className="bg-muted text-muted-foreground">
-                    {getInitials(group.name)}
-                  </AvatarFallback>
-                </Avatar>
-                {group.id !== 'ungrouped' && (
-                  <EditExpenseGroupDialog
-                    group={group}
-                    allGroups={allGroups}
-                    onGroupUpdated={onGroupUpdated}
-                    onGroupDeleted={onGroupDeleted}
-                    hasAccounts={accountsInGroup.length > 0 || childGroups.length > 0}
-                  >
-                    <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
-                      <Pencil className="h-3 w-3" />
-                    </button>
-                  </EditExpenseGroupDialog>
+                {selectedMemberAccount ? (
+                  <>
+                    <EntityFileAttachmentHover
+                      fileUrl={selectedMemberAttachmentUrl}
+                      triggerClassName="inline-flex rounded-full"
+                    >
+                      <ResolvedEntityAvatar
+                        className="h-12 w-12 flex-shrink-0 text-lg"
+                        companyId={companyId ?? undefined}
+                        src={selectedMemberAttachmentUrl ?? undefined}
+                        alt={selectedMemberAccount.name}
+                        fallbackSlot={
+                          (selectedMemberAccount as any).isSystemReserved ? (
+                            <Lock className="h-6 w-6 text-muted-foreground" />
+                          ) : (
+                            <DollarSign className="h-6 w-6 text-muted-foreground" />
+                          )
+                        }
+                      />
+                    </EntityFileAttachmentHover>
+                    {selectedMemberAccount.id !== "sales_account" &&
+                      selectedMemberAccount.id !== "purchase_account" && (
+                        <EditExpenseAccountDialog
+                          account={selectedMemberAccount}
+                          onAccountUpdated={onAccountUpdated}
+                          onAccountDeleted={onAccountUpdated}
+                          hasTransactions={processedTransactions.length > 0}
+                        >
+                          <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </EditExpenseAccountDialog>
+                      )}
+                  </>
+                ) : (
+                  <>
+                    <Avatar className="h-12 w-12 text-lg">
+                      <AvatarFallback className="bg-muted text-muted-foreground">
+                        {getInitials(group.name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    {group.id !== "ungrouped" && (
+                      <EditExpenseGroupDialog
+                        group={group}
+                        allGroups={allGroups}
+                        onGroupUpdated={onGroupUpdated}
+                        onGroupDeleted={onGroupDeleted}
+                        hasAccounts={accountsInGroup.length > 0 || childGroups.length > 0}
+                      >
+                        <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      </EditExpenseGroupDialog>
+                    )}
+                  </>
                 )}
               </div>
               <div className={LEDGER_HEADER_NAME_CARD_CN}>
-                <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
+                <GroupDetailNestedNameHeader
+                  groupName={group.name}
+                  memberName={selectedMemberAccount?.name ?? null}
+                />
               </div>
               <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
                 <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
@@ -968,31 +1025,6 @@ export function ExpenseGroupDetails({
                   <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
                 </Button>
               )}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className={cn("w-[200px] justify-between", LEDGER_HEADER_PILL_CN)}>
-                    <span className="truncate">Members ({accountsInGroup.length})</span>
-                    <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-[320px] max-h-72 overflow-y-auto">
-                  {accountsInGroup.map((p) => (
-                    <DropdownMenuItem key={p.id} disabled>
-                      <div className="flex w-full items-center justify-between gap-3">
-                        <span className="truncate text-left">{p.name}</span>
-                        <span
-                          className={cn(
-                            "shrink-0 text-xs font-semibold tabular-nums",
-                            (Number((p as any).balance) || 0) >= 0 ? "text-green-600" : "text-red-600"
-                          )}
-                        >
-                          {formatCurrency(Number((p as any).balance) || 0, { showDrCr: true })}
-                        </span>
-                      </div>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
               <Button variant="outline" size="sm" onClick={() => handleOpenNoteDialog()} className={LEDGER_HEADER_PILL_CN}>
                 <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>

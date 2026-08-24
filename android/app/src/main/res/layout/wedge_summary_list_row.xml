@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/wedge_summary_row_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:paddingTop="2dp"
+    android:paddingBottom="2dp">
+    <TextView
+        android:id="@+id/wedge_summary_row_name"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="38"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textColor="#0F172A"
+        android:textSize="9sp" />
+    <TextView
+        android:id="@+id/wedge_summary_row_open"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="15"
+        android:gravity="end"
+        android:paddingEnd="2dp"
+        android:textSize="9sp" />
+    <TextView
+        android:id="@+id/wedge_summary_row_in"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="15"
+        android:gravity="end"
+        android:paddingEnd="2dp"
+        android:textColor="#16A34A"
+        android:textSize="9sp" />
+    <TextView
+        android:id="@+id/wedge_summary_row_out"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="16"
+        android:gravity="end"
+        android:paddingEnd="2dp"
+        android:textColor="#DC2626"
+        android:textSize="9sp" />
+    <TextView
+        android:id="@+id/wedge_summary_row_bal"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="16"
+        android:gravity="end"
+        android:textSize="9sp" />
+</LinearLayout>

@@ -16,6 +16,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon, Loader2, Trash2, Upload, FileText, PlusCircle, Crown, Printer, Link2, History, CheckCircle, Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { mapPartiesForVoucherCombobox } from "@/lib/masterAccountFreeze/comboboxOptions";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
@@ -614,7 +615,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const partyComboboxOptions = useMemo(
     () =>
       withSelectedComboboxOption(
-        processedPartiesForSelection.map((p) => ({ value: p.id, label: p.name })),
+        mapPartiesForVoucherCombobox(processedPartiesForSelection),
         partyId,
         processedParties.find((p) => p.id === partyId)?.name
       ),

@@ -1,6 +1,6 @@
 {
   "name": "pocket-ledger-electron",
-  "version": "1.0.4",
+  "version": "1.1.13",
   "private": true,
   "main": "main.js",
   "scripts": {
@@ -30,6 +30,7 @@
       "localAppServer.js",
       "localAppServerAccessTokens.js",
       "plTraceLog.js",
+      "tabSnapshotRecovery.js",
       "fetchPublicIpAddress.js",
       "plMirrorProtocol.cjs",
       "plWebPorts.cjs",

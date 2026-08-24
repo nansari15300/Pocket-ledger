@@ -68,7 +68,9 @@ export type Permission =
   /** Share dialog — Unlinked tab */
   | "view_reconciliation_unlinked_list"
   /** Reconciling page — blank row par remote txn se sync voucher */
-  | "sync_reconciliation_transaction";
+  | "sync_reconciliation_transaction"
+  /** Freeze party / bank / staff / tax master account (block new txns + banner). */
+  | "freeze_master_account";
 
 export type PermissionInfo = {
   key: Permission;
@@ -130,6 +132,7 @@ export const PermissionGroups: PermissionGroup[] = [
             { key: "view_special_bank_accounts", label: "View Special Bank Accounts" },
             { key: "view_owner_bank_account_details", label: "View Owner Bank Account Details" },
             { key: "view_special_account_balance", label: "View Special Account Balance" },
+            { key: "freeze_master_account", label: "Freeze Master Account (Party / Bank / Staff / Tax / Expense)" },
         ],
     },
     {

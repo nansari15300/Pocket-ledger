@@ -38,6 +38,7 @@ import {
 
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, ArrowRight, Link2, History, CheckCircle, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { mapPartiesForVoucherCombobox } from "@/lib/masterAccountFreeze/comboboxOptions";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
 import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
@@ -1974,10 +1975,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           <div className="flex gap-1 w-full min-w-0 overflow-hidden">
                             <Combobox
                               triggerClassName="h-9 w-full min-w-0 max-w-full overflow-hidden"
-                              options={processedPartiesForSelection.map((p) => ({
-                                value: p.id,
-                                label: p.name,
-                              }))}
+                              options={mapPartiesForVoucherCombobox(processedPartiesForSelection)}
                               value={field.value}
                               onChange={(val, newName) => {
                                 if (val === "add-new") {
@@ -2092,7 +2090,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </div>
                               <Combobox
                                 triggerClassName="h-10 w-full min-w-0"
-                                options={processedPartiesForSelection.map((p) => ({ value: p.id, label: p.name }))}
+                                options={mapPartiesForVoucherCombobox(processedPartiesForSelection)}
                                 value={field.value}
                                 onChange={(val, newName) => {
                                   if (val === "add-new") {

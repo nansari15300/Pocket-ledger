@@ -24,6 +24,8 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Combobox } from "@/components/ui/combobox";
+import { MASTER_ACCOUNT_FREEZE_LIST_LABEL } from "@/lib/masterAccountFreeze/labels";
+import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -238,46 +240,77 @@ export function CreateAdjustmentForm({
   }, [voucher?.id, voucher?.adjustmentTarget, defaultVoucherData?.adjustmentTarget]);
 
   const masterAccountsWithEntity = useMemo(() => {
-    const parts: { value: string; label: string; nameOnly: string; balance?: number; entityType: AdjustmentTarget["entityType"] }[] = [];
-    (processedPartiesForSelection || []).forEach((p: any) =>
-      parts.push({ value: p.id, label: `${p.name} (Party)`, nameOnly: p.name, balance: p.balance, entityType: "party" })
-    );
-    (processedStaff || []).forEach((s: any) =>
-      parts.push({ value: s.id, label: `${s.name} (Staff)`, nameOnly: s.name, balance: s.balance, entityType: "staff" })
-    );
-    (processedAccounts || []).forEach((a: any) =>
+    const parts: {
+      value: string;
+      label: string;
+      nameOnly: string;
+      balance?: number;
+      entityType: AdjustmentTarget["entityType"];
+      disabled?: boolean;
+    }[] = [];
+    const freezeSuffix = ` (${MASTER_ACCOUNT_FREEZE_LIST_LABEL})`;
+    (processedPartiesForSelection || []).forEach((p: any) => {
+      const frozen = readMasterAccountFrozen(p);
+      parts.push({
+        value: p.id,
+        label: `${p.name} (Party)${frozen ? freezeSuffix : ""}`,
+        nameOnly: p.name,
+        balance: p.balance,
+        entityType: "party",
+        disabled: frozen,
+      });
+    });
+    (processedStaff || []).forEach((s: any) => {
+      const frozen = readMasterAccountFrozen(s);
+      parts.push({
+        value: s.id,
+        label: `${s.name} (Staff)${frozen ? freezeSuffix : ""}`,
+        nameOnly: s.name,
+        balance: s.balance,
+        entityType: "staff",
+        disabled: frozen,
+      });
+    });
+    (processedAccounts || []).forEach((a: any) => {
+      const frozen = readMasterAccountFrozen(a);
+      const baseLabel = adjustmentBankCashMasterLabel(a);
       parts.push({
         value: a.id,
-        label: adjustmentBankCashMasterLabel(a),
+        label: `${baseLabel}${frozen ? freezeSuffix : ""}`,
         nameOnly: a.accountName || a.name || "Account",
         balance: a.balance,
         entityType: "account",
-      })
-    );
+        disabled: frozen,
+      });
+    });
     (processedExpenseAccounts || []).forEach((a: any) => {
       if (isAdjustmentSystemExpenseAccount(a)) return;
+      const frozen = readMasterAccountFrozen(a);
       parts.push({
         value: a.id,
-        label: `${a.name || "Expense"} (Expense)`,
+        label: `${a.name || "Expense"} (Expense)${frozen ? freezeSuffix : ""}`,
         nameOnly: a.name || "Expense",
         balance: (a as any).balance,
         entityType: "expense",
+        disabled: frozen,
       });
     });
-    (processedTaxes || []).forEach((t: any) =>
+    (processedTaxes || []).forEach((t: any) => {
+      const frozen = readMasterAccountFrozen(t);
       parts.push({
         value: t.id,
-        label: `${t.name || "Tax"} (Tax)`,
+        label: `${t.name || "Tax"} (Tax)${frozen ? freezeSuffix : ""}`,
         nameOnly: t.name || "Tax",
         balance: (t as any).balance,
         entityType: "tax",
-      })
-    );
+        disabled: frozen,
+      });
+    });
     return parts.sort((a, b) => a.label.localeCompare(b.label));
   }, [processedPartiesForSelection, processedStaff, processedAccounts, processedExpenseAccounts, processedTaxes]);
 
   const masterAccountOptions = useMemo(
-    () => masterAccountsWithEntity.map(({ value, label, balance }) => ({ value, label, balance })),
+    () => masterAccountsWithEntity.map(({ value, label, balance, disabled }) => ({ value, label, balance, disabled })),
     [masterAccountsWithEntity]
   );
 

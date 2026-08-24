@@ -14,6 +14,10 @@ export const masterListNameTriggerCn =
 export const masterListNameTriggerStrongCn =
   "pl-master-list-row-name-strong block w-full cursor-default truncate border-0 border-transparent bg-transparent p-0 text-left shadow-none outline-none appearance-none";
 
+/** Expandable group child member — chhota text taaki card height na badhe */
+export const groupListChildMemberNameTriggerCn =
+  "pl-master-list-row-name block w-full cursor-default truncate border-0 border-transparent bg-transparent p-0 text-left text-[11px] font-medium leading-tight shadow-none outline-none appearance-none";
+
 export const masterListUnselectedCompactCn =
   "border border-gray-200 bg-transparent shadow-none transition-[border-color,background-color] duration-200 dark:border-gray-600";
 

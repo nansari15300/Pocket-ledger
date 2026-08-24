@@ -111,6 +111,10 @@ import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillL
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
+import { useMasterAccountFreezeDetailsChrome } from "@/hooks/useMasterAccountFreezeDetailsChrome";
+import { EXPENSE_FREEZE_COLLECTION } from "@/lib/masterAccountFreeze/freezeAdapter";
+import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
@@ -250,6 +254,45 @@ export function ExpenseAccountDetails({
     collection: "expense_accounts",
     entityId: initialAccount.id,
     onUpdated: () => onAccountUpdated(),
+  });
+
+  const expenseFreezeEligible =
+    account.id !== "all" &&
+    account.id !== "sales_account" &&
+    account.id !== "purchase_account";
+
+  const expenseAdjustBalanceActions = expenseFreezeEligible ? (
+    <AddVoucherDialog
+      defaultTab="adjustment"
+      allowedTabs={["adjustment"]}
+      defaultVoucherData={{
+        defaultTab: "adjustment",
+        adjustmentTarget: { id: account.id, entityType: "expense", name: account.name },
+      }}
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={readMasterAccountFrozen(account)}
+        className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")}
+        title="Adjust Balance"
+      >
+        <AdjustBalancePillLabel />
+      </Button>
+    </AddVoucherDialog>
+  ) : null;
+
+  const {
+    freezeOverlay: expenseFreezeOverlay,
+    closingBalanceActions: expenseClosingBalanceActions,
+  } = useMasterAccountFreezeDetailsChrome({
+    companyId,
+    collection: EXPENSE_FREEZE_COLLECTION,
+    entityId: account.id,
+    entity: account,
+    entityEligible: expenseFreezeEligible,
+    onEntityUpdated: handleAccountUpdated,
+    adjustBalanceActions: expenseAdjustBalanceActions,
   });
 
   const accountHeaderAttachmentUrl = useMemo(
@@ -856,6 +899,9 @@ export function ExpenseAccountDetails({
         {/* TABLE AREA â€” min-h-0: flex-1 ScrollArea shrink ho kar vertical scroll */}
         <ScrollArea className="min-h-0 flex-1">
           <div className="py-4">
+            <MasterAccountFreezeTxnShell
+              overlay={expenseFreezeOverlay}
+            >
             <TransactionsTable
               transactions={paginatedTransactions}
               context="expense"
@@ -881,24 +927,10 @@ export function ExpenseAccountDetails({
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
               closingBalance={desktopPaginationMeta.closingForPage}
-              closingBalanceActions={
-                account.id !== "all" && account.id !== "sales_account" && account.id !== "purchase_account" ? (
-                  <AddVoucherDialog
-                    defaultTab="adjustment"
-                    allowedTabs={["adjustment"]}
-                    defaultVoucherData={{
-                      defaultTab: "adjustment",
-                      adjustmentTarget: { id: account.id, entityType: "expense", name: account.name },
-                    }}
-                  >
-                    <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
-                      <AdjustBalancePillLabel />
-                    </Button>
-                  </AddVoucherDialog>
-                ) : null
-              }
+              closingBalanceActions={expenseClosingBalanceActions}
               {...statementCheck.tableProps}
             />
+            </MasterAccountFreezeTxnShell>
           </div>
           <ScrollBar orientation="horizontal" />
         </ScrollArea>
@@ -1133,6 +1165,9 @@ export function ExpenseAccountDetails({
               style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
             >
               <div className="pb-2">
+                <MasterAccountFreezeTxnShell
+                  overlay={expenseFreezeOverlay}
+                >
                 <TransactionsTable
                   transactions={mobileTransactions}
                   context="expense"
@@ -1159,24 +1194,10 @@ export function ExpenseAccountDetails({
                   periodCr={mobilePageLedgerStats.periodCrForPage}
                   closingBalance={mobilePageLedgerStats.closingForPage}
                   scrollOnlyTransactions
-                  closingBalanceActions={
-                    account.id !== "all" && account.id !== "sales_account" && account.id !== "purchase_account" ? (
-                      <AddVoucherDialog
-                        defaultTab="adjustment"
-                        allowedTabs={["adjustment"]}
-                        defaultVoucherData={{
-                          defaultTab: "adjustment",
-                          adjustmentTarget: { id: account.id, entityType: "expense", name: account.name },
-                        }}
-                      >
-                        <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
-                      <AdjustBalancePillLabel />
-                    </Button>
-                      </AddVoucherDialog>
-                    ) : null
-                  }
+                  closingBalanceActions={expenseClosingBalanceActions}
                   {...statementCheck.tableProps}
                 />
+                </MasterAccountFreezeTxnShell>
               </div>
             </div>
             <MobileTransactionsPager
@@ -1199,6 +1220,9 @@ export function ExpenseAccountDetails({
               style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
             >
               <div className="pb-2">
+                <MasterAccountFreezeTxnShell
+                  overlay={expenseFreezeOverlay}
+                >
                 <TransactionsTable
                   transactions={mobileTransactions}
                   context="expense"
@@ -1225,24 +1249,10 @@ export function ExpenseAccountDetails({
                   periodCr={mobilePageLedgerStats.periodCrForPage}
                   closingBalance={mobilePageLedgerStats.closingForPage}
                   scrollOnlyTransactions
-                  closingBalanceActions={
-                    account.id !== "all" && account.id !== "sales_account" && account.id !== "purchase_account" ? (
-                      <AddVoucherDialog
-                        defaultTab="adjustment"
-                        allowedTabs={["adjustment"]}
-                        defaultVoucherData={{
-                          defaultTab: "adjustment",
-                          adjustmentTarget: { id: account.id, entityType: "expense", name: account.name },
-                        }}
-                      >
-                        <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
-                      <AdjustBalancePillLabel />
-                    </Button>
-                      </AddVoucherDialog>
-                    ) : null
-                  }
+                  closingBalanceActions={expenseClosingBalanceActions}
                   {...statementCheck.tableProps}
                 />
+                </MasterAccountFreezeTxnShell>
               </div>
             </div>
             <MobileTransactionsPager

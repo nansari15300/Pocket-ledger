@@ -6,7 +6,7 @@ import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills, LedgerViewModeToggleButton } from "@/components/ui/LedgerViewModePills";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Crown, Columns3, Search, Info, Pencil } from "lucide-react";
+import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Crown, Columns3, Search, Info, Pencil, Landmark } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, useShowNotes } from "../vouchers/transactionColumnVisibility";
@@ -69,6 +69,12 @@ import {
 } from "@/lib/ledgerHeaderChrome";
 import { useCompany } from "@/hooks/useCompany";
 import { EditAccountGroupDialog } from "@/components/bank-cash/EditAccountGroupDialog";
+import { EditAccountDialog } from "@/components/bank-cash/EditAccountDialog";
+import { bankAccountDisplayName } from "@/lib/bankAccountDisplayName";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { GroupDetailNestedNameHeader } from "@/components/entity/GroupDetailNestedNameHeader";
 import { AccountFilterDropdown } from "@/components/bank-cash/AccountFilterDropdown";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
@@ -148,6 +154,7 @@ export function AccountGroupDetails({
   onDateRangeChange,
   onBack,
   userNames,
+  groupMemberFilterId = null,
 }: { 
   group: AccountGroup, 
   allGroups: AccountGroup[],
@@ -159,6 +166,7 @@ export function AccountGroupDetails({
   onDateRangeChange: (dateRange: DateRange | undefined) => void;
   userNames?: Record<string, string>;
   onBack?: () => void;
+  groupMemberFilterId?: string | null;
 }) {
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company, companyId } = useCompany();
@@ -206,6 +214,19 @@ export function AccountGroupDetails({
     }
     return accounts.filter((a) => a.groupId === group.id);
   }, [accounts, group.id]);
+
+  const selectedMemberAccount = useMemo(() => {
+    if (!groupMemberFilterId) return null;
+    return accounts.find((account) => account.id === groupMemberFilterId) ?? null;
+  }, [accounts, groupMemberFilterId]);
+
+  const selectedMemberDisplayName = selectedMemberAccount
+    ? bankAccountDisplayName(selectedMemberAccount)
+    : null;
+  const selectedMemberAttachmentUrl = useMemo(
+    () => trimEntityFileUrlForPreview(selectedMemberAccount?.fileUrl),
+    [selectedMemberAccount?.fileUrl, selectedMemberAccount?.id]
+  );
   const accountIdsInGroup = useMemo(() => accountsInGroup.map((a) => a.id), [accountsInGroup]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
 
@@ -276,7 +297,13 @@ export function AccountGroupDetails({
     [group.id, router]
   );
 
-  const containsSpecialAccount = useMemo(() => accounts.some(acc => acc.isSpecial), [accounts]);
+  const containsSpecialAccount = useMemo(
+    () =>
+      selectedMemberAccount
+        ? Boolean(selectedMemberAccount.isSpecial)
+        : accounts.some((acc) => acc.isSpecial),
+    [accounts, selectedMemberAccount]
+  );
   const canViewSpecialBalance = can('view_special_account_balance');
   const isBalanceMasked = containsSpecialAccount && !canViewSpecialBalance;
 
@@ -1333,18 +1360,34 @@ export function AccountGroupDetails({
                   placeholder="Select group"
                 />
               </div>
-              {group.id !== "ungrouped" && (
-                <EditAccountGroupDialog
-                  group={group}
-                  allGroups={allGroups}
-                  onGroupUpdated={onGroupUpdated}
-                  onGroupDeleted={onGroupDeleted}
-                  hasAccounts={accountsInGroup.length > 0 || childGroups.length > 0}
-                >
-                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditAccountGroupDialog>
+              {selectedMemberAccount ? (
+                (!selectedMemberAccount.isSpecial || can("manage_special_bank_accounts")) && (
+                  <EditAccountDialog
+                    account={selectedMemberAccount}
+                    allAccounts={processedAccounts}
+                    onAccountUpdated={onAccountUpdated}
+                    onAccountDeleted={() => {}}
+                    hasTransactions={processedTransactions.length > 0}
+                  >
+                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                  </EditAccountDialog>
+                )
+              ) : (
+                group.id !== "ungrouped" && (
+                  <EditAccountGroupDialog
+                    group={group}
+                    allGroups={allGroups}
+                    onGroupUpdated={onGroupUpdated}
+                    onGroupDeleted={onGroupDeleted}
+                    hasAccounts={accountsInGroup.length > 0 || childGroups.length > 0}
+                  >
+                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                  </EditAccountGroupDialog>
+                )
               )}
               <div className="relative h-8 min-w-0 flex-1">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
@@ -1616,28 +1659,70 @@ export function AccountGroupDetails({
                 </Button>
               )}
               <div className={LEDGER_HEADER_AVATAR_CN}>
-                <Avatar className="h-12 w-12 text-lg">
-                  <AvatarFallback className="bg-muted text-muted-foreground">
-                    {getInitials(group.name)}
-                  </AvatarFallback>
-                </Avatar>
-                {group.id !== 'ungrouped' && (
-                  <EditAccountGroupDialog
-                    group={group}
-                    allGroups={allGroups}
-                    onGroupUpdated={onGroupUpdated}
-                    onGroupDeleted={onGroupDeleted}
-                    hasAccounts={accountsInGroup.length > 0 || childGroups.length > 0}
-                  >
-                    <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
-                      <Pencil className="h-3 w-3" />
-                    </button>
-                  </EditAccountGroupDialog>
+                {selectedMemberAccount ? (
+                  <>
+                    <EntityFileAttachmentHover
+                      fileUrl={selectedMemberAttachmentUrl}
+                      triggerClassName="inline-flex rounded-full"
+                    >
+                      <ResolvedEntityAvatar
+                        className="h-12 w-12 flex-shrink-0 border text-lg"
+                        src={selectedMemberAttachmentUrl ?? undefined}
+                        alt={selectedMemberDisplayName ?? ""}
+                        fallbackSlot={
+                          selectedMemberAccount.isSpecial ? (
+                            <Crown className="h-6 w-6 text-amber-500" />
+                          ) : (
+                            <Landmark className="h-6 w-6 text-muted-foreground" />
+                          )
+                        }
+                      />
+                    </EntityFileAttachmentHover>
+                    {(!selectedMemberAccount.isSpecial || can("manage_special_bank_accounts")) && (
+                      <EditAccountDialog
+                        account={selectedMemberAccount}
+                        allAccounts={processedAccounts}
+                        onAccountUpdated={onAccountUpdated}
+                        onAccountDeleted={() => {}}
+                        hasTransactions={processedTransactions.length > 0}
+                      >
+                        <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      </EditAccountDialog>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <Avatar className="h-12 w-12 text-lg">
+                      <AvatarFallback className="bg-muted text-muted-foreground">
+                        <Users className="h-6 w-6" />
+                      </AvatarFallback>
+                    </Avatar>
+                    {group.id !== "ungrouped" && (
+                      <EditAccountGroupDialog
+                        group={group}
+                        allGroups={allGroups}
+                        onGroupUpdated={onGroupUpdated}
+                        onGroupDeleted={onGroupDeleted}
+                        hasAccounts={accountsInGroup.length > 0 || childGroups.length > 0}
+                      >
+                        <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      </EditAccountGroupDialog>
+                    )}
+                  </>
                 )}
               </div>
-              {containsSpecialAccount && <Crown className="h-5 w-5 text-amber-500 flex-shrink-0 self-center" />}
+              {containsSpecialAccount && (
+                <Crown className="h-5 w-5 text-amber-500 flex-shrink-0 self-center" />
+              )}
               <div className={LEDGER_HEADER_NAME_CARD_CN}>
-                <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
+                <GroupDetailNestedNameHeader
+                  groupName={group.name}
+                  memberName={selectedMemberDisplayName}
+                />
               </div>
               <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
                 <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
@@ -1730,31 +1815,6 @@ export function AccountGroupDetails({
                   <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
                 </Button>
               )}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className={cn("w-[200px] justify-between", LEDGER_HEADER_PILL_CN)}>
-                    <span className="truncate">Members ({accounts.length})</span>
-                    <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-[320px] max-h-72 overflow-y-auto">
-                  {accounts.map(p => (
-                    <DropdownMenuItem key={p.id} disabled>
-                      <div className="flex w-full items-center justify-between gap-3">
-                        <span className="truncate text-left">{p.accountName}</span>
-                        <span
-                          className={cn(
-                            "shrink-0 text-xs font-semibold tabular-nums",
-                            (Number((p as any).balance) || 0) >= 0 ? "text-green-600" : "text-red-600"
-                          )}
-                        >
-                          {formatCurrency(Number((p as any).balance) || 0, { showDrCr: true })}
-                        </span>
-                      </div>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
               <LedgerViewModePills
                 value={spendWiseView ? "spend_wise" : "statement"}
                 onChange={(v) => setSpendWiseView(v === "spend_wise")}

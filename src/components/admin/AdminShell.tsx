@@ -5,8 +5,8 @@ import { usePathname } from "next/navigation";
 import { useEffect } from "react";
 import { enterAdminFirestoreOnline, leaveAdminFirestoreOnline } from "@/lib/adminFirestoreNetwork";
 import { LayoutDashboard, Users, FileClock, Settings, ArrowLeft, FileDigit, ListTree, Landmark, CreditCard, UserCog, Trash2, Database, Megaphone } from 'lucide-react'
+import dynamic from "next/dynamic";
 import { Button } from '../ui/button'
-import { AdminHeader } from './AdminHeader'
 import {
   Sidebar,
   SidebarHeader,
@@ -19,7 +19,23 @@ import {
 } from '../ui/sidebar'
 import { cn } from '@/lib/utils'
 import { isAdminPanelDevPreview } from '@/lib/adminDevPreview'
-import { AdminPanelCompanyShell } from "@/adminPanelCompany/components/AdminPanelCompanyShell";
+
+const AdminHeader = dynamic(() => import("./AdminHeader").then((m) => m.AdminHeader), {
+  loading: () => <header className="sticky top-0 z-30 h-16 border-b bg-background" />,
+  ssr: false,
+});
+
+const AdminPanelCompanyShell = dynamic(
+  () =>
+    import("@/adminPanelCompany/components/AdminPanelCompanyShell").then((m) => m.AdminPanelCompanyShell),
+  {
+    loading: () => (
+      <div className="flex h-screen items-center justify-center text-sm text-muted-foreground">
+        Loading Admin Panel Company…
+      </div>
+    ),
+  }
+);
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   const devPreview = isAdminPanelDevPreview();

@@ -2857,7 +2857,7 @@ export function InterCompanyVoucherForm({
                 <InterCompanyPayModeInfoButton />
               </span>
               <span className="block text-xs text-muted-foreground">
-                Target posts as Payment In (normal Dr/Cr)
+                amount increase on account
               </span>
             </span>
           </label>
@@ -2872,7 +2872,7 @@ export function InterCompanyVoucherForm({
                 <InterCompanyPayModeInfoButton />
               </span>
               <span className="block text-xs text-muted-foreground">
-                Target Journal — reverse Dr/Cr on the destination account
+                amount Decrease on account
               </span>
             </span>
           </label>

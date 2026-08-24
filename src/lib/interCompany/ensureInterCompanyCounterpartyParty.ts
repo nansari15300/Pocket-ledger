@@ -1,7 +1,7 @@
 /**
- * IC clearing party:
- * - Company→Company: `IC Company "{peer}"` — `ic_peer_*`
- * - Account→Account: `IC Account "{account}"` — `ic_acct_*` (peer company + peer entity)
+ * IC clearing party — C→C aur A→A dono ke liye ek hi row (peer + entity):
+ * `IC Account "{peer account}"` + peer company niche — `ic_acct_*`
+ * (entity missing ho to legacy `ic_peer_*` fallback)
  */
 
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc } from "firebase/firestore";
@@ -10,10 +10,7 @@ import { interCompanyAcNoForNewEntity } from "@/lib/interCompany/interCompanyAcc
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
 import {
   formatInterCompanyAccountClearingPartyName,
-  formatInterCompanyCounterpartyPartyName,
-  isInterCompanyCompanyClearingPartyName,
   isInterCompanyCounterpartyPartyName,
-  readInterCompanyClearingMode,
   type InterCompanyClearingMode,
 } from "@/lib/interCompany/interCompanyCounterpartyPartyName";
 import { restoreCompanySubdocFromRecycleBin } from "@/lib/recycleBinEntityLifecycle";
@@ -53,6 +50,24 @@ export function interCompanyAccountClearingDocId(args: {
   return `ic_acct_${peer}_${kind}_${ent}`.slice(0, 96);
 }
 
+/** C→C / A→A — peer+entity par ek canonical id; entity na ho to peer-level legacy. */
+export function resolveInterCompanyClearingDocId(args: {
+  peerCompanyId: string;
+  peerEntityKind?: string;
+  peerEntityId?: string;
+}): string {
+  const peerEntityKind = String(args.peerEntityKind || "").trim().toLowerCase();
+  const peerEntityId = String(args.peerEntityId || "").trim();
+  if (peerEntityKind && peerEntityId) {
+    return interCompanyAccountClearingDocId({
+      peerCompanyId: args.peerCompanyId,
+      peerEntityKind,
+      peerEntityId,
+    });
+  }
+  return interCompanyCounterpartyDocId(args.peerCompanyId);
+}
+
 function isActiveCounterpartyRow(row: Record<string, unknown> | null | undefined): boolean {
   if (!row || row.isDeleted === true) return false;
   const id = String(row.id || "").trim();
@@ -78,8 +93,28 @@ async function listPartyRows(companyId: string): Promise<Record<string, unknown>
   }
 }
 
+function preferClearingPartyId(rows: Array<Record<string, unknown>>): string | null {
+  if (rows.length === 0) return null;
+  const sorted = [...rows].sort((a, b) => {
+    const rank = (id: string) => {
+      if (id.startsWith("ic_acct_")) return 2;
+      if (id.startsWith("ic_peer_")) return 1;
+      return 0;
+    };
+    const aRank = rank(String(a.id || "").trim());
+    const bRank = rank(String(b.id || "").trim());
+    if (aRank !== bRank) return bRank - aRank;
+    const aAbs = Math.abs(Number(a.balance) || 0);
+    const bAbs = Math.abs(Number(b.balance) || 0);
+    if (aAbs !== bAbs) return bAbs - aAbs;
+    return String(a.id || "").localeCompare(String(b.id || ""));
+  });
+  const id = String(sorted[0]?.id || "").trim();
+  return id || null;
+}
+
 /**
- * Prefer canonical id; warna pehla matching legacy row (same mode only).
+ * Prefer canonical id; warna pehla matching row (C→C / A→A mode alag — peer+entity same).
  */
 export function pickInterCompanyCounterpartyPartyId(args: {
   peerCompanyId: string;
@@ -91,22 +126,15 @@ export function pickInterCompanyCounterpartyPartyId(args: {
 }): string | null {
   const peerCompanyId = String(args.peerCompanyId || "").trim();
   const displayName = String(args.displayName || "").trim();
-  const clearingMode = args.clearingMode || "company";
   const peerEntityKind = String(args.peerEntityKind || "").trim().toLowerCase();
   const peerEntityId = String(args.peerEntityId || "").trim();
-  const canonicalId =
-    clearingMode === "account"
-      ? interCompanyAccountClearingDocId({
-          peerCompanyId,
-          peerEntityKind,
-          peerEntityId,
-        })
-      : interCompanyCounterpartyDocId(peerCompanyId);
-
-  const active = args.parties.filter((r) => {
-    if (!isActiveCounterpartyRow(r)) return false;
-    return readInterCompanyClearingMode(r) === clearingMode;
+  const canonicalId = resolveInterCompanyClearingDocId({
+    peerCompanyId,
+    peerEntityKind,
+    peerEntityId,
   });
+
+  const active = args.parties.filter((r) => isActiveCounterpartyRow(r));
   if (active.some((r) => String(r.id || "").trim() === canonicalId)) {
     return canonicalId;
   }
@@ -115,7 +143,7 @@ export function pickInterCompanyCounterpartyPartyId(args: {
     (r) => String(r.interCompanyPeerCompanyId || "").trim() === peerCompanyId
   );
 
-  if (clearingMode === "account") {
+  if (peerEntityKind && peerEntityId) {
     const byEntity = byPeer.filter(
       (r) =>
         String(r.interCompanyPeerEntityKind || "")
@@ -123,43 +151,19 @@ export function pickInterCompanyCounterpartyPartyId(args: {
           .toLowerCase() === peerEntityKind &&
         String(r.interCompanyPeerEntityId || "").trim() === peerEntityId
     );
-    if (byEntity.length > 0) {
-      const preferred =
-        byEntity.find((r) => String(r.id || "").startsWith("ic_acct_")) || byEntity[0];
-      const id = String(preferred?.id || "").trim();
-      return id || null;
-    }
-    if (displayName) {
-      const byName = byPeer.filter((r) => String(r.name || "").trim() === displayName);
-      if (byName.length > 0) {
-        const preferred =
-          byName.find((r) => String(r.id || "").startsWith("ic_acct_")) || byName[0];
-        const id = String(preferred?.id || "").trim();
-        return id || null;
-      }
-    }
-    return null;
-  }
-
-  if (byPeer.length > 0) {
-    const preferred =
-      byPeer.find((r) => String(r.id || "").startsWith("ic_peer_")) || byPeer[0];
-    const id = String(preferred?.id || "").trim();
-    return id || null;
+    const byEntityId = preferClearingPartyId(byEntity);
+    if (byEntityId) return byEntityId;
   }
 
   if (displayName) {
-    const byName = active.filter(
-      (r) =>
-        String(r.name || "").trim() === displayName &&
-        isInterCompanyCompanyClearingPartyName(r.name)
-    );
-    if (byName.length > 0) {
-      const preferred =
-        byName.find((r) => String(r.id || "").startsWith("ic_peer_")) || byName[0];
-      const id = String(preferred?.id || "").trim();
-      return id || null;
-    }
+    const byName = byPeer.filter((r) => String(r.name || "").trim() === displayName);
+    const byNameId = preferClearingPartyId(byName);
+    if (byNameId) return byNameId;
+  }
+
+  if (!peerEntityKind || !peerEntityId) {
+    const byPeerOnly = preferClearingPartyId(byPeer);
+    if (byPeerOnly) return byPeerOnly;
   }
 
   return null;
@@ -229,28 +233,22 @@ export async function ensureInterCompanyCounterpartyParty(
     clearingMode = "company";
   }
 
-  const displayName =
-    clearingMode === "account"
-      ? formatInterCompanyAccountClearingPartyName(peerEntityLabel || peerEntityId)
-      : formatInterCompanyCounterpartyPartyName(peerCompanyName);
+  const accountDisplayLabel = peerEntityLabel || peerEntityId || peerCompanyName;
+  const displayName = formatInterCompanyAccountClearingPartyName(accountDisplayLabel);
 
-  const canonicalId =
-    clearingMode === "account"
-      ? interCompanyAccountClearingDocId({
-          peerCompanyId,
-          peerEntityKind,
-          peerEntityId,
-        })
-      : interCompanyCounterpartyDocId(peerCompanyId);
+  const canonicalId = resolveInterCompanyClearingDocId({
+    peerCompanyId,
+    peerEntityKind,
+    peerEntityId,
+  });
 
   const metaPatch: Record<string, unknown> = {
     name: displayName,
     isInterCompanyCounterparty: true,
-    interCompanyClearingMode: clearingMode,
     interCompanyPeerCompanyId: peerCompanyId,
     interCompanyPeerCompanyName: peerCompanyName,
   };
-  if (clearingMode === "account") {
+  if (peerEntityKind && peerEntityId) {
     metaPatch.interCompanyPeerEntityKind = peerEntityKind;
     metaPatch.interCompanyPeerEntityId = peerEntityId;
     metaPatch.interCompanyPeerEntityLabel = peerEntityLabel || peerEntityId;
@@ -319,7 +317,7 @@ export async function ensureInterCompanyCounterpartyParty(
     interCompanyPeerCompanyName: peerCompanyName,
     interCompanyCounterpartySide: args.side,
     interCompanyAccountNo,
-    ...(clearingMode === "account"
+    ...(peerEntityKind && peerEntityId
       ? {
           interCompanyPeerEntityKind: peerEntityKind,
           interCompanyPeerEntityId: peerEntityId,

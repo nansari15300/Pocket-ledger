@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import {
@@ -19,6 +19,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { MobileMasterDetailNestedName } from "@/components/entity/MobileMasterDetailNestedName";
 import { mlc } from "@/lib/mobileListChrome";
 import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
 import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
@@ -46,6 +47,7 @@ import {
   readMasterDetailLocationQuery,
 } from "@/lib/masterDetailTabChange";
 import type { DateRange } from "@/components/ui/ad-calendar";
+import type { GroupListSelectOptions } from "@/lib/groupListExpand";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { useCachedFeatureConfig } from "@/hooks/useCachedFeatureConfig";
 
@@ -171,6 +173,7 @@ function IncomeExpensePageContent() {
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [accountDetailsDateRange, setAccountDetailsDateRange] = useState<DateRange | undefined>(undefined);
   const [groupDetailsDateRange, setGroupDetailsDateRange] = useState<DateRange | undefined>(undefined);
+  const [groupMemberFilterId, setGroupMemberFilterId] = useState<string | null>(null);
   const [isVoucherOpen, setIsVoucherOpen] = useState(false);
   const [defaultTab, setDefaultTab] = useState<'direct_income' | 'direct_expense' | 'add_salary'>('direct_income');
   // Feature config ko local cache se bhi read karo so offline UI consistent rahe.
@@ -178,15 +181,36 @@ function IncomeExpensePageContent() {
 
   const selectedAccount = activeView === 'accounts' ? selected as ExpenseAccount : null;
   const selectedGroup = activeView === 'groups' ? selected as ExpenseGroup : null;
-  const mobileIncomesSelectionLabel = useMemo(() => {
-    if (!selected) return null;
-    const name = (selected as ExpenseAccount | ExpenseGroup).name;
-    return name && String(name).trim() ? String(name).trim() : null;
-  }, [selected]);
   const mobileIncomesSelectionLabelClassName = useMemo(() => {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as ExpenseAccount | ExpenseGroup).balance);
   }, [selected]);
+  const mobileIncomesSelectionLabel = useMemo((): ReactNode => {
+    if (!selected) return null;
+    if (activeView !== "groups") {
+      const name = (selected as ExpenseAccount).name;
+      return name && String(name).trim() ? String(name).trim() : null;
+    }
+    const group = selected as ExpenseGroup;
+    if (groupMemberFilterId) {
+      const member = processedExpenseAccounts.find((account) => account.id === groupMemberFilterId);
+      return (
+        <MobileMasterDetailNestedName
+          groupName={group.name}
+          memberName={member?.name ?? null}
+          toneClassName={mobileIncomesSelectionLabelClassName}
+        />
+      );
+    }
+    const name = group.name;
+    return name && String(name).trim() ? String(name).trim() : null;
+  }, [
+    selected,
+    activeView,
+    groupMemberFilterId,
+    processedExpenseAccounts,
+    mobileIncomesSelectionLabelClassName,
+  ]);
   const mobileIncomesDetailHeaderAvatar = useMemo(() => {
     if (!isMobile || !selected) return null;
     const selectedEntity = selected as ExpenseAccount | ExpenseGroup;
@@ -524,14 +548,19 @@ function IncomeExpensePageContent() {
   }, [activeView, processedExpenseAccounts, processedExpenseGroups]);
 
   const handleSelect = useCallback(
-    (item: ExpenseAccount | ExpenseGroup, view?: "accounts" | "groups") => {
+    (item: ExpenseAccount | ExpenseGroup, view?: "accounts" | "groups", options?: GroupListSelectOptions) => {
       const isGroup = view === "groups";
       if (isGroup && !groupDetailsEnabled) return;
       if (!isGroup && !accountDetailsEnabled) return;
       pendingIncomesSelectIdRef.current = item.id;
       setSelected(item);
-      if (isGroup) setActiveView("groups");
-      else if (activeView !== "accounts") setActiveView("accounts");
+      if (isGroup) {
+        setGroupMemberFilterId(options?.memberId ?? null);
+        setActiveView("groups");
+      } else {
+        setGroupMemberFilterId(null);
+        if (activeView !== "accounts") setActiveView("accounts");
+      }
       const path = isGroup
         ? `/incomes?view=groups&selected=${encodeURIComponent(item.id)}`
         : `/incomes?selected=${encodeURIComponent(item.id)}`;
@@ -582,6 +611,44 @@ function IncomeExpensePageContent() {
     
     return groupAccounts;
   }, [selectedGroup, processedExpenseAccounts]);
+
+  const accountsForGroupDetails = useMemo(() => {
+    if (!groupMemberFilterId) return accountsForSelectedGroup;
+    return accountsForSelectedGroup.filter((a) => a.id === groupMemberFilterId);
+  }, [accountsForSelectedGroup, groupMemberFilterId]);
+
+  const resolveExpenseGroupMembers = useCallback(
+    (groupId: string) => {
+      if (groupId === "ungrouped") {
+        return processedExpenseAccounts.filter(
+          (p) => !p.groupId || p.groupId === "ungrouped_expense"
+        );
+      }
+      let groupAccounts = processedExpenseAccounts.filter((p) => p.groupId === groupId);
+      if (groupId === "direct_income") {
+        const salesAccount = processedExpenseAccounts.find((acc) => acc.id === "sales_account");
+        if (salesAccount && !groupAccounts.find((acc) => acc.id === "sales_account")) {
+          groupAccounts = [...groupAccounts, salesAccount];
+        }
+      }
+      if (groupId === "direct_expense") {
+        const purchaseAccount = processedExpenseAccounts.find((acc) => acc.id === "purchase_account");
+        if (purchaseAccount && !groupAccounts.find((acc) => acc.id === "purchase_account")) {
+          groupAccounts = [...groupAccounts, purchaseAccount];
+        }
+      }
+      return groupAccounts;
+    },
+    [processedExpenseAccounts]
+  );
+
+  const expenseGroupMembersByGroupId = useMemo(() => {
+    const map: Record<string, ExpenseAccount[]> = {};
+    for (const g of expenseGroupsForList) {
+      map[g.id] = resolveExpenseGroupMembers(g.id);
+    }
+    return map;
+  }, [expenseGroupsForList, resolveExpenseGroupMembers]);
 
   const openVoucherDialog = (type: 'direct_income' | 'direct_expense' | 'add_salary') => {
     setDefaultTab(type);
@@ -723,12 +790,15 @@ function IncomeExpensePageContent() {
         ) : (
           <ExpenseGroupList
             groups={expenseGroupsForList}
-            onSelectGroup={(g) => handleSelect(g, "groups")}
+            onSelectGroup={(g, options) => handleSelect(g, "groups", options)}
             selectedGroup={selectedGroup}
             searchTerm={searchTerm}
             collapsible={false}
             disabled={listDisabled || !groupDetailsEnabled}
             pendingApprovalByGroupId={pendingApprovalByExpenseGroupId}
+            pendingApprovalByMemberId={pendingApprovalByExpenseAccountId}
+            groupMembersByGroupId={expenseGroupMembersByGroupId}
+            selectedGroupMemberFilterId={groupMemberFilterId}
             getItemHref={useQueryNav && groupDetailsEnabled ? (g) => `/incomes?view=groups&selected=${g.id}` : undefined}
             quickFilter={groupListQuickFilter}
             onQuickFilterChange={setGroupListQuickFilter}
@@ -759,9 +829,11 @@ function IncomeExpensePageContent() {
       )}
       {!detailsDisabled && activeView === 'groups' && selectedGroup && (
         <ExpenseGroupDetails 
+            key={`${selectedGroup.id}:${groupMemberFilterId ?? "all"}`}
             group={selectedGroup} 
             allGroups={processedExpenseGroups} 
-            accounts={accountsForSelectedGroup}
+            accounts={accountsForGroupDetails}
+            groupMemberFilterId={groupMemberFilterId}
             onGroupUpdated={() => {}} 
             onGroupDeleted={() => setSelected(null)} 
             onAccountUpdated={() => {}} 

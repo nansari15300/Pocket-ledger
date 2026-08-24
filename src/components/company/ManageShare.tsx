@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Crown, Loader2, PlusCircle, Trash2, Save, Undo2, KeyRound, Eye, EyeOff, Edit, Pencil, Info } from "lucide-react";
+import { Crown, Loader2, PlusCircle, Trash2, Save, Undo2, KeyRound, Eye, EyeOff, Edit, Pencil, Info, Search, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "../ui/skeleton";
 import {
@@ -142,6 +142,54 @@ function PermissionHelpPopover({ label, description }: { label: string; descript
 
 const flattenedPermissions = PermissionGroups.flatMap(g => g.permissions.map(p => p.key));
 
+const PERMISSION_CATEGORY_ALL = "__all__";
+const PERMISSION_CATEGORY_DATE = "__date_control__";
+const PERMISSION_CATEGORY_FILE = "__file_attachment__";
+
+const DATE_CONTROL_SEARCH_TEXTS = [
+  "Date Control",
+  "Back Date Entry Days",
+  "Back Date Edit Days",
+  "Back Date Delete Days",
+  "0 = disabled to modify backdated. 1–9998 = last X days. 9999 = unlimited.",
+];
+
+const DATE_CONTROL_DAYS_HELP =
+  "0 = disabled to modify backdated. 1–9998 = last X days. 9999 = unlimited.";
+
+const FILE_ATTACHMENT_SEARCH_TEXTS = [
+  "File Attachment Settings",
+  "Allow File Attachments",
+  "Enable or disable file uploads across all voucher and entry forms.",
+  "Max File Count",
+  "Maximum number of files allowed per voucher under current plan.",
+  "Allow Image Files",
+  "Enable image file uploads.",
+  "Allow PDF Files",
+  "Enable PDF file uploads.",
+  "Allow File Delete",
+  "Allow deleting uploaded files from voucher attachments.",
+  "Role limit is capped by plan",
+  "file attachment",
+  "upload",
+];
+
+function permissionSearchNorm(query: string): string {
+  return query.trim().toLowerCase();
+}
+
+function permissionTextMatches(text: string, query: string): boolean {
+  const q = permissionSearchNorm(query);
+  if (!q) return true;
+  return text.toLowerCase().includes(q);
+}
+
+function permissionSectionMatchesSearch(texts: readonly string[], query: string): boolean {
+  const q = permissionSearchNorm(query);
+  if (!q) return true;
+  return texts.some((text) => text.toLowerCase().includes(q));
+}
+
 /** Firestore / local company doc se aayi `permissionConfig` ko UI shape me merge — ek hi function dono path. */
 function buildMergedPermissionConfig(currentConfig: PermissionConfig | undefined | null): PermissionConfig {
   return normalizePermissionConfig(currentConfig);
@@ -169,6 +217,8 @@ export function ManageShare() {
   const [firestorePermissionConfig, setFirestorePermissionConfig] = useState<PermissionConfig>(initialPermissionConfig);
   const [editablePermissionConfig, setEditablePermissionConfig] = useState<PermissionConfig>(initialPermissionConfig);
   const [selectedRoleForPermissions, setSelectedRoleForPermissions] = useState<UserRole>('viewer');
+  const [permissionCategoryFilter, setPermissionCategoryFilter] = useState(PERMISSION_CATEGORY_ALL);
+  const [permissionSearchQuery, setPermissionSearchQuery] = useState("");
   const [isSavingPermissions, setIsSavingPermissions] = useState(false);
 
   /** Save ke baad snapshot se editable mat udao; onSnapshot bhi unsaved edits preserve kare */
@@ -458,6 +508,61 @@ export function ManageShare() {
     );
     return nextMax > planMaxFilesPerVoucher;
   }, [nextPaidUpgradePlanId, livePlans, planMaxFilesPerVoucher]);
+
+  const permissionCategoryOptions = useMemo(
+    () => [
+      { value: PERMISSION_CATEGORY_ALL, label: "All Categories" },
+      { value: PERMISSION_CATEGORY_DATE, label: "Date Control" },
+      { value: PERMISSION_CATEGORY_FILE, label: "File Attachment Settings" },
+      ...PermissionGroups.map((group) => ({ value: group.title, label: group.title })),
+    ],
+    []
+  );
+
+  const filteredPermissionGroups = useMemo(() => {
+    return PermissionGroups.map((group) => {
+      if (
+        permissionCategoryFilter !== PERMISSION_CATEGORY_ALL &&
+        permissionCategoryFilter !== group.title
+      ) {
+        return { ...group, permissions: [] as typeof group.permissions };
+      }
+      const permissions = group.permissions.filter((permission) => {
+        if (!permissionSearchNorm(permissionSearchQuery)) return true;
+        if (permissionTextMatches(group.title, permissionSearchQuery)) return true;
+        if (permissionTextMatches(permission.label, permissionSearchQuery)) return true;
+        if (permission.description && permissionTextMatches(permission.description, permissionSearchQuery)) {
+          return true;
+        }
+        return false;
+      });
+      return { ...group, permissions };
+    }).filter((group) => group.permissions.length > 0);
+  }, [permissionCategoryFilter, permissionSearchQuery]);
+
+  const showDateControlSection = useMemo(() => {
+    if (
+      permissionCategoryFilter !== PERMISSION_CATEGORY_ALL &&
+      permissionCategoryFilter !== PERMISSION_CATEGORY_DATE
+    ) {
+      return false;
+    }
+    return permissionSectionMatchesSearch(DATE_CONTROL_SEARCH_TEXTS, permissionSearchQuery);
+  }, [permissionCategoryFilter, permissionSearchQuery]);
+
+  const showFileAttachmentSection = useMemo(() => {
+    if (
+      permissionCategoryFilter !== PERMISSION_CATEGORY_ALL &&
+      permissionCategoryFilter !== PERMISSION_CATEGORY_FILE
+    ) {
+      return false;
+    }
+    return permissionSectionMatchesSearch(FILE_ATTACHMENT_SEARCH_TEXTS, permissionSearchQuery);
+  }, [permissionCategoryFilter, permissionSearchQuery]);
+
+  const hasVisiblePermissionSections =
+    showDateControlSection || showFileAttachmentSection || filteredPermissionGroups.length > 0;
+
   const isUserLimitReached = isAtOrOverEntitlementCap(accountWideUserCount, maxUsersPerPlan);
 
 const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: number) => {
@@ -1239,6 +1344,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                     </Button>
                 </div>
                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex flex-wrap items-center gap-2 min-w-0">
                     <Select value={selectedRoleForPermissions} onValueChange={(value) => setSelectedRoleForPermissions(value as UserRole)}>
                         <SelectTrigger className="w-[220px]">
                             <SelectValue placeholder="Select a role to edit" />
@@ -1251,6 +1357,40 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                             ))}
                         </SelectContent>
                     </Select>
+                    <Select value={permissionCategoryFilter} onValueChange={setPermissionCategoryFilter}>
+                        <SelectTrigger className="w-[220px]">
+                            <SelectValue placeholder="All Categories" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {permissionCategoryOptions.map((option) => (
+                                <SelectItem key={option.value} value={option.value}>
+                                    {option.label}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <div className="relative w-full sm:w-[260px]">
+                      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        value={permissionSearchQuery}
+                        onChange={(e) => setPermissionSearchQuery(e.target.value)}
+                        placeholder="Search categories & permissions…"
+                        className={cn("pl-8", permissionSearchQuery.trim() ? "pr-9" : "pr-3")}
+                      />
+                      {permissionSearchQuery.trim() ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="absolute right-0.5 top-1/2 h-8 w-8 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          aria-label="Clear search"
+                          onClick={() => setPermissionSearchQuery("")}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      ) : null}
+                    </div>
+                    </div>
                     <div className="flex items-center gap-2">
                        {hasUnsavedChanges && (
                          <>
@@ -1267,6 +1407,12 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                        </Button>
                     </div>
                  </div>
+                 {!hasVisiblePermissionSections ? (
+                    <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                      No permissions match your category or search.
+                    </p>
+                 ) : null}
+                 {showDateControlSection ? (
                  <div className="space-y-4 pt-4">
                     <h3 className="text-lg font-semibold border-b pb-2">Date Control</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
@@ -1274,8 +1420,14 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                         const key = `${action.toLowerCase()}Days` as keyof typeof dateLimitsForSelectedRole;
                         const value = dateLimitsForSelectedRole?.[key] ?? 0;
                         return (
-                            <div key={action} className="flex flex-col space-y-2 p-3 border rounded-lg">
-                            <label className="text-sm font-medium">{`Back Date ${action} Days`}</label>
+                            <div key={action} className="flex flex-col gap-2 rounded-lg border p-3">
+                            <div className="flex items-center gap-2">
+                              <label className="text-sm font-medium">{`Back Date ${action} Days`}</label>
+                              <PermissionHelpPopover
+                                label={`Back Date ${action} Days`}
+                                description={DATE_CONTROL_DAYS_HELP}
+                              />
+                            </div>
                              <Input
                                 type="number"
                                 min={0}
@@ -1284,19 +1436,20 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                 disabled={selectedRoleForPermissions === "owner"}
                                 className="w-full"
                               />
-                               <p className="text-xs text-muted-foreground">0 = disabled to modify backdated. 1–9998 = last X days. 9999 = unlimited.</p>
                             </div>
                         );
                         })}
                     </div>
                 </div>
+                ) : null}
 
-                {/* File Attachment Settings */}
+                {showFileAttachmentSection ? (
                 <div className="space-y-4 pt-4">
                     <h3 className="text-lg font-semibold border-b pb-2">File Attachment Settings</h3>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     {showFileAttachmentUpgradeBanner ? (
                     <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
-                        <p className="font-medium text-amber-800">
+                        <p className="font-semibold text-amber-900">
                             Your current plan allows max {planMaxFilesPerVoucher} file(s) per voucher.
                         </p>
                         <p className="text-amber-700">
@@ -1307,101 +1460,127 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                         </p>
                     </div>
                     ) : (
-                    <p className="text-sm text-muted-foreground rounded-lg border border-black bg-muted/30 p-3">
+                    <p className="rounded-lg border border-black bg-muted/30 p-3 text-sm font-semibold text-foreground">
                         Your current plan allows max {planMaxFilesPerVoucher} file(s) per voucher.
                     </p>
                     )}
                     
                     {/* Global Toggle */}
-                    <div className="flex items-center justify-between rounded-lg border p-4">
-                        <div className="space-y-0.5">
+                    <div className="flex items-center justify-between gap-3 rounded-lg border p-4">
+                        <div className="flex min-w-0 items-center gap-2">
                             <label className="text-base font-medium">Allow File Attachments</label>
-                            <p className="text-sm text-muted-foreground">
-                                Enable or disable file uploads across all voucher and entry forms.
-                            </p>
+                            <PermissionHelpPopover
+                                label="Allow File Attachments"
+                                description="Enable or disable file uploads across all voucher and entry forms."
+                            />
                         </div>
                         <Switch 
                             checked={allowAttachmentsGlobal} 
                             onCheckedChange={handleAllowAttachmentsGlobalChange}
                         />
                     </div>
+                    </div>
 
                     {/* Role-based File Limits */}
                     {allowAttachmentsGlobal && (
                         <div className="space-y-4 p-4 border rounded-lg">
-                            <h4 className="text-sm font-semibold">File Limits for {companyShareRoleLabel(selectedRoleForPermissions)} Role</h4>
-                            {showPlanFileLimitNotice && (
-                                <p className="text-xs text-amber-700">
-                                    Role limit is capped by plan. Effective max files is {effectiveRoleMaxFiles}.
-                                </p>
-                            )}
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h4 className="text-sm font-semibold">File Limits for {companyShareRoleLabel(selectedRoleForPermissions)} Role</h4>
+                              {showPlanFileLimitNotice ? (
+                                <PermissionHelpPopover
+                                  label={`File Limits for ${companyShareRoleLabel(selectedRoleForPermissions)} Role`}
+                                  description={`Role limit is capped by plan. Effective max files is ${effectiveRoleMaxFiles}.`}
+                                />
+                              ) : null}
+                            </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 items-stretch">
                                 {/* Max File Count */}
-                                <div className="flex min-h-[132px] h-full flex-col justify-between rounded-lg border p-3">
-                                    <label className="text-sm font-medium">Max File Count (0-{planMaxFilesPerVoucher})</label>
-                                    <Input
-                                        type="number"
-                                        min={0}
-                                        max={planMaxFilesPerVoucher}
-                                        value={effectiveRoleMaxFiles}
-                                        onChange={(e) =>
-                                          handleFileAttachmentLimitChange(
-                                            "maxFileCount",
-                                            Math.min(planMaxFilesPerVoucher, Math.max(0, Number(e.target.value)))
-                                          )
-                                        }
-                                        disabled={selectedRoleForPermissions === "owner" || !planAllowsFileAttachment}
-                                        className="w-full"
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                      Maximum number of files allowed per voucher under current plan.
-                                    </p>
+                                <div className="flex flex-col justify-center gap-2 rounded-lg border p-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <label className="text-sm font-medium">Max File Count (0-{planMaxFilesPerVoucher})</label>
+                                        <PermissionHelpPopover
+                                          label={`Max File Count (0-${planMaxFilesPerVoucher})`}
+                                          description="Maximum number of files allowed per voucher under current plan."
+                                        />
+                                      </div>
+                                      <Input
+                                          type="number"
+                                          min={0}
+                                          max={planMaxFilesPerVoucher}
+                                          value={effectiveRoleMaxFiles}
+                                          onChange={(e) =>
+                                            handleFileAttachmentLimitChange(
+                                              "maxFileCount",
+                                              Math.min(planMaxFilesPerVoucher, Math.max(0, Number(e.target.value)))
+                                            )
+                                          }
+                                          disabled={selectedRoleForPermissions === "owner" || !planAllowsFileAttachment}
+                                          className="h-9 w-16 shrink-0 px-2 text-center"
+                                      />
+                                    </div>
                                 </div>
 
                                 {/* Allow Image */}
-                                <div className="flex min-h-[132px] h-full flex-col justify-between rounded-lg border p-3">
+                                <div className="flex flex-col justify-center gap-2 rounded-lg border p-3">
                                     <div className="flex items-center justify-between gap-3">
-                                      <label className="text-sm font-medium">Allow Image Files</label>
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <label className="text-sm font-medium">Allow Image Files</label>
+                                        <PermissionHelpPopover
+                                          label="Allow Image Files"
+                                          description="Enable image file uploads."
+                                        />
+                                      </div>
                                       <Switch
                                           checked={fileAttachmentLimitsForSelectedRole.allowImage}
                                           onCheckedChange={(checked) => handleFileAttachmentLimitChange('allowImage', checked)}
                                           disabled={selectedRoleForPermissions === "owner" || effectiveRoleMaxFiles === 0 || !planAllowsFileAttachment}
                                       />
                                     </div>
-                                    <p className="text-xs text-muted-foreground">Enable image file uploads.</p>
                                 </div>
 
                                 {/* Allow PDF */}
-                                <div className="flex min-h-[132px] h-full flex-col justify-between rounded-lg border p-3">
+                                <div className="flex flex-col justify-center gap-2 rounded-lg border p-3">
                                     <div className="flex items-center justify-between gap-3">
-                                      <label className="text-sm font-medium">Allow PDF Files</label>
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <label className="text-sm font-medium">Allow PDF Files</label>
+                                        <PermissionHelpPopover
+                                          label="Allow PDF Files"
+                                          description="Enable PDF file uploads."
+                                        />
+                                      </div>
                                       <Switch
                                           checked={fileAttachmentLimitsForSelectedRole.allowPDF}
                                           onCheckedChange={(checked) => handleFileAttachmentLimitChange('allowPDF', checked)}
                                           disabled={selectedRoleForPermissions === "owner" || effectiveRoleMaxFiles === 0 || !planAllowsFileAttachment}
                                       />
                                     </div>
-                                    <p className="text-xs text-muted-foreground">Enable PDF file uploads.</p>
                                 </div>
 
                                 {/* Allow Delete Uploaded Files */}
-                                <div className="flex min-h-[132px] h-full flex-col justify-between rounded-lg border p-3">
+                                <div className="flex flex-col justify-center gap-2 rounded-lg border p-3">
                                     <div className="flex items-center justify-between gap-3">
-                                      <label className="text-sm font-medium">Allow File Delete</label>
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <label className="text-sm font-medium">Allow File Delete</label>
+                                        <PermissionHelpPopover
+                                          label="Allow File Delete"
+                                          description="Allow deleting uploaded files from voucher attachments."
+                                        />
+                                      </div>
                                       <Switch
                                           checked={!!fileAttachmentLimitsForSelectedRole.allowDelete}
                                           onCheckedChange={(checked) => handleFileAttachmentLimitChange('allowDelete', checked)}
                                           disabled={selectedRoleForPermissions === "owner" || effectiveRoleMaxFiles === 0 || !planAllowsFileAttachment}
                                       />
                                     </div>
-                                    <p className="text-xs text-muted-foreground">Allow deleting uploaded files from voucher attachments.</p>
                                 </div>
                             </div>
                         </div>
                     )}
                 </div>
+                ) : null}
 
-                {PermissionGroups.map((group) => (
+                {filteredPermissionGroups.map((group) => (
                     <div key={group.title} className="space-y-4 pt-4">
                         <h3 className="text-lg font-semibold border-b pb-2">{group.title}</h3>
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">

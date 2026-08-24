@@ -27,6 +27,7 @@ import {
   ChevronDown,
   Columns3,
   Pencil,
+  Package,
 } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
@@ -113,6 +114,11 @@ import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { PartyFilterDropdown } from "@/components/party/PartyFilterDropdown";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Input } from "../ui/input";
+import { GroupDetailNestedNameHeader } from "@/components/entity/GroupDetailNestedNameHeader";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { EditItemDialog } from "./EditItemDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -164,6 +170,7 @@ export function ItemGroupDetails({
   onDateRangeChange,
   userNames,
   transactions,
+  groupMemberFilterId = null,
 }: {
   group: ItemGroup;
   allGroups: ItemGroup[];
@@ -178,12 +185,36 @@ export function ItemGroupDetails({
   onDateRangeChange: (dateRange: DateRange | undefined) => void;
   userNames: Record<string, string>;
   transactions: any[];
+  groupMemberFilterId?: string | null;
 }) {
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company, companyId } = useCompany();
   const { processedItems, processedAccounts, processedParties, journalAccountNames, vouchers } = useVouchers();
-  const itemsInGroup = useMemo(() => items.filter((i) => i.groupId === group.id), [items, group.id]);
+  const itemsInGroup = useMemo(() => {
+    if (groupMemberFilterId) {
+      const fromProp = items.filter((i) => i.id === groupMemberFilterId);
+      if (fromProp.length > 0) return fromProp;
+      const fromProcessed = processedItems.filter((i) => i.id === groupMemberFilterId);
+      if (fromProcessed.length > 0) return fromProcessed;
+    }
+    if (group.id === "ungrouped") {
+      return items.filter((i) => !i.groupId || i.groupId === "ungrouped_item");
+    }
+    if (items.length > 0) return items;
+    return processedItems.filter((i) => i.groupId === group.id);
+  }, [items, group.id, groupMemberFilterId, processedItems]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
+
+  const selectedMemberItem = useMemo(() => {
+    if (!groupMemberFilterId) return null;
+    return processedItems.find((item) => item.id === groupMemberFilterId) ?? null;
+  }, [groupMemberFilterId, processedItems]);
+
+  const selectedMemberAttachmentUrl = useMemo(
+    () => trimEntityFileUrlForPreview(selectedMemberItem?.fileUrls?.[0]),
+    [selectedMemberItem?.fileUrls, selectedMemberItem?.id]
+  );
+
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
   const router = useRouter();
@@ -238,7 +269,7 @@ export function ItemGroupDetails({
     periodCr: allPeriodCr,
     closingBalance: allClosingBalance,
   } = useTransactions(
-    { ...group, items: items },
+    { ...group, items: itemsInGroup },
     "group",
     dateRange,
     stockView,
@@ -253,10 +284,9 @@ export function ItemGroupDetails({
 
   // Filter parties to show only those with transactions involving items in this group
   const partiesWithTransactions = useMemo(() => {
-    if (!items || items.length === 0 || !processedParties || !allProcessedTransactions) return [];
-    
-    // Get item IDs in this group
-    const groupItemIds = new Set(items.map(item => item.id));
+    if (!itemsInGroup.length || !processedParties || !allProcessedTransactions) return [];
+
+    const groupItemIds = new Set(itemsInGroup.map((item) => item.id));
     
     // Get unique party IDs that have transactions with items in this group
     const partyIdsWithTransactions = new Set<string>();
@@ -274,7 +304,7 @@ export function ItemGroupDetails({
     
     // Return only parties that have transactions with items in this group
     return processedParties.filter(party => partyIdsWithTransactions.has(party.id));
-  }, [items, processedParties, allProcessedTransactions]);
+  }, [itemsInGroup, processedParties, allProcessedTransactions]);
   // Provide party-id -> party-name map so Item Group "Party" column can resolve names.
   const partyNamesMap = useMemo(
     () => Object.fromEntries((processedParties || []).map((p: any) => [p.id, p.name])),
@@ -506,8 +536,8 @@ export function ItemGroupDetails({
     useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_DEFAULT, "10");
 
   const handleOpenNoteDialog = (itemId?: string) => {
-    if (items.length === 1) {
-      setNoteEntityId(items[0].id);
+    if (itemsInGroup.length === 1) {
+      setNoteEntityId(itemsInGroup[0].id);
     } else if (itemId) {
       setNoteEntityId(itemId);
     }
@@ -913,14 +943,14 @@ export function ItemGroupDetails({
             <DialogHeader>
               <DialogTitle>Add a New Note for an Item in {group.name}</DialogTitle>
               <DialogDescription>
-                {items.length > 1 ? "Select which item this note applies to." : "Record a new note for this item."}
+                {itemsInGroup.length > 1 ? "Select which item this note applies to." : "Record a new note for this item."}
               </DialogDescription>
             </DialogHeader>
             <div className="flex-1 min-h-0">
-              {items.length > 1 && !noteEntityId && (
+              {itemsInGroup.length > 1 && !noteEntityId && (
                 <div className="flex flex-col gap-2 p-4">
                   <p className="font-semibold">Select an item for the note:</p>
-                  {items.map((item) => (
+                  {itemsInGroup.map((item) => (
                     <Button key={item.id} variant="outline" onClick={() => setNoteEntityId(item.id)}>
                       {item.name}
                     </Button>
@@ -974,27 +1004,59 @@ export function ItemGroupDetails({
                 </Button>
               )}
               <div className={LEDGER_HEADER_AVATAR_CN}>
-                <Avatar className="h-12 w-12 text-lg">
-                  <AvatarFallback className="bg-muted text-muted-foreground">
-                    {getInitials(group.name)}
-                  </AvatarFallback>
-                </Avatar>
-                {group.id !== "ungrouped" && (
-                  <EditItemGroupDialog
-                    group={group}
-                    allGroups={allGroups}
-                    onGroupUpdated={onGroupUpdated}
-                    onGroupDeleted={onGroupDeleted}
-                    hasAccounts={itemsInGroup.length > 0 || childGroups.length > 0}
-                  >
-                    <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
-                      <Pencil className="h-3 w-3" />
-                    </button>
-                  </EditItemGroupDialog>
+                {selectedMemberItem ? (
+                  <>
+                    <EntityFileAttachmentHover
+                      fileUrl={selectedMemberAttachmentUrl}
+                      triggerClassName="inline-flex rounded-full"
+                    >
+                      <ResolvedEntityAvatar
+                        className="h-12 w-12 flex-shrink-0 text-lg"
+                        companyId={selectedMemberItem.companyId}
+                        src={selectedMemberAttachmentUrl ?? undefined}
+                        alt={selectedMemberItem.name}
+                        fallbackSlot={<Package className="h-6 w-6 text-muted-foreground" />}
+                      />
+                    </EntityFileAttachmentHover>
+                    <EditItemDialog
+                      item={selectedMemberItem}
+                      onItemUpdated={onItemUpdated}
+                      onItemDeleted={onItemUpdated}
+                      hasTransactions={processedTransactions.length > 0}
+                    >
+                      <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    </EditItemDialog>
+                  </>
+                ) : (
+                  <>
+                    <Avatar className="h-12 w-12 text-lg">
+                      <AvatarFallback className="bg-muted text-muted-foreground">
+                        {getInitials(group.name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    {group.id !== "ungrouped" && (
+                      <EditItemGroupDialog
+                        group={group}
+                        allGroups={allGroups}
+                        onGroupUpdated={onGroupUpdated}
+                        onGroupDeleted={onGroupDeleted}
+                        hasAccounts={itemsInGroup.length > 0 || childGroups.length > 0}
+                      >
+                        <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      </EditItemGroupDialog>
+                    )}
+                  </>
                 )}
               </div>
               <div className={LEDGER_HEADER_NAME_CARD_CN}>
-                <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
+                <GroupDetailNestedNameHeader
+                  groupName={group.name}
+                  memberName={selectedMemberItem?.name ?? null}
+                />
               </div>
               <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
                 <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
@@ -1087,31 +1149,6 @@ export function ItemGroupDetails({
                   onSelectionChange={setSelectedPartyIds}
                 />
               )}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className={cn("w-[200px] justify-between", LEDGER_HEADER_PILL_CN)}>
-                    <span className="truncate">Members ({items.length})</span>
-                    <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-[320px] max-h-72 overflow-y-auto">
-                  {items.map((p) => (
-                    <DropdownMenuItem key={p.id} disabled>
-                      <div className="flex w-full items-center justify-between gap-3">
-                        <span className="truncate text-left">{p.name}</span>
-                        <span
-                          className={cn(
-                            "shrink-0 text-xs font-semibold tabular-nums",
-                            (Number((p as any).balance) || 0) >= 0 ? "text-green-600" : "text-red-600"
-                          )}
-                        >
-                          {formatCurrency(Number((p as any).balance) || 0, { showDrCr: true })}
-                        </span>
-                      </div>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
               <Button
                 variant="outline"
                 size="sm"
@@ -1265,16 +1302,16 @@ export function ItemGroupDetails({
               Add a New Note for an Item in {group.name}
             </DialogTitle>
             <DialogDescription>
-              {items.length > 1
+              {itemsInGroup.length > 1
                 ? "Select which item this note applies to."
                 : "Record a new note for this item."}
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 min-h-0">
-            {items.length > 1 && !noteEntityId && (
+            {itemsInGroup.length > 1 && !noteEntityId && (
               <div className="flex flex-col gap-2 p-4">
                 <p className="font-semibold">Select an item for the note:</p>
-                {items.map((item) => (
+                {itemsInGroup.map((item) => (
                   <Button
                     key={item.id}
                     variant="outline"

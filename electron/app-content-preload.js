@@ -1,5 +1,14 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+/** Wake/focus: main process bhejta hai — renderer sync (StaticFastResumeSyncManager) background me. */
+ipcRenderer.on("pl-live-sync-resume", (_event, payload) => {
+  try {
+    window.dispatchEvent(
+      new CustomEvent("pocket-ledger-electron-resume", { detail: payload || {} })
+    );
+  } catch (_) {}
+});
+
 function readAppBootSessionId() {
   try {
     return String(ipcRenderer.sendSync("pl-get-app-boot-session-id") || "");

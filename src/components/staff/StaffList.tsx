@@ -4,12 +4,13 @@
 import type { Staff } from "@/components/staff/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils"
-import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
-import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
+import { masterListShellCn, masterListRowUnselectedCn, MASTER_LIST_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN } from "@/lib/masterListChrome";
 import { useDate } from "@/hooks/useDate";
 import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { MasterListRow } from "@/components/ui/master-list-row";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { MasterListNameTooltip } from "@/components/entity/MasterListNameTooltip";
+import { MasterAccountFreezeListBadge } from "@/components/masterAccountFreeze/MasterAccountFreezeListBadge";
+import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { Briefcase } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -140,7 +141,8 @@ export function StaffList({
                         triggerClassName="inline-flex shrink-0 rounded-full"
                       >
                         <ResolvedEntityAvatar
-                          className="h-8 w-8 text-xs"
+                          className={MASTER_LIST_AVATAR_CN}
+                          fallbackClassName={MASTER_LIST_AVATAR_FALLBACK_CN}
                           companyId={staffMember.companyId}
                           src={attachmentPreviewUrl ?? undefined}
                           alt={staffMember.name}
@@ -157,23 +159,26 @@ export function StaffList({
                         </span>
                       )}
                     </div>
-                    <Tooltip>
-                      {/* asChild hata — motion layout + span ref merge par Radix setRef loop */}
-                      <TooltipTrigger
-                        type="button"
-                        data-pl-list-name=""
-                        onPointerDown={(e) => e.stopPropagation()}
-                        className={masterListNameTriggerCn}
-                      >
-                        {highlightSearch ? highlightQueryInText(staffMember.name, highlightSearch) : staffMember.name}
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>{staffMember.name}</p>
-                        {(pendingApprovalByStaffId[staffMember.id] ?? 0) > 0 && (
-                          <p className="text-xs text-muted-foreground">{pendingApprovalByStaffId[staffMember.id]} pending approval</p>
-                        )}
-                      </TooltipContent>
-                    </Tooltip>
+                    <div className="flex min-w-0 flex-col">
+                    <MasterListNameTooltip
+                      measureKey={staffMember.name}
+                      tooltipContent={
+                        <>
+                          <p>{staffMember.name}</p>
+                          {(pendingApprovalByStaffId[staffMember.id] ?? 0) > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              {pendingApprovalByStaffId[staffMember.id]} pending approval
+                            </p>
+                          )}
+                        </>
+                      }
+                    >
+                      {highlightSearch ? highlightQueryInText(staffMember.name, highlightSearch) : staffMember.name}
+                    </MasterListNameTooltip>
+                    {readMasterAccountFrozen(staffMember) ? (
+                      <MasterAccountFreezeListBadge className="mt-0.5" />
+                    ) : null}
+                    </div>
                   </div>
                   <p className={cn(
                     "pl-master-list-row-amount ml-2",

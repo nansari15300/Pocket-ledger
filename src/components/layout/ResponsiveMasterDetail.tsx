@@ -46,7 +46,7 @@ export function ResponsiveMasterDetail({
   hasSelectedItem?: boolean;
   /** Callback to go back to list when showing detail on mobile (Back button) */
   onBackToList?: () => void;
-  mobileSelectionLabel?: string | null;
+  mobileSelectionLabel?: React.ReactNode;
   mobileSelectionLabelClassName?: string;
   mobileDetailHeaderEnd?: React.ReactNode;
   listChromeRouteKey?: MasterDetailListRouteKey;
@@ -83,15 +83,19 @@ export function ResponsiveMasterDetail({
                   <span className="text-muted-foreground/55 shrink-0 select-none" aria-hidden>
                     ·
                   </span>
-                  <span
-                    className={cn(
-                      mdc.masterSelectionName,
-                      mobileSelectionLabelClassName ?? "text-muted-foreground"
-                    )}
-                    title={mobileSelectionLabel}
-                  >
-                    {mobileSelectionLabel}
-                  </span>
+                  {typeof mobileSelectionLabel === "string" ? (
+                    <span
+                      className={cn(
+                        mdc.masterSelectionName,
+                        mobileSelectionLabelClassName ?? "text-muted-foreground"
+                      )}
+                      title={mobileSelectionLabel}
+                    >
+                      {mobileSelectionLabel}
+                    </span>
+                  ) : (
+                    mobileSelectionLabel
+                  )}
                 </>
               ) : null}
             </div>

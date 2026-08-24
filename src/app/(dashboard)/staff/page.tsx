@@ -1,7 +1,7 @@
 
 "use client";
 
-import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { doc, getDoc } from "firebase/firestore";
@@ -25,6 +25,8 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { resolveMasterListSelection } from "@/lib/masterEntityLiveUpdate";
 import usePermissions from "@/hooks/usePermissions";
 import type { DateRange } from "@/components/ui/ad-calendar";
+import type { GroupListSelectOptions } from "@/lib/groupListExpand";
+import { MobileMasterDetailNestedName } from "@/components/entity/MobileMasterDetailNestedName";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
@@ -135,6 +137,7 @@ function StaffPageContent() {
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  const [groupMemberFilterId, setGroupMemberFilterId] = useState<string | null>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [voucherDefaultTab, setVoucherDefaultTab] = useState<'add_salary' | 'payment_out'>('add_salary');
 
@@ -148,15 +151,30 @@ function StaffPageContent() {
     if (!patch?.id || !selectedStaffRaw || selectedStaffRaw.id !== patch.id) return;
     setSelected({ ...selectedStaffRaw, ...patch });
   }, [setSelected, selectedStaffRaw]);
-  const mobileStaffSelectionLabel = useMemo(() => {
-    if (!selected) return null;
-    const name = (selected as Staff | StaffGroup).name;
-    return name && String(name).trim() ? String(name).trim() : null;
-  }, [selected]);
   const mobileStaffSelectionLabelClassName = useMemo(() => {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as Staff | StaffGroup).balance);
   }, [selected]);
+  const mobileStaffSelectionLabel = useMemo((): ReactNode => {
+    if (!selected) return null;
+    if (activeView !== "groups") {
+      const name = (selected as Staff).name;
+      return name && String(name).trim() ? String(name).trim() : null;
+    }
+    const group = selected as StaffGroup;
+    if (groupMemberFilterId) {
+      const member = processedStaff.find((staff) => staff.id === groupMemberFilterId);
+      return (
+        <MobileMasterDetailNestedName
+          groupName={group.name}
+          memberName={member?.name ?? null}
+          toneClassName={mobileStaffSelectionLabelClassName}
+        />
+      );
+    }
+    const name = group.name;
+    return name && String(name).trim() ? String(name).trim() : null;
+  }, [selected, activeView, groupMemberFilterId, processedStaff, mobileStaffSelectionLabelClassName]);
   const mobileStaffDetailHeaderAvatar = useMemo(() => {
     if (!isMobile || !selected) return null;
     const selectedEntity = selected as Staff | StaffGroup;
@@ -372,10 +390,15 @@ function StaffPageContent() {
     }).length;
   }, [processedStaffGroupsForList, searchTerm]);
 
-  const handleSelect = useCallback((item: Staff | StaffGroup) => {
-    const isStaffMember = "ownerId" in item;
+  const handleSelect = useCallback((item: Staff | StaffGroup, options?: GroupListSelectOptions) => {
+    // Staff rows have `groupId`; staff *groups* have `ownerId` too — `"ownerId" in item` breaks child pick.
+    const isStaffMember = "groupId" in item;
     pendingStaffSelectIdRef.current = item.id;
-    if (!isStaffMember) {
+    if (isStaffMember) {
+      setGroupMemberFilterId(null);
+      if (activeView !== "staff") setActiveView("staff");
+    } else {
+      setGroupMemberFilterId(options?.memberId ?? null);
       setActiveView("groups");
     }
     setSelected(item);
@@ -392,7 +415,7 @@ function StaffPageContent() {
     if (useQueryNav) {
       router.replace(path, { scroll: false });
     }
-  }, [router, setSelected, useQueryNav, setActiveView]);
+  }, [router, setSelected, useQueryNav, setActiveView, activeView]);
   
   const staffForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
@@ -401,6 +424,23 @@ function StaffPageContent() {
     }
     return processedStaff.filter(p => p.groupId === selectedGroup.id);
   }, [selectedGroup, processedStaff]);
+
+  const staffForGroupDetails = useMemo(() => {
+    if (!groupMemberFilterId) return staffForSelectedGroup;
+    return staffForSelectedGroup.filter((s) => s.id === groupMemberFilterId);
+  }, [staffForSelectedGroup, groupMemberFilterId]);
+
+  const staffGroupMembersByGroupId = useMemo(() => {
+    const map: Record<string, Staff[]> = {};
+    for (const g of processedStaffGroupsForList) {
+      if (g.id === "ungrouped") {
+        map[g.id] = processedStaff.filter((s) => !s.groupId || s.groupId === "ungrouped_staff");
+      } else {
+        map[g.id] = processedStaff.filter((s) => s.groupId === g.id);
+      }
+    }
+    return map;
+  }, [processedStaffGroupsForList, processedStaff]);
 
   if (vouchersLoading) {
     return <LoadingSpinner />;
@@ -536,6 +576,9 @@ function StaffPageContent() {
           selectedGroup={selectedGroup}
           searchTerm={searchTerm}
           pendingApprovalByGroupId={pendingApprovalByStaffGroupId}
+          pendingApprovalByMemberId={pendingApprovalByStaffId}
+          groupMembersByGroupId={staffGroupMembersByGroupId}
+          selectedGroupMemberFilterId={groupMemberFilterId}
           getItemHref={useQueryNav ? (g) => `/staff?view=groups&selected=${g.id}` : undefined}
           quickFilter={groupListQuickFilter}
           onQuickFilterChange={setGroupListQuickFilter}
@@ -560,10 +603,11 @@ function StaffPageContent() {
     />
   ) : activeView === "groups" && selectedGroup ? (
     <StaffGroupDetails
-      key={`group-${selectedGroup.id}`}
+      key={`group-${selectedGroup.id}:${groupMemberFilterId ?? "all"}`}
       group={selectedGroup}
       allGroups={processedStaffGroups}
-      staff={staffForSelectedGroup}
+      staff={staffForGroupDetails}
+      groupMemberFilterId={groupMemberFilterId}
       onGroupUpdated={() => {}}
       onGroupDeleted={() => setSelected(null)}
       onStaffUpdated={handleStaffUpdated}

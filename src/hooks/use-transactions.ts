@@ -905,6 +905,11 @@ export function useTransactions(
                         memberIds.has(v.purchaseAccountId) ||
                         memberIds.has(v.fromAccountId) ||
                         memberIds.has(v.toAccountId) ||
+                        memberIds.has(String(v.interCompanyCounterpartyPartyId || "").trim()) ||
+                        (Array.isArray(v.interCompanyLegs) &&
+                          v.interCompanyLegs.some((leg: any) =>
+                            memberIds.has(String(leg?.accountId || "").trim())
+                          )) ||
                         (v.type === "note" && memberIds.has(v.entityId));
 
                     // Member-linked vouchers should always appear in group details.

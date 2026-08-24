@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { MobileMasterDetailNestedName } from "@/components/entity/MobileMasterDetailNestedName";
 import { mlc } from "@/lib/mobileListChrome";
 import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
 import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
@@ -47,6 +48,7 @@ import {
   readMasterDetailLocationQuery,
 } from "@/lib/masterDetailTabChange";
 import type { DateRange } from "@/components/ui/ad-calendar";
+import type { GroupListSelectOptions } from "@/lib/groupListExpand";
 import { isSystemParentGroup } from "@/lib/system-groups";
 
 // Custom Hook
@@ -157,6 +159,7 @@ function TaxPageContent() {
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [taxDetailsDateRange, setTaxDetailsDateRange] = useState<DateRange | undefined>(undefined);
   const [groupDetailsDateRange, setGroupDetailsDateRange] = useState<DateRange | undefined>(undefined);
+  const [groupMemberFilterId, setGroupMemberFilterId] = useState<string | null>(null);
 
   const selectedTaxRaw = activeView === 'taxes' ? selected as Tax : null;
   const selectedTax = useMemo(
@@ -168,15 +171,30 @@ function TaxPageContent() {
     if (!patch?.id || !selectedTaxRaw || selectedTaxRaw.id !== patch.id) return;
     setSelected({ ...selectedTaxRaw, ...patch });
   }, [setSelected, selectedTaxRaw]);
-  const mobileTaxSelectionLabel = useMemo(() => {
-    if (!selected) return null;
-    const name = (selected as Tax | TaxGroup).name;
-    return name && String(name).trim() ? String(name).trim() : null;
-  }, [selected]);
   const mobileTaxSelectionLabelClassName = useMemo(() => {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as Tax | TaxGroup).balance);
   }, [selected]);
+  const mobileTaxSelectionLabel = useMemo((): ReactNode => {
+    if (!selected) return null;
+    if (activeView !== "groups") {
+      const name = (selected as Tax).name;
+      return name && String(name).trim() ? String(name).trim() : null;
+    }
+    const group = selected as TaxGroup;
+    if (groupMemberFilterId) {
+      const member = processedTaxes.find((tax) => tax.id === groupMemberFilterId);
+      return (
+        <MobileMasterDetailNestedName
+          groupName={group.name}
+          memberName={member?.name ?? null}
+          toneClassName={mobileTaxSelectionLabelClassName}
+        />
+      );
+    }
+    const name = group.name;
+    return name && String(name).trim() ? String(name).trim() : null;
+  }, [selected, activeView, groupMemberFilterId, processedTaxes, mobileTaxSelectionLabelClassName]);
   const mobileTaxDetailHeaderAvatar = useMemo(() => {
     if (!isMobile || !selected) return null;
     const selectedEntity = selected as Tax | TaxGroup;
@@ -382,12 +400,17 @@ function TaxPageContent() {
       : processedTaxGroups.reduce((acc, group) => acc + group.balance, 0);
   }, [activeView, processedTaxes, processedTaxGroups]);
 
-  const handleSelect = useCallback((item: Tax | TaxGroup) => {
+  const handleSelect = useCallback((item: Tax | TaxGroup, options?: GroupListSelectOptions) => {
     pendingTaxSelectIdRef.current = item.id;
     setSelected(item);
     const isTax = "rate" in item;
-    if (!isTax) setActiveView("groups");
-    else if (activeView !== "taxes") setActiveView("taxes");
+    if (isTax) {
+      setGroupMemberFilterId(null);
+    } else {
+      setGroupMemberFilterId(options?.memberId ?? null);
+      setActiveView("groups");
+    }
+    if (isTax && activeView !== "taxes") setActiveView("taxes");
     const path = isTax
       ? `/tax?selected=${encodeURIComponent(item.id)}`
       : `/tax?view=groups&selected=${encodeURIComponent(item.id)}`;
@@ -456,6 +479,23 @@ function TaxPageContent() {
     showApproveOnList,
     pendingApprovalByTaxGroupId,
   ]);
+
+  const taxesForGroupDetails = useMemo(() => {
+    if (!groupMemberFilterId) return taxesForSelectedGroup;
+    return taxesForSelectedGroup.filter((t) => t.id === groupMemberFilterId);
+  }, [taxesForSelectedGroup, groupMemberFilterId]);
+
+  const taxGroupMembersByGroupId = useMemo(() => {
+    const map: Record<string, Tax[]> = {};
+    for (const g of processedTaxGroupsForList) {
+      if (g.id === "ungrouped") {
+        map[g.id] = processedTaxes.filter((t) => !t.groupId || t.groupId === "ungrouped_tax");
+      } else {
+        map[g.id] = processedTaxes.filter((t) => t.groupId === g.id);
+      }
+    }
+    return map;
+  }, [processedTaxGroupsForList, processedTaxes]);
 
   // Filtered group count (matches TaxGroupList: exclude report-only + system groups; apply search)
   const filteredGroupCount = useMemo(() => {
@@ -582,6 +622,9 @@ function TaxPageContent() {
           selectedGroup={selectedGroup}
           searchTerm={searchTerm}
           pendingApprovalByGroupId={pendingApprovalByTaxGroupId}
+          pendingApprovalByMemberId={pendingApprovalByTaxId}
+          groupMembersByGroupId={taxGroupMembersByGroupId}
+          selectedGroupMemberFilterId={groupMemberFilterId}
           getItemHref={useQueryNav ? (g) => `/tax?view=groups&selected=${g.id}` : undefined}
           quickFilter={groupListQuickFilter}
           onQuickFilterChange={setGroupListQuickFilter}
@@ -597,7 +640,7 @@ function TaxPageContent() {
         <TaxDetails tax={selectedTax} allTaxes={processedTaxes} onTaxUpdated={handleTaxUpdated} onTaxDeleted={() => setSelected(null)} dateRange={taxDetailsDateRange} onDateRangeChange={setTaxDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} />
       )}
       {activeView === 'groups' && selectedGroup && (
-        <TaxGroupDetails group={selectedGroup} allGroups={processedTaxGroups} taxes={taxesForSelectedGroup} onGroupUpdated={() => {}} onGroupDeleted={() => setSelected(null)} onTaxUpdated={handleTaxUpdated} dateRange={groupDetailsDateRange} onDateRangeChange={setGroupDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} />
+        <TaxGroupDetails key={`${selectedGroup.id}:${groupMemberFilterId ?? "all"}`} group={selectedGroup} allGroups={processedTaxGroups} taxes={taxesForGroupDetails} groupMemberFilterId={groupMemberFilterId} onGroupUpdated={() => {}} onGroupDeleted={() => setSelected(null)} onTaxUpdated={handleTaxUpdated} dateRange={groupDetailsDateRange} onDateRangeChange={setGroupDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} />
       )}
       {!selected && <div className="p-6 text-center text-muted-foreground">Select an item to see details</div>}
     </>

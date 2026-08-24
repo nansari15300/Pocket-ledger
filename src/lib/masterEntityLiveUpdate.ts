@@ -28,6 +28,8 @@ export function masterEntityProfileUiFields(row: Record<string, unknown> | null 
     String(row.isSpecial ?? ""),
     String(row.isClearing ?? ""),
     String(row.allowVoucherMinusBalance ?? ""),
+    String(row.isFrozen ?? ""),
+    String(row.freezeMessage ?? ""),
     useFor,
     String(row.fileUrl ?? ""),
     String(row.avatarUrl ?? ""),

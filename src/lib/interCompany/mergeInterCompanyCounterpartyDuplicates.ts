@@ -6,11 +6,8 @@
 import { collection, getDocs } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import {
+  interCompanyClearingPartyDedupeKeys,
   isInterCompanyCompanyClearingParty,
-  isInterCompanyAccountClearingPartyName,
-  isInterCompanyCompanyClearingPartyName,
-  normalizeInterCompanyClearingDedupeKey,
-  readInterCompanyClearingMode,
 } from "@/lib/interCompany/interCompanyCounterpartyPartyName";
 import { purgeInterCompanyCounterpartyPartyIfUnused } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
@@ -31,8 +28,11 @@ function remapLegsAccountId(legs: unknown, fromId: string, toId: string): unknow
 
 function pickWinner(rows: PartyRow[]): PartyRow {
   const sorted = [...rows].sort((a, b) => {
-    const rank = (id: string) =>
-      String(id).startsWith("ic_peer_") || String(id).startsWith("ic_acct_") ? 1 : 0;
+    const rank = (id: string) => {
+      if (String(id).startsWith("ic_acct_")) return 2;
+      if (String(id).startsWith("ic_peer_")) return 1;
+      return 0;
+    };
     const aCanon = rank(String(a.id));
     const bCanon = rank(String(b.id));
     if (aCanon !== bCanon) return bCanon - aCanon;
@@ -44,7 +44,7 @@ function pickWinner(rows: PartyRow[]): PartyRow {
   return sorted[0]!;
 }
 
-/** Union party ids that share peer+mode (and entity for A→A). Company/Account never merge. */
+/** Union party ids — same peer+account (C→C / A→A duplicates). */
 export function groupDuplicateInterCompanyClearingPartyIds(
   parties: Array<{
     id: string;
@@ -80,28 +80,7 @@ export function groupDuplicateInterCompanyClearingPartyIds(
 
   const byKey = new Map<string, string>();
   for (const p of clearing) {
-    const mode = readInterCompanyClearingMode(p);
-    const keys: string[] = [];
-    const peer = String(p.interCompanyPeerCompanyId || "").trim();
-    if (mode === "account") {
-      const kind = String(p.interCompanyPeerEntityKind || "")
-        .trim()
-        .toLowerCase();
-      const ent = String(p.interCompanyPeerEntityId || "").trim();
-      if (peer && kind && ent) keys.push(`account|peer:${peer}|ent:${kind}:${ent}`);
-      const nameKey = normalizeInterCompanyClearingDedupeKey(p.name);
-      if (peer && nameKey && isInterCompanyAccountClearingPartyName(p.name)) {
-        keys.push(`account|peer:${peer}|name:${nameKey}`);
-      }
-    } else {
-      if (peer) keys.push(`company|peer:${peer}`);
-      const nameKey = normalizeInterCompanyClearingDedupeKey(p.name);
-      if (nameKey && isInterCompanyCompanyClearingPartyName(p.name)) {
-        keys.push(`company|name:${nameKey}`);
-      }
-    }
-    if (keys.length === 0) keys.push(`id:${p.id}`);
-
+    const keys = interCompanyClearingPartyDedupeKeys(p);
     for (const key of keys) {
       const prev = byKey.get(key);
       if (prev) union(prev, p.id);

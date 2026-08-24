@@ -7,6 +7,9 @@ import { cn } from "@/lib/utils";
 import { Receipt } from "lucide-react";
 import { useDate } from "@/hooks/useDate";
 import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { MasterListNameTooltip } from "@/components/entity/MasterListNameTooltip";
+import { MasterAccountFreezeListBadge } from "@/components/masterAccountFreeze/MasterAccountFreezeListBadge";
+import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { Tooltip, TooltipProvider, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import React, { useMemo, useState } from "react";
@@ -16,9 +19,8 @@ import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
-import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows"
-import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
-import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
+import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows";
+import { masterListShellCn, masterListRowUnselectedCn, MASTER_LIST_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN } from "@/lib/masterListChrome";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
@@ -107,7 +109,8 @@ export function TaxList({
                             <div className="relative flex-shrink-0">
                               <EntityFileAttachmentHover fileUrl={attachmentPreviewUrl} triggerClassName="inline-flex shrink-0 rounded-md">
                                 <ResolvedEntityAvatar
-                                  className="h-8 w-8 text-sm bg-muted text-muted-foreground"
+                                  className={cn(MASTER_LIST_AVATAR_CN, "text-sm")}
+                                  fallbackClassName={MASTER_LIST_AVATAR_FALLBACK_CN}
                                   src={attachmentPreviewUrl ?? undefined}
                                   alt={tax.name}
                                   fallbackSlot={<Receipt className="h-4 w-4" />}
@@ -123,23 +126,27 @@ export function TaxList({
                                 </span>
                               )}
                             </div>
-                            <Tooltip>
-                          {/* asChild hata — motion layout + span ref merge par Radix setRef loop */}
-                          <TooltipTrigger
-                            type="button"
-                            data-pl-list-name=""
-                            onPointerDown={(e) => e.stopPropagation()}
-                            className={masterListNameTriggerCn}
-                          >
-                            {highlightSearch ? highlightQueryInText(tax.name, highlightSearch) : tax.name}
-                          </TooltipTrigger>
-                          <TooltipContent side="right">
-                            <p className="font-medium">{tax.name}</p>
-                            {(pendingApprovalByTaxId[tax.id] ?? 0) > 0 && (
-                              <p className="text-xs text-muted-foreground">{pendingApprovalByTaxId[tax.id]} pending approval</p>
-                            )}
-                          </TooltipContent>
-                        </Tooltip>
+                            <div className="flex min-w-0 flex-col">
+                            <MasterListNameTooltip
+                              measureKey={tax.name}
+                              side="right"
+                              tooltipContent={
+                                <>
+                                  <p className="font-medium">{tax.name}</p>
+                                  {(pendingApprovalByTaxId[tax.id] ?? 0) > 0 && (
+                                    <p className="text-xs text-muted-foreground">
+                                      {pendingApprovalByTaxId[tax.id]} pending approval
+                                    </p>
+                                  )}
+                                </>
+                              }
+                            >
+                              {highlightSearch ? highlightQueryInText(tax.name, highlightSearch) : tax.name}
+                            </MasterListNameTooltip>
+                            {readMasterAccountFrozen(tax) ? (
+                              <MasterAccountFreezeListBadge className="mt-0.5" />
+                            ) : null}
+                            </div>
                       </div>
 
                       <Tooltip>

@@ -4,7 +4,7 @@ import * as React from "react";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills } from "@/components/ui/LedgerViewModePills";
-import { Edit, Printer, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, ChevronDown, Columns3, Search, Pencil } from "lucide-react";
+import { Edit, Printer, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, ChevronDown, Columns3, Search, Pencil, Briefcase } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
@@ -77,6 +77,11 @@ import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useVouchers } from "@/hooks/useVouchers";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { Avatar, AvatarFallback } from "../ui/avatar";
+import { GroupDetailNestedNameHeader } from "@/components/entity/GroupDetailNestedNameHeader";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { EditStaffDialog } from "./EditStaffDialog";
 import { Input } from "../ui/input";
 import {
   DropdownMenu,
@@ -128,6 +133,7 @@ export function StaffGroupDetails({
   onDateRangeChange,
   onBack,
   userNames,
+  groupMemberFilterId = null,
 }: {
   group: StaffGroup;
   allGroups: StaffGroup[];
@@ -139,6 +145,7 @@ export function StaffGroupDetails({
   onDateRangeChange: (dateRange: DateRange | undefined) => void;
   userNames?: Record<string, string>;
   onBack?: () => void;
+  groupMemberFilterId?: string | null;
 }) {
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company, companyId } = useCompany();
@@ -152,6 +159,16 @@ export function StaffGroupDetails({
     return staff.filter((s) => s.groupId === group.id);
   }, [staff, group.id]);
   const childGroups = useMemo(() => allGroups.filter((g) => g.parentId === group.id), [allGroups, group.id]);
+
+  const selectedMemberStaff = useMemo(() => {
+    if (!groupMemberFilterId) return null;
+    return processedStaff.find((member) => member.id === groupMemberFilterId) ?? null;
+  }, [groupMemberFilterId, processedStaff]);
+
+  const selectedMemberAttachmentUrl = useMemo(
+    () => trimEntityFileUrlForPreview(selectedMemberStaff?.fileUrl),
+    [selectedMemberStaff?.fileUrl, selectedMemberStaff?.id]
+  );
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
@@ -920,23 +937,56 @@ export function StaffGroupDetails({
                 </Button>
               )}
               <div className={LEDGER_HEADER_AVATAR_CN}>
-                <Avatar className="h-12 w-12 text-lg">
-                  <AvatarFallback className="bg-muted text-muted-foreground">{getInitials(group.name)}</AvatarFallback>
-                </Avatar>
-                <EditStaffGroupDialog
-                  group={group}
-                  allGroups={allGroups}
-                  onGroupUpdated={onGroupUpdated}
-                  onGroupDeleted={onGroupDeleted}
-                  hasAccounts={staffInGroup.length > 0 || childGroups.length > 0}
-                >
-                  <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
-                    <Pencil className="h-3 w-3" />
-                  </button>
-                </EditStaffGroupDialog>
+                {selectedMemberStaff ? (
+                  <>
+                    <EntityFileAttachmentHover
+                      fileUrl={selectedMemberAttachmentUrl}
+                      triggerClassName="inline-flex rounded-full"
+                    >
+                      <ResolvedEntityAvatar
+                        className="h-12 w-12 flex-shrink-0 text-lg"
+                        companyId={selectedMemberStaff.companyId}
+                        src={selectedMemberAttachmentUrl ?? undefined}
+                        alt={selectedMemberStaff.name}
+                        fallbackSlot={<Briefcase className="h-6 w-6 text-muted-foreground" />}
+                      />
+                    </EntityFileAttachmentHover>
+                    <EditStaffDialog
+                      staff={selectedMemberStaff}
+                      allGroups={allGroups}
+                      onStaffUpdated={onStaffUpdated}
+                      onStaffDeleted={onStaffUpdated}
+                      hasTransactions={processedTransactions.length > 0}
+                    >
+                      <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    </EditStaffDialog>
+                  </>
+                ) : (
+                  <>
+                    <Avatar className="h-12 w-12 text-lg">
+                      <AvatarFallback className="bg-muted text-muted-foreground">{getInitials(group.name)}</AvatarFallback>
+                    </Avatar>
+                    <EditStaffGroupDialog
+                      group={group}
+                      allGroups={allGroups}
+                      onGroupUpdated={onGroupUpdated}
+                      onGroupDeleted={onGroupDeleted}
+                      hasAccounts={staffInGroup.length > 0 || childGroups.length > 0}
+                    >
+                      <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    </EditStaffGroupDialog>
+                  </>
+                )}
               </div>
               <div className={LEDGER_HEADER_NAME_CARD_CN}>
-                <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
+                <GroupDetailNestedNameHeader
+                  groupName={group.name}
+                  memberName={selectedMemberStaff?.name ?? null}
+                />
               </div>
               <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
                 <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
@@ -1030,31 +1080,6 @@ export function StaffGroupDetails({
                   <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
                 </Button>
               )}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className={cn("w-[200px] justify-between", LEDGER_HEADER_PILL_CN)}>
-                    <span className="truncate">Members ({staff.length})</span>
-                    <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-[320px] max-h-72 overflow-y-auto">
-                  {staff.map((s) => (
-                    <DropdownMenuItem key={s.id} disabled>
-                      <div className="flex w-full items-center justify-between gap-3">
-                        <span className="truncate text-left">{s.name}</span>
-                        <span
-                          className={cn(
-                            "shrink-0 text-xs font-semibold tabular-nums",
-                            (Number((s as any).balance) || 0) >= 0 ? "text-green-600" : "text-red-600"
-                          )}
-                        >
-                          {formatCurrency(Number((s as any).balance) || 0, { showDrCr: true })}
-                        </span>
-                      </div>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
               <LedgerViewModePills
                 value={balanceMode}
                 onChange={setBalanceMode}

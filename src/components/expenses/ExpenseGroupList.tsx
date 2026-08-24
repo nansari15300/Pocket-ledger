@@ -1,25 +1,26 @@
 
 "use client";
 
+import React from "react";
 import { cn } from "@/lib/utils";
 import { Users, Lock } from "lucide-react";
-import type { ExpenseGroup } from "@/components/expenses/types";
+import type { ExpenseGroup, ExpenseAccount } from "@/components/expenses/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
 import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
-import { MasterListRow } from "@/components/ui/master-list-row";
-import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
+import { TooltipProvider } from "../ui/tooltip";
 import { useMemo, useState } from "react";
 import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
 import { filterAndSortEntityGroups } from "@/lib/entityGroupListQuickFilter";
-import { motion, AnimatePresence } from "framer-motion";
-import Link from "next/link";
-import { isSystemParentGroup } from "@/lib/system-groups"
-import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
-import { masterListNameTriggerStrongCn } from "@/lib/listSelectionChrome";
+import { motion } from "framer-motion";
+import { isSystemParentGroup } from "@/lib/system-groups";
+import { masterListShellCn } from "@/lib/masterListChrome";
+import type { GroupListSelectOptions } from "@/lib/groupListExpand";
+import { MasterGroupExpandableListBody } from "@/components/entity/MasterGroupExpandableListBody";
+import { MasterListGroupIcon } from "@/components/entity/MasterListGroupIcon";
 
 export function ExpenseGroupList({
   groups,
@@ -33,23 +34,29 @@ export function ExpenseGroupList({
   quickFilter: quickFilterProp,
   onQuickFilterChange,
   hideQuickFilterBar = false,
+  groupMembersByGroupId = {},
+  selectedGroupMemberFilterId = null,
+  pendingApprovalByMemberId = {},
 }: {
   groups: ExpenseGroup[];
   searchTerm: string;
   selectedGroup: ExpenseGroup | null;
-  onSelectGroup: (group: ExpenseGroup) => void;
-  /** When false (e.g. incomes page), list is always expanded. When true, expand/collapse is shown. */
+  onSelectGroup: (group: ExpenseGroup, options?: GroupListSelectOptions) => void;
   collapsible?: boolean;
   disabled?: boolean;
   pendingApprovalByGroupId?: Record<string, number>;
-  /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
   getItemHref?: (group: ExpenseGroup) => string | undefined;
   quickFilter?: EntityListQuickFilter;
   onQuickFilterChange?: (next: EntityListQuickFilter) => void;
   hideQuickFilterBar?: boolean;
+  groupMembersByGroupId?: Record<string, ExpenseAccount[]>;
+  selectedGroupMemberFilterId?: string | null;
+  pendingApprovalByMemberId?: Record<string, number>;
 }) {
+  void collapsible;
   const { formatCurrency } = useDate();
-  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } = useMasterListRowMotion();
+  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } =
+    useMasterListRowMotion();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
@@ -57,7 +64,6 @@ export function ExpenseGroupList({
     <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
   ) : null;
 
-  // System groups sirf Reports me – list pages pe hide (Direct Income, Direct Expenses etc. bhi)
   const filteredAndSortedGroups = useMemo(() => {
     const base = (groups || []).filter((group) => {
       const isReportOnly = (group as any).isReportOnly === true;
@@ -91,12 +97,16 @@ export function ExpenseGroupList({
     { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
   );
 
+  const renderLeading = (isSystem: boolean) => (
+    <MasterListGroupIcon>
+      {isSystem ? <Lock className="h-4 w-4" /> : <Users className="h-4 w-4" />}
+    </MasterListGroupIcon>
+  );
+
   if (displayListRows.length === 0) {
     return (
       <TooltipProvider delayDuration={200}>
-        <div
-          className={cn(masterListShellCn, disabled && "pointer-events-none opacity-60")}
-        >
+        <div className={cn(masterListShellCn, disabled && "pointer-events-none opacity-60")}>
           <div className="flex min-h-0 flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">
             No groups found.
           </div>
@@ -116,83 +126,27 @@ export function ExpenseGroupList({
           onViewportTouchMove={markListScrolling}
         >
           <ul className="pl-master-list-ul w-full">
-            <AnimatePresence mode={animatePresenceMode}>
-              {displayListRows.map((group) => {
-                const isSelected = selectedGroup?.id === group.id;
-                const isSystem = (group as any).isSystemReserved;
-                const href = getItemHref?.(group);
-                const cardClassName = masterListRowUnselectedCn(isSelected);
-                const cardContent = (
-                      <div className="pl-master-list-row">
-                        <div className="pl-master-list-row-leading">
-                          <div className="relative flex-shrink-0">
-                            <div className="h-8 w-8 flex items-center justify-center bg-muted rounded-md text-muted-foreground">
-                              {isSystem ? <Lock className="h-4 w-4" /> : <Users className="h-4 w-4" />}
-                            </div>
-                            {(pendingApprovalByGroupId[group.id] ?? 0) > 0 && (
-                              <span
-                                className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
-                                style={{ transform: "rotate(45deg) translate(25%, -25%)" }}
-                                aria-label={`${pendingApprovalByGroupId[group.id]} pending approval`}
-                              >
-                                <span style={{ transform: "rotate(-45deg)" }}>{pendingApprovalByGroupId[group.id]}</span>
-                              </span>
-                            )}
-                          </div>
-                          <Tooltip>
-                            {/* asChild hata — Radix ref + motion layout par setRef loop */}
-                            <TooltipTrigger
-                              type="button"
-                              data-pl-list-name=""
-                              onPointerDown={(e) => e.stopPropagation()}
-                              className={masterListNameTriggerStrongCn}
-                            >
-                              {group.name}
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>{group.name}</p>
-                              {(pendingApprovalByGroupId[group.id] ?? 0) > 0 && (
-                                <p className="text-xs text-muted-foreground">{pendingApprovalByGroupId[group.id]} pending approval</p>
-                              )}
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                        <Tooltip>
-                          <TooltipTrigger
-                            type="button"
-                            onPointerDown={(e) => e.stopPropagation()}
-                            className={cn(
-                              "pl-master-list-row-amount-xs ml-1 rounded border-0 bg-transparent px-1 text-left shadow-none",
-                              group.balance >= 0 ? "text-green-600" : "text-red-600"
-                            )}
-                          >
-                            {formatCurrency(group.balance, {
-                              showDrCr: true,
-                              noAnimation: true,
-                            })}
-                          </TooltipTrigger>
-                          <TooltipContent side="left">
-                            <p className="font-medium">{formatCurrency(group.balance, { showDrCr: true })}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                );
-                return (
-                  <motion.li key={group.id} className="w-full" layoutDependency={displayOrderKey} {...rowMotionProps}>
-                    {href ? (
-                      // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
-                      <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
-                        <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
-                      </Link>
-                    ) : (
-                      <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectGroup(group)}>
-                        {cardContent}
-                      </MasterListRow>
-                    )}
-                  </motion.li>
-                );
-              })}
-            </AnimatePresence>
+            <MasterGroupExpandableListBody
+              displayListRows={displayListRows}
+              displayOrderKey={displayOrderKey}
+              selectedGroup={selectedGroup}
+              selectedGroupMemberFilterId={selectedGroupMemberFilterId}
+              groupMembersByGroupId={groupMembersByGroupId}
+              onSelectGroup={onSelectGroup}
+              pendingApprovalByGroupId={pendingApprovalByGroupId}
+              pendingApprovalByMemberId={pendingApprovalByMemberId}
+              getItemHref={getItemHref}
+              quickFilter={quickFilter}
+              animatePresenceMode={animatePresenceMode}
+              rowMotionProps={rowMotionProps}
+              isRowAnimationEnabled={isRowAnimationEnabled}
+              layoutHoldMs={layoutHoldMs}
+              expandAriaLabel="accounts"
+              formatCurrency={(amount, options) =>
+                formatCurrency(amount, { ...options, noAnimation: true }) as React.ReactNode
+              }
+              renderGroupLeading={(group) => renderLeading(Boolean((group as any).isSystemReserved))}
+            />
           </ul>
         </ScrollArea>
         {quickFilterFooter}

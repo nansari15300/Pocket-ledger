@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="wedge_pad_outer">13dp</dimen>
+    <dimen name="wedge_pad_card">13dp</dimen>
+    <dimen name="wedge_text_title">16sp</dimen>
+    <dimen name="wedge_text_sub">16sp</dimen>
+    <dimen name="wedge_text_body">16sp</dimen>
+    <dimen name="wedge_text_money">14sp</dimen>
+    <dimen name="wedge_text_small">13sp</dimen>
+    <dimen name="wedge_text_icon">17sp</dimen>
+    <dimen name="wedge_text_rotate">24sp</dimen>
+    <dimen name="wedge_text_arrow">26sp</dimen>
+    <dimen name="wedge_btn_arrow">37dp</dimen>
+    <dimen name="wedge_btn_rotate">37dp</dimen>
+    <dimen name="wedge_row_pad_v">5dp</dimen>
+    <dimen name="wedge_row_height">36dp</dimen>
+    <dimen name="wedge_today_gap">17dp</dimen>
+    <dimen name="wedge_company_max_w">202dp</dimen>
+    <!-- Full table width for ↻ expand horizontal scroll -->
+    <dimen name="wedge_table_min_width">560dp</dimen>
+    <dimen name="wedge_col_name">176dp</dimen>
+    <dimen name="wedge_col_money">96dp</dimen>
+</resources>

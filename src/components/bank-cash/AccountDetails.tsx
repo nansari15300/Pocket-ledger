@@ -118,6 +118,10 @@ import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillL
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
+import { useMasterAccountFreezeDetailsChrome } from "@/hooks/useMasterAccountFreezeDetailsChrome";
+import { BANK_ACCOUNT_FREEZE_COLLECTION } from "@/lib/masterAccountFreeze/freezeAdapter";
+import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
@@ -297,6 +301,42 @@ export function AccountDetails({
     collection: "bank_accounts",
     entityId: initialAccount.id,
     onUpdated: onAccountUpdated,
+  });
+
+  const accountFreezeEligible = account.id !== "all";
+  const accountAdjustBalanceActions =
+    accountFreezeEligible ? (
+      <AddVoucherDialog
+        defaultTab="adjustment"
+        allowedTabs={["adjustment"]}
+        defaultVoucherData={{
+          defaultTab: "adjustment",
+          adjustmentTarget: { id: account.id, entityType: "account", name: account.accountName },
+        }}
+      >
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={readMasterAccountFrozen(account)}
+          className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")}
+          title="Adjust Balance"
+        >
+          <AdjustBalancePillLabel />
+        </Button>
+      </AddVoucherDialog>
+    ) : null;
+
+  const {
+    freezeOverlay: accountFreezeOverlay,
+    closingBalanceActions: accountClosingBalanceActions,
+  } = useMasterAccountFreezeDetailsChrome({
+    companyId,
+    collection: BANK_ACCOUNT_FREEZE_COLLECTION,
+    entityId: account.id,
+    entity: account,
+    entityEligible: accountFreezeEligible,
+    onEntityUpdated: handleAccountUpdated,
+    adjustBalanceActions: accountAdjustBalanceActions,
   });
 
   const accountHeaderAttachmentUrl = useMemo(
@@ -1594,6 +1634,9 @@ export function AccountDetails({
       >
         <div className="pb-24">
           {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}
+          <MasterAccountFreezeTxnShell
+            overlay={accountFreezeOverlay}
+          >
           <TransactionsTable
             transactions={displayMobileTransactionsToShow}
             context="account"
@@ -1626,25 +1669,11 @@ export function AccountDetails({
             closingBalance={showMaskedBalance ? undefined : displayMobilePageLedgerStats.closingForPage}
             isBalanceMasked={showMaskedBalance}
             scrollOnlyTransactions
-            closingBalanceActions={
-              account.id !== "all" ? (
-                <AddVoucherDialog
-                  defaultTab="adjustment"
-                  allowedTabs={["adjustment"]}
-                  defaultVoucherData={{
-                    defaultTab: "adjustment",
-                    adjustmentTarget: { id: account.id, entityType: "account", name: account.accountName },
-                  }}
-                >
-                  <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
-                      <AdjustBalancePillLabel />
-                    </Button>
-                </AddVoucherDialog>
-              ) : null
-            }
+            closingBalanceActions={accountClosingBalanceActions}
             blinkMode={spendWiseBlinkMode}
             spendWiseGroupPrint={spendWiseGroupPrint}
           />
+          </MasterAccountFreezeTxnShell>
         </div>
       </div>
       <MobileTransactionsPager
@@ -1929,6 +1958,9 @@ export function AccountDetails({
         <div className="flex-1 flex flex-col min-h-0 overflow-x-auto scrollbar-slim-dim">
           <div className={cn("py-4 min-w-0", spendWiseView ? "p-[2px]" : "flex-1 flex flex-col min-h-0")}>
             {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}
+            <MasterAccountFreezeTxnShell
+              overlay={accountFreezeOverlay}
+            >
             <TransactionsTable
               key={`account-${account.id}-${effectiveBalanceMode}-${bankDrCrPerspective}`}
               transactions={displayPaginatedTransactions}
@@ -1977,25 +2009,11 @@ export function AccountDetails({
               closingBalance={showMaskedBalance ? undefined : displayDesktopPageLedgerStats.closingForPage}
               isBalanceMasked={showMaskedBalance}
               scrollOnlyTransactions
-              closingBalanceActions={
-                account.id !== "all" ? (
-                  <AddVoucherDialog
-                    defaultTab="adjustment"
-                    allowedTabs={["adjustment"]}
-                    defaultVoucherData={{
-                      defaultTab: "adjustment",
-                      adjustmentTarget: { id: account.id, entityType: "account", name: account.accountName },
-                    }}
-                  >
-                    <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
-                      <AdjustBalancePillLabel />
-                    </Button>
-                  </AddVoucherDialog>
-                ) : null
-              }
+              closingBalanceActions={accountClosingBalanceActions}
               blinkMode={spendWiseBlinkMode}
               spendWiseGroupPrint={spendWiseGroupPrint}
             />
+            </MasterAccountFreezeTxnShell>
           </div>
         </div>
         {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}

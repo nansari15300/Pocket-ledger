@@ -86,7 +86,7 @@ export function isInterCompanyPartyListAccount(
   return isInterCompanyCompanyClearingParty(party);
 }
 
-/** List card: C→C = ek line; A→A = IC Account line + niche peer company name. */
+/** List card: IC Account line + niche peer company name (A→A aur C→C dono). */
 export function getInterCompanyPartyListTitleLines(party: {
   name?: string;
   interCompanyPeerCompanyName?: string;
@@ -94,9 +94,6 @@ export function getInterCompanyPartyListTitleLines(party: {
   id?: string;
 }): { primary: string; secondary?: string } {
   const primary = String(party?.name || "").trim() || "—";
-  if (readInterCompanyClearingMode(party) !== "account") {
-    return { primary };
-  }
   const companyName = String(party?.interCompanyPeerCompanyName || "").trim();
   if (!companyName) return { primary };
   return { primary, secondary: companyName };
@@ -119,9 +116,28 @@ function peerEntityDedupeKey(party: {
   return `${kind}:${id}`;
 }
 
+/** C→C + A→A — same peer+entity / same IC Account naam → ek hi clearing row. */
+export function interCompanyClearingPartyDedupeKeys(party: {
+  id?: string;
+  name?: string;
+  interCompanyPeerCompanyId?: string;
+  interCompanyPeerEntityKind?: string;
+  interCompanyPeerEntityId?: string;
+}): string[] {
+  const keys: string[] = [];
+  const peer = String(party.interCompanyPeerCompanyId || "").trim();
+  const ent = peerEntityDedupeKey(party);
+  if (peer && ent) keys.push(`peer:${peer}|ent:${ent}`);
+  const nameKey = normalizeInterCompanyClearingDedupeKey(party.name);
+  if (peer && nameKey && isInterCompanyAccountClearingPartyName(party.name)) {
+    keys.push(`peer:${peer}|name:${nameKey}`);
+  }
+  if (keys.length === 0) keys.push(`id:${String(party.id || "").trim()}`);
+  return keys;
+}
+
 /**
- * Same peer + same clearing mode (+ same peer entity for A→A) — ek hi row.
- * Company aur Account clearing kabhi merge nahi.
+ * Same peer + same account (C→C / A→A mode alag ho to bhi) — ek hi row.
  */
 export function dedupeInterCompanyClearingParties<
   T extends {
@@ -161,24 +177,7 @@ export function dedupeInterCompanyClearingParties<
 
   const byKey = new Map<string, string>();
   for (const p of clearing) {
-    const mode = readInterCompanyClearingMode(p);
-    const keys: string[] = [];
-    const peer = String(p.interCompanyPeerCompanyId || "").trim();
-    if (mode === "account") {
-      const ent = peerEntityDedupeKey(p);
-      if (peer && ent) keys.push(`account|peer:${peer}|ent:${ent}`);
-      const nameKey = normalizeInterCompanyClearingDedupeKey(p.name);
-      if (peer && nameKey && isInterCompanyAccountClearingPartyName(p.name)) {
-        keys.push(`account|peer:${peer}|name:${nameKey}`);
-      }
-    } else {
-      if (peer) keys.push(`company|peer:${peer}`);
-      const nameKey = normalizeInterCompanyClearingDedupeKey(p.name);
-      if (nameKey && isInterCompanyCompanyClearingPartyName(p.name)) {
-        keys.push(`company|name:${nameKey}`);
-      }
-    }
-    if (keys.length === 0) keys.push(`id:${p.id}`);
+    const keys = interCompanyClearingPartyDedupeKeys(p);
     for (const key of keys) {
       const prev = byKey.get(key);
       if (prev) union(prev, p.id);
@@ -201,8 +200,11 @@ export function dedupeInterCompanyClearingParties<
       continue;
     }
     const sorted = [...members].sort((a, b) => {
-      const rank = (id: string) =>
-        id.startsWith("ic_peer_") || id.startsWith("ic_acct_") ? 1 : 0;
+      const rank = (id: string) => {
+        if (id.startsWith("ic_acct_")) return 2;
+        if (id.startsWith("ic_peer_")) return 1;
+        return 0;
+      };
       const aCanon = rank(a.id);
       const bCanon = rank(b.id);
       if (aCanon !== bCanon) return bCanon - aCanon;

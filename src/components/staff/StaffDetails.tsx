@@ -108,6 +108,10 @@ import { HistoryDialog } from "../vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "../vouchers/LinkAdvancesToVoucherDialog";
 import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
+import { useMasterAccountFreezeDetailsChrome } from "@/hooks/useMasterAccountFreezeDetailsChrome";
+import { STAFF_FREEZE_COLLECTION } from "@/lib/masterAccountFreeze/freezeAdapter";
+import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
@@ -277,6 +281,42 @@ export function StaffDetails({
     collection: "staff",
     entityId: initialStaff.id,
     onUpdated: onStaffUpdated,
+  });
+
+  const staffFreezeEligible = !isAllVouchersView && staff.id !== "all";
+  const staffAdjustBalanceActions = staffFreezeEligible ? (
+    <AddVoucherDialog
+      defaultTab="adjustment"
+      allowedTabs={["adjustment"]}
+      defaultVoucherData={{
+        defaultTab: "adjustment",
+        adjustmentTarget: { id: staff.id, entityType: "staff", name: staff.name },
+      }}
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={readMasterAccountFrozen(staff)}
+        className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")}
+        title="Adjust Balance"
+      >
+        <AdjustBalancePillLabel />
+      </Button>
+    </AddVoucherDialog>
+  ) : null;
+
+  const {
+    blockNewTransactions: blockStaffNewTransactions,
+    freezeOverlay: staffFreezeOverlay,
+    closingBalanceActions: staffClosingBalanceActions,
+  } = useMasterAccountFreezeDetailsChrome({
+    companyId,
+    collection: STAFF_FREEZE_COLLECTION,
+    entityId: staff.id,
+    entity: staff,
+    entityEligible: staffFreezeEligible,
+    onEntityUpdated: handleStaffUpdated,
+    adjustBalanceActions: staffAdjustBalanceActions,
   });
 
   const staffHeaderAttachmentUrl = useMemo(
@@ -1149,6 +1189,10 @@ export function StaffDetails({
             openingBalance={openingBalanceForPeriod}
           />
         ) : (
+        <MasterAccountFreezeTxnShell
+          className="min-h-[8rem]"
+          overlay={staffFreezeOverlay}
+        >
         <TransactionsTable
           key={`staff-mobile-${staff.id}-${taxDetailsMode ? "tax" : "stmt"}-${currentPage}-${rowsPerPage}`}
           transactions={mobileTransactionsToShow}
@@ -1192,24 +1236,10 @@ export function StaffDetails({
           debitColumnHeaderLabel={taxDetailsMode ? "Tax" : undefined}
           creditColumnHeaderLabel={taxDetailsMode ? "Salary" : undefined}
           scrollOnlyTransactions
-          closingBalanceActions={
-            !isAllVouchersView ? (
-              <AddVoucherDialog
-                defaultTab="adjustment"
-                allowedTabs={["adjustment"]}
-                defaultVoucherData={{
-                  defaultTab: "adjustment",
-                  adjustmentTarget: { id: staff.id, entityType: "staff", name: staff.name },
-                }}
-              >
-                <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
-                      <AdjustBalancePillLabel />
-                    </Button>
-              </AddVoucherDialog>
-            ) : null
-          }
+          closingBalanceActions={staffClosingBalanceActions}
           {...statementCheck.tableProps}
         />
+        </MasterAccountFreezeTxnShell>
         )}
         </div>
       </div>
@@ -1672,6 +1702,9 @@ export function StaffDetails({
       {/* TABLE AREA - flex layout so table footer (Total / Closing Balance) stays visible */}
       <div className="flex-1 flex flex-col min-h-0 overflow-x-auto">
         <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
+                <MasterAccountFreezeTxnShell
+                  overlay={staffFreezeOverlay}
+                >
                 <TransactionsTable
                   key={`staff-${staff.id}-${taxDetailsMode ? "tax" : "stmt"}-${currentPage}-${rowsPerPage}`}
                   transactions={paginatedTransactions}
@@ -1724,24 +1757,10 @@ export function StaffDetails({
                   debitColumnHeaderLabel={taxDetailsMode ? "Tax" : undefined}
                   creditColumnHeaderLabel={taxDetailsMode ? "Salary" : undefined}
                   scrollOnlyTransactions
-                  closingBalanceActions={
-                    !isAllVouchersView ? (
-                      <AddVoucherDialog
-                        defaultTab="adjustment"
-                        allowedTabs={["adjustment"]}
-                        defaultVoucherData={{
-                          defaultTab: "adjustment",
-                          adjustmentTarget: { id: staff.id, entityType: "staff", name: staff.name },
-                        }}
-                      >
-                        <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
-                      <AdjustBalancePillLabel />
-                    </Button>
-                      </AddVoucherDialog>
-                    ) : null
-                  }
+                  closingBalanceActions={staffClosingBalanceActions}
                   {...statementCheck.tableProps}
                 />
+                </MasterAccountFreezeTxnShell>
           {paginatedTransactions.length === 0 && (
             <div className="text-center py-8 text-muted-foreground">
               {taxDetailsMode

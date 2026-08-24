@@ -10,7 +10,8 @@ import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } 
 import { Package } from "lucide-react";
 import type { StockView } from "./ItemDetails";
 import React, { useMemo, useState } from "react";
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/tooltip";
+import { MasterListNameTooltip } from "@/components/entity/MasterListNameTooltip";
+import { TooltipProvider } from "../ui/tooltip";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import {
@@ -18,8 +19,7 @@ import {
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
 import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows"
-import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
-import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
+import { masterListShellCn, masterListRowUnselectedCn, MASTER_LIST_ITEM_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN } from "@/lib/masterListChrome";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
@@ -190,7 +190,8 @@ export function ItemList({
                           triggerClassName="inline-flex shrink-0 rounded-md"
                         >
                           <ResolvedEntityAvatar
-                            className="h-8 w-8 text-sm"
+                            className={cn(MASTER_LIST_ITEM_AVATAR_CN, "text-sm")}
+                            fallbackClassName={MASTER_LIST_AVATAR_FALLBACK_CN}
                             companyId={item.companyId}
                             src={attachmentPreviewUrl ?? undefined}
                             alt={item.name}
@@ -207,23 +208,21 @@ export function ItemList({
                           </span>
                         )}
                       </div>
-                      <Tooltip>
-                        {/* asChild hata — motion layout + span ref merge par Radix/ScrollArea setRef loop */}
-                        <TooltipTrigger
-                          type="button"
-                          data-pl-list-name=""
-                          onPointerDown={(e) => e.stopPropagation()}
-                          className={masterListNameTriggerCn}
-                        >
-                          {highlightSearch ? highlightQueryInText(item.name, highlightSearch) : item.name}
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>{item.name}</p>
-                          {(pendingApprovalByItemId[item.id] ?? 0) > 0 && (
-                            <p className="text-xs text-muted-foreground">{pendingApprovalByItemId[item.id]} pending approval</p>
-                          )}
-                        </TooltipContent>
-                      </Tooltip>
+                      <MasterListNameTooltip
+                        measureKey={item.name}
+                        tooltipContent={
+                          <>
+                            <p>{item.name}</p>
+                            {(pendingApprovalByItemId[item.id] ?? 0) > 0 && (
+                              <p className="text-xs text-muted-foreground">
+                                {pendingApprovalByItemId[item.id]} pending approval
+                              </p>
+                            )}
+                          </>
+                        }
+                      >
+                        {highlightSearch ? highlightQueryInText(item.name, highlightSearch) : item.name}
+                      </MasterListNameTooltip>
                     </div>
                     <div
                       className={cn(
