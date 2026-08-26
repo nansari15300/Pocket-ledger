@@ -4,6 +4,8 @@
     "next-env.d.ts",
     "src/**/*.ts",
     "src/**/*.tsx",
+    "wedge/**/*.ts",
+    "wedge/**/*.tsx",
     "**/*.mts"
   ],
   "exclude": [
