@@ -32,7 +32,7 @@ export function LoanVoucherAttachmentsField({
   const attachFileInputId = useId();
   const canAddMoreFiles =
     allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount;
-  useVoucherAttachmentProcessing(files, setFiles, companyId || undefined);
+  const isAttachmentProcessing = useVoucherAttachmentProcessing();
 
   const attachmentClientFileUrlsForPreview = useMemo(
     () => getVoucherAttachmentUrlsForUi({ fileUrls: files }),
@@ -63,6 +63,7 @@ export function LoanVoucherAttachmentsField({
             <FilePreview
               key={`${typeof file === "string" ? file : file.name}-${index}`}
               file={file}
+              isCompressing={isAttachmentProcessing}
               attachmentCompanyId={companyId || undefined}
               attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
               onRemove={

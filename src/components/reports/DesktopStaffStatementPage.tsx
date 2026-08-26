@@ -11,6 +11,7 @@ import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
 import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2, X } from "lucide-react";
 import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
+import type { Staff, StaffGroup } from "@/components/staff/types";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
