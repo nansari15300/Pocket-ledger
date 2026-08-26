@@ -12,6 +12,10 @@ Var PL_DESKTOP_PROMPT_OK
   ${OrIf} $R1 != ""
     StrCpy $PL_DESKTOP_PROMPT_OK "no"
   ${EndIf}
+  ; Uninstaller-only NSIS compile skips customInstall — reference var here (warning 6001).
+  ${If} $PL_DESKTOP_PROMPT_OK == ""
+    StrCpy $PL_DESKTOP_PROMPT_OK "yes"
+  ${EndIf}
 !macroend
 
 ; Runs after unpack + shortcuts step: skipped when DO_NOT_CREATE_DESKTOP_SHORTCUT is set (see package.json),
