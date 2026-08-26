@@ -1,3 +1,4 @@
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 import type { RpEntityKind } from "@/lib/receivablesPayablesDialogUi";
 import type {
   ReceivablesPayablesFinancialSummary,
@@ -10,7 +11,7 @@ export type RpVisibilityCategory = "party" | "bank" | "staff" | "tax" | "income_
 export const RP_VISIBILITY_CATEGORIES: { id: RpVisibilityCategory; label: string }[] = [
   { id: "party", label: "Party" },
   { id: "bank", label: "Bank / Cash" },
-  { id: "staff", label: "Staff" },
+  { id: "staff", label: STAFF_ENTITY_LABEL },
   { id: "tax", label: "Tax" },
   { id: "income_expense", label: "Income / Expense" },
 ];

@@ -584,8 +584,11 @@ export function openAttachmentGalleryInApp(
           try {
             const pdfBlob = await fetch(resolved.src).then((r) => (r.ok ? r.blob() : null));
             if (!pdfBlob?.size) throw new Error("empty_pdf");
-            const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
-            const result = await convertPdfFirstPageToImage(pdfBlob, 0.92, 1800);
+            const { convertPdfForPortalRasterPreview } = await import("@/lib/pdfToImageExport");
+            const result = await convertPdfForPortalRasterPreview(pdfBlob, {
+              quality: 0.92,
+              maxPageWidth: 1800,
+            });
             resolved.revoke();
             currentRevoke = () => {
               try {
@@ -610,9 +613,14 @@ export function openAttachmentGalleryInApp(
                 })
               );
             };
-            imageZoomApi = mountGalleryImageZoom(scrollHost, img, (s) => {
-              currentImageScale = s;
-            });
+            imageZoomApi = mountGalleryImageZoom(
+              scrollHost,
+              img,
+              (s) => {
+                currentImageScale = s;
+              },
+              { onePageHeightPx: result.portalMeta?.onePageHeightPx }
+            );
             setZoomControlsVisible(zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, true);
             const syncFitH = () => styleFitButtons(false);
             if (img.complete && img.naturalWidth > 1) syncFitH();

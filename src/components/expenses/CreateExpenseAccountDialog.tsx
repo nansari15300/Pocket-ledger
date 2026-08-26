@@ -46,6 +46,7 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { toast as sonnerToast } from "sonner";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
 import {
   apkCloudEntityMasterReadFromSqliteMirror,
   apkCloudCompanyOfflineViewOnly,
@@ -460,7 +461,7 @@ export function CreateExpenseAccountDialog({
         companyId,
         collectionName: "expense_accounts",
         name: values.name.trim(),
-        entityLabel: "Expense Account",
+        entityLabel: sidebarEntityMenuLabel("incomes"),
       });
       if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate Account Name", {

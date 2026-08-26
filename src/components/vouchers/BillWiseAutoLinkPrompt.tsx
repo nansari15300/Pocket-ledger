@@ -1,5 +1,6 @@
 "use client";
 
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -525,7 +526,7 @@ export function usePartyBillWiseAutoLinkPrompt(opts: {
 
     const built = buildPartyBillWiseAutoLinkProposal({
       ledgerId,
-      ledgerName: ledgerName || (ledgerKind === "staff" ? "Staff" : "Party"),
+      ledgerName: ledgerName || (ledgerKind === "staff" ? STAFF_ENTITY_LABEL : "Party"),
       ledgerKind,
       vouchers,
     });

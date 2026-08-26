@@ -14,8 +14,15 @@ export const COLLECTIONS_TO_BACKUP = [
   "expense_groups",
   "unassigned_documents",
   "vouchers",
-  /** Auto Monthly schedule + enabled flag — restore ke baad app-open recurring chale. */
   "recurring_voucher_templates",
+  "loans",
+  "loan_schedules",
+  "loan_transactions",
+  "loan_rate_history",
+  "loan_charges",
+  "loan_audit_logs",
+  "loan_settings",
+  "loan_documents",
 ] as const;
 
 export type CompanyBackupCollection = (typeof COLLECTIONS_TO_BACKUP)[number];

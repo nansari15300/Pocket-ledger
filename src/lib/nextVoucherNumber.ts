@@ -24,6 +24,7 @@ export const DEFAULT_VOUCHER_PREFIX_LABELS: Record<string, string> = {
   note: "NOTE-",
   add_salary: "ADD-SAL-",
   pay_salary: "PAY-SAL-",
+  pay_emi: "EMI-",
   production: "PROD-",
   inter_company: "IC-",
 };
@@ -34,6 +35,7 @@ export function getVoucherPrefixKeyFromLike(v: {
   lineItems?: Array<{ type?: string }>;
 }): string {
   if (v.type === "journal" && v.subType === "add_salary") return "add_salary";
+  if (v.type === "journal" && v.subType === "pay_emi") return "pay_emi";
   if (v.type === "payment_out" && v.subType === "pay_salary") return "pay_salary";
   if (v.type === "sale") return v.lineItems?.[0]?.type === "service" ? "sale_service" : "sale";
   if (v.type === "purchase") return v.lineItems?.[0]?.type === "service" ? "purchase_service" : "purchase";
@@ -51,8 +53,9 @@ function filterVoucherRowsForSerial(
       return srcLineType === rowLineType;
     }
     if (voucherLike.type === "journal" && voucherLike.subType === "add_salary") return r.subType === "add_salary";
+    if (voucherLike.type === "journal" && voucherLike.subType === "pay_emi") return r.subType === "pay_emi";
     if (voucherLike.type === "payment_out" && voucherLike.subType === "pay_salary") return r.subType === "pay_salary";
-    if (voucherLike.type === "journal") return r.subType !== "add_salary";
+    if (voucherLike.type === "journal") return r.subType !== "add_salary" && r.subType !== "pay_emi";
     if (voucherLike.type === "payment_out") return r.subType !== "pay_salary";
     return String(r.type || "") === String(voucherLike.type || "");
   });

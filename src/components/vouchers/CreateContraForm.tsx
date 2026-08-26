@@ -40,7 +40,7 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave, finalizeVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase, voucherAttachmentFieldsForSave } from "@/lib/voucherFormAttachmentSave";
+import { applyVoucherAttachmentsAfterFormSave, finalizeVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase, voucherAttachmentFieldsForSave, voucherAttachmentLockSaveOpts} from "@/lib/voucherFormAttachmentSave";
 import { toast as sonnerToast } from "sonner";
 import {
   completeVoucherBackgroundProgress,
@@ -74,6 +74,7 @@ import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
+import { readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import { useAccountBalance } from "@/hooks/useAccountBalance";
 import { bankAccountAllowsVoucherMinusBalance } from "@/lib/bankAccountMinusBalancePolicy";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -955,9 +956,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const amount = Number((data as any).amount || 0);
 
       const filesForSave = await prepareVoucherAttachmentsForSave(files, {
-        companyId,
-        savePdfAsImage,
-      });
+          companyId,
+          savePdfAsImage,
+          lockedPdfFileUrls: readLockedPdfFileUrlsFromRow(voucher),
+        });
 
       // Build payload with only serializable fields (avoid form state carrying Timestamps/id that can break Firestore update)
       const submissionData: any = {
@@ -1043,7 +1045,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         voucherAttachmentFieldsForSave(
           (Array.isArray(submissionData.fileUrls) ? submissionData.fileUrls : []).filter(
             (u: unknown): u is string => typeof u === "string"
-          )
+          ),
+          voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))
         )
       );
 
@@ -1854,6 +1857,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <FormLabel>Attach Files (Optional)</FormLabel>
                     {showPdfAsImageToggle && (
                       <VoucherPdfAsImageToggle
+                        existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(voucher)}
                         id="voucher-save-pdf-as-image-contra"
                         checked={savePdfAsImage}
                         onCheckedChange={setSavePdfAsImage}

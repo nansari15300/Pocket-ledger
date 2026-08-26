@@ -13,10 +13,12 @@ export const mlc = {
   pageBalance: "flex-shrink-0 text-sm font-semibold leading-tight tabular-nums",
 
   /** Tabs wrapper row — andar `TabsList listChrome` */
-  tabsRow: "pl-mlc-tabs-row flex-shrink-0 border-b px-2 py-0",
+  tabsRow: "pl-mlc-tabs-row flex-shrink-0 border-b px-2 py-[4px]",
+  /** Detail panel tabs (Loan Accounting…) — wrap allowed, equal vertical inset */
+  detailTabsRow: "pl-mlc-detail-tabs-row",
 
   /** Search + badge + add row */
-  searchRow: "pl-mlc-search-row flex flex-shrink-0 items-center gap-1 border-b px-2 py-0",
+  searchRow: "pl-mlc-search-row flex flex-shrink-0 items-center gap-1 border-b px-2 py-[4px]",
   searchWrap: "relative min-w-0 flex-1",
   /** Search input ke andar — `Input listChromeSearch` ke saath; pointer-events-none overlap fix */
   searchIcon:
@@ -27,12 +29,12 @@ export const mlc = {
     "pl-mlc-section-label-row flex flex-shrink-0 items-center gap-1.5 border-b px-2 py-0.5 text-xs font-semibold leading-tight text-muted-foreground",
   sectionIcon: "h-3.5 w-3.5",
 
-  actionRow: "pl-mlc-action-row flex-shrink-0 border-b px-2 py-0",
+  actionRow: "pl-mlc-action-row flex-shrink-0 border-b px-2 py-[4px]",
   actionGrid: "grid grid-cols-2 gap-1",
 
   /** Mobile master list: search/section/tabs — scroll ke neeche, quick-filter sabse niche */
   mobileListDock:
-    "pl-mobile-list-dock flex flex-shrink-0 flex-col gap-[2px] border-t px-[2px] pb-[2px]",
+    "pl-mobile-list-dock flex flex-shrink-0 flex-col gap-[4px] border-t px-[2px] pb-[2px]",
 } as const;
 
 /** `MasterListViewShell` mobile footer dock */

@@ -1,3 +1,4 @@
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 export type AdRewardTierId = "seconds20" | "seconds30" | "seconds40" | "seconds60";
 
 /** Temporary unlock targets — maps to app feature / plan gates. */
@@ -92,7 +93,7 @@ export function adServerSyncIntro(hours: number): string {
 export const AD_FEATURE_LOCK_SCREENS: ReadonlyArray<{ id: string; label: string }> = [
   { id: "party", label: "Parties" },
   { id: "bank-cash", label: "Bank/Cash" },
-  { id: "staff", label: "Staff" },
+  { id: "staff", label: STAFF_ENTITY_LABEL },
   { id: "tax", label: "Tax" },
   { id: "incomes", label: "Income & Expense" },
   { id: "items", label: "Items & Service" },
@@ -158,7 +159,7 @@ export const DEFAULT_AD_SETTINGS: AdSettings = {
     { id: "company_slot", label: "Extra company slot", featureId: "company_slot", pointsCost: 50, durationHours: 24, enabled: true },
     { id: "party", label: "Parties", featureId: "party", pointsCost: 10, durationHours: 24, enabled: false },
     { id: "bank_cash", label: "Bank/Cash", featureId: "bank-cash", pointsCost: 10, durationHours: 24, enabled: false },
-    { id: "staff", label: "Staff", featureId: "staff", pointsCost: 10, durationHours: 24, enabled: false },
+    { id: "staff", label: STAFF_ENTITY_LABEL, featureId: "staff", pointsCost: 10, durationHours: 24, enabled: false },
     { id: "tax", label: "Tax", featureId: "tax", pointsCost: 10, durationHours: 24, enabled: false },
     { id: "incomes", label: "Income & Expense", featureId: "incomes", pointsCost: 15, durationHours: 24, enabled: false },
     { id: "items", label: "Items & Service", featureId: "items", pointsCost: 15, durationHours: 24, enabled: false },

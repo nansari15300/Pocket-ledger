@@ -10,7 +10,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
 import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2, X } from "lucide-react";
-import type { Staff, StaffGroup } from "@/components/staff/types";
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
@@ -326,7 +326,7 @@ export default function DesktopStaffStatementPage() {
           address: company.address,
           logoUrl: company.logoUrl,
         },
-        title: `${selectedStaff ? "Staff" : "Group"} Statement: ${activeEntity.name}`,
+        title: `${selectedStaff ? STAFF_ENTITY_LABEL : "Group"} Statement: ${activeEntity.name}`,
         context: activeContext,
         contextId: activeEntity.id,
         dateSystem: dateSystem,
@@ -402,7 +402,7 @@ export default function DesktopStaffStatementPage() {
       }
       const payload = {
         company: { name: company.name, pan: company.pan, phone: company.phone, address: company.address, logoUrl: company.logoUrl },
-        title: `${selectedStaff ? "Staff" : "Group"} Statement: ${entityName}`,
+        title: `${selectedStaff ? STAFF_ENTITY_LABEL : "Group"} Statement: ${entityName}`,
         context: activeContext as Context,
         contextId: activeEntity.id,
         dateSystem: dateSystem,

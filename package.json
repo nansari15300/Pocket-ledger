@@ -19,6 +19,7 @@
     "typecheck": "node --max-old-space-size=4096 node_modules/typescript/bin/tsc --noEmit -p tsconfig.typecheck.json",
     "tsc": "node --max-old-space-size=4096 node_modules/typescript/bin/tsc --noEmit -p tsconfig.typecheck.json",
     "typecheck:light": "node --max-old-space-size=4096 node_modules/typescript/bin/tsc --noEmit -p tsconfig.typecheck.json",
+    "test:loans": "npx --yes tsx src/modules/loans/calculations/loanCalculation.selftest.ts",
     "ci": "npm install && npm run build",
     "electron:install": "cd electron && npm install",
     "electron:start": "cd electron && npm start",

@@ -3,7 +3,6 @@
 
 import {
   BookText,
-  Briefcase,
   Factory,
   FilePenLine,
   Flame,
@@ -72,6 +71,10 @@ import type { Permission } from "@/lib/permissions";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 import { appNavHref, settingsViewHref } from "@/lib/appNavHref";
+import { publicAssetUrl } from "@/lib/webAppBasePath";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { AttachmentHoverPortal } from "@/components/vouchers/AttachmentHoverPortal";
+import { PublicStaticImagePreviewBody } from "@/components/vouchers/attachmentHoverPreviewBody";
 import {
   markMasterDetailSidebarListNav,
   masterDetailRouteKeyFromPath,
@@ -83,6 +86,9 @@ import { useCachedFeatureConfig } from "@/hooks/useCachedFeatureConfig";
 import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesPartyLedger";
 import { collectBankAccountIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesBankLedger";
 import { collectItemIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesItemLedger";
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
+import { StaffEntityNavIcon } from "@/components/entity/StaffEntityIcon";
+import { LOAN_LIABILITY_ENTITY_ICON_PATH } from "@/lib/loanLiabilityEntityIcon";
 import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesStaffLedger";
 import { collectInterCompanyIdsForPendingApproval } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
@@ -108,7 +114,7 @@ const allMenuItems: MenuItem[] = [
   { id: 'dashboard', href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: 'party', href: "/party", label: "Parties", icon: Users },
   { id: 'bank-cash', href: "/bank-cash", label: "Bank/Cash", icon: Landmark },
-  { id: 'staff', href: "/staff", label: "Staff", icon: Briefcase },
+  { id: 'staff', href: "/staff", label: STAFF_ENTITY_LABEL, icon: StaffEntityNavIcon },
   { id: 'tax', href: "/tax", label: "Tax", icon: Banknote },
   { id: 'incomes', href: "/incomes", label: "Income & Expense", icon: DollarSign },
   { id: 'items', href: "/items", label: "Items & Service", icon: BookText },
@@ -541,7 +547,13 @@ export function AppSidebar() {
     (messageSettings?.on !== false && messageSettings?.onEntity !== false) || includeAlertsInSidebar;
   const messagesBadgeCount = showMessageBadgeInSidebar ? totalNotifications : 0;
   const isMenuItemActive = useCallback(
-    (item: MenuItem) => pathname.startsWith(item.href.replace(/\/$/, "")),
+    (item: MenuItem) => {
+      const base = item.href.replace(/\/$/, "");
+      if (pathname.startsWith(base)) return true;
+      // Loan Overview lives under /loans but belongs to Loan & Staff entity nav.
+      if (item.id === "staff" && pathname.startsWith("/loans")) return true;
+      return false;
+    },
     [pathname]
   );
 
@@ -585,16 +597,30 @@ export function AppSidebar() {
     const tooltipText =
       pendingCount > 0 ? `${item.label} (${pendingCount} pending approval)` : item.label;
     const navHref = appNavHref(item.href);
+    const pendingBadgeEl = showPendingBadge ? (
+      <span className="pointer-events-none absolute top-0 right-0 flex h-4 min-w-[1rem] translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-pink-500 px-1 text-[10px] font-medium text-white">
+        {pendingCount}
+      </span>
+    ) : null;
+    const iconEl =
+      item.id === "staff" ? (
+        <AttachmentHoverPortal
+          clickOpensPreview
+          triggerClassName="relative flex shrink-0 cursor-pointer items-center justify-center overflow-visible [&_svg]:size-5 [&_img]:size-5"
+          preview={<PublicStaticImagePreviewBody url={staffNavIconPreviewUrl} />}
+        >
+          <StaffEntityNavIcon />
+          {pendingBadgeEl}
+        </AttachmentHoverPortal>
+      ) : (
+        <span className="relative flex shrink-0 items-center justify-center overflow-visible [&_svg]:size-5 [&_img]:size-5">
+          <item.icon />
+          {pendingBadgeEl}
+        </span>
+      );
     const button = (
       <SidebarMenuButton isActive={isMenuItemActive(item)} tooltip={tooltipText} data-theme-nav={item.id}>
-        <span className="relative flex shrink-0 items-center justify-center [&_svg]:size-5">
-          <item.icon />
-          {showPendingBadge && (
-            <span className="absolute top-0 right-0 h-4 min-w-[1rem] translate-x-1/2 -translate-y-1/2 rounded-full bg-pink-500 px-1 text-[10px] font-medium text-white flex items-center justify-center">
-              {pendingCount}
-            </span>
-          )}
-        </span>
+        {iconEl}
         {isOpen && (
           <span className="flex min-w-0 flex-1 items-center gap-1">
             <span className="truncate">{item.label}</span>
@@ -632,7 +658,7 @@ export function AppSidebar() {
     const navHref = appNavHref(item.href);
     const button = (
       <SidebarMenuButton isActive={isMenuItemActive(item)} tooltip={item.label} data-theme-nav={item.id}>
-        <span className="relative flex shrink-0 items-center justify-center [&_svg]:size-5">
+        <span className="relative flex shrink-0 items-center justify-center overflow-visible [&_svg]:size-5 [&_img]:size-5">
           <item.icon />
           {showBadge && (
             <span className={messagesSidebarNavBadgeClassName}>
@@ -690,35 +716,41 @@ export function AppSidebar() {
         </div>
   );
 
+  const sidebarBrandPreviewUrl =
+    trimEntityFileUrlForPreview(company?.logoUrl) || publicAssetUrl("/app-icon.png");
+  const sidebarBrandAppIconUrl = publicAssetUrl("/app-icon.png");
+  const staffNavIconPreviewUrl = publicAssetUrl(LOAN_LIABILITY_ENTITY_ICON_PATH);
+  const sidebarBrandIconEl = (
+    <AttachmentHoverPortal
+      clickOpensPreview
+      triggerClassName="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/30"
+      preview={<PublicStaticImagePreviewBody url={sidebarBrandAppIconUrl} />}
+    >
+      <img
+        src={sidebarBrandPreviewUrl}
+        alt=""
+        className="pointer-events-none h-full w-full object-contain"
+        loading="eager"
+        decoding="async"
+        onError={(e) => {
+          e.currentTarget.style.display = "none";
+          const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+          if (fallback) fallback.style.display = "flex";
+        }}
+      />
+      <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
+        <Flame />
+      </span>
+    </AttachmentHoverPortal>
+  );
 
   return (
     <Sidebar>
       <SidebarHeader className="shrink-0">
-        {/* Brand + Company link: icon flush left; Pocket Ledger above; Company = blue clickable → /company */}
+        {/* Brand icon → portal preview; blue Company → /company only */}
         {useEmbeddedClientNav ? (
           <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald w-full flex items-center justify-start gap-2 py-2 pl-0 pr-2">
-            <button
-              type="button"
-              className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/30 appearance-none p-0 cursor-pointer"
-              title="Select company"
-              onClick={() => navigateSidebarHref("/company")}
-            >
-              <img
-                src="/app-icon.png"
-                alt=""
-                className="h-full w-full object-contain"
-                loading="eager"
-                decoding="async"
-                onError={(e) => {
-                  e.currentTarget.style.display = "none";
-                  const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
-                  if (fallback) fallback.style.display = "flex";
-                }}
-              />
-              <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
-                <Flame />
-              </span>
-            </button>
+            {sidebarBrandIconEl}
             {isOpen ? (
               <div className="min-w-0 flex flex-col items-start justify-center leading-tight">
                 <span className="font-headline w-full truncate text-left text-base font-semibold sm:text-lg">
@@ -742,29 +774,7 @@ export function AppSidebar() {
           </div>
         ) : (
           <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald w-full flex items-center justify-start gap-2 py-2 pl-0 pr-2">
-            <Link
-              prefetch={false}
-              href={appNavHref("/company")}
-              onClick={(e) => onNavLinkClick(e, "/company")}
-              className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/30"
-              title="Select company"
-            >
-              <img
-                src="/app-icon.png"
-                alt=""
-                className="h-full w-full object-contain"
-                loading="eager"
-                decoding="async"
-                onError={(e) => {
-                  e.currentTarget.style.display = "none";
-                  const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
-                  if (fallback) fallback.style.display = "flex";
-                }}
-              />
-              <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
-                <Flame />
-              </span>
-            </Link>
+            {sidebarBrandIconEl}
             {isOpen ? (
               <div className="min-w-0 flex flex-col items-start justify-center leading-tight">
                 <span className="font-headline w-full truncate text-left text-base font-semibold sm:text-lg">

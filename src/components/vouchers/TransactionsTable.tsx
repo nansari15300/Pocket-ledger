@@ -51,6 +51,8 @@ import {
   BillWiseLinkedDetailCells,
   voucherTypePillClassName,
   type FileColumnDisplayMode,
+  readSavedFileColumnViewPrefs,
+  saveFileColumnViewPrefs,
   type TxnDrCrSide,
 } from "./transactionTableShared";
 import { Badge } from "@/components/ui/badge";
@@ -128,41 +130,9 @@ export type VisibleColumns = Partial<Record<TransactionColumnKey, boolean>>;
 
 export { TransactionRow, getConversionFactor, formatQuantity };
 
-/** Spend-wise table-fixed: type pill ("direct expense") — 75px par voucher no overlap hota tha. */
 const SPEND_WISE_TYPE_COL_PX = 112;
-const TXN_FILE_COLUMN_VIEW_PREF_KEY = "pocket-ledger:transactions:file-column-view:v1";
 
-function readSavedFileColumnViewPrefs(): {
-  displayMode: FileColumnDisplayMode;
-  showAll: boolean;
-  filterMode: "all" | "with" | "without";
-} {
-  if (typeof window === "undefined") return { displayMode: "preview", showAll: false, filterMode: "all" };
-  try {
-    const raw = window.localStorage.getItem(TXN_FILE_COLUMN_VIEW_PREF_KEY);
-    if (!raw) return { displayMode: "preview", showAll: false, filterMode: "all" };
-    const parsed = JSON.parse(raw) as { displayMode?: unknown; showAll?: unknown; filterMode?: unknown };
-    const displayMode: FileColumnDisplayMode = parsed.displayMode === "tick" ? "tick" : "preview";
-    const filterMode = parsed.filterMode === "with" || parsed.filterMode === "without" ? parsed.filterMode : "all";
-    return { displayMode, showAll: displayMode === "preview" && parsed.showAll === true, filterMode };
-  } catch {
-    return { displayMode: "preview", showAll: false, filterMode: "all" };
-  }
-}
-
-function saveFileColumnViewPrefs(
-  displayMode: FileColumnDisplayMode,
-  showAll: boolean,
-  filterMode: "all" | "with" | "without"
-): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(
-    TXN_FILE_COLUMN_VIEW_PREF_KEY,
-    JSON.stringify({ displayMode, showAll: displayMode === "preview" && showAll === true, filterMode })
-  );
-}
-
-/** Firestore Timestamp | plain `{seconds}` | Date | string — opening / period row; OB noon parse shared helper */
+/** Spend-wise table-fixed: type pill ("direct expense") — 75px par voucher no overlap hota tha. */
 function normalizeLedgerObDateField(v: unknown): Date | null {
   return parseOpeningBalanceDateToLocalNoon(v);
 }

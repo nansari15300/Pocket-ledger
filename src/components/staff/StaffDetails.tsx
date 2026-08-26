@@ -1,4 +1,4 @@
-﻿
+
 "use client";
 
 import * as React from "react";
@@ -25,7 +25,6 @@ import {
   ChevronsRight,
   FilePlus,
   FileText,
-  Briefcase,
   MoreVertical,
   XCircle,
   ArrowLeft,
@@ -34,6 +33,7 @@ import {
   Search,
   Pencil,
 } from "lucide-react";
+import { StaffAccountFallbackIcon } from "@/components/entity/StaffEntityIcon";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { format, startOfDay, endOfDay } from "date-fns";
@@ -1534,7 +1534,7 @@ export function StaffDetails({
                   className="h-12 w-12 text-lg flex-shrink-0"
                   src={staffHeaderAttachmentUrl ?? undefined}
                   alt={staff.name}
-                  fallbackSlot={<Briefcase className="h-6 w-6 text-muted-foreground" />}
+                  fallbackSlot={<StaffAccountFallbackIcon staff={staff} variant="detail" className="h-6 w-6" />}
                 />
               </EntityFileAttachmentHover>
               <EditStaffDialog

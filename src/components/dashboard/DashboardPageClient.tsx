@@ -1,5 +1,5 @@
-
 'use client';
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import {
   Card,
@@ -1012,7 +1012,7 @@ export function DashboardPageContent() {
 
     const getEntityType = (v: Voucher): string => {
         if(v.partyId) return 'Party';
-        if(v.staffId) return 'Staff';
+        if(v.staffId) return STAFF_ENTITY_LABEL;
         if(v.taxAccountId) return 'Tax';
         if(v.incomeAccountId || v.expenseAccountId) return 'Income/Expense';
         return 'Other';

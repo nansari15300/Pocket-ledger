@@ -1,5 +1,6 @@
-
 "use client";
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
+import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, CalendarIcon } from "lucide-react";
@@ -538,7 +539,7 @@ export function CreateStaffForm({
         companyId,
         collectionName: "staff",
         name: values.name.trim(),
-        entityLabel: "Staff",
+        entityLabel: sidebarEntityMenuLabel("staff"),
       });
       if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate Staff Name", {
@@ -970,7 +971,7 @@ export function CreateStaffForm({
             </div>
             <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly} className="shrink-0">
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Add Staff Member
+              Add {STAFF_ENTITY_LABEL}
             </Button>
           </div>
         </form>

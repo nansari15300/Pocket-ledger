@@ -71,6 +71,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { EditAccountGroupDialog } from "@/components/bank-cash/EditAccountGroupDialog";
 import { EditAccountDialog } from "@/components/bank-cash/EditAccountDialog";
 import { bankAccountDisplayName } from "@/lib/bankAccountDisplayName";
+import { bankLedgerDepositWithdrawColumnLabels } from "@/lib/bankLedgerDrCrPerspective";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
@@ -925,6 +926,7 @@ export function AccountGroupDetails({
       includeNotes: includeNotesInTable,
       visibleColumns,
       userNames,
+      ...bankLedgerDepositWithdrawColumnLabels("bank"),
     };
   }, [
     spendWiseView,
@@ -1297,6 +1299,7 @@ export function AccountGroupDetails({
             spendWise: Boolean(spendWiseView),
             billWise: false,
             userNames: userNames,
+            ...bankLedgerDepositWithdrawColumnLabels("bank"),
           },
           {
             paginatedTransactions,
@@ -1447,6 +1450,7 @@ export function AccountGroupDetails({
               blinkMode={spendWiseBlinkMode}
               spendWiseGroupPrint={spendWiseGroupPrint}
               {...statementCheck.tableProps}
+              {...bankLedgerDepositWithdrawColumnLabels("bank")}
             />
             </div>
             </div>
@@ -1885,6 +1889,7 @@ export function AccountGroupDetails({
               blinkMode={spendWiseBlinkMode}
               spendWiseGroupPrint={spendWiseGroupPrint}
               {...statementCheck.tableProps}
+              {...bankLedgerDepositWithdrawColumnLabels("bank")}
             />
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">

@@ -134,10 +134,23 @@ export async function prewarmVisibleAttachmentRefsForInstantOpen(
 
 /** EXE preview: download + disk write — isse zyada mat wait karo; retry dikhao. */
 const EMBEDDED_PREVIEW_DOWNLOAD_TIMEOUT_MS = 28_000;
-const PDF_HOVER_RASTER_TIMEOUT_MS = 20_000;
+const PDF_HOVER_RASTER_TIMEOUT_MS = 45_000;
 
 function pdfPortalCacheKey(url: string): string {
-  return `${url}::pdf-portal`;
+  return `${url}::pdf-portal-v2`;
+}
+
+type PortalPdfRasterMeta = { pageCount: number; onePageHeightPx: number };
+
+const portalPdfMetaByCacheKey = new Map<string, PortalPdfRasterMeta>();
+
+function rememberPortalPdfMeta(urlKey: string, meta: PortalPdfRasterMeta | undefined): void {
+  if (!meta || meta.pageCount <= 1 || meta.onePageHeightPx < 1) return;
+  portalPdfMetaByCacheKey.set(pdfPortalCacheKey(urlKey), meta);
+}
+
+function peekPortalPdfMeta(urlKey: string): PortalPdfRasterMeta | undefined {
+  return portalPdfMetaByCacheKey.get(pdfPortalCacheKey(urlKey));
 }
 
 /** EXE/APK: pl-attachments / blob cache; web: online par HTTPS allowed. */
@@ -425,12 +438,27 @@ function HoverPreviewHttpsAwareImage(props: {
 /** Multi-file row / local pending: gallery swipe App me */
 export type AttachmentPreviewGalleryOpts = { urls: readonly string[]; startIndex: number };
 
-/** Portal me nested FilePreview (800px box) PDF ko ek side dhakel deta tha — seedha first-page raster + data-pdf-portal-page. */
-function PdfPortalRasterImg({ src, onOpen }: { src: string; onOpen: () => void }) {
+/** Portal raster — single page ya multi-page stitched JPEG; portal scroll se saari pages. */
+function PdfPortalRasterImg({
+  src,
+  onOpen,
+  portalMeta,
+}: {
+  src: string;
+  onOpen: () => void;
+  portalMeta?: PortalPdfRasterMeta | null;
+}) {
+  const multi = portalMeta && portalMeta.pageCount > 1 && portalMeta.onePageHeightPx > 1;
   return (
-    // eslint-disable-next-line @next/next/no-img-element -- pdf.js first-page raster
+    // eslint-disable-next-line @next/next/no-img-element -- pdf.js portal raster
     <img
       data-pdf-portal-page="1"
+      {...(multi
+        ? {
+            "data-pdf-portal-pages": String(portalMeta!.pageCount),
+            "data-pdf-portal-one-page-h": String(Math.round(portalMeta!.onePageHeightPx)),
+          }
+        : {})}
       src={src}
       alt=""
       draggable={false}
@@ -468,7 +496,13 @@ function HttpsPdfPortalHoverPreview({
   const cellThumb = peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`);
 
   if (portalCached) {
-    return <PdfPortalRasterImg src={portalCached} onOpen={onOpen} />;
+    return (
+      <PdfPortalRasterImg
+        src={portalCached}
+        portalMeta={peekPortalPdfMeta(effectiveUrl)}
+        onOpen={onOpen}
+      />
+    );
   }
 
   return (
@@ -536,13 +570,18 @@ function LocalPdfBlobHoverPreview({
         if (pdfBlob.type !== "application/pdf") {
           pdfBlob = new Blob([await pdfBlob.arrayBuffer()], { type: "application/pdf" });
         }
-        const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
-        const result = await convertPdfFirstPageToImage(pdfBlob, 0.92, 1800);
+        const { convertPdfForPortalRasterPreview } = await import("@/lib/pdfToImageExport");
+        const result = await convertPdfForPortalRasterPreview(pdfBlob, {
+          quality: 0.92,
+          maxPageWidth: 1800,
+          signal: ac.signal,
+        });
         if (cancelled || ac.signal.aborted) {
           URL.revokeObjectURL(result.thumbnailUrl);
           return;
         }
         rememberHoverBlobUrl(pdfPortalCacheKey(cacheKey), result.thumbnailUrl);
+        rememberPortalPdfMeta(cacheKey, result.portalMeta);
         void seedOfflineAttachmentCacheFromBlob(pdfPortalCacheKey(cacheKey), result.thumbnailBlob);
         setThumbUrl(result.thumbnailUrl);
       } catch {
@@ -575,7 +614,7 @@ function LocalPdfBlobHoverPreview({
       </div>
     );
   }
-  return <PdfPortalRasterImg src={thumbUrl} onOpen={onOpen} />;
+  return <PdfPortalRasterImg src={thumbUrl} portalMeta={peekPortalPdfMeta(portalCacheKey || sourceUrl)} onOpen={onOpen} />;
 }
 
 /** `local:` / `drive:` / `PL_ATTACH_V1` — PC hover preview: local/pending pehle, phir Drive (HTTPS image path alag). */
@@ -784,14 +823,19 @@ export function LocalFileRefTooltipPreview({
           mime = "application/pdf";
         }
         if (mime.includes("pdf")) {
-          const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
-          const result = await convertPdfFirstPageToImage(blob, 0.92, 1800);
+          const { convertPdfForPortalRasterPreview } = await import("@/lib/pdfToImageExport");
+          const result = await convertPdfForPortalRasterPreview(blob, {
+            quality: 0.92,
+            maxPageWidth: 1800,
+            signal: ac.signal,
+          });
           if (cancelled) {
             URL.revokeObjectURL(result.thumbnailUrl);
             return;
           }
           urlRef.current = result.thumbnailUrl;
           rememberHoverBlobUrl(pdfPortalCacheKey(effectiveUrl), result.thumbnailUrl);
+          rememberPortalPdfMeta(effectiveUrl, result.portalMeta);
           void seedOfflineAttachmentCacheFromBlob(pdfPortalCacheKey(effectiveUrl), result.thumbnailBlob);
           setState({ status: "ready", objectUrl: result.thumbnailUrl, mime: "image/jpeg", fromCellThumb: false });
           return;
@@ -894,11 +938,18 @@ export function LocalFileRefTooltipPreview({
     isPdf || state.fromCellThumb
       ? peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`)
       : null;
+  const portalPdfMeta = peekPortalPdfMeta(effectiveUrl);
+  const isPortalPdfRaster =
+    isImage &&
+    (portalPdfMeta != null ||
+      peekHoverCachedBlobUrl(pdfPortalCacheKey(effectiveUrl)) === objectUrl);
 
   /** Voucher FilePreview hover jaisa — max-w-full / center flex mat (AttachmentHoverPortal width-fit + scroll) */
   return (
     <div className="flex w-max max-w-none flex-shrink-0 flex-col gap-1">
-      {isImage ? (
+      {isPortalPdfRaster ? (
+        <PdfPortalRasterImg src={objectUrl} portalMeta={portalPdfMeta} onOpen={openAttachment} />
+      ) : isImage ? (
         // eslint-disable-next-line @next/next/no-img-element -- blob: preview
         <img
           src={objectUrl}
@@ -983,6 +1034,28 @@ export function MultiAttachmentPortalPreview({
     <VoucherAttachmentFallbackContext.Provider value={{ companyId: cid, voucherId: vid }}>
       {body}
     </VoucherAttachmentFallbackContext.Provider>
+  );
+}
+
+export function isPublicStaticImageUrl(url: string | null | undefined): boolean {
+  const u = String(url ?? "").trim();
+  if (!u) return false;
+  if (u.startsWith("blob:") || u.startsWith("data:")) return true;
+  if (u.startsWith("/") && !u.startsWith("//")) return true;
+  return false;
+}
+
+/** App public assets (`/app-icon.png`, `/icons/…`) — attachment download pipeline ki zaroorat nahi. */
+export function PublicStaticImagePreviewBody({ url }: { url: string }) {
+  return (
+    <div className="flex min-h-[160px] min-w-[200px] items-center justify-center p-4">
+      <img
+        src={url}
+        alt=""
+        draggable={false}
+        className="max-h-[min(70vh,520px)] max-w-[min(92vw,520px)] object-contain"
+      />
+    </div>
   );
 }
 

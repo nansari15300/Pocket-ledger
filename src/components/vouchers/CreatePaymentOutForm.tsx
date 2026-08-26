@@ -1,5 +1,5 @@
-
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -53,6 +53,7 @@ import {
   uploadVoucherAttachmentFileToFirebase,
   voucherAttachmentFieldsForSave,
   normalizeFormFileUrlsForSave,
+  voucherAttachmentLockSaveOpts,
 } from "@/lib/voucherFormAttachmentSave";
 import { useVoucherAttachmentPostSaveSync } from "@/hooks/useVoucherAttachmentPostSaveSync";
 import { toast as sonnerToast } from "sonner";
@@ -89,6 +90,7 @@ import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
+import { readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import { useAccountBalance } from "@/hooks/useAccountBalance";
 import { bankAccountAllowsVoucherMinusBalance } from "@/lib/bankAccountMinusBalancePolicy";
@@ -1537,9 +1539,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             : Number(formAmount || 0);
 
       const filesForSave = await prepareVoucherAttachmentsForSave(files, {
-        companyId,
-        savePdfAsImage,
-      });
+          companyId,
+          savePdfAsImage,
+          lockedPdfFileUrls: readLockedPdfFileUrlsFromRow(voucher),
+        });
 
       // Journal/Note path: existing string URLs + new File upload/stage, then attach to payload.
       let fileUrls: string[] = normalizeFormFileUrlsForSave(
@@ -1644,7 +1647,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       delete sanitizedData.fileUrls;
       delete sanitizedData.files;
       delete sanitizedData.unassignedFile;
-      Object.assign(sanitizedData, voucherAttachmentFieldsForSave(fileUrls));
+      Object.assign(sanitizedData, voucherAttachmentFieldsForSave(fileUrls, voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))));
 
       const isEdit = !!voucher?.id && !originalVoucherIdToDelete;
       const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
@@ -1782,7 +1785,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   { key: "voucherNumber", label: "Voucher number" },
                   { key: "accountId", label: "Account" },
                   { key: "partyId", label: "Party" },
-                  { key: "staffId", label: "Staff" },
+                  { key: "staffId", label: STAFF_ENTITY_LABEL },
                   { key: "expenseAccountId", label: "Expense account" },
                   { key: "toAccountId", label: "To account" },
                 ]
@@ -2147,7 +2150,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   
   const paymentPayeeTypes = [
     { value: 'party', label: 'Party' },
-    { value: 'staff', label: 'Staff' },
+    { value: 'staff', label: STAFF_ENTITY_LABEL },
     { value: 'tax', label: 'Tax' },
   ];
   const expensePayeeTypes = [
@@ -3252,6 +3255,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <FormLabel>Attach Files (Optional)</FormLabel>
                 {showPdfAsImageToggle && (
                   <VoucherPdfAsImageToggle
+                    existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(voucher)}
                     id="voucher-save-pdf-as-image-payment-out"
                     checked={savePdfAsImage}
                     onCheckedChange={setSavePdfAsImage}
@@ -4057,7 +4061,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           isOpen={isLinkToSalaryOpen}
           onOpenChange={setIsLinkToSalaryOpen}
           staffId={staffId}
-          staffName={processedStaff.find((s) => s.id === staffId)?.name ?? "Staff"}
+          staffName={processedStaff.find((s) => s.id === staffId)?.name ?? STAFF_ENTITY_LABEL}
           paymentOutId={voucher?.id ?? savedVoucherId ?? null}
           amountPaid={amountPaid}
           existingAllocations={allocations}

@@ -1,4 +1,5 @@
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 
 /**
  * Browser tab + **Electron EXE tab strip** (`webContents.getTitle()` = `document.title`).
@@ -40,7 +41,8 @@ const ROUTE_PREFIX_LABELS: { prefix: string; label: string }[] = [
   { prefix: "/contra", label: "Contra" },
   { prefix: "/embed", label: "Voucher" },
   { prefix: "/sale", label: "Sale" },
-  { prefix: "/staff", label: "Staff" },
+  { prefix: "/loans", label: "Loan Overview" },
+  { prefix: "/staff", label: STAFF_ENTITY_LABEL },
   { prefix: "/items", label: "Items & Service" },
   { prefix: "/tax", label: "Tax" },
   { prefix: "/notes", label: "Notes" },

@@ -32,10 +32,11 @@ import { openPrintDirect } from "@/lib/printDirect";
 import { resolveLedgerRowToVoucherId } from "@/lib/resolveLedgerVoucherId";
 import { getFiscalMergePartitionDateFromCompany } from "@/lib/fiscalPartitionRows";
 import { buildBankAccountSpendWiseRows } from "@/lib/buildBankAccountSpendWiseRows";
-import { BankLedgerDrCrPerspectiveSwitch } from "@/components/bank-cash/BankLedgerDrCrPerspectiveSwitch";
 import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
 import {
   applyBankDrCrPerspectiveToTxnRows,
+  bankLedgerDepositWithdrawColumnLabels,
+  bankLedgerTxnColumnLabels,
   flipLedgerDrCr,
   flipLedgerSignedBalance,
 } from "@/lib/bankLedgerDrCrPerspective";
@@ -132,8 +133,7 @@ export default function DesktopBankStatementPage() {
     });
   }, []);
   const { spendWiseBlinkMode } = useSpendWiseBlinkMode();
-  const { perspective: bankDrCrPerspective, setPerspective: setBankDrCrPerspective } =
-    useBankLedgerDrCrPerspective();
+  const { perspective: bankDrCrPerspective } = useBankLedgerDrCrPerspective();
 
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<AccountGroup | null>(null);
@@ -351,6 +351,14 @@ export default function DesktopBankStatementPage() {
   const displayPeriodTotals = flipLedgerDrCr(periodDr, periodCr, activeBankDrCrPerspective);
   const displayClosingBalance = flipLedgerSignedBalance(closingBalance, activeBankDrCrPerspective);
 
+  const bankDepositWithdrawColumnLabels = useMemo(
+    () =>
+      selectedAccount
+        ? bankLedgerTxnColumnLabels(selectedAccount.accountType, activeBankDrCrPerspective)
+        : bankLedgerDepositWithdrawColumnLabels(activeBankDrCrPerspective),
+    [selectedAccount, activeBankDrCrPerspective]
+  );
+
   const bankStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${spendWiseActive ? "sw" : "st"}|${activeBankDrCrPerspective}`;
   const {
     pagingMeta: bankStatementMobilePaging,
@@ -450,7 +458,10 @@ export default function DesktopBankStatementPage() {
       else dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
     }
     const entityName = selectedAccount ? selectedAccount.accountName : selectedGroup?.name || "";
-    const printRows = displayTableRows.filter((t: any) => !(t as any)._spendWiseSpacer);
+    const printRows = displayTableRowsForPerspective.filter((t: any) => !(t as any)._spendWiseSpacer);
+    const printDrCrLabels = selectedAccount
+      ? bankLedgerTxnColumnLabels(selectedAccount.accountType, activeBankDrCrPerspective)
+      : bankLedgerDepositWithdrawColumnLabels(activeBankDrCrPerspective);
     openPrintDirect(
       {
         company: {
@@ -473,7 +484,7 @@ export default function DesktopBankStatementPage() {
         dateSystem: dateSystem,
         dateRangeText,
         vouchersCount: printRows.length,
-        openingBalance: openingBalanceForPeriod,
+        openingBalance: displayOpeningBalanceForPeriod,
         transactions: printRows,
         showNarration: true,
         userNames: userNames,
@@ -482,6 +493,7 @@ export default function DesktopBankStatementPage() {
         billWise: false,
         fiscalMergePartitionAt: getFiscalMergePartitionDateFromCompany(company) ?? undefined,
         fiscalPartitionLabel: company.fiscalPartitionLabel || undefined,
+        ...printDrCrLabels,
       },
       true
     );
@@ -755,15 +767,6 @@ export default function DesktopBankStatementPage() {
         ) : (
           <>
             <MobileDetailSummaryCollapsible>
-            {selectedAccount ? (
-              <div className="flex justify-end pb-1">
-                <BankLedgerDrCrPerspectiveSwitch
-                  compact
-                  perspective={bankDrCrPerspective}
-                  onPerspectiveChange={setBankDrCrPerspective}
-                />
-              </div>
-            ) : null}
             <div className="flex flex-nowrap gap-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               {summaryCards.map((card) => (
                 <ReportSummaryCard key={card.title} title={card.title} amount={card.amount} color={card.color} />
@@ -800,6 +803,7 @@ export default function DesktopBankStatementPage() {
                         className="h-8 w-32 max-w-[140px] text-sm"
                       />
                     }
+                    {...bankDepositWithdrawColumnLabels}
                   />
                 </div>
               ) : (
@@ -828,6 +832,7 @@ export default function DesktopBankStatementPage() {
                       className="h-8 w-32 max-w-[140px] text-sm"
                     />
                   }
+                  {...bankDepositWithdrawColumnLabels}
                 />
               )}
             </div>

@@ -1,4 +1,5 @@
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_SEARCH_PLACEHOLDER } from "@/lib/staffEntityDisplayName";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PlusCircle, Search } from "lucide-react";
@@ -178,10 +179,10 @@ export function AddSalaryReportDetail() {
             amountText: formatCurrencyForPrint(totalSalaryAdded, { noSuffix: true }),
             amountClassName: "text-blue-600",
           }}
-          searchPlaceholder="Search staff..."
+          searchPlaceholder={STAFF_ENTITY_SEARCH_PLACEHOLDER}
           searchValue={searchTerm}
           onSearchChange={setSearchTerm}
-          listSectionTitle={`Staff (${filteredStaff.length})`}
+          listSectionTitle={`${STAFF_ENTITY_LABEL} (${filteredStaff.length})`}
         >
           <StaffList staff={filteredStaff} onSelectStaff={handleSelectStaff} selectedStaff={selectedStaff} searchTerm={searchTerm} />
         </ReportRegisterMobileListChrome>
@@ -208,11 +209,11 @@ export function AddSalaryReportDetail() {
             <div className="p-3 border-b flex-shrink-0">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input placeholder="Search staff..." className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                <Input placeholder={STAFF_ENTITY_SEARCH_PLACEHOLDER} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
               </div>
             </div>
             <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
-              <h3 className="text-sm font-semibold">Staff ({filteredStaff.length})</h3>
+              <h3 className="text-sm font-semibold">{STAFF_ENTITY_LABEL} ({filteredStaff.length})</h3>
             </div>
             <div className="flex-1 min-h-0 overflow-hidden">
               <StaffList staff={filteredStaff} onSelectStaff={handleSelectStaff} selectedStaff={selectedStaff} searchTerm={searchTerm} />

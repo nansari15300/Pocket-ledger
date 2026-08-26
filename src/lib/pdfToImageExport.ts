@@ -31,13 +31,82 @@ export type ConvertPdfToStitchedJpegOptions = {
   signal?: AbortSignal;
 };
 
+/** Open / preview: multi-page PDF image shortcut se bachne ke liye. */
+export async function getPdfPageCount(pdfInput: File | Blob): Promise<number> {
+  if (typeof document === "undefined") return 1;
+  const { pdfjsLib, pdfjs } = await importPdfJsDist();
+  const version =
+    (pdfjsLib as { version?: string }).version ??
+    pdfjs.version ??
+    PDFJS_WORKER_VERSION_FALLBACK;
+  await ensurePdfJsWorker(pdfjs as never, version);
+
+  const pdfBytes = new Uint8Array(await pdfInput.arrayBuffer());
+  if (!isPdfLikeUint8Header(pdfBytes.subarray(0, Math.min(pdfBytes.byteLength, 256)))) {
+    return 1;
+  }
+  const loadingTask = pdfjs.getDocument({ data: pdfBytes }) as {
+    promise: Promise<PdfJsDocLike>;
+  };
+  const pdfSrc = await loadingTask.promise;
+  const n = Math.max(1, pdfSrc.numPages || 1);
+  try {
+    await pdfSrc.destroy();
+  } catch {
+    /* ignore */
+  }
+  return n;
+}
+
+export type PortalPdfRasterMeta = {
+  pageCount: number;
+  /** Stitched JPEG me pehli page ki height (natural px) — portal fit 1 page ke liye. */
+  onePageHeightPx: number;
+};
+
+/** Hover portal: 1 page → first-page raster; 2+ pages → vertical stitched JPEG (scroll). */
+export async function convertPdfForPortalRasterPreview(
+  pdfInput: File | Blob,
+  options?: { quality?: number; maxPageWidth?: number; signal?: AbortSignal }
+): Promise<{ thumbnailUrl: string; thumbnailBlob: Blob; portalMeta?: PortalPdfRasterMeta }> {
+  const quality = options?.quality ?? 0.92;
+  const maxPageWidth = options?.maxPageWidth ?? 1800;
+  const signal = options?.signal;
+
+  const pageCount = await getPdfPageCount(pdfInput);
+  if (pageCount > 1) {
+    const stitched = await convertPdfToStitchedJpegFile(pdfInput, {
+      maxPageWidth,
+      quality,
+      signal,
+    });
+    return {
+      thumbnailUrl: URL.createObjectURL(stitched.file),
+      thumbnailBlob: stitched.file,
+      portalMeta: {
+        pageCount: stitched.pageCount,
+        onePageHeightPx: stitched.onePageHeightPx,
+      },
+    };
+  }
+
+  const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
+  return convertPdfFirstPageToImage(pdfInput, quality, maxPageWidth, { signal });
+}
+
+export type StitchedJpegResult = {
+  file: File;
+  pageCount: number;
+  onePageHeightPx: number;
+};
+
 /**
  * PDF → ek hi JPEG file (pages vertically stacked). Naam: `foo.pdf` → `foo_all_pages.jpg`
  */
 export async function convertPdfToStitchedJpegFile(
   pdfInput: File | Blob,
   options: ConvertPdfToStitchedJpegOptions = {}
-): Promise<File> {
+): Promise<StitchedJpegResult> {
   if (typeof document === "undefined") {
     throw new Error("convertPdfToStitchedJpegFile requires browser");
   }
@@ -84,6 +153,7 @@ export async function convertPdfToStitchedJpegFile(
 
   const canvasW = Math.max(1, Math.floor(targetW * globalScale));
   const canvasH = Math.max(1, Math.floor(totalH * globalScale));
+  const onePageHeightPx = Math.max(1, Math.floor(pageDims[0].h * globalScale));
 
   const canvas = document.createElement("canvas");
   canvas.width = canvasW;
@@ -145,8 +215,9 @@ export async function convertPdfToStitchedJpegFile(
       ? pdfInput.name.replace(/\.pdf$/i, "_all_pages")
       : "attachment_all_pages";
 
-  return new File([blob], `${baseName}.jpg`, {
+  const file = new File([blob], `${baseName}.jpg`, {
     type: "image/jpeg",
     lastModified: Date.now(),
   });
+  return { file, pageCount: numPages, onePageHeightPx };
 }

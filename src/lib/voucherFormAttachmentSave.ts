@@ -23,9 +23,12 @@ import {
 } from "@/lib/voucherAttachmentNormalize";
 import { resolveFormAttachmentUrlsForEditSave } from "@/lib/formAttachmentEditHelper";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
+import { isFirebaseLedgerCompanyAttachmentUploadEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import {
-  isFirebaseLedgerCompanyAttachmentUploadEnabled,
-} from "@/lib/firebaseLedgerCompanySyncPrefs";
+  buildLockedPdfFileUrlsForSave,
+  readLockPdfAsPdfPreference,
+  readLockedPdfFileUrlsFromRow,
+} from "@/lib/attachmentPdfOptions";
 
 /**
  * Form `files` state me `PL_ATTACH_V1:local:uuid` clipboard marker strings ho sakti hain (paste / Reuse).
@@ -169,15 +172,45 @@ export async function materializeVoucherFileUrlsForWebSave(params: {
 }
 
 /** Save payload: stale `files[]` metadata EXE par removed attachment dubara na dikhaye. */
-export function voucherAttachmentFieldsForSave(fileUrls: string[]): {
+export function voucherAttachmentFieldsForSave(
+  fileUrls: string[],
+  opts?: {
+    existingLockedPdfFileUrls?: readonly string[];
+    canUnlockLockedPdf?: boolean;
+  }
+): {
   fileUrls: string[];
   files: [];
   unassignedFile: null;
+  lockedPdfFileUrls?: string[];
+} {
+  const fields = {
+    fileUrls,
+    files: [] as [],
+    unassignedFile: null,
+  };
+
+  const lockedPdfFileUrls = buildLockedPdfFileUrlsForSave({
+    lockPdfAsPdf: readLockPdfAsPdfPreference(false),
+    existingLocked: opts?.existingLockedPdfFileUrls,
+    finalFileUrls: fileUrls,
+    canUnlockLockedPdf: opts?.canUnlockLockedPdf ?? false,
+  });
+
+  if (lockedPdfFileUrls.length === 0) return fields;
+  return { ...fields, lockedPdfFileUrls };
+}
+
+export function voucherAttachmentLockSaveOpts(
+  row: Record<string, unknown> | null | undefined,
+  canUnlockLockedPdf: boolean
+): {
+  existingLockedPdfFileUrls: string[];
+  canUnlockLockedPdf: boolean;
 } {
   return {
-    fileUrls,
-    files: [],
-    unassignedFile: null,
+    existingLockedPdfFileUrls: readLockedPdfFileUrlsFromRow(row ?? null),
+    canUnlockLockedPdf,
   };
 }
 

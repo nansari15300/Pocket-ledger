@@ -120,11 +120,13 @@ import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
+import { readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import {
   applyVoucherAttachmentsAfterFormSave,
   finalizeVoucherAttachmentsAfterFormSave,
   uploadVoucherAttachmentFileToFirebase,
   voucherAttachmentFieldsForSave,
+  voucherAttachmentLockSaveOpts,
 } from "@/lib/voucherFormAttachmentSave";
 import { CreateBankAccountDialog } from "../bank-cash/CreateBankAccountDialog";
 import { AddVoucherDialog } from "./AddVoucherDialog";
@@ -1241,6 +1243,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const filesForSave = await prepareVoucherAttachmentsForSave(files, {
           companyId,
           savePdfAsImage,
+          lockedPdfFileUrls: readLockedPdfFileUrlsFromRow(voucher),
         });
 
         /** Convert / Copy-draft: Firestore `saveVoucher` 4th arg — copy pehli bar null hona chahiye (stale id overwrite na ho). */
@@ -1314,7 +1317,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
         let finalData = {
           ...submissionData,
-          ...voucherAttachmentFieldsForSave(existingFileUrls),
+          ...voucherAttachmentFieldsForSave(existingFileUrls, voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))),
           isApproved: isCompanyAdmin ? true : (data.isApproved ?? voucher?.isApproved ?? false),
         };
         // Keep opening balance link from current voucher (set by Link to Txns); copy-draft pehli save par stale savedVoucherId se purani row na uthao
@@ -3479,6 +3482,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       <FormLabel className="text-sm">Attach Files</FormLabel>
                       {showPdfAsImageToggle && (
                         <VoucherPdfAsImageToggle
+                          existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(voucher)}
                           id="voucher-save-pdf-as-image-sale-mobile"
                           checked={savePdfAsImage}
                           onCheckedChange={setSavePdfAsImage}
@@ -3782,6 +3786,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <FormLabel>Attach Files (Optional)</FormLabel>
                         {showPdfAsImageToggle && (
                           <VoucherPdfAsImageToggle
+                            existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(voucher)}
                             id="voucher-save-pdf-as-image-sale-desktop"
                             checked={savePdfAsImage}
                             onCheckedChange={setSavePdfAsImage}

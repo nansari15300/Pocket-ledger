@@ -37,6 +37,7 @@ import {
   applyVoucherAttachmentsAfterFormSave,
   finalizeVoucherAttachmentsAfterFormSave,
   voucherAttachmentFieldsForSave,
+  voucherAttachmentLockSaveOpts,
 } from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
@@ -55,6 +56,7 @@ import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
+import { readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { Upload } from "lucide-react";
 import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
@@ -494,9 +496,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       setIsLoading(true);
 
       const filesForSave = await prepareVoucherAttachmentsForSave(files, {
-        companyId,
-        savePdfAsImage,
-      });
+          companyId,
+          savePdfAsImage,
+          lockedPdfFileUrls: readLockedPdfFileUrlsFromRow(voucher),
+        });
 
       let existingFileUrls = filesForSave.filter((f): f is string => typeof f === 'string');
       // `files` UI list is canonical — do not re-inject `unassignedFile` (resurrects removed attachments).
@@ -568,7 +571,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         totalOutput: data.totalOutput,
         total: data.totalOutput,
         amount: data.totalOutput,
-        ...voucherAttachmentFieldsForSave(existingFileUrls),
+        ...voucherAttachmentFieldsForSave(existingFileUrls, voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))),
       };
 
       const result = await saveVoucher(

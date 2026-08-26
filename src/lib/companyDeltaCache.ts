@@ -22,6 +22,14 @@ export const COMPANY_COLLECTION_PATHS = [
   "expense_groups",
   "alarms",
   "recurring_voucher_templates",
+  "loans",
+  "loan_schedules",
+  "loan_transactions",
+  "loan_rate_history",
+  "loan_charges",
+  "loan_audit_logs",
+  "loan_settings",
+  "loan_documents",
 ] as const;
 
 export type CompanyCollectionPath = (typeof COMPANY_COLLECTION_PATHS)[number];

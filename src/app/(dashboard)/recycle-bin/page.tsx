@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { useCompany } from "@/hooks/useCompany";
+import { STAFF_ENTITY_GROUPS_LABEL, STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 import { PermissionRouteGuard } from "@/components/permission/PermissionRouteGuard";
 import {
     collection,
@@ -35,6 +35,7 @@ import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
+import { useCompany } from "@/hooks/useCompany";
 import usePermissions, { canForRecycleBinLocalCompany, type PermissionConfig } from "@/hooks/usePermissions";
 import { assertCan, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
 import { PermissionButton } from "@/components/permission";
@@ -258,8 +259,8 @@ const COLLECTIONS_TO_CHECK = [
     { path: 'groups', nameField: 'name', type: 'Party Group' },
     { path: 'bank_accounts', nameField: 'accountName', type: 'Bank/Cash Account' },
     { path: 'account_groups', nameField: 'name', type: 'Account Group' },
-    { path: 'staff', nameField: 'name', type: 'Staff' },
-    { path: 'staff_groups', nameField: 'name', type: 'Staff Group' },
+    { path: 'staff', nameField: 'name', type: STAFF_ENTITY_LABEL },
+    { path: 'staff_groups', nameField: 'name', type: STAFF_ENTITY_GROUPS_LABEL },
     { path: 'items', nameField: 'name', type: 'Item' },
     { path: 'item_groups', nameField: 'name', type: 'Item Group' },
     { path: 'taxes', nameField: 'name', type: 'Tax' },

@@ -9,7 +9,7 @@ import Link from "next/link";
 import { Upload } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
-import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
+import { AttachmentPdfOptionsPanel } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 import { toast as sonnerToast } from "sonner";
 import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -19,7 +19,7 @@ import type { Control, FieldValues, Path } from "react-hook-form";
 import {
   MASTER_SAVE_PDF_AS_IMAGE_STORAGE_KEY,
   readMasterSavePdfAsImagePreference,
-} from "@/lib/entityProfileLocalFiles";
+} from "@/lib/attachmentPdfOptions";
 
 const DOC_SIZE = 96;
 
@@ -37,10 +37,12 @@ export function MasterPdfAsImageToggle({
   id = "master-save-pdf-as-image",
   disabled,
   className,
+  existingLockedPdfFileUrls,
 }: {
   id?: string;
   disabled?: boolean;
   className?: string;
+  existingLockedPdfFileUrls?: readonly string[];
 }) {
   const [checked, setChecked] = React.useState(false);
 
@@ -58,12 +60,13 @@ export function MasterPdfAsImageToggle({
   };
 
   return (
-    <VoucherPdfAsImageToggle
-      id={id}
-      checked={checked}
-      onCheckedChange={handleChange}
+    <AttachmentPdfOptionsPanel
+      savePdfAsImage={checked}
+      onSavePdfAsImageChange={handleChange}
+      existingLockedPdfFileUrls={existingLockedPdfFileUrls}
       disabled={disabled}
       className={className}
+      savePdfAsImageId={id}
     />
   );
 }
@@ -158,6 +161,7 @@ export function EntityDocumentsBlock({
   attachmentCompanyId,
   setDocSlots,
   attachmentReusePlaceKey,
+  existingLockedPdfFileUrls,
 }: {
   docSlots: Array<File | string>;
   onRemoveDoc: (idx: number) => void;
@@ -172,6 +176,7 @@ export function EntityDocumentsBlock({
   /** Paste/Reuse HTTPS link (same company) — no re-upload. */
   setDocSlots?: React.Dispatch<React.SetStateAction<Array<File | string>>>;
   attachmentReusePlaceKey?: string | null;
+  existingLockedPdfFileUrls?: readonly string[];
 }) {
   // Edit mode: saare slots string URL hon to full-screen viewer me ← → / swipe same set
   const galleryUrls =
@@ -194,7 +199,10 @@ export function EntityDocumentsBlock({
         </p>
       ) : (
         <div className="space-y-2">
-          <MasterPdfAsImageToggle id={`${inputId}-pdf-as-image`} />
+          <MasterPdfAsImageToggle
+            id={`${inputId}-pdf-as-image`}
+            existingLockedPdfFileUrls={existingLockedPdfFileUrls}
+          />
           <div className="flex flex-wrap items-start gap-2">
             {docSlots.map((slot, idx) => (
               <FilePreview

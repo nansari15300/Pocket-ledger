@@ -1,6 +1,6 @@
-
-
 "use client";
+
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 
 import {
   Card,
@@ -864,7 +864,7 @@ export default function DashboardPage() {
 
     const getEntityType = (v: Voucher): string => {
         if(v.partyId) return 'Party';
-        if(v.staffId) return 'Staff';
+        if(v.staffId) return STAFF_ENTITY_LABEL;
         if(v.taxAccountId) return 'Tax';
         if(v.incomeAccountId || v.expenseAccountId || v.toAccountId) return 'Income/Expense';
         return 'Other';
@@ -1612,7 +1612,7 @@ export default function DashboardPage() {
                                     <div className="w-64 border-r p-2 space-y-1">
                                         <Button variant={cashFlowCategoryFilter === 'all' ? 'secondary' : 'ghost'} className="w-full justify-start capitalize" onClick={() => setCashFlowCategoryFilter('all')}>All</Button>
                                         <Button variant={cashFlowCategoryFilter === 'party' ? 'secondary' : 'ghost'} className="w-full justify-start capitalize" onClick={() => setCashFlowCategoryFilter('party')}>Party</Button>
-                                        <Button variant={cashFlowCategoryFilter === 'staff' ? 'secondary' : 'ghost'} className="w-full justify-start capitalize" onClick={() => setCashFlowCategoryFilter('staff')}>Staff</Button>
+                                        <Button variant={cashFlowCategoryFilter === 'staff' ? 'secondary' : 'ghost'} className="w-full justify-start capitalize" onClick={() => setCashFlowCategoryFilter('staff')}>{STAFF_ENTITY_LABEL}</Button>
                                         <Button variant={cashFlowCategoryFilter === 'tax' ? 'secondary' : 'ghost'} className="w-full justify-start capitalize" onClick={() => setCashFlowCategoryFilter('tax')}>Tax</Button>
                                         <Button variant={cashFlowCategoryFilter === 'income_expense' ? 'secondary' : 'ghost'} className="w-full justify-start capitalize" onClick={() => setCashFlowCategoryFilter('income_expense')}>Income / Expense</Button>
                                         <Button variant={cashFlowCategoryFilter === 'other' ? 'secondary' : 'ghost'} className="w-full justify-start capitalize" onClick={() => setCashFlowCategoryFilter('other')}>Other</Button>

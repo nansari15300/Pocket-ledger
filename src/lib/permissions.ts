@@ -70,7 +70,8 @@ export type Permission =
   /** Reconciling page — blank row par remote txn se sync voucher */
   | "sync_reconciliation_transaction"
   /** Freeze party / bank / staff / tax master account (block new txns + banner). */
-  | "freeze_master_account";
+  | "freeze_master_account"
+  | "unlock_locked_pdf";
 
 export type PermissionInfo = {
   key: Permission;
@@ -212,6 +213,17 @@ export const PermissionGroups: PermissionGroup[] = [
                 label: "Can sync trxn",
                 description:
                     "On the Reconciling compare page, allows copying a transaction from the other side into a new voucher on your ledger when your row is blank (Sync transaction link on selected rows).",
+            },
+        ],
+    },
+    {
+        title: "Attachments",
+        permissions: [
+            {
+                key: "unlock_locked_pdf",
+                label: "Unlock locked PDF attachments",
+                description:
+                    "Allows turning off Lock As Pdf on saved voucher or master records that already have locked PDF attachments. Without this, locked PDFs stay as PDF and cannot be converted to JPEG.",
             },
         ],
     },

@@ -712,6 +712,7 @@ function activeMasterCollectionPathsForRoute(
   if (route.startsWith("/bank-cash")) return new Set(["vouchers", "bank_accounts", "account_groups"]);
   if (route.startsWith("/party")) return new Set(["vouchers", "parties", "groups", "expense_accounts"]);
   if (route.startsWith("/staff")) return new Set(["vouchers", "staff", "staff_groups"]);
+  if (route.startsWith("/loans")) return new Set(["vouchers", "staff", "staff_groups", "bank_accounts", "account_groups", "expense_accounts", "expense_groups"]);
   if (route.startsWith("/tax")) return new Set(["vouchers", "taxes", "tax_groups"]);
   if (route.startsWith("/items")) return new Set(["vouchers", "items", "item_groups"]);
   if (route.startsWith("/incomes")) return new Set(["vouchers", "expense_accounts", "expense_groups"]);

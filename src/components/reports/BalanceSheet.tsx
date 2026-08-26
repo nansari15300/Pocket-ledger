@@ -1,5 +1,6 @@
-
 "use client";
+
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 
 import React, { useMemo, useState, useCallback, useEffect } from "react";
 import {
@@ -1513,7 +1514,7 @@ export function BalanceSheetPage() {
                     <option value="all">All Entities</option>
                     <option value="party">Party</option>
                     <option value="account">Bank/Account</option>
-                    <option value="staff">Staff</option>
+                    <option value="staff">{STAFF_ENTITY_LABEL}</option>
                     <option value="tax">Tax</option>
                     <option value="opening_balance">Opening Balance</option>
                   </select>

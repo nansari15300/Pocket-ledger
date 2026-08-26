@@ -55,6 +55,7 @@ import {
 } from "@/lib/fileUploadLimits";
 import { RestrictedFileUploader } from "@/components/ui/RestrictedFileUploader";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { apkCloudCompanyOfflineViewOnly } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { uploadItemAvatarAndAttachmentsRemote } from "@/lib/entityProfileLocalFiles";
@@ -179,7 +180,7 @@ export function CreateFinishedGoodDialog({
         companyId,
         collectionName: "items",
         name: values.name.trim(),
-        entityLabel: "Item",
+        entityLabel: sidebarEntityMenuLabel("items"),
       });
       if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate name", { id: toastId, description: "An item with this name already exists." });

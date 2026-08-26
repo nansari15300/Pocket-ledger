@@ -92,6 +92,7 @@ import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { EntityOpeningBalanceNarrationField } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
 import {
   apkCloudEntityMasterReadFromSqliteMirror,
   apkCloudCompanyOfflineViewOnly,
@@ -544,7 +545,7 @@ export function CreateBankAccountDialog({
         collectionName: "bank_accounts",
         fieldName: "accountName",
         name: values.accountName.trim(),
-        entityLabel: "Bank/Cash Account",
+        entityLabel: sidebarEntityMenuLabel("bankCash"),
       });
       if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate Account Name", {

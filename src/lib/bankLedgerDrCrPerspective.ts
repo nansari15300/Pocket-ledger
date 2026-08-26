@@ -60,6 +60,40 @@ export function applyBankDrCrPerspectiveToTxnRows<
   return rows.map((r) => applyBankDrCrPerspectiveToTxnRow(r, perspective));
 }
 
+/** Bank/Cash txn table — Deposit/Withdraw column titles (flip with Company perspective). */
+export function bankLedgerDepositWithdrawColumnLabels(
+  perspective: BankLedgerDrCrPerspective
+): { debitColumnHeaderLabel: string; creditColumnHeaderLabel: string } {
+  if (perspective === "bank") {
+    return { debitColumnHeaderLabel: "Deposit", creditColumnHeaderLabel: "Withdraw" };
+  }
+  return { debitColumnHeaderLabel: "Withdraw", creditColumnHeaderLabel: "Deposit" };
+}
+
+/** Cash account txn table — In/Out column titles (flip with Company perspective). */
+export function bankLedgerInOutColumnLabels(
+  perspective: BankLedgerDrCrPerspective
+): { debitColumnHeaderLabel: string; creditColumnHeaderLabel: string } {
+  if (perspective === "bank") {
+    return { debitColumnHeaderLabel: "In", creditColumnHeaderLabel: "Out" };
+  }
+  return { debitColumnHeaderLabel: "Out", creditColumnHeaderLabel: "In" };
+}
+
+export function isBankCashAccountTypeCash(accountType: unknown): boolean {
+  return String(accountType || "").toLowerCase() === "cash";
+}
+
+/** Bank account → Deposit/Withdraw; Cash account → In/Out (Company/Bank flip on both). */
+export function bankLedgerTxnColumnLabels(
+  accountType: unknown,
+  perspective: BankLedgerDrCrPerspective
+): { debitColumnHeaderLabel: string; creditColumnHeaderLabel: string } {
+  return isBankCashAccountTypeCash(accountType)
+    ? bankLedgerInOutColumnLabels(perspective)
+    : bankLedgerDepositWithdrawColumnLabels(perspective);
+}
+
 /** Info popover — English intro for staff. */
 export const BANK_LEDGER_DRCR_PERSPECTIVE_INFO = {
   title: "Company vs Bank Dr/Cr",

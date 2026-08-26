@@ -1,4 +1,5 @@
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
 import { useParams, usePathname, useSearchParams } from "next/navigation";
@@ -129,7 +130,7 @@ const COMPARE_ENTITY_SELECT_ITEMS: { value: CompareEntityBucket; label: string }
   { value: "all", label: "All accounts" },
   { value: "party", label: "Parties" },
   { value: "bank", label: "Bank/Cash" },
-  { value: "staff", label: "Staff" },
+  { value: "staff", label: STAFF_ENTITY_LABEL },
   { value: "tax", label: "Tax" },
   { value: "income_expense", label: "Income & Expense" },
 ];

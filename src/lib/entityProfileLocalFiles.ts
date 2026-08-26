@@ -26,28 +26,29 @@ import {
   resolveCompanyUsesPocketLedgerStorage,
 } from "@/lib/firebaseStoragePaths";
 
-export const MASTER_SAVE_PDF_AS_IMAGE_STORAGE_KEY = "pocket-ledger-master-save-pdf-as-image";
-
-export function readMasterSavePdfAsImagePreference(defaultValue = false): boolean {
-  if (typeof window === "undefined") return defaultValue;
-  try {
-    const raw = window.localStorage.getItem(MASTER_SAVE_PDF_AS_IMAGE_STORAGE_KEY);
-    if (raw === "1" || raw === "true") return true;
-    if (raw === "0" || raw === "false") return false;
-  } catch {
-    /* storage optional */
-  }
-  return defaultValue;
-}
+export {
+  MASTER_SAVE_PDF_AS_IMAGE_STORAGE_KEY,
+  readMasterSavePdfAsImagePreference,
+  readLockPdfAsPdfPreference,
+} from "@/lib/attachmentPdfOptions";
 
 async function maybeConvertMasterDocumentPdfsToImages(
   files: File[],
   savePdfAsImage?: boolean,
-  companyId?: string | null
+  companyId?: string | null,
+  opts?: { lockPdfAsPdf?: boolean; lockedPdfFileUrls?: readonly string[] }
 ): Promise<File[]> {
-  const enabled = savePdfAsImage ?? readMasterSavePdfAsImagePreference(false);
+  const { readMasterSavePdfAsImagePreference, readLockPdfAsPdfPreference } = await import(
+    "@/lib/attachmentPdfOptions"
+  );
+  const lockPdfAsPdf = opts?.lockPdfAsPdf ?? readLockPdfAsPdfPreference(false);
+  const enabled = (savePdfAsImage ?? readMasterSavePdfAsImagePreference(false)) && !lockPdfAsPdf;
   if (!enabled || files.length === 0) return files;
-  const converted = await convertPdfAttachmentsToJpegIfEnabled(files, true, { companyId });
+  const converted = await convertPdfAttachmentsToJpegIfEnabled(files, true, {
+    companyId,
+    lockPdfAsPdf,
+    lockedPdfFileUrls: opts?.lockedPdfFileUrls,
+  });
   return converted.filter((item): item is File => item instanceof File);
 }
 

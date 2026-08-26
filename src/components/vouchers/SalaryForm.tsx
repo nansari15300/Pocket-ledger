@@ -1,5 +1,5 @@
-
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -67,7 +67,13 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave, finalizeVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
+import {
+  applyVoucherAttachmentsAfterFormSave,
+  finalizeVoucherAttachmentsAfterFormSave,
+  uploadVoucherAttachmentFileToFirebase,
+  voucherAttachmentFieldsForSave,
+  voucherAttachmentLockSaveOpts,
+} from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
@@ -116,6 +122,7 @@ import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
+import { readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import { CreateBankAccountDialog } from "../bank-cash/CreateBankAccountDialog";
 // Types only — runtime circular import SalaryForm ↔ AddVoucherDialog avoid.
 import type { CopyMasterDraftRequestPayload, CopyMissingMasterOpts } from "./AddVoucherDialog";
@@ -123,6 +130,7 @@ import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import type { Staff } from "@/components/staff/types";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
+import { isLoanLiabilityStaff } from "@/modules/loans/utils/loanLiabilityStaff";
 import type { ExpenseAccount } from "../expenses/types";
 import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDialog";
 import {
@@ -390,6 +398,10 @@ export function SalaryForm({
   const { user, customUser } = useAuth();
   const { formatCurrency, formatCurrencyForPrint, formatDate, formatDateBS, dateSystem } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedStaff, processedTaxes, expenseAccounts, processedAccounts, processedExpenseAccounts } = useVouchers();
+  const salaryStaffOptions = useMemo(
+    () => processedStaff.filter((s) => !isLoanLiabilityStaff(s)).map((s) => ({ value: s.id, label: s.name })),
+    [processedStaff]
+  );
   const { company, companyId } = useCompany();
   const { can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const fileAttachLockedByDialog = !!voucher?.id && deleteDisabledWhenLinked;
@@ -1587,9 +1599,10 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
       }
 
       const filesForSave = await prepareVoucherAttachmentsForSave(files, {
-        companyId,
-        savePdfAsImage,
-      });
+          companyId,
+          savePdfAsImage,
+          lockedPdfFileUrls: readLockedPdfFileUrlsFromRow(voucher),
+        });
       
       const existingUrls = filesForSave.filter(f => typeof f === 'string') as string[];
       const newFiles = filesForSave.filter(f => f instanceof File) as File[];
@@ -1668,7 +1681,10 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
         total: data.total,
         type: voucherType,
         subType: subType,
-        fileUrls: allFileUrls,
+        ...voucherAttachmentFieldsForSave(
+          allFileUrls,
+          voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))
+        ),
         unassignedFile: data.unassignedFile || null,
       };
 
@@ -2247,7 +2263,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                       <div className="[&_button]:h-9 [&_button]:text-xs">
                                         <Combobox
                                           triggerClassName={cn(staffLineNeedsCopyChip(index) && "!border-red-400 !bg-red-100/80 !text-red-700")}
-                                          options={processedStaff.map((s) => ({ value: s.id, label: s.name }))}
+                                          options={salaryStaffOptions}
                                           value={field.value}
                                           onChange={(value, newName) => {
                                             if (value === "add-new") {
@@ -2547,7 +2563,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                         <div className="min-w-0 w-full overflow-hidden [&_button]:h-9">
                                         <Combobox
                                           triggerClassName={cn(staffLineNeedsCopyChip(index) && "!border-red-400 !bg-red-100/80 !text-red-700")}
-                                          options={processedStaff.map((s) => ({ value: s.id, label: s.name }))}
+                                          options={salaryStaffOptions}
                                           value={field.value}
                                           onChange={(value, newName) => {
                                             if (value === "add-new") {
@@ -2765,6 +2781,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                       <FormLabel>Attach Files (Optional)</FormLabel>
                       {showPdfAsImageToggle && (
                         <VoucherPdfAsImageToggle
+                          existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(voucher)}
                           id="voucher-save-pdf-as-image-salary-shared"
                           checked={savePdfAsImage}
                           onCheckedChange={setSavePdfAsImage}
@@ -3004,7 +3021,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                   <tr className="border-b last:border-b-0">
                     <td className="p-2 text-muted-foreground whitespace-nowrap">{voucher?.date ? (() => { const d = typeof (voucher.date as any)?.toDate === "function" ? (voucher.date as any).toDate() : voucher.date instanceof Date ? voucher.date : new Date(voucher.date as string | number); return d && !isNaN(d.getTime()) ? (dateSystem === "AD" ? formatDate(d) : dateSystem === "BS" ? formatDateBS(d) : `${formatDateBS(d)} (${formatDate(d)})`) : "—"; })() : "—"}</td>
                     <td className="p-2 font-medium whitespace-nowrap">{voucher?.voucherNumber ?? "—"}</td>
-                    <td className="p-2 whitespace-nowrap">Staff</td>
+                    <td className="p-2 whitespace-nowrap">{STAFF_ENTITY_LABEL}</td>
                     <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(totalForView, { noSuffix: true })}</td>
                     <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(selectedLinkTotal, { noSuffix: true })}</td>
                     <td className="p-2 text-right font-medium whitespace-nowrap">{formatCurrency(salaryRemainingToLink, { noSuffix: true })}</td>

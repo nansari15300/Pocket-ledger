@@ -1,3 +1,4 @@
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 /** Master categories available in the print-masters picker. */
 export type MasterPrintKind =
   | "party"
@@ -33,7 +34,7 @@ export const MASTER_PRINT_KIND_LABELS: Record<MasterPrintKind, string> = {
   partyGroup: "Party groups",
   bankCash: "Bank / Cash accounts",
   bankCashGroup: "Bank / Cash groups",
-  staff: "Staff",
+  staff: STAFF_ENTITY_LABEL,
   staffGroup: "Staff groups",
   tax: "Tax",
   taxGroup: "Tax groups",

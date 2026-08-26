@@ -11,7 +11,7 @@ import { MasterListRow } from "@/components/ui/master-list-row";
 import { MasterListNameTooltip } from "@/components/entity/MasterListNameTooltip";
 import { MasterAccountFreezeListBadge } from "@/components/masterAccountFreeze/MasterAccountFreezeListBadge";
 import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
-import { Briefcase } from "lucide-react";
+import { StaffAccountFallbackIcon } from "@/components/entity/StaffEntityIcon";
 import React, { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
@@ -146,7 +146,7 @@ export function StaffList({
                           companyId={staffMember.companyId}
                           src={attachmentPreviewUrl ?? undefined}
                           alt={staffMember.name}
-                          fallbackSlot={<Briefcase className="h-4 w-4 text-muted-foreground" />}
+                          fallbackSlot={<StaffAccountFallbackIcon staff={staffMember} />}
                         />
                       </EntityFileAttachmentHover>
                       {(pendingApprovalByStaffId[staffMember.id] ?? 0) > 0 && (

@@ -165,5 +165,19 @@ export const reports: Report[] = [
     description: "View tax accounts and tax-group transaction details.",
     category: "Tax/GST",
   },
+  {
+    id: "loan-overview",
+    name: "Loan Overview",
+    description: "Loan dashboard, schedule, EMI, and accounting reports.",
+    category: "Accounting",
+    href: "/loans",
+  },
+  {
+    id: "loan-outstanding",
+    name: "Outstanding Loan Report",
+    description: "Current outstanding principal by loan.",
+    category: "Accounting",
+    href: "/loans?view=reports",
+  },
   // Removed duplicate Party Ledger from list; Party Statement already covers this flow.
 ];

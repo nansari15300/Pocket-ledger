@@ -140,6 +140,40 @@ export type Context =
 
 export type Transaction = Record<string, any>;
 export type FileColumnDisplayMode = "preview" | "tick";
+export type FileColumnFilterMode = "all" | "with" | "without";
+
+export const TXN_FILE_COLUMN_VIEW_PREF_KEY = "pocket-ledger:transactions:file-column-view:v1";
+
+export function readSavedFileColumnViewPrefs(): {
+  displayMode: FileColumnDisplayMode;
+  showAll: boolean;
+  filterMode: FileColumnFilterMode;
+} {
+  if (typeof window === "undefined") return { displayMode: "preview", showAll: false, filterMode: "all" };
+  try {
+    const raw = window.localStorage.getItem(TXN_FILE_COLUMN_VIEW_PREF_KEY);
+    if (!raw) return { displayMode: "preview", showAll: false, filterMode: "all" };
+    const parsed = JSON.parse(raw) as { displayMode?: unknown; showAll?: unknown; filterMode?: unknown };
+    const displayMode: FileColumnDisplayMode = parsed.displayMode === "tick" ? "tick" : "preview";
+    const filterMode =
+      parsed.filterMode === "with" || parsed.filterMode === "without" ? parsed.filterMode : "all";
+    return { displayMode, showAll: displayMode === "preview" && parsed.showAll === true, filterMode };
+  } catch {
+    return { displayMode: "preview", showAll: false, filterMode: "all" };
+  }
+}
+
+export function saveFileColumnViewPrefs(
+  displayMode: FileColumnDisplayMode,
+  showAll: boolean,
+  filterMode: FileColumnFilterMode
+): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    TXN_FILE_COLUMN_VIEW_PREF_KEY,
+    JSON.stringify({ displayMode, showAll: displayMode === "preview" && showAll === true, filterMode })
+  );
+}
 
 /** Portal preview — stable memo taaki table re-render / reuse-border tick par fetch/spinner reset na ho. */
 function StableAttachmentPortalPreview({

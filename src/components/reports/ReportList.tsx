@@ -4,6 +4,7 @@
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Report } from "./report-data";
+import { reportCategoryDisplayName } from "@/lib/staffEntityDisplayName";
 import { FileText, Users, ReceiptText, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { MasterListRow } from "@/components/ui/master-list-row";
@@ -50,7 +51,7 @@ export function ReportList({
             {groupedReports.map((group) => (
               <li key={group.category} className="space-y-1">
                 <p className="px-1 pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  {group.category}
+                  {reportCategoryDisplayName(group.category)}
                 </p>
                 {group.items.map((report) => {
                 const isSelected = selectedReport?.id === report.id;

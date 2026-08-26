@@ -22,6 +22,7 @@ import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageCl
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
+import { attachmentLockFieldsForFinalUrls, readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import {
   EntityProfilePhotoBlock,
   EntityDocumentsBlock,
@@ -114,7 +115,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     [company, navigatorOnline]
   );
   const { user } = useAuth();
-  const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const { canAddAvatar, canAddFileImagePdf, can } = usePermissions();
   const isMobile = useIsMobile();
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { processedTaxGroups } = useVouchers();
@@ -323,6 +324,12 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           groupId: values.groupId || null,
           fileUrl,
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+          ...attachmentLockFieldsForFinalUrls(documentFileUrls, {
+            existingLockedPdfFileUrls: readLockedPdfFileUrlsFromRow(
+              tax as unknown as Record<string, unknown>
+            ),
+            canUnlockLockedPdf: can("unlock_locked_pdf"),
+          }),
           openingBalanceNarration: narrationClean,
           updatedAt: serverTimestamp(),
         };
@@ -699,6 +706,9 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                   attachmentReusePlaceKey={tax.id ? `taxes/${tax.id}` : null}
                   entityStatementLabel="tax"
                   inputId="edit-tax-docs"
+                  existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(
+                    tax as unknown as Record<string, unknown>
+                  )}
                 />
                 <EntityOpeningBalanceNarrationField
                   control={form.control}

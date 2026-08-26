@@ -839,12 +839,13 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
     const router = useRouter();
     const { user } = useAuth();
 
-    // Settings / gallery / billing statement: body scroll band — andar panel scroll (outer chain `min-h-0`).
+    // Settings / gallery / billing / loans: body scroll band — andar panel scroll (outer chain `min-h-0`).
     useEffect(() => {
         if (
           pathname?.startsWith("/settings") ||
           pathname?.startsWith("/gallery") ||
-          pathname?.startsWith("/billing/statement")
+          pathname?.startsWith("/billing/statement") ||
+          pathname?.startsWith("/loans")
         ) {
             document.documentElement.style.overflow = "hidden";
             document.body.style.overflow = "hidden";
@@ -932,7 +933,8 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       isMobile && "overscroll-x-none",
                       (pathname?.startsWith("/settings") ||
                         pathname?.startsWith("/gallery") ||
-                        pathname?.startsWith("/billing/statement")) &&
+                        pathname?.startsWith("/billing/statement") ||
+                        pathname?.startsWith("/loans")) &&
                         "overflow-hidden"
                     )}
                   >
@@ -960,7 +962,8 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                           "flex min-h-0 flex-1 flex-col",
                           pathname?.startsWith("/settings") ||
                             pathname?.startsWith("/gallery") ||
-                            pathname?.startsWith("/billing/statement")
+                            pathname?.startsWith("/billing/statement") ||
+                            pathname?.startsWith("/loans")
                             ? "overflow-hidden"
                             : "overflow-y-auto"
                         )}

@@ -1,3 +1,5 @@
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
+
 /** Share for Reconciliation — entity / account types (ledger modules). */
 export type ReconciliationEntityType = "party" | "bank" | "staff" | "tax" | "expense";
 

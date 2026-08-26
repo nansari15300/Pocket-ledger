@@ -32,7 +32,23 @@ Backup/restore was stabilized for online → local portable `.plbp` with attachm
 - Keep the change minimal and scoped to the request.
 - Preserve: SQLite-only static backup, download vs continue-local-only prompt, pending `local:` embed, restore attachment hold (no orphan wipe of restored bytes), zip byte sniff on restore.
 
-## Freeze: PDF Portal Preview
+## Freeze: Attachment preview (hard — both systems)
+
+**Aug 2026:** Hover portal preview **and** click-to-open full preview are stabilized on web, EXE, and APK. **Do not edit either system unless the human explicitly asks to change attachment preview in that same message.**
+
+### Permission (every AI)
+
+Before changing **any** file listed below (or preview fit/zoom/open routing behavior):
+
+1. **Stop** — do not edit, refactor, or “small fix” preview code while doing unrelated work.
+2. **Ask the human** in chat: which preview (portal / full open / both), what symptom, and confirm they want an edit now.
+3. Proceed **only** after explicit approval in that conversation (e.g. “preview fix karo”, “portal preview change”, “PDF open preview change”).
+
+Casual mentions (“PDF thoda adjust”, “preview improve”) without clear override **do not** lift this freeze.
+
+---
+
+### A. PDF portal preview (hover / ledger cell / portal panel)
 
 PDF attachment portal preview was stabilized so PDF files behave like image previews:
 
@@ -41,30 +57,66 @@ PDF attachment portal preview was stabilized so PDF files behave like image prev
 - repeated portal opens must not reuse revoked `blob:` URLs or collapse to an empty strip
 - fit-window must stay stable on first click and repeat clicks
 
-### Frozen preview paths (do not touch casually)
+#### Frozen portal paths (do not touch casually)
 
 - `src/components/vouchers/AttachmentHoverPortal.tsx`
 - `src/components/vouchers/attachmentHoverPreviewBody.tsx`
 - `src/hooks/useAttachmentThumbDisplayUrl.ts`
 - `src/lib/attachmentHoverBlobCache.ts`
 - `src/lib/pdfToImage.ts`
+- `src/lib/pdfToImageExport.ts` (portal raster + stitched JPEG meta — shared with full open; **frozen for preview**)
 
-### Do not
+#### Do not (portal)
 
 - Revert PDF portal preview back to browser/PDF iframe rendering for this portal.
 - Mix the full-quality PDF portal raster cache with the small `::cell-thumb` cache.
 - Revoke a cached `blob:` URL without removing that exact cache entry.
-- Change PDF preview fit/zoom behavior unless the human explicitly asks.
+- Change PDF portal fit/zoom/scroll behavior unless the human explicitly asks.
 
-### If the human explicitly asks to change PDF preview
+---
 
-- Keep row thumbnails small.
-- Keep portal preview direct and clear once the PDF raster is cached.
-- Preserve repeat-click behavior: first click, close, second click must show the file again.
+### B. Full attachment open preview (click tile → fullscreen)
 
-### Not frozen (backup preview UI OK)
+Click-to-open preview was stabilized so party and voucher forms behave the same:
 
-Display/thumb fixes may touch `FilePreview`, `attachmentHoverPreviewBody`, `useAttachmentThumbDisplayUrl`, etc. **without** changing backup pack / restore write logic, unless the human asks to change backup itself. For PDF portal preview, follow the freeze above.
+- PDF opens via raster → **`showInAppImagePreview`** (toolbar: **Browser / Width / Height**; default **Height** = one page fit)
+- multi-page PDF: stitched JPEG, `pdfOnePageHeightPx`, scroll for page 2+
+- JPEG bytes stored with PDF label (“save as image” / locked PDF image) → **image preview**, not native PDF iframe at 100% with dead ± zoom
+- PDF click prefers **canonical** `https` / `local:` / storage path over **cell-thumb** blob URLs
+- `showInAppPdfPreview` (Fit / Print / Share) is **fallback only** when raster fails; image sniff must redirect to image preview
+- same behavior target on **web, EXE, APK** (APK may still use external viewer only on explicit native-cache edge paths — do not widen those without asking)
+
+#### Frozen full-open paths (do not touch casually)
+
+- `src/lib/openAttachmentInApp.ts`
+- `src/lib/inAppImagePreview.ts`
+- `src/lib/inAppPdfPreview.ts`
+- `src/lib/inAppGalleryImageZoom.ts`
+- `src/lib/inAppAttachmentGallery.ts`
+- `src/lib/inAppAttachmentPreviewOpen.ts`
+- `src/lib/shouldUseInAppPdfPreview.ts`
+- `src/lib/pdfToImageExport.ts` (shared with portal — see above)
+- `src/components/vouchers/FilePreview.tsx` (tile preview, click-open, PDF thumb prewarm, gallery prewarm hooks)
+- `src/components/gallery/GalleryPageClient.tsx` (gallery PDF thumb / open parity)
+
+#### Do not (full open)
+
+- Route voucher PDF click through a different viewer than party (native full-width iframe as default).
+- Open cell-thumb JPEG as the fullscreen “PDF” when full bytes or canonical URL exist.
+- Remove or bypass `openPdfBlobAsImagePreview` / `pdfOnePageHeightPx` height-fit without explicit request.
+- Change ± zoom / Width / Height semantics in full open preview unless the human explicitly asks.
+
+---
+
+### If the human explicitly asks to change attachment preview
+
+- Say which system (portal / full open / both) and keep the diff minimal.
+- Preserve repeat-click behavior (portal) and party=voucher open parity (full open).
+- Test at minimum: party PDF click, voucher PDF click, multi-page scroll, JPEG-as-PDF receipt, gallery grid PDF.
+
+### Not frozen (outside preview)
+
+Invoice/print-only PDF overlays (`printDirect`, billing statement PDF, sale invoice page) are **not** part of this freeze unless the human groups them with “attachment preview”. Backup/restore preview UI remains under the Backup freeze section above.
 
 ## Freeze: Online Company Sync (hard)
 
@@ -196,7 +248,7 @@ When the human asks for PL Server fixes (including “make PL like online”):
 
 - Edit normal company ledger UI, `useCompany` company flows, or normal `companies/` write paths to “support” Admin Panel Company — **copy instead**.
 - Put Admin Panel Company documents under `companies/`.
-- Touch frozen Backup / PDF portal / Online sync / PL Server paths for this feature unless the human explicitly asks for that area.
+- Touch frozen Backup / **Attachment preview (portal + full open)** / Online sync / PL Server paths for this feature unless the human explicitly asks for that area.
 - Weaken this rule by “sharing” helpers that force changes to normal company modules.
 
 ### If the human explicitly asks to change normal company code for Admin Panel Company

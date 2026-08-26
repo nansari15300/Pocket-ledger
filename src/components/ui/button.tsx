@@ -30,8 +30,8 @@ const buttonVariants = cva(
       size: {
         default: "h-10 px-4 py-2",
         sm: "h-9 px-3",
-        /** Master–detail list toolbar (+ Add, etc.) — search row jitni height */
-        list: "h-7 min-h-7 px-2 py-0 text-xs",
+        /** Master–detail list toolbar (+ Add, etc.) — tabs row jitni height */
+        list: "h-6 min-h-6 max-h-6 px-2 py-0 text-xs",
         lg: "h-11 px-8",
         icon: "h-10 w-10",
       },

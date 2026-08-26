@@ -1,4 +1,5 @@
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import React, { Fragment, useMemo, useState, useEffect, useRef } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -854,7 +855,7 @@ export function FinancialSummaryCards({
 
         const getEntityType = (v: any): string => {
             if(v.partyId) return 'Party';
-            if(v.staffId) return 'Staff';
+            if(v.staffId) return STAFF_ENTITY_LABEL;
             if(v.taxAccountId) return 'Tax';
             if(v.incomeAccountId || v.expenseAccountId || v.toAccountId) return 'Income/Expense';
             return 'Other';
@@ -3243,7 +3244,7 @@ export function FinancialSummaryCards({
                                                     <SelectContent>
                                                         <SelectItem value="all">All</SelectItem>
                                                         <SelectItem value="party">Party</SelectItem>
-                                                        <SelectItem value="staff">Staff</SelectItem>
+                                                        <SelectItem value="staff">{STAFF_ENTITY_LABEL}</SelectItem>
                                                         <SelectItem value="tax">Tax</SelectItem>
                                                         <SelectItem value="income_expense">Income / Expense</SelectItem>
                                                         <SelectItem value="other">Other</SelectItem>

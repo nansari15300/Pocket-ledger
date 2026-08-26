@@ -31,7 +31,6 @@ import {
   MessageSquare,
   Gift,
   User,
-  Briefcase,
   Receipt,
   Landmark,
   Wallet,
@@ -39,6 +38,7 @@ import {
   ChevronDown,
   Pencil,
 } from "lucide-react";
+import { StaffAccountFallbackIcon } from "@/components/entity/StaffEntityIcon";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
@@ -138,8 +138,8 @@ const getInitials = (name: string) => {
     .join("");
 };
 
-const getEntityIcon = (type: string) => {
-    if (type === 'Staff') return <Briefcase className="h-6 w-6" />;
+const getEntityIcon = (type: string, entity?: { groupId?: string | null; isLoanAccount?: boolean | null }) => {
+    if (type === "Staff") return <StaffAccountFallbackIcon staff={entity} variant="detail" className="h-6 w-6" />;
     if (type === 'Tax') return <Receipt className="h-6 w-6" />;
     if (type === 'Income' || type === 'Expense') return <Wallet className="h-6 w-6" />;
     return <User className="h-6 w-6" />; // Default Party
@@ -460,7 +460,7 @@ export function PayeeDetails({
                     className="h-12 w-12 text-lg flex-shrink-0"
                     src={trimEntityFileUrlForPreview(party.fileUrl) ?? undefined}
                     alt={party.name}
-                    fallbackSlot={<span className="text-muted-foreground">{getEntityIcon(party.type)}</span>}
+                    fallbackSlot={<span className="text-muted-foreground">{getEntityIcon(party.type, party)}</span>}
                   />
                 </EntityFileAttachmentHover>
                 {party.type === 'Party' && party.id !== 'all' && (

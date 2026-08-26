@@ -19,6 +19,7 @@ import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDoc
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
+import { attachmentLockFieldsForFinalUrls, readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import {
   EntityProfilePhotoBlock,
   EntityDocumentsBlock,
@@ -107,7 +108,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
   const { toast } = useToast();
   const { companyId, company } = useCompany();
   const { user } = useAuth();
-  const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const { canAddAvatar, canAddFileImagePdf, can } = usePermissions();
   const isMobile = useIsMobile();
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { processedExpenseGroups } = useVouchers();
@@ -331,6 +332,12 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           openingBalanceNarration: narrationClean,
           fileUrl,
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+          ...attachmentLockFieldsForFinalUrls(documentFileUrls, {
+            existingLockedPdfFileUrls: readLockedPdfFileUrlsFromRow(
+              account as unknown as Record<string, unknown>
+            ),
+            canUnlockLockedPdf: can("unlock_locked_pdf"),
+          }),
         };
 
         if (localSqlMirror) {
@@ -546,7 +553,13 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           </DialogHeader>
           <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
+            <form
+              onSubmit={(e) => {
+                e.stopPropagation();
+                void form.handleSubmit(onSubmit)(e);
+              }}
+              className="flex min-h-0 flex-1 flex-col"
+            >
             <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
               <MasterFormNameAcNoRow
                 entityKind="expense"
@@ -671,6 +684,9 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                 attachmentCompanyId={companyId ?? undefined}
                 entityStatementLabel="income/expense account"
                 inputId="edit-expense-docs"
+                existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(
+                  account as unknown as Record<string, unknown>
+                )}
               />
               <EntityOpeningBalanceNarrationField
                 control={form.control}

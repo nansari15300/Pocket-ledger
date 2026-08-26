@@ -61,6 +61,7 @@ import { format } from "date-fns";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
 import {
   apkCloudCompanyOfflineViewOnly,
   apkEntityWriteUsesLocalSqliteMirror,
@@ -421,7 +422,7 @@ export function CreateTaxForm({
         companyId,
         collectionName: "taxes",
         name: values.name.trim(),
-        entityLabel: "Tax",
+        entityLabel: sidebarEntityMenuLabel("tax"),
       });
       if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate Tax Name", {

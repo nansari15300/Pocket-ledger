@@ -1,4 +1,5 @@
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
 import { useState, useEffect, useMemo } from "react";
@@ -245,7 +246,7 @@ export function LinkPaymentInToSalaryDialog({
                 <tr className="border-b last:border-b-0">
                   <td className="p-2 text-muted-foreground whitespace-nowrap">{targetVoucherDate ? (dateSystem === "AD" ? formatDate(targetVoucherDate) : dateSystem === "BS" ? formatDateBS(targetVoucherDate) : `${formatDateBS(targetVoucherDate)} (${formatDate(targetVoucherDate)})`) : "—"}</td>
                   <td className="p-2 font-medium whitespace-nowrap">{paymentInVoucherNumber ?? "—"}</td>
-                  <td className="p-2 whitespace-nowrap">{staffName || "Staff"}</td>
+                  <td className="p-2 whitespace-nowrap">{staffName || STAFF_ENTITY_LABEL}</td>
                   <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(amountReceived, { noSuffix: true })}</td>
                   <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(totalLinked, { noSuffix: true })}</td>
                   <td className="p-2 text-right font-medium whitespace-nowrap">{formatCurrency(remainingToLink, { noSuffix: true })}</td>

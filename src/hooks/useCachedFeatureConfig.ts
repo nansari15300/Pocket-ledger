@@ -12,6 +12,7 @@ const OFFLINE_BASE_FEATURE_CONFIG: Record<string, boolean> = {
   party: true,
   "bank-cash": true,
   staff: true,
+  loans: true,
   tax: true,
   incomes: true,
   items: true,

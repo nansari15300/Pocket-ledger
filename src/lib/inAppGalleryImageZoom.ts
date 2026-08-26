@@ -22,14 +22,22 @@ export type GalleryImageZoomApi = {
   dispose: () => void;
 };
 
+export type GalleryImageZoomFitOpts = {
+  /** Stitched multi-page PDF JPEG: fit/zoom uses 1 page height (scroll for page 2+). */
+  onePageHeightPx?: number;
+};
+
 /**
  * `scrollHost` khali hona chahiye — yahin inner structure append hogi; `img` pehle se `src` set ho sakta hai.
  */
 export function mountGalleryImageZoom(
   scrollHost: HTMLElement,
   img: HTMLImageElement,
-  onScaleChange: (scale: number) => void
+  onScaleChange: (scale: number) => void,
+  fitOpts?: GalleryImageZoomFitOpts
 ): GalleryImageZoomApi {
+  const onePageHeightPx = Math.max(0, Number(fitOpts?.onePageHeightPx || 0));
+  const multiPagePdfRaster = onePageHeightPx > 1;
   let disposed = false;
   let scrollResizeObserver: ResizeObserver | null = null;
   let dragPanActive = false;
@@ -98,9 +106,11 @@ export function mountGalleryImageZoom(
     if (baseLayoutW <= 0) return 1;
     const vw = Math.max(scrollHost.clientWidth - H_PAD, 1);
     const vh = Math.max(scrollHost.clientHeight - H_PAD, 1);
+    const fitH =
+      multiPagePdfRaster && img.naturalHeight > onePageHeightPx ? onePageHeightPx : baseLayoutH;
     return Math.max(
       FIT_SCALE_MIN,
-      Math.min(MAX_ZOOM, Math.min(vw / baseLayoutW, vh / baseLayoutH))
+      Math.min(MAX_ZOOM, Math.min(vw / baseLayoutW, vh / fitH))
     );
   };
 
@@ -322,7 +332,9 @@ export function mountGalleryImageZoom(
       syncLayout();
       requestAnimationFrame(() => {
         const sl = Math.max(0, (scrollHost.scrollWidth - scrollHost.clientWidth) / 2);
-        const st = Math.max(0, (scrollHost.scrollHeight - scrollHost.clientHeight) / 2);
+        const st = multiPagePdfRaster
+          ? 0
+          : Math.max(0, (scrollHost.scrollHeight - scrollHost.clientHeight) / 2);
         scrollHost.scrollTo({ left: sl, top: st, behavior: "auto" });
       });
     };
@@ -366,7 +378,9 @@ export function mountGalleryImageZoom(
     syncLayout();
     requestAnimationFrame(() => {
       const sl = Math.max(0, (scrollHost.scrollWidth - scrollHost.clientWidth) / 2);
-      const st = Math.max(0, (scrollHost.scrollHeight - scrollHost.clientHeight) / 2);
+      const st = multiPagePdfRaster
+        ? 0
+        : Math.max(0, (scrollHost.scrollHeight - scrollHost.clientHeight) / 2);
       scrollHost.scrollTo({ left: sl, top: st, behavior: "auto" });
     });
   };

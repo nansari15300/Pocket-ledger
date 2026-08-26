@@ -69,11 +69,13 @@ import {
 } from "@/lib/appendCompressedVoucherAttachments";
 import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
+import { readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import {
   finalizeVoucherAttachmentsAfterFormSave,
   uploadVoucherAttachmentFileToFirebase,
   voucherAttachmentFieldsForSave,
   normalizeFormFileUrlsForSave,
+  voucherAttachmentLockSaveOpts,
 } from "@/lib/voucherFormAttachmentSave";
 import {
   appendLocalOnlyVoucherFilesToUrls,
@@ -408,9 +410,10 @@ export function CreateAdjustmentForm({
           ];
       const approverName = customUser?.displayName || user.displayName || user.email || user.uid;
       const filesForSave = await prepareVoucherAttachmentsForSave(files, {
-        companyId,
-        savePdfAsImage,
-      });
+          companyId,
+          savePdfAsImage,
+          lockedPdfFileUrls: readLockedPdfFileUrlsFromRow(voucher),
+        });
       let fileUrls = normalizeFormFileUrlsForSave(
         filesForSave.filter((f): f is string => typeof f === "string")
       );
@@ -478,7 +481,7 @@ export function CreateAdjustmentForm({
           adjustmentTarget: selectedTarget,
           adjustmentExpenseAccountId: adjustmentExpenseId,
           entries,
-          ...voucherAttachmentFieldsForSave(fileUrls),
+          ...voucherAttachmentFieldsForSave(fileUrls, voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))),
         },
         voucher?.id,
         approveAfterSave ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined
@@ -705,6 +708,7 @@ export function CreateAdjustmentForm({
               <FormLabel>Attach Files (Optional)</FormLabel>
               {showPdfAsImageToggle ? (
                 <VoucherPdfAsImageToggle
+                  existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(voucher)}
                   id="voucher-save-pdf-as-image-adjustment"
                   checked={savePdfAsImage}
                   onCheckedChange={setSavePdfAsImage}

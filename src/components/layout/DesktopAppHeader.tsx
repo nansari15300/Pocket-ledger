@@ -1,6 +1,8 @@
 
 "use client";
 
+import { STAFF_ENTITY_ADD_LABEL } from "@/lib/staffEntityDisplayName";
+import { StaffEntityNavIcon } from "@/components/entity/StaffEntityIcon";
 import * as React from "react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
@@ -8,7 +10,6 @@ import { Switch } from "@/components/ui/switch";
 import {
   Plus,
   Landmark,
-  Briefcase,
   BookText,
   Users,
   ChevronDown,
@@ -562,7 +563,7 @@ function HeaderActions() {
 
       <CreateStaffDialog onStaffCreated={() => {}} groups={[]} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen}>
         <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} onClick={() => setIsCreateStaffOpen(true)} data-theme-btn="add-staff">
-          <Briefcase className="mr-1 h-4 w-4" /> Add Staff
+          <StaffEntityNavIcon className="mr-1 h-4 w-4" /> {STAFF_ENTITY_ADD_LABEL}
         </PermissionButton>
       </CreateStaffDialog>
     </>

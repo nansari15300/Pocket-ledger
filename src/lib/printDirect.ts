@@ -153,6 +153,9 @@ export type PrintPayload = {
   preserveOrder?: boolean;
   /** Print using spend-wise row values/order (account/bank spend-wise view). */
   spendWise?: boolean;
+  /** Bank/Cash print: override Debit/Credit column titles (e.g. Deposit / Withdraw). */
+  debitColumnHeaderLabel?: string;
+  creditColumnHeaderLabel?: string;
   /** Bill-wise: vouchers for allocation amount lookup (voucher details with amount in print). */
   vouchers?: any[];
   /** Merge fiscal: nayi FY ki pehli din (AD) — table jaisa PDF me divider. */
@@ -1687,8 +1690,12 @@ const buildTableHeader = (p: PrintPayload): TableCell[] => {
   if (isColVisible(p, "user")) headers.push(boldHeader('User'));
   if (isColVisible(p, "file")) headers.push(boldHeader('File'));
 
-  const debitLabel = p.context === 'item' && p.stockView === 'qty' ? 'In' : 'Debit';
-  const creditLabel = p.context === 'item' && p.stockView === 'qty' ? 'Out' : 'Credit';
+  const debitLabel =
+    p.debitColumnHeaderLabel ??
+    (p.context === 'item' && p.stockView === 'qty' ? 'In' : 'Debit');
+  const creditLabel =
+    p.creditColumnHeaderLabel ??
+    (p.context === 'item' && p.stockView === 'qty' ? 'Out' : 'Credit');
   const balanceLabel = p.context === 'item' && p.stockView === 'qty' ? 'Stock' : 'Balance';
 
   const isBillWise = isBillWiseContext(p);

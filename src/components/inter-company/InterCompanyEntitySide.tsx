@@ -1,4 +1,5 @@
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 /**
  * Inter-company: ek company column — entity type + pick (party, bank, staff, tax, ledger).
@@ -19,7 +20,7 @@ export type InterCompanyEntityKind = "party" | "bank" | "staff" | "tax" | "expen
 export const INTER_COMPANY_ENTITY_LABELS: Record<InterCompanyEntityKind, string> = {
   party: "Party",
   bank: "Bank / Cash",
-  staff: "Staff",
+  staff: STAFF_ENTITY_LABEL,
   tax: "Tax",
   expense: "Income / Expense ledger",
 };

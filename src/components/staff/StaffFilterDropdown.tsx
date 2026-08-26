@@ -1,5 +1,5 @@
-
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
 import { Check, ChevronsUpDown } from "lucide-react";
@@ -89,7 +89,7 @@ export function StaffFilterDropdown({
       </PopoverTrigger>
       <PopoverContent className="w-[250px] p-0">
         <Command>
-          <CommandInput placeholder="Search staff..." />
+          <CommandInput placeholder={STAFF_ENTITY_SEARCH_PLACEHOLDER} />
           <CommandList>
             <CommandEmpty>No staff found.</CommandEmpty>
             <CommandGroup>

@@ -7,6 +7,7 @@ import {
   scheduleInAppAttachmentPreviewRootRemoval,
   setAttachmentPreviewHardwareBackHandler,
 } from "@/lib/inAppAttachmentPreviewOpen";
+import { showInAppImagePreview } from "@/lib/inAppImagePreview";
 
 /**
  * APK / static WebView: bahar browser + blob: URL khaali dikhcha — PDF yahi overlay ma preview / print / share.
@@ -75,14 +76,13 @@ async function loadPdfJsDocument(
 }
 
 /**
- * Fit: pehli page **poora** viewport (W+H) ke andar — hamesha `min(sw,sh)` taaki PC wide par bhi
- * mobile jaisa "ek page screen me" khule; purana width-only fit yahan se hata (height crop + ~100% label).
+ * Fit: pehli page poori viewport (W+H) ke andar — single aur multi-page dono me
+ * `min(sw,sh)` taaki ek page height fit ho; baaki pages scroll se.
  */
 async function computeFitZoomPercentForFirstPage(
-  pdf: { getPage: (i: number) => Promise<any> },
+  pdf: { getPage: (i: number) => Promise<any>; numPages?: number },
   availW: number,
-  availH: number,
-  vwBasis: number
+  availH: number
 ): Promise<number> {
   const page = await pdf.getPage(1);
   const base = page.getViewport({ scale: 1 });
@@ -92,7 +92,7 @@ async function computeFitZoomPercentForFirstPage(
   const sh = availH / h;
   const pdfScale = Math.min(Math.min(sw, sh), 8);
   const layoutCssWidth = w * pdfScale;
-  const basis = Math.max(200, vwBasis);
+  const basis = Math.max(200, availW);
   return Math.round((100 * layoutCssWidth) / basis);
 }
 
@@ -107,6 +107,7 @@ async function renderPdfPagesToZoomInner(
     zoomPercent: number;
     scrollInnerWidthPx?: number;
     onFirstPageRendered?: () => void;
+    onAllPagesRendered?: () => void;
     isCancelled: () => boolean;
     skipOffscreen?: boolean;
     scrollHostForCull?: HTMLElement;
@@ -224,7 +225,11 @@ async function renderPdfPagesToZoomInner(
       skippedForIdle.push(i);
       continue;
     }
-    await paintOnePage(i);
+    try {
+      await paintOnePage(i);
+    } catch (e) {
+      console.warn("[inAppPdfPreview] page render failed", i, e);
+    }
   }
 
   if (skippedForIdle.length > 0 && !opts.isCancelled()) {
@@ -268,6 +273,10 @@ async function renderPdfPagesToZoomInner(
     note.style.cssText =
       "color:#d4d4d4;text-align:center;padding:12px;font-size:13px;margin:0";
     zoomInner.appendChild(note);
+  }
+
+  if (!opts.isCancelled()) {
+    opts.onAllPagesRendered?.();
   }
 }
 
@@ -528,6 +537,88 @@ export type ShowInAppPdfPreviewOptions = {
 
 const PREVIEW_PRINT_HIDE_STYLE_ID = "in-app-pdf-preview-print-hide-toolbar";
 
+/** HTTPS Firebase / Storage URL → blob:; caller `onDispose` + optional `revokeExtra` dono chalaaye. */
+async function resolvePdfPreviewLoadTarget(sourceUrl: string): Promise<{
+  blobUrl: string;
+  blob: Blob;
+  revokeExtra?: () => void;
+}> {
+  const u = String(sourceUrl || "").trim();
+  if (!u) throw new Error("empty pdf url");
+
+  if (u.startsWith("blob:") || u.startsWith("data:")) {
+    const res = await fetch(u);
+    if (!res.ok) throw new Error(String(res.status));
+    const blob = await res.blob();
+    if (!blob?.size) throw new Error("empty pdf blob");
+    return { blobUrl: u, blob };
+  }
+
+  if (/^https?:\/\//i.test(u)) {
+    const { getRemoteAttachmentBlobPreferOfflineCache } = await import("@/lib/offlineAttachmentUrlCache");
+    const { tryGetBlobFromFirebaseStorageDownloadUrl } = await import("@/lib/storageGetBlobFromDownloadUrl");
+    let blob =
+      (await tryGetBlobFromFirebaseStorageDownloadUrl(u, undefined, { explicitUserRequest: true })) ||
+      (await getRemoteAttachmentBlobPreferOfflineCache(u, undefined, { explicitUserRequest: true }));
+    if (!blob?.size) {
+      const res = await fetch(u, { mode: "cors", credentials: "omit" });
+      if (!res.ok) throw new Error(String(res.status));
+      blob = await res.blob();
+    }
+    if (!blob?.size) throw new Error("empty pdf blob");
+    const bUrl = URL.createObjectURL(blob);
+    return {
+      blobUrl: bUrl,
+      blob,
+      revokeExtra: () => {
+        try {
+          URL.revokeObjectURL(bUrl);
+        } catch {
+          /* ignore */
+        }
+      },
+    };
+  }
+
+  const res = await fetch(u);
+  if (!res.ok) throw new Error(String(res.status));
+  const blob = await res.blob();
+  if (!blob?.size) throw new Error("empty pdf blob");
+  return { blobUrl: u, blob };
+}
+
+function tryIframePdfFallback(
+  iframeEl: HTMLIFrameElement,
+  scrollHostEl: HTMLElement,
+  loadingOverlayEl: HTMLElement,
+  src: string,
+  hideLoading: () => void
+): boolean {
+  if (!src.startsWith("blob:") && !src.startsWith("data:") && !/^https?:\/\//i.test(src)) {
+    return false;
+  }
+  try {
+    iframeEl.style.display = "block";
+    iframeEl.style.flex = "1";
+    iframeEl.style.minHeight = "0";
+    iframeEl.style.width = "100%";
+    iframeEl.style.height = "100%";
+    iframeEl.setAttribute("scrolling", "yes");
+    scrollHostEl.style.display = "none";
+    const hash = "view=FitH&toolbar=0&navpanes=0";
+    const iframeSrc = src.includes("#") ? src : `${src}#${hash}`;
+    iframeEl.onload = () => hideLoading();
+    iframeEl.onerror = () => {
+      loadingOverlayEl.textContent = "Preview failed — use Share for PDF";
+      loadingOverlayEl.style.display = "flex";
+    };
+    iframeEl.src = iframeSrc;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Parent window bata “Print page” aayo bhane footer toolbar print ma na aaos; iframe.print() ma PDF matra (toolbar bahira) */
 function ensurePreviewToolbarHiddenOnDocumentPrint(): void {
   if (typeof document === "undefined" || document.getElementById(PREVIEW_PRINT_HIDE_STYLE_ID)) return;
@@ -559,6 +650,9 @@ export function showInAppPdfPreview(
 
   /** PDF.js async render band garne (close jaldi dabda) */
   const previewCancelled = { v: false };
+  let previewRevokeExtra: (() => void) | undefined;
+  let previewBlob: Blob | null = null;
+  let previewBlobUrl = blobUrl;
 
   const safeClose = () => {
     previewCancelled.v = true;
@@ -577,6 +671,11 @@ export function showInAppPdfPreview(
       /* ignore */
     }
     resetPdfPreviewTransforms();
+    try {
+      previewRevokeExtra?.();
+    } catch {
+      /* ignore */
+    }
     try {
       onDispose();
     } catch {
@@ -874,8 +973,21 @@ export function showInAppPdfPreview(
   };
 
   void (async () => {
+    try {
+      const loaded = await resolvePdfPreviewLoadTarget(blobUrl);
+      previewBlobUrl = loaded.blobUrl;
+      previewBlob = loaded.blob;
+      previewRevokeExtra = loaded.revokeExtra;
+    } catch (e) {
+      console.warn("[inAppPdfPreview] load pdf bytes failed", e);
+      loadingOverlay.textContent = "Preview failed — use Share for PDF";
+      loadingOverlay.style.fontSize = "14px";
+      loadingOverlay.style.padding = "16px";
+      return;
+    }
+
     if (!usePdfJs) {
-      iframe.src = blobUrl;
+      iframe.src = previewBlobUrl;
       iframe.onload = () => hideLoading();
       iframe.onerror = () => hideLoading();
       setTimeout(hideLoading, 8000);
@@ -890,25 +1002,76 @@ export function showInAppPdfPreview(
         PDFJS_WORKER_VERSION_FALLBACK;
       await ensurePdfJsWorker(pdfjs, version);
 
-      const blob = await fetch(blobUrl).then((r) => r.blob());
+      const blob = previewBlob ?? (await fetch(previewBlobUrl).then((r) => r.blob()));
       if (previewCancelled.v) return;
+
+      const { sniffBlobKindForPreview } = await import("@/lib/attachmentFormatLabel");
+      const kind = await sniffBlobKindForPreview(blob);
+      if (kind === "image") {
+        hideLoading();
+        previewCancelled.v = true;
+        const imgSrc =
+          previewBlobUrl.startsWith("blob:") || previewBlobUrl.startsWith("data:")
+            ? previewBlobUrl
+            : URL.createObjectURL(blob);
+        const revokeImg = () => {
+          if (imgSrc !== previewBlobUrl) {
+            try {
+              URL.revokeObjectURL(imgSrc);
+            } catch {
+              /* ignore */
+            }
+          }
+        };
+        scheduleInAppAttachmentPreviewRootRemoval(root, () => {
+          setAttachmentPreviewHardwareBackHandler(null);
+          try {
+            options?.onAfterPreviewLayerRemoved?.();
+          } catch {
+            /* ignore */
+          }
+        });
+        showInAppImagePreview(imgSrc, () => {
+          revokeImg();
+          try {
+            previewRevokeExtra?.();
+          } catch {
+            /* ignore */
+          }
+          try {
+            onDispose();
+          } catch {
+            /* ignore */
+          }
+        }, { title });
+        return;
+      }
+
       const pdf = await loadPdfJsDocument(blob, pdfjs, {
         isCancelled: () => previewCancelled.v,
       });
       if (!pdf || previewCancelled.v) return;
+
+      const totalPages = pdf.numPages ?? 1;
+      let initialFitPass = true;
 
       /** Fit / hybrid: `skipOffscreen` hybrid repaint par — pehle viewport, idle me baaki. */
       const runPaintAtZoom = async (pct: number, skipOffscreen = false) => {
         if (previewCancelled.v) return;
         resetPdfPreviewTransforms();
         const cw = scrollHost.clientWidth > 0 ? scrollHost.clientWidth : 0;
+        const padX = 28;
+        const paintW =
+          cw > 0 ? Math.max(120, cw - padX) : undefined;
+        const waitForAllPages = initialFitPass && totalPages > 1;
         await renderPdfPagesToZoomInner(pdf, zoomInner, {
           zoomPercent: pct,
-          scrollInnerWidthPx: cw > 0 ? cw : undefined,
-          onFirstPageRendered: hideLoading,
+          scrollInnerWidthPx: paintW,
+          onFirstPageRendered: waitForAllPages ? undefined : hideLoading,
+          onAllPagesRendered: waitForAllPages ? hideLoading : undefined,
           isCancelled: () => previewCancelled.v,
-          skipOffscreen,
-          scrollHostForCull: skipOffscreen ? scrollHost : undefined,
+          skipOffscreen: skipOffscreen && !initialFitPass,
+          scrollHostForCull: skipOffscreen && !initialFitPass ? scrollHost : undefined,
         });
         if (!previewCancelled.v) hideLoading();
       };
@@ -933,20 +1096,27 @@ export function showInAppPdfPreview(
         const padY = 32;
         const availW = Math.max(120, cw - padX);
         const availH = Math.max(160, ch - padY);
-        const vwBasis = Math.max(200, cw - 16);
-        zoomPercent = clampZoom(await computeFitZoomPercentForFirstPage(pdf, availW, availH, vwBasis));
+        zoomPercent = clampZoom(await computeFitZoomPercentForFirstPage(pdf, availW, availH));
         if (!previewCancelled.v) {
           updateZoomLabel();
-          // 220% par paint + chhota label = zyada CSS downscale = PC blur; label = paint se `rendered` match, scale 1.
           await runPaintAtZoom(zoomPercent);
           renderedZoomPercent = zoomPercent;
           scrollHost.scrollLeft = 0;
           scrollHost.scrollTop = 0;
+          initialFitPass = false;
           // Pehle frame me layout flush — bina iske `measurePdfPreviewContentSize` / scroll galat, ek page fit nahi dikhta.
           await new Promise<void>((resolve) =>
             requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
           );
           applyViewZoomCss();
+          // Multi-page: scroll area dubara sync — page 2 niche scroll ho sake.
+          if (totalPages > 1) {
+            const { W, H } = measurePdfPreviewContentSize();
+            zoomScalerWrap.style.minHeight = `${Math.ceil(H)}px`;
+            zoomScalerWrap.style.height = `${Math.ceil(H)}px`;
+            zoomScalerWrap.style.minWidth = `${Math.ceil(W)}px`;
+            zoomScalerWrap.style.width = `${Math.ceil(W)}px`;
+          }
         }
       };
 
@@ -956,9 +1126,20 @@ export function showInAppPdfPreview(
       toolbarFitPdf = applyFitZoom;
     } catch (e) {
       console.warn("[inAppPdfPreview] PDF.js preview failed", e);
+      const hasPaintedCanvas = zoomInner.querySelector("[data-pdf-page-wrap] canvas");
+      if (hasPaintedCanvas) {
+        hideLoading();
+        return;
+      }
+      if (
+        tryIframePdfFallback(iframe, scrollHost, loadingOverlay, previewBlobUrl, hideLoading)
+      ) {
+        return;
+      }
       loadingOverlay.textContent = "Preview failed — use Share for PDF";
       loadingOverlay.style.fontSize = "14px";
       loadingOverlay.style.padding = "16px";
+      loadingOverlay.style.display = "flex";
       // Overlay rahne dinchha ta user le message dekhlos
     }
   })();
@@ -1267,7 +1448,7 @@ export function showInAppPdfPreview(
             iframe.addEventListener("load", onLoad, { once: true });
             iframe.addEventListener("error", onErr, { once: true });
             iframe.src = "";
-            iframe.src = blobUrl;
+            iframe.src = previewBlobUrl;
           });
 
           const cw = iframe.contentWindow;
@@ -1299,7 +1480,9 @@ export function showInAppPdfPreview(
   shareBtn.onclick = async () => {
     shareBtn.disabled = true;
     try {
-      const blob = await fetch(blobUrl).then((r) => r.blob());
+      const blob =
+        previewBlob ??
+        (await resolvePdfPreviewLoadTarget(previewBlobUrl || blobUrl).then((x) => x.blob));
       await sharePdfBlob(blob, fileName, { previewRoot: root });
     } catch (e) {
       console.warn("[inAppPdfPreview] share click failed", e);

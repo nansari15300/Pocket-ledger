@@ -1,4 +1,5 @@
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -469,7 +470,7 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
     const entityTypes: Array<{ id: string; name: string; accountType: UnifiedAccount['accountType'] }> = [
       { id: 'entity-party', name: 'Parties', accountType: 'party' },
       { id: 'entity-bank', name: 'Bank/Cash', accountType: 'bank' },
-      { id: 'entity-staff', name: 'Staff', accountType: 'staff' },
+      { id: 'entity-staff', name: STAFF_ENTITY_LABEL, accountType: 'staff' },
       { id: 'entity-tax', name: 'Tax', accountType: 'tax' },
       { id: 'entity-expense', name: 'Income & Expense', accountType: 'expense' },
     ];
@@ -587,7 +588,7 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
     const entityTypes: Array<{ id: string; name: string; groupType: UnifiedGroup['groupType'] }> = [
       { id: 'entity-party', name: 'Parties', groupType: 'party' },
       { id: 'entity-bank', name: 'Bank/Cash', groupType: 'bank' },
-      { id: 'entity-staff', name: 'Staff', groupType: 'staff' },
+      { id: 'entity-staff', name: STAFF_ENTITY_LABEL, groupType: 'staff' },
       { id: 'entity-tax', name: 'Tax', groupType: 'tax' },
       { id: 'entity-expense', name: 'Income & Expense', groupType: 'expense' },
     ];

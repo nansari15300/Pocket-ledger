@@ -322,10 +322,25 @@ export async function prewarmPdfThumbnailsForGallery(
 ): Promise<void> {
   const seen = new Set<string>();
   const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
-  for (const { url, storagePath } of entries) {
+  for (const { url, storagePath: entryStoragePath } of entries) {
     if (signal?.aborted) return;
     const u = String(url).trim();
     if (!u) continue;
+    let storagePath = entryStoragePath;
+    if (!storagePath && opts?.companyId) {
+      const fromUrl = tryGetStoragePathFromFirebaseDownloadUrl(u);
+      if (fromUrl) storagePath = fromUrl;
+      else {
+        const norm = normalizeFirebaseStorageObjectPathForSdk(u, { companyId: opts.companyId });
+        if (
+          /^voucher-files\//i.test(norm) ||
+          /^companies\//i.test(norm) ||
+          /^entity-files\//i.test(norm)
+        ) {
+          storagePath = norm;
+        }
+      }
+    }
     // Local gallery = `data:application/pdf`; Firebase URL kabhi filename me literal `.pdf` na ho — label se sniff
     const base = u.split("?")[0].toLowerCase();
     let isPdfEntry =
@@ -400,6 +415,9 @@ export async function prewarmPdfThumbnailsForGallery(
       pdfThumbCacheSet(ck, result.thumbnailUrl);
       rememberHoverBlobUrl(sharedPdfPortalThumbKey(u), result.thumbnailUrl);
       void seedOfflineAttachmentCacheFromBlob(sharedPdfPortalThumbKey(u), result.thumbnailBlob);
+      // Grid tile (160px): cell-thumb bhi seed — portal-only warm se lal PDF icon reh jata tha.
+      rememberHoverBlobUrl(sharedPdfCellThumbKey(u), result.thumbnailUrl);
+      void seedOfflineAttachmentCacheFromBlob(sharedPdfCellThumbKey(u), result.thumbnailBlob);
     } catch {
       /* ek PDF fail ho to baaki warm rahein */
     }
@@ -1158,6 +1176,15 @@ export function FilePreview({
         }
 
         const sharedThumb = skipCachedThumb ? undefined : peekHoverCachedBlobUrl(sharedThumbKey);
+        if (!wantsSharpPortal && !skipCachedThumb) {
+          const portalForGrid = peekHoverCachedBlobUrl(portalKey);
+          if (portalForGrid) {
+            pdfThumbCacheSet(ck, portalForGrid);
+            pdfThumbnailKeyRef.current = ck;
+            setPdfThumbnailSafe(portalForGrid);
+            return portalForGrid;
+          }
+        }
         if (sharedThumb && !wantsSharpPortal) {
           pdfThumbCacheSet(ck, sharedThumb);
           pdfThumbnailKeyRef.current = ck;
@@ -1226,7 +1253,12 @@ export function FilePreview({
             // Pehle warm-sync IndexedDB; phir SDK/getBlob path (helper se bytes background cache)
               resolved =
                 (await tryOfflineCachedAttachmentBlobMultiKey(pdfUrl)) ||
-                (await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal, { localOnly: localLedgerOnly }));
+                (await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal, {
+                  localOnly: localLedgerOnly,
+                  companyId: pathCompanyId,
+                  explicitUserRequest: stableLocalPreviewOnly,
+                  bypassVisiblePageCheck: stableLocalPreviewOnly,
+                }));
             }
             if (!resolved) {
               try {
@@ -1283,7 +1315,12 @@ export function FilePreview({
             // Warm cache → SDK/fetch (timeout wala fallback jab helper null)
             const hydrated =
               (await tryOfflineCachedAttachmentBlobMultiKey(pdfUrl)) ||
-              (await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal, { localOnly: localLedgerOnly }));
+              (await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal, {
+                localOnly: localLedgerOnly,
+                companyId: pathCompanyId,
+                explicitUserRequest: stableLocalPreviewOnly,
+                bypassVisiblePageCheck: stableLocalPreviewOnly,
+              }));
             pdfFile =
               hydrated && hydrated.size > 0
                 ? hydrated
@@ -1367,7 +1404,15 @@ export function FilePreview({
         setIsPdfLoading(false);
       }
     },
-    [layoutMaxEdge, pathCompanyId, voucherAttachmentFb?.companyId, revokeThumbnailUrl, setPdfThumbnailSafe, localLedgerOnly]
+    [
+      layoutMaxEdge,
+      pathCompanyId,
+      voucherAttachmentFb?.companyId,
+      revokeThumbnailUrl,
+      setPdfThumbnailSafe,
+      localLedgerOnly,
+      stableLocalPreviewOnly,
+    ]
   );
 
   useEffect(() => {
@@ -1407,6 +1452,12 @@ export function FilePreview({
           const sharedThumb = peekHoverCachedBlobUrl(sharedPdfCellThumbKey(pdfThumbSource));
           const portalThumb = peekHoverCachedBlobUrl(sharedPdfPortalThumbKey(pdfThumbSource));
           if (edge >= GALLERY_PDF_HOVER_THUMB_EDGE && portalThumb) {
+            pdfThumbCacheSet(ck, portalThumb);
+            pdfThumbnailKeyRef.current = ck;
+            setPdfThumbnailSafe(portalThumb);
+            return;
+          }
+          if (edge < GALLERY_PDF_HOVER_THUMB_EDGE && portalThumb) {
             pdfThumbCacheSet(ck, portalThumb);
             pdfThumbnailKeyRef.current = ck;
             setPdfThumbnailSafe(portalThumb);
@@ -2507,8 +2558,8 @@ export function FilePreview({
         const preferPortal = layoutMaxEdge >= GALLERY_PDF_HOVER_THUMB_EDGE;
         const cachedPdfThumb =
           (preferPortal ? portalPdfThumb : null) ||
-          (!preferPortal ? sharedPdfThumb : null) ||
-          (preferPortal ? sharedPdfThumb : null) ||
+          sharedPdfThumb ||
+          (!preferPortal ? portalPdfThumb : null) ||
           pdfThumbCacheGet(pdfCacheKey);
         if (cachedPdfThumb) {
           if (portalPdfThumb && preferPortal) pdfThumbCacheSet(pdfCacheKey, portalPdfThumb);
@@ -2779,10 +2830,20 @@ export function FilePreview({
         ? normalizedPreviewFile
         : "";
     const isMemoryUrl = (u: string) => u.startsWith("blob:") || u.startsWith("data:");
+    const isPdfAttachment =
+      viewFileInfo.formatLabel === "PDF" || viewFileInfo.type === "pdf";
     // IC + other edit forms: thumb already resolved to memory blob while Files OFF —
     // prefer that over canonical HTTPS (network blocked) so open matches portal / Payment In.
     const previewMemoryUrl = (() => {
       if (!localLedgerOnly) return "";
+      /** PDF: party jaisa — thumb JPEG / cell-thumb mat; sirf full PDF bytes cache ya canonical ref. */
+      if (isPdfAttachment) {
+        if (!rawRef && !underlyingLocalRef) return "";
+        const canonical = underlyingLocalRef || rawRef;
+        const full = peekHoverCachedBlobUrl(canonical);
+        if (full && isMemoryUrl(full)) return full;
+        return "";
+      }
       const fromView = String(viewFileInfo.url || "").trim();
       if (fromView && isMemoryUrl(fromView)) return fromView;
       const fromPdf = String(viewPdfThumbnail || "").trim();
@@ -2797,14 +2858,22 @@ export function FilePreview({
       return "";
     })();
     // Click-open: network ON → canonical `local:` / https. Files OFF + local blob → open blob.
-    const openSrc =
-      previewMemoryUrl ||
-      underlyingLocalRef ||
-      (rawRef && !rawRef.startsWith("blob:") ? rawRef : "") ||
-      (viewFileInfo.url && !viewFileInfo.url.startsWith("blob:") ? viewFileInfo.url : "") ||
-      rawRef ||
-      viewFileInfo.url ||
-      "";
+    // PDF: kabhi bhi tile thumb blob ko https se upar mat rakho — raster + Height fit ke liye canonical ref.
+    const openSrc = isPdfAttachment
+      ? previewMemoryUrl ||
+        underlyingLocalRef ||
+        (rawRef && !rawRef.startsWith("blob:") ? rawRef : "") ||
+        (viewFileInfo.url && !viewFileInfo.url.startsWith("blob:") ? viewFileInfo.url : "") ||
+        rawRef ||
+        viewFileInfo.url ||
+        ""
+      : previewMemoryUrl ||
+        underlyingLocalRef ||
+        (rawRef && !rawRef.startsWith("blob:") ? rawRef : "") ||
+        (viewFileInfo.url && !viewFileInfo.url.startsWith("blob:") ? viewFileInfo.url : "") ||
+        rawRef ||
+        viewFileInfo.url ||
+        "";
     if (!openSrc) return;
     const kind =
       viewFileInfo.formatLabel === "PDF" || viewFileInfo.type === "pdf"

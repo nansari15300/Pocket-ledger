@@ -44,9 +44,14 @@ function isPdfFile(f: File): boolean {
 export async function convertPdfAttachmentsToJpegIfEnabled(
   items: (File | string)[],
   enabled: boolean,
-  opts?: { companyId?: string | null }
+  opts?: {
+    companyId?: string | null;
+    lockPdfAsPdf?: boolean;
+    lockedPdfFileUrls?: readonly string[];
+  }
 ): Promise<(File | string)[]> {
   if (!enabled) return items;
+  const { shouldSkipPdfToJpegConversion } = await import("@/lib/attachmentPdfOptions");
   const { resolveAttachmentImageMaxBytes, IMAGE_SOFT_MIN_KB } = await import(
     "@/lib/attachmentCompressionUi"
   );
@@ -56,13 +61,24 @@ export async function convertPdfAttachmentsToJpegIfEnabled(
   const out: (File | string)[] = [];
 
   for (const item of items) {
+    if (
+      shouldSkipPdfToJpegConversion({
+        lockPdfAsPdf: !!opts?.lockPdfAsPdf,
+        lockedPdfFileUrls: opts?.lockedPdfFileUrls,
+        item,
+      })
+    ) {
+      out.push(item);
+      continue;
+    }
+
     if (item instanceof File) {
       if (!isPdfFile(item)) {
         out.push(item);
         continue;
       }
       try {
-        let jpg = await convertPdfToStitchedJpegFile(item);
+        let jpg = (await convertPdfToStitchedJpegFile(item)).file;
         jpg = await compressFile(jpg, {
           maxKB,
           minKB,
@@ -101,7 +117,7 @@ export async function convertPdfAttachmentsToJpegIfEnabled(
           continue;
         }
         const pdfFile = new File([blob], "attachment.pdf", { type: "application/pdf" });
-        let jpg = await convertPdfToStitchedJpegFile(pdfFile);
+        let jpg = (await convertPdfToStitchedJpegFile(pdfFile)).file;
         jpg = await compressFile(jpg, {
           maxKB,
           minKB,
@@ -140,7 +156,7 @@ export async function convertPdfAttachmentsToJpegIfEnabled(
         continue;
       }
       const pdfFile = new File([blob], "attachment.pdf", { type: "application/pdf" });
-      let jpg = await convertPdfToStitchedJpegFile(pdfFile);
+      let jpg = (await convertPdfToStitchedJpegFile(pdfFile)).file;
       jpg = await compressFile(jpg, {
         maxKB,
         minKB,

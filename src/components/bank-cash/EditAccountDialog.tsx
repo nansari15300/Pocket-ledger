@@ -53,6 +53,7 @@ import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { CreateAccountGroupDialog } from "./CreateAccountGroupDialog";
 import { Switch } from "../ui/switch";
 import usePermissions from "@/hooks/usePermissions";
+import { attachmentLockFieldsForFinalUrls, readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import { Combobox } from "../ui/combobox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useDate } from "@/hooks/useDate";
@@ -459,6 +460,12 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           useFor: values.useFor ?? { in: [], out: [] },
           fileUrl,
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+          ...attachmentLockFieldsForFinalUrls(documentFileUrls, {
+            existingLockedPdfFileUrls: readLockedPdfFileUrlsFromRow(
+              account as unknown as Record<string, unknown>
+            ),
+            canUnlockLockedPdf: can("unlock_locked_pdf"),
+          }),
           updatedAt: serverTimestamp(),
         };
 
@@ -716,7 +723,10 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <Form {...form}>
             <form
-              onSubmit={form.handleSubmit(onSubmit)}
+              onSubmit={(e) => {
+                e.stopPropagation();
+                void form.handleSubmit(onSubmit)(e);
+              }}
               className="flex min-h-0 flex-1 flex-col"
             >
             <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-2">
@@ -999,7 +1009,12 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                     </p>
                   ) : (
                     <div className="space-y-2">
-                      <MasterPdfAsImageToggle id="edit-bank-account-pdf-as-image" />
+                      <MasterPdfAsImageToggle
+                        id="edit-bank-account-pdf-as-image"
+                        existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(
+                          account as unknown as Record<string, unknown>
+                        )}
+                      />
                       <div className="flex flex-wrap items-start gap-2">{/* add slot inline with FilePreviews */}
                         {docSlots.map((slot, idx) => (
                           <FilePreview

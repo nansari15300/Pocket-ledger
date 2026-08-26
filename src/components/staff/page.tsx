@@ -1,5 +1,5 @@
-
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import React from "react";
@@ -259,7 +259,7 @@ export default function StaffPage() {
             </div>
             {activeView === 'staff' ? (
                 <CreateStaffDialog onStaffCreated={() => {}} groups={processedStaffGroups} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen}>
-                <Button size="sm" onClick={() => setIsCreateStaffOpen(true)}>+ Add Staff</Button>
+                <Button size="sm" onClick={() => setIsCreateStaffOpen(true)}>{STAFF_ENTITY_ADD_BUTTON}</Button>
                 </CreateStaffDialog>
             ) : (
                 <CreateStaffGroupDialog onGroupCreated={() => {}} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={processedStaffGroups}>
@@ -325,12 +325,12 @@ export default function StaffPage() {
   return (
     <>
     <ResponsiveMasterDetail
-      title="Staff"
+      title={STAFF_ENTITY_LABEL}
       balance={formatCurrency(totalBalance, { showDrCr: true })}
       tabs={
         <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
           <TabsList className="w-full">
-            <TabsTrigger value="staff" className="flex-1">Staff</TabsTrigger>
+            <TabsTrigger value="staff" className="flex-1">{STAFF_ENTITY_LABEL}</TabsTrigger>
             <TabsTrigger value="groups" className="flex-1">Groups</TabsTrigger>
           </TabsList>
         </Tabs>

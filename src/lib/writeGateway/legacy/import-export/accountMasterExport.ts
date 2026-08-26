@@ -1,6 +1,7 @@
 "use client";
 
 import { listImportExportCollectionDocs } from "@/lib/import-export/companyCollectionIO";
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 
 function toDateStr(v: unknown): string {
   if (v == null) return "";
@@ -87,7 +88,7 @@ export async function exportAccountMaster(companyId: string): Promise<Record<str
   staff.forEach(({ id, data }) => {
     rows.push(
       flatRow(
-        "Staff",
+        STAFF_ENTITY_LABEL,
         String(data.name ?? id),
         data.groupId ? (staffGroups[String(data.groupId)] ?? String(data.groupId)) : "",
         Number(data.openingBalance ?? 0),

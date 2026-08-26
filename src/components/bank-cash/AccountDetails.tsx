@@ -182,6 +182,7 @@ import { applySpendWiseStatementRunningBalances } from "@/lib/spendWiseStatement
 import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
 import {
   applyBankDrCrPerspectiveToTxnRows,
+  bankLedgerTxnColumnLabels,
   flipLedgerDrCr,
   flipLedgerSignedBalance,
 } from "@/lib/bankLedgerDrCrPerspective";
@@ -986,6 +987,7 @@ export function AccountDetails({
       includeNotes: includeNotesInTable,
       visibleColumns,
       userNames,
+      ...bankLedgerTxnColumnLabels(account.accountType, bankDrCrPerspective),
     };
   }, [
     spendWiseView,
@@ -998,11 +1000,31 @@ export function AccountDetails({
     includeNotesInTable,
     visibleColumns,
     userNames,
+    bankDrCrPerspective,
+    account.accountType,
   ]);
 
   const handlePrintStatement = async () => {
     if (!company) return;
     const toastId = toast.loading("Preparing print...");
+    const printDrCrLabels = bankLedgerTxnColumnLabels(account.accountType, bankDrCrPerspective);
+    const printTransactions = applyBankDrCrPerspectiveToTxnRows(
+      paginatedTransactions as any[],
+      bankDrCrPerspective
+    );
+    const printPeriod = flipLedgerDrCr(
+      Number(desktopPageLedgerStats.periodDrForPage) || 0,
+      Number(desktopPageLedgerStats.periodCrForPage) || 0,
+      bankDrCrPerspective
+    );
+    const printOpening = flipLedgerSignedBalance(
+      Number(desktopPageLedgerStats.openingForPage) || 0,
+      bankDrCrPerspective
+    );
+    const printClosing = flipLedgerSignedBalance(
+      Number(desktopPageLedgerStats.closingForPage) || 0,
+      bankDrCrPerspective
+    );
     // Keep print synced with current view (statement/spend-wise), shown columns, and notes toggle.
     const printVisibleColumns = visibleColumns;
     try {
@@ -1026,11 +1048,11 @@ export function AccountDetails({
             contextId: account.id,
             dateSystem: dateSystem,
             dateRangeText: buildDateRangeText(),
-            vouchersCount: paginatedTransactions.length,
-            openingBalance: desktopPageLedgerStats.openingForPage,
+            vouchersCount: printTransactions.length,
+            openingBalance: printOpening,
             openingBalanceDate: (account as any).openingBalanceDate,
             openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
-            transactions: paginatedTransactions,
+            transactions: printTransactions,
             showNarration: showNarration,
             includeNotes: includeNotesInTable,
             visibleColumns: printVisibleColumns,
@@ -1038,13 +1060,14 @@ export function AccountDetails({
             preserveOrder: spendWiseView,
             spendWise: Boolean(spendWiseView),
             billWise: false,
+            ...printDrCrLabels,
           },
           {
-            paginatedTransactions,
-            openingForPage: desktopPageLedgerStats.openingForPage,
-            periodDrForPage: desktopPageLedgerStats.periodDrForPage,
-            periodCrForPage: desktopPageLedgerStats.periodCrForPage,
-            closingForPage: desktopPageLedgerStats.closingForPage,
+            paginatedTransactions: printTransactions,
+            openingForPage: printOpening,
+            periodDrForPage: printPeriod.debit,
+            periodCrForPage: printPeriod.credit,
+            closingForPage: printClosing,
             booksOpeningBalance: showMaskedBalance ? undefined : masterAccountOpening,
             ledgerShowBookOpeningRow: rowsPerPage <= 0 || desktopLedgerSliceFlatStart === 0,
             ledgerDateFilterActive: tableLedgerDateFilterActive,
@@ -1066,6 +1089,24 @@ export function AccountDetails({
   const handlePrintBillWise = async () => {
     if (!company) return;
     const toastId = toast.loading("Preparing print...");
+    const printDrCrLabels = bankLedgerTxnColumnLabels(account.accountType, bankDrCrPerspective);
+    const printTransactions = applyBankDrCrPerspectiveToTxnRows(
+      paginatedTransactions as any[],
+      bankDrCrPerspective
+    );
+    const printPeriod = flipLedgerDrCr(
+      Number(desktopPageLedgerStats.periodDrForPage) || 0,
+      Number(desktopPageLedgerStats.periodCrForPage) || 0,
+      bankDrCrPerspective
+    );
+    const printOpening = flipLedgerSignedBalance(
+      Number(desktopPageLedgerStats.openingForPage) || 0,
+      bankDrCrPerspective
+    );
+    const printClosing = flipLedgerSignedBalance(
+      Number(desktopPageLedgerStats.closingForPage) || 0,
+      bankDrCrPerspective
+    );
     // Bill-wise print keeps Status column visible by design.
     const printVisibleColumns = { ...visibleColumns, status: true };
     try {
@@ -1087,11 +1128,11 @@ export function AccountDetails({
             contextId: account.id,
             dateSystem: dateSystem,
             dateRangeText: buildDateRangeText(),
-            vouchersCount: paginatedTransactions.length,
-            openingBalance: desktopPageLedgerStats.openingForPage,
+            vouchersCount: printTransactions.length,
+            openingBalance: printOpening,
             openingBalanceDate: (account as any).openingBalanceDate,
             openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
-            transactions: paginatedTransactions,
+            transactions: printTransactions,
             showNarration: showNarration,
             includeNotes: includeNotesInTable,
             visibleColumns: printVisibleColumns,
@@ -1100,13 +1141,14 @@ export function AccountDetails({
             billWise: true,
             openingBalanceOutstanding: showMaskedBalance ? undefined : openingBalanceOutstanding,
             openingBalanceLinkedVoucherNos: showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos,
+            ...printDrCrLabels,
           },
           {
-            paginatedTransactions,
-            openingForPage: desktopPageLedgerStats.openingForPage,
-            periodDrForPage: desktopPageLedgerStats.periodDrForPage,
-            periodCrForPage: desktopPageLedgerStats.periodCrForPage,
-            closingForPage: desktopPageLedgerStats.closingForPage,
+            paginatedTransactions: printTransactions,
+            openingForPage: printOpening,
+            periodDrForPage: printPeriod.debit,
+            periodCrForPage: printPeriod.credit,
+            closingForPage: printClosing,
             booksOpeningBalance: showMaskedBalance ? undefined : masterAccountOpening,
             ledgerShowBookOpeningRow: rowsPerPage <= 0 || desktopLedgerSliceFlatStart === 0,
             ledgerDateFilterActive: tableLedgerDateFilterActive,
@@ -1147,6 +1189,11 @@ export function AccountDetails({
   const displayPaginatedTransactions = useMemo(
     () => applyBankDrCrPerspectiveToTxnRows(paginatedTransactions as any[], bankDrCrPerspective),
     [paginatedTransactions, bankDrCrPerspective]
+  );
+
+  const bankDepositWithdrawColumnLabels = useMemo(
+    () => bankLedgerTxnColumnLabels(account.accountType, bankDrCrPerspective),
+    [account.accountType, bankDrCrPerspective]
   );
 
   const displayDesktopPageLedgerStats = useMemo(() => {
@@ -1672,6 +1719,7 @@ export function AccountDetails({
             closingBalanceActions={accountClosingBalanceActions}
             blinkMode={spendWiseBlinkMode}
             spendWiseGroupPrint={spendWiseGroupPrint}
+            {...bankDepositWithdrawColumnLabels}
           />
           </MasterAccountFreezeTxnShell>
         </div>
@@ -2012,11 +2060,11 @@ export function AccountDetails({
               closingBalanceActions={accountClosingBalanceActions}
               blinkMode={spendWiseBlinkMode}
               spendWiseGroupPrint={spendWiseGroupPrint}
+              {...bankDepositWithdrawColumnLabels}
             />
             </MasterAccountFreezeTxnShell>
           </div>
         </div>
-        {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
         {/* Footer — global PC shell LedgerDesktopFooter */}
         <LedgerDesktopFooter
           left={

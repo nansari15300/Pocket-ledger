@@ -17,7 +17,7 @@ import { shareAttachmentFromPreviewSrc } from "@/lib/shareAttachmentBlob";
 export function showInAppImagePreview(
   imageSrc: string,
   onDispose: () => void,
-  options?: { title?: string }
+  options?: { title?: string; /** Multi-page PDF raster: fit 1 page height, scroll for baaki */ pdfOnePageHeightPx?: number }
 ): void {
   if (typeof document === "undefined") return;
 
@@ -136,7 +136,9 @@ export function showInAppImagePreview(
     showZoomBar(false);
   };
 
-  imageZoomApi = mountGalleryImageZoom(scrollHost, img, () => {});
+  imageZoomApi = mountGalleryImageZoom(scrollHost, img, () => {}, {
+    onePageHeightPx: options?.pdfOnePageHeightPx,
+  });
 
   /** Default fit = height (poora image screen me) — button rang sync */
   const syncFitButtonsToHeight = () => styleFitButtons(false);

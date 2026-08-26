@@ -1,4 +1,5 @@
 import type { ReceivablesPayablesFinancialSummary } from "@/lib/receivablesPayablesFinancialSummary";
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 
 export type RpCategoryFilter =
   | "all"
@@ -29,7 +30,7 @@ export const RP_DIALOG_FILTER_OPTIONS: { id: RpCategoryFilter; label: string }[]
   { id: "all", label: "All" },
   { id: "party", label: "Party" },
   { id: "bank", label: "Bank/Cash" },
-  { id: "staff", label: "Staff" },
+  { id: "staff", label: STAFF_ENTITY_LABEL },
   { id: "tax", label: "Tax" },
   { id: "income", label: "Income" },
   { id: "expense", label: "Expense" },
@@ -38,7 +39,7 @@ export const RP_DIALOG_FILTER_OPTIONS: { id: RpCategoryFilter; label: string }[]
 const CATEGORY_META: { kind: RpEntityKind; label: string; filter: RpCategoryFilter }[] = [
   { kind: "party", label: "Party", filter: "party" },
   { kind: "bank", label: "Bank / Cash", filter: "bank" },
-  { kind: "staff", label: "Staff", filter: "staff" },
+  { kind: "staff", label: STAFF_ENTITY_LABEL, filter: "staff" },
   { kind: "tax", label: "Tax", filter: "tax" },
   { kind: "income", label: "Income", filter: "income" },
   { kind: "expense", label: "Expense", filter: "expense" },

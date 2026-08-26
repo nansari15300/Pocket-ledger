@@ -380,18 +380,36 @@ export async function recompressOversizedImageAttachmentsOnSave(
 /** PDF→JPEG (optional) then oversized-image recompress — voucher / master shared save entry. */
 export async function prepareVoucherAttachmentsForSave(
   items: (File | string)[],
-  opts?: { companyId?: string | null; savePdfAsImage?: boolean }
+  opts?: {
+    companyId?: string | null;
+    savePdfAsImage?: boolean;
+    lockPdfAsPdf?: boolean;
+    lockedPdfFileUrls?: readonly string[];
+  }
 ): Promise<(File | string)[]> {
   let pdfToastId: string | number | undefined;
   try {
+    const { readLockPdfAsPdfPreference } = await import("@/lib/attachmentPdfOptions");
+    const lockPdfAsPdf = opts?.lockPdfAsPdf ?? readLockPdfAsPdfPreference(false);
+    const lockedPdfFileUrls = opts?.lockedPdfFileUrls;
+    const savePdfAsImage = !!opts?.savePdfAsImage && !lockPdfAsPdf;
+
     let out = items;
-    if (opts?.savePdfAsImage && shouldSuggestPdfAsImage(items)) {
+    if (savePdfAsImage && shouldSuggestPdfAsImage(items)) {
       pdfToastId = sonnerToast.loading("Converting PDF attachments to image…");
-      out = await convertPdfAttachmentsToJpegIfEnabled(out, true, { companyId: opts.companyId });
+      out = await convertPdfAttachmentsToJpegIfEnabled(out, true, {
+        companyId: opts?.companyId,
+        lockPdfAsPdf,
+        lockedPdfFileUrls,
+      });
       sonnerToast.dismiss(pdfToastId);
       pdfToastId = undefined;
-    } else if (opts?.savePdfAsImage) {
-      out = await convertPdfAttachmentsToJpegIfEnabled(out, true, { companyId: opts.companyId });
+    } else if (savePdfAsImage) {
+      out = await convertPdfAttachmentsToJpegIfEnabled(out, true, {
+        companyId: opts?.companyId,
+        lockPdfAsPdf,
+        lockedPdfFileUrls,
+      });
     }
     return await recompressOversizedImageAttachmentsOnSave(out, { companyId: opts?.companyId });
   } finally {
@@ -402,12 +420,21 @@ export async function prepareVoucherAttachmentsForSave(
 /** Master edit Save: PDF toggle (pref) + oversized image recompress for doc slots. */
 export async function prepareMasterDocumentSlotsForSave(
   slots: (File | string)[],
-  opts?: { companyId?: string | null; savePdfAsImage?: boolean }
+  opts?: {
+    companyId?: string | null;
+    savePdfAsImage?: boolean;
+    lockPdfAsPdf?: boolean;
+    lockedPdfFileUrls?: readonly string[];
+  }
 ): Promise<(File | string)[]> {
-  const { readMasterSavePdfAsImagePreference } = await import("@/lib/entityProfileLocalFiles");
+  const { readMasterSavePdfAsImagePreference, readLockPdfAsPdfPreference } = await import(
+    "@/lib/attachmentPdfOptions"
+  );
   return prepareVoucherAttachmentsForSave(slots, {
     companyId: opts?.companyId,
     savePdfAsImage: opts?.savePdfAsImage ?? readMasterSavePdfAsImagePreference(false),
+    lockPdfAsPdf: opts?.lockPdfAsPdf ?? readLockPdfAsPdfPreference(false),
+    lockedPdfFileUrls: opts?.lockedPdfFileUrls,
   });
 }
 

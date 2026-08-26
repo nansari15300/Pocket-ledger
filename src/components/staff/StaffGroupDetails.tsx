@@ -4,7 +4,8 @@ import * as React from "react";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills } from "@/components/ui/LedgerViewModePills";
-import { Edit, Printer, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, ChevronDown, Columns3, Search, Pencil, Briefcase } from "lucide-react";
+import { Edit, Printer, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, ChevronDown, Columns3, Search, Pencil } from "lucide-react";
+import { StaffAccountFallbackIcon } from "@/components/entity/StaffEntityIcon";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
@@ -948,7 +949,7 @@ export function StaffGroupDetails({
                         companyId={selectedMemberStaff.companyId}
                         src={selectedMemberAttachmentUrl ?? undefined}
                         alt={selectedMemberStaff.name}
-                        fallbackSlot={<Briefcase className="h-6 w-6 text-muted-foreground" />}
+                        fallbackSlot={<StaffAccountFallbackIcon staff={selectedMemberStaff} variant="detail" className="h-6 w-6" />}
                       />
                     </EntityFileAttachmentHover>
                     <EditStaffDialog

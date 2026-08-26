@@ -64,7 +64,6 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { collectBankAccountIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesBankLedger";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
-import { BankLedgerDrCrPerspectiveSwitch } from "@/components/bank-cash/BankLedgerDrCrPerspectiveSwitch";
 import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
 import { flipLedgerSignedBalance } from "@/lib/bankLedgerDrCrPerspective";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
@@ -80,8 +79,7 @@ function BankCashPageContent() {
   const { user } = useAuth();
   const { company, companyId, effectiveNotificationSettings } = useCompany();
   const { formatCurrency, formatRunning } = useDate();
-  const { perspective: bankDrCrPerspective, setPerspective: setBankDrCrPerspective } =
-    useBankLedgerDrCrPerspective();
+  const { perspective: bankDrCrPerspective } = useBankLedgerDrCrPerspective();
   const { vouchers, loading: vouchersLoading, processedAccounts, processedAccountGroups: initialProcessedAccountGroups, userNames } = useVouchers();
   const pageColdLoading = vouchersLoading && processedAccounts.length === 0;
   const router = useRouter();
@@ -640,30 +638,20 @@ function BankCashPageContent() {
     </div>
   );
 
-  const bankDrCrSwitchEl = (
-    <BankLedgerDrCrPerspectiveSwitch
-      perspective={bankDrCrPerspective}
-      onPerspectiveChange={setBankDrCrPerspective}
-      className="ml-auto shrink-0"
-    />
-  );
-
   const bankSectionLabelEl =
     activeView === "accounts" ? (
-      <div className={cn(mlc.sectionLabelRow, "justify-between", isMobile && "px-[2px]")}>
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
         <div className="flex min-w-0 items-center gap-1.5">
           <Landmark className={mlc.sectionIcon} />
           <span>Accounts ({filteredAccountListCount})</span>
         </div>
-        {bankDrCrSwitchEl}
       </div>
     ) : activeView === "clearing" ? (
-      <div className={cn(mlc.sectionLabelRow, "justify-between", isMobile && "px-[2px]")}>
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
         <div className="flex min-w-0 items-center gap-1.5">
           <Landmark className={mlc.sectionIcon} />
           <span>Clearing A/c ({filteredClearingAccountListCount})</span>
         </div>
-        {bankDrCrSwitchEl}
       </div>
     ) : (
       <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>

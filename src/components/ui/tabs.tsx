@@ -42,7 +42,7 @@ const TabsTrigger = React.forwardRef<
     ref={ref}
     className={cn(
       listChrome
-        ? "flex h-5 min-h-5 max-h-5 flex-1 items-center justify-center whitespace-nowrap rounded-full px-2 py-0 text-xs font-medium leading-none ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:shadow-none"
+        ? "flex h-6 min-h-6 max-h-6 flex-1 items-center justify-center whitespace-nowrap rounded-full px-2 py-0 text-xs font-medium leading-none ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:shadow-none"
         : "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
       className
     )}

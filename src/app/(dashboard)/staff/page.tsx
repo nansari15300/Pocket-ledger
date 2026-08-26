@@ -6,16 +6,17 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { Briefcase, Search, Users } from "lucide-react";
+import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useDate } from "@/hooks/useDate";
 import { useSearchParams, useRouter } from "next/navigation";
+import Link from "next/link";
 import { StaffList } from "@/components/staff/StaffList";
 import { StaffDetails } from "@/components/staff/StaffDetails";
-import { StaffGroupList } from "@/components/staff/StaffGroupList";
+import { StaffLiabilityGroupList } from "@/components/staff/StaffLiabilityGroupList";
 import { StaffGroupDetails } from "@/components/staff/StaffGroupDetails";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
 import { CreateStaffGroupDialog } from "@/components/staff/CreateStaffGroupDialog";
@@ -43,6 +44,7 @@ import {
   readMasterDetailLocationQuery,
 } from "@/lib/masterDetailTabChange";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
+import { LoanStaffNavTitle } from "@/components/layout/LoanStaffNavTitle";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
@@ -57,9 +59,25 @@ import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMaster
 import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesStaffLedger";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { StaffEntityNavIcon } from "@/components/entity/StaffEntityIcon";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import {
+  STAFF_ENTITY_ADD_BUTTON,
+  STAFF_ENTITY_LABEL,
+  STAFF_ENTITY_SEARCH_PLACEHOLDER,
+} from "@/lib/staffEntityDisplayName";
+import { isLoanLiabilityStaff } from "@/modules/loans/utils/loanLiabilityStaff";
+import { LOAN_LIABILITY_GROUP_ID } from "@/modules/loans/constants/loanConstants";
+import {
+  buildStaffPageLiabilityGroupTree,
+  staffMembersForGroupSelection,
+} from "@/lib/staffPageLiabilityGroupTree";
+import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
+import { StaffPayEmiFlow } from "@/modules/loans/components/StaffPayEmiFlow";
+import { useStaffPayEmiButtonState } from "@/modules/loans/hooks/useStaffPayEmiButtonState";
+import { payEmiButtonClassName, payEmiButtonVariant } from "@/modules/loans/utils/payEmiButtonStyle";
 import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 
 function StaffPageContent() {
@@ -139,6 +157,8 @@ function StaffPageContent() {
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [groupMemberFilterId, setGroupMemberFilterId] = useState<string | null>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
+  const [payEmiOpen, setPayEmiOpen] = useState(false);
+  const [payEmiPreferredAccountId, setPayEmiPreferredAccountId] = useState<string | null>(null);
   const [voucherDefaultTab, setVoucherDefaultTab] = useState<'add_salary' | 'payment_out'>('add_salary');
 
   const selectedStaffRaw = activeView === 'staff' ? selected as Staff : null;
@@ -146,6 +166,13 @@ function StaffPageContent() {
     () => resolveMasterListSelection(selectedStaffRaw, processedStaff),
     [selectedStaffRaw, processedStaff]
   );
+  const payEmiSelectedAccountId =
+    selectedStaff && isLoanLiabilityStaff(selectedStaff) ? selectedStaff.id : null;
+  const { show: showPayEmiButton, emiDue: payEmiDue } = useStaffPayEmiButtonState({
+    companyId,
+    processedStaff,
+    selectedAccountId: payEmiSelectedAccountId,
+  });
   const selectedGroup = activeView === 'groups' ? selected as StaffGroup : null;
   const handleStaffUpdated = useCallback((patch?: Partial<Staff>) => {
     if (!patch?.id || !selectedStaffRaw || selectedStaffRaw.id !== patch.id) return;
@@ -178,7 +205,7 @@ function StaffPageContent() {
   const mobileStaffDetailHeaderAvatar = useMemo(() => {
     if (!isMobile || !selected) return null;
     const selectedEntity = selected as Staff | StaffGroup;
-    const name = selectedEntity.name || "Staff";
+    const name = selectedEntity.name || STAFF_ENTITY_LABEL;
     // Stale `"null"` / khali — header par PDF preview mat kholo
     const attachmentUrl = trimEntityFileUrlForPreview((selectedEntity as any).fileUrl);
     const initials = name
@@ -213,7 +240,6 @@ function StaffPageContent() {
       </div>
     );
   }, [isMobile, selected]);
-  const staffMasterDetailTitle = activeView === "groups" ? "Staff Groups" : "Staff";
   useSyncMasterDetailHeaderId("staff", selectedStaff?.id ?? selectedGroup?.id ?? null);
 
   const processedStaffGroups = useMemo(() => {
@@ -242,12 +268,41 @@ function StaffPageContent() {
     return baseGroups;
   }, [processedStaff, initialProcessedStaffGroups, companyId]);
 
+  const processedStaffGroupsForList = useMemo(() => {
+    if (!showOnlyStaffGroupsWithPendingApproval || !showApproveOnList) return processedStaffGroups;
+    return processedStaffGroups.filter((g) => (pendingApprovalByStaffGroupId[g.id] ?? 0) > 0);
+  }, [
+    processedStaffGroups,
+    showOnlyStaffGroupsWithPendingApproval,
+    showApproveOnList,
+    pendingApprovalByStaffGroupId,
+  ]);
+
+  const staffLiabilityGroupTree = useMemo(
+    () =>
+      buildStaffPageLiabilityGroupTree({
+        processedStaff,
+        salaryGroups: processedStaffGroupsForList,
+        staffGroupsMeta: initialProcessedStaffGroups,
+        companyId: companyId || "",
+      }),
+    [processedStaff, processedStaffGroupsForList, initialProcessedStaffGroups, companyId]
+  );
+
+  const pendingApprovalByStaffGroupIdWithParent = useMemo(() => {
+    const total = Object.values(pendingApprovalByStaffGroupId).reduce((sum, n) => sum + n, 0);
+    return {
+      ...pendingApprovalByStaffGroupId,
+      [LOAN_LIABILITY_GROUP_ID]: total,
+    };
+  }, [pendingApprovalByStaffGroupId]);
+
   /** Party-style tab switch — EXE/APK stale ?selected= snap-back band. */
   const handleStaffTabChange = useCallback(
     (value: string) => {
       const tab = value === "groups" ? "groups" : "staff";
       const items =
-        (tab === "groups" ? processedStaffGroups : processedStaff) as ReadonlyArray<{ id: string }>;
+        (tab === "groups" ? staffLiabilityGroupTree.allGroups : processedStaff) as ReadonlyArray<{ id: string }>;
       const nextSelected = tabSwitchSelection(
         isMobile,
         pickRememberedListSelection("staffPageState", tab, items)
@@ -265,7 +320,7 @@ function StaffPageContent() {
       replaceMasterDetailTabUrl(href, router, useQueryNav);
       writeMasterDetailPageState("staffPageState", tab, nextSelected?.id);
     },
-    [isMobile, useQueryNav, processedStaff, processedStaffGroups, setActiveView, setSelected, router]
+    [isMobile, useQueryNav, processedStaff, staffLiabilityGroupTree.allGroups, setActiveView, setSelected, router]
   );
 
   // ========== MEMORY LOGIC ==========
@@ -275,7 +330,7 @@ function StaffPageContent() {
     setActiveView,            
     selected,                 
     setSelected,              
-    activeView === 'staff' ? processedStaff : processedStaffGroups, 
+    activeView === 'staff' ? processedStaff : staffLiabilityGroupTree.allGroups, 
     vouchersLoading,
     isMobile,
     selectedIdFromUrl
@@ -321,7 +376,9 @@ function StaffPageContent() {
       }
       return;
     }
-    const groupItem = processedStaffGroups.find((i) => i.id === selectedId);
+    const groupItem =
+      staffLiabilityGroupTree.allGroups.find((i) => i.id === selectedId) ||
+      processedStaffGroups.find((i) => i.id === selectedId);
     const staffItem = processedStaff.find((i) => i.id === selectedId);
     if (view === "groups" && groupItem) setActiveView("groups");
     else if (view === "staff" && staffItem) setActiveView("staff");
@@ -339,7 +396,13 @@ function StaffPageContent() {
     if (shouldReplaceWithMasterDetailCanonical(canonical)) {
       router.replace(canonical, { scroll: false });
     }
-  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedStaff, processedStaffGroups, selected?.id, activeView, setSelected, setActiveView, router]);
+  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedStaff, processedStaffGroups, staffLiabilityGroupTree.allGroups, selected?.id, activeView, setSelected, setActiveView, router]);
+
+  const openPayEmi = () => {
+    const staff = selectedStaff as Staff | undefined;
+    setPayEmiPreferredAccountId(staff?.id && isLoanLiabilityStaff(staff) ? staff.id : null);
+    setPayEmiOpen(true);
+  };
 
   const openVoucherDialog = (mode: 'add_salary' | 'payment_out') => {
     setVoucherDefaultTab(mode);
@@ -357,38 +420,19 @@ function StaffPageContent() {
     if (activeView === 'staff') {
       return processedStaff.reduce((acc, staff) => acc + staff.balance, 0);
     }
-    // Groups view: exclude system parent groups so balances are not double-counted
-    return processedStaffGroups
-      .filter((g) => {
-        const anyG = g as any;
-        const isSystem =
-          anyG.isSystemReserved === true ||
-          isSystemParentGroup("staff_groups", anyG.id);
-        return !isSystem;
-      })
-      .reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, processedStaff, processedStaffGroups]);
+    return Number(staffLiabilityGroupTree.systemGroup.balance) || 0;
+  }, [activeView, processedStaff, staffLiabilityGroupTree.systemGroup.balance]);
 
-  const processedStaffGroupsForList = useMemo(() => {
-    if (!showOnlyStaffGroupsWithPendingApproval || !showApproveOnList) return processedStaffGroups;
-    return processedStaffGroups.filter((g) => (pendingApprovalByStaffGroupId[g.id] ?? 0) > 0);
-  }, [
-    processedStaffGroups,
-    showOnlyStaffGroupsWithPendingApproval,
-    showApproveOnList,
-    pendingApprovalByStaffGroupId,
-  ]);
-
-  // Filtered group count (matches StaffGroupList: exclude system/report-only + search)
+  // Filtered group count (nested under Loan & Liabilities parent)
   const filteredStaffGroupCount = useMemo(() => {
-    const searchLower = (searchTerm || "").toLowerCase();
-    return (processedStaffGroupsForList || []).filter((g) => {
-      const anyG = g as any;
-      if (anyG.isReportOnly === true || anyG.isSystemReserved === true) return false;
-      if (isSystemParentGroup("staff_groups", anyG.id)) return false;
-      return anyG.name && (searchLower ? String(anyG.name).toLowerCase().includes(searchLower) : true);
-    }).length;
-  }, [processedStaffGroupsForList, searchTerm]);
+    const q = searchTerm.trim();
+    if (!q) return Math.max(1, staffLiabilityGroupTree.childGroups.length || 1);
+    const childMatches = staffLiabilityGroupTree.childGroups.filter((group) =>
+      masterEntityTextMatchesSearch(group.name, searchTerm)
+    ).length;
+    if (childMatches > 0) return childMatches;
+    return masterEntityTextMatchesSearch(staffLiabilityGroupTree.systemGroup.name, searchTerm) ? 1 : 0;
+  }, [staffLiabilityGroupTree, searchTerm]);
 
   const handleSelect = useCallback((item: Staff | StaffGroup, options?: GroupListSelectOptions) => {
     // Staff rows have `groupId`; staff *groups* have `ownerId` too — `"ownerId" in item` breaks child pick.
@@ -419,28 +463,15 @@ function StaffPageContent() {
   
   const staffForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
-    if (selectedGroup.id === 'ungrouped') {
-      return processedStaff.filter((p: any) => !p.groupId || p.groupId === "ungrouped_staff");
-    }
-    return processedStaff.filter(p => p.groupId === selectedGroup.id);
-  }, [selectedGroup, processedStaff]);
+    return staffMembersForGroupSelection(selectedGroup.id, processedStaff, staffLiabilityGroupTree);
+  }, [selectedGroup, processedStaff, staffLiabilityGroupTree]);
 
   const staffForGroupDetails = useMemo(() => {
     if (!groupMemberFilterId) return staffForSelectedGroup;
     return staffForSelectedGroup.filter((s) => s.id === groupMemberFilterId);
   }, [staffForSelectedGroup, groupMemberFilterId]);
 
-  const staffGroupMembersByGroupId = useMemo(() => {
-    const map: Record<string, Staff[]> = {};
-    for (const g of processedStaffGroupsForList) {
-      if (g.id === "ungrouped") {
-        map[g.id] = processedStaff.filter((s) => !s.groupId || s.groupId === "ungrouped_staff");
-      } else {
-        map[g.id] = processedStaff.filter((s) => s.groupId === g.id);
-      }
-    }
-    return map;
-  }, [processedStaffGroupsForList, processedStaff]);
+  const staffGroupMembersByGroupId = staffLiabilityGroupTree.groupMembersByGroupId;
 
   if (vouchersLoading) {
     return <LoadingSpinner />;
@@ -464,7 +495,7 @@ function StaffPageContent() {
  const staffTabsEl = (
     <Tabs value={activeView} onValueChange={handleStaffTabChange} className="w-full">
       <TabsList listChrome>
-        <TabsTrigger listChrome value="staff" className="flex-1">Staff</TabsTrigger>
+        <TabsTrigger listChrome value="staff" className="flex-1">{STAFF_ENTITY_LABEL}</TabsTrigger>
         <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
       </TabsList>
     </Tabs>
@@ -475,7 +506,7 @@ function StaffPageContent() {
       <div className={mlc.searchWrap}>
         <Search className={mlc.searchIcon} />
         <Input
-          placeholder={activeView === 'staff' ? 'Search staff...' : 'Search groups...'}
+          placeholder={activeView === 'staff' ? STAFF_ENTITY_SEARCH_PLACEHOLDER : 'Search groups...'}
           listChrome
           listChromeSearch
           value={searchTerm}
@@ -508,7 +539,7 @@ function StaffPageContent() {
       {activeView === "staff" ? (
         <CreateStaffDialog onStaffCreated={() => {}} groups={processedStaffGroups} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen}>
           <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateStaffOpen(true)}>
-            + Add Staff
+            {STAFF_ENTITY_ADD_BUTTON}
           </PermissionButton>
         </CreateStaffDialog>
       ) : (
@@ -523,10 +554,21 @@ function StaffPageContent() {
 
   const staffActionRowEl = (
     <div className={mlc.actionRow}>
-      <div className={mlc.actionGrid}>
+      <div className={cn("grid gap-1", showPayEmiButton ? "grid-cols-3" : "grid-cols-2")}>
         <PermissionButton permission="create_records" variant="outline" size="list" className="w-full" onClick={() => openVoucherDialog("add_salary")}>
           Add Salary
         </PermissionButton>
+        {showPayEmiButton ? (
+          <PermissionButton
+            permission="create_records"
+            variant={payEmiButtonVariant(payEmiDue)}
+            size="list"
+            className={payEmiButtonClassName(payEmiDue, "w-full")}
+            onClick={openPayEmi}
+          >
+            Pay EMI
+          </PermissionButton>
+        ) : null}
         <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("payment_out")}>
           Pay Salary
         </PermissionButton>
@@ -534,18 +576,16 @@ function StaffPageContent() {
     </div>
   );
 
-  const staffSectionLabelEl =
-    activeView === "staff" ? (
-      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
-        <Briefcase className={mlc.sectionIcon} />
-        <span>Staff ({filteredStaffListCount})</span>
-      </div>
-    ) : (
-      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
-        <Users className={mlc.sectionIcon} />
-        <span>Groups ({filteredStaffGroupCount})</span>
-      </div>
-    );
+  const staffSectionLabelEl = (
+    <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+      <StaffEntityNavIcon className={mlc.sectionIcon} />
+      <span>
+        {activeView === "staff"
+          ? `${STAFF_ENTITY_LABEL} (${filteredStaffListCount})`
+          : `Groups (${filteredStaffGroupCount})`}
+      </span>
+    </div>
+  );
 
  const listView = (
     <MasterListViewShell
@@ -570,14 +610,15 @@ function StaffPageContent() {
           hideQuickFilterBar
         />
       ) : (
-        <StaffGroupList
-          groups={processedStaffGroupsForList}
+        <StaffLiabilityGroupList
+          systemGroup={staffLiabilityGroupTree.systemGroup}
+          childGroups={staffLiabilityGroupTree.childGroups}
+          groupMembersByGroupId={staffGroupMembersByGroupId}
           onSelectGroup={handleSelect}
           selectedGroup={selectedGroup}
           searchTerm={searchTerm}
-          pendingApprovalByGroupId={pendingApprovalByStaffGroupId}
+          pendingApprovalByGroupId={pendingApprovalByStaffGroupIdWithParent}
           pendingApprovalByMemberId={pendingApprovalByStaffId}
-          groupMembersByGroupId={staffGroupMembersByGroupId}
           selectedGroupMemberFilterId={groupMemberFilterId}
           getItemHref={useQueryNav ? (g) => `/staff?view=groups&selected=${g.id}` : undefined}
           quickFilter={groupListQuickFilter}
@@ -622,7 +663,7 @@ function StaffPageContent() {
   return (
     <>
     <ResponsiveMasterDetail
-      title={staffMasterDetailTitle}
+      title={<LoanStaffNavTitle active="staff" />}
       mobileSelectionLabel={mobileStaffSelectionLabel}
       mobileSelectionLabelClassName={mobileStaffSelectionLabelClassName}
       mobileDetailHeaderEnd={mobileStaffDetailHeaderAvatar}
@@ -652,6 +693,11 @@ function StaffPageContent() {
         defaultTab={voucherDefaultTab}
         defaultVoucherData={voucherDefaultTab === 'payment_out' ? { payeeType: 'staff', ...(selectedStaff ? { staffId: selectedStaff.id } : {}) } : undefined}
      />
+    <StaffPayEmiFlow
+      open={payEmiOpen}
+      onOpenChange={setPayEmiOpen}
+      preferredAccountId={payEmiPreferredAccountId}
+    />
     </>
   );
 }

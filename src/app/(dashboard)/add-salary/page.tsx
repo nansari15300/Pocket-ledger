@@ -1,5 +1,5 @@
-
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_SEARCH_PLACEHOLDER } from "@/lib/staffEntityDisplayName";
 
 import { Button } from "@/components/ui/button";
 import { PermissionButton } from "@/components/permission";
@@ -148,7 +148,7 @@ export default function AddSalaryPage() {
                     <div className="relative mt-4">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                         <Input
-                            placeholder="Search staff..."
+                            placeholder={STAFF_ENTITY_SEARCH_PLACEHOLDER}
                             className="pl-9"
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
@@ -157,7 +157,7 @@ export default function AddSalaryPage() {
                     </div>
                 </div>
                  <div className="px-4 pt-2 pb-1 border-b">
-                    <h3 className="text-sm font-semibold">Staff ({filteredStaff.length})</h3>
+                    <h3 className="text-sm font-semibold">{STAFF_ENTITY_LABEL} ({filteredStaff.length})</h3>
                 </div>
                 <StaffList staff={filteredStaff} onSelectStaff={handleSelectStaff} selectedStaff={selectedStaff} searchTerm={searchTerm}/>
             </div>

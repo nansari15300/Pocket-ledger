@@ -40,6 +40,7 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import usePermissions from "@/hooks/usePermissions";
+import { attachmentLockFieldsForFinalUrls, readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import Link from "next/link";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { MasterFormNameAcNoRow, MasterMobileNoField, masterFormTwoColClass } from "@/components/inter-company/MasterFormLayout";
@@ -131,7 +132,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   processedStaffGroupsRef.current = processedStaffGroups;
   const { user } = useAuth();
   const isMobile = useIsMobile();
-  const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const { canAddAvatar, canAddFileImagePdf, can } = usePermissions();
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { dateSystem } = useDate();
   const [groups, setGroups] = useState<StaffGroup[]>(allGroups);
@@ -367,6 +368,12 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
             companyId,
             fileUrl: fileUrl ?? (base.fileUrl as string | null) ?? null,
             documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+            ...attachmentLockFieldsForFinalUrls(documentFileUrls, {
+              existingLockedPdfFileUrls: readLockedPdfFileUrlsFromRow(
+                staff as unknown as Record<string, unknown>
+              ),
+              canUnlockLockedPdf: can("unlock_locked_pdf"),
+            }),
           };
           await upsertCompanyDocInBrowserDb(companyId, "staff", staffRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "staff", "update", staffRefSnap.id, payload);
@@ -414,6 +421,12 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           openingBalanceNarration: narrationClean,
           fileUrl,
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+          ...attachmentLockFieldsForFinalUrls(documentFileUrls, {
+            existingLockedPdfFileUrls: readLockedPdfFileUrlsFromRow(
+              staff as unknown as Record<string, unknown>
+            ),
+            canUnlockLockedPdf: can("unlock_locked_pdf"),
+          }),
           groupId: values.groupId || null,
           updatedAt: serverTimestamp(),
         });
@@ -607,7 +620,13 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           </DialogHeader>
           <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
+            <form
+              onSubmit={(e) => {
+                e.stopPropagation();
+                void form.handleSubmit(onSubmit)(e);
+              }}
+              className="flex min-h-0 flex-1 flex-col"
+            >
             <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
               <div className={masterFormTwoColClass}>
                 <MasterFormNameAcNoRow
@@ -795,6 +814,9 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                   attachmentCompanyId={companyId ?? undefined}
                   attachmentReusePlaceKey={staff.id ? `staff/${staff.id}` : null}
                   entityStatementLabel="staff"
+                  existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(
+                    staff as unknown as Record<string, unknown>
+                  )}
                 />
                 <EntityOpeningBalanceNarrationField
                   control={form.control}

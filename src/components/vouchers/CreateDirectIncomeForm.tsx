@@ -1,4 +1,5 @@
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -64,13 +65,20 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave, finalizeVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
+import {
+  applyVoucherAttachmentsAfterFormSave,
+  finalizeVoucherAttachmentsAfterFormSave,
+  uploadVoucherAttachmentFileToFirebase,
+  voucherAttachmentFieldsForSave,
+  voucherAttachmentLockSaveOpts,
+} from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
+import { readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 
 
 const fileSchema = z.object({
@@ -379,9 +387,10 @@ export function CreatePaymentInForm({
       const { files: formFiles, date, ...restOfData } = data;
 
       const filesForSave = await prepareVoucherAttachmentsForSave(files, {
-        companyId,
-        savePdfAsImage,
-      });
+          companyId,
+          savePdfAsImage,
+          lockedPdfFileUrls: readLockedPdfFileUrlsFromRow(voucher),
+        });
 
       const submissionData: any = {
         ...restOfData,
@@ -446,6 +455,14 @@ export function CreatePaymentInForm({
           }
         }
       }
+
+      Object.assign(
+        submissionData,
+        voucherAttachmentFieldsForSave(
+          submissionData.fileUrls as string[],
+          voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))
+        )
+      );
 
       let originalVoucherIdToDelete: string | null = null;
       if (isEditingAndConverting && voucher.id) {
@@ -617,7 +634,7 @@ export function CreatePaymentInForm({
   
   const paymentPayeeTypes = [
     { value: 'party', label: 'Party' },
-    { value: 'staff', label: 'Staff' },
+    { value: 'staff', label: STAFF_ENTITY_LABEL },
     { value: 'tax', label: 'Tax' },
   ];
   const incomePayeeTypes = [
@@ -901,6 +918,7 @@ export function CreatePaymentInForm({
                 <FormLabel>Attach Files (Optional)</FormLabel>
                 {showPdfAsImageToggle && (
                   <VoucherPdfAsImageToggle
+                    existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(voucher)}
                     id="voucher-save-pdf-as-image-direct-income"
                     checked={savePdfAsImage}
                     onCheckedChange={setSavePdfAsImage}

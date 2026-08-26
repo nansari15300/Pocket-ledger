@@ -1,5 +1,5 @@
-
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -98,11 +98,13 @@ import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
+import { readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import {
   applyVoucherAttachmentsAfterFormSave,
   finalizeVoucherAttachmentsAfterFormSave,
   uploadVoucherAttachmentFileToFirebase,
   voucherAttachmentFieldsForSave,
+  voucherAttachmentLockSaveOpts,
 } from "@/lib/voucherFormAttachmentSave";
 import { useVoucherAttachmentPostSaveSync } from "@/hooks/useVoucherAttachmentPostSaveSync";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
@@ -128,7 +130,7 @@ import type { CopyMissingMasterOpts, CopyMasterDraftRequestPayload } from "@/com
 const ENTITY_OPTIONS = [
   { value: "", label: "All" },
   { value: "party", label: "Party" },
-  { value: "staff", label: "Staff" },
+  { value: "staff", label: STAFF_ENTITY_LABEL },
   { value: "account", label: "Bank/Cash" },
   { value: "expense", label: "Expense" },
   { value: "tax", label: "Tax" },
@@ -140,7 +142,7 @@ const JOURNAL_ADD_NEW_BY_ENTITY: Record<
   { value: string; label: string; createType: "party" | "staff" | "account" | "expense" | "tax" }
 > = {
   party: { value: "add-new-party", label: "+ Add Party", createType: "party" },
-  staff: { value: "add-new-staff", label: "+ Add Staff", createType: "staff" },
+  staff: { value: "add-new-staff", label: `+ Add ${STAFF_ENTITY_LABEL}`, createType: "staff" },
   account: { value: "add-new-account", label: "+ Add Bank/Cash", createType: "account" },
   expense: { value: "add-new-expense", label: "+ Add Expense Account", createType: "expense" },
   tax: { value: "add-new-tax", label: "+ Add Tax", createType: "tax" },
@@ -1415,7 +1417,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         return {
           accountId,
           kind: "staff" as const,
-          label: staff?.name || accountLabelById.get(accountId) || "Staff",
+          label: staff?.name || accountLabelById.get(accountId) || STAFF_ENTITY_LABEL,
           openingBalance: Number((staff as any)?.openingBalance ?? 0),
         };
       }
@@ -1709,9 +1711,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
 
       const filesForSave = await prepareVoucherAttachmentsForSave(files, {
-        companyId,
-        savePdfAsImage,
-      });
+          companyId,
+          savePdfAsImage,
+          lockedPdfFileUrls: readLockedPdfFileUrlsFromRow(voucher),
+        });
       
       let fileUrls: string[] = filesForSave.filter(f => typeof f === 'string') as string[];
       let preGeneratedVoucherId: string | undefined;
@@ -1786,7 +1789,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         })),
         // Persist links made from Journal debit/credit bill-wise cards.
         allocations: effectiveJournalAllocations,
-        ...voucherAttachmentFieldsForSave(fileUrls),
+        ...voucherAttachmentFieldsForSave(fileUrls, voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))),
       };
 
       if (!idArgForFirestore) delete (submissionData as { id?: string }).id;
@@ -2834,6 +2837,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <FormLabel>Attach Files (Optional)</FormLabel>
                 {showPdfAsImageToggle && (
                   <VoucherPdfAsImageToggle
+                    existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(voucher)}
                     id="voucher-save-pdf-as-image-journal"
                     checked={savePdfAsImage}
                     onCheckedChange={setSavePdfAsImage}
@@ -3212,7 +3216,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           if (!open) setActiveJournalLinkSide(null);
         }}
         staffId={activeJournalLinkContext?.kind === "staff" ? activeJournalLinkContext.accountId : null}
-        staffName={activeJournalLinkContext?.kind === "staff" ? activeJournalLinkContext.label : "Staff"}
+        staffName={activeJournalLinkContext?.kind === "staff" ? activeJournalLinkContext.label : STAFF_ENTITY_LABEL}
         paymentInId={journalVoucherId || null}
         amountReceived={Number(activeJournalLinkContext?.amount ?? 0) || 0}
         existingAllocations={journalDialogExistingAllocations}
@@ -3233,7 +3237,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           if (!open) setActiveJournalLinkSide(null);
         }}
         staffId={activeJournalLinkContext?.kind === "staff" ? activeJournalLinkContext.accountId : null}
-        staffName={activeJournalLinkContext?.kind === "staff" ? activeJournalLinkContext.label : "Staff"}
+        staffName={activeJournalLinkContext?.kind === "staff" ? activeJournalLinkContext.label : STAFF_ENTITY_LABEL}
         paymentOutId={journalVoucherId || null}
         amountPaid={Number(activeJournalLinkContext?.amount ?? 0) || 0}
         existingAllocations={journalDialogExistingAllocations}

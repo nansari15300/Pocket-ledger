@@ -97,6 +97,38 @@ function getImageStackNaturalSize(root: HTMLElement): { width: number; height: n
   return { width, height };
 }
 
+/** Multi-page portal PDF stitch: fit/zoom uses 1 page height, scroll for baaki pages. */
+function getPortalPdfFitNatural(
+  root: HTMLElement,
+  fullNatural: { width: number; height: number }
+): { width: number; height: number; isMultiPageStitch: boolean } {
+  const img = root.querySelector("img[data-pdf-portal-pages]");
+  if (!(img instanceof HTMLImageElement)) {
+    return { width: fullNatural.width, height: fullNatural.height, isMultiPageStitch: false };
+  }
+  const pages = Number.parseInt(img.dataset.pdfPortalPages || "1", 10);
+  const onePageH = Number.parseFloat(img.dataset.pdfPortalOnePageH || "0");
+  if (pages > 1 && onePageH > 1) {
+    return { width: fullNatural.width, height: onePageH, isMultiPageStitch: true };
+  }
+  return { width: fullNatural.width, height: fullNatural.height, isMultiPageStitch: false };
+}
+
+function getFitNaturalSize(
+  root: HTMLElement
+): { width: number; height: number; isMultiPageStitch: boolean } | null {
+  const full = getImageStackNaturalSize(root);
+  if (!full) return null;
+  return getPortalPdfFitNatural(root, full);
+}
+
+function isMultiPagePortalPdfRoot(root: HTMLElement | null): boolean {
+  if (!root) return false;
+  const img = root.querySelector("img[data-pdf-portal-pages]");
+  if (!(img instanceof HTMLImageElement)) return false;
+  return Number.parseInt(img.dataset.pdfPortalPages || "1", 10) > 1;
+}
+
 type PanSession = {
   active: boolean;
   pointerId: number;
@@ -186,6 +218,8 @@ export function AttachmentHoverPortal({
   const [galleryIndex, setGalleryIndex] = React.useState(0);
   const [panelWidth, setPanelWidth] = React.useState<number | null>(null);
   const [panelHeight, setPanelHeight] = React.useState<number | null>(null);
+  const [scrollable, setScrollable] = React.useState(false);
+  const [portalPdfMultiPage, setPortalPdfMultiPage] = React.useState(false);
   const [pos, setPos] = React.useState({ top: 0, left: 0 });
   const normalizedGalleryUrls = React.useMemo(
     () => (Array.isArray(galleryUrls) ? galleryUrls.map((u) => String(u || "").trim()).filter(Boolean) : []),
@@ -273,7 +307,7 @@ export function AttachmentHoverPortal({
 
     const attempt = (n: number) => {
       if (n > 48) return;
-      const natural = getImageStackNaturalSize(root);
+      const natural = getFitNaturalSize(root);
       if (natural) {
         const fitWindowScale = computeFitWindowZoomFromNatural(natural, maxContentW, maxContentH);
         const fitWidthScale = maxContentW / natural.width;
@@ -339,7 +373,7 @@ export function AttachmentHoverPortal({
 
     const attempt = (n: number) => {
       if (n > 60 || fitModeRef.current !== "width") return;
-      const natural = getImageStackNaturalSize(root);
+      const natural = getFitNaturalSize(root);
       if (!natural) {
         requestAnimationFrame(() => attempt(n + 1));
         return;
@@ -362,7 +396,7 @@ export function AttachmentHoverPortal({
 
     const attempt = (n: number) => {
       if (n > 60 || fitModeRef.current !== "height") return;
-      const natural = getImageStackNaturalSize(root);
+      const natural = getFitNaturalSize(root);
       if (!natural) {
         requestAnimationFrame(() => attempt(n + 1));
         return;
@@ -394,7 +428,7 @@ export function AttachmentHoverPortal({
 
     const attempt = (n: number) => {
       if (n > 60 || fitModeRef.current !== "window") return;
-      const natural = getImageStackNaturalSize(root);
+      const natural = getFitNaturalSize(root);
       if (!natural) {
         /** PDF/thumb baad me aata hai — zoom 100% pe mat chhodna */
         requestAnimationFrame(() => attempt(n + 1));
@@ -446,6 +480,7 @@ export function AttachmentHoverPortal({
       setGalleryIndex(0);
       setPanelWidth(null);
       setPanelHeight(null);
+      setPortalPdfMultiPage(false);
       return;
     }
     if (clickOrTapOpenMode) return;
@@ -520,11 +555,11 @@ export function AttachmentHoverPortal({
    * Har `<img>` ko `width = naturalW * zoom` — multi-file stack + PDF thumb baad me aaye to MutationObserver.
    * Fit window: ResizeObserver pe dubara fit MAT — tall files pe scrollbar↔zoom vibrate hota tha.
    */
-  const [scrollable, setScrollable] = React.useState(false);
   const lastFitSignatureRef = React.useRef("");
   React.useLayoutEffect(() => {
     if (!open) {
       setScrollable(false);
+      setPortalPdfMultiPage(false);
       lastFitSignatureRef.current = "";
       return;
     }
@@ -534,8 +569,10 @@ export function AttachmentHoverPortal({
     const syncScrollable = () => {
       const r = scrollRef.current;
       if (!r) return;
-      /** Fit window/height: overflow hidden — scrollable flag vibration avoid */
-      if (fitModeRef.current === "window" || fitModeRef.current === "height") {
+      const multiPagePdf = isMultiPagePortalPdfRoot(r);
+      setPortalPdfMultiPage((prev) => (prev === multiPagePdf ? prev : multiPagePdf));
+      /** Fit window/height: overflow hidden — unless multi-page portal PDF (scroll for page 2+) */
+      if ((fitModeRef.current === "window" || fitModeRef.current === "height") && !multiPagePdf) {
         setScrollable(false);
         return;
       }
@@ -557,9 +594,10 @@ export function AttachmentHoverPortal({
     };
 
     const fitSignature = () => {
-      const natural = getImageStackNaturalSize(root);
+      const natural = getFitNaturalSize(root);
       if (!natural) return "";
-      return `${fitModeRef.current}:${natural.width}x${natural.height}`;
+      const mp = natural.isMultiPageStitch ? ":mp" : "";
+      return `${fitModeRef.current}:${natural.width}x${natural.height}${mp}`;
     };
 
     const refitIfNeeded = () => {
@@ -839,7 +877,7 @@ export function AttachmentHoverPortal({
     panelHeight != null ? Math.min(panelHeight, viewportMaxPanelH) : viewportMaxPanelH;
   const measuredPanelHeight = panelHeight != null;
   const panelHeightStyle = measuredPanelHeight ? effectivePanelH : undefined;
-  const measuredContentFrame = measuredPanelHeight && (fitMode === "window" || fitMode === "height");
+  const measuredContentFrame = measuredPanelHeight && (fitMode === "window" || fitMode === "height") && !portalPdfMultiPage;
 
   const portalTree =
     open &&

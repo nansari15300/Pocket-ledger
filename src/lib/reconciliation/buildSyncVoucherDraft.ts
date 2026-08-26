@@ -1,3 +1,4 @@
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 import { startOfDay } from "date-fns";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
@@ -733,7 +734,7 @@ function reconciliationEntityTypeToNoteContext(entityType: string): string {
     case "bank":
       return "Bank/Cash";
     case "staff":
-      return "Staff";
+      return STAFF_ENTITY_LABEL;
     case "tax":
       return "Tax";
     case "expense":

@@ -187,6 +187,45 @@ html[data-pl-app-ui-zoom-shell="android-zoom"] .min-h-dvh {
     flex-shrink: 0;
     stroke: currentColor;
   }
+  /** Inline edit pen — profile avatar pen jaisa, bina absolute overlay */
+  .pl-ledger-inline-edit-pen {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    min-width: 1.25rem;
+    min-height: 1.25rem;
+    padding: 0;
+    margin: 0;
+    border-radius: 9999px !important;
+    border: 1px solid rgb(147 197 253) !important; /* blue-300 */
+    background-color: rgb(219 234 254) !important; /* blue-100 */
+    background-image: none !important;
+    color: rgb(30 58 138) !important; /* blue-900 */
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.55),
+      0 1px 2px rgba(15, 23, 42, 0.08) !important;
+    cursor: pointer;
+    line-height: 0;
+    overflow: visible;
+    flex-shrink: 0;
+  }
+  .pl-ledger-inline-edit-pen:hover {
+    background-color: rgb(191 219 254) !important; /* blue-200 */
+    border-color: rgb(96 165 250) !important;
+    color: rgb(30 58 138) !important;
+  }
+  .pl-ledger-inline-edit-pen:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .pl-ledger-inline-edit-pen svg {
+    width: 0.75rem;
+    height: 0.75rem;
+    flex-shrink: 0;
+    stroke: currentColor;
+  }
   /**
    * Name card: left 50% me avatar+balance ke baad jo bache — responsive fill.
    * Floor 15ch; usse kam ribbon H-scroll.
@@ -1289,15 +1328,15 @@ body.theme-colorfull main [role="tablist"] {
 }
 /* List pages: colorfull — ribbon/pill borders height na badhayein */
 body.theme-colorfull main [data-pl-master-list-chrome] [role="tablist"] {
-  height: 1.5rem !important;
-  min-height: 1.5rem !important;
-  max-height: 1.5rem !important;
+  height: var(--pl-mlc-pill-h, 1.5rem) !important;
+  min-height: var(--pl-mlc-pill-h, 1.5rem) !important;
+  max-height: var(--pl-mlc-pill-h, 1.5rem) !important;
   padding: 2px !important;
 }
 body.theme-colorfull main [data-pl-master-list-chrome] [role="tab"] {
-  height: 1.25rem !important;
-  min-height: 1.25rem !important;
-  max-height: 1.25rem !important;
+  height: var(--pl-mlc-pill-h, 1.5rem) !important;
+  min-height: var(--pl-mlc-pill-h, 1.5rem) !important;
+  max-height: var(--pl-mlc-pill-h, 1.5rem) !important;
   padding-top: 0 !important;
   padding-bottom: 0 !important;
   line-height: 1 !important;
@@ -3094,31 +3133,56 @@ button.day_selected.is-today.has-transactions {
 }
 
 /* Master–detail list: tabs/search — utilities ke baad force (Tailwind lib scan + listChrome props) */
+[data-pl-master-list-chrome] {
+  --pl-mlc-pill-h: 1.5rem;
+}
 [data-pl-master-list-chrome] [data-pl-master-list-tabs][role="tablist"],
 [data-pl-master-list-chrome] [role="tablist"] {
   display: flex !important;
-  height: 1.5rem !important;
-  min-height: 1.5rem !important;
-  max-height: 1.5rem !important;
+  height: var(--pl-mlc-pill-h) !important;
+  min-height: var(--pl-mlc-pill-h) !important;
+  max-height: var(--pl-mlc-pill-h) !important;
   padding: 2px !important;
   gap: 2px !important;
   align-items: center !important;
   box-sizing: border-box !important;
 }
 [data-pl-master-list-chrome] [role="tablist"] [role="tab"] {
-  height: 1.25rem !important;
-  min-height: 1.25rem !important;
-  max-height: 1.25rem !important;
+  height: var(--pl-mlc-pill-h) !important;
+  min-height: var(--pl-mlc-pill-h) !important;
+  max-height: var(--pl-mlc-pill-h) !important;
   padding-top: 0 !important;
   padding-bottom: 0 !important;
   line-height: 1 !important;
   box-sizing: border-box !important;
 }
+[data-pl-master-list-chrome] .pl-mlc-tabs-row,
+[data-pl-master-list-chrome] .pl-mlc-search-row,
+[data-pl-master-list-chrome] .pl-mlc-action-row {
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
+  box-sizing: border-box !important;
+}
+/* Loan / detail tabs — multi-row wrap; pills vertically centered with equal top/bottom inset */
+[data-pl-master-list-chrome] .pl-mlc-detail-tabs-row {
+  display: flex !important;
+  align-items: center !important;
+}
+[data-pl-master-list-chrome] .pl-mlc-detail-tabs-row [role="tablist"] {
+  height: auto !important;
+  min-height: var(--pl-mlc-pill-h) !important;
+  max-height: none !important;
+  padding: 0 !important;
+  gap: 4px !important;
+  align-items: center !important;
+  align-content: center !important;
+  flex-wrap: wrap !important;
+}
 [data-pl-master-list-chrome] .pl-mlc-search-row input,
 [data-pl-master-list-chrome] .pl-mlc-search-row button {
-  height: 1.75rem !important;
-  min-height: 1.75rem !important;
-  max-height: 1.75rem !important;
+  height: var(--pl-mlc-pill-h) !important;
+  min-height: var(--pl-mlc-pill-h) !important;
+  max-height: var(--pl-mlc-pill-h) !important;
   padding-top: 0 !important;
   padding-bottom: 0 !important;
   box-sizing: border-box !important;
@@ -3129,9 +3193,9 @@ button.day_selected.is-today.has-transactions {
 }
 /* Pink pending count — search/+ Add row se upar na nikle */
 [data-pl-master-list-chrome] .pl-mlc-search-row .pl-mlc-pending-badge {
-  height: 1.75rem !important;
-  min-height: 1.75rem !important;
-  max-height: 1.75rem !important;
+  height: var(--pl-mlc-pill-h) !important;
+  min-height: var(--pl-mlc-pill-h) !important;
+  max-height: var(--pl-mlc-pill-h) !important;
   padding-top: 0 !important;
   padding-bottom: 0 !important;
   line-height: 1 !important;
@@ -3140,9 +3204,9 @@ button.day_selected.is-today.has-transactions {
 }
 /* List voucher shortcuts (Add Salary, Pay Salary, Direct Income…) — search row jitni height */
 [data-pl-master-list-chrome] .pl-mlc-action-row button {
-  height: 1.75rem !important;
-  min-height: 1.75rem !important;
-  max-height: 1.75rem !important;
+  height: var(--pl-mlc-pill-h) !important;
+  min-height: var(--pl-mlc-pill-h) !important;
+  max-height: var(--pl-mlc-pill-h) !important;
   padding-top: 0 !important;
   padding-bottom: 0 !important;
   font-size: 0.75rem !important;
@@ -4000,6 +4064,9 @@ body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs
 
 /* Master–detail list PC: saari chrome rows +20% height + green active tab — Party/Tax/Bank/Staff/Items/Incomes */
 @media (min-width: 768px) {
+  [data-master-detail-layout] [data-pl-master-list-chrome] {
+    --pl-mlc-pill-h: 1.8rem;
+  }
   [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-page-header {
     min-height: 2.7rem !important;
     padding-top: 0.3rem !important;
@@ -4007,39 +4074,28 @@ body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs
     box-sizing: border-box !important;
   }
   [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-tabs-row {
-    min-height: 2.1rem !important;
-    padding-top: 0.15rem !important;
-    padding-bottom: 0.15rem !important;
+    min-height: calc(var(--pl-mlc-pill-h) + 8px) !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
     box-sizing: border-box !important;
   }
-  [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs][role="tablist"],
-  [data-master-detail-layout] [data-pl-master-list-chrome] [role="tablist"] {
-    height: 1.8rem !important;
-    min-height: 1.8rem !important;
-    max-height: 1.8rem !important;
-  }
-  [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"],
-  [data-master-detail-layout] [data-pl-master-list-chrome] [role="tablist"] [role="tab"] {
-    height: 1.5rem !important;
-    min-height: 1.5rem !important;
-    max-height: 1.5rem !important;
+  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-detail-tabs-row {
+    min-height: calc(var(--pl-mlc-pill-h) + 8px) !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+    box-sizing: border-box !important;
   }
   [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-search-row {
-    min-height: 2.5rem !important;
-    padding-top: 0.2rem !important;
-    padding-bottom: 0.2rem !important;
+    min-height: calc(var(--pl-mlc-pill-h) + 8px) !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
     box-sizing: border-box !important;
   }
-  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-search-row input,
-  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-search-row button {
-    height: 2.1rem !important;
-    min-height: 2.1rem !important;
-    max-height: 2.1rem !important;
-  }
-  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-search-row .pl-mlc-pending-badge {
-    height: 2.1rem !important;
-    min-height: 2.1rem !important;
-    max-height: 2.1rem !important;
+  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-action-row {
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+    min-height: calc(var(--pl-mlc-pill-h) + 8px) !important;
+    box-sizing: border-box !important;
   }
   [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-search-row .pl-mlc-search-icon,
   [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-search-row svg.pl-mlc-search-icon {
@@ -4051,11 +4107,6 @@ body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs
     padding-top: 0.36rem !important;
     padding-bottom: 0.36rem !important;
     box-sizing: border-box !important;
-  }
-  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-action-row button {
-    height: 2.1rem !important;
-    min-height: 2.1rem !important;
-    max-height: 2.1rem !important;
   }
   body.theme-pro main [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"],
   body.theme-colorfull main [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"],
@@ -4463,33 +4514,33 @@ body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-action-row {
   [data-pl-mobile-list-dock] .pl-mlc-tabs-row,
   [data-pl-party-mobile-list-dock] .pl-mlc-tabs-row {
     min-height: 1.92rem !important;
-    padding-top: 2px !important;
-    padding-bottom: 2px !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
     box-sizing: border-box !important;
   }
   [data-pl-mobile-list-dock] [data-pl-master-list-tabs][role="tablist"],
   [data-pl-mobile-list-dock] [role="tablist"],
   [data-pl-party-mobile-list-dock] [data-pl-master-list-tabs][role="tablist"],
   [data-pl-party-mobile-list-dock] [role="tablist"] {
-    height: 1.8rem !important;
-    min-height: 1.8rem !important;
-    max-height: 1.8rem !important;
+    height: var(--pl-mlc-pill-h, 1.5rem) !important;
+    min-height: var(--pl-mlc-pill-h, 1.5rem) !important;
+    max-height: var(--pl-mlc-pill-h, 1.5rem) !important;
   }
   [data-pl-mobile-list-dock] [data-pl-master-list-tabs] [role="tab"],
   [data-pl-mobile-list-dock] [role="tablist"] [role="tab"],
   [data-pl-party-mobile-list-dock] [data-pl-master-list-tabs] [role="tab"],
   [data-pl-party-mobile-list-dock] [role="tablist"] [role="tab"] {
-    height: 1.5rem !important;
-    min-height: 1.5rem !important;
-    max-height: 1.5rem !important;
+    height: var(--pl-mlc-pill-h, 1.5rem) !important;
+    min-height: var(--pl-mlc-pill-h, 1.5rem) !important;
+    max-height: var(--pl-mlc-pill-h, 1.5rem) !important;
   }
   [data-pl-mobile-list-dock] .pl-mlc-search-row,
   [data-pl-mobile-list-dock] .pl-mlc-section-label-row,
   [data-pl-mobile-list-dock] .pl-mlc-action-row,
   [data-pl-party-mobile-list-dock] .pl-mlc-search-row,
   [data-pl-party-mobile-list-dock] .pl-mlc-section-label-row {
-    padding-top: 2px !important;
-    padding-bottom: 2px !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
     box-sizing: border-box !important;
   }
   body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-search-row input {

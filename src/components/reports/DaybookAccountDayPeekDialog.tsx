@@ -16,10 +16,10 @@ import { cn } from "@/lib/utils";
 import type { Account } from "@/components/bank-cash/types";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { HistoryDialog } from "@/components/vouchers/HistoryDialog";
-import { BankLedgerDrCrPerspectiveSwitch } from "@/components/bank-cash/BankLedgerDrCrPerspectiveSwitch";
 import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
 import {
   applyBankDrCrPerspectiveToTxnRows,
+  bankLedgerTxnColumnLabels,
   flipLedgerDrCr,
   flipLedgerSignedBalance,
 } from "@/lib/bankLedgerDrCrPerspective";
@@ -55,7 +55,7 @@ export function DaybookAccountDayPeekDialog({
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [historyVoucher, setHistoryVoucher] = useState<any>(null);
-  const { perspective, setPerspective } = useBankLedgerDrCrPerspective();
+  const { perspective } = useBankLedgerDrCrPerspective();
 
   const dateRange = useMemo(
     () => (daybookDate ? { from: daybookDate, to: daybookDate } : undefined),
@@ -104,20 +104,16 @@ export function DaybookAccountDayPeekDialog({
     () => applyBankDrCrPerspectiveToTxnRows(processedTransactions || [], perspective),
     [processedTransactions, perspective]
   );
+  const bankDepositWithdrawColumnLabels = useMemo(
+    () => bankLedgerTxnColumnLabels(account?.accountType, perspective),
+    [account?.accountType, perspective]
+  );
 
   return (
     <>
       <Dialog open={open && !!account} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-[min(96vw,1100px)] w-full max-h-[90vh] flex flex-col gap-3 overflow-hidden p-4 sm:p-6">
-          {/* X (right-4) ke left ~10ch gap — Company/Bank Dr/Cr switch + info */}
-          <div className="absolute right-[calc(2.75rem+10ch)] top-3.5 z-10 sm:top-4">
-            <BankLedgerDrCrPerspectiveSwitch
-              compact
-              perspective={perspective}
-              onPerspectiveChange={setPerspective}
-            />
-          </div>
-          <DialogHeader className="shrink-0 space-y-1 pr-[calc(7rem+10ch)]">
+          <DialogHeader className="shrink-0 space-y-1">
             <DialogTitle className="text-base sm:text-lg truncate">
               {account?.accountName || "Account"} — {dateLabel || "Day"}
             </DialogTitle>
@@ -168,6 +164,7 @@ export function DaybookAccountDayPeekDialog({
                 periodCr={displayPeriod.credit}
                 closingBalance={displayClosing}
                 hideFooter={false}
+                {...bankDepositWithdrawColumnLabels}
               />
             ) : (
               <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">

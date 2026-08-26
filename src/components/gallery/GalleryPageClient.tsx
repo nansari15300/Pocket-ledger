@@ -1,6 +1,6 @@
-
-
 "use client";
+
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 
 import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
@@ -120,7 +120,7 @@ const ALL_VOUCHER_TYPES_WITH_ALL = [
 
 const CATEGORIES = [
     { id: 'party', label: 'Party' },
-    { id: 'staff', label: 'Staff' },
+    { id: 'staff', label: STAFF_ENTITY_LABEL },
     { id: 'bank_cash', label: 'Bank/Cash' },
     { id: 'tax', label: 'Tax' },
     { id: 'items', label: 'Items' },
@@ -394,6 +394,8 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
   const [fullHoverPreview, setFullHoverPreview] = useState(false);
   // Is page ke PDF preload chal raha — is waqt hover preview band + button par spinner
   const [pdfPrewarmLoading, setPdfPrewarmLoading] = useState(false);
+  /** Prewarm ke baad grid FilePreview ko cache se dubara mount — PDF raster turant dikhe. */
+  const [galleryPdfThumbEpoch, setGalleryPdfThumbEpoch] = useState(0);
   /** Local voucher refs ka JPEG/PDF label — `getAttachmentFormatLabel('local:…')` = FILE */
   const [pendingLocalLabelsByRef, setPendingLocalLabelsByRef] = useState<Record<string, string>>({});
   const fullPreviewBootstrapDoneRef = useRef(false);
@@ -630,7 +632,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
         itemsToFilter = itemsToFilter.filter(item => {
             if (showAvatarsOnly) {
                 const typeMap: Record<string, string> = { 
-                    'party': 'Party', 'staff': 'Staff', 'bank_cash': 'Bank/Cash', 
+                    'party': 'Party', 'staff': STAFF_ENTITY_LABEL, 'bank_cash': 'Bank/Cash', 
                     'tax': 'Tax', 'items': 'Item', 'expense_income': 'Expense/Income'
                 };
                 return item.type === typeMap[selectedAccountType];
@@ -770,6 +772,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
         });
       } finally {
         setPdfPrewarmLoading(false);
+        setGalleryPdfThumbEpoch((n) => n + 1);
         if (ac.signal.aborted) return;
         // Sirf pehli dafa (refresh): prewarm ke baad hi full preview on/off localStorage se
         if (!fullPreviewBootstrapDoneRef.current) {
@@ -900,6 +903,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                          >
                             {/* Unassigned jaisa: storagePath + size — online getBlob / offline sniff same pipeline */}
                             <FilePreview
+                              key={`cf-${item.id}-${index}-e${galleryPdfThumbEpoch}`}
                               file={url}
                               size={Number(previewSize)}
                               storagePath={attachMeta.storagePath}
@@ -907,6 +911,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                               sourceFileName={attachMeta.sourceFileName}
                               contentType={attachMeta.contentType}
                               attachmentCompanyId={companyId}
+                              attachmentClientFileUrls={item.fileUrls}
                               forceLocalAttachmentOnly={localAttachmentsOnly}
                               stableLocalPreviewOnly
                               enableHoverFullPreview={false}
@@ -992,12 +997,14 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                               // Tile jaisa: signed URL `<img>` offline WebView me fail — `FilePreview` IndexedDB / blob path
                               return (
                                 <FilePreview
+                                  key={`cf-hover-${item.id}-${index}-e${galleryPdfThumbEpoch}`}
                                   file={url}
                                   storagePath={attachMeta.storagePath}
                                   fileSize={attachMeta.fileSize}
                                   sourceFileName={attachMeta.sourceFileName}
                                   contentType={attachMeta.contentType}
                                   attachmentCompanyId={companyId}
+                                  attachmentClientFileUrls={item.fileUrls}
                                   forceLocalAttachmentOnly={localAttachmentsOnly}
                                   stableLocalPreviewOnly
                                   size={700}
@@ -1408,6 +1415,8 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   /** Company Files jaisa: hover par bada preview on/off; dono tabs same localStorage key share karte hain */
   const [fullHoverPreview, setFullHoverPreview] = useState(false);
   const [pdfPrewarmLoading, setPdfPrewarmLoading] = useState(false);
+  /** Prewarm ke baad grid FilePreview ko cache se dubara mount — PDF raster turant dikhe. */
+  const [galleryPdfThumbEpoch, setGalleryPdfThumbEpoch] = useState(0);
   const fullPreviewBootstrapDoneRef = useRef(false);
   /** Menu item select ke baad Radix portal hataane par jo click neeche tile par lagta hai — wahan `openAttachmentInApp` se khali `_blank` tab bachti hai */
   const suppressTileOpenUntilPerfRef = useRef(0);
@@ -1865,6 +1874,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
         });
       } finally {
         setPdfPrewarmLoading(false);
+        setGalleryPdfThumbEpoch((n) => n + 1);
         if (ac.signal.aborted) return;
         if (!fullPreviewBootstrapDoneRef.current) {
           fullPreviewBootstrapDoneRef.current = true;
@@ -1967,6 +1977,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                     onClick={openAtt}
                   >
                     <FilePreview
+                      key={`ua-${file.id}-e${galleryPdfThumbEpoch}`}
                       file={file.url}
                       size={Number(previewSize)}
                       fileSize={file.size}
@@ -2053,6 +2064,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                       >
                         {(() => (
                           <FilePreview
+                            key={`ua-hover-${file.id}-e${galleryPdfThumbEpoch}`}
                             file={file.url}
                             storagePath={isLocalFileRef(String(file.url || "")) ? undefined : file.path}
                             forceLocalAttachmentOnly={localAttachmentsOnly}

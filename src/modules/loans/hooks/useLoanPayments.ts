@@ -1,0 +1,1 @@
+export { useLoanPayments } from "./useLoan";

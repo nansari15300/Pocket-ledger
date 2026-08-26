@@ -102,6 +102,13 @@ async function openInMemoryUrlAttachment(
   try {
     const blob = await fetch(u).then((r) => r.blob());
     if (!blob || blob.size <= 0) return false;
+    /** PDF label + JPEG bytes (Lock/save-as-image) → Height-fit image preview, native PDF viewer mat. */
+    if (opts?.kind === "pdf") {
+      const mime = (blob.type || "").toLowerCase();
+      if (mime.startsWith("image/")) {
+        return await openPdfBlobAsImagePreview(blob, opts?.title ?? "PDF");
+      }
+    }
     await openBlobAttachmentInApp(blob, opts);
     return true;
   } catch {
@@ -161,10 +168,25 @@ async function openBlobAttachmentInApp(
 
 async function openPdfBlobAsImagePreview(blob: Blob, title: string): Promise<boolean> {
   try {
-    const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
+    const mime = (blob.type || "").toLowerCase();
+    let isImage = mime.startsWith("image/");
+    if (!isImage && mime !== "application/pdf" && !mime.includes("pdf")) {
+      const sniffed = await sniffBlobKindForPreview(blob);
+      isImage = sniffed === "image";
+    }
+    /** Voucher "PDF" jo as JPEG store hai — party jaisa Browser/Width/Height preview. */
+    if (isImage) {
+      const url = URL.createObjectURL(blob);
+      showInAppImagePreview(url, () => URL.revokeObjectURL(url), { title });
+      return true;
+    }
     const pdfBlob =
       blob.type === "application/pdf" ? blob : new Blob([await blob.arrayBuffer()], { type: "application/pdf" });
-    const result = await convertPdfFirstPageToImage(pdfBlob, 0.92, 1800);
+    const { convertPdfForPortalRasterPreview } = await import("@/lib/pdfToImageExport");
+    const result = await convertPdfForPortalRasterPreview(pdfBlob, {
+      quality: 0.92,
+      maxPageWidth: 1800,
+    });
     showInAppImagePreview(
       result.thumbnailUrl,
       () => {
@@ -172,7 +194,10 @@ async function openPdfBlobAsImagePreview(blob: Blob, title: string): Promise<boo
           URL.revokeObjectURL(result.thumbnailUrl);
         } catch {}
       },
-      { title }
+      {
+        title,
+        pdfOnePageHeightPx: result.portalMeta?.onePageHeightPx,
+      }
     );
     return true;
   } catch {
@@ -278,22 +303,25 @@ async function tryOpenAttachmentFromDeviceCacheOnly(
     /* ignore */
   }
 
-  try {
-    const { peekHoverCachedBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
-    // FilePreview PDF thumbs use `::cell-thumb-v2`; ledger cells use `::cell-thumb`.
-    for (const thumbKey of [`${u}::cell-thumb-v2`, `${u}::cell-thumb`, `${u}::pdf-portal`]) {
-      const cellThumb = peekHoverCachedBlobUrl(thumbKey);
-      if (cellThumb && (await openInMemoryUrlAttachment(cellThumb, { title: opts?.title, kind: opts?.kind }))) {
-        return true;
+  /** PDF: thumb JPEG se open mat — galat zoom; sirf poora PDF bytes (upar wale steps). */
+  if (opts?.kind !== "pdf") {
+    try {
+      const { peekHoverCachedBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
+      // FilePreview PDF thumbs use `::cell-thumb-v2`; ledger cells use `::cell-thumb`.
+      for (const thumbKey of [`${u}::cell-thumb-v2`, `${u}::cell-thumb`, `${u}::pdf-portal`]) {
+        const cellThumb = peekHoverCachedBlobUrl(thumbKey);
+        if (cellThumb && (await openInMemoryUrlAttachment(cellThumb, { title: opts?.title, kind: opts?.kind }))) {
+          return true;
+        }
+        const persistedThumb = await tryOfflineCachedAttachmentBlobMultiKey(thumbKey);
+        if (persistedThumb && persistedThumb.size > 0) {
+          await openBlobAttachmentInApp(persistedThumb, { title: opts?.title, kind: opts?.kind });
+          return true;
+        }
       }
-      const persistedThumb = await tryOfflineCachedAttachmentBlobMultiKey(thumbKey);
-      if (persistedThumb && persistedThumb.size > 0) {
-        await openBlobAttachmentInApp(persistedThumb, { title: opts?.title, kind: opts?.kind });
-        return true;
-      }
+    } catch {
+      /* ignore */
     }
-  } catch {
-    /* ignore */
   }
 
   const native = await getOfflineCachedAttachmentNativeRef(u);
@@ -426,7 +454,12 @@ export async function openAttachmentInApp(
         return;
       }
       if (isPdf && shouldUseInAppPdfPreviewOverlay()) {
-        showInAppPdfPreview(bUrl, () => URL.revokeObjectURL(bUrl), { title: opts?.title ?? "PDF" });
+        const openedAsImage = await openPdfBlobAsImagePreview(blob, opts?.title ?? "PDF");
+        if (openedAsImage) {
+          URL.revokeObjectURL(bUrl);
+        } else {
+          showInAppPdfPreview(bUrl, () => URL.revokeObjectURL(bUrl), { title: opts?.title ?? "PDF" });
+        }
         return;
       }
       if (isPdf) {

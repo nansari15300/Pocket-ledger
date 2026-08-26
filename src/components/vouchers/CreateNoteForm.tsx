@@ -1,5 +1,6 @@
-
 "use client";
+
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_SEARCH_PLACEHOLDER } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -28,6 +29,11 @@ import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
+import { readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
+import {
+  voucherAttachmentFieldsForSave,
+  voucherAttachmentLockSaveOpts,
+} from "@/lib/voucherFormAttachmentSave";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -56,7 +62,11 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
-import { applyVoucherAttachmentsAfterFormSave, finalizeVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
+import {
+  applyVoucherAttachmentsAfterFormSave,
+  finalizeVoucherAttachmentsAfterFormSave,
+  uploadVoucherAttachmentFileToFirebase,
+} from "@/lib/voucherFormAttachmentSave";
 import { useVoucherAttachmentPostSaveSync } from "@/hooks/useVoucherAttachmentPostSaveSync";
 import { toast as sonnerToast } from "sonner";
 import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
@@ -396,7 +406,7 @@ export function CreateNoteForm({
     switch (selectedContext) {
       case "Party": return "Search party by name…";
       case "Bank/Cash": return "Search bank / cash account…";
-      case "Staff": return "Search staff…";
+      case "Staff": return STAFF_ENTITY_SEARCH_PLACEHOLDER.replace('...', '…');
       case "Tax": return "Search tax…";
       case "Items": return "Search item…";
       case "Income": return "Search income account…";
@@ -410,7 +420,7 @@ export function CreateNoteForm({
     switch (selectedContext) {
       case "Party": return "+ Add New Party";
       case "Bank/Cash": return "+ Add New Account";
-      case "Staff": return "+ Add New Staff";
+      case "Staff": return `+ Add New ${STAFF_ENTITY_LABEL}`;
       case "Tax": return "+ Add New Tax Ledger";
       case "Items": return "+ Add New Item";
       case "Income": return "+ Add New Income Account";
@@ -554,6 +564,7 @@ export function CreateNoteForm({
         const filesForSave = await prepareVoucherAttachmentsForSave(files, {
           companyId,
           savePdfAsImage,
+          lockedPdfFileUrls: readLockedPdfFileUrlsFromRow(voucher),
         });
 
         let fileUrls = [...filesForSave.filter(f => typeof f === 'string')];
@@ -614,7 +625,7 @@ export function CreateNoteForm({
           context: values.context,
           entityId: values.entityId,
           entityName: entityName,
-          fileUrls: fileUrls,
+          ...voucherAttachmentFieldsForSave(fileUrls, voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))),
           type: 'note',
           amount: 0
         };
@@ -978,7 +989,7 @@ export function CreateNoteForm({
                 <FormField control={form.control} name="title" render={({ field }: any) => (<FormItem><FormLabel>Title</FormLabel><FormControl><Input placeholder="Note title" {...field} /></FormControl><FormMessage /></FormItem>)} />
                 <div className={cn("grid gap-4", isMobile ? "grid-cols-1" : "grid-cols-2")}>
                      <FormField control={form.control} name="context" render={({ field }: any) => (
-                        <FormItem><FormLabel>Link to</FormLabel><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger><SelectValue placeholder="Select context" /></SelectTrigger></FormControl><SelectContent><SelectItem value="Party">Party</SelectItem><SelectItem value="Bank/Cash">Bank/Cash Account</SelectItem><SelectItem value="Staff">Staff</SelectItem><SelectItem value="Tax">Tax</SelectItem><SelectItem value="Items">Items</SelectItem><SelectItem value="Income">Income</SelectItem><SelectItem value="Expense">Expense</SelectItem></SelectContent></Select></FormItem>
+                        <FormItem><FormLabel>Link to</FormLabel><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger><SelectValue placeholder="Select context" /></SelectTrigger></FormControl><SelectContent><SelectItem value="Party">Party</SelectItem><SelectItem value="Bank/Cash">Bank/Cash Account</SelectItem><SelectItem value="Staff">{STAFF_ENTITY_LABEL}</SelectItem><SelectItem value="Tax">Tax</SelectItem><SelectItem value="Items">Items</SelectItem><SelectItem value="Income">Income</SelectItem><SelectItem value="Expense">Expense</SelectItem></SelectContent></Select></FormItem>
                      )} />
                     <FormField control={form.control} name="entityId" render={({ field }: any) => (
                       <FormItem>
@@ -1016,6 +1027,7 @@ export function CreateNoteForm({
                   <FormLabel>Attach Files (Optional)</FormLabel>
                   {showPdfAsImageToggle && (
                     <VoucherPdfAsImageToggle
+                      existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(voucher)}
                       id="voucher-save-pdf-as-image-note"
                       checked={savePdfAsImage}
                       onCheckedChange={setSavePdfAsImage}

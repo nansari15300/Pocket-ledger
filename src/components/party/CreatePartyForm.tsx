@@ -67,6 +67,7 @@ import { format } from "date-fns";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
@@ -534,7 +535,7 @@ export function CreatePartyForm({
         companyId: companyId!,
         collectionName: "parties",
         name: values.name.trim(),
-        entityLabel: "Party",
+        entityLabel: sidebarEntityMenuLabel("party"),
       });
       if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate party name", {

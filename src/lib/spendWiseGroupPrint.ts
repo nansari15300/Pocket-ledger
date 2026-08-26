@@ -18,6 +18,8 @@ export type SpendWiseGroupPrintConfig = {
   includeNotes?: boolean;
   visibleColumns?: PrintPayload["visibleColumns"];
   userNames?: Record<string, string>;
+  debitColumnHeaderLabel?: string;
+  creditColumnHeaderLabel?: string;
 };
 
 /** Anchor row ke `_spendWiseGroupId` se poori group rows (spacers skip). */
@@ -75,6 +77,8 @@ export async function printSpendWiseGroupTransactions(
       preserveOrder: true,
       spendWise: true,
       billWise: false,
+      debitColumnHeaderLabel: config.debitColumnHeaderLabel,
+      creditColumnHeaderLabel: config.creditColumnHeaderLabel,
     },
     true
   );

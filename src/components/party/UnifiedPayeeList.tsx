@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { useDate } from "@/hooks/useDate";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Users, Briefcase, Receipt, DollarSign, Building } from "lucide-react";
+import { StaffAccountFallbackIcon } from "@/components/entity/StaffEntityIcon";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { masterEntityAttachmentPreviewUrl } from "@/lib/masterEntityAttachmentPreviewUrl";
@@ -78,7 +79,13 @@ export function UnifiedPayeeList({
                             companyId={payee.entity?.companyId ?? company?.id}
                             src={attachmentPreviewUrl ?? undefined}
                             alt={payee.name}
-                            fallbackSlot={<Icon className="h-4 w-4 text-muted-foreground" />}
+                            fallbackSlot={
+                              payee.type === "Staff" ? (
+                                <StaffAccountFallbackIcon staff={payee.entity} />
+                              ) : (
+                                <Icon className="h-4 w-4 text-muted-foreground" />
+                              )
+                            }
                           />
                         </EntityFileAttachmentHover>
                        <Tooltip>

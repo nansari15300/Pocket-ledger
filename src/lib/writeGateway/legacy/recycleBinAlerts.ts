@@ -1,4 +1,5 @@
 "use client";
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 
 import {
   addDoc,
@@ -38,7 +39,7 @@ const COLLECTION_LABELS: Record<string, string> = {
   groups: "Party Group",
   bank_accounts: "Bank/Cash Account",
   account_groups: "Account Group",
-  staff: "Staff",
+  staff: STAFF_ENTITY_LABEL,
   staff_groups: "Staff Group",
   items: "Item",
   item_groups: "Item Group",

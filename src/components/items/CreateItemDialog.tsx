@@ -99,6 +99,7 @@ import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { itemStrippedRowToCreateItemFormPatch } from "@/lib/crossCompanyMasterPrefill";
@@ -657,7 +658,7 @@ export function CreateItemDialog({
         companyId,
         collectionName: "items",
         name: values.name.trim(),
-        entityLabel: "Item",
+        entityLabel: sidebarEntityMenuLabel("items"),
       });
       if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate Item Name", {

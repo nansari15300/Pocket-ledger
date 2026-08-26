@@ -1,5 +1,5 @@
-
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import { cn } from "@/lib/utils";
 import { Users, Lock, Building2, CreditCard, Receipt, Package, FileText, ChevronRight, ChevronDown } from "lucide-react";
@@ -134,7 +134,7 @@ export function PartyGroupList({
     return [
       { name: "Party group", icon: <Users className="h-4 w-4" />, groups: partyGroups },
       { name: "Tax", icon: <Receipt className="h-4 w-4" />, groups: taxGroups },
-      { name: "Staff", icon: <Building2 className="h-4 w-4" />, groups: staffGroups },
+      { name: STAFF_ENTITY_LABEL, icon: <Building2 className="h-4 w-4" />, groups: staffGroups },
       { name: "Bank & Cash", icon: <CreditCard className="h-4 w-4" />, groups: accountGroups },
       { name: "Income & Expense", icon: <FileText className="h-4 w-4" />, groups: expenseGroups },
       { name: "Item", icon: <Package className="h-4 w-4" />, groups: itemGroups },

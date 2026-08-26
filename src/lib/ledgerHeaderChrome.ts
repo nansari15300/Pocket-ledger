@@ -32,6 +32,11 @@ export const LEDGER_HEADER_AVATAR_PEN_CN = cn(
   "pl-ledger-header-avatar-pen",
   chromeProPillCn
 );
+/** Same pen chrome inline (combobox / form pills) — no avatar absolute overlay */
+export const LEDGER_INLINE_EDIT_PEN_CN = cn(
+  "pl-ledger-inline-edit-pen",
+  chromeProPillCn
+);
 /** Name card — left half me remaining width; 2-line wrap + … */
 export const LEDGER_HEADER_NAME_CARD_CN =
   "pl-ledger-header-card pl-ledger-header-name-card justify-start";

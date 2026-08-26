@@ -62,6 +62,7 @@ const voucherPrefixSchema = z.object({
   note: z.array(z.string()),
   add_salary: z.array(z.string()),
   pay_salary: z.array(z.string()),
+  pay_emi: z.array(z.string()),
 });
 
 type VoucherPrefixValues = z.infer<typeof voucherPrefixSchema>;
@@ -81,6 +82,7 @@ const defaultPrefixes: VoucherPrefixValues = {
   note: ["NOTE-"],
   add_salary: ["ADD-SAL-"],
   pay_salary: ["PAY-SAL-"],
+  pay_emi: ["EMI-"],
 };
 
 const prefixLabels: Record<keyof VoucherPrefixValues, string> = {
@@ -98,6 +100,7 @@ const prefixLabels: Record<keyof VoucherPrefixValues, string> = {
     note: "Note",
     add_salary: "Add Salary (Journal)",
     pay_salary: "Pay Salary (Payment)",
+    pay_emi: "Pay EMI (Loan)",
 }
 
 const voucherNumberingSettingsSchema = z.object({
@@ -115,6 +118,7 @@ const voucherNumberingSettingsSchema = z.object({
   note: z.boolean(),
   add_salary: z.boolean(),
   pay_salary: z.boolean(),
+  pay_emi: z.boolean(),
 });
 
 const voucherEditableSettingsSchema = z.object({
@@ -132,6 +136,7 @@ const voucherEditableSettingsSchema = z.object({
   note: z.boolean(),
   add_salary: z.boolean(),
   pay_salary: z.boolean(),
+  pay_emi: z.boolean(),
 });
 
 const rateEditableSettingsSchema = z.object({
@@ -231,12 +236,12 @@ export function VoucherSettings() {
       autoVoucherNumbering: {
         sale: true, sale_service: true, purchase: true, purchase_service: true, payment_in: true, payment_out: true,
         contra: true, direct_income: true, direct_expense: true, journal: true, adjustment: true, note: true,
-        add_salary: true, pay_salary: true,
+        add_salary: true, pay_salary: true, pay_emi: true,
       },
       allowVoucherNumberEditing: {
         sale: false, sale_service: false, purchase: false, purchase_service: false, payment_in: false, payment_out: false,
         contra: false, direct_income: false, direct_expense: false, journal: false, adjustment: false, note: false,
-        add_salary: false, pay_salary: false,
+        add_salary: false, pay_salary: false, pay_emi: false,
       },
         allowRateEditing: {
           sale: true, purchase: true,
@@ -245,7 +250,7 @@ export function VoucherSettings() {
         enableVoucherPrefixSelection: {
           sale: false, sale_service: false, purchase: false, purchase_service: false, payment_in: false, payment_out: false,
           contra: false, direct_income: false, direct_expense: false, journal: false, adjustment: false, note: false,
-          add_salary: false, pay_salary: false,
+          add_salary: false, pay_salary: false, pay_emi: false,
         },
         enableLinkPaymentToTxns: false,
         enableCrossCompanyLedgerCopy: false,

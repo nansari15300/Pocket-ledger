@@ -37,6 +37,14 @@ const COMPANY_SUBCOLLECTIONS = [
   "expense_groups",
   "alarms",
   "payments",
+  "loans",
+  "loan_schedules",
+  "loan_transactions",
+  "loan_rate_history",
+  "loan_charges",
+  "loan_audit_logs",
+  "loan_settings",
+  "loan_documents",
 ] as const;
 
 async function deleteAllDocumentsInCollection(collectionPath: string): Promise<void> {

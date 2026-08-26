@@ -1,3 +1,4 @@
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 export const WEBSITE_VIDEO_PLATFORMS = ["youtube", "facebook", "tiktok"] as const;
 export type WebsiteVideoPlatform = (typeof WEBSITE_VIDEO_PLATFORMS)[number];
 
@@ -51,7 +52,7 @@ export const WEBSITE_VIDEO_CATEGORY_COPY: Record<WebsiteVideoCategory, string> =
   dashboard: "Dashboard",
   party: "Parties",
   "bank-cash": "Bank/Cash",
-  staff: "Staff",
+  staff: STAFF_ENTITY_LABEL,
   tax: "Tax",
   incomes: "Income & Expense",
   items: "Items & Service",

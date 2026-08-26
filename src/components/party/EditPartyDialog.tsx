@@ -84,6 +84,7 @@ import {
   masterEntityDialogHeaderClassName,
 } from "@/lib/masterEntityDialogClasses";
 import { MasterPdfAsImageToggle } from "@/components/common/EntityProfileDocumentsNarrationFields";
+import { attachmentLockFieldsForFinalUrls, readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 
 /** Create form jaisa: combobox value hamesha `ungrouped_party` ho jab party bucket “Ungrouped” ho (null / legacy empty). */
 function normalizePartyEditGroupId(groupId: string | null | undefined): string {
@@ -132,7 +133,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
   /** Dialog effect me Firestore fail hone par bhi latest list — deps me poora array na dalein (balance churn). */
   const processedGroupsRef = React.useRef(processedGroups);
   processedGroupsRef.current = processedGroups;
-  const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const { canAddAvatar, canAddFileImagePdf, can } = usePermissions();
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { dateSystem } = useDate();
   const isMobile = useIsMobile();
@@ -394,6 +395,12 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           groupId: resolvedGroupId,
           fileUrl,
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+          ...attachmentLockFieldsForFinalUrls(documentFileUrls, {
+            existingLockedPdfFileUrls: readLockedPdfFileUrlsFromRow(
+              party as unknown as Record<string, unknown>
+            ),
+            canUnlockLockedPdf: can("unlock_locked_pdf"),
+          }),
           updatedAt: serverTimestamp(),
         };
 
@@ -853,7 +860,12 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                     </p>
                   ) : (
                     <div className="space-y-2">
-                      <MasterPdfAsImageToggle id="edit-party-pdf-as-image" />
+                      <MasterPdfAsImageToggle
+                        id="edit-party-pdf-as-image"
+                        existingLockedPdfFileUrls={readLockedPdfFileUrlsFromRow(
+                          party as unknown as Record<string, unknown>
+                        )}
+                      />
                       <div className="flex flex-wrap items-start gap-2">
                         {docSlots.map((slot, idx) => (
                           <FilePreview

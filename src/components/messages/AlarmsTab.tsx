@@ -1,5 +1,6 @@
-
 "use client";
+
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
 import { useCompany } from "@/hooks/useCompany";
@@ -99,7 +100,7 @@ export function AlarmsTab() {
 
   const contextOptions = [
     { value: 'Party', label: 'Party' },
-    { value: 'Staff', label: 'Staff' },
+    { value: 'Staff', label: STAFF_ENTITY_LABEL },
     { value: 'Bank/Cash', label: 'Bank/Cash Account' },
     { value: 'Tax', label: 'Tax' },
     { value: 'Items', label: 'Items' },

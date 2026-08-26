@@ -1,4 +1,5 @@
 "use client";
+import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
 import {
@@ -223,7 +224,7 @@ function getEntityLabelForField(field: string, voucherType: string | undefined):
   }
   if (field === 'accountId') {
     if (['payment_in', 'payment_out', 'direct_income', 'direct_expense'].includes(t)) return 'Bank/Cash';
-    if (t === 'add_salary') return 'Staff';
+    if (t === 'add_salary') return STAFF_ENTITY_LABEL;
     if (t === 'contra') return 'Bank/Cash';
     return 'Account';
   }
