@@ -69,6 +69,7 @@
       "installerHeaderIcon": "build/icon.ico",
       "createDesktopShortcut": false,
       "createStartMenuShortcut": true,
+      "warningsAsErrors": false,
       "include": "build/installer.nsh"
     },
     "icon": "../public/app-icon.png"
