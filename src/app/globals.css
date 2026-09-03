@@ -249,6 +249,7 @@ html[data-pl-app-ui-zoom-shell="android-zoom"] .min-h-dvh {
   /** Ribbon strip background — pill blue */
   .pl-ledger-header-ribbon-wrap {
     background-color: rgb(219 234 254); /* blue-100 — same as pill / cards */
+    padding: 3px !important;
   }
   /**
    * Ribbon = 50% left (profile+name+balance) + 50% pills.
@@ -283,7 +284,7 @@ html[data-pl-app-ui-zoom-shell="android-zoom"] .min-h-dvh {
     max-width: calc(50% - 2px);
     height: 3.75rem;
     min-height: 3.75rem;
-    gap: 0.25rem;
+    gap: 3px;
     overflow-x: auto;
     overflow-y: hidden;
   }
@@ -580,6 +581,28 @@ html[data-pl-app-ui-zoom-shell="android-zoom"] .min-h-dvh {
   /* TableFooter: `border-t` on <tfoot> + optional row top line */
   .dashboard-financial-popup table tfoot {
     border-top-width: var(--dfc-popup-h) !important;
+  }
+
+  /**
+   * Balance Sheet account ledger dialog — crisp txn table (no dashboard-financial-popup 0.4px borders).
+   */
+  .balance-sheet-ledger-popup [data-theme-table="transactions"] table {
+    font-feature-settings: "tnum" 1;
+  }
+  .balance-sheet-ledger-popup [data-theme-table="transactions"] thead th,
+  .balance-sheet-ledger-popup [data-theme-table="transactions"] tbody td,
+  .balance-sheet-ledger-popup [data-theme-table="transactions"] tfoot td {
+    border-left-width: 0 !important;
+    border-right-width: 0 !important;
+  }
+  .balance-sheet-ledger-popup [data-theme-table="transactions"] table thead tr {
+    border-bottom-width: 1px !important;
+  }
+  .balance-sheet-ledger-popup [data-theme-table="transactions"] table tbody tr:not(:last-child) {
+    border-bottom-width: 1px !important;
+  }
+  .balance-sheet-ledger-popup [data-theme-table="transactions"] table tfoot {
+    border-top-width: 1px !important;
   }
 }
 
@@ -1013,6 +1036,7 @@ body.theme-colorfull [data-theme-btn="add-group"]:hover { background: hsl(160 55
 body.theme-pro header button.pl-chrome-btn-drop:not(.border-0):not([data-pl-txn-icon-btn]),
 body.theme-pro main button.pl-chrome-btn-drop:not(.border-0):not(.bg-primary):not(.bg-destructive):not([data-pl-txn-icon-btn]),
 body.theme-pro footer button.pl-chrome-btn-drop:not(.border-0),
+body.theme-pro div.pl-chrome-btn-drop:not(.border-0),
 body.theme-pro span.pl-chrome-btn-drop,
 body.theme-pure-white header button.pl-chrome-btn-drop:not(.border-0):not([data-pl-txn-icon-btn]),
 body.theme-pure-white main button.pl-chrome-btn-drop:not(.border-0):not(.bg-primary):not(.bg-destructive),
@@ -1039,10 +1063,21 @@ body.theme-pro header button.pl-chrome-btn-drop:not(.border-0):not([data-pl-txn-
   border-color: rgb(96 165 250) !important;
 }
 /* Pro: detail / group / report — main outline pills header jaisa same blue (selected view pill exclude) */
-body.theme-pro main button.pl-chrome-btn-drop:not(.border-0):not(.bg-primary):not(.bg-destructive):not(.bg-pink-600):not([data-pl-txn-icon-btn]):not([data-chrome-pill-active="true"]):not([aria-pressed="true"]):not([data-pl-ledger-view-active="true"]):not([data-pl-auto-backup-tab-active="true"]) {
+body.theme-pro main button.pl-chrome-btn-drop:not(.border-0):not(.bg-primary):not(.bg-destructive):not(.bg-pink-600):not([data-pl-txn-icon-btn]):not([data-chrome-pill-active="true"]):not([aria-pressed="true"]):not([data-pl-ledger-view-active="true"]):not([data-pl-auto-backup-tab-active="true"]):not([data-pl-fresh-info]):not([data-pl-footer-fresh-info]),
+body.theme-pro main div.pl-chrome-btn-drop[data-pl-footer-drcr-balance-card]:not(.border-0) {
   background-color: rgb(219 234 254) !important;
   background-image: none !important;
   color: rgb(30 58 138) !important;
+  border-color: rgb(147 197 253) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body.theme-pro main button.pl-chrome-btn-drop[data-pl-fresh-info]:not(.border-0),
+body.theme-pro main button.pl-chrome-btn-drop[data-pl-footer-fresh-info]:not(.border-0) {
+  background-color: rgb(219 234 254 / 0.8) !important;
+  background-image: none !important;
+  color: rgb(147 197 253) !important;
   border-color: rgb(147 197 253) !important;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.55),
@@ -1135,17 +1170,22 @@ body.theme-pro main button[data-theme-detail="add-note"]:not(.border-0):hover {
   border-color: rgb(96 165 250) !important;
 }
 
-/* Header file-preview switch — light green track + border (themes/4K black mat) */
+/* Header file-preview switch — green track + i-circle jaisa blue border */
 body[class*="theme-"] [data-pl-header-preview-switch] {
-  border-width: 2px !important;
-  border-color: rgb(134 239 172) !important;
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
   background-color: rgb(240 253 244) !important;
   background-image: none !important;
 }
 body[class*="theme-"] [data-pl-header-preview-switch][data-preview-mode="hover"],
 body[class*="theme-"] [data-pl-header-preview-switch][data-preview-mode="click"] {
-  border-color: rgb(74 222 128) !important;
+  border-color: rgb(96 165 250) !important;
   background-color: rgb(220 252 231) !important;
+}
+/* Switch ke andar embedded (i) — thoda chota chrome */
+button[data-pl-header-preview-info],
+button[data-pl-bank-drcr-perspective-info] {
+  box-shadow: none !important;
 }
 /* Bank list Company|Bank switch — light green track + green border (theme black mat) */
 body[class*="theme-"] [data-pl-bank-drcr-perspective-switch] {
@@ -1157,72 +1197,143 @@ body[class*="theme-"] [data-pl-bank-drcr-perspective-switch] {
 body[class*="theme-"] [data-pl-bank-drcr-perspective-switch] > span[aria-hidden="true"]:not(.sr-only) {
   background-color: rgb(74 222 128) !important; /* green-400 knob */
 }
-/* i icon — light blue, koi black circle/border nahi */
-body[class*="theme-"] [data-pl-header-preview-info] {
-  border: none !important;
-  box-shadow: none !important;
-  background: transparent !important;
-  color: rgb(56 189 248) !important;
-}
-body[class*="theme-"] [data-pl-header-preview-info]:hover {
-  color: rgb(14 165 233) !important;
-  background-color: rgb(224 242 254) !important;
-}
-/* Admin plans — rule (i) icons: theme black border/color override mat karo */
+/* Header / bank switch embedded (i) — AppFreshInfoButton chrome (purana transparent sky override hata) */
+
+button[data-pl-fresh-info],
+button[data-pl-footer-fresh-info],
 button[data-pl-plan-rule-info],
-body[class*="theme-"] button[data-pl-plan-rule-info],
-body.theme-pro main button[data-pl-plan-rule-info] {
-  border: none !important;
-  border-width: 0 !important;
-  box-shadow: none !important;
-  background: transparent !important;
-  color: rgb(14 165 233) !important; /* sky-500 */
-}
-button[data-pl-plan-rule-info]:hover,
-body[class*="theme-"] button[data-pl-plan-rule-info]:hover,
-body.theme-pro main button[data-pl-plan-rule-info]:hover {
-  color: rgb(2 132 199) !important; /* sky-600 */
-  background-color: rgb(224 242 254) !important;
-}
-button[data-pl-plan-rule-info] svg,
-body[class*="theme-"] button[data-pl-plan-rule-info] svg,
-body.theme-pro main button[data-pl-plan-rule-info] svg,
-[data-pl-plan-rule-info].lucide,
-body[class*="theme-"] svg[data-pl-plan-rule-info] {
-  color: rgb(14 165 233) !important;
-  stroke: rgb(14 165 233) !important;
-}
-/* Billing page — feature-row (i) icons: keep sky blue under themes */
 button[data-pl-billing-feature-info],
+button[data-pl-header-preview-info],
+button[data-pl-bank-drcr-perspective-info],
+body[class*="theme-"] button[data-pl-fresh-info],
+body[class*="theme-"] button[data-pl-footer-fresh-info],
+body[class*="theme-"] button[data-pl-plan-rule-info],
 body[class*="theme-"] button[data-pl-billing-feature-info],
-body.theme-pro main button[data-pl-billing-feature-info] {
-  border: none !important;
-  border-width: 0 !important;
-  box-shadow: none !important;
-  background: transparent !important;
-  color: rgb(14 165 233) !important;
+body[class*="theme-"] button[data-pl-header-preview-info],
+body[class*="theme-"] button[data-pl-bank-drcr-perspective-info],
+body.theme-pro main button[data-pl-fresh-info],
+body.theme-pro main button[data-pl-footer-fresh-info],
+body.theme-pro main button[data-pl-plan-rule-info],
+body.theme-pro main button[data-pl-billing-feature-info],
+body.theme-pro main button[data-pl-header-preview-info],
+body.theme-pro main button[data-pl-bank-drcr-perspective-info],
+body.theme-pro footer button[data-pl-fresh-info],
+body.theme-pro footer button[data-pl-footer-fresh-info],
+body.theme-pro header button[data-pl-header-preview-info] {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: rgb(219 234 254 / 0.8) !important;
+  color: rgb(147 197 253) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
 }
-button[data-pl-billing-feature-info]:hover,
-body[class*="theme-"] button[data-pl-billing-feature-info]:hover,
-body.theme-pro main button[data-pl-billing-feature-info]:hover {
-  color: rgb(2 132 199) !important;
-  background-color: rgb(224 242 254) !important;
-}
+button[data-pl-fresh-info] svg,
+button[data-pl-footer-fresh-info] svg,
+button[data-pl-plan-rule-info] svg,
 button[data-pl-billing-feature-info] svg,
+button[data-pl-header-preview-info] svg,
+button[data-pl-bank-drcr-perspective-info] svg,
+body[class*="theme-"] button[data-pl-fresh-info] svg,
+body[class*="theme-"] button[data-pl-footer-fresh-info] svg,
+body[class*="theme-"] button[data-pl-plan-rule-info] svg,
 body[class*="theme-"] button[data-pl-billing-feature-info] svg,
-body.theme-pro main button[data-pl-billing-feature-info] svg {
-  color: rgb(14 165 233) !important;
-  stroke: rgb(14 165 233) !important;
+body[class*="theme-"] button[data-pl-header-preview-info] svg,
+body[class*="theme-"] button[data-pl-bank-drcr-perspective-info] svg,
+body.theme-pro main button[data-pl-fresh-info] svg,
+body.theme-pro main button[data-pl-footer-fresh-info] svg,
+body.theme-pro main button[data-pl-plan-rule-info] svg,
+body.theme-pro main button[data-pl-billing-feature-info] svg,
+body.theme-pro main button[data-pl-header-preview-info] svg,
+body.theme-pro main button[data-pl-bank-drcr-perspective-info] svg,
+body.theme-pro footer button[data-pl-fresh-info] svg,
+body.theme-pro footer button[data-pl-footer-fresh-info] svg,
+body.theme-pro header button[data-pl-header-preview-info] svg {
+  color: rgb(147 197 253) !important;
+  stroke: rgb(147 197 253) !important;
+  fill: rgb(147 197 253) !important;
 }
-body[class*="theme-"] [data-pl-bank-drcr-perspective-info] {
-  border: none !important;
-  box-shadow: none !important;
-  background: transparent !important;
-  color: rgb(56 189 248) !important;
+button[data-pl-fresh-info]:hover,
+button[data-pl-footer-fresh-info]:hover,
+button[data-pl-plan-rule-info]:hover,
+button[data-pl-billing-feature-info]:hover,
+button[data-pl-header-preview-info]:hover,
+button[data-pl-bank-drcr-perspective-info]:hover,
+body[class*="theme-"] button[data-pl-fresh-info]:hover,
+body[class*="theme-"] button[data-pl-footer-fresh-info]:hover,
+body[class*="theme-"] button[data-pl-plan-rule-info]:hover,
+body[class*="theme-"] button[data-pl-billing-feature-info]:hover,
+body[class*="theme-"] button[data-pl-header-preview-info]:hover,
+body[class*="theme-"] button[data-pl-bank-drcr-perspective-info]:hover,
+body.theme-pro main button[data-pl-fresh-info]:hover,
+body.theme-pro main button[data-pl-footer-fresh-info]:hover,
+body.theme-pro main button[data-pl-plan-rule-info]:hover,
+body.theme-pro main button[data-pl-billing-feature-info]:hover,
+body.theme-pro main button[data-pl-header-preview-info]:hover,
+body.theme-pro main button[data-pl-bank-drcr-perspective-info]:hover,
+body.theme-pro footer button[data-pl-fresh-info]:hover,
+body.theme-pro footer button[data-pl-footer-fresh-info]:hover,
+body.theme-pro header button[data-pl-header-preview-info]:hover {
+  border-color: rgb(96 165 250) !important;
+  background-color: rgb(191 219 254) !important;
+  color: rgb(96 165 250) !important;
 }
-body[class*="theme-"] [data-pl-bank-drcr-perspective-info]:hover {
-  color: rgb(14 165 233) !important;
-  background-color: rgb(224 242 254 / 0.5) !important;
+button[data-pl-fresh-info]:hover svg,
+button[data-pl-footer-fresh-info]:hover svg,
+button[data-pl-plan-rule-info]:hover svg,
+button[data-pl-billing-feature-info]:hover svg,
+button[data-pl-header-preview-info]:hover svg,
+button[data-pl-bank-drcr-perspective-info]:hover svg,
+body[class*="theme-"] button[data-pl-fresh-info]:hover svg,
+body[class*="theme-"] button[data-pl-footer-fresh-info]:hover svg,
+body[class*="theme-"] button[data-pl-plan-rule-info]:hover svg,
+body[class*="theme-"] button[data-pl-billing-feature-info]:hover svg,
+body[class*="theme-"] button[data-pl-header-preview-info]:hover svg,
+body[class*="theme-"] button[data-pl-bank-drcr-perspective-info]:hover svg,
+body.theme-pro main button[data-pl-fresh-info]:hover svg,
+body.theme-pro main button[data-pl-footer-fresh-info]:hover svg,
+body.theme-pro main button[data-pl-plan-rule-info]:hover svg,
+body.theme-pro main button[data-pl-billing-feature-info]:hover svg,
+body.theme-pro main button[data-pl-header-preview-info]:hover svg,
+body.theme-pro main button[data-pl-bank-drcr-perspective-info]:hover svg,
+body.theme-pro footer button[data-pl-fresh-info]:hover svg,
+body.theme-pro footer button[data-pl-footer-fresh-info]:hover svg,
+body.theme-pro header button[data-pl-header-preview-info]:hover svg {
+  color: rgb(96 165 250) !important;
+  stroke: rgb(96 165 250) !important;
+  fill: rgb(96 165 250) !important;
+}
+/* Closing Balance footer: action pills wrap instead of overlapping the total. */
+[data-pl-closing-balance-card],
+[data-pl-closing-balance-actions],
+[data-pl-closing-balance-actions] > div {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+[data-pl-closing-balance-card] {
+  overflow: visible !important;
+}
+[data-pl-closing-balance-actions] button,
+[data-pl-closing-balance-actions] a,
+[data-pl-closing-balance-card] button,
+[data-pl-closing-balance-card] a {
+  flex: 0 1 auto !important;
+}
+
+/* Footer Dr/Cr balance cards — filter Dr/Cr outline pill jaisa blue (4K black mat) */
+[data-pl-footer-drcr-balance-card],
+body[class*="theme-"] [data-pl-footer-drcr-balance-card],
+body.theme-pro main [data-pl-footer-drcr-balance-card],
+body.theme-pro footer [data-pl-footer-drcr-balance-card] {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: rgb(219 234 254 / 0.8) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
 }
 
 /* PC ledger footer — parent pill + rows select (black box mat) */
@@ -1852,37 +1963,75 @@ button.day_selected.is-today.has-transactions {
   }
 
   /*
-   * Master-detail list scroll: medium gray pill thumb (~10px) — screenshot jaisa (#a6a6a6).
-   * Track transparent; idle par halka fade, scroll par full.
+   * Hover-only dim scrollbar — account list footer filters, horizontal pills, etc.
+   * Default hidden; mouse hover par patla dim thumb (touch par fully hidden).
+   */
+  .scrollbar-hover-dim {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  .scrollbar-hover-dim::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  .scrollbar-hover-dim::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-hover-dim::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 9999px;
+  }
+  .scrollbar-hover-dim:hover {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.22) transparent;
+  }
+  .scrollbar-hover-dim:hover::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.22);
+  }
+  .scrollbar-hover-dim:hover::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.35);
+  }
+  @media (hover: none) {
+    .scrollbar-hover-dim {
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    .scrollbar-hover-dim::-webkit-scrollbar {
+      display: none;
+    }
+  }
+
+  /*
+   * Master-detail list scroll: dim gray pill — hover par dikhe (idle par chhupa).
+   * Track transparent; Radix ScrollArea + native overflow dono.
    */
   .pl-master-list-scroll [data-radix-scroll-area-scrollbar],
   [data-theme-list="account-list"] [data-radix-scroll-area-scrollbar],
   [data-pl-master-list-chrome] [data-radix-scroll-area-scrollbar] {
-    width: 10px !important;
+    width: 8px !important;
     background: transparent !important;
     border: none !important;
-    opacity: 1 !important;
-    transition: opacity 0.2s ease;
+    opacity: 0 !important;
+    pointer-events: none;
+    transition: opacity 0.18s ease;
   }
-  .pl-master-list-scroll [data-radix-scroll-area-scrollbar][data-state="hidden"],
-  [data-theme-list="account-list"] [data-radix-scroll-area-scrollbar][data-state="hidden"],
-  [data-pl-master-list-chrome] [data-radix-scroll-area-scrollbar][data-state="hidden"] {
-    opacity: 0.65 !important;
-  }
-  .pl-master-list-scroll [data-radix-scroll-area-scrollbar][data-state="visible"],
-  [data-theme-list="account-list"] [data-radix-scroll-area-scrollbar][data-state="visible"],
-  [data-pl-master-list-chrome] [data-radix-scroll-area-scrollbar][data-state="visible"] {
+  .pl-master-list-shell:hover .pl-master-list-scroll [data-radix-scroll-area-scrollbar],
+  .pl-master-list-scroll:hover [data-radix-scroll-area-scrollbar],
+  [data-theme-list="account-list"]:hover [data-radix-scroll-area-scrollbar],
+  [data-pl-master-list-chrome]:hover [data-radix-scroll-area-scrollbar] {
     opacity: 1 !important;
+    pointer-events: auto;
   }
   .pl-master-list-scroll [data-radix-scroll-area-scrollbar][data-orientation="horizontal"],
   [data-theme-list="account-list"] [data-radix-scroll-area-scrollbar][data-orientation="horizontal"],
   [data-pl-master-list-chrome] [data-radix-scroll-area-scrollbar][data-orientation="horizontal"] {
-    height: 10px !important;
+    height: 8px !important;
   }
   .pl-master-list-scroll [data-radix-scroll-area-thumb],
   [data-theme-list="account-list"] [data-radix-scroll-area-thumb],
   [data-pl-master-list-chrome] [data-radix-scroll-area-thumb] {
-    background: #a6a6a6 !important;
+    background: hsl(var(--muted-foreground) / 0.28) !important;
     border: none !important;
     border-radius: 9999px !important;
     box-shadow: none !important;
@@ -1891,33 +2040,48 @@ button.day_selected.is-today.has-transactions {
   .pl-master-list-scroll [data-radix-scroll-area-thumb]:hover,
   [data-theme-list="account-list"] [data-radix-scroll-area-thumb]:hover,
   [data-pl-master-list-chrome] [data-radix-scroll-area-thumb]:hover {
-    background: #8f8f8f !important;
+    background: hsl(var(--muted-foreground) / 0.42) !important;
   }
-  [data-theme-list="account-list"],
   [data-theme-list="account-list"] .scrollbar-slim-dim,
   [data-pl-master-list-chrome] .scrollbar-slim-dim,
   .pl-master-list-scroll {
-    scrollbar-width: auto;
-    scrollbar-color: #a6a6a6 transparent;
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  .pl-master-list-shell:hover [data-theme-list="account-list"],
+  .pl-master-list-shell:hover [data-pl-master-list-chrome],
+  .pl-master-list-shell:hover .pl-master-list-scroll,
+  [data-theme-list="account-list"]:hover,
+  [data-pl-master-list-chrome]:hover,
+  .pl-master-list-scroll:hover {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.22) transparent;
   }
   [data-theme-list="account-list"]::-webkit-scrollbar,
   [data-pl-master-list-chrome]::-webkit-scrollbar,
   .pl-master-list-scroll::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
   }
   [data-theme-list="account-list"]::-webkit-scrollbar-thumb,
   [data-pl-master-list-chrome]::-webkit-scrollbar-thumb,
   .pl-master-list-scroll::-webkit-scrollbar-thumb {
-    background: #a6a6a6;
+    background: transparent;
     border-radius: 9999px;
     border: none;
     min-height: 40px;
   }
+  .pl-master-list-shell:hover [data-theme-list="account-list"]::-webkit-scrollbar-thumb,
+  .pl-master-list-shell:hover [data-pl-master-list-chrome]::-webkit-scrollbar-thumb,
+  .pl-master-list-shell:hover .pl-master-list-scroll::-webkit-scrollbar-thumb,
+  [data-theme-list="account-list"]:hover::-webkit-scrollbar-thumb,
+  [data-pl-master-list-chrome]:hover::-webkit-scrollbar-thumb,
+  .pl-master-list-scroll:hover::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.28);
+  }
   [data-theme-list="account-list"]::-webkit-scrollbar-thumb:hover,
   [data-pl-master-list-chrome]::-webkit-scrollbar-thumb:hover,
   .pl-master-list-scroll::-webkit-scrollbar-thumb:hover {
-    background: #8f8f8f;
+    background: hsl(var(--muted-foreground) / 0.42);
   }
   [data-theme-list="account-list"]::-webkit-scrollbar-track,
   [data-pl-master-list-chrome]::-webkit-scrollbar-track,
@@ -1927,12 +2091,12 @@ button.day_selected.is-today.has-transactions {
   body.theme-pro.dark [data-theme-list="account-list"] [data-radix-scroll-area-thumb],
   body.theme-pro.dark [data-pl-master-list-chrome] [data-radix-scroll-area-thumb],
   body.theme-pro.dark .pl-master-list-scroll [data-radix-scroll-area-thumb] {
-    background: #9ca3af !important;
+    background: hsl(var(--muted-foreground) / 0.32) !important;
   }
   body.theme-pro.dark [data-theme-list="account-list"] [data-radix-scroll-area-thumb]:hover,
   body.theme-pro.dark [data-pl-master-list-chrome] [data-radix-scroll-area-thumb]:hover,
   body.theme-pro.dark .pl-master-list-scroll [data-radix-scroll-area-thumb]:hover {
-    background: #b4b9c2 !important;
+    background: hsl(var(--muted-foreground) / 0.48) !important;
   }
 
   /*
@@ -2208,10 +2372,10 @@ button.day_selected.is-today.has-transactions {
   }
   
   /* Input and form element borders */
-  input,
-  textarea,
+  input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]),
+  textarea:not([data-pl-mlc-search-input]),
   select,
-  button:not([class*="border-0"]):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]),
+  button:not([class*="border-0"]):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]),
   [type="text"],
   [type="number"],
   [type="email"],
@@ -2289,6 +2453,13 @@ button.day_selected.is-today.has-transactions {
     width: 12px !important;
     height: 12px !important;
   }
+  /* Account list + hover-dim scrollbars — 4K global mota scrollbar mat */
+  .pl-master-list-shell .scrollbar-hover-dim::-webkit-scrollbar,
+  .pl-master-list-scroll::-webkit-scrollbar,
+  [data-theme-list="account-list"]::-webkit-scrollbar {
+    width: 8px !important;
+    height: 8px !important;
+  }
 
   /* Inter Company voucher scroll — 4K black border override se bachao */
   .inter-company-voucher-y-scroll [data-orientation="vertical"],
@@ -2308,11 +2479,11 @@ button.day_selected.is-today.has-transactions {
   }
   
   /* Dialog, Sheet, Popover borders */
-  [role="dialog"]:not([class*="border-0"]),
+  [role="dialog"]:not([class*="border-0"]):not([data-pl-dialog-shell]),
   [data-vaul-drawer]:not([class*="border-0"]),
   [data-vaul-overlay]:not([class*="border-0"]),
-  [class*="dialog"]:not([class*="border-0"]),
-  [class*="sheet"]:not([class*="border-0"]),
+  [class*="dialog"]:not([class*="border-0"]):not([data-pl-dialog-shell]),
+  [class*="sheet"]:not([class*="border-0"]):not([data-pl-dialog-shell]),
   [class*="popover"]:not([class*="border-0"]) {
     border-width: 3px !important;
     border-color: #000000 !important;
@@ -2340,13 +2511,13 @@ button.day_selected.is-today.has-transactions {
   
   /* Tailwind border utilities - double thickness (except border-0) */
   /* 4K ma sabai borders moto ra pure black */
-  .border:not(.border-0):not([data-pl-list-row]),
-  .border-t:not(.border-0):not([data-pl-list-row]),
-  .border-r:not(.border-0):not([data-pl-list-row]),
-  .border-b:not(.border-0):not([data-pl-list-row]),
-  .border-l:not(.border-0):not([data-pl-list-row]),
-  .border-x:not(.border-0):not([data-pl-list-row]),
-  .border-y:not(.border-0):not([data-pl-list-row]) {
+  .border:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon),
+  .border-t:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon),
+  .border-r:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon),
+  .border-b:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon),
+  .border-l:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon),
+  .border-x:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon),
+  .border-y:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon) {
     border-width: 3px !important;
     border-color: #000000 !important;
   }
@@ -2376,12 +2547,62 @@ button.day_selected.is-today.has-transactions {
      ============================================ */
   
   /* Dialog Content (Radix UI) - Voucher dialogs, Add Party, Add Bank, etc. */
-  [data-radix-dialog-content],
-  [role="dialog"],
-  .dialog-content,
-  [class*="DialogContent"] {
+  [data-radix-dialog-content]:not([data-pl-dialog-shell]):not([data-pl-auto-monthly-settings]),
+  [role="dialog"]:not([data-pl-dialog-shell]):not([data-pl-auto-monthly-settings]),
+  .dialog-content:not([data-pl-dialog-shell]),
+  [class*="DialogContent"]:not([data-pl-dialog-shell]) {
     border-width: 3px !important;
     border-color: #000000 !important;
+  }
+  /* Sab popup dialogs — dim green shell (4K black override) */
+  [data-pl-dialog-shell],
+  [role="dialog"][data-pl-dialog-shell],
+  [data-radix-dialog-content][data-pl-dialog-shell] {
+    border-width: 2px !important;
+    border-style: solid !important;
+    border-color: rgb(110 231 183 / 0.85) !important;
+  }
+  body.theme-pro.dark [data-pl-dialog-shell],
+  body.theme-pro.dark [role="dialog"][data-pl-dialog-shell],
+  body.theme-pro.dark [data-radix-dialog-content][data-pl-dialog-shell],
+  body[class*="theme-"].dark [data-pl-dialog-shell],
+  body[class*="theme-"].dark [role="dialog"][data-pl-dialog-shell],
+  body[class*="theme-"].dark [data-radix-dialog-content][data-pl-dialog-shell] {
+    border-color: rgb(4 120 87 / 0.55) !important;
+  }
+  /* Popup dialog — andar ke borders 4K black override se bachao */
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border:not(.border-0):not([data-pl-list-row]),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border-t:not(.border-t-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border-b:not(.border-b-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border-r:not(.border-r-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border-l:not(.border-l-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border-x:not(.border-x-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border-y:not(.border-y-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) [class*="border-border"]:not([class*="border-0"]),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table,
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table td,
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table th,
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table tr,
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) input:not(.border-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) textarea:not(.border-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) select:not(.border-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) button:not(.border-0):not([data-pl-list-row]):not(.pl-master-list-row-name):not([data-pl-list-name]),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) [role="combobox"]:not(.border-0) {
+    border-color: var(--pl-dialog-inner-border, rgb(110 231 183 / 0.65)) !important;
+  }
+  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border:not(.border-0):not([data-pl-list-row]),
+  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table,
+  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table td,
+  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table th,
+  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) input:not(.border-0),
+  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) button:not(.border-0):not([data-pl-list-row]),
+  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border:not(.border-0):not([data-pl-list-row]),
+  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table,
+  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table td,
+  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table th,
+  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) input:not(.border-0),
+  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) button:not(.border-0):not([data-pl-list-row]) {
+    border-color: var(--pl-dialog-inner-border, rgb(4 120 87 / 0.45)) !important;
   }
   /* Auto Monthly settings — stable 2px pill-blue (4K black dialog border override) */
   [data-pl-auto-monthly-settings],
@@ -2642,10 +2863,10 @@ button.day_selected.is-today.has-transactions {
      ============================================ */
   
   /* All buttons — pro chrome pill exclude */
-  button:not(.border-0):not(.pl-chrome-btn-drop):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]),
-  [role="button"]:not(.border-0):not(.pl-chrome-btn-drop):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]),
-  [type="button"]:not(.border-0):not(.pl-chrome-btn-drop):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]),
-  [type="submit"]:not(.border-0):not(.pl-chrome-btn-drop):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]) {
+  button:not(.border-0):not(.pl-chrome-btn-drop):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]):not([data-pl-fresh-info]):not([data-pl-footer-fresh-info]):not([data-pl-header-preview-switch]),
+  [role="button"]:not(.border-0):not(.pl-chrome-btn-drop):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]):not([data-pl-fresh-info]):not([data-pl-footer-fresh-info]):not([data-pl-header-preview-switch]),
+  [type="button"]:not(.border-0):not(.pl-chrome-btn-drop):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]):not([data-pl-fresh-info]):not([data-pl-footer-fresh-info]):not([data-pl-header-preview-switch]),
+  [type="submit"]:not(.border-0):not(.pl-chrome-btn-drop):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]):not([data-pl-fresh-info]):not([data-pl-footer-fresh-info]):not([data-pl-header-preview-switch]) {
     border-width: 3px !important;
     border-color: #000000 !important;
   }
@@ -2688,10 +2909,10 @@ button.day_selected.is-today.has-transactions {
     background-color: rgb(219 234 254) !important;
     color: rgb(30 58 138) !important;
   }
-  /* 4K: file-preview switch — green track + light blue i (black border mat) */
+  /* 4K: file-preview switch — green track + i jaisa blue border */
   body[class*="theme-"] [data-pl-header-preview-switch] {
-    border-width: 2px !important;
-    border-color: rgb(134 239 172) !important;
+    border-width: 1px !important;
+    border-color: rgb(147 197 253) !important;
     background-color: rgb(240 253 244) !important;
   }
   body[class*="theme-"] [data-pl-bank-drcr-perspective-switch] {
@@ -2702,35 +2923,30 @@ button.day_selected.is-today.has-transactions {
   body[class*="theme-"] [data-pl-bank-drcr-perspective-switch] > span[aria-hidden="true"]:not(.sr-only) {
     background-color: rgb(74 222 128) !important;
   }
-  body[class*="theme-"] [data-pl-header-preview-info] {
-    border: none !important;
-    color: rgb(56 189 248) !important;
-    background: transparent !important;
-  }
+  button[data-pl-fresh-info],
+  button[data-pl-footer-fresh-info],
   button[data-pl-plan-rule-info],
-  body[class*="theme-"] button[data-pl-plan-rule-info] {
-    border: none !important;
-    border-width: 0 !important;
-    color: rgb(14 165 233) !important;
-    background: transparent !important;
-  }
-  button[data-pl-plan-rule-info] svg,
-  body[class*="theme-"] button[data-pl-plan-rule-info] svg,
-  body[class*="theme-"] svg[data-pl-plan-rule-info] {
-    color: rgb(14 165 233) !important;
-    stroke: rgb(14 165 233) !important;
-  }
   button[data-pl-billing-feature-info],
+  body[class*="theme-"] button[data-pl-fresh-info],
+  body[class*="theme-"] button[data-pl-footer-fresh-info],
+  body[class*="theme-"] button[data-pl-plan-rule-info],
   body[class*="theme-"] button[data-pl-billing-feature-info] {
-    border: none !important;
-    border-width: 0 !important;
-    color: rgb(14 165 233) !important;
-    background: transparent !important;
+    border-width: 1px !important;
+    border-color: rgb(147 197 253) !important;
+    color: rgb(147 197 253) !important;
+    background-color: rgb(219 234 254 / 0.8) !important;
   }
+  button[data-pl-fresh-info] svg,
+  button[data-pl-footer-fresh-info] svg,
+  button[data-pl-plan-rule-info] svg,
   button[data-pl-billing-feature-info] svg,
+  body[class*="theme-"] button[data-pl-fresh-info] svg,
+  body[class*="theme-"] button[data-pl-footer-fresh-info] svg,
+  body[class*="theme-"] button[data-pl-plan-rule-info] svg,
   body[class*="theme-"] button[data-pl-billing-feature-info] svg {
-    color: rgb(14 165 233) !important;
-    stroke: rgb(14 165 233) !important;
+    color: rgb(147 197 253) !important;
+    stroke: rgb(147 197 253) !important;
+    fill: rgb(147 197 253) !important;
   }
   
   /* Icon buttons — transaction filter/3-dot exclude */
@@ -3397,10 +3613,10 @@ body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll input:not([t
 body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll select,
 body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[role="combobox"],
 body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[data-theme-detail="date-range"],
-body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not(.bg-primary):not(.bg-destructive),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not([data-pl-fresh-info]):not([data-pl-footer-fresh-info]):not(.bg-primary):not(.bg-destructive),
 body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid input:not([type="checkbox"]):not([type="radio"]),
 body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid button[role="combobox"],
-body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not(.bg-primary):not(.bg-destructive) {
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not([data-pl-fresh-info]):not([data-pl-footer-fresh-info]):not(.bg-primary):not(.bg-destructive) {
   min-height: var(--pl-master-pill-h) !important;
   height: var(--pl-master-pill-h) !important;
   box-sizing: border-box !important;
@@ -3677,13 +3893,18 @@ body.theme-pro main {
   background-color: hsl(220 14% 98.5%) !important;
   background-image: none !important;
 }
-body.theme-pro main > div > div.border-b:first-of-type,
+body.theme-pro main > div > div.border-b:first-of-type:not(.pl-ledger-header-ribbon-wrap),
 body.theme-pro main > div.h-full.flex,
 body.theme-pro main > div.grid.min-h-0,
 body.theme-pro main > div > main,
 body.theme-pro main > div > main > .overflow-y-auto,
 body.theme-pro [data-pl-main-sidebar] {
   background-color: hsl(220 14% 98.5%) !important;
+  background-image: none !important;
+}
+/* Party / report detail ribbon — pill blue (theme-pro gray shell se alag) */
+body.theme-pro main .pl-ledger-header-ribbon-wrap {
+  background-color: rgb(219 234 254) !important;
   background-image: none !important;
 }
 /* Settings list column = container (sky ribbon); beech ka gap gray rehta hai */
@@ -3693,7 +3914,7 @@ body.theme-pro .pl-settings-list-shell {
 }
 
 /* Pro: saare main forms — gray field + black border (Company Profile jaisa) */
-body.theme-pro main input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]),
 body.theme-pro main textarea,
 body.theme-pro main select,
 body.theme-pro main button[role="combobox"],
@@ -3704,8 +3925,8 @@ body.theme-pro main button[data-theme-detail="date-range"]:not(.pl-chrome-btn-dr
 }
 
 /* Pro: global Card shells — nested/settings/grid sab jagah dashboard ribbon; tone cards alag border */
-body.theme-pro main .rounded-lg.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card),
-body.theme-pro main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card) {
+body.theme-pro main .rounded-lg.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
+body.theme-pro main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]) {
   border-color: #000 !important;
   border-width: 1px !important;
   background-color: #ecfdf5 !important;
@@ -4544,8 +4765,8 @@ body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-action-row {
     box-sizing: border-box !important;
   }
   body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-search-row input {
-    border-color: #f9a8d4 !important;
-    background-color: #fffbfc !important;
+    border-color: rgb(147 197 253) !important;
+    background-color: rgb(219 234 254 / 0.8) !important;
   }
   /* Master list amounts: Dr/Cr — mobile APK par bhi hamesha green/red (pehle Pro par Dr pink ho jata tha) */
   [data-pl-master-list-chrome] [data-pl-list-balance="dr"] {
@@ -4631,21 +4852,68 @@ body.theme-pro [data-theme-table="transactions"]:not([data-pl-txn-table-tone="gr
 }
 
 /* Reconciliation matched pair — dono side green (detail: file end par stripe override ke baad) */
-body[class*="theme-"] main .rounded-lg.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card),
-body[class*="theme-"] main .rounded-md.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card),
-body[class*="theme-"] main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card),
-body[class*="theme-"] main .rounded-lg.border.bg-card.shadow-sm:not([data-pl-list-row]):not(.pl-dashboard-tone-card),
+body[class*="theme-"] main .rounded-lg.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]),
+body[class*="theme-"] main .rounded-md.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]),
+body[class*="theme-"] main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
+body[class*="theme-"] main .rounded-lg.border.bg-card.shadow-sm:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
 body[class*="theme-"] [data-pl-main-sidebar] .rounded-md.border,
 body[class*="theme-"] [data-pl-main-sidebar] .rounded-lg.border,
-body[class*="theme-"] header .rounded-lg.border,
-body[class*="theme-"] header .rounded-full.border,
+body[class*="theme-"] header .rounded-lg.border:not([data-pl-header-preview-switch]),
+body[class*="theme-"] header .rounded-full.border:not([data-pl-header-preview-switch]),
 body[class*="theme-"] .pl-chrome-card:not(.pl-recon-share-list-card):not([class*="pl-chrome-tone-"]),
 body[class*="theme-"] .pl-settings-list-shell,
-body[class*="theme-"] main .border-2:not(.pl-dashboard-tone-card):not(.pl-dashboard-footer-tab),
+body[class*="theme-"] main .border-2:not(.pl-dashboard-tone-card):not(.pl-dashboard-footer-tab):not([data-pl-mobile-transaction-card]),
 body[class*="theme-"] [data-pl-main-sidebar] .border-2:not([class*="pl-chrome-tone-"]),
-body[class*="theme-"] header .border-2:not([class*="pl-chrome-tone-"]) {
+body[class*="theme-"] header .border-2:not([class*="pl-chrome-tone-"]):not([data-pl-header-preview-switch]) {
   border-width: 1px !important;
   border-color: #000 !important;
+}
+
+/* Header file-preview switch — black header .rounded-full.border override ke upar blue */
+body[class*="theme-"] header [data-pl-header-preview-switch],
+body[class*="theme-"] [data-pl-header-preview-switch] {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: rgb(240 253 244) !important;
+  background-image: none !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body[class*="theme-"] header [data-pl-header-preview-switch][data-preview-mode="hover"],
+body[class*="theme-"] header [data-pl-header-preview-switch][data-preview-mode="click"],
+body[class*="theme-"] [data-pl-header-preview-switch][data-preview-mode="hover"],
+body[class*="theme-"] [data-pl-header-preview-switch][data-preview-mode="click"] {
+  border-color: rgb(96 165 250) !important;
+  background-color: rgb(220 252 231) !important;
+}
+
+/* Footer Dr/Cr balance cards — filter Dr/Cr outline pill blue (theme black override ke upar) */
+body[class*="theme-"] main [data-pl-footer-drcr-balance-card].pl-chrome-btn-drop,
+body[class*="theme-"] [data-pl-footer-drcr-balance-card].pl-chrome-btn-drop,
+body.theme-pro main [data-pl-footer-drcr-balance-card].pl-chrome-btn-drop,
+body.theme-pro footer [data-pl-footer-drcr-balance-card].pl-chrome-btn-drop {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: rgb(219 234 254 / 0.8) !important;
+  color: rgb(30 58 138) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body[class*="theme-"] main button[data-pl-fresh-info].pl-chrome-btn-drop,
+body[class*="theme-"] button[data-pl-fresh-info].pl-chrome-btn-drop,
+body[class*="theme-"] main button[data-pl-footer-fresh-info].pl-chrome-btn-drop,
+body[class*="theme-"] button[data-pl-footer-fresh-info].pl-chrome-btn-drop,
+body.theme-pro main button[data-pl-fresh-info].pl-chrome-btn-drop,
+body.theme-pro footer button[data-pl-fresh-info].pl-chrome-btn-drop,
+body.theme-pro main button[data-pl-footer-fresh-info].pl-chrome-btn-drop,
+body.theme-pro footer button[data-pl-footer-fresh-info].pl-chrome-btn-drop {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: rgb(219 234 254 / 0.8) !important;
+  color: rgb(147 197 253) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
 }
 
 body[class*="theme-"] main table,
@@ -4740,7 +5008,7 @@ body[class*="theme-"] main hr {
   border-color: #000 !important;
 }
 
-body[class*="theme-"] main input:not([type="checkbox"]):not([type="radio"]),
+body[class*="theme-"] main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]),
 body[class*="theme-"] main textarea,
 body[class*="theme-"] main select,
 body[class*="theme-"] main button[role="combobox"],
@@ -4813,7 +5081,7 @@ body.theme-pure-white main [class*="pl-chrome-tone-"] {
   background-color: #ffffff !important;
   background-image: none !important;
 }
-body.theme-pure-white main input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pure-white main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]),
 body.theme-pure-white main textarea,
 body.theme-pure-white main select,
 body.theme-pure-white main button[role="combobox"],
@@ -4864,7 +5132,7 @@ body:not(.theme-pro):not(.theme-pure-white).theme-colorfull main {
   background-color: hsl(var(--card)) !important;
   background-image: none !important;
 }
-body:not(.theme-pro):not(.theme-pure-white) main input:not([type="checkbox"]):not([type="radio"]),
+body:not(.theme-pro):not(.theme-pure-white) main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]),
 body:not(.theme-pro):not(.theme-pure-white) main textarea,
 body:not(.theme-pro):not(.theme-pure-white) main select,
 body:not(.theme-pro):not(.theme-pure-white) main button[role="combobox"],
@@ -5060,6 +5328,37 @@ body[class*="theme-"] [data-pl-list-selected] [data-pl-list-name] {
   border: none !important;
   border-width: 0 !important;
   background: transparent !important;
+}
+
+/* Master list group icon — account avatar jaisa green / IC blue; 4K `.border` black mat */
+body[class*="theme-"] [data-pl-list-row] .pl-master-list-row-leading .pl-master-list-group-icon {
+  border-width: 0.5px !important;
+  border-style: solid !important;
+  border-color: rgb(74 222 128) !important;
+  background-color: rgb(209 250 229) !important;
+  color: rgb(74 222 128) !important;
+  box-sizing: border-box;
+}
+body[class*="theme-"] [data-pl-list-row][data-pl-ic-company-row] .pl-master-list-row-leading .pl-master-list-group-icon {
+  border-color: rgb(147 197 253) !important;
+  background-color: rgb(219 234 254) !important;
+  color: rgb(147 197 253) !important;
+}
+body.theme-pro.dark [data-pl-list-row]:not([data-pl-ic-company-row]) .pl-master-list-row-leading .pl-master-list-group-icon,
+body[class*="theme-"].dark [data-pl-list-row]:not([data-pl-ic-company-row]) .pl-master-list-row-leading .pl-master-list-group-icon {
+  border-color: rgb(34 197 94 / 0.75) !important;
+  background-color: rgb(6 78 59 / 0.5) !important;
+  color: rgb(34 197 94 / 0.88) !important;
+}
+body.theme-pro.dark [data-pl-list-row][data-pl-ic-company-row] .pl-master-list-row-leading .pl-master-list-group-icon,
+body[class*="theme-"].dark [data-pl-list-row][data-pl-ic-company-row] .pl-master-list-row-leading .pl-master-list-group-icon {
+  border-color: rgb(96 165 250 / 0.75) !important;
+  background-color: rgb(30 58 138 / 0.5) !important;
+  color: rgb(96 165 250 / 0.88) !important;
+}
+body[class*="theme-"] [data-pl-list-row] .pl-master-list-row-leading .pl-master-list-group-icon svg {
+  color: var(--pl-master-profile-ink, rgb(74 222 128)) !important;
+  stroke: currentColor !important;
 }
 
 /* Pro dark: master list unselected — emerald dark tone */
@@ -5280,6 +5579,13 @@ body.theme-pro.dark [data-pl-ic-company-group],
 body[class*="theme-"].dark [data-pl-ic-company-group] {
   border-color: rgb(30 64 175 / 0.55);
   background-color: rgb(30 58 138 / 0.12);
+}
+
+/* Group list account move — block text selection only while dragging after hold. */
+body.pl-group-account-move-active,
+body.pl-group-account-move-active * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }
 
 /* IC company sub-group — peer company + uske accounts */
@@ -5781,6 +6087,23 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-w
 }
 .pl-inter-company-voucher .ic-voucher-row-account {
   order: 3;
+}
+
+/* Simple view — sirf Type + Account name; extra lookup / detail fields hide */
+.pl-inter-company-voucher[data-ic-simple-view="1"] .ic-account-lookup-extra-fields,
+.pl-inter-company-voucher[data-ic-simple-view="1"] .ic-company-extra-fields,
+.pl-inter-company-voucher[data-ic-simple-view="1"] .ic-entity-details-card {
+  display: none !important;
+}
+
+.pl-inter-company-voucher[data-ic-simple-view="1"] .inter-company-panel-x-scroll {
+  overflow-x: hidden;
+}
+
+.pl-inter-company-voucher[data-ic-simple-view="1"] .inter-company-panel-x-scroll-inner {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
 }
 
 /* Inter Company — edit lock par bhi text select + copy (readOnly fields; `disabled` par select band hota hai) */
@@ -6296,6 +6619,72 @@ body.theme-pro main button.pl-dashboard-footer-tab[data-pl-footer-tab="dashboard
   border-width: 2px !important;
 }
 
+/* Sab popup dialogs — dim green shell (theme / 4K black override se bachao) */
+[data-pl-dialog-shell],
+[role="dialog"][data-pl-dialog-shell],
+[data-radix-dialog-content][data-pl-dialog-shell] {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: rgb(110 231 183 / 0.85) !important;
+}
+body.theme-pro.dark [data-pl-dialog-shell],
+body.theme-pro.dark [role="dialog"][data-pl-dialog-shell],
+body.theme-pro.dark [data-radix-dialog-content][data-pl-dialog-shell],
+body[class*="theme-"].dark [data-pl-dialog-shell],
+body[class*="theme-"].dark [role="dialog"][data-pl-dialog-shell],
+body[class*="theme-"].dark [data-radix-dialog-content][data-pl-dialog-shell] {
+  border-color: rgb(4 120 87 / 0.55) !important;
+}
+
+/*
+ * Popup dialog — andar ke sab borders (panels, header line, table, inputs, buttons)
+ * Auto Monthly blue shell alag; IC company blue tree alag rules se.
+ */
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) {
+  --pl-dialog-inner-border: rgb(110 231 183 / 0.65);
+}
+body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]),
+body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) {
+  --pl-dialog-inner-border: rgb(4 120 87 / 0.45);
+}
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border:not(.border-0):not([data-pl-list-row]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-t:not(.border-t-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-b:not(.border-b-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-r:not(.border-r-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-l:not(.border-l-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-x:not(.border-x-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-y:not(.border-y-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [class*="border-border"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) hr:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [role="separator"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) table,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) table td,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) table th,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) table tr,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) thead tr,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) tbody tr,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) tfoot,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) input:not(.border-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) textarea:not(.border-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) select:not(.border-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) button:not(.border-0):not([data-pl-list-row]):not(.pl-master-list-row-name):not([data-pl-list-name]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [role="combobox"]:not(.border-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [role="tablist"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [role="tab"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [class*="card"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [class*="Card"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [class*="border-blue"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-input,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .pl-chrome-btn-drop:not(.border-0) {
+  border-color: var(--pl-dialog-inner-border) !important;
+}
+body.theme-pro [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) button.pl-chrome-btn-drop:not(.border-0),
+body[class*="theme-"] [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) button.pl-chrome-btn-drop:not(.border-0),
+body.theme-pro [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) [role="combobox"],
+body[class*="theme-"] [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) [role="combobox"] {
+  border-color: var(--pl-dialog-inner-border) !important;
+}
+
 /* Auto Monthly settings popup — stable 2px pill-blue border (theme/4K black dialog override se bachao) */
 [data-pl-auto-monthly-settings],
 [role="dialog"][data-pl-auto-monthly-settings],
@@ -6350,4 +6739,918 @@ tr.pl-daybook-summary-row[data-pl-daybook-summary-selected] > td:first-child {
 tr.pl-daybook-summary-row.pl-daybook-summary-row-selected > td:last-child,
 tr.pl-daybook-summary-row[data-pl-daybook-summary-selected] > td:last-child {
   box-shadow: inset -2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+}
+
+/* Header file-preview switch — theme + 4K black .border/button overrides ke upar (i circle jaisa blue) */
+body[class*="theme-"] header button[data-pl-header-preview-switch].rounded-full.border,
+body[class*="theme-"] button[data-pl-header-preview-switch].rounded-full.border {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: rgb(240 253 244) !important;
+  background-image: none !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body[class*="theme-"] header button[data-pl-header-preview-switch].rounded-full.border[data-preview-mode="hover"],
+body[class*="theme-"] header button[data-pl-header-preview-switch].rounded-full.border[data-preview-mode="click"],
+body[class*="theme-"] button[data-pl-header-preview-switch].rounded-full.border[data-preview-mode="hover"],
+body[class*="theme-"] button[data-pl-header-preview-switch].rounded-full.border[data-preview-mode="click"] {
+  border-color: rgb(96 165 250) !important;
+  background-color: rgb(220 252 231) !important;
+}
+
+/* Master list search — + Add Account chrome pill jaisa blue border (theme black input/rounded-md override se upar) */
+body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-search-row input[data-pl-mlc-search-input].rounded-md.border,
+body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-search-row input[data-pl-mlc-search-input].rounded-md.border,
+body[class*="theme-"] [data-pl-mobile-list-dock] .pl-mlc-search-row input[data-pl-mlc-search-input].rounded-md.border,
+body[class*="theme-"] [data-pl-party-mobile-list-dock] .pl-mlc-search-row input[data-pl-mlc-search-input].rounded-md.border,
+[data-pl-master-list-chrome] .pl-mlc-search-row input[data-pl-mlc-search-input].rounded-md.border {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: rgb(219 234 254 / 0.8) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-search-row input[data-pl-mlc-search-input]:focus-visible,
+body[class*="theme-"] [data-pl-mobile-list-dock] .pl-mlc-search-row input[data-pl-mlc-search-input]:focus-visible,
+body[class*="theme-"] [data-pl-party-mobile-list-dock] .pl-mlc-search-row input[data-pl-mlc-search-input]:focus-visible {
+  border-color: rgb(96 165 250) !important;
+}
+
+/* Balance Sheet difference trace popup — separate section cards + inner grid. */
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] {
+  --bs-diff-trace-chrome: color-mix(in srgb, hsl(var(--muted)) 58%, hsl(var(--foreground)) 18%);
+  --bs-diff-trace-header-blue: color-mix(in srgb, rgb(96 165 250) 20%, hsl(var(--muted)) 80%);
+  --bs-diff-trace-total-orange: color-mix(in srgb, rgb(251 146 60) 22%, hsl(var(--muted)) 78%);
+}
+body[class*="theme-"].dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup],
+body.dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] {
+  --bs-diff-trace-chrome: color-mix(in srgb, hsl(var(--muted)) 72%, hsl(var(--foreground)) 28%);
+  --bs-diff-trace-header-blue: color-mix(in srgb, rgb(96 165 250) 28%, hsl(var(--muted)) 72%);
+  --bs-diff-trace-total-orange: color-mix(in srgb, rgb(251 146 60) 30%, hsl(var(--muted)) 70%);
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-cards-row],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-cards-row] {
+  gap: 4px !important;
+  align-items: stretch !important;
+  width: max-content !important;
+  min-width: 100% !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace-wrap],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace-wrap] {
+  overflow: hidden !important;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-h-scroll],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-h-scroll] {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-grid-shell],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-grid-shell] {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-body-scroll],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-body-scroll] {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  scrollbar-gutter: stable !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-x-track="header"],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-x-track="header"] {
+  flex-shrink: 0 !important;
+  box-sizing: border-box !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-x-track="footer"],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-x-track="footer"] {
+  flex-shrink: 0 !important;
+  box-sizing: border-box !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-x-track="summary"],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-x-track="summary"] {
+  flex-shrink: 0 !important;
+  box-sizing: border-box !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-x-track],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-x-track] {
+  flex-shrink: 0 !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="header"] [data-bs-diff-trace-card-title],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="header"] [data-bs-diff-trace-card-title] {
+  background: var(--bs-diff-trace-header-blue) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="header"] [data-balance-sheet-difference-trace] thead th,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="header"] [data-balance-sheet-difference-trace] thead th {
+  background: var(--bs-diff-trace-header-blue) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] {
+  table-layout: fixed !important;
+  width: calc(var(--bs-diff-trace-identity-account-ch, 9) * 1ch + var(--bs-diff-trace-identity-group-ch, 5) * 1ch) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-bs-diff-trace-card-title],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-bs-diff-trace-card-title] {
+  background: var(--bs-diff-trace-header-blue) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="header"] [data-bs-diff-trace-card-title],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="header"] [data-bs-diff-trace-card-title] {
+  position: static !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="header"] [data-balance-sheet-difference-trace] thead th,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="header"] [data-balance-sheet-difference-trace] thead th {
+  position: static !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-section-card],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-section-card] {
+  display: flex !important;
+  flex-direction: column !important;
+  min-width: max-content !important;
+  background: hsl(var(--card)) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="header"] [data-bs-diff-trace-card-title],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="header"] [data-bs-diff-trace-card-title] {
+  background: var(--bs-diff-trace-header-blue) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="header"] [data-balance-sheet-difference-trace] thead th,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="header"] [data-balance-sheet-difference-trace] thead th {
+  background: var(--bs-diff-trace-header-blue) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr:not([data-bs-diff-trace-selected]):not([data-bs-diff-trace-hovered]) > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr:not([data-bs-diff-trace-selected]):not([data-bs-diff-trace-hovered]) > td {
+  background: var(--bs-diff-trace-chrome) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-grand-total-row]:not([data-bs-diff-trace-selected]):not([data-bs-diff-trace-hovered]) > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-grand-total-row]:not([data-bs-diff-trace-selected]):not([data-bs-diff-trace-hovered]) > td {
+  background: var(--bs-diff-trace-total-orange) !important;
+  background-color: var(--bs-diff-trace-total-orange) !important;
+  border-top: 1px solid var(--bs-diff-trace-grid) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr:not([data-bs-diff-trace-selected]):not([data-bs-diff-trace-hovered]) > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr:not([data-bs-diff-trace-selected]):not([data-bs-diff-trace-hovered]) > td {
+  position: static !important;
+  box-shadow: none !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="summary"] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-summary-row] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="summary"] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-summary-row] > td {
+  background: var(--bs-diff-trace-chrome) !important;
+  background-color: var(--bs-diff-trace-chrome) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-body-row],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-body-row] {
+  height: 3rem !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-summary-row],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-summary-row] {
+  height: 1.625rem !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-summary-row] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-summary-row] > td {
+  height: 1.625rem !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-grand-total-row],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-grand-total-row] {
+  height: 1.625rem !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-grand-total-row] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-grand-total-row] > td {
+  height: 1.625rem !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tfoot,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tfoot {
+  border-top: none !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tfoot tr:not([data-bs-diff-trace-selected]):not([data-bs-diff-trace-hovered]),
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tfoot tr:not([data-bs-diff-trace-selected]):not([data-bs-diff-trace-hovered]) {
+  border: none !important;
+  box-shadow: none !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] {
+  background: hsl(var(--card)) !important;
+  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.08) !important;
+  isolation: isolate !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-bs-diff-trace-card-title],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-bs-diff-trace-card-title] {
+  background: var(--bs-diff-trace-header-blue) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tbody td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tbody td {
+  background-color: hsl(var(--card)) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-summary-row] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-summary-row] > td {
+  background: var(--bs-diff-trace-chrome) !important;
+  background-color: var(--bs-diff-trace-chrome) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-other-account] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-other-account] > td {
+  background-color: color-mix(in srgb, hsl(var(--muted)) 24%, hsl(var(--card))) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td {
+  background-color: rgb(255 247 237) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td {
+  background-color: rgb(255 237 213) !important;
+}
+body[class*="theme-"].dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-other-account] > td,
+body[class*="theme-"].dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-other-account] > td {
+  background-color: color-mix(in srgb, hsl(var(--muted)) 32%, hsl(var(--card))) !important;
+}
+body[class*="theme-"].dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td,
+body[class*="theme-"].dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td {
+  background-color: rgb(67 20 7 / 0.55) !important;
+}
+body[class*="theme-"].dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-identity-card] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td {
+  background-color: rgb(67 20 7 / 0.72) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-other-account]:not([data-bs-diff-trace-hovered]):not([data-bs-diff-trace-selected]) > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-other-account]:not([data-bs-diff-trace-hovered]):not([data-bs-diff-trace-selected]) > td {
+  background-color: color-mix(in srgb, hsl(var(--muted)) 18%, hsl(var(--card))) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-body-row]:not([data-bs-diff-trace-other-account]):not([data-bs-diff-trace-hovered]):not([data-bs-diff-trace-selected]) > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-body-row]:not([data-bs-diff-trace-other-account]):not([data-bs-diff-trace-hovered]):not([data-bs-diff-trace-selected]) > td {
+  background-color: hsl(var(--card)) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace],
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] {
+  --bs-diff-trace-grid: rgba(0, 0, 0, 0.22);
+  border-collapse: collapse !important;
+  border-spacing: 0 !important;
+  border: none !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] thead tr,
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tbody tr,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] thead tr,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tbody tr {
+  border: none !important;
+  box-shadow: none !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] th,
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] th,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] td {
+  border: none !important;
+  border-bottom: 1px solid var(--bs-diff-trace-grid) !important;
+  border-right: 1px solid var(--bs-diff-trace-grid) !important;
+  box-shadow: none !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] thead tr:first-child th,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] thead tr:first-child th {
+  border-top: 1px solid var(--bs-diff-trace-grid) !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] thead tr:first-child th:first-child,
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tbody td:first-child,
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tfoot td:first-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] thead tr:first-child th:first-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tbody td:first-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tfoot td:first-child {
+  border-left: 1px solid var(--bs-diff-trace-grid) !important;
+}
+
+/* Difference trace rows — hover/select: outer ring only (no internal column dividers). */
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td,
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td {
+  background-color: rgb(255 247 237 / 0.45) !important;
+  border-top-color: transparent !important;
+  border-bottom-color: transparent !important;
+  border-right-color: transparent !important;
+  box-shadow: inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td:first-child,
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:first-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td:first-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:first-child {
+  box-shadow: inset 1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td:last-child,
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:last-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td:last-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:last-child {
+  box-shadow: inset -1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td {
+  background-color: rgb(255 247 237 / 0.9) !important;
+  box-shadow: inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:first-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:first-child {
+  box-shadow: inset 2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:last-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:last-child {
+  box-shadow: inset -2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+}
+body[class*="theme-"].dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td,
+body[class*="theme-"].dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td {
+  background-color: rgb(67 20 7 / 0.28) !important;
+}
+body[class*="theme-"].dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td {
+  background-color: rgb(67 20 7 / 0.42) !important;
+}
+
+/* Footer band — hover/select must beat chrome/orange resets above. */
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td,
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td {
+  background-color: rgb(255 247 237 / 0.45) !important;
+  border-top-color: transparent !important;
+  border-bottom-color: transparent !important;
+  border-right-color: transparent !important;
+  box-shadow: inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td:first-child,
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:first-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td:first-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:first-child {
+  box-shadow: inset 1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td:last-child,
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:last-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td:last-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:last-child {
+  box-shadow: inset -1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td {
+  background-color: rgb(255 247 237 / 0.9) !important;
+  box-shadow: inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:first-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:first-child {
+  box-shadow: inset 2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:last-child,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td:last-child {
+  box-shadow: inset -2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+}
+body[class*="theme-"].dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-hovered] > td,
+body[class*="theme-"].dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td {
+  background-color: rgb(67 20 7 / 0.28) !important;
+}
+body[class*="theme-"].dark [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-bs-diff-trace-band="footer"] [data-balance-sheet-difference-trace] tfoot tr[data-bs-diff-trace-row][data-bs-diff-trace-selected] > td {
+  background-color: rgb(67 20 7 / 0.42) !important;
+}
+
+body[class*="theme-"] [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-other-section-start] > td,
+body [data-pl-dialog-shell][data-balance-sheet-difference-trace-popup] [data-balance-sheet-difference-trace] tbody tr[data-bs-diff-trace-other-section-start] > td {
+  border-top: 2px solid var(--bs-diff-trace-grid) !important;
+}
+
+/* Financial Summary cards — report list row jaisa green border (rgb(74 222 128)) */
+body[class*="theme-"] main [data-pl-financial-summary-card].pl-dashboard-tone-card.rounded-lg.border.bg-card.pl-dashboard-ribbon-emerald,
+body.theme-pro main [data-pl-financial-summary-card].pl-dashboard-tone-card.rounded-lg.border.bg-card.pl-dashboard-ribbon-emerald {
+  border-width: 1.5px !important;
+  border-style: solid !important;
+  border-color: rgb(74 222 128) !important;
+}
+
+/* Mobile transaction cards: theme card override ke baad fill ke hue ka bold border. */
+body[class*="theme-"] main [data-pl-mobile-transaction-card] {
+  border-width: 2px !important;
+  border-style: solid !important;
+}
+body[class*="theme-"] main [data-pl-mobile-transaction-card="green"]:not([data-pl-mobile-card-color]) {
+  border-color: rgb(74 222 128) !important;
+}
+body[class*="theme-"] main [data-pl-mobile-transaction-card="pink"]:not([data-pl-mobile-card-color]) {
+  border-color: rgb(244 114 182) !important;
+}
+body[class*="theme-"] main [data-pl-mobile-transaction-card="blue"]:not([data-pl-mobile-card-color]) {
+  border-color: rgb(96 165 250) !important;
+}
+body[class*="theme-"] main [data-pl-mobile-transaction-card].border-2 {
+  border-width: 2px !important;
+  border-style: solid !important;
+}
+body[class*="theme-"] main [data-pl-mobile-transaction-card="green"].border-2:not([data-pl-mobile-card-color]) {
+  border-color: rgb(74 222 128) !important;
+}
+body[class*="theme-"] main [data-pl-mobile-transaction-card="pink"].border-2:not([data-pl-mobile-card-color]) {
+  border-color: rgb(244 114 182) !important;
+}
+body[class*="theme-"] main [data-pl-mobile-transaction-card="blue"].border-2:not([data-pl-mobile-card-color]) {
+  border-color: rgb(96 165 250) !important;
+}
+body [data-pl-mobile-transaction-card].border-2 {
+  border-width: 2px !important;
+  border-style: solid !important;
+}
+body [data-pl-mobile-transaction-card="green"].border-2:not([data-pl-mobile-card-color]) {
+  border-color: rgb(74 222 128) !important;
+}
+body [data-pl-mobile-transaction-card="pink"].border-2:not([data-pl-mobile-card-color]) {
+  border-color: rgb(244 114 182) !important;
+}
+body [data-pl-mobile-transaction-card="blue"].border-2:not([data-pl-mobile-card-color]) {
+  border-color: rgb(96 165 250) !important;
+}
+html body[class*="theme-"] main .rounded-lg.border[data-pl-mobile-transaction-card].border-2 {
+  border-width: 2px !important;
+  border-style: solid !important;
+}
+html body[class*="theme-"] main .rounded-lg.border[data-pl-mobile-transaction-card="green"].border-2:not([data-pl-mobile-card-color]) {
+  border-color: rgb(22 163 74) !important;
+  box-shadow: inset 0 0 0 2px rgb(22 163 74) !important;
+}
+html body[class*="theme-"] main .rounded-lg.border[data-pl-mobile-transaction-card="pink"].border-2:not([data-pl-mobile-card-color]) {
+  border-color: rgb(219 39 119) !important;
+  box-shadow: inset 0 0 0 2px rgb(219 39 119) !important;
+}
+html body[class*="theme-"] main .rounded-lg.border[data-pl-mobile-transaction-card="blue"].border-2:not([data-pl-mobile-card-color]) {
+  border-color: rgb(37 99 235) !important;
+  box-shadow: inset 0 0 0 2px rgb(37 99 235) !important;
+}
+body[class*="theme-"].dark main [data-pl-mobile-transaction-card="green"]:not([data-pl-mobile-card-color]) {
+  border-color: rgb(34 197 94 / 0.85) !important;
+}
+body[class*="theme-"].dark main [data-pl-mobile-transaction-card="pink"]:not([data-pl-mobile-card-color]) {
+  border-color: rgb(236 72 153 / 0.85) !important;
+}
+body[class*="theme-"].dark main [data-pl-mobile-transaction-card="blue"]:not([data-pl-mobile-card-color]) {
+  border-color: rgb(96 165 250 / 0.85) !important;
+}
+
+/* Inset color ring remains visible even where an older theme rule paints the outer edge black. */
+html body [data-pl-mobile-transaction-card="green"].border-2:not([data-pl-mobile-card-color]) {
+  box-shadow: inset 0 0 0 2px rgb(22 163 74) !important;
+}
+html body [data-pl-mobile-transaction-card="pink"].border-2:not([data-pl-mobile-card-color]) {
+  box-shadow: inset 0 0 0 2px rgb(219 39 119) !important;
+}
+html body [data-pl-mobile-transaction-card="blue"].border-2:not([data-pl-mobile-card-color]) {
+  box-shadow: inset 0 0 0 2px rgb(37 99 235) !important;
+}
+
+/* Transaction card edge should match the thin blue account pill, not a heavy panel border. */
+html body [data-pl-mobile-transaction-card].border-2 {
+  border-width: 1px !important;
+  box-shadow: none !important;
+}
+html body [data-pl-mobile-transaction-card].border {
+  border-width: 1px !important;
+}
+
+/* Final specificity guard: theme card rules target this exact Card class stack and must not repaint it black. */
+html body[class*="theme-"] main .relative.rounded-lg.border.bg-card.border-2.shadow-sm[data-pl-mobile-transaction-card="green"]:not([data-pl-mobile-card-color]) {
+  border: 1px solid rgb(22 163 74) !important;
+  outline: 1px solid rgb(22 163 74) !important;
+  outline-offset: -1px !important;
+}
+html body[class*="theme-"] main .relative.rounded-lg.border.bg-card.border-2.shadow-sm[data-pl-mobile-transaction-card="pink"]:not([data-pl-mobile-card-color]) {
+  border: 1px solid rgb(219 39 119) !important;
+  outline: 1px solid rgb(219 39 119) !important;
+  outline-offset: -1px !important;
+}
+html body[class*="theme-"] main .relative.rounded-lg.border.bg-card.border-2.shadow-sm[data-pl-mobile-transaction-card="blue"]:not([data-pl-mobile-card-color]) {
+  border: 1px solid rgb(37 99 235) !important;
+  outline: 1px solid rgb(37 99 235) !important;
+  outline-offset: -1px !important;
+}
+html body[class*="theme-"].dark main .relative.rounded-lg.border.bg-card.border-2.shadow-sm[data-pl-mobile-transaction-card="green"]:not([data-pl-mobile-card-color]) {
+  border-color: rgb(34 197 94 / 0.85) !important;
+}
+html body[class*="theme-"].dark main .relative.rounded-lg.border.bg-card.border-2.shadow-sm[data-pl-mobile-transaction-card="pink"]:not([data-pl-mobile-card-color]) {
+  border-color: rgb(236 72 153 / 0.85) !important;
+}
+html body[class*="theme-"].dark main .relative.rounded-lg.border.bg-card.border-2.shadow-sm[data-pl-mobile-transaction-card="blue"]:not([data-pl-mobile-card-color]) {
+  border-color: rgb(96 165 250 / 0.85) !important;
+}
+
+/* Pro theme: restoring the green transaction-card fill after excluding it from the generic black shell rule. */
+html body[class*="theme-"] main [data-pl-mobile-transaction-card="green"]:not([data-pl-mobile-card-color]) {
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(
+    90deg,
+    rgba(236, 253, 245, 0.98) 0%,
+    #ffffff 50%,
+    rgba(209, 250, 229, 0.92) 100%
+  ) !important;
+}
+html body[class*="theme-"].dark main [data-pl-mobile-transaction-card="green"]:not([data-pl-mobile-card-color]) {
+  background-color: rgb(6 78 59 / 0.38) !important;
+  background-image: linear-gradient(
+    90deg,
+    rgba(6, 78, 59, 0.42) 0%,
+    rgba(15, 23, 42, 0.55) 50%,
+    rgba(6, 95, 70, 0.34) 100%
+  ) !important;
+}
+
+/* User-selected mobile card color: local palette intentionally wins over theme shell colors. */
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="blue"] {
+  background-color: rgb(239 246 255) !important;
+  background-image: none !important;
+  border-color: rgb(96 165 250) !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="pink"] {
+  background-color: rgb(253 242 248) !important;
+  background-image: none !important;
+  border-color: rgb(244 114 182) !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="amber"] {
+  background-color: rgb(255 251 235) !important;
+  background-image: none !important;
+  border-color: rgb(251 191 36) !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"] {
+  background-color: rgb(245 243 255) !important;
+  background-image: none !important;
+  border-color: rgb(167 139 250) !important;
+}
+html body.dark [data-pl-mobile-transaction-card][data-pl-mobile-card-color="blue"] {
+  background-color: rgb(23 37 84 / 0.45) !important;
+  border-color: rgb(96 165 250 / 0.85) !important;
+}
+html body.dark [data-pl-mobile-transaction-card][data-pl-mobile-card-color="pink"] {
+  background-color: rgb(80 7 36 / 0.4) !important;
+  border-color: rgb(236 72 153 / 0.85) !important;
+}
+html body.dark [data-pl-mobile-transaction-card][data-pl-mobile-card-color="amber"] {
+  background-color: rgb(69 46 5 / 0.45) !important;
+  border-color: rgb(251 191 36 / 0.85) !important;
+}
+html body.dark [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"] {
+  background-color: rgb(46 16 101 / 0.45) !important;
+  border-color: rgb(167 139 250 / 0.85) !important;
+}
+
+/* Mobile card color picker is the source of truth for the mobile ledger. */
+html body [data-pl-mobile-card-page-color="violet"] {
+  background-color: #f3f4f6 !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"] {
+  border-color: transparent !important;
+  background-color: #ffffff !important;
+  background-image: none !important;
+  color: #000000 !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"][data-pl-mobile-transaction-card="pink"] {
+  background-color: #a6a5a0 !important;
+  color: #ffffff !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="default"] {
+  border-color: rgb(134 239 172) !important;
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="default"][data-pl-mobile-transaction-card="pink"] {
+  border-color: rgb(244 114 182) !important;
+  background-color: #fce7f3 !important;
+  background-image: none !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="blue"] {
+  border-color: rgb(147 197 253) !important;
+  background-color: #dbeafe !important;
+  background-image: none !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="blue"][data-pl-mobile-transaction-card="pink"] {
+  border-color: rgb(156 163 175) !important;
+  background-color: #e5e7eb !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="pink"] {
+  border-color: rgb(249 168 212) !important;
+  background-color: #fce7f3 !important;
+  background-image: none !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="pink"][data-pl-mobile-transaction-card="pink"] {
+  border-color: rgb(251 191 36) !important;
+  background-color: #fef3c7 !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="amber"] {
+  border-color: rgb(252 211 77) !important;
+  background-color: #fef3c7 !important;
+  background-image: none !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="amber"][data-pl-mobile-transaction-card="pink"] {
+  border-color: #ffa500 !important;
+  background-color: #ffa500 !important;
+}
+
+/* Final normal-card guard: Pro adds a green background image to normal cards. */
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"][data-pl-mobile-transaction-card="green"] {
+  border: 0 !important;
+  background: #ffffff !important;
+  color: #000000 !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="default"][data-pl-mobile-transaction-card="green"] {
+  border-color: rgb(134 239 172) !important;
+  background: linear-gradient(90deg, rgba(236, 253, 245, .98), #ffffff 50%, rgba(209, 250, 229, .92)) !important;
+  color: #000000 !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="blue"][data-pl-mobile-transaction-card="green"] {
+  border-color: rgb(147 197 253) !important;
+  background: #dbeafe !important;
+  color: #000000 !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="pink"][data-pl-mobile-transaction-card="green"] {
+  border-color: rgb(249 168 212) !important;
+  background: #fce7f3 !important;
+  color: #000000 !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="amber"][data-pl-mobile-transaction-card="green"] {
+  border-color: rgb(252 211 77) !important;
+  background: #fef3c7 !important;
+  color: #000000 !important;
+}
+
+/* App-root fallback: a detail/group renderer cannot keep an old normal-card palette. */
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-transaction-card="green"] {
+  border: 0 !important;
+  background: #ffffff !important;
+  color: #000000 !important;
+}
+html[data-pl-mobile-card-color="default"] body [data-pl-mobile-transaction-card="green"] {
+  background: linear-gradient(90deg, rgba(236, 253, 245, .98), #ffffff 50%, rgba(209, 250, 229, .92)) !important;
+}
+html[data-pl-mobile-card-color="blue"] body [data-pl-mobile-transaction-card="green"] {
+  border-color: rgb(147 197 253) !important;
+  background: #dbeafe !important;
+}
+html[data-pl-mobile-card-color="pink"] body [data-pl-mobile-transaction-card="green"] {
+  border-color: rgb(249 168 212) !important;
+  background: #fce7f3 !important;
+}
+html[data-pl-mobile-card-color="amber"] body [data-pl-mobile-transaction-card="green"] {
+  border-color: rgb(252 211 77) !important;
+  background: #fef3c7 !important;
+}
+
+/* Root preference fallback: keeps the saved picker choice authoritative after page changes. */
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-page-color] {
+  background-color: #f3f4f6 !important;
+}
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-transaction-card] {
+  border-width: 0 !important;
+  border-color: transparent !important;
+  background: #ffffff !important;
+  color: #000000 !important;
+}
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-transaction-card="pink"] {
+  background: #a6a5a0 !important;
+  color: #ffffff !important;
+}
+html[data-pl-mobile-card-color="blue"] body [data-pl-mobile-transaction-card] {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background: #dbeafe !important;
+}
+html[data-pl-mobile-card-color="blue"] body [data-pl-mobile-transaction-card="pink"] {
+  border-color: rgb(156 163 175) !important;
+  background: #e5e7eb !important;
+}
+html[data-pl-mobile-card-color="pink"] body [data-pl-mobile-transaction-card] {
+  border-width: 1px !important;
+  border-color: rgb(249 168 212) !important;
+  background: #fce7f3 !important;
+}
+html[data-pl-mobile-card-color="pink"] body [data-pl-mobile-transaction-card="pink"] {
+  border-color: rgb(251 191 36) !important;
+  background: #fef3c7 !important;
+}
+html[data-pl-mobile-card-color="amber"] body [data-pl-mobile-transaction-card] {
+  border-width: 1px !important;
+  border-color: rgb(252 211 77) !important;
+  background: #fef3c7 !important;
+}
+html[data-pl-mobile-card-color="amber"] body [data-pl-mobile-transaction-card="pink"] {
+  border-color: #ffa500 !important;
+  background: #ffa500 !important;
+}
+
+/* Page-scoped fallback for transaction rows whose legacy status classes are more specific. */
+html body [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-card] {
+  border-width: 0 !important;
+  border-color: transparent !important;
+  background: #ffffff !important;
+  color: #000000 !important;
+}
+html body [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-card="pink"] {
+  background: #a6a5a0 !important;
+  color: #ffffff !important;
+}
+html body [data-pl-mobile-card-page-color="default"] [data-pl-mobile-transaction-card] {
+  border-width: 1px !important;
+  border-color: rgb(134 239 172) !important;
+  background: #ecfdf5 !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
+}
+html body [data-pl-mobile-card-page-color="default"] [data-pl-mobile-transaction-card="pink"] {
+  border-color: rgb(244 114 182) !important;
+  background: #fce7f3 !important;
+  background-image: none !important;
+}
+html body [data-pl-mobile-card-page-color="blue"] [data-pl-mobile-transaction-card] {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background: #dbeafe !important;
+}
+html body [data-pl-mobile-card-page-color="blue"] [data-pl-mobile-transaction-card="pink"] {
+  border-color: rgb(156 163 175) !important;
+  background: #e5e7eb !important;
+}
+html body [data-pl-mobile-card-page-color="pink"] [data-pl-mobile-transaction-card] {
+  border-width: 1px !important;
+  border-color: rgb(249 168 212) !important;
+  background: #fce7f3 !important;
+}
+html body [data-pl-mobile-card-page-color="pink"] [data-pl-mobile-transaction-card="pink"] {
+  border-color: rgb(251 191 36) !important;
+  background: #fef3c7 !important;
+}
+html body [data-pl-mobile-card-page-color="amber"] [data-pl-mobile-transaction-card] {
+  border-width: 1px !important;
+  border-color: rgb(252 211 77) !important;
+  background: #fef3c7 !important;
+}
+html body [data-pl-mobile-card-page-color="amber"] [data-pl-mobile-transaction-card="pink"] {
+  border-color: #ffa500 !important;
+  background: #ffa500 !important;
+}
+
+/* Final mobile-only palette override: remove legacy theme/status outlines. */
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color] {
+  outline: none !important;
+  box-shadow: none !important;
+  background-image: none !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"] {
+  border-width: 0 !important;
+  border-color: transparent !important;
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"][data-pl-mobile-transaction-card="pink"] {
+  background-color: #a6a5a0 !important;
+  color: #ffffff !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="default"] {
+  border-width: 1px !important;
+  border-color: rgb(134 239 172) !important;
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="default"][data-pl-mobile-transaction-card="pink"] {
+  border-color: rgb(244 114 182) !important;
+  background-color: #fce7f3 !important;
+  background-image: none !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="blue"] {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: #dbeafe !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="blue"][data-pl-mobile-transaction-card="pink"] {
+  border-color: rgb(156 163 175) !important;
+  background-color: #e5e7eb !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="pink"] {
+  border-width: 1px !important;
+  border-color: rgb(249 168 212) !important;
+  background-color: #fce7f3 !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="pink"][data-pl-mobile-transaction-card="pink"] {
+  border-color: rgb(251 191 36) !important;
+  background-color: #fef3c7 !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="amber"] {
+  border-width: 1px !important;
+  border-color: rgb(252 211 77) !important;
+  background-color: #fef3c7 !important;
+}
+html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="amber"][data-pl-mobile-transaction-card="pink"] {
+  border-color: #ffa500 !important;
+  background-color: #ffa500 !important;
+}
+
+/* Color picker wins over legacy status borders on the exact mobile Card stack. */
+html body[class*="theme-"] main .relative.rounded-lg.border.bg-card.border-2.shadow-sm[data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"][data-pl-mobile-transaction-card="pink"] {
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: #a6a5a0 !important;
+  color: #ffffff !important;
+}
+html body[class*="theme-"] main .relative.rounded-lg.border.bg-card.border-2.shadow-sm[data-pl-mobile-transaction-card][data-pl-mobile-card-color="default"][data-pl-mobile-transaction-card="pink"] {
+  border: 1px solid rgb(244 114 182) !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: #fce7f3 !important;
+  background-image: none !important;
+  color: #000000 !important;
+}
+html body[class*="theme-"] main .relative.rounded-lg.border.bg-card.border-2.shadow-sm[data-pl-mobile-transaction-card][data-pl-mobile-card-color="blue"][data-pl-mobile-transaction-card="pink"] {
+  border: 1px solid rgb(156 163 175) !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: #e5e7eb !important;
+  color: #000000 !important;
+}
+html body[class*="theme-"] main .relative.rounded-lg.border.bg-card.border-2.shadow-sm[data-pl-mobile-transaction-card][data-pl-mobile-card-color="pink"][data-pl-mobile-transaction-card="pink"] {
+  border: 1px solid rgb(251 191 36) !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: #fef3c7 !important;
+  color: #000000 !important;
+}
+html body[class*="theme-"] main .relative.rounded-lg.border.bg-card.border-2.shadow-sm[data-pl-mobile-transaction-card][data-pl-mobile-card-color="amber"][data-pl-mobile-transaction-card="pink"] {
+  border: 1px solid #ffa500 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: #ffa500 !important;
+  color: #000000 !important;
+}
+
+/* Amount / balance chips copy THIS card's fill + border (2px). */
+html body [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="violet"] [data-pl-mobile-card-inner-pill],
+html body [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="violet"] [data-pl-mobile-card-inner-pill] {
+  border: 2px solid #ffffff !important;
+  background-color: #ffffff !important;
+}
+html body [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="violet"] [data-pl-mobile-card-inner-pill] {
+  border: 2px solid #a6a5a0 !important;
+  background-color: #a6a5a0 !important;
+}
+html body [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="default"] [data-pl-mobile-card-inner-pill],
+html body [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="default"] [data-pl-mobile-card-inner-pill] {
+  border: 2px solid rgb(52 211 153) !important;
+  background-color: rgb(236 253 245) !important;
+}
+html body [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="default"] [data-pl-mobile-card-inner-pill] {
+  border: 2px solid rgb(190 24 93) !important;
+  background-color: #fce7f3 !important;
+}
+html body [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="blue"] [data-pl-mobile-card-inner-pill],
+html body [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="blue"] [data-pl-mobile-card-inner-pill] {
+  border: 2px solid rgb(147 197 253) !important;
+  background-color: #dbeafe !important;
+}
+html body [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="blue"] [data-pl-mobile-card-inner-pill] {
+  border: 2px solid rgb(107 114 128) !important;
+  background-color: #e5e7eb !important;
+}
+html body [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="pink"] [data-pl-mobile-card-inner-pill],
+html body [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="pink"] [data-pl-mobile-card-inner-pill] {
+  border: 2px solid rgb(249 168 212) !important;
+  background-color: #fce7f3 !important;
+}
+html body [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="pink"] [data-pl-mobile-card-inner-pill] {
+  border: 2px solid rgb(251 191 36) !important;
+  background-color: #fef3c7 !important;
+}
+html body [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="amber"] [data-pl-mobile-card-inner-pill],
+html body [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="amber"] [data-pl-mobile-card-inner-pill] {
+  border: 2px solid rgb(252 211 77) !important;
+  background-color: #fef3c7 !important;
+}
+html body [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="amber"] [data-pl-mobile-card-inner-pill] {
+  border: 2px solid #ffa500 !important;
+  background-color: #ffa500 !important;
+}
+
+/* Unapproved card border must use the 3-dot palette even when theme status rules force a 2px pink edge. */
+html body[class*="theme-"] main [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="violet"] {
+  border-width: 0 !important;
+  border-color: transparent !important;
+}
+html body[class*="theme-"] main [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="default"] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(190 24 93) !important;
+}
+html body[class*="theme-"] main [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="blue"] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(107 114 128) !important;
+}
+html body[class*="theme-"] main [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="pink"] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(251 191 36) !important;
+}
+html body[class*="theme-"] main [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="amber"] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: #ffa500 !important;
 }

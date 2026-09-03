@@ -78,6 +78,18 @@ import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import usePermissions from "@/hooks/usePermissions";
 import { approveVoucherWithHistory, approveVouchersWithHistoryBatch } from "@/lib/voucherActionsClient";
+import {
+  type MobileTransactionCardColor,
+  MOBILE_TRANSACTION_CARD_COLOR_CHANGED_EVENT,
+  mobileCardInnerPillClass,
+  mobileCardInnerPillStyle,
+  readMobileTransactionCardColor,
+  writeMobileTransactionCardColor,
+} from "@/lib/mobileTransactionCardColor";
+import {
+  MobileTransactionCardColorPicker,
+  type MobileTransactionCardPreview,
+} from "./MobileTransactionCardColorPicker";
 import { clearLedgerVouchersLocallyApproved, isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
 import { dispatchVoucherLivePatch, dispatchVoucherLivePatchMany } from "@/lib/voucherFormAttachmentSave";
 import {
@@ -111,6 +123,11 @@ import {
   LEDGER_TXN_TABLE_TONE_CHANGED_EVENT,
 } from "@/lib/ledgerTxnTableTone";
 import { chromeProPillCn, chromePillActive } from "@/lib/chromePillButton";
+import {
+  LEDGER_CLOSING_BALANCE_ACTIONS_CN,
+  LEDGER_CLOSING_BALANCE_CARD_ROW_CN,
+  LEDGER_CLOSING_BALANCE_TOTAL_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { stripSpendWiseSyntheticOpeningMaster } from "@/lib/ledgerPagePrint";
 import {
   BOOK_OB_EPS as SHARED_BOOK_OB_EPS,
@@ -637,6 +654,8 @@ export function TransactionsTable({
   );
   const [fileShowAll, setFileShowAll] = useState(() => readSavedFileColumnViewPrefs().showAll);
   const [txnTableTone, setTxnTableTone] = useState<LedgerTxnTableTone>("default");
+  const [mobileCardColor, setMobileCardColor] = useState<MobileTransactionCardColor>("violet");
+  const [mobileCardColorPickerOpen, setMobileCardColorPickerOpen] = useState(false);
   useEffect(() => {
     setTxnTableTone(readLedgerTxnTableTone());
     const onTone = () => setTxnTableTone(readLedgerTxnTableTone());
@@ -646,6 +665,12 @@ export function TransactionsTable({
   const applyTxnTableTone = useCallback((next: LedgerTxnTableTone) => {
     setTxnTableTone(next);
     writeLedgerTxnTableTone(next);
+  }, []);
+  useEffect(() => {
+    setMobileCardColor(readMobileTransactionCardColor());
+    const onColor = () => setMobileCardColor(readMobileTransactionCardColor());
+    window.addEventListener(MOBILE_TRANSACTION_CARD_COLOR_CHANGED_EVENT, onColor);
+    return () => window.removeEventListener(MOBILE_TRANSACTION_CARD_COLOR_CHANGED_EVENT, onColor);
   }, []);
   /** File column filter popover — local open state so Save always closes even if parent filter state lags. */
   const [fileFilterPopoverOpen, setFileFilterPopoverOpen] = useState(false);
@@ -986,6 +1011,29 @@ export function TransactionsTable({
     formatCurrency,
     dateSystem,
   } = useDate();
+  const mobileCardPreviews = useMemo<MobileTransactionCardPreview[]>(() =>
+    tableTransactions
+      .filter((row: any) => row?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE && !row?._spendWiseSpacer)
+      .slice(0, 10)
+      .map((row: any, index) => {
+        const credit = Number(row?.credit ?? 0);
+        const debit = Number(row?.debit ?? 0);
+        const balance = Number(row?.balance ?? row?.runningBalance ?? 0);
+        return {
+          id: String(row?.id ?? `preview-${index}`),
+          tone: highlightPendingApproval && row?.isApproved !== true ? "pink" : "green",
+          title: `${row?.voucherNumber || row?.type || "Transaction"} · ${getDisplayType(row)}`,
+          narration: String(row?.narration || "—"),
+          date: String(row?.date || "—"),
+          user: String(row?.userName || "—"),
+          amount: String(formatCurrency(Math.abs(credit || debit), { noSuffix: true, context: "transaction", noAnimation: true })),
+          amountSide: credit > 0 ? "cr" : debit > 0 ? "dr" : "none",
+          balance: String(formatCurrency(Math.abs(balance), { noSuffix: true, context: "transaction", noAnimation: true })),
+          balanceSide: balance < 0 ? "cr" : balance > 0 ? "dr" : "none",
+        };
+      }),
+    [tableTransactions, highlightPendingApproval, formatCurrency]
+  );
   const { settings: animationSettings } = useAnimationSettings();
   
   // Get animation settings - check enabled flag explicitly (match PartyList / list motion). Disable when parent asks (e.g. view toggle).
@@ -2025,6 +2073,40 @@ export function TransactionsTable({
       return (s: string) => highlightQueryInText(s, q);
     };
     const hl = hlForColumn("");
+    const mobileCardPaletteStyle = (tone: "green" | "pink" | "blue"): React.CSSProperties => {
+      const unapproved = tone === "pink";
+      if (mobileCardColor === "violet") {
+        return {
+          borderWidth: 0,
+          borderColor: "transparent",
+          backgroundColor: unapproved ? "#a6a5a0" : "#fff",
+          color: unapproved ? "#fff" : "#000",
+        };
+      }
+      if (mobileCardColor === "blue") return { borderColor: unapproved ? "#9ca3af" : "#93c5fd", backgroundColor: unapproved ? "#e5e7eb" : "#dbeafe", color: "#000" };
+      if (mobileCardColor === "pink") return { borderColor: unapproved ? "#fbbf24" : "#f9a8d4", backgroundColor: unapproved ? "#fef3c7" : "#fce7f3", color: "#000" };
+      if (mobileCardColor === "amber") return { borderColor: unapproved ? "#ffa500" : "#fcd34d", backgroundColor: unapproved ? "#ffa500" : "#fef3c7", color: "#000" };
+      return { borderColor: unapproved ? "#f472b6" : "#86efac", backgroundColor: unapproved ? "#fce7f3" : "#ecfdf5", backgroundImage: unapproved ? "none" : "linear-gradient(90deg, rgba(236, 253, 245, .98), #fff 50%, rgba(209, 250, 229, .92))", color: "#000" };
+    };
+    const mobileCardPaletteClass = (tone: "green" | "pink" | "blue") => {
+      const unapproved = tone === "pink";
+      if (mobileCardColor === "violet") return unapproved ? "!border-0 !bg-[#a6a5a0] !text-white" : "!border-0 !bg-white !text-black";
+      if (mobileCardColor === "blue") return unapproved ? "!border-gray-400 !bg-gray-200 !text-black" : "!border-blue-300 !bg-blue-100 !text-black";
+      if (mobileCardColor === "pink") return unapproved ? "!border-amber-400 !bg-amber-100 !text-black" : "!border-pink-300 !bg-pink-100 !text-black";
+      if (mobileCardColor === "amber") return unapproved ? "!border-[#ffa500] !bg-[#ffa500] !text-black" : "!border-amber-300 !bg-amber-100 !text-black";
+      return unapproved ? "!border-pink-300 !bg-pink-100 !text-black" : "!border-emerald-300 !bg-emerald-50 !text-black";
+    };
+    const mobileCardThemeOptions: Array<{ value: MobileTransactionCardColor; label: string }> = [
+      { value: "violet", label: "Default" },
+      { value: "default", label: "Green" },
+      { value: "blue", label: "Blue" },
+      { value: "pink", label: "Pink" },
+      { value: "amber", label: "Amber" },
+    ];
+    const applyMobileCardTheme = (value: MobileTransactionCardColor) => {
+      setMobileCardColor(value);
+      writeMobileTransactionCardColor(value);
+    };
     const renderMobileCard = (t: any, key: string, insideGroup: boolean) => {
       if (t.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
         const label =
@@ -2166,19 +2248,22 @@ export function TransactionsTable({
       const swBorder = !insideGroup && typeof (t as any)._spendWiseGroupColorIndex === "number"
         ? ((t as any)._spendWiseGroupColorIndex === 1 ? "border-l-4 border-l-green-500" : (t as any)._spendWiseGroupColorIndex === 2 ? "border-l-4 border-l-pink-500" : "border-l-4 border-l-blue-500")
         : "";
-      // Mobile transaction cards: border card-tone se match — black ki jagah thoda bold same-hue edge.
+      const mobileCardTone = isPeerPendingChange ? "blue" : isPendingApproval ? "pink" : "green";
+      const mobileInnerPillClass = mobileCardInnerPillClass(mobileCardColor, mobileCardTone);
+      const mobileInnerPillStyle = mobileCardInnerPillStyle(mobileCardColor, mobileCardTone);
+      // Mobile transaction cards: border + amount chips follow 3-dot card color (not site theme).
       return (
         <Card
           key={key}
+          data-pl-mobile-transaction-card={mobileCardTone}
+          data-pl-mobile-card-color={mobileCardColor}
+          style={mobileCardPaletteStyle(mobileCardTone)}
           className={cn(
             "relative p-2.5 min-w-0 w-full overflow-hidden border-2 shadow-sm cursor-pointer transition-colors",
             context === "daybook" && "rounded-lg",
             swBorder,
-            isPeerPendingChange
-              ? "bg-blue-100 dark:bg-blue-950/40 hover:bg-blue-200 dark:hover:bg-blue-950/50 border-blue-300/90 dark:border-blue-700/55"
-              : isPendingApproval
-                ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border-pink-300/90 dark:border-pink-700/55"
-                : "bg-card hover:bg-muted/30 border-emerald-300/85 dark:border-emerald-800/50"
+            "hover:opacity-90",
+            mobileCardPaletteClass(mobileCardTone)
           )}
           onClick={() => onRowClick?.(t)}
         >
@@ -2191,7 +2276,7 @@ export function TransactionsTable({
                 </span>
               ) : null}
             </div>
-            <div className={cn("relative flex shrink-0 items-center justify-end gap-1 font-bold text-sm", showFileBySelection && "pl-8", mainAmountClass)}>
+            <div className={cn("relative flex shrink-0 items-center justify-end gap-1 font-bold text-sm", showFileBySelection && "pl-8")}>
               {showFileBySelection ? (
                 <div className="absolute left-0 top-1/2 -translate-y-1/2">
                   <MobileTransactionFilePreview
@@ -2200,11 +2285,22 @@ export function TransactionsTable({
                   />
                 </div>
               ) : null}
-              <span>{amount > 0 ? renderHighlightedMobileAmountOrQty(amount) : "-"}</span>
-              {can("approve_transactions") &&
-              effectiveNotificationSettings?.approve?.on !== false &&
-              effectiveNotificationSettings?.approve?.onTransaction !== false &&
-              (isPendingApproval || showApproveAllOnPage) ? (
+              <span
+                data-pl-mobile-card-inner-pill=""
+                className={cn(
+                  "whitespace-nowrap rounded-md px-1.5 py-0.5 font-bold",
+                  mobileInnerPillClass,
+                  mainAmountClass === "text-red-600"
+                    ? "!text-red-600"
+                    : mainAmountClass === "text-green-600"
+                      ? "!text-green-600"
+                      : mainAmountClass
+                )}
+                style={mobileInnerPillStyle}
+              >
+                {amount > 0 ? renderHighlightedMobileAmountOrQty(amount) : "-"}
+              </span>
+              {useMobileCardView ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
@@ -2235,6 +2331,34 @@ export function TransactionsTable({
                         Approve All
                       </DropdownMenuItem>
                     ) : null}
+                    <div className="mt-1 border-t border-border/60 px-1 pt-1">
+                      <DropdownMenuItem
+                        onSelect={() => setMobileCardColorPickerOpen(true)}
+                        className="px-2 py-1 text-xs font-semibold text-muted-foreground"
+                      >
+                        View Card Theme
+                      </DropdownMenuItem>
+                      <div className="flex flex-col gap-1 rounded-md border border-border/60 bg-muted/30 p-1">
+                        {mobileCardThemeOptions.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={cn(
+                              "w-full rounded-full border px-2 py-1 text-left text-xs hover:bg-accent",
+                              mobileCardColor === option.value
+                                ? "border-primary bg-accent font-semibold"
+                                : "border-border/60"
+                            )}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              applyMobileCardTheme(option.value);
+                            }}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : null}
@@ -2269,10 +2393,13 @@ export function TransactionsTable({
             ) : !hideBalanceColumn ? (
               <Badge
                 variant="secondary"
+                data-pl-mobile-card-inner-pill=""
                 className={cn(
                   "text-xs font-semibold px-1.5 py-0 whitespace-nowrap shrink-0",
-                  balance >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
+                  mobileInnerPillClass,
+                  balance >= 0 ? "!text-green-700" : "!text-red-600"
                 )}
+                style={mobileInnerPillStyle}
               >
                 <span>Bal:</span>
                 {renderHighlightedMobileAmountOrQty(balanceAbs)}
@@ -2318,10 +2445,13 @@ export function TransactionsTable({
               {showStatusInCard && !hideBalanceColumn && (
                 <Badge
                   variant="secondary"
+                  data-pl-mobile-card-inner-pill=""
                   className={cn(
                     "text-xs font-semibold px-1.5 py-0 whitespace-nowrap",
-                    balance >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
+                    mobileInnerPillClass,
+                    balance >= 0 ? "!text-green-700" : "!text-red-600"
                   )}
+                  style={mobileInnerPillStyle}
                 >
                   <span>Bal:</span>
                   {renderHighlightedMobileAmountOrQty(balanceAbs)}
@@ -2349,7 +2479,14 @@ export function TransactionsTable({
     // Daybook/Recent: horizontal gap comes from parent (DaybookReport/dashboard); other contexts use px-0.5
     // Mobile transaction list: 4px vertical gap between cards for cleaner scanability.
     return (
-      <div className={cn("w-full min-w-0 space-y-1 pb-4 overflow-hidden", context === "daybook" ? "" : "px-0.5")}>
+      <div key={mobileCardColor} data-pl-mobile-card-page-color={mobileCardColor} className={cn("w-full min-w-0 space-y-1 pb-4 overflow-hidden", context === "daybook" ? "" : "px-0.5")}>
+        <MobileTransactionCardColorPicker
+          open={mobileCardColorPickerOpen}
+          value={mobileCardColor}
+          samples={mobileCardPreviews}
+          onOpenChange={setMobileCardColorPickerOpen}
+          onChange={setMobileCardColor}
+        />
         {can("approve_transactions") &&
         effectiveNotificationSettings?.approve?.on !== false &&
         effectiveNotificationSettings?.approve?.onTransaction !== false &&
@@ -2371,7 +2508,7 @@ export function TransactionsTable({
           <>
             {/* Date filter + master OB: pehla card (stacked); search slot sirf neeche wale card par */}
             {showBookOpeningAboveDatedRow ? (
-              <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border-2 border-emerald-300/85 dark:border-emerald-800/50 shadow-sm">
+              <Card data-pl-mobile-transaction-card="green" data-pl-mobile-card-color={mobileCardColor} style={mobileCardPaletteStyle("green")} className={cn("p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border-2 border-emerald-300/85 dark:border-emerald-800/50 shadow-sm", mobileCardPaletteClass("green"))}>
                 <div className="flex justify-between items-start gap-2 min-w-0">
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5 min-h-9 justify-center">
                     <Badge
@@ -2422,7 +2559,7 @@ export function TransactionsTable({
                 <span className="whitespace-pre-wrap font-normal">{openingBalanceNarrationTrimmed}</span>
               </p>
             ) : null}
-            <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
+            <Card data-pl-mobile-transaction-card="green" data-pl-mobile-card-color={mobileCardColor} style={mobileCardPaletteStyle("green")} className={cn("p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm", mobileCardPaletteClass("green"))}>
               <div className="flex justify-between items-start gap-2 min-w-0">
                 <div className="flex min-w-0 flex-1 flex-col gap-0.5 min-h-9 justify-center">
                   <div className="flex items-center gap-2 min-w-0">
@@ -2593,6 +2730,7 @@ export function TransactionsTable({
 
           return (
             <Virtuoso
+              key={mobileCardColor}
               // Mobile long ledgers: only visible cards mount (plus overscan) to reduce freeze.
               style={{
                 height: Math.min(
@@ -2626,11 +2764,12 @@ export function TransactionsTable({
           );
         })()}
         {!hideFooter ? (
-          <Card className="p-2.5 min-w-0 overflow-hidden bg-card border-2 border-emerald-300/85 dark:border-emerald-800/50 shadow-sm">
-            <div className="flex min-w-0 items-center gap-2">
+          <Card data-pl-mobile-transaction-card="green" data-pl-mobile-card-color={mobileCardColor} data-pl-closing-balance-card="" style={mobileCardPaletteStyle("green")} className={cn("p-2.5 min-w-0 overflow-visible bg-card border-2 border-emerald-300/85 dark:border-emerald-800/50 shadow-sm", mobileCardPaletteClass("green"))}>
+            <div className={LEDGER_CLOSING_BALANCE_CARD_ROW_CN}>
               {closingBalanceActions ? (
                 <div
-                  className="min-w-0 shrink-0"
+                  data-pl-closing-balance-actions=""
+                  className={LEDGER_CLOSING_BALANCE_ACTIONS_CN}
                   onClick={(e) => e.stopPropagation()}
                   onKeyDown={(e) => e.stopPropagation()}
                 >
@@ -2638,7 +2777,7 @@ export function TransactionsTable({
                 </div>
               ) : null}
               {!hideBalanceColumn ? (
-                <div className="ml-auto flex min-w-0 items-center justify-end gap-1.5">
+                <div className={LEDGER_CLOSING_BALANCE_TOTAL_CN}>
                   <span className="shrink-0 text-xs font-semibold text-muted-foreground">Closing Balance</span>
                   <span className="shrink-0 text-sm">{formatFooterBalance(displayClosingBalance)}</span>
                 </div>
@@ -3175,7 +3314,7 @@ export function TransactionsTable({
                   colSpan={totalColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol}
                   className="align-middle"
                 >
-                  <div className="flex w-full min-w-0 items-center justify-between gap-2">
+                  <div data-pl-closing-balance-card="" className={LEDGER_CLOSING_BALANCE_CARD_ROW_CN}>
                     <div
                       className="flex min-w-0 flex-wrap items-center gap-1"
                       onClick={(e) => e.stopPropagation()}
@@ -3206,10 +3345,11 @@ export function TransactionsTable({
                         </button>
                       ))}
                     </div>
-                    <div className="flex shrink-0 items-center">
+                    <div className={LEDGER_CLOSING_BALANCE_TOTAL_CN}>
                       {closingBalanceActions ? (
                         <div
-                          className="mr-[10ch] flex items-center font-normal"
+                          data-pl-closing-balance-actions=""
+                          className={cn(LEDGER_CLOSING_BALANCE_ACTIONS_CN, "mr-0")}
                           onClick={(e) => e.stopPropagation()}
                           onKeyDown={(e) => e.stopPropagation()}
                         >
