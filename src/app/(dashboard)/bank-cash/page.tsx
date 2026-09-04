@@ -277,10 +277,9 @@ function BankCashPageContent() {
         .map(group => {
         const accountsInGroup = processedAccounts.filter(acc => acc.groupId === group.id);
         const hasSpecial = accountsInGroup.some(acc => acc.isSpecial);
-        const balance = canViewSpecialBalance || !hasSpecial 
-            ? accountsInGroup.reduce((sum, acc) => sum + acc.balance, 0)
-            : '*****';
-        return { ...group, hasSpecial, balance };
+        const balance = accountsInGroup.reduce((sum, acc) => sum + acc.balance, 0);
+        const balanceMasked = hasSpecial && !canViewSpecialBalance;
+        return { ...group, hasSpecial, balance, balanceMasked };
     });
 
     return appendMasterEntitySystemBranchGroups(
@@ -346,7 +345,7 @@ function BankCashPageContent() {
   const handleBankCashTabChange = useCallback(
     (value: string) => {
       const tab = value === "groups" || value === "clearing" ? value : "accounts";
-      const items =
+      const items: (Account | AccountGroup)[] =
         tab === "groups"
           ? processedAccountGroups
           : tab === "clearing"
@@ -354,7 +353,7 @@ function BankCashPageContent() {
             : accountsForAccountList;
       const nextSelected = tabSwitchSelection(
         isMobile,
-        pickRememberedListSelection("bankCashPageState", tab, items)
+        pickRememberedListSelection<Account | AccountGroup>("bankCashPageState", tab, items)
       );
       pendingBankSelectIdRef.current = nextSelected?.id ?? null;
       setActiveView(tab);
@@ -471,13 +470,13 @@ function BankCashPageContent() {
     // activeView === 'groups'
     return processedAccountGroups
       .filter((g) => {
-        const anyG = g as any;
+        const anyG = g as AccountGroup & { isSystemReserved?: boolean; balanceMasked?: boolean };
         const isSystemParent =
           anyG.isSystemReserved === true ||
           isSystemParentGroup("account_groups", anyG.id);
-        return typeof g.balance === "number" && !isSystemParent;
+        return !anyG.balanceMasked && !isSystemParent;
       })
-      .reduce((acc, group) => acc + (group.balance as number), 0);
+      .reduce((acc, group) => acc + group.balance, 0);
   }, [activeView, processedAccounts, processedAccountGroups, can]);
 
   const displayTotalBalance = useMemo(() => {

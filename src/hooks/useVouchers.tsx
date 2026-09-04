@@ -1168,6 +1168,9 @@ export const VoucherProvider = ({
         case "expense_accounts":
           applyPatch(setUnprocessedExpenseAccounts);
           break;
+        case "expense_groups":
+          applyPatch(setExpenseGroups);
+          break;
         default:
           break;
       }

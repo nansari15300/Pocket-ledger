@@ -12,6 +12,10 @@ import {
   renderGroupListRowShell,
 } from "@/components/entity/GroupListMemberRow";
 import { formatGroupListCardCountSubtitle } from "@/lib/groupListCardCounts";
+import {
+  toggleGroupListAccordionExpand,
+  type GroupListSelectOptions,
+} from "@/lib/groupListExpand";
 import { groupListMemberAvatarFromRow } from "@/components/entity/GroupListMemberAvatar";
 import { MasterListGroupIcon } from "@/components/entity/MasterListGroupIcon";
 

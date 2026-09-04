@@ -132,7 +132,9 @@ export function AccountGroupList({
                 formatCurrency(amount, { ...options, noAnimation: true }) as React.ReactNode
               }
               balanceToneClass={masterDetailBalanceToneClass}
-              isGroupBalanceMasked={(group) => typeof group.balance !== "number"}
+              isGroupBalanceMasked={(group) =>
+                Boolean((group as { balanceMasked?: boolean }).balanceMasked)
+              }
               renderGroupLeading={(group) => (
                 <MasterListGroupIcon>
                   {(group as { hasSpecial?: boolean }).hasSpecial ? (

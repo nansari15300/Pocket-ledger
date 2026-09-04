@@ -1163,7 +1163,9 @@ export function TrialBalancePage() {
                     {openingBalanceLedgerBreakdown ? (
                       <OpeningBalanceLedgerAccountsTable
                         breakdown={openingBalanceLedgerBreakdown}
-                        formatCurrency={formatCurrency}
+                        formatCurrency={(amount, options) =>
+                          String(formatCurrency(amount, options ?? {}))
+                        }
                         interactionLocked={openingBalanceEditOpen}
                         onRowActivate={handleOpeningBalanceRowActivate}
                       />

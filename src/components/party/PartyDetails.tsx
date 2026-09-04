@@ -1390,7 +1390,9 @@ export function PartyDetails({
   const openingBalanceLedgerTable = isOpeningBalanceLedger && openingBalanceLedgerBreakdown ? (
     <OpeningBalanceLedgerAccountsTable
       breakdown={openingBalanceLedgerBreakdown}
-      formatCurrency={formatCurrency}
+      formatCurrency={(amount, options) =>
+        String(formatCurrency(amount, options ?? {}))
+      }
       className="px-1 pb-2"
       interactionLocked={openingBalanceEditOpen}
       onRowActivate={handleOpeningBalanceRowActivate}

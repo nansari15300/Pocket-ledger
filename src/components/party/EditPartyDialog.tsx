@@ -110,9 +110,9 @@ function normalizePartyEditGroupId(groupId: string | null | undefined): string {
 }
 
 const formSchema = z.object({
-  accountType: z.enum([PARTY_SYSTEM_DEBTORS_ID, PARTY_SYSTEM_CREDITORS_ID], {
-    required_error: "Select account type.",
-  }),
+    accountType: z.enum([PARTY_SYSTEM_DEBTORS_ID, PARTY_SYSTEM_CREDITORS_ID], {
+      message: "Select account type.",
+    }),
   name: z.string().min(2, { message: "Party name must be at least 2 characters." }),
   email: z.string().email({ message: "Please enter a valid email." }).optional().or(z.literal("")),
   phone: z.string().optional(),

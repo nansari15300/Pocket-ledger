@@ -1,5 +1,5 @@
 import { isInterCompanyPartyListAccount } from "@/lib/interCompany/interCompanyCounterpartyPartyName";
-import { collectMasterGroupDescendantIds } from "@/lib/masterGroupListTree";
+import { collectMasterGroupDescendantIds, type MasterGroupListRow } from "@/lib/masterGroupListTree";
 import {
   isPartyDirectOnSystemBranch,
   isPartySystemGroupId,
@@ -7,7 +7,7 @@ import {
   resolvePartyListGroupBucketId,
 } from "@/lib/partySystemGroups";
 
-type PartyGroupRow = { id: string; parentId?: string };
+type PartyGroupRow = MasterGroupListRow;
 
 /** User group ids nested under a system branch (all depths). */
 export function collectPartyUserGroupIdsUnderBranch(
@@ -46,12 +46,12 @@ export function partyInPartyGroupScope(
   if (isPartySystemGroupId(scopeGroupId)) {
     if (
       scopeGroupId === PARTY_SYSTEM_DEBTORS_ID &&
-      isInterCompanyPartyListAccount(party)
+      isInterCompanyPartyListAccount(party as Parameters<typeof isInterCompanyPartyListAccount>[0])
     ) {
       return true;
     }
     if (isPartyDirectOnSystemBranch(party, scopeGroupId)) {
-      return !isInterCompanyPartyListAccount(party);
+      return !isInterCompanyPartyListAccount(party as Parameters<typeof isInterCompanyPartyListAccount>[0]);
     }
     const nestedIds = collectPartyUserGroupIdsUnderBranch(scopeGroupId, allGroups);
     return nestedIds.has(resolvePartyListGroupBucketId(party));

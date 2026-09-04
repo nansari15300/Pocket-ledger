@@ -591,7 +591,7 @@ function PartyPageContent() {
   const selectedGroup = useMemo(
     () =>
       selectedGroupRaw
-        ? resolvePartyGroupForSelection(selectedGroupRaw.id, processedGroups, companyId || "")
+        ? (resolvePartyGroupForSelection(selectedGroupRaw.id, processedGroups, companyId || "") as Group | null)
         : null,
     [processedGroups, selectedGroupRaw, companyId]
   );
@@ -740,7 +740,7 @@ function PartyPageContent() {
           ? groupItem
           : partyItem
         : groupItem || partyItem;
-    if (item && item.id !== currentSelectedId) setSelected(item);
+    if (item && item.id !== currentSelectedId) setSelected(item as Party | Group);
     const canonical =
       view === "groups"
         ? `/party?view=groups&selected=${encodeURIComponent(selectedId)}`

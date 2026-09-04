@@ -133,7 +133,7 @@ export function ItemGroupList({
                   pendingCount={ctx.pendingCount}
                   leading={groupListMemberAvatarFromRow(member)}
                   highlightQuery={ctx.highlightQuery}
-                  isAccountFrozen={Boolean((member as Item).isFrozen)}
+                  isAccountFrozen={false}
                   rowDimClass={ctx.rowDimClass}
                   {...ctx.memberMoveProps}
                 />

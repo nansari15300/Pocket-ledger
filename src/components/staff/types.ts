@@ -35,4 +35,5 @@ export type StaffGroup = {
     balance: number;
     openingBalance?: number;
     isDeleted?: boolean;
+    isSystemReserved?: boolean;
 };

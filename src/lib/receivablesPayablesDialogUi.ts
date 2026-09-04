@@ -124,7 +124,7 @@ function groupIcAccountPartyRowsForRpDialog(rows: RpDialogRow[]): RpDialogRow[] 
         party: interCompanyClearingAccountDisplayName({
           name: member.party,
           interCompanyPeerEntityLabel: member.interCompanyPeerEntityLabel,
-        } as { name?: string; interCompanyPeerEntityLabel?: string }),
+        } as Parameters<typeof interCompanyClearingAccountDisplayName>[0]),
       }))
       .sort((a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0));
     const balance = children.reduce((sum, child) => sum + (Number(child.balance) || 0), 0);

@@ -188,7 +188,7 @@ function periodExpenseAccountMovement(
   return round2(balanceAfter - balanceBefore);
 }
 
-function buildGroupMaps(groups: any[]) {
+function buildGroupMaps(groups: ReadonlyArray<any>) {
   const byId = new Map<string, any>();
   for (const g of groups) {
     if (g?.id) byId.set(g.id, g);

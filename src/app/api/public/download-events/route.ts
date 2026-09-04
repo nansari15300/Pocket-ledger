@@ -62,7 +62,9 @@ async function verifyDownloadUser(req: NextRequest): Promise<
 export async function POST(req: NextRequest) {
   try {
     const userGate = await verifyDownloadUser(req);
-    if (!userGate.ok) return userGate.error;
+    if (userGate.ok === false) {
+      return userGate.error;
+    }
 
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     if (!isWebsiteDownloadPlatform(body.platform)) {

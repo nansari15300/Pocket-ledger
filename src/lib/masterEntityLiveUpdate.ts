@@ -6,7 +6,8 @@ export type MasterEntityPatchCollection =
   | "bank_accounts"
   | "taxes"
   | "items"
-  | "expense_accounts";
+  | "expense_accounts"
+  | "expense_groups";
 
 /** Fingerprint me profile/attachment fields — `entityListUiFingerprint` stale UI skip fix. */
 export function masterEntityProfileUiFields(row: Record<string, unknown> | null | undefined): string {

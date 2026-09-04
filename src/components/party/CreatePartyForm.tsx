@@ -101,7 +101,7 @@ import { MasterPdfAsImageToggle } from "@/components/common/EntityProfileDocumen
 const formSchema = z
   .object({
     accountType: z.enum([PARTY_SYSTEM_DEBTORS_ID, PARTY_SYSTEM_CREDITORS_ID], {
-      required_error: "Select account type.",
+      message: "Select account type.",
     }),
     name: z.string().min(2, "Party name is required."),
     groupId: z.string().optional(),

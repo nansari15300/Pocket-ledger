@@ -219,11 +219,12 @@ export default function StaffPage() {
 
   const staffLiabilityGroupTree = useMemo(
     () =>
-      buildStaffPageLiabilityGroupTree(
-        processedStaffGroups,
+      buildStaffPageLiabilityGroupTree({
         processedStaff,
-        companyId || ""
-      ),
+        salaryGroups: processedStaffGroups,
+        staffGroupsMeta: processedStaffGroups,
+        companyId: companyId || "",
+      }),
     [processedStaffGroups, processedStaff, companyId]
   );
 

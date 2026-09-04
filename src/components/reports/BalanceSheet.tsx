@@ -1998,7 +1998,7 @@ export function BalanceSheetPage() {
           { requireConflictReason: true }
         )
       )
-      .filter((row): row is BalanceSheetDifferenceTraceRow => row !== null)
+      .filter((row): row is NonNullable<typeof row> => row !== null)
       .sort((a, b) => Math.abs(b.closing) - Math.abs(a.closing));
   }, [
     balanceSheetData,
@@ -2037,7 +2037,7 @@ export function BalanceSheetPage() {
           { requireConflictReason: false, isOtherAccount: true }
         )
       )
-      .filter((row): row is BalanceSheetDifferenceTraceRow => row !== null)
+      .filter((row): row is NonNullable<typeof row> => row !== null)
       .sort((a, b) => Math.abs(b.closing) - Math.abs(a.closing));
   }, [
     balanceSheetData,
@@ -2130,7 +2130,7 @@ export function BalanceSheetPage() {
           isOtherAccount: !conflictKeys.has(differenceTraceRowKey(built)),
         };
       })
-      .filter((row): row is BalanceSheetDifferenceTraceRow => row !== null)
+      .filter((row): row is NonNullable<typeof row> => row !== null)
       .sort((a, b) => a.accountName.localeCompare(b.accountName));
   }, [
     balanceSheetData,

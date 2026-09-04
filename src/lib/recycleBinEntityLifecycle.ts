@@ -98,7 +98,7 @@ export async function syncOnlineRecycleBinFromFirestoreToSqlite(
   if (typeof navigator !== "undefined" && !navigator.onLine) return;
 
   const cryptoCtx: ServerBackupCryptoContext | null = reg.encryptServerBackupSalt
-    ? { encryptServerBackupSalt: reg.encryptServerBackupSalt }
+    ? { encryptServerBackupSalt: String(reg.encryptServerBackupSalt) }
     : null;
 
   for (const coll of collections) {
@@ -150,7 +150,7 @@ export function subscribeOnlineRecycleBinFirestoreToSqliteMirror(
     if (cancelled || !localId || !fsId || !reg) return;
 
     const cryptoCtx: ServerBackupCryptoContext | null = reg.encryptServerBackupSalt
-      ? { encryptServerBackupSalt: reg.encryptServerBackupSalt }
+      ? { encryptServerBackupSalt: String(reg.encryptServerBackupSalt) }
       : null;
 
     unsubs = collections.map((coll) => {

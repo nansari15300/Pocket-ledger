@@ -15,6 +15,7 @@ import {
 import { useDate } from "@/hooks/useDate";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useIsTextTruncated } from "@/hooks/useIsTextTruncated";
+import { MasterAccountFreezeListBadge } from "@/components/masterAccountFreeze/MasterAccountFreezeListBadge";
 import type { GroupListMemberMoveProps } from "@/hooks/useGroupListAccountMove";
 
 type GroupListMemberRowProps = {
