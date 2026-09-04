@@ -4,6 +4,7 @@ export type Staff = {
   name: string;
   email?: string;
   phone?: string;
+  whatsapp?: boolean;
   address?: string;
   salary?: number;
   openingBalance?: number;
@@ -21,6 +22,7 @@ export type Staff = {
   isDeleted?: boolean;
   isFrozen?: boolean;
   freezeMessage?: string | null;
+  anusuchi13ConfirmationByFy?: Record<string, { sent?: boolean; completed?: boolean; statementSent?: boolean }>;
 };
 
 export type StaffGroup = {

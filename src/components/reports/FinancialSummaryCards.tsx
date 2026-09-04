@@ -63,7 +63,7 @@ import {
     type RpCategoryFilter,
 } from "@/lib/receivablesPayablesDialogUi";
 import { ReceivablesPayablesDialogFooter } from "@/components/reports/ReceivablesPayablesDialogFooter";
-import { ReceivablesPayablesDialogEntityList, rpDialogListScrollHandlers } from "@/components/reports/ReceivablesPayablesDialogEntityList";
+import { ReceivablesPayablesDialogEntityList, RP_DIALOG_DIM_GREEN_BORDER, rpDialogListScrollHandlers } from "@/components/reports/ReceivablesPayablesDialogEntityList";
 import { ReceivablesPayablesEntitySettings } from "@/components/reports/ReceivablesPayablesEntitySettings";
 import {
     DaybookAccountDayPeekDialog,
@@ -3093,7 +3093,7 @@ export function FinancialSummaryCards({
                                                 <div className={cn("flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 pb-2", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
                                                     <div className="flex flex-col min-h-0">
                                                         <h3 className="text-lg font-semibold mb-0.5 text-green-600 mt-0 shrink-0">Receivables ({receivablesDialogCount})</h3>
-                                                        <div className="border rounded-lg bg-muted/20 p-1.5">
+                                                        <div className={cn("rounded-lg bg-emerald-50/20 dark:bg-emerald-950/10 p-1.5 border", RP_DIALOG_DIM_GREEN_BORDER)}>
                                                             <ReceivablesPayablesDialogEntityList
                                                                 sections={receivablesDialogSections}
                                                                 side="receivables"
@@ -3105,7 +3105,7 @@ export function FinancialSummaryCards({
                                                     </div>
                                                     <div className="flex flex-col min-h-0">
                                                         <h3 className="text-lg font-semibold mb-0.5 text-red-600 shrink-0">Payables ({payablesDialogCount})</h3>
-                                                        <div className="border rounded-lg bg-muted/20 p-1.5">
+                                                        <div className={cn("rounded-lg bg-emerald-50/20 dark:bg-emerald-950/10 p-1.5 border", RP_DIALOG_DIM_GREEN_BORDER)}>
                                                             <ReceivablesPayablesDialogEntityList
                                                                 sections={payablesDialogSections}
                                                                 side="payables"
@@ -3121,7 +3121,7 @@ export function FinancialSummaryCards({
                                                     {(!isMobile || receivablesPayablesTab === "receivables") && (
                                                         <div className="flex flex-col min-h-0 h-full">
                                                             <h3 className="text-lg font-semibold mb-0.5 text-green-600 shrink-0">Receivables ({receivablesDialogCount})</h3>
-                                                            <div className={cn("flex-1 min-h-0 border rounded-lg bg-muted/20 p-1.5 overflow-y-auto overflow-x-hidden", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
+                                                            <div className={cn("flex-1 min-h-0 rounded-lg bg-emerald-50/20 dark:bg-emerald-950/10 p-1.5 overflow-y-auto overflow-x-hidden border", RP_DIALOG_DIM_GREEN_BORDER, RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
                                                                 <ReceivablesPayablesDialogEntityList
                                                                     sections={receivablesDialogSections}
                                                                     side="receivables"
@@ -3135,7 +3135,7 @@ export function FinancialSummaryCards({
                                                     {(!isMobile || receivablesPayablesTab === "payables") && (
                                                         <div className="flex flex-col min-h-0 h-full">
                                                             <h3 className="text-lg font-semibold mb-0.5 text-red-600 shrink-0">Payables ({payablesDialogCount})</h3>
-                                                            <div className={cn("flex-1 min-h-0 border rounded-lg bg-muted/20 p-1.5 overflow-y-auto overflow-x-hidden", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
+                                                            <div className={cn("flex-1 min-h-0 rounded-lg bg-emerald-50/20 dark:bg-emerald-950/10 p-1.5 overflow-y-auto overflow-x-hidden border", RP_DIALOG_DIM_GREEN_BORDER, RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
                                                                 <ReceivablesPayablesDialogEntityList
                                                                     sections={payablesDialogSections}
                                                                     side="payables"

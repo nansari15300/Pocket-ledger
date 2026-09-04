@@ -47,6 +47,7 @@ import {
   interCompanyComboboxTriggerClass,
   interCompanyDropdownContentClass,
   interCompanyCompanyFieldsRowClass,
+  interCompanyCompanyFieldsRowSimpleClass,
   interCompanyFieldColClass,
   interCompanyIcReadonlyFieldClass,
   interCompanyInputClass,
@@ -105,6 +106,8 @@ type Props = {
   headerTrailing?: ReactNode;
   companyBankAccountId?: string;
   onCompanyBankAccountIdChange?: (id: string) => void;
+  /** Simple view — company row: naam only; account rows: type + naam */
+  simpleView?: boolean;
 };
 
 export function InterCompanyTargetConnectSection({
@@ -138,6 +141,7 @@ export function InterCompanyTargetConnectSection({
   headerTrailing = null,
   companyBankAccountId = "",
   onCompanyBankAccountIdChange,
+  simpleView = false,
 }: Props) {
   const [companyCodeInput, setCompanyCodeInput] = useState("");
   const [companyAcInput, setCompanyAcInput] = useState("");
@@ -574,7 +578,11 @@ export function InterCompanyTargetConnectSection({
           showRevertedBadge={showRevertedBadge}
           trailingAction={headerTrailing}
         />
-        <div className={interCompanyCompanyFieldsRowClass}>
+        <div
+          className={cn(
+            simpleView ? interCompanyCompanyFieldsRowSimpleClass : interCompanyCompanyFieldsRowClass
+          )}
+        >
           <div className={cn(interCompanyFieldColClass, "min-w-[8.5rem]")}>
             <Label className="whitespace-nowrap text-xs text-muted-foreground sm:sr-only">Company name</Label>
             {fieldsDisabled ? (
@@ -604,6 +612,8 @@ export function InterCompanyTargetConnectSection({
               />
             )}
           </div>
+          {!simpleView ? (
+            <div className="ic-company-extra-fields contents">
           <div className={interCompanyFieldColClass}>
             <Label className="whitespace-nowrap text-xs text-muted-foreground">Company Code</Label>
             <Input
@@ -740,6 +750,8 @@ export function InterCompanyTargetConnectSection({
               readOnly={fieldsDisabled}
             />
           </div>
+            </div>
+          ) : null}
         </div>
         {companyRowSearching ? (
           <p className="text-xs text-muted-foreground">Searching linked companies…</p>
@@ -771,6 +783,7 @@ export function InterCompanyTargetConnectSection({
               ? "Loading bank accounts…"
               : "Saved voucher — bank account is read-only"
           }
+          simpleView={simpleView}
         />
       </div>
 
@@ -808,6 +821,8 @@ export function InterCompanyTargetConnectSection({
               ? "Loading target accounts…"
               : "Saved voucher — accounts are read-only"
           }
+          simpleView={simpleView}
+          showDetails={!simpleView}
         />
       </div>
 

@@ -86,7 +86,7 @@ export function InterCompanyEntityDetailsCard({
   return (
     <div
       className={cn(
-        "rounded-md border border-sky-400/70 bg-sky-50/50 p-3 dark:border-sky-400/50 dark:bg-sky-950/25",
+        "ic-entity-details-card rounded-md border border-sky-400/70 bg-sky-50/50 p-3 dark:border-sky-400/50 dark:bg-sky-950/25",
         interCompanyViewOnlyAllowCopyClass
       )}
     >

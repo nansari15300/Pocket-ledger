@@ -5,9 +5,30 @@
  * permanent delete → SQLite row + Drive attachments + `plPermanentlyPurged` op (doosre devices).
  */
 
-import { Timestamp, deleteDoc, doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
+import {
+  Timestamp,
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 import { firestore, auth } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
+import type { Company } from "@/hooks/useCompany";
+import {
+  mirrorCollectionDocsToBrowserDbSilent,
+  notifyBrowserDbCollectionUpdated,
+} from "@/lib/localCompanyDocMirror";
+import { decryptFirestoreCompanyDocIfNeeded, type ServerBackupCryptoContext } from "@/lib/serverBackupEncryption";
+import { stampLocalMirrorBackedByFirestore } from "@/lib/localMirrorServerMeta";
 import { remotePathFromDriveFileRef, isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import type { DeletedItem } from "@/components/recycle-bin/RecycleBinItem";
 import {
@@ -15,7 +36,7 @@ import {
   getCompanyDocFromBrowserDb,
   listCompanyDocsFromBrowserDb,
 } from "@/lib/localCompanyDocMirror";
-import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { getLocalCompanyById, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { coerceDeletedAtToDate } from "@/lib/coerceDeletedAt";
 import { isLocalFileRef, removePendingFile } from "@/lib/localPendingFiles";
 import { writeEntity, type WriteEntityResult } from "@/lib/writeGateway";
@@ -39,13 +60,153 @@ export function recycleBinDeletedAt(): InstanceType<typeof Timestamp> | ReturnTy
   return isLocalOnlyMode() ? Timestamp.now() : serverTimestamp();
 }
 
+async function resolveRecycleBinCompanyIds(companyId: string): Promise<{ localId: string; fsId: string; reg: LocalCompanyDoc | null }> {
+  const localId = String(companyId || "").trim();
+  const reg = localId ? await getLocalCompanyById(localId, { includeDeleted: true }) : null;
+  const fsId =
+    String((reg as { authoritativeCompanyId?: string } | null)?.authoritativeCompanyId || localId).trim() ||
+    localId;
+  return { localId, fsId, reg };
+}
+
 /** Recycle bin list SQLite se bhi load karni hai (Firestore empty ho sakta hai local+Drive par). */
 export async function companyUsesSqliteRecycleBinSource(companyId: string): Promise<boolean> {
   const cid = String(companyId || "").trim();
   if (!cid) return false;
   if (isLocalOnlyMode()) return true;
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
-  return String((reg as { storageOption?: string } | null)?.storageOption || "").toLowerCase() === "local";
+  if (String((reg as { storageOption?: string } | null)?.storageOption || "").toLowerCase() === "local") {
+    return true;
+  }
+  // Static / EXE / APK: online company bhi SQLite mirror se bin — Firestore listener alone sync miss karta tha.
+  if (isEmbeddedOfflinePreloadClient() && reg && isCloudBackedCompanyShape(reg as Company)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Embedded online company: Firestore soft-deleted rows → SQLite mirror taaki recycle bin web jaisa dikhe.
+ */
+export async function syncOnlineRecycleBinFromFirestoreToSqlite(
+  companyId: string,
+  collections: RecycleBinCollectionMeta[]
+): Promise<void> {
+  const { localId, fsId, reg } = await resolveRecycleBinCompanyIds(companyId);
+  if (!localId || !fsId || !reg || !isEmbeddedOfflinePreloadClient()) return;
+  if (!isCloudBackedCompanyShape(reg as Company)) return;
+  if (typeof navigator !== "undefined" && !navigator.onLine) return;
+
+  const cryptoCtx: ServerBackupCryptoContext | null = reg.encryptServerBackupSalt
+    ? { encryptServerBackupSalt: reg.encryptServerBackupSalt }
+    : null;
+
+  for (const coll of collections) {
+    try {
+      const q = query(
+        collection(firestore, `companies/${fsId}/${coll.path}`),
+        where("isDeleted", "==", true)
+      );
+      const snap = await getDocs(q);
+      const rows: Record<string, unknown>[] = [];
+      for (const docSnap of snap.docs) {
+        const data = docSnap.data();
+        if (data.movedToAdminRecycleAt) continue;
+        const raw = { ...data, id: docSnap.id } as Record<string, unknown> & { id: string };
+        const decrypted = await decryptFirestoreCompanyDocIfNeeded(raw, cryptoCtx, localId);
+        if (!decrypted || (decrypted as { isDeleted?: unknown }).isDeleted !== true) continue;
+        rows.push(
+          stampLocalMirrorBackedByFirestore({ ...(decrypted as Record<string, unknown>), id: docSnap.id })
+        );
+      }
+      if (rows.length) {
+        await mirrorCollectionDocsToBrowserDbSilent(localId, coll.path, rows, {
+          cloudBackedOfflineCache: !isLocalOnlyMode(),
+        });
+        notifyBrowserDbCollectionUpdated(localId, coll.path, {
+          immediate: true,
+          source: "recycle_bin_firestore_pull",
+        });
+      }
+    } catch {
+      /* best effort per collection */
+    }
+  }
+}
+
+/** Live mirror: web se delete hote hi embedded SQLite bin refresh. */
+export function subscribeOnlineRecycleBinFirestoreToSqliteMirror(
+  companyId: string,
+  collections: RecycleBinCollectionMeta[],
+  onUpdated: () => void
+): () => void {
+  let cancelled = false;
+  let unsubs: Array<() => void> = [];
+
+  void (async () => {
+    if (cancelled || !isEmbeddedOfflinePreloadClient()) return;
+    if (!(await companyUsesSqliteRecycleBinSource(companyId))) return;
+    const { localId, fsId, reg } = await resolveRecycleBinCompanyIds(companyId);
+    if (cancelled || !localId || !fsId || !reg) return;
+
+    const cryptoCtx: ServerBackupCryptoContext | null = reg.encryptServerBackupSalt
+      ? { encryptServerBackupSalt: reg.encryptServerBackupSalt }
+      : null;
+
+    unsubs = collections.map((coll) => {
+      const q = query(
+        collection(firestore, `companies/${fsId}/${coll.path}`),
+        where("isDeleted", "==", true)
+      );
+      return onSnapshot(q, (snapshot) => {
+        void (async () => {
+          try {
+            const rows: Record<string, unknown>[] = [];
+            for (const docSnap of snapshot.docs) {
+              const data = docSnap.data();
+              if (data.movedToAdminRecycleAt) continue;
+              const raw = { ...data, id: docSnap.id } as Record<string, unknown> & { id: string };
+              const decrypted = await decryptFirestoreCompanyDocIfNeeded(raw, cryptoCtx, localId);
+              if (!decrypted || (decrypted as { isDeleted?: unknown }).isDeleted !== true) continue;
+              rows.push(
+                stampLocalMirrorBackedByFirestore({ ...(decrypted as Record<string, unknown>), id: docSnap.id })
+              );
+            }
+            if (rows.length) {
+              await mirrorCollectionDocsToBrowserDbSilent(localId, coll.path, rows, {
+                cloudBackedOfflineCache: !isLocalOnlyMode(),
+              });
+            }
+            notifyBrowserDbCollectionUpdated(localId, coll.path, {
+              immediate: true,
+              source: "recycle_bin_firestore_mirror",
+            });
+          } catch {
+            /* ignore */
+          } finally {
+            if (!cancelled) onUpdated();
+          }
+        })();
+      });
+    });
+  })();
+
+  return () => {
+    cancelled = true;
+    unsubs.forEach((u) => u());
+    unsubs = [];
+  };
+}
+
+/** SQLite bin rows — embedded online par pehle Firestore se mirror. */
+export async function loadDeletedSubdocsForRecycleBin(
+  companyId: string,
+  collections: RecycleBinCollectionMeta[]
+): Promise<DeletedItem[]> {
+  if (await companyUsesSqliteRecycleBinSource(companyId)) {
+    await syncOnlineRecycleBinFromFirestoreToSqlite(companyId, collections);
+  }
+  return listDeletedSubdocsFromSqlite(companyId, collections);
 }
 
 export type RecycleBinCollectionMeta = {
@@ -143,6 +304,14 @@ export async function softDeleteCompanySubdocToRecycleBin(
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   const fsId = String((reg as { authoritativeCompanyId?: string } | null)?.authoritativeCompanyId || cid).trim();
   void updateDoc(doc(firestore, `companies/${fsId}/${collectionName}`, id), patch).catch(() => {});
+  const { scheduleSystemOpeningBalanceReconcileAfterMasterLifecycle } = await import(
+    "@/lib/localCompanyDocMirror"
+  );
+  scheduleSystemOpeningBalanceReconcileAfterMasterLifecycle({
+    companyId: cid,
+    collectionName,
+    docId: id,
+  });
   return res;
 }
 
@@ -171,6 +340,14 @@ export async function restoreCompanySubdocFromRecycleBin(
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   const fsId = String((reg as { authoritativeCompanyId?: string } | null)?.authoritativeCompanyId || cid).trim();
   void updateDoc(doc(firestore, `companies/${fsId}/${collectionPath}`, id), patch).catch(() => {});
+  const { scheduleSystemOpeningBalanceReconcileAfterMasterLifecycle } = await import(
+    "@/lib/localCompanyDocMirror"
+  );
+  scheduleSystemOpeningBalanceReconcileAfterMasterLifecycle({
+    companyId: cid,
+    collectionName: collectionPath,
+    docId: id,
+  });
 }
 
 function collectFirebaseStoragePaths(data: Record<string, unknown>): string[] {

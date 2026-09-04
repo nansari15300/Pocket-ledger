@@ -146,11 +146,31 @@ const portalPdfMetaByCacheKey = new Map<string, PortalPdfRasterMeta>();
 
 function rememberPortalPdfMeta(urlKey: string, meta: PortalPdfRasterMeta | undefined): void {
   if (!meta || meta.pageCount <= 1 || meta.onePageHeightPx < 1) return;
-  portalPdfMetaByCacheKey.set(pdfPortalCacheKey(urlKey), meta);
+  const key = pdfPortalCacheKey(urlKey);
+  portalPdfMetaByCacheKey.set(key, meta);
+  try {
+    sessionStorage.setItem(`pl-portal-pdf-meta:${key}`, JSON.stringify(meta));
+  } catch {
+    /* ignore */
+  }
 }
 
 function peekPortalPdfMeta(urlKey: string): PortalPdfRasterMeta | undefined {
-  return portalPdfMetaByCacheKey.get(pdfPortalCacheKey(urlKey));
+  const key = pdfPortalCacheKey(urlKey);
+  const mem = portalPdfMetaByCacheKey.get(key);
+  if (mem) return mem;
+  try {
+    const raw = sessionStorage.getItem(`pl-portal-pdf-meta:${key}`);
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw) as PortalPdfRasterMeta;
+    if (parsed.pageCount > 1 && parsed.onePageHeightPx > 1) {
+      portalPdfMetaByCacheKey.set(key, parsed);
+      return parsed;
+    }
+  } catch {
+    /* ignore */
+  }
+  return undefined;
 }
 
 /** EXE/APK: pl-attachments / blob cache; web: online par HTTPS allowed. */
@@ -448,15 +468,42 @@ function PdfPortalRasterImg({
   onOpen: () => void;
   portalMeta?: PortalPdfRasterMeta | null;
 }) {
-  const multi = portalMeta && portalMeta.pageCount > 1 && portalMeta.onePageHeightPx > 1;
+  const [derivedMeta, setDerivedMeta] = React.useState<PortalPdfRasterMeta | null>(null);
+  const effectiveMeta = portalMeta ?? derivedMeta;
+  const multi = effectiveMeta && effectiveMeta.pageCount > 1 && effectiveMeta.onePageHeightPx > 1;
+
+  React.useEffect(() => {
+    if (!multi) return;
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+  }, [multi, effectiveMeta?.pageCount, effectiveMeta?.onePageHeightPx]);
+
+  const handleLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    if (!portalMeta && img.naturalWidth > 1 && img.naturalHeight > 1) {
+      const nw = img.naturalWidth;
+      const nh = img.naturalHeight;
+      const estPageH = nw * (297 / 210);
+      const pageRatio = nh / estPageH;
+      if (pageRatio >= 1.32) {
+        const pages = Math.max(2, Math.round(pageRatio));
+        setDerivedMeta({ pageCount: pages, onePageHeightPx: nh / pages });
+      }
+    }
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+  };
+
   return (
     // eslint-disable-next-line @next/next/no-img-element -- pdf.js portal raster
     <img
       data-pdf-portal-page="1"
       {...(multi
         ? {
-            "data-pdf-portal-pages": String(portalMeta!.pageCount),
-            "data-pdf-portal-one-page-h": String(Math.round(portalMeta!.onePageHeightPx)),
+            "data-pdf-portal-pages": String(effectiveMeta!.pageCount),
+            "data-pdf-portal-one-page-h": String(Math.round(effectiveMeta!.onePageHeightPx)),
           }
         : {})}
       src={src}
@@ -464,11 +511,7 @@ function PdfPortalRasterImg({
       draggable={false}
       className="block h-auto w-auto max-h-none max-w-none object-contain"
       loading="eager"
-      onLoad={() => {
-        requestAnimationFrame(() => {
-          window.dispatchEvent(new Event("resize"));
-        });
-      }}
+      onLoad={handleLoad}
       onDoubleClick={(e) => {
         e.stopPropagation();
         onOpen();

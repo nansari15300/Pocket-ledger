@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
-import { ArrowLeftRight, ChevronLeft, ChevronRight, Users } from "lucide-react";
+import { ArrowLeftRight, Users } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export type InterCompanyRibbonTab = "voucher" | "join";
 
@@ -15,11 +15,11 @@ const ITEMS: {
   { id: "join", title: "Inter Com System", icon: Users },
 ];
 
-/** localStorage — ribbon collapsed preference (icons-only sidebar) */
-const RIBBON_COLLAPSED_STORAGE_KEY = "interCompanyRibbonCollapsed";
-
 /** Last save popup pay-mode — next save pe default tick */
 export const IC_PAY_MODE_STORAGE_KEY = "interCompanyLastPayMode";
+
+/** Simple view — company / account rows me kam fields */
+export const IC_SIMPLE_VIEW_STORAGE_KEY = "interCompanySimpleView";
 
 export type InterCompanyPayModeChoice = "account_to_account" | "company_to_company";
 
@@ -31,118 +31,79 @@ type Props = {
   /** Edit: account fields differ from last saved — show under Voucher */
   changeDetected?: boolean;
   onChangeDetectedClick?: () => void;
+  /** Voucher tab — simple view toggle (default on) */
+  simpleView?: boolean;
+  onSimpleViewChange?: (enabled: boolean) => void;
 };
 
-/** Left ribbon — Voucher / Inter Com System; collapse par sirf icon */
+/** Top tabs — Voucher / Inter Com System; Simple view tick (voucher tab) */
 export function InterCompanyRibbonNav({
   active,
   onChange,
   pendingSystemJoinCount = 0,
   changeDetected = false,
   onChangeDetectedClick,
+  simpleView = true,
+  onSimpleViewChange,
 }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
-
-  useEffect(() => {
-    try {
-      if (localStorage.getItem(RIBBON_COLLAPSED_STORAGE_KEY) === "1") setCollapsed(true);
-    } catch {
-      /* private mode */
-    }
-  }, []);
-
-  const toggleCollapsed = useCallback(() => {
-    setCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(RIBBON_COLLAPSED_STORAGE_KEY, next ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  }, []);
-
   return (
-    <nav
-      className={cn(
-        "app-chrome-sidebar-ribbon pl-dashboard-ribbon-sky flex h-full min-h-0 shrink-0 flex-col gap-1 self-stretch rounded-lg border border-black shadow-sm dark:border-black",
-        collapsed ? "w-[3.25rem] p-1.5" : "w-full min-w-[11.5rem] p-2"
-      )}
+    <div
+      className="flex flex-wrap items-center gap-2 border-b border-black/15 pb-2 dark:border-white/15"
       aria-label="Inter company sections"
     >
-      <button
-        type="button"
-        onClick={toggleCollapsed}
-        className={cn(
-          "flex w-full items-center rounded-md border border-black text-muted-foreground transition-colors hover:bg-muted/30",
-          collapsed ? "justify-center px-0 py-2" : "gap-2 px-3 py-1.5 text-left text-xs"
-        )}
-        aria-expanded={!collapsed}
-        aria-label={collapsed ? "Show sidebar labels" : "Hide sidebar labels"}
-        title={collapsed ? "Show labels" : "Hide labels"}
-      >
-        {collapsed ? (
-          <ChevronRight className="h-4 w-4 shrink-0" aria-hidden />
-        ) : (
-          <>
-            <ChevronLeft className="h-4 w-4 shrink-0" aria-hidden />
-            <span className="truncate">Hide</span>
-          </>
-        )}
-      </button>
+      <nav className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+        {ITEMS.map(({ id, title, icon: Icon }) => {
+          const isActive = active === id;
+          const badge = id === "join" && pendingSystemJoinCount > 0 ? pendingSystemJoinCount : null;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onChange(id)}
+              className={cn(
+                "relative inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition-colors",
+                isActive
+                  ? "border-black bg-secondary font-medium shadow-sm dark:border-white/30"
+                  : "border-black/40 hover:bg-muted/30 dark:border-white/20"
+              )}
+            >
+              <Icon className="h-4 w-4 shrink-0 opacity-80" />
+              <span className="truncate">{title}</span>
+              {badge != null ? (
+                <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-destructive px-1.5 text-[10px] font-bold text-destructive-foreground">
+                  {badge > 99 ? "99+" : badge}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
 
-      {ITEMS.map(({ id, title, icon: Icon }) => {
-        const isActive = active === id;
-        const badge = id === "join" && pendingSystemJoinCount > 0 ? pendingSystemJoinCount : null;
-        return (
+        {changeDetected ? (
           <button
-            key={id}
             type="button"
-            onClick={() => onChange(id)}
-            title={collapsed ? title : undefined}
-            aria-label={collapsed ? title : undefined}
-            className={cn(
-              "relative flex w-full items-center rounded-md border text-sm transition-colors",
-              collapsed ? "justify-center px-0 py-2.5" : "gap-2 px-3 py-2 text-left",
-              isActive
-                ? "border-black bg-secondary font-medium shadow-sm"
-                : "border-black hover:bg-muted/30"
-            )}
+            onClick={() => onChangeDetectedClick?.()}
+            className="ml-1 rounded-md border border-blue-700/50 bg-blue-100 px-2.5 py-1.5 text-[11px] font-semibold leading-snug text-blue-950 transition-colors hover:bg-blue-200/80 dark:border-blue-500/40 dark:bg-blue-900/50 dark:text-blue-50 dark:hover:bg-blue-900/70"
+            title="Compare and apply peer changes"
+            aria-label="Change Detected — compare and apply"
           >
-            <Icon className="h-4 w-4 shrink-0 opacity-80" />
-            {!collapsed ? (
-              <>
-                <span className="min-w-0 flex-1 truncate">{title}</span>
-                {badge != null ? (
-                  <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-destructive px-1.5 text-[10px] font-bold text-destructive-foreground">
-                    {badge > 99 ? "99+" : badge}
-                  </span>
-                ) : null}
-              </>
-            ) : badge != null ? (
-              <span className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">
-                {badge > 9 ? "9+" : badge}
-              </span>
-            ) : null}
+            Change Detected
           </button>
-        );
-      })}
+        ) : null}
+      </nav>
 
-      {changeDetected ? (
-        <button
-          type="button"
-          onClick={() => onChangeDetectedClick?.()}
-          className={cn(
-            "mt-auto rounded-md border border-blue-700/50 bg-blue-100 px-2 py-1.5 text-left text-[10px] font-semibold leading-snug text-blue-950 transition-colors hover:bg-blue-200/80 dark:border-blue-500/40 dark:bg-blue-900/50 dark:text-blue-50 dark:hover:bg-blue-900/70",
-            collapsed && "px-1 text-center text-[9px]"
-          )}
-          title="Compare and apply peer changes"
-          aria-label="Change Detected — compare and apply"
+      {active === "voucher" && onSimpleViewChange ? (
+        <label
+          htmlFor="ic-simple-view"
+          className="inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-md border border-black/40 bg-background px-2.5 py-1.5 text-xs font-medium dark:border-white/20"
         >
-          {collapsed ? "Δ" : "Change Detected"}
-        </button>
+          <Checkbox
+            id="ic-simple-view"
+            checked={simpleView}
+            onCheckedChange={(v) => onSimpleViewChange(v === true)}
+          />
+          <span>Simple view</span>
+        </label>
       ) : null}
-    </nav>
+    </div>
   );
 }

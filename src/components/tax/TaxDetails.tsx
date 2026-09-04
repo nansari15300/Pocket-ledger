@@ -3,7 +3,7 @@
 
 import * as React from "react";
 import { toast } from "sonner";
-import { openPrintDirect } from "@/lib/printDirect";
+import { openPrintDirect, getPdfBlob } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import { Button } from "@/components/ui/button";
@@ -91,6 +91,8 @@ import { EditTaxDialog } from "./EditTaxDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
 import { useMasterAccountFreezeDetailsChrome } from "@/hooks/useMasterAccountFreezeDetailsChrome";
+import { useLedgerConfirmationSendPill } from "@/hooks/useLedgerConfirmationSendPill";
+import { ledgerConfirmationPrintVisibleColumns } from "@/lib/reports/ledgerConfirmationShare";
 import { TAX_FREEZE_COLLECTION } from "@/lib/masterAccountFreeze/freezeAdapter";
 import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
@@ -235,6 +237,7 @@ export function TaxDetails({
   });
 
   const taxFreezeEligible = Boolean(tax?.id) && tax.id !== "all";
+  const buildStatementPdfRef = React.useRef<(() => Promise<Blob | null>) | null>(null);
   const taxAdjustBalanceActions = tax && taxFreezeEligible ? (
     <AddVoucherDialog
       defaultTab="adjustment"
@@ -256,6 +259,17 @@ export function TaxDetails({
     </AddVoucherDialog>
   ) : null;
 
+  const confirmationSendPill = useLedgerConfirmationSendPill({
+    entity: tax ?? { id: "", name: "", rate: 0, balance: 0, companyId: "", debit: 0, credit: 0 },
+    collection: "taxes",
+    eligible: taxFreezeEligible,
+    onEntityUpdated: handleTaxUpdated,
+    buildStatementPdfBlob: React.useCallback(async () => {
+      if (!buildStatementPdfRef.current) return null;
+      return buildStatementPdfRef.current();
+    }, []),
+  });
+
   const {
     freezeOverlay: taxFreezeOverlay,
     closingBalanceActions: taxClosingBalanceActions,
@@ -267,6 +281,7 @@ export function TaxDetails({
     entityEligible: taxFreezeEligible,
     onEntityUpdated: handleTaxUpdated,
     adjustBalanceActions: taxAdjustBalanceActions,
+    prependClosingBalanceActions: confirmationSendPill,
   });
 
   const taxHeaderAttachmentUrl = useMemo(
@@ -676,7 +691,7 @@ export function TaxDetails({
           periodCrForPage: desktopPaginationMeta.periodCrForPage,
           closingForPage: desktopPaginationMeta.closingForPage,
           booksOpeningBalance: Number((tax as any).openingBalance) || 0,
-          ledgerShowBookOpeningRow: currentPage === 1,
+          ledgerShowBookOpeningRow: rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0,
           ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
           openingBalancePeriodStartDate: dateRange?.from,
           masterOpeningBalanceDate: (tax as any).openingBalanceDate,
@@ -686,6 +701,67 @@ export function TaxDetails({
       true
     );
   };
+
+  const buildStatementPdfBlob = React.useCallback(async () => {
+    if (!company || !tax) return null;
+    const printVisibleColumns = ledgerConfirmationPrintVisibleColumns(visibleColumns);
+    const payload = applyLedgerPageToPrintPayload(
+      {
+        company: {
+          name: company.name,
+          pan: company.pan,
+          phone: company.phone,
+          address: company.address,
+          decimalPlaces: company.decimalPlaces,
+          showDrCr: company.showDrCr,
+          showCurrencySymbol: company.showCurrencySymbol,
+          logoUrl: company.logoUrl,
+        },
+        title: `Tax Statement: ${tax.name}`,
+        context: "tax",
+        contextId: tax.id,
+        dateSystem: dateSystem,
+        dateRangeText: buildDateRangeText(),
+        vouchersCount: paginatedTransactions.length,
+        openingBalance: desktopPaginationMeta.openingForPage,
+        openingBalanceDate: (tax as any).openingBalanceDate,
+        openingBalanceNarration: tax.openingBalanceNarration ?? null,
+        transactions: paginatedTransactions,
+        showNarration: showNarration,
+        includeNotes: includeNotesInTable,
+        visibleColumns: printVisibleColumns,
+        billWise: false,
+      },
+      {
+        paginatedTransactions,
+        openingForPage: desktopPaginationMeta.openingForPage,
+        periodDrForPage: desktopPaginationMeta.periodDrForPage,
+        periodCrForPage: desktopPaginationMeta.periodCrForPage,
+        closingForPage: desktopPaginationMeta.closingForPage,
+        booksOpeningBalance: Number((tax as any).openingBalance) || 0,
+        ledgerShowBookOpeningRow: rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0,
+        ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
+        openingBalancePeriodStartDate: dateRange?.from,
+        masterOpeningBalanceDate: (tax as any).openingBalanceDate,
+        dateRange,
+      }
+    );
+    return getPdfBlob(payload);
+  }, [
+    company,
+    tax,
+    visibleColumns,
+    dateSystem,
+    paginatedTransactions,
+    desktopPaginationMeta,
+    showNarration,
+    includeNotesInTable,
+    rowsPerPage,
+    dateRange,
+    buildDateRangeText,
+  ]);
+
+  buildStatementPdfRef.current = buildStatementPdfBlob;
 
   const handlePrint = () => {
     setTimeout(async () => {
@@ -892,7 +968,7 @@ export function TaxDetails({
               openingBalance={desktopPaginationMeta.openingForPage}
               booksOpeningBalance={masterTaxOpening}
               ledgerDateFilterActive={hasLedgerDateFilter}
-              ledgerShowBookOpeningRow={currentPage === 1}
+              ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0}
               openingBalancePeriodStartDate={dateRange?.from}
               dateRange={dateRange}
               openingBalanceOutstanding={openingBalanceOutstanding}
@@ -1350,7 +1426,7 @@ export function TaxDetails({
                   openingBalance={desktopPaginationMeta.openingForPage}
                   booksOpeningBalance={masterTaxOpening}
                   ledgerDateFilterActive={hasLedgerDateFilter}
-                  ledgerShowBookOpeningRow={currentPage === 1}
+                  ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0}
                   openingBalancePeriodStartDate={dateRange?.from}
                   dateRange={dateRange}
                   openingBalanceOutstanding={openingBalanceOutstanding}
@@ -1400,7 +1476,7 @@ export function TaxDetails({
               <LedgerFooterCheckboxPill
                 id="show-narration-tax"
                 checked={showNarration}
-                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
               <LedgerFooterColumnsMenu>

@@ -8,7 +8,10 @@
   <link rel="stylesheet" href="../styles.css" />
   <link rel="stylesheet" href="../css/website-settings.css" />
   <style>
-    .admin-card { max-width: 44rem; }
+    .admin-card {
+      max-width: none;
+      width: min(1200px, calc(100% - 2rem));
+    }
     .row { margin: 0.85rem 0; }
     .row label { display: block; font-weight: 700; margin-bottom: 0.35rem; }
     .status { margin-top: 1rem; font-size: 0.95rem; }
@@ -44,16 +47,6 @@
     }
     .add-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .add-row input { flex: 1; min-width: 12rem; }
-    .platform-tabs {
-      display: flex;
-      gap: 0.35rem;
-      margin: 0.75rem 0 0;
-    }
-    .platform-tabs .btn.is-active {
-      background: var(--ink);
-      color: #fff;
-      border-color: var(--ink);
-    }
     .settings-grid {
       display: grid;
       gap: 0.75rem;
@@ -61,6 +54,136 @@
     }
     @media (min-width: 36rem) {
       .settings-grid { grid-template-columns: 1fr 1fr; }
+    }
+    .release-tables-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+    @media (max-width: 920px) {
+      .release-tables-grid { grid-template-columns: 1fr; }
+    }
+    .release-table-panel { min-width: 0; }
+    .release-table-head {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin-bottom: 0.55rem;
+    }
+    .release-table-title {
+      margin: 0;
+      font-size: 0.95rem;
+      font-weight: 800;
+    }
+    .release-info-btn {
+      position: relative;
+      flex: 0 0 auto;
+      width: 1.2rem;
+      height: 1.2rem;
+      border-radius: 50%;
+      border: 1px solid #c7d2e0;
+      background: #fff;
+      color: #64748b;
+      font-size: 0.78rem;
+      font-weight: 800;
+      font-style: italic;
+      font-family: Georgia, "Times New Roman", serif;
+      line-height: 1;
+      padding: 0;
+      cursor: help;
+    }
+    .release-info-btn:hover,
+    .release-info-btn:focus-visible {
+      border-color: #94a3b8;
+      color: #334155;
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.15);
+    }
+    .release-info-tip {
+      display: none;
+      position: absolute;
+      left: 50%;
+      top: calc(100% + 0.45rem);
+      transform: translateX(-50%);
+      z-index: 20;
+      width: max-content;
+      max-width: min(18rem, 70vw);
+      padding: 0.55rem 0.65rem;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-style: normal;
+      font-weight: 500;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      line-height: 1.45;
+      text-align: left;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+      pointer-events: none;
+    }
+    .release-info-btn:hover .release-info-tip,
+    .release-info-btn:focus-visible .release-info-tip {
+      display: block;
+    }
+    .release-table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+    .release-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+    }
+    .release-table th,
+    .release-table td {
+      padding: 0.55rem 0.65rem;
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      vertical-align: middle;
+    }
+    .release-table th {
+      background: var(--paper);
+      font-weight: 700;
+      font-size: 0.8rem;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .release-table tr:last-child td { border-bottom: 0; }
+    .release-table .col-action { width: 1%; white-space: nowrap; text-align: right; }
+    .release-table-empty {
+      margin: 0.5rem 0 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    .release-form-table input[type="file"],
+    .release-form-table input[type="text"],
+    .release-form-table input[type="url"],
+    .release-form-table input[type="date"] {
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    .release-form-table th {
+      width: 30%;
+      vertical-align: middle;
+    }
+    .release-form-table td {
+      width: 70%;
+    }
+    .release-upload-date {
+      margin: 0.85rem 0 0;
+    }
+    .release-actions-row {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
     }
     .release-confirm-modal {
       position: fixed;
@@ -161,76 +284,204 @@
               Upload target: Firebase Storage → public-releases/
             </div>
 
-            <div class="row">
-              <label for="dateField">Date folder</label>
-              <input id="dateField" type="date" />
+            <h3 style="margin:0.85rem 0 0.35rem;font-size:1rem">Upload new build</h3>
+            <div class="release-upload-date settings-grid">
+              <div class="row" style="margin:0">
+                <label for="dateField">Date folder (shared)</label>
+                <input id="dateField" type="date" />
+              </div>
             </div>
-            <div class="row">
-              <label for="exeFile">Windows EXE</label>
-              <input id="exeFile" type="file" accept=".exe" />
+            <div class="release-tables-grid">
+              <div class="release-table-panel">
+                <h4 class="release-table-title">EXE (Windows)</h4>
+                <div class="release-table-wrap">
+                  <table class="release-table release-form-table">
+                    <tbody>
+                      <tr>
+                        <th><label for="exeFile">File</label></th>
+                        <td><input id="exeFile" type="file" accept=".exe" /></td>
+                      </tr>
+                      <tr>
+                        <th><label for="windowsVersion">Version</label></th>
+                        <td>
+                          <input id="windowsVersion" type="text" inputmode="decimal" placeholder="e.g. 1.1.15" />
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="release-table-panel">
+                <h4 class="release-table-title">APK (Android)</h4>
+                <div class="release-table-wrap">
+                  <table class="release-table release-form-table">
+                    <tbody>
+                      <tr>
+                        <th><label for="apkFile">File</label></th>
+                        <td>
+                          <input id="apkFile" type="file" accept=".apk,application/vnd.android.package-archive" />
+                        </td>
+                      </tr>
+                      <tr>
+                        <th><label for="androidVersion">Version</label></th>
+                        <td>
+                          <input id="androidVersion" type="text" inputmode="decimal" placeholder="e.g. 1.1.15" />
+                        </td>
+                      </tr>
+                      <tr>
+                        <th><label for="playStoreUrl">Play Store</label></th>
+                        <td>
+                          <input
+                            id="playStoreUrl"
+                            type="url"
+                            placeholder="https://play.google.com/store/apps/details?id=…"
+                          />
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-            <div class="row">
-              <label for="windowsVersion">Windows version</label>
-              <input id="windowsVersion" type="text" inputmode="decimal" placeholder="e.g. 1.0.1" />
+            <div class="release-actions-row">
+              <button type="button" class="btn btn-primary" id="publishBtn">Upload to Firebase Storage</button>
             </div>
-            <div class="row">
-              <label for="apkFile">Android APK (phone install)</label>
-              <input id="apkFile" type="file" accept=".apk,application/vnd.android.package-archive" />
-            </div>
-            <div class="row">
-              <label for="androidVersion">Android version</label>
-              <input id="androidVersion" type="text" inputmode="decimal" placeholder="e.g. 1.0.1" />
-            </div>
-            <div class="row">
-              <label for="playStoreUrl">Google Play Store link (optional)</label>
-              <input id="playStoreUrl" type="url" placeholder="https://play.google.com/store/apps/details?id=…" style="width:100%" />
-            </div>
-            <button type="button" class="btn btn-primary" id="publishBtn">Upload to Firebase Storage</button>
             <progress id="progress" max="100" value="0" hidden></progress>
 
             <hr style="margin:1.5rem 0;border:0;border-top:1px solid var(--line)" />
 
             <h3 style="margin:0 0 0.35rem;font-size:1rem">Downloads list (user-visible)</h3>
-            <p id="visibleListHint" style="margin:0;color:var(--muted);font-size:0.88rem"></p>
-            <div class="row" style="margin:0.75rem 0 0">
-              <label for="downloadsMaxOld">Older builds in Downloads dropdown</label>
-              <input id="downloadsMaxOld" type="number" min="0" max="20" step="1" />
+            <div class="settings-grid" style="margin-top:0.75rem">
+              <div class="row" style="margin:0">
+                <label for="downloadsMaxOldExe">Older EXE builds in Downloads dropdown</label>
+                <input id="downloadsMaxOldExe" type="number" min="0" max="20" step="1" />
+              </div>
+              <div class="row" style="margin:0">
+                <label for="downloadsMaxOldApk">Older APK builds in Downloads dropdown</label>
+                <input id="downloadsMaxOldApk" type="number" min="0" max="20" step="1" />
+              </div>
             </div>
-            <button type="button" class="btn btn-outline btn-sm" id="saveDownloadsSettingsBtn" style="margin-top:0.5rem">Save downloads setting</button>
-            <div class="platform-tabs" role="tablist" aria-label="Platform">
-              <button type="button" class="btn btn-outline btn-sm is-active" id="tabExe" role="tab" aria-selected="true">EXE</button>
-              <button type="button" class="btn btn-outline btn-sm" id="tabApk" role="tab" aria-selected="false">APK</button>
+            <div class="release-tables-grid">
+              <div class="release-table-panel">
+                <div class="release-table-head">
+                  <h4 class="release-table-title">EXE (Windows)</h4>
+                  <button type="button" class="release-info-btn" aria-label="EXE downloads info">
+                    <span aria-hidden="true">i</span>
+                    <span id="visibleListHintExe" class="release-info-tip" role="tooltip"></span>
+                  </button>
+                </div>
+                <div class="release-table-wrap">
+                  <table class="release-table">
+                    <thead>
+                      <tr>
+                        <th>Role</th>
+                        <th>Version</th>
+                        <th>Date</th>
+                        <th>File</th>
+                        <th class="col-action"></th>
+                      </tr>
+                    </thead>
+                    <tbody id="visibleReleaseTableExe"></tbody>
+                  </table>
+                </div>
+                <p id="visibleReleaseEmptyExe" class="release-table-empty" hidden>No EXE published yet.</p>
+              </div>
+              <div class="release-table-panel">
+                <div class="release-table-head">
+                  <h4 class="release-table-title">APK (Android)</h4>
+                  <button type="button" class="release-info-btn" aria-label="APK downloads info">
+                    <span aria-hidden="true">i</span>
+                    <span id="visibleListHintApk" class="release-info-tip" role="tooltip"></span>
+                  </button>
+                </div>
+                <div class="release-table-wrap">
+                  <table class="release-table">
+                    <thead>
+                      <tr>
+                        <th>Role</th>
+                        <th>Version</th>
+                        <th>Date</th>
+                        <th>File</th>
+                        <th class="col-action"></th>
+                      </tr>
+                    </thead>
+                    <tbody id="visibleReleaseTableApk"></tbody>
+                  </table>
+                </div>
+                <p id="visibleReleaseEmptyApk" class="release-table-empty" hidden>No APK published yet.</p>
+              </div>
             </div>
-            <ul class="admin-list" id="visibleReleaseList"></ul>
-            <p id="visibleReleaseEmpty" style="margin:0.5rem 0 0;color:var(--muted);font-size:0.88rem" hidden>
-              No published build yet for this platform.
-            </p>
+            <div class="release-actions-row">
+              <button type="button" class="btn btn-outline btn-sm" id="saveDownloadsSettingsBtn">Save downloads setting</button>
+            </div>
 
             <hr style="margin:1.5rem 0;border:0;border-top:1px solid var(--line)" />
 
             <h3 style="margin:0 0 0.35rem;font-size:1rem">Hidden / outdated releases</h3>
-            <p id="outdatedListHint" style="margin:0;color:var(--muted);font-size:0.88rem"></p>
             <div class="settings-grid" style="margin-top:0.75rem">
               <div class="row" style="margin:0">
-                <label for="outdatedPolicy">Hidden / outdated builds</label>
-                <select id="outdatedPolicy">
-                  <option value="keep">Keep in admin list</option>
-                  <option value="auto_delete">Auto-delete from Storage</option>
-                </select>
-              </div>
-              <div class="row" id="outdatedMaxKeepRow" style="margin:0">
                 <label for="outdatedMaxKeep">Max hidden builds to keep (0 = no limit)</label>
                 <input id="outdatedMaxKeep" type="number" min="0" max="100" step="1" />
               </div>
             </div>
-            <button type="button" class="btn btn-outline btn-sm" id="saveSettingsBtn" style="margin-top:0.5rem">Save hidden settings</button>
-            <button type="button" class="btn btn-outline btn-sm btn-danger" id="deleteAllOutdatedBtn" style="margin-top:0.65rem">
-              Delete all outdated
-            </button>
-            <ul class="admin-list" id="outdatedList"></ul>
-            <p id="outdatedEmpty" style="margin:0.5rem 0 0;color:var(--muted);font-size:0.88rem" hidden>
-              No outdated builds yet for this platform.
-            </p>
+            <select id="outdatedPolicy" hidden aria-hidden="true">
+              <option value="keep" selected>Keep in admin list</option>
+              <option value="auto_delete">Auto-delete from Storage</option>
+            </select>
+            <div class="release-tables-grid">
+              <div class="release-table-panel">
+                <div class="release-table-head">
+                  <h4 class="release-table-title">EXE (Windows)</h4>
+                  <button type="button" class="release-info-btn" aria-label="Hidden EXE info">
+                    <span aria-hidden="true">i</span>
+                    <span id="outdatedListHintExe" class="release-info-tip" role="tooltip"></span>
+                  </button>
+                </div>
+                <div class="release-table-wrap">
+                  <table class="release-table">
+                    <thead>
+                      <tr>
+                        <th>Version</th>
+                        <th>Date</th>
+                        <th>File</th>
+                        <th class="col-action"></th>
+                      </tr>
+                    </thead>
+                    <tbody id="outdatedTableExe"></tbody>
+                  </table>
+                </div>
+                <p id="outdatedEmptyExe" class="release-table-empty" hidden>No outdated EXE builds.</p>
+              </div>
+              <div class="release-table-panel">
+                <div class="release-table-head">
+                  <h4 class="release-table-title">APK (Android)</h4>
+                  <button type="button" class="release-info-btn" aria-label="Hidden APK info">
+                    <span aria-hidden="true">i</span>
+                    <span id="outdatedListHintApk" class="release-info-tip" role="tooltip"></span>
+                  </button>
+                </div>
+                <div class="release-table-wrap">
+                  <table class="release-table">
+                    <thead>
+                      <tr>
+                        <th>Version</th>
+                        <th>Date</th>
+                        <th>File</th>
+                        <th class="col-action"></th>
+                      </tr>
+                    </thead>
+                    <tbody id="outdatedTableApk"></tbody>
+                  </table>
+                </div>
+                <p id="outdatedEmptyApk" class="release-table-empty" hidden>No outdated APK builds.</p>
+              </div>
+            </div>
+            <div class="release-actions-row">
+              <button type="button" class="btn btn-outline btn-sm btn-danger" id="deleteAllOutdatedBtn">
+                Delete all outdated
+              </button>
+              <button type="button" class="btn btn-outline btn-sm" id="saveSettingsBtn">Save hidden settings</button>
+            </div>
 
             <hr style="margin:1.5rem 0;border:0;border-top:1px solid var(--line)" />
 

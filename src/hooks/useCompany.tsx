@@ -1634,7 +1634,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
               : sharedOnlyMirrorIds.has(norm.id)
                 ? false
                 : resolveCompanyIsOwnedForUser(norm, shareUser);
-            companyById.set(norm.id, stampCloudMirrorRow(norm, cloudOwned));
+            // Static EXE/APK: Firestore pull pehle companyById me aata hai — sirf SQLite norm mat chipkao
+            // (warna web par save hui permissionConfig / sharedWith EXE par stale rehti thi).
+            const fromMirror = companyById.get(norm.id);
+            const mergedCloudLinked = fromMirror
+              ? mergeOnlineCompanyWithLocalPlanOverlay(fromMirror, norm)
+              : norm;
+            companyById.set(norm.id, stampCloudMirrorRow(mergedCloudLinked, cloudOwned));
             continue;
           }
           const isOwnerLocalBackup =

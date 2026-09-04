@@ -117,8 +117,8 @@ export async function initializeCompanyData(companyId: string, userId: string) {
     
     // For Staff Menu
     { col: "staff_groups", id: "loans_liabilities", name: "Loans & Liabilities", type: "Liability", parentId: "liabilities", isSystemReserved: true, isReportOnly: false },
+    { col: "staff_groups", id: "staff_system", name: "Staff", type: "General", parentId: "loans_liabilities", isSystemReserved: true, isReportOnly: false },
     // Auto-created Ungrouped buckets (kept hidden in UI lists unless real ungrouped records exist).
-    { col: "groups", id: "ungrouped_party", name: "Ungrouped", type: "General", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
     { col: "staff_groups", id: "ungrouped_staff", name: "Ungrouped", type: "General", parentId: "loans_liabilities", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
     { col: "tax_groups", id: "ungrouped_tax", name: "Ungrouped", type: "General", parentId: "duties_taxes", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
     { col: "account_groups", id: "ungrouped_account", name: "Ungrouped", type: "General", parentId: "bank_accounts_group", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
@@ -207,74 +207,21 @@ export async function initializeCompanyData(companyId: string, userId: string) {
 }
 
 /**
- * Automatically balance opening balance changes with Capital Account (Opening Balance ledger)
- * This maintains double-entry bookkeeping: when any account has opening balance, 
- * Capital Account's Opening Balance ledger gets the opposite entry
+ * Automatically reconcile System Opening Balance (Equity) from current master opening balances.
+ * Legacy incremental API — old/new per-master deltas are ignored.
  */
 export async function balanceOpeningBalanceWithCapital(
   companyId: string,
-  accountCollection: 'parties' | 'bank_accounts' | 'staff' | 'taxes' | 'expense_accounts',
-  accountId: string,
-  oldOpeningBalance: number,
-  newOpeningBalance: number
+  _accountCollection?: 'parties' | 'bank_accounts' | 'staff' | 'taxes' | 'expense_accounts',
+  _accountId?: string,
+  _oldOpeningBalance?: number,
+  _newOpeningBalance?: number
 ) {
-  try {
-    if (!companyId) throw new Error("Company ID is missing");
-    
-    const difference = newOpeningBalance - oldOpeningBalance;
-    if (Math.abs(difference) < 0.01) return { success: true }; // No change
-    
-    // Get Capital Account's Opening Balance ledger
-    const capitalOpeningBalanceRef = doc(firestore, `companies/${companyId}/parties`, 'opening_balance_ledger');
-    const capitalOpeningBalanceSnap = await getDoc(capitalOpeningBalanceRef);
-    
-    let currentCapitalOB = 0;
-    
-    if (!capitalOpeningBalanceSnap.exists()) {
-      // Create it if it doesn't exist (for existing companies)
-      const companySnap = await getDoc(doc(firestore, 'companies', companyId));
-      await setDoc(capitalOpeningBalanceRef, {
-        name: "Opening Balance",
-        groupId: "equity",
-        openingBalance: 0,
-        openingBalanceDate: null,
-        companyId,
-        ownerId: companySnap.data()?.ownerId || '',
-        isDeleted: false,
-        isSystemReserved: true,
-        isSystemAccount: true,
-        createdAt: serverTimestamp(),
-        balance: 0,
-        debit: 0,
-        credit: 0,
-      });
-      currentCapitalOB = 0;
-    } else {
-      currentCapitalOB = capitalOpeningBalanceSnap.data()?.openingBalance || 0;
-    }
-    
-    // Update Capital Account's Opening Balance ledger
-    // If account opening balance increased (more DR), Capital should decrease (more CR)
-    // If account opening balance decreased (less DR), Capital should increase (less CR)
-    // So we subtract the difference
-    const newCapitalOB = currentCapitalOB - difference;
-    
-    // Calculate debit and credit from balance
-    const capitalDebit = newCapitalOB > 0 ? newCapitalOB : 0;
-    const capitalCredit = newCapitalOB < 0 ? Math.abs(newCapitalOB) : 0;
-    
-    await updateDoc(capitalOpeningBalanceRef, {
-      openingBalance: newCapitalOB,
-      balance: newCapitalOB,
-      debit: capitalDebit,
-      credit: capitalCredit,
-    });
-    
-    return { success: true };
-  } catch (error: any) {
-    console.error("Error balancing opening balance with capital:", error);
-    return { success: false, error: error.message };
-  }
+  const { reconcileSystemOpeningBalanceLedger } = await import(
+    '@/lib/reports/systemOpeningBalanceEquityClient'
+  );
+  const result = await reconcileSystemOpeningBalanceLedger(companyId, { apply: true });
+  return { success: result.success, error: result.error };
 }
 
 

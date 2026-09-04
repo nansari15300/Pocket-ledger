@@ -12,6 +12,7 @@ export type ExpenseAccount = {
     fileUrl?: string;
     documentFileUrls?: string[];
     phone?: string;
+    whatsapp?: boolean;
     isDeleted?: boolean;
     isFrozen?: boolean;
     freezeMessage?: string | null;

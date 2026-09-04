@@ -4,7 +4,11 @@
 import * as React from "react";
 import { openPrintDirect } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
+import { resolveGroupBooksOpeningBalance } from "@/lib/ledgerOpeningBalanceDisplay";
 import type { Tax, TaxGroup } from "@/components/tax/types";
+import { filterMembersByMasterGroupScope } from "@/lib/masterGroupMemberScope";
+import { TAX_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { isMasterEntitySystemGroupId, resolveTaxListGroupBucketId } from "@/lib/masterEntitySystemGroups";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Edit, Printer, Users, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, Receipt, ChevronDown, Columns3, Pencil } from "lucide-react";
@@ -108,6 +112,9 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { EditTaxDialog } from "./EditTaxDialog";
+import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
+import { useGroupMemberAccountLedgerChrome } from "@/hooks/useGroupMemberAccountLedgerChrome";
+import { TAX_FREEZE_COLLECTION } from "@/lib/masterAccountFreeze/freezeAdapter";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -163,13 +170,18 @@ export function TaxGroupDetails({
     () => ({ ...journalAccountNames, ...(userNames ?? {}) }),
     [journalAccountNames, userNames]
   );
+  const isSystemBranchGroup = isMasterEntitySystemGroupId(TAX_ENTITY_GROUP_PRESET, group.id);
   const taxesInGroup = useMemo(() => {
-    if (group.id === "ungrouped") {
-      // Ungrouped should include both empty groupId and persisted ungrouped id rows.
-      return taxes.filter((t) => !t.groupId || t.groupId === "ungrouped_tax");
-    }
-    return taxes.filter((t) => t.groupId === group.id);
-  }, [taxes, group.id]);
+    if (taxes.length > 0) return taxes;
+    return filterMembersByMasterGroupScope<Tax>(
+      group.id,
+      processedTaxes,
+      allGroups,
+      resolveTaxListGroupBucketId,
+      (id) => isMasterEntitySystemGroupId(TAX_ENTITY_GROUP_PRESET, id),
+      (tax, branchId) => resolveTaxListGroupBucketId(tax) === branchId
+    );
+  }, [taxes, group.id, allGroups, processedTaxes]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
 
   const selectedMemberTax = useMemo(() => {
@@ -181,6 +193,15 @@ export function TaxGroupDetails({
     () => trimEntityFileUrlForPreview(selectedMemberTax?.fileUrl),
     [selectedMemberTax?.fileUrl, selectedMemberTax?.id]
   );
+
+  const { memberFreezeOverlay, memberClosingBalanceActions } = useGroupMemberAccountLedgerChrome({
+    companyId,
+    collection: TAX_FREEZE_COLLECTION,
+    patchCollection: "taxes",
+    selectedMember: selectedMemberTax,
+    adjustmentEntityType: "tax",
+    onMemberUpdated: onTaxUpdated,
+  });
 
   const { balanceMode } = useBalanceMode();
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
@@ -575,7 +596,7 @@ export function TaxGroupDetails({
           periodDrForPage: desktopPaginationMeta.periodDrForPage,
           periodCrForPage: desktopPaginationMeta.periodCrForPage,
           closingForPage: desktopPaginationMeta.closingForPage,
-          booksOpeningBalance: Number(group.openingBalance) || 0,
+          booksOpeningBalance: resolveGroupBooksOpeningBalance(group, taxes),
           ledgerShowBookOpeningRow: currentPage === 1,
           ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
           openingBalancePeriodStartDate: dateRange?.from,
@@ -630,7 +651,7 @@ export function TaxGroupDetails({
                   placeholder="Select group"
                 />
               </div>
-              {group.id !== "ungrouped" && (
+              {!isSystemBranchGroup && (
                 <EditTaxGroupDialog
                   group={group}
                   allGroups={allGroups}
@@ -664,6 +685,7 @@ export function TaxGroupDetails({
               style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
             >
             <div className="pb-2">
+            <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable
               transactions={mobileTransactionsToShow}
               context="group"
@@ -686,11 +708,13 @@ export function TaxGroupDetails({
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
               closingBalance={desktopPaginationMeta.closingForPage}
+              closingBalanceActions={memberClosingBalanceActions}
               isTaxContext={true}
               scrollOnlyTransactions
               highlightPendingApproval
               {...statementCheck.tableProps}
             />
+            </MasterAccountFreezeTxnShell>
             </div>
             </div>
             <MobileTransactionsPager
@@ -916,7 +940,7 @@ export function TaxGroupDetails({
                         {getInitials(group.name)}
                       </AvatarFallback>
                     </Avatar>
-                    {group.id !== "ungrouped" && (
+                    {!isSystemBranchGroup && (
                       <EditTaxGroupDialog
                         group={group}
                         allGroups={allGroups}
@@ -1021,6 +1045,7 @@ export function TaxGroupDetails({
         </div>
         <ScrollArea className="flex-1">
           <div className="py-4">
+            <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable
               transactions={paginatedTransactions}
               context="group"
@@ -1043,10 +1068,12 @@ export function TaxGroupDetails({
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
               closingBalance={desktopPaginationMeta.closingForPage}
+              closingBalanceActions={memberClosingBalanceActions}
               scrollOnlyTransactions
               highlightPendingApproval
               {...statementCheck.tableProps}
             />
+            </MasterAccountFreezeTxnShell>
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">
                 No transactions found for the selected period.
@@ -1063,7 +1090,7 @@ export function TaxGroupDetails({
               <LedgerFooterCheckboxPill
                 id="show-narration-tax-group"
                 checked={showNarration}
-                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
               <LedgerFooterColumnsMenu>

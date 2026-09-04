@@ -822,32 +822,46 @@ function scheduleOpeningBalanceCapitalBalanceAfterMasterWrite(input: {
   shouldNotify: boolean;
   skipCloudSyncEnqueue?: boolean;
 }): void {
-  if (!input.shouldNotify || input.skipCloudSyncEnqueue === true) return;
   if (!OPENING_BALANCE_MASTER_COLLECTIONS.has(input.collectionName)) return;
   if (input.collectionName === "parties" && input.docId === "opening_balance_ledger") return;
-  if (!Object.prototype.hasOwnProperty.call(input.after, "openingBalance")) return;
+
   const oldOpeningBalance = Number(input.before?.openingBalance) || 0;
   const newOpeningBalance = Number(input.after.openingBalance) || 0;
-  if (Math.abs(newOpeningBalance - oldOpeningBalance) < 0.01) return;
-  void import("@/lib/voucherActionsClient")
-    .then(({ balanceOpeningBalanceWithCapital }) =>
-      balanceOpeningBalanceWithCapital(
-        input.companyId,
-        input.collectionName as OpeningBalanceMasterCollection,
-        input.docId,
-        oldOpeningBalance,
-        newOpeningBalance
-      )
+  const openingBalanceChanged =
+    Object.prototype.hasOwnProperty.call(input.after, "openingBalance") &&
+    Math.abs(newOpeningBalance - oldOpeningBalance) >= 0.01;
+  const deletedChanged =
+    Object.prototype.hasOwnProperty.call(input.after, "isDeleted") &&
+    Boolean(input.before?.isDeleted) !== Boolean(input.after.isDeleted);
+
+  if (!openingBalanceChanged && !deletedChanged) return;
+
+  void import("@/lib/reports/systemOpeningBalanceEquityClient")
+    .then(({ scheduleSystemOpeningBalanceReconcile }) =>
+      scheduleSystemOpeningBalanceReconcile(input.companyId)
     )
-    .then((result) => {
-      if (result && result.success === false) {
-        console.warn("[localCompanyDocMirror] opening balance background sync failed", result.error);
-      }
-    })
     .catch((e) => {
-      console.warn("[localCompanyDocMirror] opening balance background sync failed", e);
+      console.warn("[localCompanyDocMirror] system opening balance reconcile schedule failed", e);
     });
 }
+
+function scheduleSystemOpeningBalanceReconcileAfterMasterLifecycle(input: {
+  companyId: string;
+  collectionName: string;
+  docId: string;
+}): void {
+  if (!OPENING_BALANCE_MASTER_COLLECTIONS.has(input.collectionName)) return;
+  if (input.collectionName === "parties" && input.docId === "opening_balance_ledger") return;
+  void import("@/lib/reports/systemOpeningBalanceEquityClient")
+    .then(({ scheduleSystemOpeningBalanceReconcile }) =>
+      scheduleSystemOpeningBalanceReconcile(input.companyId)
+    )
+    .catch((e) => {
+      console.warn("[localCompanyDocMirror] system opening balance lifecycle reconcile failed", e);
+    });
+}
+
+export { scheduleSystemOpeningBalanceReconcileAfterMasterLifecycle };
 
 async function commitCompanyDocOnRenderer(
   companyId: string,

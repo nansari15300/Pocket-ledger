@@ -1,93 +1,78 @@
 
 "use client";
 
-import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2 } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
-import { useForm } from "react-hook-form";
-import { z } from "zod";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose, DialogPortal, DialogOverlay } from "@/components/ui/dialog";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
-import { firestore } from "@/lib/firebase";
 import { cn } from "@/lib/utils";
 import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
 import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { ExpenseGroup } from "./types";
+import { NestedExpenseGroupFields } from "./NestedExpenseGroupFields";
 import { isSystemGroupName } from "@/lib/system-group-names";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import {
   apkCloudCompanyOfflineViewOnly,
-  apkEntityWriteUsesLocalSqliteMirror,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
-import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
-import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import {
+  expenseGroupCreateChainPendingNames,
+  trimTrailingEmptyCreateChainSlots,
+  type ExpenseGroupCreateChainSlot,
+  type ExpenseGroupListBranch,
+} from "@/lib/expenseGroupTree";
+import { createOneExpenseGroup } from "@/lib/expenseGroupWrite";
 
-function createLocalEntityId(prefix: string): string {
-  // Local-first mode ke liye deterministic client-side id generation.
-  const rand =
-    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID().slice(0, 12)
-      : Math.random().toString(36).slice(2, 14);
-  return `${prefix}_${Date.now().toString(36)}_${rand}`;
-}
-
-const formSchema = z.object({
-  name: z.string().min(2, { message: "Group name must be at least 2 characters." }),
-  parentId: z.string().min(1, "Parent group is required."),
-});
-
+export type ExpenseGroupCreatedPayload = {
+  id: string;
+  name: string;
+  parentId: string;
+};
 
 export function CreateExpenseGroupDialog({ onGroupCreated, children, isOpen, onOpenChange, groups = [] }: { 
-    onGroupCreated: (groupId: string) => void, 
+    onGroupCreated: (groupId: string, created?: ExpenseGroupCreatedPayload) => void, 
     children?: React.ReactNode, 
     groups: ExpenseGroup[],
     isOpen?: boolean, 
     onOpenChange?: (open: boolean) => void 
 }) {
   const [isLoading, setIsLoading] = useState(false);
+  const [systemBranch, setSystemBranch] = useState<ExpenseGroupListBranch>("expenses");
+  const [chainSlots, setChainSlots] = useState<ExpenseGroupCreateChainSlot[]>([{}]);
   const { toast } = useToast();
   const { user } = useAuth();
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
-  /** APK + cloud company offline: expense group Create / Save & New band (parity vouchers). */
   const apkOfflineViewOnly = useMemo(
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
     [company, navigatorOnline]
   );
 
-  const form = useForm<z.infer<typeof formSchema>>({
-    resolver: zodResolver(formSchema),
-    defaultValues: {
-      name: "",
-      parentId: "expenses",
-    },
-  });
+  const resetForm = () => {
+    setChainSlots([{}]);
+    setSystemBranch("expenses");
+  };
 
   useEffect(() => {
     const handlePrefill = (event: CustomEvent) => {
-      form.setValue('name', event.detail || '');
+      const name = String(event.detail || "").trim();
+      setChainSlots(name ? [{ pendingName: name }] : [{}]);
     };
-    // @ts-ignore
-    document.addEventListener('prefill-create-expense-group-name', handlePrefill);
+    document.addEventListener("prefill-create-expense-group-name", handlePrefill as EventListener);
     return () => {
-      // @ts-ignore
-      document.removeEventListener('prefill-create-expense-group-name', handlePrefill);
+      document.removeEventListener("prefill-create-expense-group-name", handlePrefill as EventListener);
     };
-  }, [form]);
+  }, []);
 
-  async function onSubmit(values: z.infer<typeof formSchema>, saveAndNew: boolean = false) {
+  async function handleSubmit(saveAndNew: boolean = false) {
     if (!user || !companyId) {
         toast({ variant: "destructive", title: "Authentication Error", description: "You must be logged in." });
         return;
@@ -100,83 +85,117 @@ export function CreateExpenseGroupDialog({ onGroupCreated, children, isOpen, onO
       });
       return;
     }
-    setIsLoading(true);
-    
-    try {
-      const nameTrimmed = values.name.trim();
-      
-      // Check if it's a system group name
-      if (isSystemGroupName("expense", nameTrimmed)) {
+
+    const trimmedChain = trimTrailingEmptyCreateChainSlots(chainSlots);
+    const pendingNames = expenseGroupCreateChainPendingNames(chainSlots);
+
+    if (pendingNames.length === 0) {
+      toast({
+        variant: "destructive",
+        title: "Invalid name",
+        description: "Group name must be at least 2 characters.",
+      });
+      return;
+    }
+
+    for (const name of pendingNames) {
+      if (name.length < 2) {
+        toast({
+          variant: "destructive",
+          title: "Invalid name",
+          description: "Group name must be at least 2 characters.",
+        });
+        return;
+      }
+      if (isSystemGroupName("expense", name)) {
         toast({
           variant: "destructive",
           title: "System Group Name",
-          description: "This is a system group name. Please use another name.",
+          description: `"${name}" is a system group name. Please use another name.`,
         });
-        setIsLoading(false);
         return;
       }
-      
-      // Recycle-bin duplicate flow: restore or create-new on user choice.
-      const duplicateDecision = await resolveRecycleBinDuplicate({
-        companyId,
-        collectionName: "expense_groups",
-        name: nameTrimmed,
-        entityLabel: "Expense Group",
-      });
-      if (duplicateDecision.decision === "active_exists") {
+    }
+
+    setIsLoading(true);
+    
+    try {
+      let parentId: string = systemBranch;
+      let lastCreatedId = "";
+      let lastCreatedGroup: ExpenseGroupCreatedPayload | null = null;
+
+      for (const slot of trimmedChain) {
+        if (slot.groupId) {
+          parentId = slot.groupId;
+          lastCreatedId = slot.groupId;
+          continue;
+        }
+
+        const nameTrimmed = String(slot.pendingName || "").trim();
+        if (!nameTrimmed) continue;
+
+        const duplicateDecision = await resolveRecycleBinDuplicate({
+          companyId,
+          collectionName: "expense_groups",
+          name: nameTrimmed,
+          entityLabel: "Expense Group",
+        });
+        if (duplicateDecision.decision === "active_exists") {
+          toast({
+            variant: "destructive",
+            title: "Duplicate Group Name",
+            description: `A group named "${nameTrimmed}" already exists.`,
+          });
+          setIsLoading(false);
+          return;
+        }
+
+        const createParentId = parentId;
+
+        if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+          lastCreatedId = duplicateDecision.restoredId;
+          parentId = lastCreatedId;
+          lastCreatedGroup = {
+            id: lastCreatedId,
+            name: nameTrimmed,
+            parentId: createParentId,
+          };
+          continue;
+        }
+
+        lastCreatedId = await createOneExpenseGroup({
+          company,
+          companyId,
+          userId: user.uid,
+          name: nameTrimmed,
+          parentId: createParentId,
+        });
+        parentId = lastCreatedId;
+        lastCreatedGroup = {
+          id: lastCreatedId,
+          name: nameTrimmed,
+          parentId: createParentId,
+        };
+      }
+
+      if (!lastCreatedId || !lastCreatedGroup) {
         toast({
           variant: "destructive",
-          title: "Duplicate Group Name",
-          description: "A group with this name already exists.",
+          title: "Error Creating Group",
+          description: "Group could not be created.",
         });
         setIsLoading(false);
         return;
       }
-      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
-        toast({
-          title: "Group Restored!",
-          description: `"${nameTrimmed}" was restored from Recycle Bin.`,
-        });
-        onGroupCreated(duplicateDecision.restoredId);
-        if (saveAndNew) form.reset({ name: "", parentId: "expenses" });
-        else if (onOpenChange) onOpenChange(false);
-        setIsLoading(false);
-        return;
-      }
 
-      let createdId = "";
-      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
-        // Local-only mode me group browser DB me save karke background sync queue me dalo.
-        createdId = createLocalEntityId("expense_group");
-        const payload = {
-          id: createdId,
-          name: values.name.trim(),
-          ownerId: user.uid,
-          companyId,
-          parentId: values.parentId,
-          createdAt: new Date().toISOString(),
-          isDeleted: false,
-        };
-        await upsertCompanyDocInBrowserDb(companyId, "expense_groups", createdId, payload);
-        await enqueueCompanyDocOutbox(companyId, "expense_groups", "create", createdId, payload);
-      } else {
-        const docRef = await addDoc(collection(firestore, `companies/${companyId}/expense_groups`), {
-          name: values.name.trim(),
-          ownerId: user.uid,
-          companyId: companyId,
-          parentId: values.parentId,
-          createdAt: serverTimestamp(),
-        });
-        createdId = docRef.id;
-      }
-
-      toast({ title: "Group Created!", description: `"${values.name}" has been successfully created.` });
-      onGroupCreated(createdId);
-      if (saveAndNew) {
-        form.reset({ name: "", parentId: "expenses" });
-      } else {
-        if(onOpenChange) onOpenChange(false);
-      }
+      const leafPending = pendingNames[pendingNames.length - 1];
+      toast({
+        title: "Group Created!",
+        description: `"${leafPending}" has been successfully created.`,
+      });
+      onGroupCreated(lastCreatedId, lastCreatedGroup);
+      if (saveAndNew) resetForm();
+      else if (onOpenChange) onOpenChange(false);
     } catch (error) {
       console.error("Error creating group:", error);
       toast({ variant: "destructive", title: "Error Creating Group", description: "Group details could not be saved." });
@@ -184,12 +203,6 @@ export function CreateExpenseGroupDialog({ onGroupCreated, children, isOpen, onO
       setIsLoading(false);
     }
   }
-
-  // Parent: only Income & Expenses (main P&L categories)
-  const parentOptions = [
-    { id: "income", name: "Income" },
-    { id: "expenses", name: "Expenses" },
-  ];
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -206,69 +219,53 @@ export function CreateExpenseGroupDialog({ onGroupCreated, children, isOpen, onO
           }}
         >
           <DialogHeader>
-            <DialogTitle>Create a New Expense Group</DialogTitle>
-            <DialogDescription>Add a new group to categorize your expense accounts.</DialogDescription>
+            <DialogTitle>Create Income / Expense Groups</DialogTitle>
+            <DialogDescription>
+              System group → Users Parent group → Child group tree. Parent change par pending naam child me shift hoga. Save par poori chain banti hai.
+            </DialogDescription>
           </DialogHeader>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(data => onSubmit(data, false))} className="space-y-4 py-4">
-              <FormField
-                control={form.control}
-                name="name"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel>Group Name</FormLabel>
-                    <FormControl>
-                      <Input placeholder="e.g., Office Expenses" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="parentId"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel>Parent Group</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select a parent group" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                         {parentOptions.map((p) => (
-                           <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                         ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-               <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
-                  <DialogClose asChild>
-                    <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>Cancel</Button>
-                  </DialogClose>
-                  <div className="flex min-w-0 flex-1 justify-center px-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
-                      onClick={form.handleSubmit(data => onSubmit(data, true))}
-                      disabled={isLoading || apkOfflineViewOnly}
-                    >
-                      {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                      Save & New
-                    </Button>
-                  </div>
-                  <Button type="submit" disabled={isLoading || !companyId || apkOfflineViewOnly} className="shrink-0">
+          <div className="space-y-4 py-4">
+            <NestedExpenseGroupFields
+              allGroups={groups}
+              systemBranch={systemBranch}
+              onSystemBranchChange={setSystemBranch}
+              parentPathIds={[]}
+              onParentPathIdsChange={() => {}}
+              chainSlots={chainSlots}
+              onChainSlotsChange={setChainSlots}
+              groupName=""
+              onGroupNameChange={() => {}}
+              mode="create"
+              disabled={isLoading || apkOfflineViewOnly}
+              formResetKey={isOpen ? "create-open" : "create-closed"}
+            />
+            <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
+                <DialogClose asChild>
+                  <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>Cancel</Button>
+                </DialogClose>
+                <div className="flex min-w-0 flex-1 justify-center px-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
+                    onClick={() => handleSubmit(true)}
+                    disabled={isLoading || apkOfflineViewOnly}
+                  >
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Create Group
+                    Save & New
                   </Button>
-              </DialogFooter>
-            </form>
-          </Form>
+                </div>
+                <Button
+                  type="button"
+                  onClick={() => handleSubmit(false)}
+                  disabled={isLoading || !companyId || apkOfflineViewOnly}
+                  className="shrink-0"
+                >
+                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Create Group
+                </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
         </DialogPortal>
     </Dialog>

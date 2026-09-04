@@ -26,7 +26,9 @@ import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "../ui/textarea";
-import { Combobox } from "../ui/combobox";
+import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
+import { STAFF_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { useVouchers } from "@/hooks/useVouchers";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
@@ -35,9 +37,12 @@ import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
+import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { format } from "date-fns";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { DateRange } from "@/components/ui/ad-calendar";
 
 import { toast as sonnerToast } from "sonner";
@@ -63,7 +68,20 @@ import { interCompanyAcNoForNewEntity } from "@/lib/interCompany/interCompanyAcc
 
 import type { StaffGroup } from "@/components/staff/types";
 import { CreateStaffGroupDialog } from "./CreateStaffGroupDialog";
-import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import {
+  getDefaultSystemGroupId,
+  isMasterEntitySystemGroupId,
+  normalizeStaffGroupIdForStorage,
+} from "@/lib/masterEntitySystemGroups";
+import { resolveMasterGroupTreeBranchIdForGroup } from "@/lib/masterGroupTreeCombobox";
+import {
+  LOAN_LIABILITY_GROUP_ID,
+} from "@/modules/loans/constants/loanConstants";
+import {
+  STAFF_FORM_DEFAULT_ACCOUNT_TYPE_ID,
+  STAFF_SYSTEM_GROUP_ID,
+  type StaffAccountTypeId,
+} from "@/lib/staffSystemGroups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import {
   apkCloudEntityMasterReadFromSqliteMirror,
@@ -83,9 +101,13 @@ function createLocalEntityId(prefix: string): string {
 }
 
 const formSchema = z.object({
+  accountType: z.enum([LOAN_LIABILITY_GROUP_ID, STAFF_SYSTEM_GROUP_ID], {
+    message: "Account type is required.",
+  }),
   name: z.string().min(2, { message: "Staff name must be at least 2 characters." }),
   email: z.string().optional(),
   phone: z.string().optional(),
+  whatsapp: z.boolean().optional(),
   address: z.string().optional(),
   salary: z.coerce.number().optional(),
   openingBalance: z.coerce.number().optional(),
@@ -94,11 +116,34 @@ const formSchema = z.object({
   groupId: z.string().min(1, "Group is required."),
   /** Party/staff edit jaisa — opening row narration statement par */
   openingBalanceNarration: z.string().optional(),
-});
+}).superRefine(refineMasterOpeningBalanceDateRequired);
 
 const MAX_FILE_SIZE_MB = 0.5;
 
 type FormValues = z.infer<typeof formSchema>;
+
+function staffPersistFields(values: Pick<FormValues, "groupId" | "accountType">) {
+  const groupId = normalizeStaffGroupIdForStorage(values.groupId, values.accountType);
+  return {
+    groupId,
+    isLoanAccount: values.accountType === LOAN_LIABILITY_GROUP_ID,
+  };
+}
+
+function staffFormResetDefaults(accountType: StaffAccountTypeId = STAFF_FORM_DEFAULT_ACCOUNT_TYPE_ID) {
+  return {
+    accountType,
+    name: "",
+    email: "",
+    phone: "",
+    address: "",
+    salary: 0,
+    openingBalance: 0,
+    salaryPeriod: "Monthly" as const,
+    groupId: getDefaultSystemGroupId("staff", { accountType }),
+    openingBalanceNarration: "",
+  };
+}
 
 export function CreateStaffForm({
   onStaffCreated,
@@ -141,6 +186,7 @@ export function CreateStaffForm({
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   React.useEffect(() => { onNestedDialogOpenChange?.(isCreateGroupOpen); }, [isCreateGroupOpen, onNestedDialogOpenChange]);
   const [groups, setGroups] = useState<StaffGroup[]>(initialGroups || []);
+  const { processedStaffGroups } = useVouchers();
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const docsInputRef = useRef<HTMLInputElement>(null);
@@ -151,26 +197,12 @@ export function CreateStaffForm({
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
   // ---------------------------
-  // ✅ Unique helper (fix duplicate keys)
-  // ---------------------------
-  const uniqueByValue = useMemo(() => {
-    return (opts: { value: string; label: string }[]) => {
-      const seen = new Set<string>();
-      return opts.filter((o) => {
-        if (!o?.value) return false;
-        if (seen.has(o.value)) return false;
-        seen.add(o.value);
-        return true;
-      });
-    };
-  }, []);
-
-  // ---------------------------
   // Form
   // ---------------------------
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
     defaultValues: {
+      accountType: STAFF_FORM_DEFAULT_ACCOUNT_TYPE_ID,
       name: "",
       email: "",
       phone: "",
@@ -178,10 +210,14 @@ export function CreateStaffForm({
       salary: 0,
       openingBalance: 0,
       salaryPeriod: "Monthly",
-      groupId: "",
+      groupId: getDefaultSystemGroupId("staff", { accountType: STAFF_FORM_DEFAULT_ACCOUNT_TYPE_ID }),
       openingBalanceNarration: "",
     },
   });
+
+  const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
+
+  const accountType = form.watch("accountType");
 
   // ---------------------------
   // Load groups from Firestore
@@ -217,56 +253,31 @@ export function CreateStaffForm({
   }, [companyId, sqliteListsSkipFirestore]);
 
   useEffect(() => {
-    let alive = true;
-    void (async () => {
-      if (!companyId || !user?.uid) return;
-      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
-        // Pure-local APK: local synthetic ungrouped; Firestore ensure avoid.
-        const current = form.getValues("groupId");
-        if (!current) form.setValue("groupId", getUngroupedGroupId("staff"), { shouldDirty: false });
-        return;
-      }
-      // Keep Staff create default on canonical Ungrouped bucket.
-      const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "staff");
-      if (!alive) return;
-      const current = form.getValues("groupId");
-      if (!current) form.setValue("groupId", ungroupedId, { shouldDirty: false });
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [companyId, user?.uid, form, company]);
+    if (!companyId || !user?.uid) return;
+    const current = form.getValues("groupId");
+    const type = form.getValues("accountType");
+    if (!current) {
+      form.setValue("groupId", getDefaultSystemGroupId("staff", { accountType: type }), {
+        shouldDirty: false,
+      });
+    }
+  }, [companyId, user?.uid, form]);
 
   // ---------------------------
-  // ✅ Build combobox options (duplicate-safe)
-  // ---------------------------
-  const groupOptions = useMemo(() => {
-    // Only user-defined staff groups; hide system parent groups
-    const userGroups = (groups || []).filter(g => !(g as any).isSystemReserved && (g as any).isAutoUngrouped !== true);
-    return uniqueByValue(
-      [
-        { value: getUngroupedGroupId("staff"), label: "Ungrouped" },
-        ...userGroups.map((g) => ({
-        value: g.id,
-        label: g.name,
-        })),
-      ]
-    );
-  }, [groups, uniqueByValue]);
-
-  // ---------------------------
-  // ✅ If current groupId doesn't exist in options, auto-fix
+  // If current groupId doesn't exist, auto-fix to default system branch
   // ---------------------------
   useEffect(() => {
     const current = form.getValues("groupId");
-    const exists = groupOptions.some((o) => o.value === current);
-
-    if (!exists && groupOptions.length > 0) {
-      // choose first non-system option if available
-      const fallback = groupOptions[0]?.value;
-      if (fallback) form.setValue("groupId", fallback);
+    const type = form.getValues("accountType");
+    const defaultGroupId = getDefaultSystemGroupId("staff", { accountType: type });
+    const exists =
+      current === defaultGroupId ||
+      isMasterEntitySystemGroupId(STAFF_ENTITY_GROUP_PRESET, current) ||
+      groups.some((g) => g.id === current);
+    if (!exists && current) {
+      form.setValue("groupId", defaultGroupId, { shouldDirty: false });
     }
-  }, [groupOptions, form]);
+  }, [groups, form]);
 
   // ---------------------------
   // Prefill: defaultName prop (e.g. from Add Salary staff search) or custom event
@@ -375,7 +386,8 @@ export function CreateStaffForm({
         openingBalance: defaults.openingBalance,
         openingBalanceDate: defaults.openingBalanceDate,
         salaryPeriod: defaults.salaryPeriod,
-        groupId: getUngroupedGroupId("staff"),
+        groupId: getDefaultSystemGroupId("staff", { accountType: STAFF_FORM_DEFAULT_ACCOUNT_TYPE_ID }),
+        accountType: STAFF_FORM_DEFAULT_ACCOUNT_TYPE_ID,
         openingBalanceNarration: defaults.openingBalanceNarration,
       });
       if (remoteAvatarUrl?.trim() && canAddAvatar) {
@@ -490,13 +502,16 @@ export function CreateStaffForm({
           avatarFile: avatarToUpload?.file ?? null,
           documentFiles: documentFiles.filter((f): f is File => f instanceof File),
         });
+        const { accountType, ...staffValues } = values;
+        const persisted = staffPersistFields(values);
         const payload = {
           id: localId,
-          ...values,
+          ...staffValues,
+          ...persisted,
           openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
           ownerId: user.uid,
           companyId,
-          groupId: values.groupId?.trim() || getUngroupedGroupId("staff"),
+          groupId: persisted.groupId,
           balance: values.openingBalance || 0,
           openingBalance: values.openingBalance || 0,
           openingBalanceDate: values.openingBalanceDate || null,
@@ -517,17 +532,7 @@ export function CreateStaffForm({
             : `"${values.name}" was saved locally.`,
         });
         if (saveAndNew) {
-          form.reset({
-            name: "",
-            email: "",
-            phone: "",
-            address: "",
-            salary: 0,
-            openingBalance: 0,
-            salaryPeriod: "Monthly",
-            groupId: getUngroupedGroupId("staff"),
-            openingBalanceNarration: "",
-          });
+          form.reset(staffFormResetDefaults());
           clearUploads();
         }
         onStaffCreated?.(saveAndNew, localId);
@@ -576,8 +581,8 @@ export function CreateStaffForm({
       }
 
       // Pehle Firestore doc id — `stageEntityAvatarAndDocuments` isi se path banata hai
-      const resolvedGroupId =
-        values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "staff"));
+      const persisted = staffPersistFields(values);
+      const { accountType, ...staffValues } = values;
       const staffRef = doc(collection(firestore, `companies/${companyId}/staff`));
       const newStaffId = staffRef.id;
       // Online: Storage → HTTPS URLs in Firestore (other devices; not only local: + syncPendingFiles)
@@ -591,13 +596,13 @@ export function CreateStaffForm({
 
       const interCompanyAccountNo = await interCompanyAcNoForNewEntity("staff");
       await setDoc(staffRef, {
-        ...values,
+        ...staffValues,
+        ...persisted,
         openingBalance: values.openingBalance || 0,
         openingBalanceDate: values.openingBalanceDate || null,
         openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
         ownerId: user.uid,
         companyId,
-        groupId: resolvedGroupId || getUngroupedGroupId("staff"),
         balance: values.openingBalance || 0,
         isDeleted: false,
         createdAt: serverTimestamp(),
@@ -625,17 +630,7 @@ export function CreateStaffForm({
       });
 
       if (saveAndNew) {
-        form.reset({
-          name: "",
-          email: "",
-          phone: "",
-          address: "",
-          salary: 0,
-          openingBalance: 0,
-          salaryPeriod: "Monthly",
-          groupId: getUngroupedGroupId("staff"),
-          openingBalanceNarration: "",
-        });
+        form.reset(staffFormResetDefaults());
         clearUploads();
       }
 
@@ -664,14 +659,16 @@ export function CreateStaffForm({
             avatarFile: avatarToUpload?.file ?? null,
             documentFiles: documentFiles.filter((f): f is File => f instanceof File),
           });
+          const catchPersisted = staffPersistFields(values);
+          const { accountType: _accountType, ...catchStaffValues } = values;
           const nowTs = Timestamp.now();
           const payload: Record<string, unknown> = {
             id: localId,
-            ...values,
+            ...catchStaffValues,
+            ...catchPersisted,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
             ownerId: user.uid,
             companyId,
-            groupId: values.groupId?.trim() || getUngroupedGroupId("staff"),
             balance: values.openingBalance || 0,
             openingBalance: values.openingBalance || 0,
             openingBalanceDate: values.openingBalanceDate || null,
@@ -689,17 +686,7 @@ export function CreateStaffForm({
           });
           onStaffCreated?.(saveAndNew, localId);
           if (saveAndNew) {
-            form.reset({
-              name: "",
-              email: "",
-              phone: "",
-              address: "",
-              salary: 0,
-              openingBalance: 0,
-              salaryPeriod: "Monthly",
-              groupId: getUngroupedGroupId("staff"),
-              openingBalanceNarration: "",
-            });
+            form.reset(staffFormResetDefaults());
             clearUploads();
           }
         } catch {
@@ -727,6 +714,49 @@ export function CreateStaffForm({
         <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
           <div className="pl-master-form-scroll min-h-0 flex-1 space-y-6 overflow-y-auto pr-1 sm:pr-2">
           <div className="space-y-4">
+            <FormField
+              control={form.control}
+              name="accountType"
+              render={({ field }: any) => (
+                <FormItem>
+                  <FormLabel>Account Type</FormLabel>
+                  <RadioGroup
+                    className="flex flex-col gap-2 sm:flex-row sm:gap-6"
+                    value={field.value}
+                    onValueChange={(next: StaffAccountTypeId) => {
+                      field.onChange(next);
+                      const currentBranch = resolveMasterGroupTreeBranchIdForGroup(
+                        form.getValues("groupId"),
+                        processedStaffGroups as StaffGroup[],
+                        STAFF_ENTITY_GROUP_PRESET
+                      );
+                      const expectedBranch = next;
+                      if (currentBranch !== expectedBranch) {
+                        form.setValue(
+                          "groupId",
+                          getDefaultSystemGroupId("staff", { accountType: next }),
+                          { shouldDirty: true }
+                        );
+                      }
+                    }}
+                  >
+                    <FormItem className="flex items-center space-x-2 space-y-0">
+                      <FormControl>
+                        <RadioGroupItem value={STAFF_SYSTEM_GROUP_ID} />
+                      </FormControl>
+                      <FormLabel className="cursor-pointer font-normal">Staff</FormLabel>
+                    </FormItem>
+                    <FormItem className="flex items-center space-x-2 space-y-0">
+                      <FormControl>
+                        <RadioGroupItem value={LOAN_LIABILITY_GROUP_ID} />
+                      </FormControl>
+                      <FormLabel className="cursor-pointer font-normal">Loan & Liabilities</FormLabel>
+                    </FormItem>
+                  </RadioGroup>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
             <MasterFormNameAcNoRow
               entityKind="staff"
               mode="create"
@@ -756,9 +786,20 @@ export function CreateStaffForm({
                   <FormLabel>Group/Department</FormLabel>
                   <FormControl>
                     <div className="w-full">
-                      <Combobox
-                        options={groupOptions}
+                      <MasterGroupTreeCombobox
+                        preset={STAFF_ENTITY_GROUP_PRESET}
+                        groups={groups}
+                        processedGroups={processedStaffGroups as StaffGroup[]}
+                        popoverModal={false}
+                        confirmWithOk
                         value={field.value}
+                        onBranchChange={(branchId) => {
+                          if (branchId === LOAN_LIABILITY_GROUP_ID || branchId === STAFF_SYSTEM_GROUP_ID) {
+                            form.setValue("accountType", branchId as StaffAccountTypeId, {
+                              shouldDirty: true,
+                            });
+                          }
+                        }}
                         onChange={(val, newName) => {
                           if (val === "add-new") {
                             setIsCreateGroupOpen(true);
@@ -770,11 +811,28 @@ export function CreateStaffForm({
                               );
                             }, 100);
                           } else {
-                            field.onChange(val === "none" ? "" : val);
+                            const gid = val === "none" ? "" : val;
+                            field.onChange(gid);
+                            if (gid) {
+                              const branchId = resolveMasterGroupTreeBranchIdForGroup(
+                                gid,
+                                processedStaffGroups as StaffGroup[],
+                                STAFF_ENTITY_GROUP_PRESET
+                              );
+                              if (
+                                branchId === LOAN_LIABILITY_GROUP_ID ||
+                                branchId === STAFF_SYSTEM_GROUP_ID
+                              ) {
+                                form.setValue("accountType", branchId as StaffAccountTypeId, {
+                                  shouldDirty: true,
+                                });
+                              }
+                            }
                           }
                         }}
                         placeholder="Select a group"
-                        addNewLabel="+ Add New Group"
+                        searchPlaceholder="Search groups..."
+                        addNewLabel="Add New Group"
                       />
                     </div>
                   </FormControl>
@@ -963,13 +1021,13 @@ export function CreateStaffForm({
                 variant="ghost"
                 className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                 onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                disabled={isLoading || isCompressing || apkOfflineViewOnly}
+                disabled={isLoading || isCompressing || apkOfflineViewOnly || openingBalanceDateMissing}
               >
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save & New
               </Button>
             </div>
-            <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly} className="shrink-0">
+            <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly || openingBalanceDateMissing} className="shrink-0">
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Add {STAFF_ENTITY_LABEL}
             </Button>
@@ -982,6 +1040,7 @@ export function CreateStaffForm({
         isOpen={isCreateGroupOpen}
         onOpenChange={setIsCreateGroupOpen}
         groups={groups}
+        initialSystemBranch={accountType}
       />
     </>
   );

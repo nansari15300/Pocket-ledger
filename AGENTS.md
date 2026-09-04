@@ -118,6 +118,37 @@ Click-to-open preview was stabilized so party and voucher forms behave the same:
 
 Invoice/print-only PDF overlays (`printDirect`, billing statement PDF, sale invoice page) are **not** part of this freeze unless the human groups them with “attachment preview”. Backup/restore preview UI remains under the Backup freeze section above.
 
+## Freeze: Master account freeze (hard — Freez Account)
+
+**Aug 2026:** Master account freeze (owner toggle, diagonal overlay, list badge, voucher dropdown disabled) is stabilized for party, staff, bank/cash, tax, and expense. **Do not edit unless the human explicitly asks to change account freeze in that same message.**
+
+### Frozen paths (do not touch casually)
+
+- `src/lib/masterAccountFreeze/**`
+- `src/components/masterAccountFreeze/**`
+- `src/hooks/useMasterAccountFreezeFeature.ts`
+- `src/hooks/useMasterAccountFreezeOwner.ts`
+- `src/hooks/useMasterAccountFreezeDetailsChrome.tsx`
+
+### Stabilized behavior to preserve
+
+- Owner footer toggle: tick = freeze / unfreeze (auto-save).
+- Frozen details: diagonal overlay blocks new transactions; optional owner-only message.
+- List rows: “Freezed Account” badge.
+- Voucher comboboxes: frozen masters **visible but disabled** via `map*ForVoucherCombobox` / `withMasterAccountFreezeComboboxOption` — label includes `(Freezed Account)`.
+- Plan gate: `masterAccountFreezeEnabled` + permission `freeze_master_account`.
+
+### Do not
+
+- Refactor, rename, or drive-by edit frozen paths while fixing unrelated ledger/voucher/sync work.
+- Remove or bypass combobox `disabled` for frozen accounts in voucher forms.
+- Change overlay, toggle labels, or save semantics without explicit request.
+
+### If the human explicitly asks to change account freeze
+
+- Keep the diff minimal and scoped to that request.
+- Preserve: visible-but-disabled in vouchers, overlay on details, owner-only toggle.
+
 ## Freeze: Online Company Sync (hard)
 
 **Online company sync is frozen for every AI.** Do not edit online sync logic unless the human explicitly asks to change **online / Firebase / cloud company sync**.

@@ -35,6 +35,9 @@ import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { filterMembersByMasterGroupScope } from "@/lib/masterGroupMemberScope";
+import { BANK_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { isMasterEntitySystemGroupId, resolveBankListGroupBucketId } from "@/lib/masterEntitySystemGroups";
 
 
 export default function BankCashPage() {
@@ -170,12 +173,18 @@ export default function BankCashPage() {
   
   const accountsForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
-    if (selectedGroup.id === 'ungrouped') {
-        // Keep Ungrouped group selection aligned with stored ungrouped ids.
-        return processedAccounts.filter(acc => !acc.groupId || acc.groupId === "ungrouped_account");
+    if (selectedGroup.id === "ungrouped") {
+      return processedAccounts.filter((acc) => !acc.groupId || acc.groupId === "ungrouped_account");
     }
-    return processedAccounts.filter(p => p.groupId === selectedGroup.id);
-  }, [selectedGroup, processedAccounts]);
+    return filterMembersByMasterGroupScope<Account>(
+      selectedGroup.id,
+      processedAccounts,
+      processedAccountGroups,
+      resolveBankListGroupBucketId,
+      (id) => isMasterEntitySystemGroupId(BANK_ENTITY_GROUP_PRESET, id),
+      (account, branchId) => resolveBankListGroupBucketId(account) === branchId
+    );
+  }, [selectedGroup, processedAccounts, processedAccountGroups]);
 
   if (vouchersLoading) {
     return <LoadingSpinner />;

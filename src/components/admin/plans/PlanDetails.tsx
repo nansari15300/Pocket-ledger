@@ -11,6 +11,7 @@ import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Save, Calendar as CalendarIcon, Info } from "lucide-react";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
 import { type Plan, type EntitlementKey, ONLINE_ENTITLEMENT_CAP_KEYS } from "@/config/plans";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
@@ -38,14 +39,7 @@ function PlanRuleInfo({ tip }: { tip: string }) {
     return (
         <Popover>
             <PopoverTrigger asChild>
-                <button
-                    type="button"
-                    data-pl-plan-rule-info=""
-                    className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-0 bg-transparent text-sky-500 hover:bg-sky-100 hover:text-sky-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
-                    aria-label="Rule"
-                >
-                    <Info className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden />
-                </button>
+                <AppFreshInfoButton size="xs" aria-label="Rule" />
             </PopoverTrigger>
             <PopoverContent side="top" align="start" className="max-w-xs text-left text-xs leading-snug">
                 {tip}

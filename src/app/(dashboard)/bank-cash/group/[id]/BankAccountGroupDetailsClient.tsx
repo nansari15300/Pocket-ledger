@@ -6,6 +6,10 @@ import { useVouchers } from '@/hooks/useVouchers';
 import { useState, useEffect, useCallback } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
+import type { Account } from '@/components/bank-cash/types';
+import { filterMembersByMasterGroupScope } from '@/lib/masterGroupMemberScope';
+import { BANK_ENTITY_GROUP_PRESET } from '@/lib/masterEntityGroupFormPresets';
+import { isMasterEntitySystemGroupId, resolveBankListGroupBucketId } from '@/lib/masterEntitySystemGroups';
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from '@/lib/firebase';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -19,7 +23,14 @@ export function BankAccountGroupDetailsClient() {
   const isMobile = useIsMobile();
   const groupId = params.id as string;
   const group = processedAccountGroups.find((g) => g.id === groupId);
-  const accountsInGroup = processedAccounts.filter((a) => a.groupId === groupId);
+  const accountsInGroup = filterMembersByMasterGroupScope<Account>(
+    groupId,
+    processedAccounts,
+    processedAccountGroups,
+    resolveBankListGroupBucketId,
+    (id) => isMasterEntitySystemGroupId(BANK_ENTITY_GROUP_PRESET, id),
+    (account, branchId) => resolveBankListGroupBucketId(account) === branchId
+  );
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     if (userNames[userId]) return userNames[userId];

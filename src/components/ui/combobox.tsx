@@ -24,7 +24,17 @@ import { useIsMobile } from "@/hooks/use-mobile";
 
 type ComboboxProps = {
   // Option-level disabled is used by voucher account dropdowns to block non-selectable accounts.
-  options: { value: string; label: string; triggerLabel?: string; isSpecial?: boolean; disabled?: boolean }[];
+  options: {
+    value: string;
+    label: string;
+    triggerLabel?: string;
+    isSpecial?: boolean;
+    disabled?: boolean;
+    /** Tree picker: left indent in dropdown rows (×15px). */
+    depth?: number;
+    /** Extra haystack for filter search (breadcrumb path). */
+    searchText?: string;
+  }[];
   value?: string | string[];
   onChange?: (value: string, newName?: string) => void;
   onMultiChange?: (values: string[]) => void;
@@ -59,6 +69,8 @@ type ComboboxProps = {
   maxVisibleOptions?: number;
   /** Popover panel extra classes; agar set ho to default trigger-width inline style skip (mobile width jaise). */
   popoverContentClassName?: string;
+  /** CommandList max-height / scroll — default `max-h-[300px]`. */
+  commandListClassName?: string;
   /**
    * Mobile par default 80vw list + ek-line option — band karo jahan wrap chahiye (`mobileWideOptionList={false}`).
    * Web + APK/Capacitor dono: `useIsMobile()` breakpoint.
@@ -88,6 +100,7 @@ export function Combobox({
   triggerLabelMinCh,
   maxVisibleOptions,
   popoverContentClassName,
+  commandListClassName,
   mobileWideOptionList = true,
 }: ComboboxProps) {
   const isMobile = useIsMobile();
@@ -207,7 +220,12 @@ export function Combobox({
 
   const addNewItems = addNewLabels || (addNewLabel ? [{value: "add-new", label: addNewLabel}] : []);
   const q = search.trim().toLowerCase();
-  const filteredOptions = q.length === 0 ? options : options.filter((opt) => opt.label.toLowerCase().includes(q));
+  const filteredOptions = q.length === 0
+    ? options
+    : options.filter((opt) => {
+        const hay = (opt.searchText || opt.label).toLowerCase();
+        return hay.includes(q) || opt.label.toLowerCase().includes(q);
+      });
   // Keep dropdown manageable on dense lists by capping rendered rows when requested.
   const visibleOptions = React.useMemo(() => {
     if (typeof maxVisibleOptions !== "number" || maxVisibleOptions <= 0) return filteredOptions;
@@ -378,6 +396,7 @@ export function Combobox({
             onKeyDown={(e) => e.stopPropagation()}
           />
           <CommandList
+            className={commandListClassName}
             onPointerDownCapture={(e) => {
               listGestureStartRef.current = { x: e.clientX, y: e.clientY };
               blockSelectFromGestureRef.current = false;
@@ -437,10 +456,17 @@ export function Combobox({
                     // Sirf Check = form selection; aria-selected sirf halka hover (scroll pe galat “selected” na lage).
                     "[&[aria-selected=true]]:!bg-muted/25 [&[aria-selected=true]]:!text-foreground",
                     option.isSpecial && "text-amber-600 font-medium",
-                    option.disabled && "opacity-50 cursor-not-allowed"
+                    option.disabled && "opacity-70 cursor-default font-medium text-muted-foreground"
                   )}
                 >
-                  <span className="pointer-events-none flex w-full min-w-0 items-center">
+                  <span
+                    className="pointer-events-none flex w-full min-w-0 items-center"
+                    style={
+                      option.depth != null && option.depth > 0
+                        ? { paddingLeft: `${option.depth * 15}px` }
+                        : undefined
+                    }
+                  >
                     <Check
                       className={cn(
                         "mr-2 h-4 w-4 shrink-0",

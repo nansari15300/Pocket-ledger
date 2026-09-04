@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import type { Control, FieldPath, FieldValues } from "react-hook-form";
 import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { masterFormRowClassName } from "@/lib/masterFormPillChrome";
 import { MasterFormInterCompanyAcNoSlot } from "@/components/inter-company/MasterFormInterCompanyAcNoSlot";
@@ -86,7 +87,25 @@ export function MasterMobileNoField<T extends FieldValues>({
       name={name}
       render={({ field }) => (
         <FormItem>
-          <FormLabel>Mobile No.</FormLabel>
+          <div className="flex items-center justify-between gap-2">
+            <FormLabel>Mobile No.</FormLabel>
+            <FormField
+              control={control}
+              name={"whatsapp" as FieldPath<T>}
+              render={({ field: whatsappField }) => (
+                <FormItem className="flex shrink-0 items-center gap-1.5 space-y-0">
+                  <FormControl>
+                    <Checkbox
+                      checked={whatsappField.value === true}
+                      onCheckedChange={whatsappField.onChange}
+                      aria-label="WhatsApp number"
+                    />
+                  </FormControl>
+                  <FormLabel className="cursor-pointer text-xs font-normal">WhatsApp</FormLabel>
+                </FormItem>
+              )}
+            />
+          </div>
           <FormControl>
             <Input
               inputMode="tel"

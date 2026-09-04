@@ -116,7 +116,9 @@ import {
   interCompanyPageHeaderClass,
   interCompanyPanelClass,
   interCompanyPanelScrollInnerClass,
+  interCompanyPanelScrollInnerSimpleClass,
   interCompanyPanelScrollOuterClass,
+  interCompanyPanelScrollOuterSimpleClass,
   interCompanyVoucherScrollAreaClass,
   interCompanyVoucherTabShellClass,
   interCompanyReadOnlyCopyInputClass,
@@ -142,6 +144,7 @@ import { useStickyInterCompanyCompanyCode } from "@/components/inter-company/use
 import {
   InterCompanyRibbonNav,
   IC_PAY_MODE_STORAGE_KEY,
+  IC_SIMPLE_VIEW_STORAGE_KEY,
   type InterCompanyRibbonTab,
   type InterCompanyPayModeChoice,
 } from "@/components/inter-company/InterCompanyRibbonNav";
@@ -157,15 +160,38 @@ import {
 } from "@/lib/interCompany/interCompanySystemJoinRequest";
 import { usePendingInterCompanySystemJoinCount } from "@/lib/interCompany/usePendingInterCompanySystemJoinCount";
 
-const interCompanySchema = z.object({
-  voucherNumber: z.string().min(1, "Voucher number required"),
-  date: z.date({ message: "Date required" }),
-  targetCompanyId: z.string().min(1, "Select target company"),
-  amount: z.coerce.number().min(0.01, "Amount must be positive"),
-  narration: z.string().optional(),
-});
+const interCompanySchema = z
+  .object({
+    voucherNumber: z.string().min(1, "Voucher number required"),
+    date: z.date({ message: "Date required" }),
+    targetCompanyId: z.string().min(1, "Select target company"),
+    amount: z.coerce.number().min(0.01, "Amount must be positive"),
+    narration: z.string().optional(),
+    otherChargeAccountId: z.string().optional(),
+    otherChargeAmount: z.coerce.number().optional(),
+  })
+  .superRefine((data, ctx) => {
+    const chargeAmount = Number(data.otherChargeAmount || 0);
+    if (chargeAmount > 0 && !String(data.otherChargeAccountId || "").trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Please select other charge account.",
+        path: ["otherChargeAccountId"],
+      });
+    }
+  });
 
 type InterCompanyFormValues = z.infer<typeof interCompanySchema>;
+
+function withSelectedComboboxOption(
+  rows: Array<{ value: string; label: string }>,
+  value: string | undefined,
+  label: string | undefined
+) {
+  if (!value || rows.some((r) => r.value === value)) return rows;
+  if (!label) return rows;
+  return [{ value, label }, ...rows];
+}
 
 type IcAccountBaseline = {
   sourcePayeeKind: InterCompanyEntityKind;
@@ -236,11 +262,27 @@ function mergeHydratedBankEntity(
   return [...entities, { id, kind: "bank", label }];
 }
 
-/** Source/target card � ek horizontal scroll; poora panel content saath move */
-function InterCompanyPanelScroll({ children }: { children: ReactNode }) {
+/** Source/target card — ek horizontal scroll; simple view par fit-only */
+function InterCompanyPanelScroll({
+  children,
+  simpleView = false,
+}: {
+  children: ReactNode;
+  simpleView?: boolean;
+}) {
   return (
-    <div className={interCompanyPanelScrollOuterClass}>
-      <div className={interCompanyPanelScrollInnerClass}>{children}</div>
+    <div
+      className={
+        simpleView ? interCompanyPanelScrollOuterSimpleClass : interCompanyPanelScrollOuterClass
+      }
+    >
+      <div
+        className={
+          simpleView ? interCompanyPanelScrollInnerSimpleClass : interCompanyPanelScrollInnerClass
+        }
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -359,24 +401,28 @@ function TwoColumnEntityGrid({
   rightHeader,
   targetCompanyField,
   sourcePanel,
+  simpleView = false,
 }: {
   leftHeader?: ReactNode;
   rightHeader?: ReactNode;
   targetCompanyField: ReactNode;
   sourcePanel: ReactNode;
+  simpleView?: boolean;
 }) {
   return (
     <div className="grid gap-4 lg:grid-cols-2 lg:items-stretch">
       <div className="flex min-h-0 flex-col gap-3">
         {leftHeader}
         <div className={cn(interCompanyPanelClass, "min-h-0 flex-1")}>
-          <InterCompanyPanelScroll>{sourcePanel}</InterCompanyPanelScroll>
+          <InterCompanyPanelScroll simpleView={simpleView}>{sourcePanel}</InterCompanyPanelScroll>
         </div>
       </div>
       <div className="flex min-h-0 flex-col gap-3">
         {rightHeader}
         <div className={cn(interCompanyPanelClass, "min-h-0 flex-1")}>
-          <InterCompanyPanelScroll>{targetCompanyField}</InterCompanyPanelScroll>
+          <InterCompanyPanelScroll simpleView={simpleView}>
+            {targetCompanyField}
+          </InterCompanyPanelScroll>
         </div>
       </div>
     </div>
@@ -428,6 +474,26 @@ export function InterCompanyVoucherForm({
   const { formatDate, formatDateBS, formatDateBySystem, formatCurrency, formatCurrencyForPrint, dateSystem } = useDate();
 
   const [ribbonTab, setRibbonTab] = useState<InterCompanyRibbonTab>(initialRibbonTab ?? "voucher");
+  const [simpleView, setSimpleView] = useState(true);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(IC_SIMPLE_VIEW_STORAGE_KEY);
+      if (stored === "0") setSimpleView(false);
+      else if (stored === "1") setSimpleView(true);
+    } catch {
+      /* private mode */
+    }
+  }, []);
+
+  const handleSimpleViewChange = useCallback((enabled: boolean) => {
+    setSimpleView(enabled);
+    try {
+      localStorage.setItem(IC_SIMPLE_VIEW_STORAGE_KEY, enabled ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     onRibbonTabChange?.(ribbonTab);
@@ -473,6 +539,10 @@ export function InterCompanyVoucherForm({
   const [payModeDialogOpen, setPayModeDialogOpen] = useState(false);
   const [payModeChoice, setPayModeChoice] = useState<InterCompanyPayModeChoice | "">("");
   const [pendingSaveOpts, setPendingSaveOpts] = useState<IcSaveOpts | null>(null);
+  const [otherChargeEnabled, setOtherChargeEnabled] = useState(() => {
+    const row = (voucher || defaultVoucherData) as Record<string, unknown> | null | undefined;
+    return Boolean(row?.otherChargeAccountId || Number(row?.otherChargeAmount || 0) > 0);
+  });
   const [changeDetectDialogOpen, setChangeDetectDialogOpen] = useState(false);
   const [accountDiffRows, setAccountDiffRows] = useState<IcAccountDiffRow[]>([]);
   const [selectedApplyKeys, setSelectedApplyKeys] = useState<
@@ -548,6 +618,8 @@ export function InterCompanyVoucherForm({
       targetCompanyId: String(seed?.targetCompanyId || ""),
       amount: Number(seed?.amount || 0),
       narration: String(seed?.narration || ""),
+      otherChargeAccountId: String(seed?.otherChargeAccountId || ""),
+      otherChargeAmount: Number(seed?.otherChargeAmount || 0),
     },
   });
 
@@ -698,7 +770,12 @@ export function InterCompanyVoucherForm({
         editIds.targetCompanyFieldId || String(row.targetCompanyId || "").trim(),
       amount: Number(row.amount || 0),
       narration: String(row.narration || ""),
+      otherChargeAccountId: String(row.otherChargeAccountId || ""),
+      otherChargeAmount: Number(row.otherChargeAmount || 0),
     });
+    setOtherChargeEnabled(
+      Boolean(row.otherChargeAccountId || Number(row.otherChargeAmount || 0) > 0)
+    );
     const sourceHome =
       editIds.sourceEntitiesCompanyId || String(companyId || "").trim();
     sourceHomeCompanyIdRef.current = sourceHome;
@@ -1351,6 +1428,67 @@ export function InterCompanyVoucherForm({
     [targetEntities, targetPayeeKind, targetPayeeId]
   );
 
+  const showIcOtherCharge = icViewerSide !== "target";
+  const transferAmountValue = Number(form.watch("amount")) || 0;
+  const otherChargeAccountId = form.watch("otherChargeAccountId");
+  const otherChargeAmountValue = Number(form.watch("otherChargeAmount")) || 0;
+  const otherChargeAccountOptions = useMemo(() => {
+    const rows = sourceEntities
+      .filter((e) => e.kind === "party" || e.kind === "staff" || e.kind === "expense")
+      .map((e) => ({
+        value: e.id,
+        label: `${e.kind === "party" ? "Party" : e.kind === "staff" ? "Staff" : "Expense"}: ${e.label}`,
+      }));
+    const selected = sourceEntities.find((e) => e.id === otherChargeAccountId);
+    return withSelectedComboboxOption(rows, otherChargeAccountId, selected?.label);
+  }, [sourceEntities, otherChargeAccountId]);
+  const otherChargeBalance = useMemo(() => {
+    if (!otherChargeAccountId) return null;
+    const ent = sourceEntities.find((e) => e.id === otherChargeAccountId);
+    if (!ent) return null;
+    return Number(ent.closingBalance ?? 0);
+  }, [otherChargeAccountId, sourceEntities]);
+  const otherChargeDefaultStorageKey = useMemo(
+    () =>
+      `pocket-ledger:inter-company:other-charge-default:${sourceEntitiesCompanyId || companyId || "global"}`,
+    [sourceEntitiesCompanyId, companyId]
+  );
+  const setOtherChargeDefault = useCallback(() => {
+    const id = String(form.getValues("otherChargeAccountId") || "").trim();
+    if (!id) return;
+    try {
+      localStorage.setItem(otherChargeDefaultStorageKey, id);
+      toast.success("Default other charge account saved.");
+    } catch {
+      toast.error("Default save failed.");
+    }
+  }, [form, otherChargeDefaultStorageKey]);
+  const showOtherChargeCard =
+    showIcOtherCharge &&
+    (otherChargeEnabled || Boolean(otherChargeAccountId) || otherChargeAmountValue > 0);
+  const sourceSimpleViewBankOutTotal =
+    simpleView && showOtherChargeCard && showIcOtherCharge
+      ? Math.round((transferAmountValue + otherChargeAmountValue) * 100) / 100
+      : null;
+
+  useEffect(() => {
+    if (!showOtherChargeCard || otherChargeAccountId) return;
+    try {
+      const saved = String(localStorage.getItem(otherChargeDefaultStorageKey) || "").trim();
+      if (saved && otherChargeAccountOptions.some((option) => option.value === saved)) {
+        form.setValue("otherChargeAccountId", saved);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [
+    showOtherChargeCard,
+    otherChargeAccountId,
+    otherChargeDefaultStorageKey,
+    otherChargeAccountOptions,
+    form,
+  ]);
+
   // Auto narration must refresh — user typed extra lines rakho.
   useEffect(() => {
     if (fieldsDisabled || icViewerSide === "target") return;
@@ -1623,6 +1761,23 @@ export function InterCompanyVoucherForm({
         resolveFileUrlsForSave(targetFiles, resolvedTargetCompanyId, peerVoucherId, targetPlanContext),
       ]);
 
+      let saveOtherChargeAccountId = "";
+      let saveOtherChargeAmount = 0;
+      let saveOtherChargeKind: "party" | "staff" | "expense" | null = null;
+      if (icViewerSide !== "target") {
+        const ocAmt = Math.round((Number(values.otherChargeAmount) || 0) * 100) / 100;
+        const ocId = String(values.otherChargeAccountId || "").trim();
+        if (ocAmt > 0 && ocId) {
+          const ocEntity = sourceEntities.find((e) => e.id === ocId);
+          const kind = ocEntity?.kind;
+          if (kind === "party" || kind === "staff" || kind === "expense") {
+            saveOtherChargeAccountId = ocId;
+            saveOtherChargeAmount = ocAmt;
+            saveOtherChargeKind = kind;
+          }
+        }
+      }
+
       const result = await saveInterCompanyVoucherPair({
         sourceCompanyId: resolvedSourceCompanyId,
         targetCompanyId: resolvedTargetCompanyId,
@@ -1631,6 +1786,9 @@ export function InterCompanyVoucherForm({
         voucherNumber: values.voucherNumber,
         date: voucherDate,
         amount: values.amount,
+        otherChargeAccountId: saveOtherChargeAccountId || undefined,
+        otherChargeAmount: saveOtherChargeAmount || undefined,
+        otherChargeKind: saveOtherChargeKind,
         narration: narrationForSave,
         sourceEntityKind: saveSourcePayeeKind,
         sourceEntityId: saveSourcePayeeId,
@@ -2421,7 +2579,10 @@ export function InterCompanyVoucherForm({
   const showAdDate = dateSystem === "AD" || dateSystem === "Both";
 
   const voucherTabBody = (
-    <div className={cn("pl-inter-company-voucher select-text", interCompanyVoucherTabShellClass)}>
+    <div
+      className={cn("pl-inter-company-voucher select-text", interCompanyVoucherTabShellClass)}
+      data-ic-simple-view={simpleView ? "1" : "0"}
+    >
       <FormField control={form.control} name="date" render={() => <FormMessage />} />
 
       <TwoColumnEntityGrid
@@ -2546,6 +2707,7 @@ export function InterCompanyVoucherForm({
                     setTargetCompanyBankId(id);
                   }}
                   formMessage={<FormMessage />}
+                  simpleView={simpleView}
                 />
               </FormItem>
             )}
@@ -2579,8 +2741,12 @@ export function InterCompanyVoucherForm({
               if (sourceSideDisabled) return;
               setSourceCompanyBankId(id);
             }}
+            simpleView={simpleView}
+            simpleViewBankOutTotal={sourceSimpleViewBankOutTotal}
+            formatCurrencyForPrint={formatCurrencyForPrint}
           />
         }
+        simpleView={simpleView}
       />
 
       <InterCompanyVoucherIdentityStrip
@@ -2612,6 +2778,21 @@ export function InterCompanyVoucherForm({
         formatCurrencyForPrint={formatCurrencyForPrint}
         fieldsDisabled={fieldsDisabled}
         editLocked={isInterCompanyEditLocked}
+        showOtherCharge={showIcOtherCharge}
+        otherChargeEnabled={otherChargeEnabled}
+        onOtherChargeEnabledChange={(enabled) => {
+          setOtherChargeEnabled(enabled);
+          if (!enabled) {
+            form.setValue("otherChargeAccountId", "");
+            form.setValue("otherChargeAmount", 0);
+          } else {
+            form.setValue("otherChargeAmount", 0);
+          }
+        }}
+        otherChargeAccountOptions={otherChargeAccountOptions}
+        otherChargeBalance={otherChargeBalance}
+        onOtherChargeDefault={setOtherChargeDefault}
+        otherChargeAccountId={String(otherChargeAccountId || "")}
       />
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3 md:items-stretch">
@@ -2808,15 +2989,17 @@ export function InterCompanyVoucherForm({
     </Form>
   );
 
-  // auto column = ribbon collapse par icon-only width; content column baaki width le
+  // Top tabs — Voucher / Inter Com System; content neeche full width
   const ribbonLayout = (
-    <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[auto_1fr] md:gap-4 md:items-stretch">
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
       <InterCompanyRibbonNav
         active={ribbonTab}
         onChange={setRibbonTab}
         pendingSystemJoinCount={pendingSystemJoinCount}
         changeDetected={showChangeDetected}
         onChangeDetectedClick={openChangeDetectDialog}
+        simpleView={simpleView}
+        onSimpleViewChange={handleSimpleViewChange}
       />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">{formInner}</div>
     </div>

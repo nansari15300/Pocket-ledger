@@ -15,6 +15,7 @@ export type Party = {
   address?: string;
   pan?: string;
   phone?: string;
+  whatsapp?: boolean;
   email?: string;
   isDeleted?: boolean;
   /** Owner freeze — no new vouchers; visible disabled in dropdowns. */
@@ -35,6 +36,11 @@ export type Party = {
   isIcPeerCompanyGroup?: boolean;
   icPeerCompanyId?: string;
   icMemberParties?: Party[];
+  /** Nepal Anusuchi 13 — FY-keyed confirmation / statement send. */
+  anusuchi13ConfirmationByFy?: Record<
+    string,
+    { sent?: boolean; completed?: boolean; statementSent?: boolean }
+  >;
 };
 
 export type Group = {

@@ -7,8 +7,10 @@ import { useState, useEffect, useCallback } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useRouter } from 'next/navigation';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
+import { collectExpenseGroupScopeAccounts } from '@/lib/expenseGroupTree';
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from '@/lib/firebase';
+import { masterDetailListHref } from '@/lib/masterDetailListPath';
 
 export function ExpenseGroupDetailsClient() {
   const params = useParams();
@@ -18,7 +20,11 @@ export function ExpenseGroupDetailsClient() {
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const groupId = params.id as string;
   const group = processedExpenseGroups.find((g) => g.id === groupId);
-  const accountsInGroup = processedExpenseAccounts.filter(p => p.groupId === groupId);
+  const accountsInGroup = collectExpenseGroupScopeAccounts(
+    groupId,
+    processedExpenseGroups,
+    processedExpenseAccounts
+  );
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     if (userNames[userId]) return userNames[userId];
@@ -54,7 +60,7 @@ export function ExpenseGroupDetailsClient() {
         onAccountUpdated={() => {}}
         dateRange={dateRange}
         onDateRangeChange={setDateRange}
-        onBack={() => router.push(`/incomes?view=groups&selected=${encodeURIComponent(groupId)}`)}
+        onBack={() => router.replace(`${masterDetailListHref("incomes")}?view=groups`, { scroll: false })}
         userNames={userNames}
       />
     </div>

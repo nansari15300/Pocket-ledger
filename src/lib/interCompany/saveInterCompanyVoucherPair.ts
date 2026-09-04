@@ -23,9 +23,12 @@ import {
   composeInterCompanyNarrationBase,
   extractInterCompanyUserNarration,
   normalizeInterCompanyTargetPostMode,
+  resolveInterCompanyLegsForVoucher,
   type InterCompanyTargetPostMode,
 } from "@/lib/interCompany/interCompanyPostingLegs";
 import { getNextInterCompanyVoucherNumber } from "@/lib/interCompany/nextInterCompanyVoucherNumber";
+
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 import {
   purgeInterCompanyCounterpartyPartyIfUnused,
   reconcileUnusedInterCompanyCounterpartyParties,
@@ -86,6 +89,10 @@ export type SaveInterCompanyPairInput = {
   sourceEntityId: string;
   targetEntityKind: InterCompanyEntityKind;
   targetEntityId: string;
+  /** Source-only — Payment Out style other charge (not synced to target). */
+  otherChargeAccountId?: string;
+  otherChargeAmount?: number;
+  otherChargeKind?: InterCompanyEntityKind | null;
   /** Source company — payment nikalne wala bank/cash */
   sourceCompanyBankAccountId: string;
   /** Target company — receive hone wala bank/cash (approve par ledger) */
@@ -218,13 +225,26 @@ function buildVoucherPayload(args: {
   shareSourceAttachmentsWithPeer?: boolean;
   shareTargetAttachmentsWithSource?: boolean;
   targetPostMode?: InterCompanyTargetPostMode;
+  otherChargeAccountId?: string;
+  otherChargeAmount?: number;
+  otherChargeKind?: InterCompanyEntityKind | null;
 }): Record<string, unknown> {
+  const otherAmt = round2(Number(args.otherChargeAmount) || 0);
+  const otherAccountId = String(args.otherChargeAccountId || "").trim();
+  const transferAmt = round2(Number(args.amount) || 0);
+  const docTotal = round2(transferAmt + (otherAmt > 0 && otherAccountId ? otherAmt : 0));
+  const otherChargeKind =
+    args.otherChargeKind === "party" ||
+    args.otherChargeKind === "staff" ||
+    args.otherChargeKind === "expense"
+      ? args.otherChargeKind
+      : null;
   return {
     type: "inter_company",
     voucherNumber: args.voucherNumber,
     date: args.dateIso,
-    amount: args.amount,
-    total: args.amount,
+    amount: transferAmt,
+    total: docTotal,
     narration: args.narration,
     fileUrls: args.ownFileUrls,
     interCompanyOwnFileUrls: args.ownFileUrls,
@@ -250,6 +270,13 @@ function buildVoucherPayload(args: {
     targetCompanyBankLabel: args.targetCompanyBankLabel || null,
     interCompanyCounterpartyPartyId: args.interCompanyCounterpartyPartyId || null,
     interCompanyLegs: args.interCompanyLegs,
+    ...(otherAmt > 0 && otherAccountId
+      ? {
+          otherChargeAccountId: otherAccountId,
+          otherChargeAmount: otherAmt,
+          ...(otherChargeKind ? { otherChargeKind } : {}),
+        }
+      : {}),
     ...entityPayeeFields(args.entityKind, args.entityId),
   };
 }
@@ -605,6 +632,36 @@ export async function saveInterCompanyVoucherPair(
     }),
   ]);
 
+  let resolvedOtherChargeAccountId = String(input.otherChargeAccountId || "").trim();
+  let resolvedOtherChargeAmount = round2(Number(input.otherChargeAmount) || 0);
+  let resolvedOtherChargeKind: InterCompanyEntityKind | null =
+    input.otherChargeKind === "party" ||
+    input.otherChargeKind === "staff" ||
+    input.otherChargeKind === "expense"
+      ? input.otherChargeKind
+      : null;
+
+  if (editingSide === "target" && existingSourceRow) {
+    resolvedOtherChargeAccountId = String(existingSourceRow.otherChargeAccountId || "").trim();
+    resolvedOtherChargeAmount = round2(Number(existingSourceRow.otherChargeAmount) || 0);
+    const storedKind = String(existingSourceRow.otherChargeKind || "").trim() as InterCompanyEntityKind;
+    if (storedKind === "party" || storedKind === "staff" || storedKind === "expense") {
+      resolvedOtherChargeKind = storedKind;
+    } else if (resolvedOtherChargeAccountId && resolvedOtherChargeAmount > 0) {
+      const leg = resolveInterCompanyLegsForVoucher(existingSourceRow).find(
+        (row) =>
+          String(row.accountId) === resolvedOtherChargeAccountId &&
+          row.debit > 0 &&
+          (row.kind === "party" || row.kind === "staff" || row.kind === "expense")
+      );
+      if (leg) resolvedOtherChargeKind = leg.kind;
+    }
+  } else if (resolvedOtherChargeAmount <= 0 || !resolvedOtherChargeAccountId) {
+    resolvedOtherChargeAccountId = "";
+    resolvedOtherChargeAmount = 0;
+    resolvedOtherChargeKind = null;
+  }
+
   const sourceLegs = existingSourceApproved
     ? buildSourceInterCompanyLegsApproved({
         amount,
@@ -613,6 +670,9 @@ export async function saveInterCompanyVoucherPair(
         companyBankAccountId: lockedSourceBankId,
         interCompanyCounterpartyPartyId: sourceIcPartyId,
         useIcConduit,
+        otherChargeAccountId: resolvedOtherChargeAccountId,
+        otherChargeAmount: resolvedOtherChargeAmount,
+        otherChargeKind: resolvedOtherChargeKind,
       })
     : buildSourceInterCompanyLegs({
         amount,
@@ -621,6 +681,9 @@ export async function saveInterCompanyVoucherPair(
         companyBankAccountId: lockedSourceBankId,
         interCompanyCounterpartyPartyId: sourceIcPartyId,
         useIcConduit,
+        otherChargeAccountId: resolvedOtherChargeAccountId,
+        otherChargeAmount: resolvedOtherChargeAmount,
+        otherChargeKind: resolvedOtherChargeKind,
       });
 
   const targetLegs = existingTargetApproved
@@ -724,6 +787,9 @@ export async function saveInterCompanyVoucherPair(
     shareSourceAttachmentsWithPeer,
     shareTargetAttachmentsWithSource,
     targetPostMode,
+    otherChargeAccountId: resolvedOtherChargeAccountId,
+    otherChargeAmount: resolvedOtherChargeAmount,
+    otherChargeKind: resolvedOtherChargeKind,
   });
 
   const targetLink: InterCompanyLinkDoc = {

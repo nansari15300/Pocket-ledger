@@ -57,6 +57,19 @@ import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDeta
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
+import { createMasterEntityGroupMoveHandler } from "@/lib/createMasterEntityGroupMoveHandler";
+import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
+import { ITEM_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { itemGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
+import { itemGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
+import { ITEM_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { filterMembersByMasterGroupScope } from "@/lib/masterGroupMemberScope";
+import {
+  appendMasterEntitySystemBranchGroups,
+  isMasterEntitySystemGroupId,
+  resolveMasterEntityGroupForSelection,
+  resolveItemListGroupBucketId,
+} from "@/lib/masterEntitySystemGroups";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { collectItemIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesItemLedger";
@@ -97,10 +110,7 @@ function ItemsPageContent() {
     processedItems.forEach((item: any) => {
       const n = pendingApprovalByItemId[item.id] || 0;
       if (!n) return;
-      const gid =
-        item.groupId && String(item.groupId).trim() !== "" && item.groupId !== "ungrouped_item"
-          ? item.groupId
-          : "ungrouped";
+      const gid = resolveItemListGroupBucketId(item);
       map[gid] = (map[gid] || 0) + n;
     });
     return map;
@@ -160,7 +170,7 @@ function ItemsPageContent() {
   }, [vouchersUserNames]);
 
   const selectedItem = activeView === "items" ? (selected as Item) : null;
-  const selectedItemGroup = activeView === "groups" ? (selected as ItemGroup) : null;
+  const selectedItemGroupRaw = activeView === "groups" ? (selected as ItemGroup) : null;
   const mobileItemsSelectionLabelClassName = useMemo(() => {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as Item | ItemGroup).balance);
@@ -226,33 +236,35 @@ function ItemsPageContent() {
     );
   }, [isMobile, selected]);
   const itemsMasterDetailTitle = activeView === "groups" ? "Item Groups" : "Items";
-  useSyncMasterDetailHeaderId("items", selectedItem?.id ?? selectedItemGroup?.id ?? null);
+  useSyncMasterDetailHeaderId("items", selectedItem?.id ?? selectedItemGroupRaw?.id ?? null);
 
   const processedItemGroups = useMemo(() => {
-    // Hide auto-created Ungrouped base doc; system groups sirf Reports me – list pages pe nahi
-    const baseGroups = initialProcessedItemGroups.filter((g) => {
+    const userGroups = initialProcessedItemGroups.filter((g) => {
       const anyG = g as any;
       if (anyG.isAutoUngrouped === true) return false;
       if (anyG.isReportOnly === true || anyG.isSystemReserved === true) return false;
       if (isSystemParentGroup("item_groups", anyG.id)) return false;
       return true;
     });
-    // Show Ungrouped row only when at least one item is in the Ungrouped bucket.
-    const ungrouped = processedItems.filter((p: any) => !p.groupId || p.groupId === "ungrouped_item");
-    if (ungrouped.length > 0) {
-      const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
-      const ungroupedGroup: ItemGroup = {
-        id: "ungrouped",
-        name: "Ungrouped",
-        balance: ungroupedBalance,
-        companyId: companyId || "",
-        debit: ungrouped.reduce((sum, p) => sum + p.debit, 0),
-        credit: ungrouped.reduce((sum, p) => sum + p.credit, 0),
-      };
-      return [...baseGroups, ungroupedGroup];
-    }
-    return baseGroups;
-  }, [processedItems, initialProcessedItemGroups, companyId]);
+    return appendMasterEntitySystemBranchGroups(
+      userGroups,
+      ITEM_ENTITY_GROUP_PRESET,
+      companyId || ""
+    );
+  }, [initialProcessedItemGroups, companyId]);
+
+  const selectedItemGroup = useMemo(
+    () =>
+      selectedItemGroupRaw
+        ? (resolveMasterEntityGroupForSelection(
+            selectedItemGroupRaw.id,
+            processedItemGroups,
+            ITEM_ENTITY_GROUP_PRESET,
+            companyId || ""
+          ) as ItemGroup | null)
+        : null,
+    [selectedItemGroupRaw, processedItemGroups, companyId]
+  );
 
   const allItems = useMemo(
     () => processedItems.filter((i) => i.type === "item" || i.type === "service" || i.type === "finished_good" || !i.type),
@@ -447,11 +459,15 @@ function ItemsPageContent() {
 
   const selectedGroupItems = useMemo(() => {
     if (!selectedItemGroup) return [];
-    if (selectedItemGroup.id === "ungrouped") {
-      return processedItems.filter((p: any) => !p.groupId || p.groupId === "ungrouped_item");
-    }
-    return processedItems.filter((p) => p.groupId === selectedItemGroup.id);
-  }, [selectedItemGroup, processedItems]);
+    return filterMembersByMasterGroupScope<Item>(
+      selectedItemGroup.id,
+      processedItems,
+      processedItemGroups,
+      resolveItemListGroupBucketId,
+      (id) => isMasterEntitySystemGroupId(ITEM_ENTITY_GROUP_PRESET, id),
+      (item, branchId) => resolveItemListGroupBucketId(item) === branchId
+    );
+  }, [selectedItemGroup, processedItems, processedItemGroups]);
 
   const processedItemGroupsForList = useMemo(() => {
     if (!showOnlyItemGroupsWithPendingApproval || !showApproveOnList) return processedItemGroups;
@@ -508,15 +524,38 @@ function ItemsPageContent() {
 
   const itemGroupMembersByGroupId = useMemo(() => {
     const map: Record<string, Item[]> = {};
-    for (const g of processedItemGroupsForList) {
-      if (g.id === "ungrouped") {
-        map[g.id] = processedItems.filter((p) => !p.groupId || p.groupId === "ungrouped_item");
-      } else {
-        map[g.id] = processedItems.filter((p) => p.groupId === g.id);
-      }
+    for (const item of processedItems) {
+      const bucket = resolveItemListGroupBucketId(item);
+      if (!map[bucket]) map[bucket] = [];
+      map[bucket].push(item);
     }
     return map;
-  }, [processedItemGroupsForList, processedItems]);
+  }, [processedItems]);
+
+  const handleMoveItemToGroup = useCallback(
+    (item: Item, targetGroupId: string) =>
+      createMasterEntityGroupMoveHandler({
+        companyId,
+        company,
+        groupsForName: processedItemGroups,
+        moveHelpers: itemGroupAccountMove,
+        entityLabel: "Item",
+      })(item, targetGroupId),
+    [companyId, company, processedItemGroups]
+  );
+
+  const handleMoveItemGroupToGroup = useCallback(
+    (sourceGroupId: string, targetGroupId: string) =>
+      createMasterEntityGroupTreeMoveHandler({
+        companyId,
+        company,
+        groupsForName: processedItemGroups,
+        allGroups: initialProcessedItemGroups,
+        config: ITEM_GROUP_LIST_CONFIG,
+        moveHelpers: itemGroupTreeMove,
+      })(sourceGroupId, targetGroupId),
+    [companyId, company, processedItemGroups, initialProcessedItemGroups]
+  );
 
   if (!companyId) {
     return (
@@ -545,7 +584,7 @@ function ItemsPageContent() {
       <div className={mlc.searchWrap}>
         <Search className={mlc.searchIcon} />
         <Input
-          placeholder={activeView === "items" ? "Search items..." : "Search groups..."}
+          placeholder={activeView === "items" ? "Search items..." : "Search groups/item"}
           listChrome
           listChromeSearch
           value={searchTerm}
@@ -659,6 +698,12 @@ function ItemsPageContent() {
           quickFilter={groupListQuickFilter}
           onQuickFilterChange={setGroupListQuickFilter}
           hideQuickFilterBar
+          moveAccountsEnabled={!!companyId}
+          onMoveAccountToGroup={handleMoveItemToGroup}
+          canMoveMember={itemGroupAccountMove.canMoveAccount}
+          onMoveGroupToGroup={handleMoveItemGroupToGroup}
+          canMoveGroup={itemGroupTreeMove.canMoveGroup}
+          allGroupsForMove={initialProcessedItemGroups}
         />
       )}
     </MasterListViewShell>
@@ -728,6 +773,11 @@ function ItemsPageContent() {
       mobileListOnly={true}
       hasSelectedItem={!!selected}
       onBackToList={onBackToList}
+      mobileListSelectionKey={
+        selected
+          ? `${selected.id}:${activeView === "groups" ? groupMemberFilterId ?? "" : ""}`
+          : null
+      }
     />
   );
 }

@@ -9,6 +9,7 @@ import { useRouter } from 'next/navigation';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from '@/lib/firebase';
+import { masterDetailListHref } from '@/lib/masterDetailListPath';
 
 function ExpenseAccountDetailsPageContent() {
   const params = useParams();
@@ -71,7 +72,7 @@ function ExpenseAccountDetailsPageContent() {
         onAccountDeleted={() => router.push('/incomes')}
         dateRange={dateRange}
         onDateRangeChange={handleDateRangeChange}
-        onBack={() => router.push(`/incomes?selected=${encodeURIComponent(accountId)}`)}
+        onBack={() => router.replace(masterDetailListHref("incomes"), { scroll: false })}
         userNames={userNames}
         journalAccountNames={journalAccountNames}
       />

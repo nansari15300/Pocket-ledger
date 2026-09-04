@@ -30,12 +30,13 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
     return (
       <input
         type={inputType}
+        data-pl-mlc-search-input={listChromeSearch ? "" : undefined}
         // Input width lock: long values should scroll/clip inside field, not expand layout.
         className={cn(
           listChrome
             ? cn(
-                "flex h-6 min-h-6 max-h-6 w-full min-w-0 max-w-full rounded-md border border-input bg-background py-0 text-xs ring-offset-background file:border-0 file:bg-transparent file:text-xs file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
-                listChromeSearch ? "pl-7 pr-7" : "px-2"
+                "flex h-6 min-h-6 max-h-6 w-full min-w-0 max-w-full rounded-md border bg-background py-0 text-xs ring-offset-background file:border-0 file:bg-transparent file:text-xs file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                listChromeSearch ? "border-blue-300 pl-7 pr-7" : "border-input px-2"
               )
             : "flex h-10 w-full min-w-0 max-w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
           className

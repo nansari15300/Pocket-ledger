@@ -1,6 +1,8 @@
 
 "use client";
-import { Combobox } from "@/components/ui/combobox";
+import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
+import { BANK_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { useVouchers } from "@/hooks/useVouchers";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, PlusCircle } from "lucide-react";
 import { useState } from "react";
@@ -19,7 +21,13 @@ import { firestore } from "@/lib/firebase";
 import type { AccountGroup } from "@/components/bank-cash/types";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { CreateAccountGroupDialog } from "./CreateAccountGroupDialog";
-import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import {
+  BANK_SYSTEM_BANK_BRANCH_ID,
+  BANK_SYSTEM_CASH_BRANCH_ID,
+  getDefaultSystemGroupId,
+  normalizeBankGroupIdForStorage,
+} from "@/lib/masterEntitySystemGroups";
+import { resolveMasterGroupTreeBranchIdForGroup } from "@/lib/masterGroupTreeCombobox";
 import { apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
@@ -41,6 +49,7 @@ function createLocalEntityId(prefix: string): string {
 const formSchema = z.object({
   accountName: z.string().min(2, "Account name must be at least 2 characters."),
   phone: z.string().optional(),
+  whatsapp: z.boolean().optional(),
   accountType: z.enum(["Bank", "Cash"], { message: "Account type is required." }),
   openingBalance: z.coerce.number().min(0),
   groupId: z.string().optional(),
@@ -59,6 +68,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
   const { user } = useAuth();
   const { companyId, company } = useCompany();
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  const { processedAccountGroups } = useVouchers();
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
@@ -72,8 +82,8 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
       ifscCode: "",
       allowVoucherMinusBalance: false,
       isClearing: false,
-      // Default to canonical Ungrouped; ensured again at save-time.
-      groupId: getUngroupedGroupId("bank"),
+      // Default to system branch (Bank Accounts / Cash-in-Hand).
+      groupId: getDefaultSystemGroupId("bank", { accountType: "Bank" }),
     },
   });
 
@@ -95,13 +105,14 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
         // Local-only mode: save account in browser DB and queue cloud backup sync.
         const localId = createLocalEntityId("bank");
         const interCompanyAccountNo = await interCompanyAcNoForNewEntity("bank");
+        const normalizedGroupId = normalizeBankGroupIdForStorage(values.groupId, values.accountType);
         const payload = {
           id: localId,
           ...values,
           phone: values.phone?.trim() || null,
           ownerId: user.uid,
           companyId,
-          groupId: values.groupId?.trim() || getUngroupedGroupId("bank"),
+          groupId: normalizedGroupId,
           balance: values.openingBalance,
           createdAt: new Date().toISOString(),
           isDeleted: false,
@@ -117,14 +128,12 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
             ? `"${values.accountName}" was saved locally and will sync when online.`
             : `"${values.accountName}" was saved locally.`,
         });
-        form.reset({ accountName: "", accountType: "Bank", openingBalance: 0, bankName: "", accountNumber: "", ifscCode: "", groupId: getUngroupedGroupId("bank") });
+        form.reset({ accountName: "", accountType: "Bank", openingBalance: 0, bankName: "", accountNumber: "", ifscCode: "", groupId: getDefaultSystemGroupId("bank", { accountType: "Bank" }) });
         onAccountCreated?.();
         return;
       }
 
-      // If user leaves group unchanged, auto-assign/create Ungrouped before save.
-      const resolvedGroupId =
-        values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "bank"));
+      const normalizedGroupId = normalizeBankGroupIdForStorage(values.groupId, values.accountType);
       const bankRef = doc(collection(firestore, `companies/${companyId}/bank_accounts`));
       const interCompanyAccountNo = await interCompanyAcNoForNewEntity("bank");
       await setDoc(bankRef, {
@@ -132,7 +141,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
         phone: values.phone?.trim() || null,
         ownerId: user.uid,
         companyId,
-        groupId: resolvedGroupId || getUngroupedGroupId("bank"),
+        groupId: normalizedGroupId,
         balance: values.openingBalance,
         createdAt: serverTimestamp(),
         isDeleted: false,
@@ -144,8 +153,8 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
         description: `"${values.accountName}" has been successfully created.`,
       });
       
-      // Keep default selection on Ungrouped for next quick entry.
-      form.reset({ accountName: "", accountType: "Bank", openingBalance: 0, bankName: "", accountNumber: "", ifscCode: "", groupId: getUngroupedGroupId("bank") });
+      // Keep default on system branch for next quick entry.
+      form.reset({ accountName: "", accountType: "Bank", openingBalance: 0, bankName: "", accountNumber: "", ifscCode: "", groupId: getDefaultSystemGroupId("bank", { accountType: "Bank" }) });
       if (onAccountCreated) {
         onAccountCreated();
       }
@@ -167,6 +176,50 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
         <div className="space-y-4">
+            <FormField
+              control={form.control}
+              name="accountType"
+              render={({ field }: any) => (
+                <FormItem>
+                  <FormLabel>Account Type</FormLabel>
+                  <RadioGroup
+                    className="flex flex-col gap-2 sm:flex-row sm:gap-6"
+                    value={field.value}
+                    onValueChange={(next: "Bank" | "Cash") => {
+                      field.onChange(next);
+                      const currentBranch = resolveMasterGroupTreeBranchIdForGroup(
+                        form.getValues("groupId"),
+                        processedAccountGroups as AccountGroup[],
+                        BANK_ENTITY_GROUP_PRESET
+                      );
+                      const expectedBranch =
+                        next === "Cash" ? BANK_SYSTEM_CASH_BRANCH_ID : BANK_SYSTEM_BANK_BRANCH_ID;
+                      if (currentBranch !== expectedBranch) {
+                        form.setValue(
+                          "groupId",
+                          getDefaultSystemGroupId("bank", { accountType: next }),
+                          { shouldDirty: true }
+                        );
+                      }
+                    }}
+                  >
+                    <FormItem className="flex items-center space-x-2 space-y-0">
+                      <FormControl>
+                        <RadioGroupItem value="Bank" />
+                      </FormControl>
+                      <FormLabel className="cursor-pointer font-normal">Bank Account</FormLabel>
+                    </FormItem>
+                    <FormItem className="flex items-center space-x-2 space-y-0">
+                      <FormControl>
+                        <RadioGroupItem value="Cash" />
+                      </FormControl>
+                      <FormLabel className="cursor-pointer font-normal">Cash in Hand</FormLabel>
+                    </FormItem>
+                  </RadioGroup>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
             <MasterFormNameAcNoRow
               entityKind="bank"
               mode="create"
@@ -186,37 +239,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
                 />
               }
             />
-            <MasterFormTwoColGrid>
-              <MasterMobileNoField control={form.control} />
-            <FormField
-            control={form.control}
-            name="accountType"
-            render={({ field }: any) => (
-                <FormItem>
-                <FormLabel>Account Type</FormLabel>
-                 <RadioGroup
-                    onValueChange={field.onChange}
-                    defaultValue={field.value}
-                    className="flex h-10 w-full items-center space-x-4"
-                    >
-                    <FormItem className="flex items-center space-x-2 space-y-0">
-                        <FormControl>
-                        <RadioGroupItem value="Bank" />
-                        </FormControl>
-                        <FormLabel className="font-normal">Bank Account</FormLabel>
-                    </FormItem>
-                    <FormItem className="flex items-center space-x-2 space-y-0">
-                        <FormControl>
-                        <RadioGroupItem value="Cash" />
-                        </FormControl>
-                        <FormLabel className="font-normal">Cash in Hand</FormLabel>
-                    </FormItem>
-                    </RadioGroup>
-                <FormMessage />
-                </FormItem>
-            )}
-            />
-            </MasterFormTwoColGrid>
+            <MasterMobileNoField control={form.control} />
             <MasterFormTwoColGrid>
               <FormField
               control={form.control}
@@ -227,19 +250,38 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
                   <FormControl>
                     <div className="flex items-center gap-2">
                       <div className="flex-1">
-                        <Combobox
-                          options={[
-                            { value: getUngroupedGroupId("bank"), label: "Ungrouped" },
-                            ...groups
-                              .filter((group) => !(group as any).isSystemReserved && (group as any).isAutoUngrouped !== true)
-                              .map((group) => ({
-                                value: group.id,
-                                label: group.name,
-                              })),
-                          ]}
+                        <MasterGroupTreeCombobox
+                          preset={BANK_ENTITY_GROUP_PRESET}
+                          groups={groups}
+                          processedGroups={processedAccountGroups as AccountGroup[]}
+                          popoverModal={false}
+                          confirmWithOk
                           value={field.value}
-                          onChange={(val) => field.onChange(val === "none" ? "" : val)}
+                          onBranchChange={(branchId) => {
+                            if (branchId === BANK_SYSTEM_BANK_BRANCH_ID) {
+                              form.setValue("accountType", "Bank", { shouldDirty: true });
+                            } else if (branchId === BANK_SYSTEM_CASH_BRANCH_ID) {
+                              form.setValue("accountType", "Cash", { shouldDirty: true });
+                            }
+                          }}
+                          onChange={(val) => {
+                            const gid = val === "none" ? "" : val;
+                            field.onChange(gid);
+                            if (gid) {
+                              const branchId = resolveMasterGroupTreeBranchIdForGroup(
+                                gid,
+                                processedAccountGroups as AccountGroup[],
+                                BANK_ENTITY_GROUP_PRESET
+                              );
+                              if (branchId === BANK_SYSTEM_CASH_BRANCH_ID) {
+                                form.setValue("accountType", "Cash", { shouldDirty: true });
+                              } else if (branchId === BANK_SYSTEM_BANK_BRANCH_ID) {
+                                form.setValue("accountType", "Bank", { shouldDirty: true });
+                              }
+                            }
+                          }}
                           placeholder="Select or search a group"
+                          searchPlaceholder="Search groups..."
                           addNewLabel="Create New Group"
                           disabled={isLoading}
                         />

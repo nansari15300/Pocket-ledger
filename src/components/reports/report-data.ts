@@ -18,6 +18,8 @@ export type Report = {
   href?: string;
   /** When set, this report is only shown when company country matches (e.g. Nepal for Anusuchi 13). */
   countryOnly?: string;
+  /** Master-detail report: reports page top bar = party detail blue ribbon. */
+  ledgerDetailTopRibbon?: boolean;
 };
 
 export const reports: Report[] = [
@@ -139,6 +141,7 @@ export const reports: Report[] = [
     description: "Nepali VAT: Parties with transaction of one lac or above.",
     category: "Tax/GST",
     countryOnly: "Nepal",
+    ledgerDetailTopRibbon: true,
   },
   {
     id: "gst-report-1",

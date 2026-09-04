@@ -5,12 +5,18 @@ import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
+import { resolveGroupBooksOpeningBalance } from "@/lib/ledgerOpeningBalanceDisplay";
 import type { Party, Group } from "@/components/party/types";
 import {
   IC_COMPANY_PARTY_GROUP_ID,
   icPeerCompanyGroupListTitleLines,
   interCompanyClearingAccountDisplayName,
 } from "@/lib/interCompany/icPeerCompanyGroups";
+import { isPartySystemGroupId } from "@/lib/partySystemGroups";
+import {
+  collectPartyGroupScopeBucketIds,
+  filterPartiesForPartyGroupScope,
+} from "@/lib/partyGroupScope";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills, LedgerViewModeToggleButton } from "@/components/ui/LedgerViewModePills";
@@ -127,6 +133,11 @@ import { LinkAdvancesToVoucherDialog } from "../vouchers/LinkAdvancesToVoucherDi
 import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
+import { useMasterEntityLivePatch } from "@/hooks/useMasterEntityLivePatch";
+import { useMasterAccountFreezeDetailsChrome } from "@/hooks/useMasterAccountFreezeDetailsChrome";
+import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
+import { PARTY_FREEZE_COLLECTION } from "@/lib/masterAccountFreeze/partyFreezeAdapter";
+import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { Input } from "../ui/input";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
@@ -251,7 +262,7 @@ export function GroupDetails({
   allParties: Party[];
   onGroupUpdated: () => void;
   onGroupDeleted: () => void;
-  onPartyUpdated: () => void;
+  onPartyUpdated: (patch?: Partial<Party>) => void;
   dateRange: DateRange | undefined;
   onDateRangeChange: (dateRange: DateRange | undefined) => void;
   userNames: Record<string, string>;
@@ -354,7 +365,7 @@ export function GroupDetails({
 
   // Determine group type
   const isAutoSyntheticPartyGroup =
-    group.id === "ungrouped" || group.id === IC_COMPANY_PARTY_GROUP_ID;
+    group.id === IC_COMPANY_PARTY_GROUP_ID || isPartySystemGroupId(group.id);
 
   const groupType = useMemo(() => {
     if ((group as any).groupType) return (group as any).groupType;
@@ -372,15 +383,11 @@ export function GroupDetails({
 
   const partiesInGroup = useMemo(() => {
     if (group.id === IC_COMPANY_PARTY_GROUP_ID) return allParties;
-    if (group.id === "ungrouped")
-      // Ungrouped should include both empty groupId and persisted ungrouped id rows.
-      return allParties.filter((p) => !p.groupId || p.groupId === "ungrouped_party");
-    // Only filter parties if this is a party group
     if (groupType === "party") {
-      return allParties.filter((p) => p.groupId === group.id);
+      return filterPartiesForPartyGroupScope(group.id, allParties, allGroups);
     }
     return [];
-  }, [allParties, group, groupType]);
+  }, [allParties, allGroups, group.id, groupType]);
 
   const selectedMemberParty = useMemo(() => {
     if (!groupMemberFilterId || group.id === IC_COMPANY_PARTY_GROUP_ID) return null;
@@ -410,8 +417,12 @@ export function GroupDetails({
   );
 
   const childGroups = useMemo(() => {
-    return allGroups.filter((g) => (g as any).parentId === group.id);
-  }, [allGroups, group]);
+    if (groupType === "party") {
+      const scopeIds = collectPartyGroupScopeBucketIds(group.id, allGroups);
+      return allGroups.filter((g) => scopeIds.has(g.id) && g.id !== group.id);
+    }
+    return allGroups.filter((g) => (g as { parentId?: string }).parentId === group.id);
+  }, [allGroups, group.id, groupType]);
 
   // Get all accounts (bank accounts, expense accounts) that belong to this group or its child groups
   const accountsInGroup = useMemo(() => {
@@ -669,7 +680,6 @@ export function GroupDetails({
   const adjustBalanceTargetParty = icHeaderMemberAccount ?? selectedMemberParty ?? null;
   const canShowAdjustBalance =
     groupType === "party" &&
-    group.id !== "ungrouped" &&
     (group.id === IC_COMPANY_PARTY_GROUP_ID || Boolean(adjustBalanceTargetParty));
   const adjustBalanceTarget = adjustBalanceTargetParty
     ? {
@@ -699,6 +709,61 @@ export function GroupDetails({
       </Button>
     </AddVoucherDialog>
   ) : null;
+
+  const liveFreezeTargetParty = useMemo(() => {
+    if (!adjustBalanceTargetParty) return null;
+    return (
+      processedParties.find((party) => party.id === adjustBalanceTargetParty.id) ??
+      adjustBalanceTargetParty
+    );
+  }, [adjustBalanceTargetParty, processedParties]);
+
+  const handleFreezeTargetPartyUpdated = useMasterEntityLivePatch<Party>({
+    collection: "parties",
+    entityId: liveFreezeTargetParty?.id ?? "",
+    onUpdated: onPartyUpdated,
+  });
+
+  const memberAdjustBalanceActions =
+    liveFreezeTargetParty && adjustBalanceTarget ? (
+      <AddVoucherDialog
+        defaultTab="adjustment"
+        allowedTabs={["adjustment"]}
+        defaultVoucherData={{
+          defaultTab: "adjustment",
+          adjustmentTarget: adjustBalanceTarget,
+        }}
+      >
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={readMasterAccountFrozen(liveFreezeTargetParty)}
+          className={cn(LEDGER_HEADER_PILL_CN, "!h-[27px] min-h-[27px] text-xs")}
+          title="Adjust Balance"
+        >
+          <AdjustBalancePillLabel />
+        </Button>
+      </AddVoucherDialog>
+    ) : null;
+
+  const {
+    freezeOverlay: memberFreezeOverlay,
+    closingBalanceActions: memberClosingBalanceActions,
+    blockNewTransactions: blockMemberNewTransactions,
+  } = useMasterAccountFreezeDetailsChrome({
+    companyId,
+    collection: PARTY_FREEZE_COLLECTION,
+    entityId: liveFreezeTargetParty?.id ?? "",
+    entity: liveFreezeTargetParty ?? { id: "", isFrozen: false },
+    entityEligible: groupType === "party" && Boolean(liveFreezeTargetParty),
+    onEntityUpdated: handleFreezeTargetPartyUpdated,
+    adjustBalanceActions: memberAdjustBalanceActions,
+  });
+
+  const tableClosingBalanceActions =
+    liveFreezeTargetParty && groupType === "party"
+      ? memberClosingBalanceActions
+      : adjustBalanceClosingActions;
 
   const transactionDates = useMemo(() => {
     const dates = new Set<number>();
@@ -958,7 +1023,10 @@ export function GroupDetails({
     return raw instanceof Date && !isNaN(raw.getTime()) ? raw : undefined;
   }, [sortedTransactions, rowsPerPage, desktopPaginationMeta.sliceStart, hasLedgerDateFilter, dateRange?.from]);
 
-  const booksOpeningForGroup = Number(group.openingBalance) || 0;
+  const booksOpeningForGroup = useMemo(() => {
+    const members = selectedMemberParty ? [selectedMemberParty] : partiesInGroup;
+    return resolveGroupBooksOpeningBalance(group, members);
+  }, [group, selectedMemberParty, partiesInGroup]);
 
   const handleOpenNoteDialog = (partyId?: string) => {
     if (partiesInGroup.length === 1) {
@@ -1341,6 +1409,7 @@ export function GroupDetails({
           style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
         >
           <div className="pb-2">
+          <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
           {/* Unapproved: pink row â€” default `highlightPendingApproval` */}
           <TransactionsTable
             transactions={mobileTransactionsToShow}
@@ -1380,7 +1449,7 @@ export function GroupDetails({
             hideBalanceColumn={false}
             isDateChange={false}
             scrollOnlyTransactions
-            closingBalanceActions={adjustBalanceClosingActions}
+            closingBalanceActions={tableClosingBalanceActions}
             statusFilter={statusFilter}
             statusFilterAllChecked={statusFilterAllChecked}
             onStatusFilterAll={handleStatusFilterAll}
@@ -1388,6 +1457,7 @@ export function GroupDetails({
             statusFilterIdPrefix="group"
             {...statementCheck.tableProps}
           />
+          </MasterAccountFreezeTxnShell>
           </div>
         </div>
         <MobileTransactionsPager
@@ -1709,6 +1779,7 @@ export function GroupDetails({
               variant="chromePill"
               size="sm"
               onClick={() => handleOpenNoteDialog()}
+              disabled={Boolean(liveFreezeTargetParty) && blockMemberNewTransactions}
               className={LEDGER_HEADER_PILL_CN}
               data-theme-detail="add-note"
             >
@@ -1722,6 +1793,7 @@ export function GroupDetails({
       </div>
       <div className={cn("flex-1 flex flex-col min-h-0", balanceMode === "bill_wise" ? "min-w-0" : "overflow-x-auto scrollbar-slim-dim")}>
         <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
+          <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
           <TransactionsTable
             transactions={paginatedTransactions}
             context="group"
@@ -1768,7 +1840,7 @@ export function GroupDetails({
             periodCr={desktopPaginationMeta.periodCrForPage}
             closingBalance={desktopPaginationMeta.closingForPage}
             scrollOnlyTransactions
-            closingBalanceActions={adjustBalanceClosingActions}
+            closingBalanceActions={tableClosingBalanceActions}
             statusFilter={statusFilter}
             statusFilterAllChecked={statusFilterAllChecked}
             onStatusFilterAll={handleStatusFilterAll}
@@ -1776,6 +1848,7 @@ export function GroupDetails({
             statusFilterIdPrefix="group"
             {...statementCheck.tableProps}
           />
+          </MasterAccountFreezeTxnShell>
           {paginatedTransactions.length === 0 && (
             <div className="text-center py-8 text-muted-foreground">
               No transactions found for the selected period.
@@ -1790,7 +1863,7 @@ export function GroupDetails({
               <LedgerFooterCheckboxPill
                 id="show-narration-party-group"
                 checked={showNarration}
-                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
             <LedgerFooterColumnsMenu>

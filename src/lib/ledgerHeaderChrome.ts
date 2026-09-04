@@ -13,10 +13,10 @@ export const LEDGER_HEADER_PILL_ICON_SIZE_CN = "h-3.5 w-3.5";
  * Right 50% of ribbon — pills (andar H-scroll).
  */
 export const LEDGER_HEADER_PILL_ROW_CN =
-  "pl-ledger-header-card pl-ledger-header-pill-row justify-start gap-1";
+  "pl-ledger-header-card pl-ledger-header-pill-row justify-start gap-[3px]";
 /** Outer ribbon wrap — top/bottom gap 2px; pill-blue strip */
 export const LEDGER_HEADER_RIBBON_WRAP_CN =
-  "pl-ledger-header-ribbon-wrap border-b px-3 py-[2px] overflow-x-auto min-h-0 scrollbar-slim-dim";
+  "pl-ledger-header-ribbon-wrap border-b px-[3px] py-[3px] overflow-x-auto min-h-0 scrollbar-slim-dim";
 /** Outer ribbon — 50/50; overflow parent pe H-scroll jab left floor tight ho */
 export const LEDGER_HEADER_OUTER_ROW_CN =
   "pl-ledger-header-outer-row flex w-full flex-nowrap items-stretch gap-1";
@@ -50,3 +50,11 @@ export const LEDGER_HEADER_TITLE_CN =
 /** Amount under Balance label */
 export const LEDGER_HEADER_BALANCE_CN =
   "pl-ledger-header-balance text-base font-bold";
+
+/** Closing Balance footer card: pills wrap instead of overlapping the total. */
+export const LEDGER_CLOSING_BALANCE_CARD_ROW_CN =
+  "flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5";
+export const LEDGER_CLOSING_BALANCE_ACTIONS_CN =
+  "flex min-w-0 max-w-full flex-[1_1_12rem] flex-wrap items-center gap-2";
+export const LEDGER_CLOSING_BALANCE_TOTAL_CN =
+  "ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5";

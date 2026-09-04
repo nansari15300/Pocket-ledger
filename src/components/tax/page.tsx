@@ -27,6 +27,9 @@ import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { DateRange } from "@/components/ui/ad-calendar";
+import { filterMembersByMasterGroupScope } from "@/lib/masterGroupMemberScope";
+import { TAX_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { isMasterEntitySystemGroupId, resolveTaxListGroupBucketId } from "@/lib/masterEntitySystemGroups";
 
 export default function TaxPage() {
   const { user } = useAuth();
@@ -169,11 +172,17 @@ export default function TaxPage() {
   const taxesForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
     if (selectedGroup.id === 'ungrouped') {
-      // Keep Ungrouped group selection aligned with stored ungrouped ids.
       return processedTaxes.filter(p => !p.groupId || p.groupId === "ungrouped_tax");
     }
-    return processedTaxes.filter(p => p.groupId === selectedGroup.id);
-  }, [selectedGroup, processedTaxes]);
+    return filterMembersByMasterGroupScope<Tax>(
+      selectedGroup.id,
+      processedTaxes,
+      processedTaxGroups,
+      resolveTaxListGroupBucketId,
+      (id) => isMasterEntitySystemGroupId(TAX_ENTITY_GROUP_PRESET, id),
+      (tax, branchId) => resolveTaxListGroupBucketId(tax) === branchId
+    );
+  }, [selectedGroup, processedTaxes, processedTaxGroups]);
 
 
   if (vouchersLoading) {

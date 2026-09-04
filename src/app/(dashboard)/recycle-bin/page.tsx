@@ -68,10 +68,11 @@ import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { BROWSER_DB_COLLECTION_BUMP, deleteCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import {
     companyUsesSqliteRecycleBinSource,
-    listDeletedSubdocsFromSqlite,
+    loadDeletedSubdocsForRecycleBin,
     permanentDeleteCompanySubdocFromRecycleBin,
     restoreCompanySubdocFromRecycleBin,
     deleteFirebaseStorageFilesForDoc,
+    subscribeOnlineRecycleBinFirestoreToSqliteMirror,
 } from "@/lib/recycleBinEntityLifecycle";
 import { LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
 import { ownerFinalizeRecycleBinCompanyOnServer } from "@/lib/ownerRecycleBinApiClient";
@@ -529,7 +530,7 @@ function RecycleBinContent() {
 
             const mergeSqliteDeletedIntoState = async () => {
                 if (!(await companyUsesSqliteRecycleBinSource(companyId))) return;
-                const sqliteItems = await listDeletedSubdocsFromSqlite(companyId, COLLECTIONS_TO_CHECK);
+                const sqliteItems = await loadDeletedSubdocsForRecycleBin(companyId, COLLECTIONS_TO_CHECK);
                 if (cancelled) return;
                 setDeletedItems((prev) => {
                     const byKey = new Map<string, DeletedItem>();
@@ -551,6 +552,13 @@ function RecycleBinContent() {
             void mergeSqliteDeletedIntoState().finally(() => {
                 if (!cancelled) setLoading(false);
             });
+            const unsubFirestoreMirror = subscribeOnlineRecycleBinFirestoreToSqliteMirror(
+                companyId,
+                COLLECTIONS_TO_CHECK,
+                () => {
+                    if (!cancelled) void mergeSqliteDeletedIntoState();
+                }
+            );
             const onBump = (ev: Event) => {
                 const d = (ev as CustomEvent<{ companyId?: string; collectionName?: string }>).detail;
                 if (d?.companyId && d.companyId !== companyId) return;
@@ -559,6 +567,7 @@ function RecycleBinContent() {
             window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
             return () => {
                 cancelled = true;
+                unsubFirestoreMirror();
                 window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
             };
         }, [companyId, user?.uid]);
@@ -578,9 +587,14 @@ function RecycleBinContent() {
                 }
                 if (cancelled) return;
 
+                const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
+                const fsCompanyId = String(
+                    (reg as { authoritativeCompanyId?: string } | null)?.authoritativeCompanyId || companyId
+                ).trim();
+
                 subcollectionUnsubs = COLLECTIONS_TO_CHECK.map((coll) => {
                     const q = query(
-                        collection(firestore, `companies/${companyId}/${coll.path}`),
+                        collection(firestore, `companies/${fsCompanyId}/${coll.path}`),
                         where("isDeleted", "==", true)
                     );
                     return onSnapshot(

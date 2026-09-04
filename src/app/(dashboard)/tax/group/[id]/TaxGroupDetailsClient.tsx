@@ -7,6 +7,10 @@ import { useState, useEffect, useCallback } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useRouter } from 'next/navigation';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
+import type { Tax } from '@/components/tax/types';
+import { filterMembersByMasterGroupScope } from '@/lib/masterGroupMemberScope';
+import { TAX_ENTITY_GROUP_PRESET } from '@/lib/masterEntityGroupFormPresets';
+import { isMasterEntitySystemGroupId, resolveTaxListGroupBucketId } from '@/lib/masterEntitySystemGroups';
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from '@/lib/firebase';
 
@@ -18,7 +22,14 @@ export function TaxGroupDetailsClient() {
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const groupId = params.id as string;
   const group = processedTaxGroups.find((g) => g.id === groupId);
-  const taxesInGroup = processedTaxes.filter(t => t.groupId === groupId);
+  const taxesInGroup = filterMembersByMasterGroupScope<Tax>(
+    groupId,
+    processedTaxes,
+    processedTaxGroups,
+    resolveTaxListGroupBucketId,
+    (id) => isMasterEntitySystemGroupId(TAX_ENTITY_GROUP_PRESET, id),
+    (tax, branchId) => resolveTaxListGroupBucketId(tax) === branchId
+  );
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     if (userNames[userId]) return userNames[userId];

@@ -1,23 +1,27 @@
 
 "use client";
 
-import { cn } from "@/lib/utils";
-import type { ItemGroup, Item } from "@/components/items/types";
+import React, { useCallback, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
-import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
-import { useMemo, useState } from "react";
+import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { ItemGroup, Item } from "@/components/items/types";
 import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
-import { filterAndSortEntityGroups } from "@/lib/entityGroupListQuickFilter";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { Boxes } from "lucide-react";
 import { masterListShellCn } from "@/lib/masterListChrome";
 import type { GroupListSelectOptions } from "@/lib/groupListExpand";
-import { MasterGroupExpandableListBody } from "@/components/entity/MasterGroupExpandableListBody";
+import { MasterGroupNestedListBody } from "@/components/entity/MasterGroupNestedListBody";
+import { ITEM_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { useMasterGroupListForest } from "@/hooks/useMasterGroupListForest";
+import { GroupListMemberRow } from "@/components/entity/GroupListMemberRow";
+import { groupListMemberAvatarFromRow } from "@/components/entity/GroupListMemberAvatar";
 import { MasterListGroupIcon } from "@/components/entity/MasterListGroupIcon";
+import { motion } from "framer-motion";
 
 export function ItemGroupList({
   groups,
@@ -32,6 +36,12 @@ export function ItemGroupList({
   groupMembersByGroupId = {},
   selectedGroupMemberFilterId = null,
   pendingApprovalByMemberId = {},
+  moveAccountsEnabled = false,
+  onMoveAccountToGroup,
+  canMoveMember,
+  onMoveGroupToGroup,
+  canMoveGroup,
+  allGroupsForMove,
 }: {
   groups: ItemGroup[];
   searchTerm: string;
@@ -45,6 +55,12 @@ export function ItemGroupList({
   groupMembersByGroupId?: Record<string, Item[]>;
   selectedGroupMemberFilterId?: string | null;
   pendingApprovalByMemberId?: Record<string, number>;
+  moveAccountsEnabled?: boolean;
+  onMoveAccountToGroup?: (item: Item, targetGroupId: string) => void | Promise<void>;
+  canMoveMember?: (item: Item) => boolean;
+  onMoveGroupToGroup?: (sourceGroupId: string, targetGroupId: string) => void | Promise<void>;
+  canMoveGroup?: (group: ItemGroup) => boolean;
+  allGroupsForMove?: ItemGroup[];
 }) {
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } =
@@ -53,73 +69,87 @@ export function ItemGroupList({
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
 
-  const filteredAndSortedGroups = useMemo(() => {
-    const base = (groups || []).filter((group) => {
-      const isReportOnly = (group as any).isReportOnly === true;
-      const isSystemParent =
-        (group as any).isSystemReserved === true ||
-        isSystemParentGroup("item_groups", (group as any).id);
-      if (isReportOnly || isSystemParent) return false;
-      return !!group.name;
-    });
-    let list = filterAndSortEntityGroups(base, searchTerm, quickFilter);
-    if (quickFilter === "default") {
-      list = [...list].sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
-    }
-    return list;
-  }, [groups, searchTerm, quickFilter]);
+  const visibleGroupFilter = useCallback((group: ItemGroup) => {
+    const isReportOnly = (group as { isReportOnly?: boolean }).isReportOnly === true;
+    const isSystemParent =
+      (group as { isSystemReserved?: boolean }).isSystemReserved === true ||
+      isSystemParentGroup("item_groups", group.id);
+    if (isReportOnly || isSystemParent) return false;
+    return !!group.name;
+  }, []);
 
-  const listOrderKey = useMemo(
-    () => masterListOrderKey(filteredAndSortedGroups.map((g) => g.id)),
-    [filteredAndSortedGroups]
-  );
-
-  const { displayRows: displayListRows, displayOrderKey } = useMasterListDisplayRows(
-    filteredAndSortedGroups,
-    listOrderKey,
-    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
-  );
+  const { forest, visibleGroups, displayOrderKey } = useMasterGroupListForest({
+    groups,
+    config: ITEM_GROUP_LIST_CONFIG,
+    searchTerm,
+    quickFilter,
+    groupMembersByGroupId,
+    visibleGroupFilter,
+  });
 
   return (
-    <div className={masterListShellCn}>
-      <ScrollArea
-        listChrome
-        className="min-h-0 min-w-0 flex-1"
-        onViewportScroll={markListScrolling}
-        onViewportTouchMove={markListScrolling}
-      >
-        <ul className="pl-master-list-ul">
-          <MasterGroupExpandableListBody
-            displayListRows={displayListRows}
-            displayOrderKey={displayOrderKey}
-            selectedGroup={selectedGroup}
-            selectedGroupMemberFilterId={selectedGroupMemberFilterId}
-            groupMembersByGroupId={groupMembersByGroupId}
-            onSelectGroup={onSelectGroup}
-            pendingApprovalByGroupId={pendingApprovalByGroupId}
-            pendingApprovalByMemberId={pendingApprovalByMemberId}
-            getItemHref={getItemHref}
-            quickFilter={quickFilter}
-            animatePresenceMode={animatePresenceMode}
-            rowMotionProps={rowMotionProps}
-            isRowAnimationEnabled={isRowAnimationEnabled}
-            layoutHoldMs={layoutHoldMs}
-            expandAriaLabel="items"
-            formatCurrency={formatCurrency}
-            renderGroupLeading={() => (
-              <MasterListGroupIcon>
-                <Boxes className="h-5 w-5" />
-              </MasterListGroupIcon>
-            )}
-          />
-          {displayListRows.length === 0 && (
-            <div className="text-center text-muted-foreground p-8">No groups found.</div>
-          )}
-        </ul>
-      </ScrollArea>
-      {!hideQuickFilterBar ? (
-        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
-      ) : null}
-    </div>
+    <TooltipProvider delayDuration={200}>
+      <motion.div className={masterListShellCn}>
+        <ScrollArea
+          listChrome
+          className="min-h-0 min-w-0 w-full flex-1"
+          onViewportScroll={markListScrolling}
+          onViewportTouchMove={markListScrolling}
+        >
+          <ul className="pl-master-list-ul w-full">
+            <MasterGroupNestedListBody
+              config={ITEM_GROUP_LIST_CONFIG}
+              forest={forest}
+              allGroups={allGroupsForMove ?? visibleGroups}
+              displayOrderKey={displayOrderKey}
+              searchTerm={searchTerm}
+              selectedGroup={selectedGroup}
+              selectedGroupMemberFilterId={selectedGroupMemberFilterId}
+              groupMembersByGroupId={groupMembersByGroupId}
+              onSelectGroup={onSelectGroup}
+              pendingApprovalByGroupId={pendingApprovalByGroupId}
+              pendingApprovalByMemberId={pendingApprovalByMemberId}
+              getItemHref={getItemHref}
+              quickFilter={quickFilter}
+              animatePresenceMode={animatePresenceMode}
+              rowMotionProps={rowMotionProps}
+              isRowAnimationEnabled={isRowAnimationEnabled}
+              layoutHoldMs={layoutHoldMs}
+              formatCurrency={(amount, options) =>
+                formatCurrency(amount, { ...options, noAnimation: true }) as React.ReactNode
+              }
+              renderGroupLeading={() => (
+                <MasterListGroupIcon>
+                  <Boxes className="h-5 w-5" />
+                </MasterListGroupIcon>
+              )}
+              renderMemberRow={(member, group, ctx) => (
+                <GroupListMemberRow
+                  key={member.id || `${group.id}-member-${member.name}`}
+                  name={member.name}
+                  balance={member.balance}
+                  isSelected={ctx.isSelected}
+                  onClick={ctx.onClick}
+                  pendingCount={ctx.pendingCount}
+                  leading={groupListMemberAvatarFromRow(member)}
+                  highlightQuery={ctx.highlightQuery}
+                  isAccountFrozen={Boolean((member as Item).isFrozen)}
+                  rowDimClass={ctx.rowDimClass}
+                  {...ctx.memberMoveProps}
+                />
+              )}
+              moveAccountsEnabled={moveAccountsEnabled}
+              onMoveAccountToGroup={onMoveAccountToGroup}
+              canMoveMember={canMoveMember}
+              onMoveGroupToGroup={onMoveGroupToGroup}
+              canMoveGroup={canMoveGroup}
+            />
+          </ul>
+        </ScrollArea>
+        {!hideQuickFilterBar ? (
+          <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+        ) : null}
+      </motion.div>
+    </TooltipProvider>
   );
 }

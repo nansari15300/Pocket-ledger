@@ -17,6 +17,7 @@ import type { Company } from "@/hooks/useCompany";
 import {
   interCompanyComboboxTriggerClass,
   interCompanyCompanyFieldsRowClass,
+  interCompanyCompanyFieldsRowSimpleClass,
   interCompanyDropdownContentClass,
   interCompanyFieldColClass,
   interCompanyIcReadonlyFieldClass,
@@ -57,6 +58,11 @@ type Props = {
   showRevertedBadge?: boolean;
   companyBankAccountId?: string;
   onCompanyBankAccountIdChange?: (id: string) => void;
+  /** Simple view — company row: naam only; account rows: type + naam */
+  simpleView?: boolean;
+  /** Simple view + other charge — transfer + other charge bank out total */
+  simpleViewBankOutTotal?: number | null;
+  formatCurrencyForPrint?: (amount: number, options?: { noSuffix?: boolean }) => string;
 };
 
 export function InterCompanySourcePaySection({
@@ -77,6 +83,9 @@ export function InterCompanySourcePaySection({
   showRevertedBadge = false,
   companyBankAccountId = "",
   onCompanyBankAccountIdChange,
+  simpleView = false,
+  simpleViewBankOutTotal = null,
+  formatCurrencyForPrint,
 }: Props) {
   const companyAc = readCompanyInterCompanyAcNo(company);
   const companyCode = useStickyInterCompanyCompanyCode(company);
@@ -96,6 +105,11 @@ export function InterCompanySourcePaySection({
     companyComboboxOptions.find((o) => o.value === selectedCompanyId)?.label ||
     "—";
   const canPickCompany = Boolean(onSourceCompanyChange) && !companySelectDisabled;
+  const sourceCompanyInfoHint = canPickCompany
+    ? "Select source company (My companies / joined)"
+    : isPeerSourceCompany
+      ? "Linked source company"
+      : "Auto — current logged-in company";
 
   return (
     <div
@@ -110,15 +124,13 @@ export function InterCompanySourcePaySection({
           flowBadge={showPaymentOutBadge ? "payment_out" : null}
           showRevertedBadge={showRevertedBadge}
           trailingAction={null}
+          infoHint={sourceCompanyInfoHint}
         />
-        <p className="text-[11px] text-muted-foreground">
-          {canPickCompany
-            ? "Select source company (My companies / joined)"
-            : isPeerSourceCompany
-              ? "Linked source company"
-              : "Auto — current logged-in company"}
-        </p>
-        <div className={interCompanyCompanyFieldsRowClass}>
+        <div
+          className={cn(
+            simpleView ? interCompanyCompanyFieldsRowSimpleClass : interCompanyCompanyFieldsRowClass
+          )}
+        >
           <div className={cn(interCompanyFieldColClass, "min-w-[8.5rem]")}>
             <Label className="whitespace-nowrap text-xs text-muted-foreground sm:sr-only">
               Company name
@@ -145,6 +157,8 @@ export function InterCompanySourcePaySection({
               />
             )}
           </div>
+          {!simpleView ? (
+            <div className="ic-company-extra-fields contents">
           <div className={interCompanyFieldColClass}>
             <Label className="whitespace-nowrap text-xs text-muted-foreground">Company Code</Label>
             <Input
@@ -171,6 +185,8 @@ export function InterCompanySourcePaySection({
               )}
             />
           </div>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -191,6 +207,7 @@ export function InterCompanySourcePaySection({
           disabled={fieldsDisabled || !onCompanyBankAccountIdChange}
           allowLookupWithoutCompany={showReadOnlyAccounts}
           showDetails={false}
+          simpleView={simpleView}
           disabledHint={
             entitiesLoading
               ? "Loading bank accounts…"
@@ -220,6 +237,10 @@ export function InterCompanySourcePaySection({
               ? "Loading source accounts…"
               : "Saved voucher — accounts are read-only"
           }
+          simpleView={simpleView}
+          showDetails={!simpleView}
+          simpleViewBankOutTotal={simpleViewBankOutTotal}
+          formatCurrencyForPrint={formatCurrencyForPrint}
         />
       </div>
     </div>

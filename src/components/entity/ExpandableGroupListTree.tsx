@@ -2,16 +2,12 @@
 
 import React, { useCallback, useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
-import { masterListOrderKey, useMasterListDisplayRows } from "@/hooks/useMasterListRowMotion";
-import {
-  GROUP_LIST_CHILD_INDENT_CLASS,
-  sortGroupListMembers,
-} from "@/lib/groupListExpand";
+import { GroupListMemberMotionList } from "@/components/entity/GroupListMemberMotionList";
 
 import type { GroupListSelectOptions, GroupListSortableMember } from "@/lib/groupListExpand";
+import { GROUP_LIST_CHILD_INDENT_CLASS, filterGroupListMembersByQuickFilter, sortGroupListMembers } from "@/lib/groupListExpand";
 
 type ExpandableGroupListTreeProps<T extends GroupListSortableMember & { id: string }> = {
   members: T[];
@@ -66,21 +62,10 @@ export function ExpandableGroupListTree<T extends GroupListSortableMember & { id
     }
   }, [expanded, isControlled, onExpandedChange]);
 
-  const sortedMembers = useMemo(
-    () => sortGroupListMembers(members, quickFilter, memberSortName),
-    [members, quickFilter, memberSortName]
-  );
-
-  const memberOrderKey = useMemo(
-    () => masterListOrderKey(sortedMembers.map((member) => member.id)),
-    [sortedMembers]
-  );
-
-  const { displayRows: displayMembers, displayOrderKey: memberDisplayOrderKey } =
-    useMasterListDisplayRows(sortedMembers, memberOrderKey, {
-      enabled: isRowAnimationEnabled,
-      holdMs: layoutHoldMs,
-    });
+  const sortedMembers = useMemo(() => {
+    const filtered = filterGroupListMembersByQuickFilter(members, quickFilter);
+    return sortGroupListMembers(filtered, quickFilter, memberSortName);
+  }, [members, quickFilter, memberSortName]);
 
   const expandControl = hasMembers ? (
     <button
@@ -108,20 +93,17 @@ export function ExpandableGroupListTree<T extends GroupListSortableMember & { id
   const groupRow = renderGroupRow({ expandControl });
   const childList = expanded ? (
     <div className={cn("flex flex-col gap-1 pt-1", GROUP_LIST_CHILD_INDENT_CLASS)}>
-      <AnimatePresence mode={animatePresenceMode}>
-        {displayMembers.map((member) => {
+      <GroupListMemberMotionList
+        members={sortedMembers}
+        animatePresenceMode={animatePresenceMode}
+        rowMotionProps={rowMotionProps}
+        isRowAnimationEnabled={isRowAnimationEnabled}
+        layoutHoldMs={layoutHoldMs}
+        renderMember={(member, _index) => {
           const isMemberSelected = selectedMemberId === member.id;
-          return (
-            <motion.div
-              key={member.id}
-              layoutDependency={memberDisplayOrderKey}
-              {...rowMotionProps}
-            >
-              {renderMemberRow(member, isMemberSelected, () => onSelectMember(member.id))}
-            </motion.div>
-          );
-        })}
-      </AnimatePresence>
+          return renderMemberRow(member, isMemberSelected, () => onSelectMember(member.id));
+        }}
+      />
     </div>
   ) : null;
 

@@ -16,7 +16,13 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon, Loader2, Trash2, Upload, FileText, PlusCircle, Crown, Printer, Link2, History, CheckCircle, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { mapPartiesForVoucherCombobox } from "@/lib/masterAccountFreeze/comboboxOptions";
+import {
+  mapPartiesForVoucherCombobox,
+  mapStaffForVoucherCombobox,
+  mapTaxesForVoucherCombobox,
+  mapExpenseAccountsForVoucherCombobox,
+  mapBankAccountsForVoucherCombobox,
+} from "@/lib/masterAccountFreeze/comboboxOptions";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
@@ -453,7 +459,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const staffComboboxOptions = useMemo(
     () =>
       withSelectedComboboxOption(
-        processedStaff.map((s) => ({ value: s.id, label: s.name })),
+        mapStaffForVoucherCombobox(processedStaff),
         staffId,
         processedStaff.find((s) => s.id === staffId)?.name
       ),
@@ -462,7 +468,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const taxComboboxOptions = useMemo(
     () =>
       withSelectedComboboxOption(
-        processedTaxes.map((t) => ({ value: t.id, label: (t as any).name ?? (t as any).label ?? "" })),
+        mapTaxesForVoucherCombobox(processedTaxes),
         taxAccountId,
         (processedTaxes.find((t) => t.id === taxAccountId) as any)?.name ?? (processedTaxes.find((t) => t.id === taxAccountId) as any)?.label
       ),
@@ -471,13 +477,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const incomeComboboxOptions = useMemo(
     () =>
       withSelectedComboboxOption(
-        expenseAccounts.map((e) => ({ value: e.id, label: e.name })),
+        mapExpenseAccountsForVoucherCombobox(expenseAccounts),
         incomeAccountId,
         expenseAccounts.find((e) => e.id === incomeAccountId)?.name
       ),
     [expenseAccounts, incomeAccountId]
   );
-
   /** Save & Copy To: red helpers + Prefilled dialogs — Payment Out (`CreatePaymentOutForm`) ke samaan. */
   const copyDraftMasterHelpersEnabled = Boolean(copySaveTargetCompanyId && onCopyMissingCategory);
   const copyPayeeMasterCategoryArg = (): "party" | "staff" | "tax" | "account_expense" => {
@@ -1962,6 +1967,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     return false;
   });
+  const bankComboboxOptions = useMemo(
+    () =>
+      mapBankAccountsForVoucherCombobox(availableAccounts).map((opt) => ({
+        ...opt,
+        isSpecial: availableAccounts.find((a) => a.id === opt.value)?.isSpecial,
+      })),
+    [availableAccounts]
+  );
   const voucherPrefixes = useMemo(() => company?.voucherPrefixes?.[voucherType] || [getVoucherPrefix()], [company, voucherType]);
   
   const paymentPayeeTypes = [
@@ -2407,7 +2420,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           <div className="min-w-0 w-full overflow-hidden">
                             <Combobox
                               triggerClassName="w-full min-w-0"
-                              options={availableAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))}
+                              options={bankComboboxOptions}
                               value={field.value}
                               onChange={(value, newName) => {
                                 if (value === "add-new") {
@@ -2660,7 +2673,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </div>
                       </div>
                        <Combobox
-                            options={availableAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))}
+                            options={bankComboboxOptions}
                             value={field.value}
                             onChange={(value, newName) => {
                               if (value === "add-new") {

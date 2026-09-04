@@ -15,7 +15,13 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon, Loader2, Trash2, Upload, FileText, PlusCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { mapPartiesForVoucherCombobox } from "@/lib/masterAccountFreeze/comboboxOptions";
+import {
+  mapPartiesForVoucherCombobox,
+  mapStaffForVoucherCombobox,
+  mapTaxesForVoucherCombobox,
+  mapExpenseAccountsForVoucherCombobox,
+  mapBankAccountsForVoucherCombobox,
+} from "@/lib/masterAccountFreeze/comboboxOptions";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
@@ -630,6 +636,10 @@ export function CreatePaymentInForm({
   };
   
   const availableAccounts = processedAccounts.filter(acc => !acc.isSpecial);
+  const bankComboboxOptions = useMemo(
+    () => mapBankAccountsForVoucherCombobox(availableAccounts),
+    [availableAccounts]
+  );
   const voucherPrefixes = useMemo(() => company?.voucherPrefixes?.[voucherType] || [getVoucherPrefix()], [company, voucherType]);
   
   const paymentPayeeTypes = [
@@ -714,7 +724,7 @@ export function CreatePaymentInForm({
                       render={({ field }: any) => (
                         <FormItem>
                            <Combobox
-                                options={processedStaff.map(s => ({ value: s.id, label: s.name }))}
+                                options={mapStaffForVoucherCombobox(processedStaff)}
                                 value={field.value}
                                  onChange={(val, newName) => {
                                     if (val === 'add-new') {
@@ -739,7 +749,7 @@ export function CreatePaymentInForm({
                       render={({ field }: any) => (
                         <FormItem>
                             <Combobox
-                                options={processedTaxes.map(t => ({ value: t.id, label: t.name }))}
+                                options={mapTaxesForVoucherCombobox(processedTaxes)}
                                 value={field.value}
                                 onChange={(val, newName) => {
                                     if (val === 'add-new') {
@@ -764,7 +774,7 @@ export function CreatePaymentInForm({
                       render={({ field }: any) => (
                         <FormItem>
                             <Combobox
-                                options={expenseAccounts.map(e => ({ value: e.id, label: e.name }))}
+                                options={mapExpenseAccountsForVoucherCombobox(expenseAccounts)}
                                 value={field.value}
                                 onChange={(val, newName) => {
                                     if (val === 'add-new') {
@@ -792,7 +802,7 @@ export function CreatePaymentInForm({
                         {accountBalance !== null && accountBalance !== undefined && <FormLabel className="text-xs text-muted-foreground">Balance: {formatCurrency(accountBalance)}</FormLabel>}
                       </div>
                        <Combobox
-                            options={availableAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})` }))}
+                            options={bankComboboxOptions}
                             value={field.value}
                             onChange={(value, newName) => {
                               if (value === "add-new") {

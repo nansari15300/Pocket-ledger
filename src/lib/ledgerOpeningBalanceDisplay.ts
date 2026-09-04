@@ -3,6 +3,53 @@ import { parseOpeningBalanceDateToLocalNoon } from "@/lib/voucherDateNormalize";
 
 export const BOOK_OB_EPS = 5e-4;
 
+type GroupMemberOpeningRow = {
+  openingBalance?: unknown;
+  openingBalanceRate?: unknown;
+  purchasePrice?: unknown;
+  salePrice?: unknown;
+  stockQty?: unknown;
+};
+
+function isItemGroupMemberRow(member: GroupMemberOpeningRow): boolean {
+  return (
+    "purchasePrice" in member ||
+    "salePrice" in member ||
+    "stockQty" in member ||
+    "openingBalanceRate" in member
+  );
+}
+
+/** Sum opening balances for members currently in group ledger scope (incl. single member filter). */
+export function sumGroupMemberOpeningBalances(
+  members: GroupMemberOpeningRow[],
+  stockView?: "amount" | "qty"
+): number {
+  if (!members.length) return 0;
+  const isItemGroup = isItemGroupMemberRow(members[0]!);
+  return members.reduce((sum, item) => {
+    if (isItemGroup && stockView === "amount") {
+      return sum + (Number(item.openingBalance) || 0) * (Number(item.openingBalanceRate) || 0);
+    }
+    return sum + (Number(item.openingBalance) || 0);
+  }, 0);
+}
+
+/**
+ * Books OB for group ledger: sum scoped members when present (0 is valid).
+ * Do not fall back to parent group OB when members exist — wrong for member drill-down.
+ */
+export function resolveGroupBooksOpeningBalance(
+  group: { openingBalance?: unknown },
+  members: GroupMemberOpeningRow[],
+  stockView?: "amount" | "qty"
+): number {
+  if (members.length > 0) {
+    return sumGroupMemberOpeningBalances(members, stockView);
+  }
+  return Number(group.openingBalance) || 0;
+}
+
 export const LEDGER_OPENING_PILL_CONTEXTS = [
   "party",
   "account",

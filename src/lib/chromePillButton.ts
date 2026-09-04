@@ -7,6 +7,11 @@ import { cn } from "@/lib/utils";
 export const chromeProPillCn =
   "pl-chrome-btn-drop border border-blue-300 bg-blue-100/80 text-blue-900 hover:border-blue-400 hover:bg-blue-200/80";
 
+/** Header chromePill text color — border / bg nahi. */
+export const chromeProPillTextCn = "text-blue-900";
+/** Same blue family, dimmer — entity/type labels. */
+export const chromeProPillTextMutedCn = "text-blue-400";
+
 /** Footer span pills — button variant jaisa */
 export const chromePillBase = chromeProPillCn;
 

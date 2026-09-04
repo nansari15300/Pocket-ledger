@@ -1,8 +1,12 @@
 "use client";
 
 import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
+import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
+import { chromeProPillTextMutedCn } from "@/lib/chromePillButton";
+import { cn } from "@/lib/utils";
 
-import React, { useMemo, useState, useCallback, useEffect } from "react";
+import React, { useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import {
   Table,
   TableBody,
@@ -16,43 +20,90 @@ import {
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowUpDown, Search, XCircle, Loader2, AlertTriangle, ChevronDown, ChevronUp, ChevronRight, Users } from "lucide-react";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { ArrowUpDown, Search, XCircle, Loader2, AlertTriangle, ChevronDown, ChevronUp, ChevronRight, Users, Check, RefreshCw } from "lucide-react";
 import {
-  Drawer,
-  DrawerClose,
-  DrawerContent,
-  DrawerFooter,
-  DrawerHeader,
-  DrawerTitle,
-} from "@/components/ui/drawer";
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
-import { TransactionsTable } from "../vouchers/TransactionsTable";
+import { BalanceSheetLedgerDetailMirror } from "@/components/reports/BalanceSheetLedgerDetailMirror";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
+import { useBalanceSheetLedgerLiveRevision } from "@/hooks/useBalanceSheetLedgerLiveRevision";
 import { MonthYearFilter } from "@/components/dashboard/MonthYearFilter";
 import { openPrintDirect } from "@/lib/printDirect";
 import { Printer } from "lucide-react";
 import { PrintOptionsDialog } from "@/components/ui/PrintOptionsDialog";
 import type { DateRange } from "@/components/ui/ad-calendar";
-import { startOfDay, endOfDay } from "date-fns";
-
-/**
- * TYPES
- */
-type BalanceSheetRow = {
-  accountId: string;
-  accountName: string;
-  group: string;
-  category: "Assets" | "Liabilities" | "Equity";
-  amount: number;
-  transactions?: any[];
-  openingBalance?: number;
-  isGroup?: boolean;
-  entityType?: 'party' | 'account' | 'staff' | 'tax' | 'income' | 'expense' | 'opening_balance';
-};
+import { endOfDay } from "date-fns";
+import {
+  computeBalanceSheetReport,
+  computeBalanceSheetNetProfit,
+  computeBalanceSheetTotals,
+  computeMasterOpeningBalanceAudit,
+  computeBalanceSheetRowGapParts,
+  type BalanceSheetRow,
+  type BalanceSheetUncategorizedAccount,
+} from "@/lib/reports/balanceSheetAccounting";
+import {
+  buildBalanceSheetUncategorizedResavePatch,
+  resaveBalanceSheetUncategorizedAccount,
+} from "@/lib/reports/balanceSheetUncategorizedResave";
+import {
+  balanceSheetDisplaySystemGroupCell,
+  balanceSheetExpandedLabelColCount,
+  balanceSheetFlattenUnderSystemBranch,
+  balanceSheetSystemBranchExpandId,
+  groupBalanceSheetItemsBySystemBranch,
+  sortBalanceSheetExpandedGroupItems,
+  type BalanceSheetExpandedColumnFlags,
+  type BalanceSheetGroupHierarchyContext,
+} from "@/lib/reports/balanceSheetGroupHierarchy";
+import {
+  balanceSheetIcSearchText,
+  BS_IC_COMPANY_GROUP_NAME,
+  isBalanceSheetIcCompanyGroupRow,
+  isBalanceSheetIcPeerGroupRow,
+} from "@/lib/reports/balanceSheetInterCompany";
+import {
+  computeBalanceSheetDifferenceBreakdown,
+} from "@/lib/reports/balanceSheetDifferenceAnalysis";
+import {
+  computeLedgerEarliestActivityDate,
+} from "@/lib/reports/balanceSheetLedgerDateRange";
+import {
+  BALANCE_SHEET_DIFF_TRACE_LANGS,
+  buildBalanceSheetFiscalYearContext,
+  balanceSheetDiffTraceReconciliationParagraphs,
+  balanceSheetDiffTraceReconciliationTitle,
+  balanceSheetOpeningMismatchIntroSummary,
+  balanceSheetOpeningMismatchIntroTitle,
+} from "@/lib/reports/balanceSheetDifferenceTraceLocales";
+import { BalanceSheetFiscalYearDisplay } from "@/components/reports/BalanceSheetFiscalYearDisplay";
+import { OpeningTraceGrid } from "@/components/reports/opening_trace";
+import { TrxnTraceGrid } from "@/components/reports/trxn_trace";
+import { OtherDifferentRemainingTrace } from "@/components/reports/otherDifferentRemainingTrace";
+import type { BalanceSheetDiffTraceMainView } from "@/components/reports/opening_trace";
+import { runBalanceSheetCheckEngine, type BalanceSheetCheckEngineInput } from "@/lib/reports/balanceSheetCheckEngine";
+import { OPENING_BALANCE_SYSTEM_LEDGER_ID } from "@/lib/reports/openingBalanceLedgerAccounts";
+import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
+import { resolveInterCompanyLegsForVoucher } from "@/lib/interCompany/interCompanyPostingLegs";
+import { getRpLedgerDebitCredit, type RpLedgerContext } from "@/lib/receivablesPayablesLedgerAmounts";
+import { toast as sonnerToast } from "sonner";
+import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import {
+  balanceSheetAccountMatchesQuery,
+  balanceSheetGroupMatchesQuery,
+  balanceSheetTextMatchesQuery,
+  collectBalanceSheetSearchExpandIds,
+} from "@/lib/reports/balanceSheetSearch";
 
 /**
  * HELPERS
@@ -66,13 +117,649 @@ const toNepaliCurrency = (n: number) =>
         maximumFractionDigits: 2,
       }).format(n);
 
-const safeToDate = (date: any): Date | null => {
+
+function safeToDate(date: any): Date | null {
   if (!date) return null;
   if (date instanceof Date) return date;
   if (date.toDate instanceof Function) return date.toDate();
   const parsed = new Date(date);
   return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** Balance Sheet report tables — 1px grid lines (override ui/table 3px defaults). */
+const BS_CARD_SHELL_CLASS = "rounded-2xl border border-black w-full overflow-x-auto";
+const BS_TABLE_CLASS =
+  "[&_tr]:!border-b-[1px] [&_tr]:!border-t-0 [&_tr]:border-black [&_tbody_tr:last-child]:!border-b-0 [&_tfoot_tr:last-child]:!border-b-0 [&_tbody_tr:first-child]:!border-t-0";
+const BS_TABLE_FIXED_CLASS = "table-fixed w-full";
+const BS_TABLE_HEADER_CLASS = "[&_tr]:!border-b-[1px] [&_tr]:!border-t-0 [&_tr]:border-black";
+const BS_TABLE_ROW_CLASS = "!border-b-[1px] !border-t-0 border-black";
+const BS_TABLE_FOOTER_ROW_CLASS = "!border-b-[1px] !border-t-0 border-black";
+/** Check Difference popup — grid shell owns vertical scroll; header/footer stay fixed. */
+const BS_DIFF_TRACE_WRAP_CLASS = "flex min-h-0 flex-1 w-full flex-col overflow-hidden";
+const BS_ACCOUNT_NAME_CLASS = cn("font-light", chromeProPillTextMutedCn);
+const BS_ACCOUNT_AMOUNT_CLASS = "font-light tabular-nums text-foreground/75";
+const BS_ENTITY_TYPE_CLASS = cn("font-light text-xs", chromeProPillTextMutedCn);
+
+function balanceSheetRowEntityLabel(row: BalanceSheetRow): string {
+  switch (row.entityType) {
+    case "party":
+      return sidebarEntityMenuLabel("party");
+    case "staff":
+      return sidebarEntityMenuLabel("staff");
+    case "tax":
+      return sidebarEntityMenuLabel("tax");
+    case "opening_balance":
+      return "Opening Balance";
+    case "account":
+      return sidebarEntityMenuLabel("bankCash");
+    default:
+      return "";
+  }
+}
+
+function BalanceSheetExpandedColGroup({ flags }: { flags: BalanceSheetExpandedColumnFlags }) {
+  const labelCount = balanceSheetExpandedLabelColCount(flags);
+  const labelPct = 64 / labelCount;
+  return (
+    <colgroup>
+      {Array.from({ length: labelCount }, (_, i) => (
+        <col key={i} style={{ width: `${labelPct}%` }} />
+      ))}
+      <col style={{ width: "18%" }} />
+      <col style={{ width: "18%" }} />
+    </colgroup>
+  );
+}
+
+/** Expanded tree: System Group → Parent Group (on branch expand) → Account Name (on parent expand) */
+const BS_TREE_INDENT_PARENT_PX = 5;
+const BS_TREE_CHEVRON_CLASS = "h-4 w-4 shrink-0";
+const BS_LABEL_CELL_CLASS = "max-w-0 overflow-hidden";
+const BS_TRUNCATE_LABEL_CLASS = "min-w-0 truncate";
+
+function BalanceSheetTruncatedLabel({
+  text,
+  leading,
+  className,
+  textClassName,
+  highlightQuery,
+}: {
+  text: string;
+  leading?: React.ReactNode;
+  className?: string;
+  textClassName?: string;
+  highlightQuery?: string;
+}) {
+  const label =
+    highlightQuery?.trim() ? highlightQueryInText(text, highlightQuery) : text;
+  return (
+    <div className={cn("flex items-center gap-2 min-w-0", className)}>
+      {leading}
+      <span className={cn(BS_TRUNCATE_LABEL_CLASS, textClassName)} title={text}>
+        {label}
+      </span>
+    </div>
+  );
+}
+
+function balanceSheetHighlightCell(text: string, highlightQuery?: string) {
+  if (!highlightQuery?.trim()) return text;
+  return highlightQueryInText(text, highlightQuery);
+}
+
+type BalanceSheetDifferenceTraceRow = {
+  accountId: string;
+  accountName: string;
+  group: string;
+  /** Sidebar/menu label for display (Parties, Bank/Cash, …) */
+  entityType: string;
+  /** Raw entity key for opening ledger detail */
+  ledgerEntityType: NonNullable<BalanceSheetRow["entityType"]>;
+  reason: string;
+  /** FY-adjusted opening used for movement / side-change analysis */
+  opening: number;
+  /** Raw master opening — matches Opening Balance Mismatch card */
+  masterRawOpening: number;
+  movementDebit: number;
+  movementCredit: number;
+  movementDifference: number;
+  closing: number;
+  closingDifference: number;
+  systemGroup: string;
+  expectedSide: string;
+  actualSide: string;
+  /** Listed because no side conflict — shown after conflict rows */
+  isOtherAccount?: boolean;
+  /** Opening non-zero, movement in period, closing net zero (cleared / settled). */
+  isSettledToZero?: boolean;
 };
+
+function differenceTraceIsSettledToZero(row: {
+  masterRawOpening: number;
+  closing: number;
+  movementDebit: number;
+  movementCredit: number;
+}): boolean {
+  if (Math.abs(row.masterRawOpening) < 0.005) return false;
+  if (Math.abs(row.closing) >= 0.005) return false;
+  return row.movementDebit >= 0.005 || row.movementCredit >= 0.005;
+}
+
+function signedSide(amount: number): string {
+  if (Math.abs(amount) < 0.005) return "—";
+  return amount > 0 ? "Dr" : "Cr";
+}
+
+function differenceTraceRowKey(row: BalanceSheetDifferenceTraceRow): string {
+  if (row.entityType === "Income/Expense") return `expense-${row.accountId}`;
+  return `${row.ledgerEntityType}-${row.accountId}`;
+}
+
+function differenceTraceMasterEntityLabel(
+  traceType: DifferenceTraceMasterOpeningRow["traceType"]
+): string {
+  switch (traceType) {
+    case "party":
+      return sidebarEntityMenuLabel("party");
+    case "account":
+      return sidebarEntityMenuLabel("bankCash");
+    case "staff":
+      return sidebarEntityMenuLabel("staff");
+    case "tax":
+      return sidebarEntityMenuLabel("tax");
+    case "expense":
+      return "Income/Expense";
+    default:
+      return "";
+  }
+}
+
+function findBalanceSheetRowForMasterOpening(
+  balanceSheetData: BalanceSheetRow[],
+  master: DifferenceTraceMasterOpeningRow
+): BalanceSheetRow | undefined {
+  const accountId = String(master.id ?? "");
+  if (!accountId || master.traceType === "expense") return undefined;
+  const entityType = master.traceType as NonNullable<BalanceSheetRow["entityType"]>;
+  return (
+    balanceSheetData.find(
+      (row) => !row.isGroup && row.accountId === accountId && row.entityType === entityType
+    ) ??
+    balanceSheetData.find((row) => !row.isGroup && row.accountId === accountId && row.entityType)
+  );
+}
+
+type DifferenceTraceMasterMetaContext = {
+  processedAccounts: Array<{ id?: string; accountName?: string; groupId?: string }>;
+  processedParties: Array<{ id?: string; name?: string; groupId?: string }>;
+  processedStaff: Array<{ id?: string; name?: string; groupId?: string }>;
+  processedTaxes: Array<{ id?: string; name?: string; groupId?: string }>;
+  processedExpenseAccounts: Array<{ id?: string; name?: string; groupId?: string }>;
+  processedGroups: Array<{ id?: string; name?: string }>;
+  processedAccountGroups: Array<{ id?: string; name?: string }>;
+  processedStaffGroups: Array<{ id?: string; name?: string }>;
+  processedTaxGroups: Array<{ id?: string; name?: string }>;
+  processedExpenseGroups: Array<{ id?: string; name?: string }>;
+};
+
+function resolveDifferenceTraceMasterMeta(
+  master: DifferenceTraceMasterOpeningRow,
+  ctx: DifferenceTraceMasterMetaContext
+): { accountName: string; group: string } {
+  const accountId = String(master.id ?? "");
+  const groupName = (groups: Array<{ id?: string; name?: string }>, groupId?: string) =>
+    groups.find((group) => group.id === groupId)?.name ?? "Ungrouped";
+
+  switch (master.traceType) {
+    case "account": {
+      const account = ctx.processedAccounts.find((item) => item.id === accountId);
+      return {
+        accountName: String(account?.accountName ?? accountId),
+        group: groupName(ctx.processedAccountGroups, account?.groupId),
+      };
+    }
+    case "party": {
+      const party = ctx.processedParties.find((item) => item.id === accountId);
+      return {
+        accountName: String(party?.name ?? accountId),
+        group: groupName(ctx.processedGroups, party?.groupId),
+      };
+    }
+    case "staff": {
+      const staff = ctx.processedStaff.find((item) => item.id === accountId);
+      return {
+        accountName: String(staff?.name ?? accountId),
+        group: groupName(ctx.processedStaffGroups, staff?.groupId),
+      };
+    }
+    case "tax": {
+      const tax = ctx.processedTaxes.find((item) => item.id === accountId);
+      return {
+        accountName: String(tax?.name ?? accountId),
+        group: groupName(ctx.processedTaxGroups, tax?.groupId),
+      };
+    }
+    case "expense": {
+      const expense = ctx.processedExpenseAccounts.find((item) => item.id === accountId);
+      return {
+        accountName: String(expense?.name ?? accountId),
+        group: groupName(ctx.processedExpenseGroups, expense?.groupId),
+      };
+    }
+    default:
+      return { accountName: accountId, group: "Ungrouped" };
+  }
+}
+
+/** Every master with raw opening — same population as Opening Balance Mismatch card. */
+function buildDifferenceTraceAllOpeningRows(
+  balanceSheetData: BalanceSheetRow[],
+  fiscalYearStart: Date | undefined,
+  masterOpeningRows: DifferenceTraceMasterOpeningRow[],
+  openingSplit: { previous: number; current: number },
+  filteredVouchers: any[],
+  processedTaxes: any[],
+  masterMetaCtx: DifferenceTraceMasterMetaContext
+): BalanceSheetDifferenceTraceRow[] {
+  const rows: BalanceSheetDifferenceTraceRow[] = [];
+  const seen = new Set<string>();
+
+  for (const master of masterOpeningRows) {
+    const accountId = String(master.id ?? "");
+    if (!accountId || accountId === OPENING_BALANCE_SYSTEM_LEDGER_ID) continue;
+    const masterRawOpening = round2(Number(master.openingBalance) || 0);
+    if (Math.abs(masterRawOpening) < 0.005) continue;
+
+    const bsRow = findBalanceSheetRowForMasterOpening(balanceSheetData, master);
+    if (bsRow) {
+      const built = buildDifferenceTraceRowFromBalanceSheetRow(
+        bsRow,
+        fiscalYearStart,
+        masterOpeningRows,
+        openingSplit,
+        filteredVouchers,
+        processedTaxes,
+        { requireConflictReason: false }
+      );
+      if (!built) continue;
+      const key = differenceTraceRowKey(built);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const sideChanged = differenceTraceSideChangedReason(built.masterRawOpening, built.closing);
+      rows.push(annotateDifferenceTraceOpeningRow(built, sideChanged));
+      continue;
+    }
+
+    const meta = resolveDifferenceTraceMasterMeta(master, masterMetaCtx);
+    const openingDate = safeToDate(master.openingBalanceDate);
+    const isCurrentFiscalOpening = Boolean(
+      fiscalYearStart && openingDate && openingDate >= fiscalYearStart
+    );
+    const opening = isCurrentFiscalOpening ? 0 : masterRawOpening;
+    const metrics = computeDifferenceTraceMetricsForMasterOpening(
+      master,
+      fiscalYearStart,
+      filteredVouchers,
+      processedTaxes
+    );
+    const isExpense = master.traceType === "expense";
+    const sideChanged = differenceTraceSideChangedReason(masterRawOpening, metrics.closing);
+    const syntheticBase: BalanceSheetDifferenceTraceRow = {
+      accountId,
+      accountName: meta.accountName,
+      group: meta.group,
+      entityType: differenceTraceMasterEntityLabel(master.traceType),
+      ledgerEntityType: isExpense
+        ? "party"
+        : (master.traceType as NonNullable<BalanceSheetRow["entityType"]>),
+      reason: "Master opening balance — not listed on Balance Sheet in this period.",
+      opening,
+      masterRawOpening,
+      movementDebit: metrics.movementDebit,
+      movementCredit: metrics.movementCredit,
+      movementDifference: metrics.movementDifference,
+      closing: metrics.closing,
+      closingDifference: 0,
+      systemGroup: masterRawOpening >= 0 ? "Assets" : "Liabilities",
+      expectedSide: masterRawOpening >= 0 ? "Dr / Asset" : "Cr / Liability",
+      actualSide: signedSide(metrics.closing),
+      isOtherAccount: !sideChanged,
+    };
+    const synthetic = annotateDifferenceTraceOpeningRow(syntheticBase, sideChanged);
+    const key = differenceTraceRowKey(synthetic);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push(synthetic);
+  }
+
+  return rows.sort((a, b) => {
+    const aConflict = differenceTraceSideChangedReason(a.masterRawOpening, a.closing) ? 1 : 0;
+    const bConflict = differenceTraceSideChangedReason(b.masterRawOpening, b.closing) ? 1 : 0;
+    if (aConflict !== bConflict) return bConflict - aConflict;
+    return Math.abs(b.masterRawOpening) - Math.abs(a.masterRawOpening);
+  });
+}
+
+function differenceTraceSideChangedReason(masterRawOpening: number, closing: number): string | null {
+  if (Math.abs(masterRawOpening) < 0.005 || Math.abs(closing) < 0.005) return null;
+  const openingSide = signedSide(masterRawOpening);
+  const closingSide = signedSide(closing);
+  if (openingSide === "—" || closingSide === "—" || openingSide === closingSide) return null;
+  return `Opening balance is ${openingSide} but closing balance is ${closingSide} — debit/credit side changed from opening to closing.`;
+}
+
+function differenceTraceContext(entityType: BalanceSheetRow["entityType"]): RpLedgerContext | null {
+  switch (entityType) {
+    case "party":
+    case "opening_balance":
+      return "party";
+    case "account":
+      return "account";
+    case "staff":
+      return "staff";
+    case "tax":
+      return "tax";
+    default:
+      return null;
+  }
+}
+
+type DifferenceTraceMasterOpeningRow = {
+  id?: string;
+  openingBalance?: number;
+  openingBalanceDate?: unknown;
+  traceType: BalanceSheetRow["entityType"] | "expense";
+};
+
+function buildDifferenceTraceMasterOpeningRows(
+  processedAccounts: Array<{ id?: string; openingBalance?: number; openingBalanceDate?: unknown }>,
+  processedParties: Array<{ id?: string; openingBalance?: number; openingBalanceDate?: unknown }>,
+  processedStaff: Array<{ id?: string; openingBalance?: number; openingBalanceDate?: unknown }>,
+  processedTaxes: Array<{ id?: string; openingBalance?: number; openingBalanceDate?: unknown }>,
+  processedExpenseAccounts: Array<{ id?: string; openingBalance?: number; openingBalanceDate?: unknown }>
+): DifferenceTraceMasterOpeningRow[] {
+  return [
+    ...processedAccounts.map((item) => ({ ...item, traceType: "account" as const })),
+    ...processedParties
+      .filter((item) => item.id !== OPENING_BALANCE_SYSTEM_LEDGER_ID)
+      .map((item) => ({ ...item, traceType: "party" as const })),
+    ...processedStaff.map((item) => ({ ...item, traceType: "staff" as const })),
+    ...processedTaxes.map((item) => ({ ...item, traceType: "tax" as const })),
+    ...processedExpenseAccounts.map((item) => ({ ...item, traceType: "expense" as const })),
+  ];
+}
+
+/** Master form opening — same basis as Opening Balance Mismatch card (excludes system OB ledger). */
+function readDifferenceTraceMasterRawOpening(
+  accountId: string,
+  masterOpeningRows: DifferenceTraceMasterOpeningRow[]
+): number {
+  if (accountId === OPENING_BALANCE_SYSTEM_LEDGER_ID) return 0;
+  const source = masterOpeningRows.find((item) => String(item.id) === String(accountId));
+  if (!source) return 0;
+  return round2(Number(source.openingBalance) || 0);
+}
+
+function computeDifferenceTraceMetricsForRow(
+  row: BalanceSheetRow,
+  fiscalYearStart: Date | undefined,
+  masterOpeningRows: DifferenceTraceMasterOpeningRow[],
+  openingSplit: { previous: number; current: number },
+  filteredVouchers: any[],
+  processedTaxes: any[]
+): { movementDebit: number; movementCredit: number; movementDifference: number; closing: number } | null {
+  if (row.isGroup || !row.entityType) return null;
+  const rawOpening = round2(Number(row.openingBalance) || 0);
+  const source = masterOpeningRows.find(
+    (item) => item.traceType === row.entityType && String(item.id) === String(row.accountId)
+  );
+  const openingDate = safeToDate(source?.openingBalanceDate);
+  const isCurrentFiscalOpening = Boolean(fiscalYearStart && openingDate && openingDate >= fiscalYearStart);
+  const isSystemOpeningLedger =
+    row.entityType === "opening_balance" && row.accountId === OPENING_BALANCE_SYSTEM_LEDGER_ID;
+  const context = differenceTraceContext(row.entityType);
+  const movementTotals = context
+    ? filteredVouchers.reduce(
+        (totals, voucher) => {
+          const amounts = getRpLedgerDebitCredit(voucher, row.accountId, context, processedTaxes);
+          return {
+            debit: totals.debit + amounts.debit,
+            credit: totals.credit + amounts.credit,
+          };
+        },
+        { debit: 0, credit: 0 }
+      )
+    : { debit: 0, credit: 0 };
+  let movementDebit = round2(movementTotals.debit);
+  let movementCredit = round2(movementTotals.credit);
+  if (isSystemOpeningLedger) {
+    movementDebit = round2(movementDebit + Math.max(0, -openingSplit.current));
+    movementCredit = round2(movementCredit + Math.max(0, openingSplit.current));
+  } else if (isCurrentFiscalOpening) {
+    movementDebit = round2(movementDebit + Math.max(0, rawOpening));
+    movementCredit = round2(movementCredit + Math.max(0, -rawOpening));
+  }
+  return {
+    movementDebit,
+    movementCredit,
+    movementDifference: round2(movementDebit - movementCredit),
+    closing: round2(row.signedBalance),
+  };
+}
+
+function computeDifferenceTraceMetricsForMasterOpening(
+  master: DifferenceTraceMasterOpeningRow,
+  fiscalYearStart: Date | undefined,
+  filteredVouchers: any[],
+  processedTaxes: any[]
+): { movementDebit: number; movementCredit: number; movementDifference: number; closing: number } {
+  if (master.traceType === "expense") {
+    const rawOpening = round2(Number(master.openingBalance) || 0);
+    return {
+      movementDebit: 0,
+      movementCredit: 0,
+      movementDifference: 0,
+      closing: rawOpening,
+    };
+  }
+
+  const accountId = String(master.id ?? "");
+  const entityType = master.traceType as NonNullable<BalanceSheetRow["entityType"]>;
+  const context = differenceTraceContext(entityType);
+  const rawOpening = round2(Number(master.openingBalance) || 0);
+  const openingDate = safeToDate(master.openingBalanceDate);
+  const isCurrentFiscalOpening = Boolean(fiscalYearStart && openingDate && openingDate >= fiscalYearStart);
+  const movementTotals = context
+    ? filteredVouchers.reduce(
+        (totals, voucher) => {
+          const amounts = getRpLedgerDebitCredit(voucher, accountId, context, processedTaxes);
+          return {
+            debit: totals.debit + amounts.debit,
+            credit: totals.credit + amounts.credit,
+          };
+        },
+        { debit: 0, credit: 0 }
+      )
+    : { debit: 0, credit: 0 };
+  let movementDebit = round2(movementTotals.debit);
+  let movementCredit = round2(movementTotals.credit);
+  if (isCurrentFiscalOpening) {
+    movementDebit = round2(movementDebit + Math.max(0, rawOpening));
+    movementCredit = round2(movementCredit + Math.max(0, -rawOpening));
+  }
+  const movementDifference = round2(movementDebit - movementCredit);
+  const openingForLedger = isCurrentFiscalOpening ? 0 : rawOpening;
+  return {
+    movementDebit,
+    movementCredit,
+    movementDifference,
+    closing: round2(openingForLedger + movementDifference),
+  };
+}
+
+function annotateDifferenceTraceOpeningRow(
+  row: BalanceSheetDifferenceTraceRow,
+  sideChanged: string | null
+): BalanceSheetDifferenceTraceRow {
+  const isSettledToZero = differenceTraceIsSettledToZero(row);
+  let reason = row.reason;
+  if (sideChanged) {
+    reason = sideChanged;
+  } else if (isSettledToZero) {
+    reason = "Opening balance settled to zero — movement in this period cleared the balance.";
+  } else if (Math.abs(row.closing) >= 0.005) {
+    reason = "Opening and closing stay on the same Dr/Cr side — listed under Side Not changed.";
+  }
+  return {
+    ...row,
+    isSettledToZero,
+    reason,
+    isOtherAccount: !sideChanged,
+  };
+}
+
+function buildDifferenceTraceRowFromBalanceSheetRow(
+  row: BalanceSheetRow,
+  fiscalYearStart: Date | undefined,
+  masterOpeningRows: DifferenceTraceMasterOpeningRow[],
+  openingSplit: { previous: number; current: number },
+  filteredVouchers: any[],
+  processedTaxes: any[],
+  options: { requireConflictReason: boolean; isOtherAccount?: boolean }
+): BalanceSheetDifferenceTraceRow | null {
+  const metrics = computeDifferenceTraceMetricsForRow(
+    row,
+    fiscalYearStart,
+    masterOpeningRows,
+    openingSplit,
+    filteredVouchers,
+    processedTaxes
+  );
+  if (!metrics) return null;
+  const opening = computeDifferenceTraceOpeningForRow(row, fiscalYearStart, masterOpeningRows, openingSplit);
+  const masterRawOpening = readDifferenceTraceMasterRawOpening(row.accountId, masterOpeningRows);
+  const reason = differenceTraceSideChangedReason(masterRawOpening, metrics.closing);
+  if (options.requireConflictReason && !reason) return null;
+  if (options.isOtherAccount) {
+    if (Math.abs(masterRawOpening) < 0.005) return null;
+    const hasActivity =
+      Math.abs(metrics.closing) >= 0.005 ||
+      metrics.movementDebit >= 0.005 ||
+      metrics.movementCredit >= 0.005;
+    if (!hasActivity) return null;
+  }
+  const expectedSide =
+    row.ledgerClass === "Asset" ? "Dr / Asset" : row.ledgerClass === "Liability" ? "Cr / Liability" : "Equity";
+  const expectedNaturalSide = row.ledgerClass === "Asset" ? "Dr" : row.ledgerClass === "Liability" ? "Cr" : "—";
+  const closingDifference =
+    expectedNaturalSide !== "—" &&
+    signedSide(row.signedBalance) !== "—" &&
+    signedSide(row.signedBalance) !== expectedNaturalSide
+      ? round2(Math.abs(row.signedBalance))
+      : 0;
+  return {
+    accountId: row.accountId,
+    accountName: row.accountName,
+    group: row.group || "Ungrouped",
+    entityType: balanceSheetRowEntityLabel(row),
+    ledgerEntityType: row.entityType!,
+    reason:
+      reason ??
+      "Opening and closing stay on the same Dr/Cr side — listed under Side Not changed.",
+    opening,
+    masterRawOpening,
+    movementDebit: metrics.movementDebit,
+    movementCredit: metrics.movementCredit,
+    movementDifference: metrics.movementDifference,
+    closing: metrics.closing,
+    closingDifference,
+    systemGroup: row.ledgerClass === "Asset" ? "Assets" : row.ledgerClass === "Liability" ? "Liabilities" : "Equity",
+    expectedSide,
+    actualSide: signedSide(row.signedBalance),
+    isOtherAccount: options.isOtherAccount,
+  };
+}
+
+function buildDifferenceTraceOpeningContext(
+  processedAccounts: Array<{ id?: string; openingBalance?: number; openingBalanceDate?: unknown }>,
+  processedParties: Array<{ id?: string; openingBalance?: number; openingBalanceDate?: unknown }>,
+  processedStaff: Array<{ id?: string; openingBalance?: number; openingBalanceDate?: unknown }>,
+  processedTaxes: Array<{ id?: string; openingBalance?: number; openingBalanceDate?: unknown }>,
+  processedExpenseAccounts: Array<{ id?: string; openingBalance?: number; openingBalanceDate?: unknown }>,
+  fiscalYearStart: Date | undefined
+) {
+  const masterOpeningRows = buildDifferenceTraceMasterOpeningRows(
+    processedAccounts,
+    processedParties,
+    processedStaff,
+    processedTaxes,
+    processedExpenseAccounts
+  );
+  const openingSplit = masterOpeningRows.reduce(
+    (totals, item) => {
+      const amount = Number(item.openingBalance) || 0;
+      const openingDate = safeToDate(item.openingBalanceDate);
+      const isCurrentFiscalOpening = Boolean(fiscalYearStart && openingDate && openingDate >= fiscalYearStart);
+      if (isCurrentFiscalOpening) totals.current += amount;
+      else totals.previous += amount;
+      return totals;
+    },
+    { previous: 0, current: 0 }
+  );
+  return { masterOpeningRows, openingSplit };
+}
+
+function balanceSheetTraceRowKey(row: Pick<BalanceSheetRow, "entityType" | "accountId">): string {
+  return `${row.entityType}-${row.accountId}`;
+}
+
+function computeDifferenceTraceOpeningForRow(
+  row: BalanceSheetRow,
+  fiscalYearStart: Date | undefined,
+  masterOpeningRows: DifferenceTraceMasterOpeningRow[],
+  openingSplit: { previous: number; current: number }
+): number {
+  const rawOpening = round2(Number(row.openingBalance) || 0);
+  const source = masterOpeningRows.find(
+    (item) => item.traceType === row.entityType && String(item.id) === String(row.accountId)
+  );
+  const openingDate = safeToDate(source?.openingBalanceDate);
+  const isCurrentFiscalOpening = Boolean(fiscalYearStart && openingDate && openingDate >= fiscalYearStart);
+  const isSystemOpeningLedger =
+    row.entityType === "opening_balance" && row.accountId === OPENING_BALANCE_SYSTEM_LEDGER_ID;
+  if (isSystemOpeningLedger) return round2(-openingSplit.previous);
+  if (isCurrentFiscalOpening) return 0;
+  return rawOpening;
+}
+
+function BalanceSheetDiffTraceLangTabs({
+  className,
+  tabsListClassName,
+  contentClassName,
+  renderContent,
+}: {
+  className?: string;
+  tabsListClassName?: string;
+  contentClassName?: string;
+  renderContent: (lang: (typeof BALANCE_SHEET_DIFF_TRACE_LANGS)[number]["value"]) => React.ReactNode;
+}) {
+  return (
+    <Tabs defaultValue="en" className={cn("w-full", className)}>
+      <TabsList className={cn("grid h-8 w-full grid-cols-3 sm:h-9", tabsListClassName)}>
+        {BALANCE_SHEET_DIFF_TRACE_LANGS.map(({ value, label }) => (
+          <TabsTrigger key={value} value={value} className="text-[11px] sm:text-xs">
+            {label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      {BALANCE_SHEET_DIFF_TRACE_LANGS.map(({ value }) => (
+        <TabsContent key={value} value={value} className={cn("mt-2", contentClassName)}>
+          {renderContent(value)}
+        </TabsContent>
+      ))}
+    </Tabs>
+  );
+}
 
 /**
  * MAIN BALANCE SHEET PAGE COMPONENT
@@ -91,8 +778,11 @@ export function BalanceSheetPage() {
     processedAccountGroups,
     processedTaxGroups,
     processedStaffGroups,
+    userNames,
+    journalAccountNames: voucherJournalAccountNames,
   } = useVouchers();
   const { companyId, company } = useCompany();
+  const ledgerLiveRevision = useBalanceSheetLedgerLiveRevision(companyId);
   const { dateSystem, formatDate, formatDateBS, formatCurrencyForPrint } = useDate();
 
   const [query, setQuery] = useState("");
@@ -100,18 +790,37 @@ export function BalanceSheetPage() {
   const [sortBy, setSortBy] = useState<'entity' | 'balance' | 'date'>('entity');
   const [entityFilter, setEntityFilter] = useState<'all' | 'party' | 'account' | 'staff' | 'tax' | 'income' | 'expense'>('all');
   const [activeRow, setActiveRow] = useState<BalanceSheetRow | null>(null);
+  const [detailDateRange, setDetailDateRange] = useState<DateRange | undefined>(undefined);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
-  const [journalAccountNames, setJournalAccountNames] = useState<
-    Record<string, string>
-  >({});
   const [showPrintDialog, setShowPrintDialog] = useState(false);
   const [showDifferenceDetails, setShowDifferenceDetails] = useState(false);
+  const [checkDifferenceOpen, setCheckDifferenceOpen] = useState(false);
+  const [differenceTraceSelectedKey, setDifferenceTraceSelectedKey] = useState<string | null>(null);
+  const [differenceTraceHoveredKey, setDifferenceTraceHoveredKey] = useState<string | null>(null);
+  const [differenceTraceMainView, setDifferenceTraceMainView] =
+    useState<BalanceSheetDiffTraceMainView>("opening");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [resavingUncategorizedIds, setResavingUncategorizedIds] = useState<Set<string>>(new Set());
+  const [recentlyMappedUncategorized, setRecentlyMappedUncategorized] = useState<
+    BalanceSheetUncategorizedAccount[]
+  >([]);
+  const [optimisticGroupOverrides, setOptimisticGroupOverrides] = useState<Record<string, string>>({});
+  const [checkEngineVoucher, setCheckEngineVoucher] = useState<any>(null);
+  const [checkEngineVoucherOpen, setCheckEngineVoucherOpen] = useState(false);
+  const router = useRouter();
 
   // Reset date range when date system changes
   useEffect(() => {
     setDateRange(undefined);
   }, [dateSystem]);
+
+  useEffect(() => {
+    if (!checkDifferenceOpen) {
+      setDifferenceTraceSelectedKey(null);
+      setDifferenceTraceHoveredKey(null);
+      setDifferenceTraceMainView("opening");
+    }
+  }, [checkDifferenceOpen]);
 
   // Reset all local state when company changes
   useEffect(() => {
@@ -120,610 +829,150 @@ export function BalanceSheetPage() {
       setDateRange(undefined);
       setActiveRow(null);
       setSortDesc(false);
+      setResavingUncategorizedIds(new Set());
+      setRecentlyMappedUncategorized([]);
+      setOptimisticGroupOverrides({});
     }
   }, [companyId]);
 
-  // Filter vouchers based on date range
+  // Balance Sheet is point-in-time: primary cutoff is range end date (not start).
+  const asOfDate = useMemo(() => {
+    if (!dateRange?.from) return undefined;
+    const to = dateRange.to ?? dateRange.from;
+    return endOfDay(to);
+  }, [dateRange]);
+
+  // Vouchers on/before as-of (for drawer, double-entry check, display context)
   const filteredVouchers = useMemo(() => {
-    if (!dateRange?.from) return vouchers;
-    const fromDate = startOfDay(dateRange.from);
-    const toDate = dateRange.to ? endOfDay(dateRange.to) : endOfDay(fromDate);
-    return vouchers.filter(v => {
+    if (!asOfDate) return vouchers;
+    return vouchers.filter((v) => {
       const txDate = safeToDate(v.date);
-      return txDate && txDate <= toDate;
+      return txDate && txDate <= asOfDate;
     });
-  }, [vouchers, dateRange]);
+  }, [vouchers, asOfDate]);
 
-  // Calculate balances up to the selected date
-  const balanceSheetData = useMemo((): BalanceSheetRow[] => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/416a5fc5-599f-40c3-9ff9-05c0e4dd1818',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'BalanceSheet.tsx:150',message:'balanceSheetData start',data:{accounts:processedAccounts.length,parties:processedParties.length,staff:processedStaff.length,taxes:processedTaxes.length,expenseAccounts:processedExpenseAccounts.length,filteredVouchers:filteredVouchers.length},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H1'})}).catch(()=>{});
-    // #endregion agent log
-    const assets: BalanceSheetRow[] = [];
-    const liabilities: BalanceSheetRow[] = [];
+  const accountsForBalanceSheet = useMemo(
+    () =>
+      processedAccounts.map((acc) =>
+        optimisticGroupOverrides[acc.id]
+          ? { ...acc, groupId: optimisticGroupOverrides[acc.id] }
+          : acc
+      ),
+    [processedAccounts, optimisticGroupOverrides]
+  );
 
-    // Calculate account balances based on filtered vouchers
-    const calculateAccountBalance = (accountId: string, openingBalance: number = 0): number => {
-      let balance = openingBalance;
-      filteredVouchers.forEach(v => {
-        const amount = v.total || v.amount || 0;
-        if (v.accountId === accountId) {
-          if (['payment_in', 'direct_income', 'sale'].includes(v.type)) balance += amount;
-          if (['payment_out', 'direct_expense', 'purchase'].includes(v.type)) balance -= amount;
-        }
-        if (v.type === 'contra') {
-          if (v.toAccountId === accountId) balance += amount;
-          if (v.fromAccountId === accountId) balance -= amount;
-        }
-        if (v.type === "journal" && Array.isArray(v.entries)) {
-          const entry = v.entries.find((e: any) => e.accountId === accountId);
-          if (entry) balance += Number(entry.debit || 0) - Number(entry.credit || 0);
-        }
-      });
-      return balance;
-    };
+  const partiesForBalanceSheet = useMemo(
+    () =>
+      processedParties.map((p) =>
+        optimisticGroupOverrides[p.id]
+          ? { ...p, groupId: optimisticGroupOverrides[p.id] }
+          : p
+      ),
+    [processedParties, optimisticGroupOverrides]
+  );
 
-    const calculatePartyBalance = (partyId: string, openingBalance: number = 0): number => {
-      let balance = openingBalance;
-      filteredVouchers.forEach(v => {
-        const amount = v.total || v.amount || 0;
-        if (v.partyId === partyId) {
-          if (["sale", "payment_out", "direct_income"].includes(v.type)) balance += amount;
-          else if (["purchase", "payment_in", "direct_expense"].includes(v.type)) balance -= amount;
-        }
-      });
-      return balance;
-    };
+  const staffForBalanceSheet = useMemo(
+    () =>
+      processedStaff.map((s) =>
+        optimisticGroupOverrides[s.id]
+          ? { ...s, groupId: optimisticGroupOverrides[s.id] }
+          : s
+      ),
+    [processedStaff, optimisticGroupOverrides]
+  );
 
-    const calculateStaffBalance = (staffId: string, openingBalance: number = 0): number => {
-      let balance = openingBalance;
-      filteredVouchers.forEach(v => {
-        const amount = v.total || v.amount || 0;
-        if (v.staffId === staffId) {
-          if (v.type === 'payment_out') balance += amount;
-          else if (v.type === 'payment_in') balance -= amount;
-        }
-      });
-      return balance;
-    };
+  const taxesForBalanceSheet = useMemo(
+    () =>
+      processedTaxes.map((t) =>
+        optimisticGroupOverrides[t.id]
+          ? { ...t, groupId: optimisticGroupOverrides[t.id] }
+          : t
+      ),
+    [processedTaxes, optimisticGroupOverrides]
+  );
 
-    const calculateTaxBalance = (taxId: string, openingBalance: number = 0): number => {
-      let balance = openingBalance;
-      filteredVouchers.forEach(v => {
-        if (v.taxAccountId === taxId) {
-          const amount = v.total || v.amount || 0;
-          if (v.type === 'payment_out') balance += amount;
-          else if (v.type === 'payment_in') balance -= amount;
-        } else if (v.lineItems?.some((li: any) => li.taxAccountId === taxId)) {
-          const taxAmount = v.lineItems.find((li: any) => li.taxAccountId === taxId)?.taxAmount || 0;
-          if (v.type === 'purchase') balance += taxAmount;
-          else if (v.type === 'sale') balance -= taxAmount;
-        }
-      });
-      return balance;
-    };
+  const { rows: balanceSheetData, uncategorized: uncategorizedAccounts } = useMemo(
+    () =>
+      computeBalanceSheetReport({
+        processedAccounts: accountsForBalanceSheet,
+        processedParties: partiesForBalanceSheet,
+        processedStaff: staffForBalanceSheet,
+        processedTaxes: taxesForBalanceSheet,
+        processedExpenseAccounts,
+        processedExpenseGroups,
+        processedGroups,
+        processedAccountGroups,
+        processedTaxGroups,
+        processedStaffGroups,
+        vouchers,
+        processedTaxesForLedger: processedTaxes,
+        asOfDate,
+      }),
+    [
+      accountsForBalanceSheet,
+      partiesForBalanceSheet,
+      staffForBalanceSheet,
+      taxesForBalanceSheet,
+      processedExpenseGroups,
+      processedGroups,
+      processedAccountGroups,
+      processedTaxGroups,
+      processedStaffGroups,
+      vouchers,
+      processedTaxes,
+      processedExpenseAccounts,
+      asOfDate,
+      ledgerLiveRevision,
+    ]
+  );
 
-    // Helper function to get group name
-    const getGroupName = (groupId: string | undefined, groupType: 'party' | 'account' | 'tax' | 'staff'): string => {
-      if (!groupId) return 'Ungrouped';
-      if (groupType === 'party') return processedGroups.find(g => g.id === groupId)?.name || 'Ungrouped';
-      if (groupType === 'account') return processedAccountGroups.find(g => g.id === groupId)?.name || 'Ungrouped';
-      if (groupType === 'tax') return processedTaxGroups.find(g => g.id === groupId)?.name || 'Ungrouped';
-      if (groupType === 'staff') return processedStaffGroups.find(g => g.id === groupId)?.name || 'Ungrouped';
-      return 'Ungrouped';
-    };
+  const openingBalanceAudit = useMemo(
+    () =>
+      computeMasterOpeningBalanceAudit([
+        ...processedAccounts,
+        ...processedParties,
+        ...processedStaff,
+        ...processedTaxes,
+        ...processedExpenseAccounts,
+      ]),
+    [processedAccounts, processedParties, processedStaff, processedTaxes, processedExpenseAccounts, ledgerLiveRevision]
+  );
 
-    // Helper function to check if a group is Nominal (Income/Expense) - should NOT appear in Balance Sheet
-    const isNominalGroup = (groupId: string | undefined, groupType: 'party' | 'account' | 'tax' | 'staff'): boolean => {
-      if (!groupId) return false;
-      const groupName = getGroupName(groupId, groupType).toLowerCase();
-      // Check for Income/Expense groups
-      return groupName.includes('income') || 
-             groupName.includes('expense') || 
-             groupName.includes('sales') || 
-             groupName.includes('purchase') ||
-             groupId === 'direct_income' ||
-             groupId === 'indirect_income' ||
-             groupId === 'direct_expense' ||
-             groupId === 'indirect_expense' ||
-             groupId === 'income' ||
-             groupId === 'expenses';
-    };
+  const ledgerEarliestDate = useMemo(
+    () =>
+      computeLedgerEarliestActivityDate(vouchers, [
+        ...processedAccounts,
+        ...processedParties,
+        ...processedStaff,
+        ...processedTaxes,
+        ...processedExpenseAccounts,
+      ]),
+    [
+      vouchers,
+      processedAccounts,
+      processedParties,
+      processedStaff,
+      processedTaxes,
+      processedExpenseAccounts,
+      ledgerLiveRevision,
+    ]
+  );
 
-    // Use Trial Balance logic: balance > 0 (Dr) = Assets, balance < 0 (Cr) = Liabilities
-    // Accounts - Use balance from processedAccounts (same as Trial Balance)
-    // IMPORTANT: Skip Nominal accounts (Income/Expense) - they don't appear in Balance Sheet
-    processedAccounts.forEach((acc) => {
-      // Skip Income/Expense accounts (Nominal accounts) - they go to P&L, not Balance Sheet
-      if (isNominalGroup(acc.groupId, 'account')) return;
-      
-      // Use the balance from processedAccounts (calculated same way as Trial Balance)
-      const balance = acc.balance || 0;
-      const groupName = getGroupName(acc.groupId, 'account');
-      if (balance > 0) {
-        assets.push({ 
-          accountId: acc.id, 
-          accountName: acc.accountName, 
-          group: groupName, 
-          category: "Assets", 
-          amount: balance, 
-          openingBalance: acc.openingBalance, 
-          isGroup: false,
-          entityType: 'account'
-        });
-      } else if (balance < 0) {
-        liabilities.push({ 
-          accountId: acc.id, 
-          accountName: acc.accountName, 
-          group: groupName, 
-          category: "Liabilities", 
-          amount: -balance, 
-          openingBalance: acc.openingBalance, 
-          isGroup: false,
-          entityType: 'account'
-        });
-      }
-    });
-    
-    // Parties - Use balance from processedParties (same as Trial Balance)
-    // IMPORTANT: Skip Nominal accounts (Income/Expense) - they don't appear in Balance Sheet
-    processedParties.forEach((p) => {
-      if (p.id === 'opening_balance_ledger') return; // Skip opening balance ledger here (handled separately)
-      
-      // Skip Income/Expense accounts (Nominal accounts) - they go to P&L, not Balance Sheet
-      if (isNominalGroup(p.groupId, 'party')) return;
-      
-      // Use the balance from processedParties (calculated same way as Trial Balance)
-      const balance = p.balance || 0;
-      const groupName = getGroupName(p.groupId, 'party');
-      
-      // Apply consistent Dr/Cr logic to ALL accounts (including Equity):
-      // Dr balance (positive) = Assets side
-      // Cr balance (negative) = Liabilities + Equity side
-      const isEquityGroup = p.groupId === 'equity';
-      
-      if (balance > 0) {
-        // Debit balance (Dr) → Assets side
-        // For Equity accounts, Dr balance is unusual but should still show on Assets side
-        assets.push({ 
-          accountId: p.id, 
-          accountName: p.name, 
-          group: groupName, 
-          category: isEquityGroup ? "Assets" : "Assets", 
-          amount: balance, 
-          openingBalance: p.openingBalance, 
-          isGroup: false,
-          entityType: 'party'
-        });
-      } else if (balance < 0) {
-        // Credit balance (Cr) → Liabilities + Equity side
-        // For Equity accounts, Cr balance is normal and goes to Equity category
-        liabilities.push({ 
-          accountId: p.id, 
-          accountName: p.name, 
-          group: groupName, 
-          category: isEquityGroup ? "Equity" : "Liabilities", 
-          amount: -balance, 
-          openingBalance: p.openingBalance, 
-          isGroup: false,
-          entityType: 'party'
-        });
-      } else {
-        // Zero balance - show Equity accounts for visibility
-        if (isEquityGroup && (p.name.toLowerCase().includes('capital') || p.name.toLowerCase().includes('owner'))) {
-          liabilities.push({ 
-            accountId: p.id, 
-            accountName: p.name, 
-            group: groupName, 
-            category: "Equity", 
-            amount: 0, 
-            openingBalance: p.openingBalance, 
-            isGroup: false,
-            entityType: 'party'
-          });
-        }
-      }
-    });
-    
-    // Add Opening Balance ledger - use its actual balance from processedParties
-    // IMPORTANT: Individual accounts already include opening balance in their balance calculation
-    // The Opening Balance ledger is a balancing account that should show the NET difference
-    // (accounts whose opening balance is NOT already included in their individual ledger)
-    // We use the ledger's balance directly, not recalculate by summing all opening balances
-    const openingBalanceLedger = processedParties.find(p => p.id === 'opening_balance_ledger');
-    if (openingBalanceLedger) {
-      // Use the Opening Balance ledger's actual balance (already calculated in processedParties)
-      // This balance represents the NET difference - accounts not already included in individual balances
-      const openingBalanceAmount = openingBalanceLedger.balance || 0;
-      
-      // Dynamically switch sides based on Dr/Cr: Dr (positive) → Assets, Cr (negative) → Liabilities + Equity
-      if (openingBalanceAmount > 0) {
-        // Debit opening balance (Dr) → Assets side
-        assets.push({ 
-          accountId: 'opening_balance_ledger', 
-          accountName: 'Opening Balance', 
-          group: 'Equity', 
-          category: 'Assets', 
-          amount: openingBalanceAmount,
-          openingBalance: openingBalanceLedger.openingBalance || 0,
-          isGroup: false,
-          entityType: 'opening_balance'
-        });
-      } else if (openingBalanceAmount < 0) {
-        // Credit opening balance (Cr) → Liabilities + Equity side
-        liabilities.push({ 
-          accountId: 'opening_balance_ledger', 
-          accountName: 'Opening Balance', 
-          group: 'Equity', 
-          category: 'Equity', 
-          amount: -openingBalanceAmount,
-          openingBalance: openingBalanceLedger.openingBalance || 0,
-          isGroup: false,
-          entityType: 'opening_balance'
-        });
-      } else {
-        // Zero balance - show on Equity side for visibility
-        liabilities.push({ 
-          accountId: 'opening_balance_ledger', 
-          accountName: 'Opening Balance', 
-          group: 'Equity', 
-          category: 'Equity', 
-          amount: 0,
-          openingBalance: openingBalanceLedger.openingBalance || 0,
-          isGroup: false,
-          entityType: 'opening_balance'
-        });
-      }
-    }
-    
-    // Staff - Use balance from processedStaff (same as Trial Balance)
-    // IMPORTANT: Skip Nominal accounts (Income/Expense) - they don't appear in Balance Sheet
-    processedStaff.forEach((s) => {
-      // Skip Income/Expense accounts (Nominal accounts) - they go to P&L, not Balance Sheet
-      if (isNominalGroup(s.groupId, 'staff')) return;
-      
-      // Use the balance from processedStaff (calculated same way as Trial Balance)
-      const balance = s.balance || 0;
-      const groupName = getGroupName(s.groupId, 'staff');
-      if (balance > 0) {
-        assets.push({ 
-          accountId: s.id, 
-          accountName: s.name, 
-          group: groupName, 
-          category: "Assets", 
-          amount: balance, 
-          openingBalance: s.openingBalance, 
-          isGroup: false,
-          entityType: 'staff'
-        });
-      } else if (balance < 0) {
-        liabilities.push({ 
-          accountId: s.id, 
-          accountName: s.name, 
-          group: groupName, 
-          category: "Liabilities", 
-          amount: -balance, 
-          openingBalance: s.openingBalance, 
-          isGroup: false,
-          entityType: 'staff'
-        });
-      }
-    });
-    
-    // Taxes - Use balance from processedTaxes (same as Trial Balance)
-    // Debit balance (Dr) = Asset, Credit balance (Cr) = Liability
-    // IMPORTANT: Skip Nominal accounts (Income/Expense) - they don't appear in Balance Sheet
-    processedTaxes.forEach((t) => {
-      // Skip Income/Expense accounts (Nominal accounts) - they go to P&L, not Balance Sheet
-      if (isNominalGroup(t.groupId, 'tax')) return;
-      
-      // Use the balance from processedTaxes (calculated same way as Trial Balance)
-      const balance = t.balance || 0;
-      const groupName = getGroupName(t.groupId, 'tax');
-      if (balance > 0) {
-        // Debit balance (Dr) - Tax receivable/Input tax credit = Asset
-        assets.push({ 
-          accountId: t.id, 
-          accountName: t.name, 
-          group: groupName, 
-          category: "Assets", 
-          amount: balance, 
-          openingBalance: t.openingBalance, 
-          isGroup: false,
-          entityType: 'tax'
-        });
-      } else if (balance < 0) {
-        // Credit balance (Cr) - Tax payable/Output tax = Liability
-        liabilities.push({ 
-          accountId: t.id, 
-          accountName: t.name, 
-          group: groupName, 
-          category: "Liabilities", 
-          amount: -balance, 
-          openingBalance: t.openingBalance, 
-          isGroup: false,
-          entityType: 'tax'
-        });
-      }
-    });
+  const companyFiscalYearContext = useMemo(
+    () =>
+      buildBalanceSheetFiscalYearContext(
+        safeToDate((company as Record<string, unknown> | null | undefined)?.fiscalYearStart),
+        safeToDate((company as Record<string, unknown> | null | undefined)?.fiscalYearEnd),
+        formatDate,
+        formatDateBS,
+        dateSystem,
+        ledgerEarliestDate,
+        asOfDate ?? new Date()
+      ),
+    [company, formatDate, formatDateBS, dateSystem, asOfDate, ledgerEarliestDate]
+  );
 
-    // Add Group Totals - Show net balance on ONE side only (not both)
-    // Account Groups - Skip Income/Expense groups (Nominal accounts)
-    processedAccountGroups.forEach((group) => {
-      // Skip Income/Expense groups - they don't appear in Balance Sheet
-      if (isNominalGroup(group.id, 'account')) return;
-      
-      const groupAccounts = processedAccounts.filter(acc => acc.groupId === group.id);
-      let netBalance = 0;
-      
-      groupAccounts.forEach(acc => {
-        // Use balance from processedAccounts (same as Trial Balance)
-        netBalance += acc.balance || 0;
-      });
-      
-      // Show net balance on appropriate side only
-      if (netBalance > 0) {
-        assets.push({ 
-          accountId: `group_account_${group.id}`, 
-          accountName: group.name, 
-          group: group.name, 
-          category: "Assets", 
-          amount: netBalance, 
-          openingBalance: 0, 
-          isGroup: true,
-          entityType: 'account'
-        });
-      } else if (netBalance < 0) {
-        liabilities.push({ 
-          accountId: `group_account_${group.id}`, 
-          accountName: group.name, 
-          group: group.name, 
-          category: "Liabilities", 
-          amount: -netBalance, 
-          openingBalance: 0, 
-          isGroup: true,
-          entityType: 'account'
-        });
-      }
-    });
-
-    // Party Groups (excluding Equity and Income/Expense - handled separately)
-    processedGroups.forEach((group) => {
-      // Skip Equity group - it will be handled separately
-      if (group.id === 'equity') return;
-      
-      // Skip Income/Expense groups - they don't appear in Balance Sheet
-      if (isNominalGroup(group.id, 'party')) return;
-      
-      const groupParties = processedParties.filter(p => p.groupId === group.id && p.id !== 'opening_balance_ledger');
-      let netBalance = 0;
-      
-      groupParties.forEach(p => {
-        // Use balance from processedParties (same as Trial Balance)
-        netBalance += p.balance || 0;
-      });
-      
-      // Show net balance on appropriate side only
-      if (netBalance > 0) {
-        assets.push({ 
-          accountId: `group_party_${group.id}`, 
-          accountName: group.name, 
-          group: group.name, 
-          category: "Assets", 
-          amount: netBalance, 
-          openingBalance: 0, 
-          isGroup: true,
-          entityType: 'party'
-        });
-      } else if (netBalance < 0) {
-        liabilities.push({ 
-          accountId: `group_party_${group.id}`, 
-          accountName: group.name, 
-          group: group.name, 
-          category: "Liabilities", 
-          amount: -netBalance, 
-          openingBalance: 0, 
-          isGroup: true,
-          entityType: 'party'
-        });
-      }
-    });
-
-    // Equity Group - Show separately
-    // Include Opening Balance ledger balance in Equity group calculation
-    // IMPORTANT: Individual accounts already include opening balance in their balance calculation
-    // The Opening Balance ledger is a balancing account - use its balance directly
-    const equityGroup = processedGroups.find(g => g.id === 'equity');
-    if (equityGroup) {
-      const equityParties = processedParties.filter(p => p.groupId === 'equity' && p.id !== 'opening_balance_ledger');
-      let netEquityBalance = 0;
-      
-      equityParties.forEach(p => {
-        netEquityBalance += p.balance || 0;
-      });
-      
-      // Include Opening Balance ledger's balance (already calculated in processedParties)
-      // This represents the NET difference - accounts not already included in individual balances
-      const openingBalanceLedger = processedParties.find(p => p.id === 'opening_balance_ledger');
-      const openingBalanceAmount = openingBalanceLedger?.balance || 0;
-      netEquityBalance += openingBalanceAmount;
-      
-      // Apply consistent Dr/Cr logic to Equity Group:
-      // Dr balance (positive) → Assets side
-      // Cr balance (negative) → Liabilities + Equity side
-      if (netEquityBalance > 0) {
-        // Debit balance (Dr) → Assets side
-        assets.push({ 
-          accountId: `group_party_equity`, 
-          accountName: equityGroup.name, 
-          group: equityGroup.name, 
-          category: "Assets", 
-          amount: netEquityBalance, 
-          openingBalance: openingBalanceAmount, 
-          isGroup: true,
-          entityType: 'party'
-        });
-      } else if (netEquityBalance < 0) {
-        // Credit balance (Cr) → Liabilities + Equity side
-        liabilities.push({ 
-          accountId: `group_party_equity`, 
-          accountName: equityGroup.name, 
-          group: equityGroup.name, 
-          category: "Equity", 
-          amount: -netEquityBalance, 
-          openingBalance: openingBalanceAmount, 
-          isGroup: true,
-          entityType: 'party'
-        });
-      }
-    }
-
-    // Tax Groups - Skip Income/Expense groups (Nominal accounts)
-    processedTaxGroups.forEach((group) => {
-      // Skip Income/Expense groups - they don't appear in Balance Sheet
-      if (isNominalGroup(group.id, 'tax')) return;
-      
-      const groupTaxes = processedTaxes.filter(t => t.groupId === group.id);
-      let netBalance = 0;
-      
-      groupTaxes.forEach(t => {
-        // Use balance from processedTaxes (same as Trial Balance)
-        netBalance += t.balance || 0;
-      });
-      
-      // Show net balance on appropriate side only
-      if (netBalance > 0) {
-        assets.push({ 
-          accountId: `group_tax_${group.id}`, 
-          accountName: group.name, 
-          group: group.name, 
-          category: "Assets", 
-          amount: netBalance, 
-          openingBalance: 0, 
-          isGroup: true,
-          entityType: 'tax'
-        });
-      } else if (netBalance < 0) {
-        liabilities.push({ 
-          accountId: `group_tax_${group.id}`, 
-          accountName: group.name, 
-          group: group.name, 
-          category: "Liabilities", 
-          amount: -netBalance, 
-          openingBalance: 0, 
-          isGroup: true,
-          entityType: 'tax'
-        });
-      }
-    });
-
-    // Staff Groups - Skip Income/Expense groups (Nominal accounts)
-    processedStaffGroups.forEach((group) => {
-      // Skip Income/Expense groups - they don't appear in Balance Sheet
-      if (isNominalGroup(group.id, 'staff')) return;
-      
-      const groupStaff = processedStaff.filter(s => s.groupId === group.id);
-      let netBalance = 0;
-      
-      groupStaff.forEach(s => {
-        // Use balance from processedStaff (same as Trial Balance)
-        netBalance += s.balance || 0;
-      });
-      
-      // Show net balance on appropriate side only
-      if (netBalance > 0) {
-        assets.push({ 
-          accountId: `group_staff_${group.id}`, 
-          accountName: group.name, 
-          group: group.name, 
-          category: "Assets", 
-          amount: netBalance, 
-          openingBalance: 0, 
-          isGroup: true,
-          entityType: 'staff'
-        });
-      } else if (netBalance < 0) {
-        liabilities.push({ 
-          accountId: `group_staff_${group.id}`, 
-          accountName: group.name, 
-          group: group.name, 
-          category: "Liabilities", 
-          amount: -netBalance, 
-          openingBalance: 0, 
-          isGroup: true,
-          entityType: 'staff'
-        });
-      }
-    });
-
-    // Note: Income and Expense accounts (Nominal accounts) are NOT shown in Balance Sheet
-    // They are shown in Profit & Loss Statement instead
-    // Balance Sheet only shows Personal and Real accounts (Assets, Liabilities, Equity)
-    // Opening Balance ledger is already included above with sum of all entities' opening balances
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/416a5fc5-599f-40c3-9ff9-05c0e4dd1818',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'BalanceSheet.tsx:717',message:'balanceSheetData end',data:{assetsCount:assets.length,liabilitiesCount:liabilities.length},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H4'})}).catch(()=>{});
-    // #endregion agent log
-    // Calculate Net Profit from expense accounts up to selected date
-    const calculateExpenseAccountBalance = (acc: any): number => {
-      let balance = Number(acc.openingBalance) || 0;
-      filteredVouchers.forEach(v => {
-        const directExpenseToId = v.toAccountId || v.expenseAccountId;
-        if (v.expenseAccountId === acc.id || v.incomeAccountId === acc.id || directExpenseToId === acc.id) {
-          const amount = v.total || v.amount || 0;
-          if (v.type === 'direct_income' && v.incomeAccountId === acc.id) balance += amount;
-          if (v.type === 'direct_expense' && directExpenseToId === acc.id) balance -= amount;
-        }
-        if (v.type === "journal" && Array.isArray(v.entries)) {
-          const entry = v.entries.find((e: any) => e.accountId === acc.id);
-          if (entry) balance += Number(entry.debit || 0) - Number(entry.credit || 0);
-        }
-      });
-      return balance;
-    };
-
-    // Don't add Net Profit to regular rows - it will be shown separately below TOTAL
-    return [...assets, ...liabilities];
-
-  }, [processedAccounts, processedParties, processedStaff, processedTaxes, processedExpenseAccounts, processedGroups, processedAccountGroups, processedTaxGroups, processedStaffGroups, filteredVouchers]);
-
-  // Opening Balance Audit - Check if opening balances are balanced
-  const openingBalanceAudit = useMemo(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/416a5fc5-599f-40c3-9ff9-05c0e4dd1818',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'BalanceSheet.tsx:724',message:'openingBalanceAudit start',data:{accounts:processedAccounts.length,parties:processedParties.length,staff:processedStaff.length,taxes:processedTaxes.length,expenseAccounts:processedExpenseAccounts.length},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H5'})}).catch(()=>{});
-    // #endregion agent log
-    let totalOpeningDr = 0;
-    let totalOpeningCr = 0;
-
-    // सबै प्रकारका लेजरहरू (Accounts, Parties, Staff, Taxes) जम्मा गर्ने
-    const allEntities = [
-      ...processedAccounts,
-      ...processedParties,
-      ...processedStaff,
-      ...processedTaxes,
-      ...processedExpenseAccounts
-    ];
-
-    allEntities.forEach((entity) => {
-      const ob = Number(entity.openingBalance) || 0;
-      if (ob > 0) {
-        totalOpeningDr += ob; // डेबिट ओपनिङ
-      } else if (ob < 0) {
-        totalOpeningCr += Math.abs(ob); // क्रेडिट ओपनिङ
-      }
-    });
-
-    const result = {
-      totalOpeningDr: round2(totalOpeningDr),
-      totalOpeningCr: round2(totalOpeningCr),
-      diff: round2(totalOpeningDr - totalOpeningCr),
-      isBalanced: Math.abs(totalOpeningDr - totalOpeningCr) < 0.01
-    };
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/416a5fc5-599f-40c3-9ff9-05c0e4dd1818',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'BalanceSheet.tsx:746',message:'openingBalanceAudit end',data:{totalOpeningDr:result.totalOpeningDr,totalOpeningCr:result.totalOpeningCr,diff:result.diff,isBalanced:result.isBalanced},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H5'})}).catch(()=>{});
-    // #endregion agent log
-    return result;
-  }, [processedAccounts, processedParties, processedStaff, processedTaxes, processedExpenseAccounts]);
+  const effectiveFiscalYearStart = companyFiscalYearContext.effectiveStart;
 
   // Opening Balance Entities for Summary Table
   const openingBalanceEntities = useMemo(() => {
@@ -736,83 +985,24 @@ export function BalanceSheetPage() {
       ...processedExpenseAccounts.map(e => ({ ...e, type: 'Income/Expense', accountName: e.name }))
     ];
     // केवल ओपनिङ ब्यालेन्स भएका लेजरहरू मात्र फिल्टर गर्ने
-    return data.filter(e => Number(e.openingBalance) !== 0);
+    return data.filter(
+      (e) =>
+        Number(e.openingBalance) !== 0 &&
+        (e as { id?: string }).id !== "opening_balance_ledger"
+    );
   }, [processedAccounts, processedParties, processedStaff, processedTaxes, processedExpenseAccounts]);
 
-  // Calculate Net Profit separately
-  // Formula: Net Profit = Total Income - Total Expenses
-  // Income = Sales Account + Direct Income + Indirect Income accounts
-  // Expenses = Purchase Account + Direct Expense + Indirect Expense + Salary Expense accounts
-  // Note: Use account.balance directly (which includes openingBalance) to match Income & Expense page calculation
-  const netProfit = useMemo(() => {
-    // Identify income groups (direct_income, indirect_income)
-    const incomeGroupIds = new Set<string>();
-    const expenseGroupIds = new Set<string>();
-    
-    if (processedExpenseGroups) {
-      processedExpenseGroups.forEach(group => {
-        // Income groups have parentId === 'income' or id === 'direct_income' or 'indirect_income'
-        if (group.parentId === 'income' || group.id === 'direct_income' || group.id === 'indirect_income') {
-          incomeGroupIds.add(group.id);
-        }
-        // Expense groups have parentId === 'expenses' or id === 'direct_expense' or 'indirect_expense'
-        if (group.parentId === 'expenses' || group.id === 'direct_expense' || group.id === 'indirect_expense') {
-          expenseGroupIds.add(group.id);
-        }
-      });
-    }
-    
-    // Calculate Total Income and Total Expenses
-    // Match Income & Expense page calculation: totalBalance = sum of all account.balance
-    // For Net Profit: Income accounts contribute negatively, Expense accounts contribute positively
-    let totalIncome = 0;
-    let totalExpenses = 0;
-    let unclassifiedAccounts: any[] = [];
-    
-    processedExpenseAccounts.forEach(acc => {
-      const isIncomeAccount = acc.id === 'sales_account' || (acc.groupId && incomeGroupIds.has(acc.groupId));
-      const isExpenseAccount = acc.id === 'purchase_account' || 
-                               (acc.groupId && expenseGroupIds.has(acc.groupId)) ||
-                               (acc as any).type === 'Expense' || 
-                               (acc as any).type === 'Salary';
-      
-      if (isIncomeAccount) {
-        // Income accounts: negative balance (Cr) means income earned
-        // Income = Credit - Debit = -(balance - openingBalance) ≈ -balance (if openingBalance small)
-        // To match Income & Expense page logic: Income = -balance
-        totalIncome += -(acc.balance || 0);
-      } else if (isExpenseAccount) {
-        // Expense accounts: positive balance (Dr) means expenses incurred
-        // Expenses = Debit - Credit = balance - openingBalance ≈ balance (if openingBalance small)
-        // To match Income & Expense page logic: Expenses = balance
-        totalExpenses += (acc.balance || 0);
-      } else {
-        // Track unclassified accounts for debugging
-        unclassifiedAccounts.push({ id: acc.id, name: acc.name, balance: acc.balance, groupId: acc.groupId });
-        // Default: treat as expense if balance is positive, income if balance is negative
-        if ((acc.balance || 0) > 0) {
-          totalExpenses += (acc.balance || 0);
-        } else {
-          totalIncome += -(acc.balance || 0);
-        }
-      }
-    });
-    
-    // Net Profit = Total Income - Total Expenses
-    // This equals: Net Profit = -sum(income balances) - sum(expense balances) = -(sum of all balances)
-    // This should match Income & Expense page: totalBalance = sum of all account.balance
-    // So Net Profit = -totalBalance (from Income & Expense page)
-    const profit = totalIncome - totalExpenses;
-    
-    // #region agent log
-    const allBalancesSum = processedExpenseAccounts.reduce((sum, acc) => sum + (acc.balance || 0), 0);
-    fetch('http://127.0.0.1:7242/ingest/416a5fc5-599f-40c3-9ff9-05c0e4dd1818',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'BalanceSheet.tsx:850',message:'netProfit calculation with balances',data:{totalIncome,totalExpenses,profit,allBalancesSum,expectedProfit:-allBalancesSum,difference:profit+allBalancesSum,incomeGroupIds:Array.from(incomeGroupIds),expenseGroupIds:Array.from(expenseGroupIds),unclassifiedAccounts:unclassifiedAccounts.map(a=>({id:a.id,name:a.name,balance:a.balance})),totalAccounts:processedExpenseAccounts.length},timestamp:Date.now(),sessionId:'debug-session',runId:'net-profit-fix-v3',hypothesisId:'H1'})}).catch(()=>{});
-    // #endregion agent log
-    
-    return round2(profit);
-  }, [processedExpenseAccounts, processedExpenseGroups]);
-
-  // Debug: Calculate total debit and credit from all vouchers to verify double-entry
+  const netProfit = useMemo(
+    () =>
+      computeBalanceSheetNetProfit(
+        processedExpenseAccounts,
+        processedExpenseGroups,
+        vouchers,
+        processedTaxes,
+        asOfDate
+      ),
+    [processedExpenseAccounts, processedExpenseGroups, vouchers, processedTaxes, asOfDate]
+  );
   const doubleEntryCheck = useMemo(() => {
     let totalDebit = 0;
     let totalCredit = 0;
@@ -911,18 +1101,25 @@ export function BalanceSheetPage() {
             totalCredit += credit;
           });
         }
-      } else if (v.type === 'add_salary') {
-        // Add Salary: handled in journal entries
-        if (v.entries && Array.isArray(v.entries)) {
-          v.entries.forEach((entry: any) => {
-            const debit = Number(entry.debit || 0);
-            const credit = Number(entry.credit || 0);
-            voucherDebit += debit;
-            voucherCredit += credit;
-            totalDebit += debit;
-            totalCredit += credit;
-          });
-        }
+      } else if (v.type === 'inter_company') {
+        const legs = resolveInterCompanyLegsForVoucher(v);
+        legs.forEach((leg) => {
+          const debit = Number(leg.debit || 0);
+          const credit = Number(leg.credit || 0);
+          voucherDebit += debit;
+          voucherCredit += credit;
+          totalDebit += debit;
+          totalCredit += credit;
+        });
+      } else if (v.type === 'adjustment' && Array.isArray(v.entries)) {
+        v.entries.forEach((entry: any) => {
+          const debit = Number(entry.debit || 0);
+          const credit = Number(entry.credit || 0);
+          voucherDebit += debit;
+          voucherCredit += credit;
+          totalDebit += debit;
+          totalCredit += credit;
+        });
       }
       
       // Check if this voucher is unbalanced
@@ -1045,7 +1242,69 @@ export function BalanceSheetPage() {
       difference: round2(Math.abs(totalDebit - totalCredit)),
       problematicVouchers: problematicVouchers.sort((a, b) => b.difference - a.difference)
     };
-  }, [filteredVouchers, processedParties, processedAccounts, processedStaff, processedTaxes, processedGroups, processedAccountGroups, processedTaxGroups, processedStaffGroups]);
+  }, [filteredVouchers, processedParties, processedAccounts, processedStaff, processedTaxes, processedGroups, processedAccountGroups, processedTaxGroups, processedStaffGroups, ledgerLiveRevision]);
+
+  const getIcPeerGroupsForCompany = useCallback(
+    (companyRow: BalanceSheetRow): BalanceSheetRow[] => {
+      if (!companyRow.isBalanceSheetIcCompanyGroup) return [];
+      return balanceSheetData.filter(
+        (r) =>
+          r.isGroup &&
+          r.isBalanceSheetIcPeerGroup &&
+          r.balanceSheetBranchHint === companyRow.balanceSheetBranchHint
+      );
+    },
+    [balanceSheetData]
+  );
+
+  const getAccountsForGroup = useCallback(
+    (groupRow: BalanceSheetRow): BalanceSheetRow[] => {
+      if (!groupRow.isGroup) return [];
+
+      if (groupRow.isBalanceSheetIcCompanyGroup) {
+        return getIcPeerGroupsForCompany(groupRow);
+      }
+
+      if (groupRow.isBalanceSheetIcPeerGroup) {
+        const peerKey = groupRow.balanceSheetIcPeerGroupKey;
+        return balanceSheetData.filter(
+          (acc) =>
+            !acc.isGroup &&
+            acc.entityType === "party" &&
+            acc.balanceSheetIcPeerGroupKey === peerKey
+        );
+      }
+
+      const match = groupRow.accountId.match(/^group_(party|account|tax|staff)_(.+)$/);
+      if (!match) return [];
+
+      const [, groupType, groupId] = match;
+      const groupName = groupRow.group;
+
+      return balanceSheetData.filter((acc) => {
+        if (acc.isGroup) return false;
+        if (acc.group === groupName && acc.entityType === groupType) return true;
+        if (groupType === "party" && groupId === "equity") {
+          return (
+            acc.group === groupName &&
+            (acc.entityType === "party" || acc.entityType === "opening_balance")
+          );
+        }
+        return false;
+      });
+    },
+    [balanceSheetData, getIcPeerGroupsForCompany]
+  );
+
+  const balanceSheetGroupHierarchyCtx = useMemo(
+    (): BalanceSheetGroupHierarchyContext => ({
+      processedGroups,
+      processedAccountGroups,
+      processedTaxGroups,
+      processedStaffGroups,
+    }),
+    [processedGroups, processedAccountGroups, processedTaxGroups, processedStaffGroups]
+  );
 
   const filtered = useMemo(() => {
     let sortedData = [...balanceSheetData];
@@ -1094,8 +1353,8 @@ export function BalanceSheetPage() {
       });
     }
 
-    // Filter to show only group totals (isGroup: true)
-      sortedData = sortedData.filter(r => r.isGroup === true);
+    // Filter to show only group totals (isGroup: true); IC peer rows nest under IC Company
+    sortedData = sortedData.filter((r) => r.isGroup === true && !r.isBalanceSheetIcPeerGroup);
 
     // Filter by entity type (both groups and individual accounts)
     if (entityFilter !== 'all') {
@@ -1113,46 +1372,31 @@ export function BalanceSheetPage() {
       });
     }
 
-    if (query) {
-      return sortedData.filter(
-        (row) =>
-          row.accountName.toLowerCase().includes(query.toLowerCase()) ||
-          row.group.toLowerCase().includes(query.toLowerCase())
+    if (query.trim()) {
+      return sortedData.filter((row) =>
+        balanceSheetGroupMatchesQuery(
+          row,
+          query,
+          balanceSheetGroupHierarchyCtx,
+          getAccountsForGroup,
+          getIcPeerGroupsForCompany
+        )
       );
     }
 
     return sortedData;
-  }, [balanceSheetData, query, sortDesc, sortBy, filteredVouchers, entityFilter]);
+  }, [
+    balanceSheetData,
+    query,
+    sortDesc,
+    sortBy,
+    filteredVouchers,
+    entityFilter,
+    getAccountsForGroup,
+    getIcPeerGroupsForCompany,
+    balanceSheetGroupHierarchyCtx,
+  ]);
   
-  // Helper function to get accounts for a group
-  const getAccountsForGroup = useCallback((groupRow: BalanceSheetRow): BalanceSheetRow[] => {
-    if (!groupRow.isGroup) return [];
-    
-    // Extract group type and ID from accountId (e.g., "group_party_equity" -> "party", "equity")
-    const match = groupRow.accountId.match(/^group_(party|account|tax|staff)_(.+)$/);
-    if (!match) return [];
-    
-    const [, groupType, groupId] = match;
-    const groupName = groupRow.group;
-    
-    // Get all accounts that belong to this group
-    return balanceSheetData.filter(acc => {
-      if (acc.isGroup) return false; // Exclude nested groups
-      
-      // Match by group name and entity type
-      if (acc.group === groupName && acc.entityType === groupType) {
-        return true;
-      }
-      
-      // Special handling for specific group IDs
-      if (groupType === 'party' && groupId === 'equity') {
-        return acc.group === groupName && (acc.entityType === 'party' || acc.entityType === 'opening_balance');
-        }
-      
-      return false;
-      });
-  }, [balanceSheetData]);
-
   // Main groups (Assets, Liabilities, Equity) for collapsed view
   const mainGroupRows = useMemo((): BalanceSheetRow[] => {
     const byCategory: Record<string, number> = {};
@@ -1174,7 +1418,9 @@ export function BalanceSheetPage() {
         accountName: "Assets",
         group: "Assets",
         category: "Assets",
+        ledgerClass: "Asset",
         amount: byCategory["Assets"],
+        signedBalance: byCategory["Assets"],
         isGroup: true,
       });
     }
@@ -1184,7 +1430,9 @@ export function BalanceSheetPage() {
         accountName: "Liabilities",
         group: "Liabilities",
         category: "Liabilities",
+        ledgerClass: "Liability",
         amount: byCategory["Liabilities"],
+        signedBalance: -byCategory["Liabilities"],
         isGroup: true,
       });
     }
@@ -1194,7 +1442,9 @@ export function BalanceSheetPage() {
         accountName: "Equity",
         group: "Equity",
         category: "Equity",
+        ledgerClass: "Equity",
         amount: byCategory["Equity"],
+        signedBalance: -byCategory["Equity"],
         isGroup: true,
       });
     }
@@ -1206,62 +1456,1167 @@ export function BalanceSheetPage() {
     [filtered]
   );
 
-  const totals = useMemo(() => {
-    // Calculate totals from regular rows (Net Profit excluded, shown separately)
-    // IMPORTANT: Always use individual accounts for totals, not group totals
-    // This ensures Detail Wise and Group Wise show the same totals
-    const allIndividualAccounts = balanceSheetData.filter(r => !r.isGroup && r.accountId !== 'net-profit');
-    
-    const assets = allIndividualAccounts.filter(r => r.category === 'Assets').reduce((sum, r) => sum + (r.amount || 0), 0);
-    const liab = allIndividualAccounts.filter(r => r.category === 'Liabilities').reduce((sum, r) => sum + (r.amount || 0), 0);
-    const equity = allIndividualAccounts.filter(r => r.category === 'Equity').reduce((sum, r) => sum + (r.amount || 0), 0);
-    
-    // Balance Sheet Equation: Assets = Liabilities + Equity + Net Profit
-    // Net Profit is calculated separately from Income - Expenses (Nominal accounts)
-    const totalAssets = round2(assets);
-    const totalLiabEquity = round2(liab + equity + netProfit);
-    
-    // फरक पत्ता लगाउने (Difference Calculation)
-    const diff = round2(totalAssets - totalLiabEquity);
-    
-    // Suspense Account को side निर्धारण गर्ने
-    const suspenseSide = diff > 0 ? 'Liabilities' : 'Assets';
-    const suspenseAmount = Math.abs(diff);
-    
-    // Suspense Account लाई totals मा जोड्ने (यसले गर्दा totals balanced हुन्छ)
-    const finalAssets = diff < 0 ? round2(totalAssets + suspenseAmount) : totalAssets;
-    const finalLiabEquity = diff > 0 ? round2(totalLiabEquity + suspenseAmount) : totalLiabEquity;
-    
-    // Suspense Account include गरेपछि totals balanced हुनुपर्छ
-    const isBalancedAfterSuspense = Math.abs(finalAssets - finalLiabEquity) < 0.01;
-    
-    return { 
-      assets: finalAssets, // Suspense Account include गरेको Assets total
-      liab: round2(liab),
-      equity: round2(equity),
-      netProfit: netProfit,
-      totalLiabEquity: finalLiabEquity, // Suspense Account include गरेको Liabilities + Equity total
-      difference: diff, // Original difference (before Suspense Account)
-      suspenseSide: suspenseSide,
-      suspenseAmount: suspenseAmount,
-      isBalanced: Math.abs(diff) < 0.01 // Original balance check (before Suspense Account)
+  const balanceSheetSearchQuery = query.trim();
+  const balanceSheetShowExpandedTree =
+    expandedGroups.size > 0 || balanceSheetSearchQuery.length > 0;
+
+  useLayoutEffect(() => {
+    if (!balanceSheetSearchQuery) return;
+    const ids = collectBalanceSheetSearchExpandIds(balanceSheetSearchQuery, {
+      mainGroupRows,
+      getSubGroupsForMain,
+      getAccountsForGroup,
+      getIcPeerGroupsForCompany,
+      ctx: balanceSheetGroupHierarchyCtx,
+    });
+    if (ids.size > 0) {
+      setExpandedGroups(ids);
+    }
+  }, [
+    balanceSheetSearchQuery,
+    mainGroupRows,
+    getSubGroupsForMain,
+    getAccountsForGroup,
+    getIcPeerGroupsForCompany,
+    balanceSheetGroupHierarchyCtx,
+  ]);
+
+  const balanceSheetExpandedColumnFlags = useMemo((): BalanceSheetExpandedColumnFlags => {
+    if (!balanceSheetShowExpandedTree) {
+      return { showParentGroup: false, showSubGroup: false, showAccountName: false };
+    }
+    let showParentGroup = false;
+    let showSubGroup = false;
+    let showAccountName = false;
+    for (const main of mainGroupRows) {
+      const sorted = sortBalanceSheetExpandedGroupItems(
+        getSubGroupsForMain(main.category),
+        balanceSheetGroupHierarchyCtx
+      );
+      for (const item of sorted) {
+        const sysId = balanceSheetSystemBranchExpandId(main.accountId, item.systemGroupLabel);
+        if (item.parentGroupLabel.trim() && expandedGroups.has(sysId)) {
+          showParentGroup = true;
+        }
+        if (isBalanceSheetIcCompanyGroupRow(item.row) && expandedGroups.has(item.row.accountId)) {
+          showSubGroup = true;
+        }
+        const accounts = getAccountsForGroup(item.row);
+        if (accounts.length === 0) continue;
+        if (balanceSheetFlattenUnderSystemBranch(item) && expandedGroups.has(sysId)) {
+          showAccountName = true;
+        }
+        if (expandedGroups.has(item.row.accountId)) {
+          if (accounts.some((a) => a.isBalanceSheetIcPeerGroup)) showSubGroup = true;
+          else showAccountName = true;
+        }
+      }
+    }
+    return {
+      showParentGroup: showParentGroup || showSubGroup || showAccountName,
+      showSubGroup: showSubGroup || showAccountName,
+      showAccountName,
     };
-  }, [filtered, netProfit]);
+  }, [
+    balanceSheetShowExpandedTree,
+    expandedGroups,
+    mainGroupRows,
+    getSubGroupsForMain,
+    getAccountsForGroup,
+    balanceSheetGroupHierarchyCtx,
+  ]);
+
+  const balanceSheetAllSystemBranchExpandIds = useMemo(() => {
+    return mainGroupRows.flatMap((main) => {
+      const sorted = sortBalanceSheetExpandedGroupItems(
+        getSubGroupsForMain(main.category),
+        balanceSheetGroupHierarchyCtx
+      );
+      const labels = [...new Set(sorted.map((i) => i.systemGroupLabel.trim()))];
+      return labels.map((label) => balanceSheetSystemBranchExpandId(main.accountId, label));
+    });
+  }, [mainGroupRows, getSubGroupsForMain, balanceSheetGroupHierarchyCtx]);
+
+  const renderExpandedSystemGroupRows = useCallback(
+    (main: BalanceSheetRow, columnFlags: BalanceSheetExpandedColumnFlags): React.ReactNode[] => {
+      const { showParentGroup, showSubGroup, showAccountName } = columnFlags;
+      const searchQ = balanceSheetSearchQuery;
+      const mainExpanded = expandedGroups.has(main.accountId);
+      const subGroups = getSubGroupsForMain(main.category);
+      const hasSubGroups = subGroups.some((r) => getAccountsForGroup(r).length > 0);
+      const assetsVal = main.category === "Assets" ? main.amount || 0 : 0;
+      const liabVal =
+        main.category === "Liabilities" || main.category === "Equity" ? main.amount || 0 : 0;
+      const els: React.ReactNode[] = [];
+
+      const sumRowAmounts = (row: BalanceSheetRow) => {
+        const groupAccounts = getAccountsForGroup(row);
+        let assetsSum = 0;
+        let liabilitiesSum = 0;
+        if (groupAccounts.length > 0) {
+          if (groupAccounts[0]?.isGroup) {
+            groupAccounts.forEach((child) => {
+              const nested = sumRowAmounts(child);
+              assetsSum += nested.assetsSum;
+              liabilitiesSum += nested.liabilitiesSum;
+            });
+          } else {
+            groupAccounts.forEach((acc) => {
+              if (acc.category === "Assets") assetsSum += acc.amount || 0;
+              else if (acc.category === "Liabilities" || acc.category === "Equity")
+                liabilitiesSum += acc.amount || 0;
+            });
+          }
+        } else if (row.amount) {
+          if (row.category === "Assets") assetsSum += row.amount || 0;
+          else if (row.category === "Liabilities" || row.category === "Equity")
+            liabilitiesSum += row.amount || 0;
+        }
+        return { assetsSum, liabilitiesSum };
+      };
+
+      if (!mainExpanded) {
+        els.push(
+          <TableRow
+            key={main.accountId}
+            className={cn(
+              "bg-muted/40 font-semibold cursor-pointer hover:bg-muted/60",
+              BS_TABLE_ROW_CLASS
+            )}
+            onClick={() => {
+              setExpandedGroups((prev) => {
+                const next = new Set(prev);
+                if (next.has(main.accountId)) next.delete(main.accountId);
+                else next.add(main.accountId);
+                return next;
+              });
+            }}
+          >
+            <TableCell className={cn("font-medium text-primary", BS_LABEL_CELL_CLASS)}>
+              <BalanceSheetTruncatedLabel
+                text={main.accountName}
+                highlightQuery={searchQ || undefined}
+                leading={
+                  <>
+                    {hasSubGroups && <ChevronRight className={BS_TREE_CHEVRON_CLASS} />}
+                    <Users className={cn(BS_TREE_CHEVRON_CLASS, "text-primary")} />
+                  </>
+                }
+              />
+            </TableCell>
+            {showParentGroup && <TableCell />}
+            {showSubGroup && <TableCell />}
+            {showAccountName && <TableCell />}
+            <TableCell className="text-right tabular-nums">
+              {assetsVal > 0 ? toNepaliCurrency(assetsVal) : "-"}
+            </TableCell>
+            <TableCell className="text-right tabular-nums">
+              {liabVal > 0 ? toNepaliCurrency(liabVal) : "-"}
+            </TableCell>
+          </TableRow>
+        );
+        return els;
+      }
+
+      const sortedItems = sortBalanceSheetExpandedGroupItems(
+        subGroups,
+        balanceSheetGroupHierarchyCtx
+      );
+      const systemBranches = groupBalanceSheetItemsBySystemBranch(sortedItems);
+
+      systemBranches.forEach(({ systemGroupLabel, items }) => {
+        const sysExpandId = balanceSheetSystemBranchExpandId(main.accountId, systemGroupLabel);
+        const branchMatchesSearch =
+          !searchQ ||
+          balanceSheetTextMatchesQuery(systemGroupLabel, searchQ) ||
+          items.some(({ row }) =>
+            balanceSheetGroupMatchesQuery(
+              row,
+              searchQ,
+              balanceSheetGroupHierarchyCtx,
+              getAccountsForGroup,
+              getIcPeerGroupsForCompany
+            )
+          );
+        if (!branchMatchesSearch) return;
+
+        const sysExpanded = expandedGroups.has(sysExpandId);
+        let branchAssets = 0;
+        let branchLiab = 0;
+        items.forEach(({ row }) => {
+          const { assetsSum, liabilitiesSum } = sumRowAmounts(row);
+          branchAssets += assetsSum;
+          branchLiab += liabilitiesSum;
+        });
+        const branchHasChildren = items.length > 0;
+
+        els.push(
+          <TableRow
+            key={sysExpandId}
+            className={cn(
+              "bg-muted/40 font-semibold cursor-pointer hover:bg-muted/60",
+              BS_TABLE_ROW_CLASS
+            )}
+            onClick={() => {
+              if (!branchHasChildren) return;
+              setExpandedGroups((prev) => {
+                const next = new Set(prev);
+                if (next.has(sysExpandId)) next.delete(sysExpandId);
+                else next.add(sysExpandId);
+                return next;
+              });
+            }}
+          >
+            <TableCell className={cn("font-medium text-primary", BS_LABEL_CELL_CLASS)}>
+              <BalanceSheetTruncatedLabel
+                text={systemGroupLabel}
+                highlightQuery={searchQ || undefined}
+                leading={
+                  branchHasChildren ? (
+                    sysExpanded ? (
+                      <ChevronDown className={BS_TREE_CHEVRON_CLASS} />
+                    ) : (
+                      <ChevronRight className={BS_TREE_CHEVRON_CLASS} />
+                    )
+                  ) : undefined
+                }
+              />
+            </TableCell>
+            {showParentGroup && <TableCell />}
+            {showSubGroup && <TableCell />}
+            {showAccountName && <TableCell />}
+            <TableCell className="text-right tabular-nums">
+              {!sysExpanded && branchAssets > 0 ? toNepaliCurrency(branchAssets) : "-"}
+            </TableCell>
+            <TableCell className="text-right tabular-nums">
+              {!sysExpanded && branchLiab > 0 ? toNepaliCurrency(branchLiab) : "-"}
+            </TableCell>
+          </TableRow>
+        );
+
+        if (!sysExpanded) return;
+
+        const renderedAccountIds = new Set<string>();
+
+        const renderAccountRows = (accounts: BalanceSheetRow[], parentRowId: string) => {
+          accounts.forEach((acc) => {
+            if (searchQ && !balanceSheetAccountMatchesQuery(acc, searchQ)) return;
+            if (renderedAccountIds.has(acc.accountId)) return;
+            renderedAccountIds.add(acc.accountId);
+
+            const isIcAccount = Boolean(acc.balanceSheetIcPeerGroupKey);
+            const parentLabel = isIcAccount
+              ? acc.balanceSheetIcParentGroup || BS_IC_COMPANY_GROUP_NAME
+              : balanceSheetRowEntityLabel(acc);
+            const subGroupLabel = isIcAccount ? acc.group : "";
+
+            els.push(
+              <TableRow
+                key={`bs-acc:${sysExpandId}:${parentRowId}:${acc.accountId}`}
+                className={cn(
+                  "bg-muted/20 text-sm cursor-pointer hover:bg-muted/40",
+                  BS_TABLE_ROW_CLASS
+                )}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openDetail(acc);
+                }}
+              >
+                <TableCell />
+                {showParentGroup && (
+                  <TableCell className={cn(BS_ENTITY_TYPE_CLASS, BS_LABEL_CELL_CLASS)}>
+                    <span className={BS_TRUNCATE_LABEL_CLASS} title={parentLabel}>
+                      {balanceSheetHighlightCell(parentLabel, searchQ || undefined)}
+                    </span>
+                  </TableCell>
+                )}
+                {showSubGroup && (
+                  <TableCell className={cn(BS_ENTITY_TYPE_CLASS, BS_LABEL_CELL_CLASS)}>
+                    <span className={BS_TRUNCATE_LABEL_CLASS} title={subGroupLabel}>
+                      {balanceSheetHighlightCell(subGroupLabel, searchQ || undefined)}
+                    </span>
+                  </TableCell>
+                )}
+                {showAccountName && (
+                  <TableCell className={cn(BS_ACCOUNT_NAME_CLASS, BS_LABEL_CELL_CLASS)}>
+                    <span className={BS_TRUNCATE_LABEL_CLASS} title={acc.accountName}>
+                      {balanceSheetHighlightCell(acc.accountName, searchQ || undefined)}
+                    </span>
+                  </TableCell>
+                )}
+                <TableCell className={cn("text-right", BS_ACCOUNT_AMOUNT_CLASS)}>
+                  {acc.category === "Assets" ? toNepaliCurrency(acc.amount || 0) : "-"}
+                </TableCell>
+                <TableCell className={cn("text-right", BS_ACCOUNT_AMOUNT_CLASS)}>
+                  {acc.category !== "Assets" ? toNepaliCurrency(acc.amount || 0) : "-"}
+                </TableCell>
+              </TableRow>
+            );
+          });
+        };
+
+        const renderIcPeerRows = (companyRow: BalanceSheetRow) => {
+          const peerRows = getIcPeerGroupsForCompany(companyRow);
+          peerRows.forEach((peer) => {
+            if (
+              searchQ &&
+              !balanceSheetGroupMatchesQuery(
+                peer,
+                searchQ,
+                balanceSheetGroupHierarchyCtx,
+                getAccountsForGroup
+              )
+            ) {
+              return;
+            }
+            const isPeerExpanded = expandedGroups.has(peer.accountId);
+            const peerAccounts = getAccountsForGroup(peer);
+            const { assetsSum, liabilitiesSum } = sumRowAmounts(peer);
+
+            els.push(
+              <TableRow
+                key={`bs-ic-peer:${sysExpandId}:${peer.accountId}`}
+                className={cn(
+                  "bg-muted/25 font-semibold cursor-pointer hover:bg-muted/45",
+                  BS_TABLE_ROW_CLASS
+                )}
+                onClick={() => {
+                  if (peerAccounts.length === 0) return;
+                  setExpandedGroups((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(peer.accountId)) next.delete(peer.accountId);
+                    else next.add(peer.accountId);
+                    return next;
+                  });
+                }}
+              >
+                <TableCell />
+                {showParentGroup && <TableCell />}
+                {showSubGroup && (
+                  <TableCell
+                    className={cn("font-medium text-primary", BS_LABEL_CELL_CLASS)}
+                    style={{ paddingLeft: BS_TREE_INDENT_PARENT_PX }}
+                  >
+                    <BalanceSheetTruncatedLabel
+                      text={peer.accountName}
+                      highlightQuery={searchQ || undefined}
+                      leading={
+                        peerAccounts.length > 0 ? (
+                          isPeerExpanded ? (
+                            <ChevronDown className={BS_TREE_CHEVRON_CLASS} />
+                          ) : (
+                            <ChevronRight className={BS_TREE_CHEVRON_CLASS} />
+                          )
+                        ) : undefined
+                      }
+                    />
+                  </TableCell>
+                )}
+                {showAccountName && <TableCell />}
+                <TableCell className="text-right tabular-nums">
+                  {isPeerExpanded ? "-" : assetsSum > 0 ? toNepaliCurrency(assetsSum) : "-"}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {isPeerExpanded
+                    ? "-"
+                    : liabilitiesSum > 0
+                      ? toNepaliCurrency(liabilitiesSum)
+                      : "-"}
+                </TableCell>
+              </TableRow>
+            );
+
+            if (isPeerExpanded && peerAccounts.length > 0) {
+              renderAccountRows(peerAccounts, peer.accountId);
+            }
+          });
+        };
+
+        items.forEach((item) => {
+          const { row: r, parentGroupLabel } = item;
+          if (
+            searchQ &&
+            !balanceSheetGroupMatchesQuery(
+              r,
+              searchQ,
+              balanceSheetGroupHierarchyCtx,
+              getAccountsForGroup,
+              getIcPeerGroupsForCompany
+            )
+          ) {
+            return;
+          }
+          const isParentExpanded = expandedGroups.has(r.accountId);
+          const groupAccounts = getAccountsForGroup(r);
+          const { assetsSum, liabilitiesSum } = sumRowAmounts(r);
+          const hasAccounts = groupAccounts.length > 0;
+          const flatten = balanceSheetFlattenUnderSystemBranch(item);
+          const isIcCompany = isBalanceSheetIcCompanyGroupRow(r);
+
+          if (flatten && !isIcCompany) {
+            if (hasAccounts) renderAccountRows(groupAccounts, r.accountId);
+            return;
+          }
+
+          if (!parentGroupLabel.trim() && !hasAccounts && !isIcCompany) return;
+
+          els.push(
+            <TableRow
+              key={`bs-parent:${sysExpandId}:${r.accountId}`}
+              className={cn(
+              "bg-muted/30 font-semibold cursor-pointer hover:bg-muted/50",
+              BS_TABLE_ROW_CLASS
+            )}
+              onClick={() => {
+                if (hasAccounts || isIcCompany) {
+                  setExpandedGroups((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(r.accountId)) next.delete(r.accountId);
+                    else next.add(r.accountId);
+                    return next;
+                  });
+                }
+              }}
+            >
+              <TableCell />
+              {showParentGroup && (
+                <TableCell
+                  className={cn("font-medium text-primary", BS_LABEL_CELL_CLASS)}
+                  style={{ paddingLeft: BS_TREE_INDENT_PARENT_PX }}
+                >
+                  <BalanceSheetTruncatedLabel
+                    text={isIcCompany ? BS_IC_COMPANY_GROUP_NAME : parentGroupLabel}
+                    highlightQuery={searchQ || undefined}
+                    leading={
+                      hasAccounts || isIcCompany ? (
+                        isParentExpanded ? (
+                          <ChevronDown className={BS_TREE_CHEVRON_CLASS} />
+                        ) : (
+                          <ChevronRight className={BS_TREE_CHEVRON_CLASS} />
+                        )
+                      ) : undefined
+                    }
+                  />
+                </TableCell>
+              )}
+              {showSubGroup && <TableCell />}
+              {showAccountName && <TableCell />}
+              <TableCell className="text-right tabular-nums">
+                {isParentExpanded ? "-" : assetsSum > 0 ? toNepaliCurrency(assetsSum) : "-"}
+              </TableCell>
+              <TableCell className="text-right tabular-nums">
+                {isParentExpanded
+                  ? "-"
+                  : liabilitiesSum > 0
+                    ? toNepaliCurrency(liabilitiesSum)
+                    : "-"}
+              </TableCell>
+            </TableRow>
+          );
+
+          if (isParentExpanded && isIcCompany) {
+            renderIcPeerRows(r);
+            return;
+          }
+
+          if (isParentExpanded && hasAccounts && !groupAccounts[0]?.isGroup) {
+            renderAccountRows(groupAccounts, r.accountId);
+          }
+        });
+      });
+
+      return els;
+    },
+    [
+      balanceSheetSearchQuery,
+      expandedGroups,
+      getSubGroupsForMain,
+      getAccountsForGroup,
+      getIcPeerGroupsForCompany,
+      balanceSheetGroupHierarchyCtx,
+    ]
+  );
+
+  const balanceSheetExpandedTableHead = (columnFlags: BalanceSheetExpandedColumnFlags) => (
+    <TableRow className={BS_TABLE_ROW_CLASS}>
+      <TableHead>System Group</TableHead>
+      {columnFlags.showParentGroup && <TableHead>Parent Group</TableHead>}
+      {columnFlags.showSubGroup && <TableHead>Sub Group</TableHead>}
+      {columnFlags.showAccountName && <TableHead>Account Name</TableHead>}
+      <TableHead className="text-right">Assets</TableHead>
+      <TableHead className="text-right">Liabilities + Equity</TableHead>
+    </TableRow>
+  );
+
+  const totals = useMemo(
+    () => computeBalanceSheetTotals(balanceSheetData, netProfit),
+    [balanceSheetData, netProfit]
+  );
+
+  const differenceBreakdown = useMemo(
+    () =>
+      computeBalanceSheetDifferenceBreakdown({
+        totals,
+        openingBalanceAudit,
+        uncategorizedAccounts,
+        doubleEntryCheck,
+        vouchers: filteredVouchers,
+        openingBalanceEntities,
+      }),
+    [
+      totals,
+      openingBalanceAudit,
+      uncategorizedAccounts,
+      doubleEntryCheck,
+      filteredVouchers,
+      openingBalanceEntities,
+      ledgerLiveRevision,
+    ]
+  );
+
+  const differenceTraceConflictRows = useMemo<BalanceSheetDifferenceTraceRow[]>(() => {
+    const fiscalYearStart = effectiveFiscalYearStart;
+    const { masterOpeningRows, openingSplit } = buildDifferenceTraceOpeningContext(
+      processedAccounts,
+      processedParties,
+      processedStaff,
+      processedTaxes,
+      processedExpenseAccounts,
+      fiscalYearStart
+    );
+
+    return balanceSheetData
+      .filter((row) => !row.isGroup)
+      .map((row) =>
+        buildDifferenceTraceRowFromBalanceSheetRow(
+          row,
+          fiscalYearStart,
+          masterOpeningRows,
+          openingSplit,
+          filteredVouchers,
+          processedTaxes,
+          { requireConflictReason: true }
+        )
+      )
+      .filter((row): row is BalanceSheetDifferenceTraceRow => row !== null)
+      .sort((a, b) => Math.abs(b.closing) - Math.abs(a.closing));
+  }, [
+    balanceSheetData,
+    filteredVouchers,
+    processedTaxes,
+    processedAccounts,
+    processedParties,
+    processedStaff,
+    processedExpenseAccounts,
+    effectiveFiscalYearStart,
+    ledgerLiveRevision,
+  ]);
+
+  const differenceTraceOtherRows = useMemo<BalanceSheetDifferenceTraceRow[]>(() => {
+    const fiscalYearStart = effectiveFiscalYearStart;
+    const { masterOpeningRows, openingSplit } = buildDifferenceTraceOpeningContext(
+      processedAccounts,
+      processedParties,
+      processedStaff,
+      processedTaxes,
+      processedExpenseAccounts,
+      fiscalYearStart
+    );
+    const conflictKeys = new Set(differenceTraceConflictRows.map(differenceTraceRowKey));
+
+    return balanceSheetData
+      .filter((row) => !row.isGroup && row.entityType && !conflictKeys.has(balanceSheetTraceRowKey(row)))
+      .map((row) =>
+        buildDifferenceTraceRowFromBalanceSheetRow(
+          row,
+          fiscalYearStart,
+          masterOpeningRows,
+          openingSplit,
+          filteredVouchers,
+          processedTaxes,
+          { requireConflictReason: false, isOtherAccount: true }
+        )
+      )
+      .filter((row): row is BalanceSheetDifferenceTraceRow => row !== null)
+      .sort((a, b) => Math.abs(b.closing) - Math.abs(a.closing));
+  }, [
+    balanceSheetData,
+    differenceTraceConflictRows,
+    filteredVouchers,
+    processedTaxes,
+    processedAccounts,
+    processedParties,
+    processedStaff,
+    processedExpenseAccounts,
+    effectiveFiscalYearStart,
+    ledgerLiveRevision,
+  ]);
+
+  const differenceTraceAllOpeningRows = useMemo<BalanceSheetDifferenceTraceRow[]>(() => {
+    const fiscalYearStart = effectiveFiscalYearStart;
+    const { masterOpeningRows, openingSplit } = buildDifferenceTraceOpeningContext(
+      processedAccounts,
+      processedParties,
+      processedStaff,
+      processedTaxes,
+      processedExpenseAccounts,
+      fiscalYearStart
+    );
+
+    return buildDifferenceTraceAllOpeningRows(
+      balanceSheetData,
+      fiscalYearStart,
+      masterOpeningRows,
+      openingSplit,
+      filteredVouchers,
+      processedTaxes,
+      {
+        processedAccounts,
+        processedParties,
+        processedStaff,
+        processedTaxes,
+        processedExpenseAccounts,
+        processedGroups,
+        processedAccountGroups,
+        processedStaffGroups,
+        processedTaxGroups,
+        processedExpenseGroups,
+      }
+    );
+  }, [
+    balanceSheetData,
+    filteredVouchers,
+    processedTaxes,
+    processedAccounts,
+    processedParties,
+    processedStaff,
+    processedExpenseAccounts,
+    processedGroups,
+    processedAccountGroups,
+    processedStaffGroups,
+    processedTaxGroups,
+    processedExpenseGroups,
+    effectiveFiscalYearStart,
+    ledgerLiveRevision,
+  ]);
+
+  const differenceTraceNoOpeningRows = useMemo<BalanceSheetDifferenceTraceRow[]>(() => {
+    const fiscalYearStart = effectiveFiscalYearStart;
+    const { masterOpeningRows, openingSplit } = buildDifferenceTraceOpeningContext(
+      processedAccounts,
+      processedParties,
+      processedStaff,
+      processedTaxes,
+      processedExpenseAccounts,
+      fiscalYearStart
+    );
+    const conflictKeys = new Set(differenceTraceConflictRows.map(differenceTraceRowKey));
+
+    return balanceSheetData
+      .filter((row) => !row.isGroup && row.entityType)
+      .map((row) => {
+        const built = buildDifferenceTraceRowFromBalanceSheetRow(
+          row,
+          fiscalYearStart,
+          masterOpeningRows,
+          openingSplit,
+          filteredVouchers,
+          processedTaxes,
+          { requireConflictReason: false }
+        );
+        if (!built || Math.abs(built.masterRawOpening) >= 0.005) return null;
+        return {
+          ...built,
+          isOtherAccount: !conflictKeys.has(differenceTraceRowKey(built)),
+        };
+      })
+      .filter((row): row is BalanceSheetDifferenceTraceRow => row !== null)
+      .sort((a, b) => a.accountName.localeCompare(b.accountName));
+  }, [
+    balanceSheetData,
+    differenceTraceConflictRows,
+    filteredVouchers,
+    processedTaxes,
+    processedAccounts,
+    processedParties,
+    processedStaff,
+    processedExpenseAccounts,
+    effectiveFiscalYearStart,
+    ledgerLiveRevision,
+  ]);
+
+  const differenceTraceRows = useMemo(
+    () => [...differenceTraceConflictRows, ...differenceTraceOtherRows],
+    [differenceTraceConflictRows, differenceTraceOtherRows]
+  );
+
+  const differenceTraceTotals = useMemo(() => {
+    const totals = differenceTraceRows.reduce(
+      (sum, row) => {
+        sum.opening += row.opening;
+        if (row.masterRawOpening > 0.005) sum.openingDr += row.masterRawOpening;
+        if (row.masterRawOpening < -0.005) sum.openingCr += Math.abs(row.masterRawOpening);
+        sum.movementDebit += row.movementDebit;
+        sum.movementCredit += row.movementCredit;
+        sum.movementDifference += row.movementDifference;
+        sum.closing += row.closing;
+        if (row.closing > 0.005) sum.closingDr += row.closing;
+        if (row.closing < -0.005) sum.closingCr += Math.abs(row.closing);
+        if (row.closingDifference >= 0.005) {
+          if (row.actualSide === "Dr") sum.closingDifferenceDr += row.closingDifference;
+          if (row.actualSide === "Cr") sum.closingDifferenceCr += row.closingDifference;
+        }
+        return sum;
+      },
+      {
+        opening: 0,
+        openingDr: 0,
+        openingCr: 0,
+        movementDebit: 0,
+        movementCredit: 0,
+        movementDifference: 0,
+        closing: 0,
+        closingDr: 0,
+        closingCr: 0,
+        closingDifferenceDr: 0,
+        closingDifferenceCr: 0,
+      }
+    );
+    return {
+      opening: round2(totals.opening),
+      openingDr: round2(totals.openingDr),
+      openingCr: round2(totals.openingCr),
+      movementDebit: round2(totals.movementDebit),
+      movementCredit: round2(totals.movementCredit),
+      movementDifference: round2(totals.movementDifference),
+      closing: round2(totals.closing),
+      closingDr: round2(totals.closingDr),
+      closingCr: round2(totals.closingCr),
+      closingDifferenceDr: round2(totals.closingDifferenceDr),
+      closingDifferenceCr: round2(totals.closingDifferenceCr),
+    };
+  }, [differenceTraceRows]);
+
+  const differenceTraceGrandOpening = useMemo(
+    () => ({
+      openingDr: openingBalanceAudit.totalOpeningDr,
+      openingCr: openingBalanceAudit.totalOpeningCr,
+    }),
+    [openingBalanceAudit.totalOpeningDr, openingBalanceAudit.totalOpeningCr]
+  );
+
+  const differenceTraceOpeningDifference = useMemo(
+    () => round2(openingBalanceAudit.diff),
+    [openingBalanceAudit.diff]
+  );
+
+  const differenceTraceReconciliation = useMemo(() => {
+    let traceGapContribution = 0;
+    for (const traceRow of differenceTraceConflictRows) {
+      const bsRow = balanceSheetData.find(
+        (r) =>
+          !r.isGroup &&
+          r.accountId === traceRow.accountId &&
+          r.entityType === traceRow.ledgerEntityType
+      );
+      if (bsRow) {
+        traceGapContribution += computeBalanceSheetRowGapParts(
+          bsRow.ledgerClass,
+          bsRow.signedBalance
+        ).gapContribution;
+      }
+    }
+    return {
+      remainingAfterOpening: differenceBreakdown.remainingAfterOpening,
+      residualDifference: differenceBreakdown.residualDifference,
+      traceAccountCount: differenceTraceConflictRows.length,
+      traceGapContribution: round2(traceGapContribution),
+      traceWrongSideGross: round2(
+        differenceTraceTotals.closingDifferenceDr + differenceTraceTotals.closingDifferenceCr
+      ),
+    };
+  }, [
+    differenceTraceConflictRows,
+    balanceSheetData,
+    differenceBreakdown.remainingAfterOpening,
+    differenceBreakdown.residualDifference,
+    differenceTraceTotals.closingDifferenceDr,
+    differenceTraceTotals.closingDifferenceCr,
+  ]);
+
+  const differenceTraceReconciliationCopy = useMemo(
+    () => ({
+      totalDifferenceLabel: toNepaliCurrency(differenceBreakdown.totalDifference),
+      openingMismatchLabel: toNepaliCurrency(differenceBreakdown.openingDifference),
+      remainingAfterOpeningLabel: toNepaliCurrency(differenceBreakdown.remainingAfterOpening),
+      residualDifferenceLabel: toNepaliCurrency(differenceBreakdown.residualDifference),
+      hasResidual: differenceBreakdown.residualDifference >= 0.01,
+      openingIsBalanced: openingBalanceAudit.isBalanced,
+    }),
+    [differenceBreakdown, openingBalanceAudit.isBalanced]
+  );
+
+  const balanceSheetCheckEngineInput = useMemo((): BalanceSheetCheckEngineInput => ({
+    processedAccounts: accountsForBalanceSheet,
+    processedParties: partiesForBalanceSheet,
+    processedStaff: staffForBalanceSheet,
+    processedTaxes: taxesForBalanceSheet,
+    processedExpenseAccounts,
+    processedExpenseGroups,
+    processedGroups,
+    processedAccountGroups,
+    processedTaxGroups,
+    processedStaffGroups,
+    vouchers,
+    processedTaxesForLedger: processedTaxes,
+    asOfDate,
+    doubleEntryCheck,
+    vouchersForAnalysis: filteredVouchers,
+  }), [
+    accountsForBalanceSheet,
+    partiesForBalanceSheet,
+    staffForBalanceSheet,
+    taxesForBalanceSheet,
+    processedExpenseAccounts,
+    processedExpenseGroups,
+    processedGroups,
+    processedAccountGroups,
+    processedTaxGroups,
+    processedStaffGroups,
+    vouchers,
+    processedTaxes,
+    asOfDate,
+    doubleEntryCheck,
+    filteredVouchers,
+  ]);
+
+  const balanceSheetCheckReport = useMemo(
+    () => runBalanceSheetCheckEngine(balanceSheetCheckEngineInput),
+    [balanceSheetCheckEngineInput, ledgerLiveRevision]
+  );
+
+  const scrollToBalanceSheetSection = useCallback((elementId: string) => {
+    const el = document.getElementById(elementId);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, []);
 
   const openDetail = (row: BalanceSheetRow) => {
-    const accountTransactions = filteredVouchers.filter(v => 
-        v.partyId === row.accountId || 
-        v.staffId === row.accountId || 
-        v.accountId === row.accountId || 
-        v.fromAccountId === row.accountId ||
-        v.toAccountId === row.accountId ||
-        v.taxAccountId === row.accountId ||
-        v.expenseAccountId === row.accountId ||
-        (v.entries || []).some((e: any) => e.accountId === row.accountId)
-      );
-    setActiveRow({ ...row, transactions: accountTransactions });
+    setDetailDateRange(dateRange);
+    setActiveRow(row);
   };
-  const closeDrawer = () => setActiveRow(null);
+
+  const openAccountFromCheckEngine = useCallback(
+    ({ accountId, entityType }: { accountId: string; entityType: string }) => {
+      setDetailDateRange(dateRange);
+      const et = entityType as BalanceSheetRow["entityType"];
+      if (et === "party" || et === "opening_balance") {
+        const party = processedParties.find((p) => p.id === accountId);
+        if (party) {
+          setActiveRow({
+            accountId,
+            accountName: String(party.name ?? accountId),
+            group: processedGroups.find((g) => g.id === party.groupId)?.name ?? "Ungrouped",
+            category: "Equity",
+            ledgerClass: "Equity",
+            amount: 0,
+            signedBalance: 0,
+            entityType: accountId === OPENING_BALANCE_SYSTEM_LEDGER_ID ? "opening_balance" : "party",
+          });
+        }
+        return;
+      }
+      if (et === "account") {
+        const account = processedAccounts.find((a) => a.id === accountId);
+        if (account) {
+          setActiveRow({
+            accountId,
+            accountName: String(account.accountName ?? accountId),
+            group: processedAccountGroups.find((g) => g.id === account.groupId)?.name ?? "Ungrouped",
+            category: "Assets",
+            ledgerClass: "Asset",
+            amount: 0,
+            signedBalance: 0,
+            entityType: "account",
+          });
+        }
+        return;
+      }
+      if (et === "staff") {
+        const staff = processedStaff.find((s) => s.id === accountId);
+        if (staff) {
+          setActiveRow({
+            accountId,
+            accountName: String(staff.name ?? accountId),
+            group: processedStaffGroups.find((g) => g.id === staff.groupId)?.name ?? "Ungrouped",
+            category: "Liabilities",
+            ledgerClass: "Liability",
+            amount: 0,
+            signedBalance: 0,
+            entityType: "staff",
+          });
+        }
+        return;
+      }
+      if (et === "tax") {
+        const tax = processedTaxes.find((t) => t.id === accountId);
+        if (tax) {
+          setActiveRow({
+            accountId,
+            accountName: String(tax.name ?? accountId),
+            group: processedTaxGroups.find((g) => g.id === tax.groupId)?.name ?? "Ungrouped",
+            category: "Liabilities",
+            ledgerClass: "Liability",
+            amount: 0,
+            signedBalance: 0,
+            entityType: "tax",
+          });
+        }
+        return;
+      }
+      if (et === "expense") {
+        router.push(`/incomes/${accountId}`);
+      }
+    },
+    [
+      processedParties,
+      processedAccounts,
+      processedStaff,
+      processedTaxes,
+      processedGroups,
+      processedAccountGroups,
+      processedStaffGroups,
+      processedTaxGroups,
+      dateRange,
+      router,
+    ]
+  );
+
+  const openDifferenceTraceRow = useCallback(
+    (traceRow: BalanceSheetDifferenceTraceRow) => {
+      if (traceRow.entityType === "Income/Expense") return;
+      const bsRow = balanceSheetData.find(
+        (r) =>
+          !r.isGroup &&
+          r.accountId === traceRow.accountId &&
+          r.entityType === traceRow.ledgerEntityType
+      );
+      if (bsRow) {
+        setDetailDateRange(dateRange);
+        setActiveRow(bsRow);
+        return;
+      }
+      openAccountFromCheckEngine({
+        accountId: traceRow.accountId,
+        entityType: traceRow.ledgerEntityType,
+      });
+    },
+    [balanceSheetData, dateRange, openAccountFromCheckEngine]
+  );
+
+  const openVoucherFromCheckEngine = useCallback(
+    (voucherId: string) => {
+      const v = vouchers.find((x) => String(x.id) === voucherId);
+      if (!v) {
+        sonnerToast.error("Voucher not found", { description: "Refresh and try again." });
+        return;
+      }
+      setCheckEngineVoucher(v);
+      setCheckEngineVoucherOpen(true);
+    },
+    [vouchers]
+  );
+
+  const openOpeningBalanceLedgerDetail = useCallback(() => {
+    const row = balanceSheetData.find(
+      (r) =>
+        !r.isGroup &&
+        r.accountId === OPENING_BALANCE_SYSTEM_LEDGER_ID &&
+        r.entityType === "opening_balance"
+    );
+    if (row) {
+      openDetail(row);
+      return;
+    }
+    openAccountFromCheckEngine({
+      accountId: OPENING_BALANCE_SYSTEM_LEDGER_ID,
+      entityType: "opening_balance",
+    });
+  }, [balanceSheetData, openAccountFromCheckEngine]);
+
+  const openPlFromCheckEngine = useCallback(() => {
+    router.push("/reports/profit-and-loss");
+  }, [router]);
+
+  const openUncategorized = (item: BalanceSheetUncategorizedAccount) => {
+    openDetail({
+      accountId: item.accountId,
+      accountName: item.accountName,
+      group: item.groupLabel,
+      category: "Equity",
+      ledgerClass: "Equity",
+      amount: Math.abs(item.signedBalance),
+      signedBalance: item.signedBalance,
+      entityType: item.entityType,
+    });
+  };
+
+  const findUncategorizedEntity = useCallback(
+    (item: BalanceSheetUncategorizedAccount): Record<string, unknown> | null => {
+      switch (item.entityType) {
+        case "party":
+        case "opening_balance":
+          return (processedParties.find((p) => p.id === item.accountId) as Record<string, unknown> | undefined) ?? null;
+        case "staff":
+          return (processedStaff.find((s) => s.id === item.accountId) as Record<string, unknown> | undefined) ?? null;
+        case "account":
+          return (processedAccounts.find((a) => a.id === item.accountId) as Record<string, unknown> | undefined) ?? null;
+        case "tax":
+          return (processedTaxes.find((t) => t.id === item.accountId) as Record<string, unknown> | undefined) ?? null;
+        default:
+          return null;
+      }
+    },
+    [processedParties, processedStaff, processedAccounts, processedTaxes]
+  );
+
+  const handleResaveUncategorized = useCallback(
+    async (item: BalanceSheetUncategorizedAccount) => {
+      if (!companyId || item.entityType === "opening_balance") return;
+
+      const entity = findUncategorizedEntity(item);
+      if (!entity) {
+        sonnerToast.error("Account not found", {
+          description: "Refresh the page and try again.",
+        });
+        return;
+      }
+
+      const rowKey = `${item.entityType}-${item.accountId}`;
+      setResavingUncategorizedIds((prev) => new Set(prev).add(rowKey));
+
+      try {
+        const patch = buildBalanceSheetUncategorizedResavePatch(item.entityType, entity);
+        const normalizedGroupId = String(patch.groupId ?? entity.groupId ?? "").trim();
+
+        const result = await resaveBalanceSheetUncategorizedAccount(
+          companyId,
+          item.entityType,
+          entity
+        );
+
+        if (result.ok === false) {
+          sonnerToast.error("Resave failed", { description: result.error });
+          return;
+        }
+
+        if (normalizedGroupId) {
+          setOptimisticGroupOverrides((prev) => ({
+            ...prev,
+            [item.accountId]: normalizedGroupId,
+          }));
+        }
+
+        const stillUncategorized = computeBalanceSheetReport({
+          processedAccounts: accountsForBalanceSheet.map((acc) =>
+            acc.id === item.accountId && normalizedGroupId
+              ? { ...acc, groupId: normalizedGroupId }
+              : acc
+          ),
+          processedParties: partiesForBalanceSheet.map((p) =>
+            p.id === item.accountId && normalizedGroupId
+              ? { ...p, groupId: normalizedGroupId }
+              : p
+          ),
+          processedStaff: staffForBalanceSheet.map((s) =>
+            s.id === item.accountId && normalizedGroupId
+              ? { ...s, groupId: normalizedGroupId }
+              : s
+          ),
+          processedTaxes: taxesForBalanceSheet.map((t) =>
+            t.id === item.accountId && normalizedGroupId
+              ? { ...t, groupId: normalizedGroupId }
+              : t
+          ),
+          processedExpenseGroups,
+          processedGroups,
+          processedAccountGroups,
+          processedTaxGroups,
+          processedStaffGroups,
+          vouchers,
+          processedTaxesForLedger: processedTaxes,
+          asOfDate,
+        }).uncategorized.some((u) => u.accountId === item.accountId);
+
+        if (!stillUncategorized) {
+          setRecentlyMappedUncategorized((prev) => {
+            const next = prev.filter(
+              (row) =>
+                !(row.accountId === item.accountId && row.entityType === item.entityType)
+            );
+            return [...next, item];
+          });
+          window.setTimeout(() => {
+            setRecentlyMappedUncategorized((prev) =>
+              prev.filter(
+                (row) =>
+                  !(row.accountId === item.accountId && row.entityType === item.entityType)
+              )
+            );
+          }, 5000);
+          sonnerToast.success("Mapped now", {
+            description: `${item.accountName} is now classified for the Balance Sheet.`,
+          });
+        } else {
+          sonnerToast.message("Account updated", {
+            description: `${item.accountName} was saved but still needs a valid Balance Sheet group.`,
+          });
+        }
+      } finally {
+        setResavingUncategorizedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(rowKey);
+          return next;
+        });
+      }
+    },
+    [
+      companyId,
+      findUncategorizedEntity,
+      accountsForBalanceSheet,
+      partiesForBalanceSheet,
+      staffForBalanceSheet,
+      taxesForBalanceSheet,
+      processedExpenseGroups,
+      processedGroups,
+      processedAccountGroups,
+      processedTaxGroups,
+      processedStaffGroups,
+      vouchers,
+      processedTaxes,
+      asOfDate,
+    ]
+  );
+
+  const uncategorizedDisplayRows = useMemo(() => {
+    const activeKeys = new Set(
+      uncategorizedAccounts.map((item) => `${item.entityType}-${item.accountId}`)
+    );
+    const rows = uncategorizedAccounts.map((item) => ({ item, mappedNow: false }));
+    for (const item of recentlyMappedUncategorized) {
+      const key = `${item.entityType}-${item.accountId}`;
+      if (!activeKeys.has(key)) {
+        rows.push({ item, mappedNow: true });
+      }
+    }
+    return rows;
+  }, [uncategorizedAccounts, recentlyMappedUncategorized]);
+
+  const closeDrawer = () => {
+    setActiveRow(null);
+    setDetailDateRange(undefined);
+  };
 
   const handlePrintBalanceSheet = (expandAll: boolean) => {
     if (!company) return;
@@ -1292,7 +2647,14 @@ export function BalanceSheetPage() {
 
     // Build table header based on mode
     const tableHeader: any[] = showColumns
-      ? [{ text: 'Parent Group', bold: true, fontSize: 10 }, { text: 'Sub Group', bold: true, fontSize: 10 }, { text: 'Account Name', bold: true, fontSize: 10 }, { text: 'Assets', bold: true, alignment: 'right', fontSize: 10 }, { text: 'Liabilities + Equity', bold: true, alignment: 'right', fontSize: 10 }]
+      ? [
+          { text: "System Group", bold: true, fontSize: 10 },
+          { text: "Parent Group", bold: true, fontSize: 10 },
+          { text: "Sub Group", bold: true, fontSize: 10 },
+          { text: "Account Name", bold: true, fontSize: 10 },
+          { text: "Assets", bold: true, alignment: "right", fontSize: 10 },
+          { text: "Liabilities + Equity", bold: true, alignment: "right", fontSize: 10 },
+        ]
       : [{ text: 'Group', bold: true, fontSize: 10 }, { text: 'Assets', bold: true, alignment: 'right', fontSize: 10 }, { text: 'Liabilities + Equity', bold: true, alignment: 'right', fontSize: 10 }];
 
     const tableBody: any[] = [tableHeader];
@@ -1301,52 +2663,112 @@ export function BalanceSheetPage() {
     const rowsWithoutNetProfit = filtered.filter(row => row.accountId !== 'net-profit');
     
     if (expandAll) {
-      // Expanded mode: Show groups with their accounts (with parent/sub group columns)
-      rowsWithoutNetProfit.forEach(groupRow => {
-        const groupAccounts = getAccountsForGroup(groupRow);
-        
-        // Calculate sum of all accounts in group separately for Assets and Liabilities
-        let assetsSum = 0;
-        let liabilitiesSum = 0;
-        
-        groupAccounts.forEach(acc => {
-          if (acc.category === 'Assets') {
-            assetsSum += acc.amount || 0;
-          } else if (acc.category === 'Liabilities' || acc.category === 'Equity') {
-            liabilitiesSum += acc.amount || 0;
+      mainGroupRows.forEach((main) => {
+        const subGroups = getSubGroupsForMain(main.category);
+        const assetsVal = main.category === "Assets" ? main.amount || 0 : 0;
+        const liabVal =
+          main.category === "Liabilities" || main.category === "Equity" ? main.amount || 0 : 0;
+
+        tableBody.push([
+          { text: main.accountName, bold: true, fontSize: 9 },
+          { text: "", fontSize: 9 },
+          { text: "", fontSize: 9 },
+          { text: "", fontSize: 9 },
+          {
+            text: assetsVal > 0 ? formatAmountForPrint(assetsVal) : "-",
+            alignment: "right",
+            fontSize: 9,
+          },
+          {
+            text: liabVal > 0 ? formatAmountForPrint(liabVal) : "-",
+            alignment: "right",
+            fontSize: 9,
+          },
+        ]);
+
+        let lastSystemKey = "";
+        sortBalanceSheetExpandedGroupItems(subGroups, balanceSheetGroupHierarchyCtx).forEach(
+          ({ row: groupRow, systemGroupLabel, parentGroupLabel }) => {
+          const groupAccounts = getAccountsForGroup(groupRow);
+
+          let assetsSum = 0;
+          let liabilitiesSum = 0;
+
+          groupAccounts.forEach((acc) => {
+            if (acc.category === "Assets") {
+              assetsSum += acc.amount || 0;
+            } else if (acc.category === "Liabilities" || acc.category === "Equity") {
+              liabilitiesSum += acc.amount || 0;
+            }
+          });
+
+          const { display: systemCellLabel, nextKey } = balanceSheetDisplaySystemGroupCell(
+            systemGroupLabel,
+            lastSystemKey
+          );
+          lastSystemKey = nextKey;
+
+          if (groupAccounts.length > 0) {
+            tableBody.push([
+              { text: systemCellLabel, bold: true, fontSize: 9 },
+              {
+                text: parentGroupLabel,
+                bold: true,
+                fontSize: 9,
+                margin: parentGroupLabel ? [BS_TREE_INDENT_PARENT_PX, 0, 0, 0] : undefined,
+              },
+              { text: "", bold: true, fontSize: 9 },
+              { text: "", bold: true, fontSize: 9 },
+              { text: "-", alignment: "right", fontSize: 9 },
+              { text: "-", alignment: "right", fontSize: 9 },
+            ]);
+
+            groupAccounts.forEach((acc) => {
+              tableBody.push([
+                { text: "", fontSize: 8 },
+                { text: "", fontSize: 8 },
+                { text: "", fontSize: 8 },
+                { text: acc.accountName, fontSize: 8 },
+                {
+                  text: acc.category === "Assets" ? formatAmountForPrint(acc.amount) : "-",
+                  alignment: "right",
+                  color: acc.category === "Assets" ? "green" : undefined,
+                  fontSize: 8,
+                },
+                {
+                  text: acc.category !== "Assets" ? formatAmountForPrint(acc.amount) : "-",
+                  alignment: "right",
+                  color: acc.category !== "Assets" ? "red" : undefined,
+                  fontSize: 8,
+                },
+              ]);
+            });
+          } else {
+            tableBody.push([
+              { text: systemCellLabel, bold: true, fontSize: 9 },
+              {
+                text: parentGroupLabel,
+                bold: true,
+                fontSize: 9,
+                margin: parentGroupLabel ? [BS_TREE_INDENT_PARENT_PX, 0, 0, 0] : undefined,
+              },
+              { text: "", bold: true, fontSize: 9 },
+              { text: "", bold: true, fontSize: 9 },
+              {
+                text: groupRow.category === "Assets" ? formatAmountForPrint(groupRow.amount) : "-",
+                alignment: "right",
+                color: groupRow.category === "Assets" ? "green" : undefined,
+                fontSize: 9,
+              },
+              {
+                text: groupRow.category !== "Assets" ? formatAmountForPrint(groupRow.amount) : "-",
+                alignment: "right",
+                color: groupRow.category !== "Assets" ? "red" : undefined,
+                fontSize: 9,
+              },
+            ]);
           }
         });
-        
-        if (groupAccounts.length > 0) {
-          // Add group row without amounts (when expanded, only accounts show amounts)
-      tableBody.push([
-            { text: groupRow.category, bold: true, fontSize: 9 },
-            { text: groupRow.group || groupRow.accountName, bold: true, fontSize: 9 },
-            { text: '', bold: true, fontSize: 9 },
-            { text: '-', alignment: 'right', fontSize: 9 },
-            { text: '-', alignment: 'right', fontSize: 9 }
-          ]);
-          
-          // Add account rows
-          groupAccounts.forEach(acc => {
-            tableBody.push([
-              { text: acc.category, fontSize: 8 },
-              { text: acc.group, fontSize: 8 },
-              { text: acc.accountName, fontSize: 8 },
-              { text: acc.category === 'Assets' ? formatAmountForPrint(acc.amount) : '-', alignment: 'right', color: acc.category === 'Assets' ? 'green' : undefined, fontSize: 8 },
-              { text: acc.category !== 'Assets' ? formatAmountForPrint(acc.amount) : '-', alignment: 'right', color: acc.category !== 'Assets' ? 'red' : undefined, fontSize: 8 }
-      ]);
-    });
-        } else {
-          // Group with no accounts - show as single row (use group row amount)
-          tableBody.push([
-            { text: groupRow.category, bold: true, fontSize: 9 },
-            { text: groupRow.group || groupRow.accountName, bold: true, fontSize: 9 },
-            { text: '', bold: true, fontSize: 9 },
-            { text: groupRow.category === 'Assets' ? formatAmountForPrint(groupRow.amount) : '-', alignment: 'right', color: groupRow.category === 'Assets' ? 'green' : undefined, fontSize: 9 },
-            { text: groupRow.category !== 'Assets' ? formatAmountForPrint(groupRow.amount) : '-', alignment: 'right', color: groupRow.category !== 'Assets' ? 'red' : undefined, fontSize: 9 }
-          ]);
-        }
       });
     } else {
       // Collapsed mode: Show only groups, no account column
@@ -1377,10 +2799,10 @@ export function BalanceSheetPage() {
 
     // Add TOTAL row (before Net Profit)
     // Adjust colSpan based on whether columns are shown
-    const totalColSpan = showColumns ? 3 : 1;
+    const totalColSpan = showColumns ? 4 : 1;
     tableBody.push([
       { text: 'TOTAL', bold: true, colSpan: totalColSpan, fontSize: 10 },
-      ...(showColumns ? [{}, {}] : []),
+      ...(showColumns ? [{}, {}, {}] : []),
       { text: formatAmountForPrint(totals.assets), bold: true, alignment: 'right', color: 'green', fontSize: 10 },
       { text: formatAmountForPrint(totals.liab), bold: true, alignment: 'right', color: 'red', fontSize: 10 }
     ]);
@@ -1388,27 +2810,52 @@ export function BalanceSheetPage() {
     // Add Net Profit as special row below TOTAL (with color based on positive/negative)
     // Net Profit is part of Equity, so it goes on Liabilities + Equity side
     if (netProfit !== 0) {
-      const netProfitColor = netProfit >= 0 ? 'green' : 'red';
+      const netProfitColor = netProfit >= 0 ? "green" : "red";
       tableBody.push([
-        { text: 'Net Profit', bold: true, colSpan: totalColSpan, fillColor: '#f3f4f6', fontSize: 10 },
-        ...(showColumns ? [{}, {}] : []),
-        { text: '-', alignment: 'right', fillColor: '#f3f4f6', fontSize: 10 },
-        { text: formatAmountForPrint(netProfit), bold: true, alignment: 'right', color: netProfitColor, fillColor: '#f3f4f6', fontSize: 10 }
-      ]);
-
-      // Add final balanced total row below Net Profit
-      // Equation: Assets = Liabilities + Equity (where Equity = Net Profit)
-      const balanceText = totals.isBalanced 
-        ? 'TOTAL (Assets = Liabilities + Equity) ✓'
-        : `TOTAL (Assets = Liabilities + Equity) - Difference: ${formatAmountForPrint(Math.abs(totals.assets - totals.totalLiabEquity))}`;
-      
-      tableBody.push([
-        { text: balanceText, bold: true, colSpan: totalColSpan, fillColor: totals.isBalanced ? '#d1fae5' : '#fee2e2', fontSize: 10 },
-        ...(showColumns ? [{}, {}] : []),
-        { text: formatAmountForPrint(totals.assets), bold: true, alignment: 'right', color: 'green', fillColor: totals.isBalanced ? '#d1fae5' : '#fee2e2', fontSize: 10 },
-        { text: formatAmountForPrint(totals.totalLiabEquity), bold: true, alignment: 'right', color: 'red', fillColor: totals.isBalanced ? '#d1fae5' : '#fee2e2', fontSize: 10 }
+        { text: "Net Profit", bold: true, colSpan: totalColSpan, fillColor: "#f3f4f6", fontSize: 10 },
+        ...(showColumns ? [{}, {}, {}] : []),
+        { text: "-", alignment: "right", fillColor: "#f3f4f6", fontSize: 10 },
+        {
+          text: formatAmountForPrint(netProfit),
+          bold: true,
+          alignment: "right",
+          color: netProfitColor,
+          fillColor: "#f3f4f6",
+          fontSize: 10,
+        },
       ]);
     }
+
+    const balanceText = totals.isBalanced
+      ? "TOTAL (Assets = Liabilities + Equity) ✓ Balanced"
+      : `TOTAL (Assets = Liabilities + Equity) — Not Balanced — Difference: ${formatAmountForPrint(Math.abs(totals.difference))}`;
+
+    tableBody.push([
+      {
+        text: balanceText,
+        bold: true,
+        colSpan: totalColSpan,
+        fillColor: totals.isBalanced ? "#d1fae5" : "#fee2e2",
+        fontSize: 10,
+      },
+      ...(showColumns ? [{}, {}, {}] : []),
+      {
+        text: formatAmountForPrint(totals.assets),
+        bold: true,
+        alignment: "right",
+        color: "green",
+        fillColor: totals.isBalanced ? "#d1fae5" : "#fee2e2",
+        fontSize: 10,
+      },
+      {
+        text: formatAmountForPrint(totals.totalLiabEquity),
+        bold: true,
+        alignment: "right",
+        color: "red",
+        fillColor: totals.isBalanced ? "#d1fae5" : "#fee2e2",
+        fontSize: 10,
+      },
+    ]);
 
     openPrintDirect({
       company: {
@@ -1431,7 +2878,7 @@ export function BalanceSheetPage() {
       customContent: [
         {
           table: {
-            widths: showColumns ? ['*', '*', '*', 'auto', 'auto'] : ['*', 'auto', 'auto'],
+            widths: showColumns ? ['*', '*', '*', '*', 'auto', 'auto'] : ['*', 'auto', 'auto'],
             body: tableBody,
           },
           layout: {
@@ -1460,6 +2907,19 @@ export function BalanceSheetPage() {
             <CardTitle className="text-2xl">Balance Sheet</CardTitle>
             <div className="flex items-center gap-2">
               <MonthYearFilter dateRange={dateRange} setDateRange={setDateRange} dateSystem={dateSystem} />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const qs = asOfDate
+                    ? `?asOf=${encodeURIComponent(asOfDate.toISOString())}`
+                    : "";
+                  router.push(`/reports/balance-sheet-2${qs}`);
+                }}
+                className="flex items-center gap-2 border-indigo-300 text-indigo-900 hover:bg-indigo-50"
+              >
+                Open Balance Sheet 2 – Audit
+              </Button>
               <Button variant="outline" size="sm" onClick={() => setShowPrintDialog(true)} className="flex items-center gap-2">
                 <Printer className="h-4 w-4" /> Print
               </Button>
@@ -1473,10 +2933,16 @@ export function BalanceSheetPage() {
                   size="sm" 
                   onClick={() => {
                     const mainIds = ["main_Assets", "main_Liabilities", "main_Equity"];
-                    const subGroupIds = filtered.filter(r => getAccountsForGroup(r).length > 0).map(r => r.accountId);
-                    const allIds = [...mainIds, ...subGroupIds];
-                    const allExpanded = allIds.every(id => expandedGroups.has(id));
-                    
+                    const subGroupIds = filtered
+                      .filter((r) => getAccountsForGroup(r).length > 0)
+                      .map((r) => r.accountId);
+                    const allIds = [
+                      ...mainIds,
+                      ...balanceSheetAllSystemBranchExpandIds,
+                      ...subGroupIds,
+                    ];
+                    const allExpanded = allIds.every((id) => expandedGroups.has(id));
+
                     if (allExpanded) {
                       setExpandedGroups(new Set());
                     } else {
@@ -1485,7 +2951,13 @@ export function BalanceSheetPage() {
                   }}
                   className="flex items-center gap-2"
                 >
-                  {["main_Assets", "main_Liabilities", "main_Equity", ...filtered.filter(r => getAccountsForGroup(r).length > 0).map(r => r.accountId)].every(id => expandedGroups.has(id)) ? (
+                  {[
+                    "main_Assets",
+                    "main_Liabilities",
+                    "main_Equity",
+                    ...balanceSheetAllSystemBranchExpandIds,
+                    ...filtered.filter((r) => getAccountsForGroup(r).length > 0).map((r) => r.accountId),
+                  ].every((id) => expandedGroups.has(id)) ? (
                     <>
                       <ChevronUp className="h-4 w-4" /> Collapse All
                     </>
@@ -1500,7 +2972,7 @@ export function BalanceSheetPage() {
                   <div className="relative flex-1 max-w-md">
                     <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 opacity-70" />
                     <Input
-                      placeholder="Search account or group…"
+                      placeholder="Search system group, parent, account…"
                       className="pl-8"
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
@@ -1535,52 +3007,47 @@ export function BalanceSheetPage() {
                 </div>
               </div>
               
-                <div className="rounded-2xl border w-full overflow-x-auto">
-                  <Table>
+                {!balanceSheetShowExpandedTree ? (
+                <div className={BS_CARD_SHELL_CLASS}>
+                  <Table className={BS_TABLE_CLASS}>
                     <TableCaption>Group totals - Summary view</TableCaption>
-                    <TableHeader>
-                      <TableRow>
-                        {expandedGroups.size > 0 ? (
-                          <>
-                            <TableHead>Parent Group</TableHead>
-                            <TableHead>Sub Group</TableHead>
-                            <TableHead>Account Name</TableHead>
-                            <TableHead className="text-right">Assets</TableHead>
-                            <TableHead className="text-right">Liabilities + Equity</TableHead>
-                          </>
-                        ) : (
-                          <>
+                    <TableHeader className={BS_TABLE_HEADER_CLASS}>
+                      <TableRow className={BS_TABLE_ROW_CLASS}>
                         <TableHead>Group</TableHead>
-                            <TableHead>Account</TableHead>
+                        <TableHead>Account</TableHead>
                         <TableHead className="text-right">Assets</TableHead>
                         <TableHead className="text-right">Liabilities + Equity</TableHead>
-                          </>
-                        )}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {expandedGroups.size === 0 ? (
-                        // Collapsed: show main groups only (Assets, Liabilities, Equity)
-                        mainGroupRows.map((main) => {
+                      {mainGroupRows.map((main) => {
                           const assetsVal = main.category === 'Assets' ? (main.amount || 0) : 0;
                           const liabVal = (main.category === 'Liabilities' || main.category === 'Equity') ? (main.amount || 0) : 0;
                           const hasSubGroups = getSubGroupsForMain(main.category).some(r => getAccountsForGroup(r).length > 0);
                           return (
                             <TableRow
                               key={main.accountId}
-                              className="bg-muted/40 font-semibold cursor-pointer hover:bg-muted/60"
+                              className={cn(
+              "bg-muted/40 font-semibold cursor-pointer hover:bg-muted/60",
+              BS_TABLE_ROW_CLASS
+            )}
                               onClick={() => {
                                 if (hasSubGroups) {
                                   setExpandedGroups(prev => new Set([...prev, main.accountId]));
                                 }
                               }}
                             >
-                              <TableCell className="font-medium text-primary">
-                                <div className="flex items-center gap-2">
-                                  {hasSubGroups && <ChevronRight className="h-4 w-4" />}
-                                  <Users className="h-4 w-4" />
-                                  {main.accountName}
-                                </div>
+                              <TableCell className={cn("font-medium text-primary", BS_LABEL_CELL_CLASS)}>
+                                <BalanceSheetTruncatedLabel
+                                  text={main.accountName}
+                                  highlightQuery={balanceSheetSearchQuery || undefined}
+                                  leading={
+                                    <>
+                                      {hasSubGroups && <ChevronRight className={BS_TREE_CHEVRON_CLASS} />}
+                                      <Users className={cn(BS_TREE_CHEVRON_CLASS, "text-primary")} />
+                                    </>
+                                  }
+                                />
                               </TableCell>
                               <TableCell></TableCell>
                               <TableCell className="text-right tabular-nums">
@@ -1591,188 +3058,454 @@ export function BalanceSheetPage() {
                               </TableCell>
                             </TableRow>
                           );
-                        })
-                      ) : (
-                        // Expanded: main groups + sub-groups + accounts
-                        mainGroupRows.flatMap((main) => {
-                          const mainExpanded = expandedGroups.has(main.accountId);
-                          const subGroups = getSubGroupsForMain(main.category);
-                          const hasSubGroups = subGroups.some(r => getAccountsForGroup(r).length > 0);
-                          const assetsVal = main.category === 'Assets' ? (main.amount || 0) : 0;
-                          const liabVal = (main.category === 'Liabilities' || main.category === 'Equity') ? (main.amount || 0) : 0;
-                          const els: React.ReactNode[] = [];
-                          els.push(
-                            <TableRow
-                              key={main.accountId}
-                              className="bg-muted/40 font-semibold cursor-pointer hover:bg-muted/60"
-                              onClick={() => {
-                                setExpandedGroups(prev => {
-                                  const next = new Set(prev);
-                                  if (next.has(main.accountId)) next.delete(main.accountId);
-                                  else next.add(main.accountId);
-                                  return next;
-                                });
-                              }}
-                            >
-                              <TableCell className="font-medium text-primary">
-                                <div className="flex items-center gap-2">
-                                  {hasSubGroups && (mainExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />)}
-                                  <Users className="h-4 w-4" />
-                                  {main.accountName}
-                                </div>
-                              </TableCell>
-                              <TableCell className="font-medium text-primary"></TableCell>
-                              <TableCell className="font-medium text-primary"></TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {!mainExpanded && assetsVal > 0 ? toNepaliCurrency(assetsVal) : '-'}
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {!mainExpanded && liabVal > 0 ? toNepaliCurrency(liabVal) : '-'}
-                              </TableCell>
-                            </TableRow>
-                          );
-                          if (mainExpanded) {
-                            subGroups.forEach((r) => {
-                              const isSubExpanded = expandedGroups.has(r.accountId);
-                              const groupAccounts = getAccountsForGroup(r);
-                              let assetsSum = 0, liabilitiesSum = 0;
-                              groupAccounts.forEach(acc => {
-                                if (acc.category === 'Assets') assetsSum += acc.amount || 0;
-                                else if (acc.category === 'Liabilities' || acc.category === 'Equity') liabilitiesSum += acc.amount || 0;
-                              });
-                              const hasAccounts = groupAccounts.length > 0;
-                              els.push(
-                                <TableRow
-                                  key={r.accountId}
-                                  className="bg-muted/30 font-semibold cursor-pointer hover:bg-muted/50"
-                                  onClick={() => {
-                                    if (hasAccounts) {
-                                      setExpandedGroups(prev => {
-                                        const next = new Set(prev);
-                                        if (next.has(r.accountId)) next.delete(r.accountId);
-                                        else next.add(r.accountId);
-                                        return next;
-                                      });
-                                    }
-                                  }}
-                                >
-                                  <TableCell className="pl-6 font-medium text-primary">{main.category}</TableCell>
-                                  <TableCell className="font-medium text-primary">
-                                    <div className="flex items-center gap-2">
-                                      {hasAccounts && (isSubExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />)}
-                                      {r.group || r.accountName}
-                                    </div>
-                                  </TableCell>
-                                  <TableCell className="font-medium text-primary">{isSubExpanded ? '' : r.accountName}</TableCell>
-                                  <TableCell className="text-right tabular-nums">
-                                    {isSubExpanded ? '-' : (assetsSum > 0 ? toNepaliCurrency(assetsSum) : '-')}
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums">
-                                    {isSubExpanded ? '-' : (liabilitiesSum > 0 ? toNepaliCurrency(liabilitiesSum) : '-')}
-                                  </TableCell>
-                                </TableRow>
-                              );
-                              if (isSubExpanded && hasAccounts) {
-                                groupAccounts.forEach((acc) => (
-                                  els.push(
-                                    <TableRow
-                                      key={acc.accountId}
-                                      className="bg-muted/20 text-sm cursor-pointer hover:bg-muted/40"
-                                      onClick={(e) => { e.stopPropagation(); openDetail(acc); }}
-                                    >
-                                      <TableCell className="pl-8 text-muted-foreground">{acc.category}</TableCell>
-                                      <TableCell className="pl-8 text-muted-foreground">{acc.group}</TableCell>
-                                      <TableCell className="pl-8 font-medium">{acc.accountName}</TableCell>
-                                      <TableCell className="text-right tabular-nums">
-                                        {acc.category === 'Assets' ? toNepaliCurrency(acc.amount || 0) : '-'}
-                                      </TableCell>
-                                      <TableCell className="text-right tabular-nums">
-                                        {acc.category !== 'Assets' ? toNepaliCurrency(acc.amount || 0) : '-'}
-                                      </TableCell>
-                                    </TableRow>
-                                  )
-                                ));
-                              }
-                            });
-                          }
-                          return els;
-                        })
-                      )}
-                      {/* यदि हिसाब मिलेको छैन भने Suspense Account रो देखाउने */}
-                      {!totals.isBalanced && (
-                        <TableRow className="bg-red-50 italic">
-                          <TableCell colSpan={expandedGroups.size > 0 ? 3 : 2} className="font-bold text-red-700">⚠️ Suspense Account (Difference)</TableCell>
-                          <TableCell className="text-right text-red-600">
-                            {totals.suspenseSide === 'Assets' ? toNepaliCurrency(totals.suspenseAmount) : "-"}
+                        })}
+                    </TableBody>
+                    <TableFooter className="!border-t-[1px] border-black">
+                      <TableRow className={BS_TABLE_FOOTER_ROW_CLASS}>
+                          <TableCell colSpan={2} className="font-bold">TOTAL</TableCell>
+                          <TableCell className="text-right font-bold tabular-nums text-green-600">{toNepaliCurrency(totals.assets)}</TableCell>
+                          <TableCell className="text-right font-bold tabular-nums text-red-600">{toNepaliCurrency(totals.liab + totals.equity)}</TableCell>
+                      </TableRow>
+                      {netProfit !== 0 && (
+                        <TableRow className={cn("bg-muted/30", BS_TABLE_FOOTER_ROW_CLASS)}>
+                          <TableCell colSpan={2} className="font-bold text-foreground">
+                            {netProfit >= 0 ? "Net Profit" : "Net Loss"}
                           </TableCell>
-                          <TableCell className="text-right text-red-600">
-                            {totals.suspenseSide === 'Liabilities' ? toNepaliCurrency(totals.suspenseAmount) : "-"}
+                          <TableCell className="text-right tabular-nums">-</TableCell>
+                          <TableCell className={`text-right font-bold tabular-nums ${netProfit >= 0 ? "text-green-600" : "text-red-600"}`}>
+                            {toNepaliCurrency(netProfit)}
                           </TableCell>
                         </TableRow>
                       )}
-                    </TableBody>
-                    <TableFooter>
-                      <TableRow>
-                          <TableCell colSpan={expandedGroups.size > 0 ? 3 : 2} className="font-bold">TOTAL</TableCell>
-                          <TableCell className="text-right font-bold tabular-nums text-green-600">{toNepaliCurrency(totals.assets)}</TableCell>
-                          <TableCell className="text-right font-bold tabular-nums text-red-600">{toNepaliCurrency(totals.liab)}</TableCell>
+                      <TableRow className={cn(`bg-muted/50 ${totals.isBalanced ? "border-green-500" : "border-orange-500"}`, BS_TABLE_FOOTER_ROW_CLASS)}>
+                        <TableCell colSpan={2} className="font-bold text-foreground">
+                          TOTAL (Assets = Liabilities + Equity)
+                          {totals.isBalanced ? (
+                            <span className="text-green-600 text-xs ml-2">✓ Balance Sheet Balanced</span>
+                          ) : (
+                            <span className="text-orange-600 text-xs ml-2 block sm:inline mt-1 sm:mt-0">
+                              ⚠ Not Balanced — Difference: {toNepaliCurrency(Math.abs(totals.difference))}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right font-bold tabular-nums text-green-600">{toNepaliCurrency(totals.assets)}</TableCell>
+                        <TableCell className="text-right font-bold tabular-nums text-red-600">{toNepaliCurrency(totals.totalLiabEquity)}</TableCell>
                       </TableRow>
-                      {netProfit !== 0 && (
-                        <>
-                          <TableRow className="bg-muted/30 border-t-2 border-foreground/20">
-                            <TableCell colSpan={expandedGroups.size > 0 ? 3 : 2} className="font-bold text-foreground">
-                              {netProfit >= 0 ? 'Net Profit' : 'Net Loss'}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">-</TableCell>
-                            <TableCell className={`text-right font-bold tabular-nums ${netProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {toNepaliCurrency(netProfit)}
-                            </TableCell>
-                          </TableRow>
-                          <TableRow className={`bg-muted/50 border-t-2 border-foreground/30 ${totals.isBalanced ? 'border-green-500' : 'border-orange-500'}`}>
-                            <TableCell colSpan={expandedGroups.size > 0 ? 3 : 2} className="font-bold text-foreground">
-                              TOTAL (Assets = Liabilities + Equity)
-                              {!totals.isBalanced && (
-                                <span className="text-orange-600 text-xs ml-2">
-                                  (Balanced with Suspense Account)
-                                </span>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right font-bold tabular-nums text-green-600">{toNepaliCurrency(totals.assets)}</TableCell>
-                            <TableCell className="text-right font-bold tabular-nums text-red-600">{toNepaliCurrency(totals.totalLiabEquity)}</TableCell>
-                          </TableRow>
-                        </>
-                      )}
                     </TableFooter>
                   </Table>
                 </div>
+                ) : (
+                <div className="space-y-4">
+                  {mainGroupRows.map((main) => {
+                    const mainExpanded = expandedGroups.has(main.accountId);
+                    const subGroups = getSubGroupsForMain(main.category);
+                    const hasSubGroups = subGroups.some((r) => getAccountsForGroup(r).length > 0);
+                    const columnFlags = balanceSheetExpandedColumnFlags;
+
+                    return (
+                    <div key={main.accountId} className={BS_CARD_SHELL_CLASS}>
+                      {mainExpanded && (
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          className="bg-muted/40 font-semibold cursor-pointer hover:bg-muted/60 px-4 py-3 !border-b-[1px] border-black flex items-center gap-2 text-primary min-w-0"
+                          onClick={() => {
+                            setExpandedGroups((prev) => {
+                              const next = new Set(prev);
+                              next.delete(main.accountId);
+                              for (const id of [...next]) {
+                                if (id.startsWith(`bs-sys:${main.accountId}:`)) next.delete(id);
+                              }
+                              getSubGroupsForMain(main.category).forEach((r) => next.delete(r.accountId));
+                              return next;
+                            });
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setExpandedGroups((prev) => {
+                                const next = new Set(prev);
+                                next.delete(main.accountId);
+                                for (const id of [...next]) {
+                                  if (id.startsWith(`bs-sys:${main.accountId}:`)) next.delete(id);
+                                }
+                                getSubGroupsForMain(main.category).forEach((r) => next.delete(r.accountId));
+                                return next;
+                              });
+                            }
+                          }}
+                        >
+                          {hasSubGroups && <ChevronDown className={BS_TREE_CHEVRON_CLASS} />}
+                          <Users className={BS_TREE_CHEVRON_CLASS} />
+                          <span className={cn("font-medium", BS_TRUNCATE_LABEL_CLASS)} title={main.accountName}>
+                            {main.accountName}
+                          </span>
+                        </div>
+                      )}
+                      <Table className={cn(BS_TABLE_CLASS, BS_TABLE_FIXED_CLASS)}>
+                        <BalanceSheetExpandedColGroup flags={columnFlags} />
+                        <TableHeader className={BS_TABLE_HEADER_CLASS}>{balanceSheetExpandedTableHead(columnFlags)}</TableHeader>
+                        <TableBody>{renderExpandedSystemGroupRows(main, columnFlags)}</TableBody>
+                      </Table>
+                    </div>
+                    );
+                  })}
+                  <div className={BS_CARD_SHELL_CLASS}>
+                    <Table className={cn(BS_TABLE_CLASS, BS_TABLE_FIXED_CLASS)}>
+                      <BalanceSheetExpandedColGroup flags={balanceSheetExpandedColumnFlags} />
+                      <TableBody>
+                        <TableRow className={BS_TABLE_FOOTER_ROW_CLASS}>
+                          <TableCell
+                            colSpan={balanceSheetExpandedLabelColCount(balanceSheetExpandedColumnFlags)}
+                            className="font-bold"
+                          >
+                            TOTAL
+                          </TableCell>
+                          <TableCell className="text-right font-bold tabular-nums text-green-600">{toNepaliCurrency(totals.assets)}</TableCell>
+                          <TableCell className="text-right font-bold tabular-nums text-red-600">{toNepaliCurrency(totals.liab + totals.equity)}</TableCell>
+                        </TableRow>
+                        {netProfit !== 0 && (
+                          <TableRow className={cn("bg-muted/30", BS_TABLE_FOOTER_ROW_CLASS)}>
+                            <TableCell
+                              colSpan={balanceSheetExpandedLabelColCount(balanceSheetExpandedColumnFlags)}
+                              className="font-bold text-foreground"
+                            >
+                              {netProfit >= 0 ? "Net Profit" : "Net Loss"}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">-</TableCell>
+                            <TableCell className={`text-right font-bold tabular-nums ${netProfit >= 0 ? "text-green-600" : "text-red-600"}`}>
+                              {toNepaliCurrency(netProfit)}
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        <TableRow className={cn(`bg-muted/50 ${totals.isBalanced ? "border-green-500" : "border-orange-500"}`, BS_TABLE_FOOTER_ROW_CLASS)}>
+                          <TableCell
+                            colSpan={balanceSheetExpandedLabelColCount(balanceSheetExpandedColumnFlags)}
+                            className="font-bold text-foreground"
+                          >
+                            TOTAL (Assets = Liabilities + Equity)
+                            {totals.isBalanced ? (
+                              <span className="text-green-600 text-xs ml-2">✓ Balance Sheet Balanced</span>
+                            ) : (
+                              <span className="text-orange-600 text-xs ml-2 block sm:inline mt-1 sm:mt-0">
+                                ⚠ Not Balanced — Difference: {toNepaliCurrency(Math.abs(totals.difference))}
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right font-bold tabular-nums text-green-600">{toNepaliCurrency(totals.assets)}</TableCell>
+                          <TableCell className="text-right font-bold tabular-nums text-red-600">{toNepaliCurrency(totals.totalLiabEquity)}</TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+                )}
             <div className="mt-2 space-y-2">
               <p className="text-sm opacity-80">
                 Note: Balance Sheet follows the rule: Assets = Liabilities + Equity
+                {asOfDate ? (
+                  <span className="block mt-1">
+                    Showing balances as of{" "}
+                    {dateSystem === "BS"
+                      ? formatDateBS(asOfDate)
+                      : dateSystem === "Both"
+                        ? `${formatDate(asOfDate)} / ${formatDateBS(asOfDate)}`
+                        : formatDate(asOfDate)}
+                    . Transactions after this date are excluded.
+                  </span>
+                ) : null}
               </p>
-              
-              {/* Opening Balance Audit Warning */}
-              {!openingBalanceAudit.isBalanced && (
-                <div className="p-4 mb-4 bg-orange-50 border-l-4 border-orange-500 rounded">
-                  <h3 className="text-orange-800 font-bold flex items-center gap-2">
+
+              {(uncategorizedAccounts.length > 0 || recentlyMappedUncategorized.length > 0) && (
+                <div id="bs-uncategorized-accounts" className="p-4 mb-4 bg-amber-50 border-l-4 border-amber-500 rounded">
+                  <h3 className="text-amber-900 font-bold flex items-center gap-2">
                     <AlertTriangle className="h-5 w-5" />
-                    ⚠️ Opening Balance Mismatch!
+                    ⚠ Uncategorized Accounts
                   </h3>
-                  <p className="text-sm text-orange-700 mt-2">
-                    Your opening debit and opening credit are not equal.
-                    <br />
-                    <strong>Total Opening Dr: {toNepaliCurrency(openingBalanceAudit.totalOpeningDr)}</strong>
-                    <br />
-                    <strong>Total Opening Cr: {toNepaliCurrency(openingBalanceAudit.totalOpeningCr)}</strong>
-                    <br />
-                    <strong className="text-red-700">Difference: {toNepaliCurrency(openingBalanceAudit.diff)}</strong>
+                  <p className="text-sm text-amber-800 mt-2">
+                    Some accounts could not be classified for the Balance Sheet. These accounts are
+                    excluded from Balance Sheet totals until their account group/type is assigned.
                   </p>
-                  <p className="text-xs mt-2 italic text-orange-600">
-                    {/* Keep guidance English-only for consistency across static/web builds. */}
-                    * To fix this, create an "Opening Balance Ledger" and post the remaining difference there.
-                  </p>
+                  <div className="mt-3 rounded-md border border-amber-200 overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Account Name</TableHead>
+                          <TableHead className="text-right">Current Balance</TableHead>
+                          <TableHead>Reason</TableHead>
+                          <TableHead className="text-right w-[180px]">Action</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {uncategorizedDisplayRows.map(({ item, mappedNow }) => {
+                          const rowKey = `${item.entityType}-${item.accountId}`;
+                          const isResaving = resavingUncategorizedIds.has(rowKey);
+
+                          return (
+                          <TableRow
+                            key={rowKey}
+                            className={cn(
+                              "cursor-pointer hover:bg-amber-100/60",
+                              mappedNow && "bg-green-50/80 hover:bg-green-50",
+                              BS_TABLE_ROW_CLASS
+                            )}
+                            onClick={() => !mappedNow && openUncategorized(item)}
+                          >
+                            <TableCell className="font-medium">{item.accountName}</TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {toNepaliCurrency(item.signedBalance)}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {mappedNow ? "Account group updated and mapped for Balance Sheet." : item.reason}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {mappedNow ? (
+                                <span className="inline-flex items-center gap-1 text-sm font-medium text-green-700">
+                                  <Check className="h-4 w-4" />
+                                  Mapped now
+                                </span>
+                              ) : (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 border-amber-300 bg-white hover:bg-amber-50"
+                                  disabled={isResaving || item.entityType === "opening_balance"}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void handleResaveUncategorized(item);
+                                  }}
+                                >
+                                  {isResaving ? (
+                                    <>
+                                      <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                      Saving…
+                                    </>
+                                  ) : (
+                                    <>
+                                      <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                                      Resave account
+                                    </>
+                                  )}
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
               )}
               
+              <div
+                className={cn(
+                  "grid gap-4",
+                  !openingBalanceAudit.isBalanced ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"
+                )}
+              >
+              {/* Opening Balance Audit Warning */}
+              {!openingBalanceAudit.isBalanced && (
+                <div id="bs-opening-balance-mismatch" className={cn(BS_CARD_SHELL_CLASS, "min-w-0 w-full bg-orange-50/80")}>
+                  <div className="px-3 py-2 sm:px-4 sm:py-3 !border-b-[1px] border-black bg-orange-100/50">
+                    <h3 className="text-orange-800 font-bold flex items-center gap-2 text-sm sm:text-base">
+                      <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 shrink-0" />
+                      <span>Opening Balance Mismatch!</span>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <AppFreshInfoButton
+                            size="sm"
+                            className="h-5 w-5 shrink-0 text-orange-600 hover:text-orange-800"
+                            aria-label="Opening balance mismatch — what this check means"
+                            title="Opening balance mismatch"
+                          />
+                        </PopoverTrigger>
+                        <PopoverContent
+                          side="bottom"
+                          align="start"
+                          className="w-[min(26rem,calc(100vw-2rem))] p-3 text-left text-xs sm:text-sm leading-relaxed"
+                          onOpenAutoFocus={(event) => event.preventDefault()}
+                        >
+                          <BalanceSheetDiffTraceLangTabs
+                            tabsListClassName="mb-1"
+                            contentClassName="space-y-2"
+                            renderContent={(lang) => (
+                              <>
+                                <p className="font-semibold text-foreground">
+                                  {balanceSheetOpeningMismatchIntroTitle(lang)}
+                                </p>
+                                <p className="text-muted-foreground">
+                                  {balanceSheetOpeningMismatchIntroSummary(lang)}
+                                </p>
+                                <BalanceSheetFiscalYearDisplay
+                                  ctx={companyFiscalYearContext}
+                                  variant="master"
+                                  lang={lang}
+                                  labelClassName="text-muted-foreground"
+                                  noteClassName="text-muted-foreground"
+                                />
+                              </>
+                            )}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </h3>
+                  </div>
+                  <Table className={cn(BS_TABLE_CLASS, "w-full min-w-[240px]")}>
+                    <TableHeader className={BS_TABLE_HEADER_CLASS}>
+                      <TableRow className={BS_TABLE_ROW_CLASS}>
+                        <TableHead className="whitespace-normal sm:whitespace-nowrap">Item</TableHead>
+                        <TableHead className="text-right whitespace-nowrap">Amount</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow className={BS_TABLE_ROW_CLASS}>
+                        <TableCell className="font-medium whitespace-normal sm:whitespace-nowrap">Total Opening Dr</TableCell>
+                        <TableCell className="text-right tabular-nums font-semibold whitespace-nowrap">
+                          {toNepaliCurrency(openingBalanceAudit.totalOpeningDr)}
+                        </TableCell>
+                      </TableRow>
+                      <TableRow className={BS_TABLE_ROW_CLASS}>
+                        <TableCell className="font-medium whitespace-normal sm:whitespace-nowrap">Total Opening Cr</TableCell>
+                        <TableCell className="text-right tabular-nums font-semibold whitespace-nowrap">
+                          {toNepaliCurrency(openingBalanceAudit.totalOpeningCr)}
+                        </TableCell>
+                      </TableRow>
+                      <TableRow className={BS_TABLE_ROW_CLASS}>
+                        <TableCell className="font-medium text-red-700 whitespace-normal sm:whitespace-nowrap">
+                          Difference (master accounts)
+                        </TableCell>
+                        <TableCell className="text-right whitespace-nowrap">
+                          <div className="inline-flex items-center justify-end gap-2">
+                            <Button
+                              type="button"
+                              variant="link"
+                              className="h-auto p-0 text-[11px] sm:text-xs text-blue-600 hover:text-blue-800 underline"
+                              onClick={openOpeningBalanceLedgerDetail}
+                            >
+                              View Details
+                            </Button>
+                            <span className="tabular-nums font-bold text-red-700">
+                              {toNepaliCurrency(Math.abs(openingBalanceAudit.diff))}
+                              {openingBalanceAudit.diff < 0 ? " Cr" : openingBalanceAudit.diff > 0 ? " Dr" : ""}
+                            </span>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+
+              <div
+                className={cn(
+                  BS_CARD_SHELL_CLASS,
+                  "min-w-0 w-full",
+                  totals.isBalanced ? "bg-green-50/80" : "bg-orange-50/80"
+                )}
+              >
+                <div
+                  className={cn(
+                    "px-3 py-2 sm:px-4 sm:py-3 !border-b-[1px] border-black flex flex-wrap items-center justify-between gap-2",
+                    totals.isBalanced ? "bg-green-100/50" : "bg-orange-100/50"
+                  )}
+                >
+                  <p className="font-semibold text-sm sm:text-base">
+                    {totals.isBalanced ? "✓ Balance Sheet Check" : "⚠ Balance Sheet Not Balanced"}
+                  </p>
+                  {!totals.isBalanced ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs border-orange-400 bg-white hover:bg-orange-50 text-orange-900"
+                      onClick={() => setCheckDifferenceOpen(true)}
+                    >
+                      Check Difference
+                    </Button>
+                  ) : null}
+                </div>
+                {totals.isBalanced ? (
+                  <p className="text-xs sm:text-sm text-green-700 px-3 sm:px-4 py-3">
+                    Assets = Liabilities + Equity (including current profit/loss).
+                  </p>
+                ) : (
+                  <>
+                    <Table className={cn(BS_TABLE_CLASS, "w-full min-w-[240px]")}>
+                      <TableHeader className={BS_TABLE_HEADER_CLASS}>
+                        <TableRow className={BS_TABLE_ROW_CLASS}>
+                          <TableHead className="whitespace-normal sm:whitespace-nowrap">Check</TableHead>
+                          <TableHead className="text-right whitespace-nowrap">Detail</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        <TableRow className={BS_TABLE_ROW_CLASS}>
+                          <TableCell className="font-medium text-orange-800 whitespace-normal sm:whitespace-nowrap">
+                            Total difference (Assets − Liab − Equity − P/L)
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums font-bold text-red-700 whitespace-nowrap">
+                            {toNepaliCurrency(differenceBreakdown.totalDifference)}
+                          </TableCell>
+                        </TableRow>
+                        {!openingBalanceAudit.isBalanced && (
+                          <TableRow className={BS_TABLE_ROW_CLASS}>
+                            <TableCell className="font-medium text-orange-800 whitespace-normal sm:whitespace-nowrap">
+                              Includes opening mismatch
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-semibold text-red-700 whitespace-nowrap">
+                              {toNepaliCurrency(differenceBreakdown.openingDifference)}
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        {differenceBreakdown.remainingAfterOpening >= 0.01 && (
+                          <TableRow className={BS_TABLE_ROW_CLASS}>
+                            <TableCell className="font-medium text-orange-900 whitespace-normal sm:whitespace-nowrap">
+                              Remaining to find (after opening)
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-bold text-red-700 whitespace-nowrap">
+                              {toNepaliCurrency(differenceBreakdown.remainingAfterOpening)}
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        {differenceBreakdown.lines
+                          .filter((line) => line.kind !== "opening_mismatch")
+                          .map((line) => (
+                            <TableRow key={line.kind + line.label} className={BS_TABLE_ROW_CLASS}>
+                              <TableCell className="font-medium text-orange-800 whitespace-normal sm:whitespace-nowrap">
+                                {line.label}
+                                {line.count != null && line.count > 0 ? (
+                                  <span className="text-muted-foreground font-normal"> ({line.count})</span>
+                                ) : null}
+                              </TableCell>
+                              <TableCell className="text-right whitespace-nowrap">
+                                {line.amount >= 0.01 ? (
+                                  <span className="tabular-nums font-semibold text-red-700">
+                                    {toNepaliCurrency(line.amount)}
+                                  </span>
+                                ) : (
+                                  <span className="text-[11px] sm:text-xs text-orange-800">—</span>
+                                )}
+                                {line.scrollTargetId ? (
+                                  <Button
+                                    type="button"
+                                    variant="link"
+                                    className="h-auto p-0 ml-2 text-[11px] sm:text-xs text-orange-800 underline"
+                                    onClick={() => scrollToBalanceSheetSection(line.scrollTargetId!)}
+                                  >
+                                    View
+                                  </Button>
+                                ) : null}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                      </TableBody>
+                    </Table>
+                  </>
+                )}
+              </div>
+              </div>
+
               {netProfit !== 0 && (
                 <div className="text-sm space-y-1 p-2 bg-muted/30 rounded-md">
                   <p className="font-semibold">
@@ -1786,8 +3519,8 @@ export function BalanceSheetPage() {
                   </p>
                 </div>
               )}
-              
-              <div className="text-sm space-y-2 p-3 bg-muted/30 rounded-md border">
+
+              <div id="bs-double-entry-check" className="text-sm space-y-2 p-3 bg-muted/30 rounded-md border">
                 <div className="flex items-center justify-between">
                   <p className="font-semibold">
                     {doubleEntryCheck.isBalanced ? '✓' : '⚠️'} Double-Entry Check:
@@ -1878,8 +3611,10 @@ export function BalanceSheetPage() {
                   </>
                 )}
                 <p className="text-xs opacity-70 mt-2 pt-2 border-t">
-                  Note: Balance Sheet difference ({toNepaliCurrency(Math.abs(totals.assets - totals.totalLiabEquity))}) may differ from Double-Entry Check difference due to opening balances, 
-                  account classifications, or Net Profit calculations.
+                  Balance Sheet check (Assets = Liabilities + Equity) is separate from Double-Entry check (Total Debit = Total Credit).
+                  {Math.abs(totals.difference) >= 0.02 && (
+                    <> Current Balance Sheet difference: {toNepaliCurrency(Math.abs(totals.difference))}.</>
+                  )}
                 </p>
               </div>
             </div>
@@ -1887,31 +3622,219 @@ export function BalanceSheetPage() {
         </Card>
       </div>
 
-      {/* DETAIL DRAWER */}
-      <Drawer open={!!activeRow} onClose={closeDrawer}>
-        <DrawerContent className="max-h-[85vh]">
-          <DrawerHeader>
-            <DrawerTitle>
+      {/* Account detail — full ledger page mirror (Bank / Party / Staff / Tax) */}
+      <Dialog
+        open={!!activeRow}
+        onOpenChange={(open) => {
+          if (!open) closeDrawer();
+        }}
+      >
+        <DialogContent
+          overlayClassName="bg-black/45 backdrop-blur-none"
+          className={cn(
+            "balance-sheet-ledger-popup",
+            "!flex h-[85vh] max-h-[85vh] w-[90vw] max-w-[90vw] flex-col gap-0 overflow-hidden p-0 rounded-lg bg-background",
+            /* Fade only — zoom 95% + slide subpixel blur on txn text */
+            "data-[state=open]:zoom-in-100 data-[state=closed]:zoom-out-100",
+            "data-[state=open]:slide-in-from-left-0 data-[state=open]:slide-in-from-top-0",
+            "data-[state=closed]:slide-out-to-left-0 data-[state=closed]:slide-out-to-top-0"
+          )}
+        >
+          <DialogHeader className="sr-only">
+            <DialogTitle>
               {activeRow?.accountName} {activeRow?.group ? `· ${activeRow.group}` : ""}
-            </DrawerTitle>
-          </DrawerHeader>
-          <ScrollArea className="px-6 pb-4 h-[60vh]">
-            {activeRow && (
-              <TransactionsTable 
-                context="party"
-                contextId={activeRow.accountId}
-                transactions={activeRow.transactions || []}
-                openingBalance={activeRow.openingBalance}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            {activeRow ? (
+              <BalanceSheetLedgerDetailMirror
+                key={`${activeRow.entityType}-${activeRow.accountId}`}
+                row={activeRow}
+                dateRange={detailDateRange}
+                onDateRangeChange={setDetailDateRange}
+                onClose={closeDrawer}
+                processedAccounts={processedAccounts}
+                processedParties={processedParties}
+                processedStaff={processedStaff}
+                processedStaffGroups={processedStaffGroups}
+                processedTaxes={processedTaxes}
+                userNames={userNames}
+                journalAccountNames={voucherJournalAccountNames}
+              />
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={checkDifferenceOpen} onOpenChange={setCheckDifferenceOpen}>
+        <DialogContent
+          data-balance-sheet-difference-trace-popup=""
+          className="w-[90vw] max-w-[90vw] h-[90vh] max-h-[90vh] overflow-hidden flex flex-col"
+        >
+          <DialogHeader className="shrink-0 space-y-0">
+            <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 pr-8">
+              <div className="flex flex-wrap items-center gap-[10px]">
+                <DialogTitle>Balance Sheet Difference Trace</DialogTitle>
+                <div
+                  data-bs-diff-trace-main-view-tabs=""
+                  className="flex flex-wrap items-center gap-1"
+                  role="tablist"
+                  aria-label="Trace view"
+                >
+                  {(
+                    [
+                      { id: "opening" as const, label: "Opening trace" },
+                      { id: "trxn" as const, label: "trxn trace" },
+                      { id: "otherDifferent" as const, label: "other different trace" },
+                    ] as const
+                  ).map(({ id, label }) => {
+                    const isActive = differenceTraceMainView === id;
+                    const showRemainingOnPill =
+                      id === "otherDifferent" &&
+                      differenceBreakdown.remainingAfterOpening >= 0.01;
+                    const pill = (
+                      <button
+                        key={id}
+                        type="button"
+                        role="tab"
+                        aria-selected={isActive}
+                        className={cn(
+                          "rounded-full border px-2.5 py-0.5 text-[11px] font-semibold leading-tight sm:text-xs",
+                          isActive
+                            ? "border-blue-700 bg-blue-700 text-white hover:bg-blue-700/90"
+                            : "border-blue-300 bg-blue-50 text-blue-950 hover:bg-blue-100"
+                        )}
+                        onClick={() => {
+                          setDifferenceTraceMainView(id);
+                          setDifferenceTraceSelectedKey(null);
+                          setDifferenceTraceHoveredKey(null);
+                        }}
+                      >
+                        {label}
+                        {showRemainingOnPill ? (
+                          <>
+                            <span className="font-normal opacity-80"> · </span>
+                            <span
+                              className={cn(
+                                "tabular-nums font-bold",
+                                isActive ? "text-red-200" : "text-red-700"
+                              )}
+                              title="Remaining after opening (Balance Sheet check)"
+                            >
+                              {toNepaliCurrency(
+                                differenceTraceReconciliation.remainingAfterOpening
+                              )}
+                            </span>
+                          </>
+                        ) : null}
+                      </button>
+                    );
+                    if (!showRemainingOnPill) return pill;
+                    return (
+                      <span key={id} className="inline-flex items-center gap-0.5">
+                        {pill}
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <AppFreshInfoButton
+                              size="sm"
+                              className="text-blue-400 hover:text-blue-500"
+                              aria-label="Remaining after opening — how this amount is calculated"
+                              title="Remaining after opening"
+                            />
+                          </PopoverTrigger>
+                          <PopoverContent
+                            side="bottom"
+                            align="start"
+                            className="w-[min(24rem,calc(100vw-2rem))] p-3 text-left text-xs sm:text-sm leading-relaxed"
+                          >
+                            <BalanceSheetDiffTraceLangTabs
+                              tabsListClassName="mb-1"
+                              contentClassName="space-y-2"
+                              renderContent={(lang) => (
+                                <>
+                                  <p className="font-semibold text-foreground">
+                                    {balanceSheetDiffTraceReconciliationTitle(lang)}
+                                  </p>
+                                  {balanceSheetDiffTraceReconciliationParagraphs(
+                                    lang,
+                                    differenceTraceReconciliationCopy
+                                  ).map((paragraph, idx) => (
+                                    <p key={idx} className="text-muted-foreground">
+                                      {paragraph}
+                                    </p>
+                                  ))}
+                                </>
+                              )}
+                            />
+                          </PopoverContent>
+                        </Popover>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </DialogHeader>
+          <div className="shrink-0 text-[11px] sm:text-xs text-muted-foreground leading-relaxed">
+            <BalanceSheetFiscalYearDisplay
+              ctx={companyFiscalYearContext}
+              variant="trace"
+              lang="en"
+            />
+          </div>
+          <div data-balance-sheet-difference-trace-wrap="" className={BS_DIFF_TRACE_WRAP_CLASS}>
+            {differenceTraceMainView === "opening" ? (
+              <OpeningTraceGrid
+                allOpeningRows={differenceTraceAllOpeningRows}
+                openingAuditTotals={{
+                  openingDr: openingBalanceAudit.totalOpeningDr,
+                  openingCr: openingBalanceAudit.totalOpeningCr,
+                  openingNet: round2(openingBalanceAudit.diff),
+                }}
+                mainView={differenceTraceMainView}
+                rowKey={differenceTraceRowKey}
+                formatAmount={toNepaliCurrency}
+                selectedKey={differenceTraceSelectedKey}
+                hoveredKey={differenceTraceHoveredKey}
+                onSelectKey={setDifferenceTraceSelectedKey}
+                onOpenRow={openDifferenceTraceRow}
+                onHoverKey={setDifferenceTraceHoveredKey}
+              />
+            ) : differenceTraceMainView === "trxn" ? (
+              <TrxnTraceGrid
+                allOpeningRows={differenceTraceAllOpeningRows}
+                conflictRows={differenceTraceConflictRows}
+                otherRows={differenceTraceOtherRows}
+                noOpeningRows={differenceTraceNoOpeningRows}
+                mainView={differenceTraceMainView}
+                rowKey={differenceTraceRowKey}
+                formatAmount={toNepaliCurrency}
+                selectedKey={differenceTraceSelectedKey}
+                hoveredKey={differenceTraceHoveredKey}
+                onSelectKey={setDifferenceTraceSelectedKey}
+                onOpenRow={openDifferenceTraceRow}
+                onHoverKey={setDifferenceTraceHoveredKey}
+              />
+            ) : (
+              <OtherDifferentRemainingTrace
+                mainView={differenceTraceMainView}
+                breakdown={differenceBreakdown}
+                checkReport={balanceSheetCheckReport}
+                checkEngineInput={balanceSheetCheckEngineInput}
+                openingIsBalanced={openingBalanceAudit.isBalanced}
+                formatAmount={toNepaliCurrency}
+                explanationActions={{
+                  onOpenAccount: openAccountFromCheckEngine,
+                  onOpenVoucher: openVoucherFromCheckEngine,
+                  onOpenPl: openPlFromCheckEngine,
+                }}
+                liveRevision={ledgerLiveRevision}
+                reportRunAtMs={balanceSheetCheckReport.runAtMs}
               />
             )}
-          </ScrollArea>
-          <DrawerFooter className="flex items-center justify-between">
-            <DrawerClose asChild>
-              <Button variant="outline">Close</Button>
-            </DrawerClose>
-          </DrawerFooter>
-        </DrawerContent>
-      </Drawer>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* PRINT OPTIONS DIALOG */}
       <PrintOptionsDialog
@@ -1920,6 +3843,19 @@ export function BalanceSheetPage() {
         onSelect={(option) => {
           // For BalanceSheet, both options print the same (already flat structure)
           handlePrintBalanceSheet(option === 'expand');
+        }}
+      />
+
+      <AddVoucherDialog
+        isOpen={checkEngineVoucherOpen}
+        onOpenChange={(open) => {
+          setCheckEngineVoucherOpen(open);
+          if (!open) setCheckEngineVoucher(null);
+        }}
+        voucher={checkEngineVoucher}
+        onVoucherCreated={() => {
+          setCheckEngineVoucherOpen(false);
+          setCheckEngineVoucher(null);
         }}
       />
     </div>

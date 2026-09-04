@@ -4,7 +4,11 @@
 import * as React from "react";
 import { openPrintDirect } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
+import { resolveGroupBooksOpeningBalance } from "@/lib/ledgerOpeningBalanceDisplay";
 import type { Item, ItemGroup } from "@/components/items/types";
+import { filterMembersByMasterGroupScope } from "@/lib/masterGroupMemberScope";
+import { ITEM_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { isMasterEntitySystemGroupId, resolveItemListGroupBucketId } from "@/lib/masterEntitySystemGroups";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -190,6 +194,7 @@ export function ItemGroupDetails({
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company, companyId } = useCompany();
   const { processedItems, processedAccounts, processedParties, journalAccountNames, vouchers } = useVouchers();
+  const isSystemBranchGroup = isMasterEntitySystemGroupId(ITEM_ENTITY_GROUP_PRESET, group.id);
   const itemsInGroup = useMemo(() => {
     if (groupMemberFilterId) {
       const fromProp = items.filter((i) => i.id === groupMemberFilterId);
@@ -197,12 +202,16 @@ export function ItemGroupDetails({
       const fromProcessed = processedItems.filter((i) => i.id === groupMemberFilterId);
       if (fromProcessed.length > 0) return fromProcessed;
     }
-    if (group.id === "ungrouped") {
-      return items.filter((i) => !i.groupId || i.groupId === "ungrouped_item");
-    }
     if (items.length > 0) return items;
-    return processedItems.filter((i) => i.groupId === group.id);
-  }, [items, group.id, groupMemberFilterId, processedItems]);
+    return filterMembersByMasterGroupScope<Item>(
+      group.id,
+      processedItems,
+      allGroups,
+      resolveItemListGroupBucketId,
+      (id) => isMasterEntitySystemGroupId(ITEM_ENTITY_GROUP_PRESET, id),
+      (item, branchId) => resolveItemListGroupBucketId(item) === branchId
+    );
+  }, [items, group.id, groupMemberFilterId, processedItems, allGroups]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
 
   const selectedMemberItem = useMemo(() => {
@@ -727,7 +736,7 @@ export function ItemGroupDetails({
           periodDrForPage: desktopPaginationMeta.periodDrForPage,
           periodCrForPage: desktopPaginationMeta.periodCrForPage,
           closingForPage: desktopPaginationMeta.closingForPage,
-          booksOpeningBalance: Number(group.openingBalance) || 0,
+          booksOpeningBalance: resolveGroupBooksOpeningBalance(group, itemsInGroup, stockView),
           ledgerShowBookOpeningRow: desktopPaginationMeta.sliceStart === 0,
           ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
           openingBalancePeriodStartDate: dateRange?.from,
@@ -783,7 +792,7 @@ export function ItemGroupDetails({
                   placeholder="Select a group"
                 />
               </div>
-              {group.id !== "ungrouped" && (
+              {!isSystemBranchGroup && (
                 <EditItemGroupDialog group={group} allGroups={allGroups} onGroupUpdated={onGroupUpdated} onGroupDeleted={onGroupDeleted} hasAccounts={itemsInGroup.length > 0 || childGroups.length > 0}>
                   <Button variant="outline" size="icon" className="h-9 w-8 flex-shrink-0">
                     <Edit className="h-4 w-4" />
@@ -1036,7 +1045,7 @@ export function ItemGroupDetails({
                         {getInitials(group.name)}
                       </AvatarFallback>
                     </Avatar>
-                    {group.id !== "ungrouped" && (
+                    {!isSystemBranchGroup && (
                       <EditItemGroupDialog
                         group={group}
                         allGroups={allGroups}

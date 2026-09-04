@@ -1,11 +1,11 @@
 "use client";
 
-import { Info } from "lucide-react";
 import type { Control, FieldPath, FieldValues } from "react-hook-form";
 import { FormControl, FormField, FormItem, FormLabel } from "@/components/ui/form";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
 import { ALLOW_VOUCHER_MINUS_BALANCE_INFO } from "@/lib/bankAccountMinusBalancePolicy";
 
 /** Bank/Cash master — minus balance allow; bordered box + info i icon */
@@ -43,13 +43,10 @@ export function AllowVoucherMinusBalanceField<T extends FieldValues>({
             <TooltipProvider delayDuration={200}>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    className="shrink-0 text-blue-500 hover:text-blue-700"
+                  <AppFreshInfoButton
+                    size="xs"
                     aria-label="About allowing minus balance on vouchers"
-                  >
-                    <Info className="h-3.5 w-3.5" aria-hidden />
-                  </button>
+                  />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-sm text-xs leading-relaxed">
                   {ALLOW_VOUCHER_MINUS_BALANCE_INFO}

@@ -24,6 +24,7 @@ export type Account = {
   credit: number;
   fileUrl?: string;
   phone?: string;
+  whatsapp?: boolean;
   isDeleted?: boolean;
   isOwnerAccount?: boolean;
   /** ON: Payment Out / Direct Expense / Contra — balance se zyada amount save allowed (account minus ho sakta hai). */

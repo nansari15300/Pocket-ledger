@@ -1003,8 +1003,12 @@ export function useTransactions(
             });
         }
 
-        // Second pass: narrow by context from full ledger only — scoped dashboard lists skip (see `shouldUseScopedPassedTransactions`).
-        if (transactionContext && !shouldUseScopedPassedTransactions) {
+        // Second pass: narrow by voucher type (sale/purchase/payment_*) — not for report-embedded ledgers (Anusuchi 13, etc.).
+        if (
+            transactionContext &&
+            transactionContext !== "report" &&
+            !shouldUseScopedPassedTransactions
+        ) {
             const contextType = transactionContext === 'payment-in' ? 'payment_in' : 
                               transactionContext === 'payment-out' ? 'payment_out' : transactionContext;
             entityTransactions = entityTransactions.filter((v: any) => {
@@ -1166,9 +1170,9 @@ export function useTransactions(
               }
           }, 0);
           
-          // For groups, always use the sum of items' opening balances (which matches the group's opening balance from processGroups)
-          // This ensures consistency: group opening balance = sum of all items' opening balances
-          initialOpeningBalance = itemsOpeningBalance !== 0 ? itemsOpeningBalance : groupOpeningBalance;
+          // Scoped members: sum their opening balances (0 is valid — do not fall back to group OB).
+          initialOpeningBalance =
+            (groupEntity.items || []).length > 0 ? itemsOpeningBalance : groupOpeningBalance;
 
         } else if (context === 'item' && entity) {
             // Item context: always compute from openingBalance/openingBalanceRate (handles number, string from Firestore)

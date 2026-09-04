@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import admin from "firebase-admin";
-import { getAdminDb } from "@/lib/firebaseAdmin";
+import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebaseAdmin";
 import {
   DOWNLOAD_EVENTS_COLLECTION,
   DOWNLOAD_STATS_DOC,
@@ -22,8 +22,48 @@ function clientIp(req: NextRequest): string {
   );
 }
 
+async function verifyDownloadUser(req: NextRequest): Promise<
+  | { ok: true; uid: string; email: string }
+  | { ok: false; error: NextResponse }
+> {
+  const authHeader = req.headers.get("authorization");
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!token) {
+    return {
+      ok: false,
+      error: NextResponse.json({ error: "Sign in required to download" }, { status: 401 }),
+    };
+  }
+  if (!isFirebaseAdminConfigured()) {
+    return {
+      ok: false,
+      error: NextResponse.json({ error: "Auth not configured" }, { status: 503 }),
+    };
+  }
+  getAdminDb();
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    const email = String(decoded.email || "").trim().toLowerCase();
+    if (!email) {
+      return {
+        ok: false,
+        error: NextResponse.json({ error: "Google account email required" }, { status: 401 }),
+      };
+    }
+    return { ok: true, uid: decoded.uid, email };
+  } catch {
+    return {
+      ok: false,
+      error: NextResponse.json({ error: "Invalid or expired sign-in" }, { status: 401 }),
+    };
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
+    const userGate = await verifyDownloadUser(req);
+    if (!userGate.ok) return userGate.error;
+
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     if (!isWebsiteDownloadPlatform(body.platform)) {
       return NextResponse.json({ error: "Invalid platform" }, { status: 400 });
@@ -70,6 +110,8 @@ export async function POST(req: NextRequest) {
         version: version || null,
         fileName: fileName || null,
         source: source || null,
+        userId: userGate.uid,
+        userEmail: userGate.email,
         ip,
         userAgent: ua,
         createdAtMs: now,
@@ -77,7 +119,7 @@ export async function POST(req: NextRequest) {
       });
     });
 
-    return NextResponse.json({ ok: true, country });
+    return NextResponse.json({ ok: true, country, id: eventRef.id });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: msg }, { status: 500 });

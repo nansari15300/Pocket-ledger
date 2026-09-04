@@ -75,7 +75,7 @@ export function MasterAccountFreezeTxnShell({
           {overlay}
         </div>
       ) : null}
-      <div data-pl-freeze-shell-content="" className="relative">
+      <div data-pl-freeze-shell-content="" className="relative flex min-h-0 flex-1 flex-col">
         {children}
       </div>
     </div>

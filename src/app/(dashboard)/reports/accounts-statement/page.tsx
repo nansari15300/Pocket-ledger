@@ -26,6 +26,10 @@ import type { ExpenseAccount } from "@/components/expenses/types";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
 import { isSystemParentGroup } from "@/lib/system-groups";
+import {
+  isPartyDirectOnSystemBranch,
+  isPartySystemGroupId,
+} from "@/lib/partySystemGroups";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { doc, getDoc, query, collection, getDocs, where } from "firebase/firestore";
@@ -849,7 +853,6 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
         entityRow.children!.unshift(ungroupedNode);
       }
     };
-    addUngroupedRow("party", processedParties, "ungrouped-party", "ungrouped_party");
     addUngroupedRow("bank", processedAccounts, "ungrouped-bank", "ungrouped_account");
     addUngroupedRow("staff", processedStaff, "ungrouped-staff", "ungrouped_staff");
     addUngroupedRow("tax", processedTaxes, "ungrouped-tax", "ungrouped_tax");
@@ -907,19 +910,7 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
 
   const buildUngroupedVirtualGroup = useCallback((groupType: UnifiedGroup["groupType"]): UnifiedGroup | null => {
     if (groupType === "party") {
-      const rows = processedParties.filter((p: any) => !p.groupId || p.groupId === "ungrouped_party");
-      if (rows.length === 0) return null;
-      const balance = rows.reduce((s: number, p: any) => s + (p.balance || 0), 0);
-      return {
-        id: "ungrouped-party",
-        name: "Ungrouped",
-        balance,
-        debit: rows.reduce((s: number, p: any) => s + (p.debit || 0), 0),
-        credit: rows.reduce((s: number, p: any) => s + (p.credit || 0), 0),
-        groupType: "party",
-        isSystemGroup: false,
-        entity: { id: "ungrouped-party", name: "Ungrouped", balance } as any,
-      };
+      return null;
     }
     if (groupType === "staff") {
       const rows = processedStaff.filter((s: any) => !s.groupId || s.groupId === "ungrouped_staff");
@@ -1277,8 +1268,8 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
       return { ...group, items: accounts, expenseGroupIds: Array.from(selectedGroupScopeIds) };
     }
     if (groupType === "party") {
-      const parties = selectedGroup.id === "ungrouped-party"
-        ? processedParties.filter((p: any) => !p.groupId || p.groupId === "ungrouped_party")
+      const parties = isPartySystemGroupId(selectedGroup.id)
+        ? processedParties.filter((p: any) => isPartyDirectOnSystemBranch(p, selectedGroup.id))
         : processedParties.filter((p: any) => inScope(p.groupId));
       return { ...group, items: parties };
     }
@@ -1312,7 +1303,9 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
       return processedExpenseAccounts.filter((e: any) => selectedGroupScopeIds.has(e.groupId || ""));
     }
     if (groupType === "party") {
-      if (selectedGroup.id === "ungrouped-party") return processedParties.filter((p: any) => !p.groupId || p.groupId === "ungrouped_party");
+      if (isPartySystemGroupId(selectedGroup.id)) {
+        return processedParties.filter((p: any) => isPartyDirectOnSystemBranch(p, selectedGroup.id));
+      }
       return processedParties.filter((p: any) => selectedGroupScopeIds.has(p.groupId || ""));
     }
     if (groupType === "staff") {
@@ -1788,10 +1781,10 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
       // Render appropriate group details component based on group type
       switch (group.groupType) {
         case 'party': {
-          const scopedParties = group.id === "ungrouped-party"
-            ? processedParties.filter((p: any) => !p.groupId || p.groupId === "ungrouped_party")
+          const scopedParties = isPartySystemGroupId(group.id)
+            ? processedParties.filter((p: any) => isPartyDirectOnSystemBranch(p, group.id))
             : processedParties.filter((p) => inScope(p.groupId));
-          const needsSyntheticGrouping = isCollapsedSystemSelection || group.id === "ungrouped-party";
+          const needsSyntheticGrouping = isCollapsedSystemSelection;
           const effectivePartyGroupId = needsSyntheticGrouping ? `${group.id}-aggregate` : group.id;
           // Rebind scoped parties to synthetic group id so GroupDetails can render scoped rows reliably.
           const effectiveParties = needsSyntheticGrouping

@@ -34,7 +34,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import KhaltiCheckout from "khalti-checkout-web";
 import { Badge } from "@/components/ui/badge";
-import { Check, Download, Info, Loader2, Printer, X } from "lucide-react";
+import { Check, Download, Loader2, Printer, X } from "lucide-react";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { doc, onSnapshot } from "firebase/firestore";
 import { auth, firestore } from "@/lib/firebase";
@@ -364,16 +365,12 @@ function AutoRenewInfoButton({ hasStripeSubscription }: { hasStripeSubscription:
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          data-pl-billing-feature-info=""
-          className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-0 bg-transparent text-sky-500 hover:bg-sky-100 hover:text-sky-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+        <AppFreshInfoButton
+          size="xs"
           aria-label="About Auto renew"
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
-        >
-          <Info className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden />
-        </button>
+        />
       </PopoverTrigger>
       <PopoverContent side="top" align="start" className="max-w-xs text-left text-xs leading-snug">
         {hasStripeSubscription ? AUTO_RENEW_TIP_STRIPE : AUTO_RENEW_TIP_NO_SUB}
@@ -401,14 +398,11 @@ function BillingTipInfoButton({ tip, ariaLabel }: { tip: string; ariaLabel: stri
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          data-pl-billing-feature-info=""
-          className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-0 bg-transparent text-sky-500 hover:bg-sky-100 hover:text-sky-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+        <AppFreshInfoButton
+          size="xs"
           aria-label={ariaLabel}
           aria-expanded={open}
           onPointerDown={(e) => {
-            // Select ke neeche trigger mat kholo — pehle popover hi toggle.
             e.preventDefault();
             e.stopPropagation();
           }}
@@ -421,9 +415,7 @@ function BillingTipInfoButton({ tip, ariaLabel }: { tip: string; ariaLabel: stri
             e.stopPropagation();
             setOpen((prev) => !prev);
           }}
-        >
-          <Info className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden />
-        </button>
+        />
       </PopoverTrigger>
       <PopoverContent
         side="top"

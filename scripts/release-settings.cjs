@@ -1,5 +1,6 @@
 const DEFAULTS = {
-  downloadsMaxOld: 5,
+  downloadsMaxOldExe: 5,
+  downloadsMaxOldApk: 5,
   outdatedPolicy: "keep",
   outdatedMaxKeep: 20,
 };
@@ -10,13 +11,40 @@ function clamp(n, min, max) {
   return Math.max(min, Math.min(max, Math.trunc(v)));
 }
 
+function isMissingSettingValue(value) {
+  return value === undefined || value === null || value === "";
+}
+
 function normalizeReleaseSettings(raw) {
   const src = raw && typeof raw === "object" ? raw : {};
+  const legacy = isMissingSettingValue(src.downloadsMaxOld) ? null : clamp(src.downloadsMaxOld, 0, 20);
   return {
-    downloadsMaxOld: clamp(src.downloadsMaxOld, 0, 20),
+    downloadsMaxOldExe: isMissingSettingValue(src.downloadsMaxOldExe)
+      ? legacy !== null
+        ? legacy
+        : DEFAULTS.downloadsMaxOldExe
+      : clamp(src.downloadsMaxOldExe, 0, 20),
+    downloadsMaxOldApk: isMissingSettingValue(src.downloadsMaxOldApk)
+      ? legacy !== null
+        ? legacy
+        : DEFAULTS.downloadsMaxOldApk
+      : clamp(src.downloadsMaxOldApk, 0, 20),
     outdatedPolicy: src.outdatedPolicy === "auto_delete" ? "auto_delete" : "keep",
-    outdatedMaxKeep: clamp(src.outdatedMaxKeep, 0, 100),
+    outdatedMaxKeep: isMissingSettingValue(src.outdatedMaxKeep)
+      ? DEFAULTS.outdatedMaxKeep
+      : clamp(src.outdatedMaxKeep, 0, 100),
   };
+}
+
+function parseReleaseSettingsJson(text) {
+  const trimmed = String(text == null ? "" : text).trim();
+  if (!trimmed || trimmed === "undefined" || trimmed === "null") return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function settingsPublicUrl(bucket, prefix = "public-releases") {
@@ -29,30 +57,28 @@ function settingsPublicUrl(bucket, prefix = "public-releases") {
   );
 }
 
-async function fetchReleaseSettings(bucket) {
+async function fetchReleaseSettingsRaw(bucket, prefix = "public-releases") {
   try {
     const https = require("https");
-    const url = settingsPublicUrl(bucket);
-    const raw = await new Promise((resolve) => {
+    const url = settingsPublicUrl(bucket, prefix);
+    const body = await new Promise((resolve) => {
       https
         .get(url, (res) => {
-          let body = "";
-          res.on("data", (c) => (body += c));
-          res.on("end", () => {
-            if (res.statusCode !== 200) return resolve(null);
-            try {
-              resolve(JSON.parse(body));
-            } catch {
-              resolve(null);
-            }
-          });
+          let text = "";
+          res.on("data", (c) => (text += c));
+          res.on("end", () => resolve(res.statusCode === 200 ? text : ""));
         })
-        .on("error", () => resolve(null));
+        .on("error", () => resolve(""));
     });
-    return normalizeReleaseSettings(raw);
+    return { body, raw: parseReleaseSettingsJson(body) };
   } catch {
-    return normalizeReleaseSettings(null);
+    return { body: "", raw: null };
   }
+}
+
+async function fetchReleaseSettings(bucket, prefix = "public-releases") {
+  const fetched = await fetchReleaseSettingsRaw(bucket, prefix);
+  return normalizeReleaseSettings(fetched.raw);
 }
 
 function readLocalReleaseSettings(projectRoot) {
@@ -61,10 +87,21 @@ function readLocalReleaseSettings(projectRoot) {
   const local = path.join(projectRoot, "releases", "release-settings.json");
   try {
     if (!fs.existsSync(local)) return normalizeReleaseSettings(null);
-    return normalizeReleaseSettings(JSON.parse(fs.readFileSync(local, "utf8")));
+    return normalizeReleaseSettings(parseReleaseSettingsJson(fs.readFileSync(local, "utf8")));
   } catch {
     return normalizeReleaseSettings(null);
   }
+}
+
+function writeLocalReleaseSettings(projectRoot, settingsRaw) {
+  const fs = require("fs");
+  const path = require("path");
+  const settings = normalizeReleaseSettings(settingsRaw);
+  const local = path.join(projectRoot, "releases", "release-settings.json");
+  fs.mkdirSync(path.dirname(local), { recursive: true });
+  const payload = { ...settings, updatedAt: new Date().toISOString() };
+  fs.writeFileSync(local, `${JSON.stringify(payload, null, 2)}\n`);
+  return local;
 }
 
 function cloneReleaseEntry(entry) {
@@ -76,6 +113,12 @@ function cloneReleaseEntry(entry) {
   };
 }
 
+function isApkAndroid(item) {
+  if (!item || !item.url) return false;
+  if (item.format === "aab") return false;
+  return /\.apk(\?|$)/i.test(String(item.file || item.url || ""));
+}
+
 function sameRelease(a, b) {
   if (!a || !b) return false;
   return (
@@ -83,6 +126,17 @@ function sameRelease(a, b) {
     String(a.windows?.url || "") === String(b.windows?.url || "") &&
     String(a.android?.url || "") === String(b.android?.url || "")
   );
+}
+
+function entryHasPlatform(entry, platform) {
+  if (platform === "apk") {
+    return Boolean(entry && entry.android && isApkAndroid(entry.android));
+  }
+  return Boolean(entry && entry.windows && entry.windows.url);
+}
+
+function downloadsMaxOldForPlatform(settings, platform) {
+  return platform === "apk" ? settings.downloadsMaxOldApk : settings.downloadsMaxOldExe;
 }
 
 function mergeOlderPool(manifest) {
@@ -105,12 +159,40 @@ function mergeOlderPool(manifest) {
   return pool;
 }
 
+function selectHistoryForPlatform(pool, platform, maxOld) {
+  const selected = [];
+  for (const entry of pool) {
+    if (!entryHasPlatform(entry, platform)) continue;
+    selected.push(cloneReleaseEntry(entry));
+    if (selected.length >= maxOld) break;
+  }
+  return selected;
+}
+
+function unionHistoryEntries(lists) {
+  const out = [];
+  for (const list of lists) {
+    for (const entry of list || []) {
+      if (!entry) continue;
+      if (out.some((e) => sameRelease(e, entry))) continue;
+      out.push(cloneReleaseEntry(entry));
+    }
+  }
+  out.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  return out;
+}
+
 function splitPoolForDownloads(pool, settings, prevHistoryLen) {
-  const history = pool.slice(0, settings.downloadsMaxOld);
-  const afterDownloads = pool.slice(settings.downloadsMaxOld);
+  const history = unionHistoryEntries([
+    selectHistoryForPlatform(pool, "exe", settings.downloadsMaxOldExe),
+    selectHistoryForPlatform(pool, "apk", settings.downloadsMaxOldApk),
+  ]);
+  const afterDownloads = pool.filter(
+    (entry) => !history.some((kept) => sameRelease(kept, entry))
+  );
   const deleteEntries = [];
   const promotedCount = Math.max(0, history.length - prevHistoryLen);
-  const spilledCount = Math.max(0, prevHistoryLen - settings.downloadsMaxOld);
+  const spilledCount = Math.max(0, prevHistoryLen - history.length);
 
   if (settings.outdatedPolicy === "auto_delete") {
     deleteEntries.push(...afterDownloads.map(cloneReleaseEntry));
@@ -212,8 +294,15 @@ function buildReleaseRotation(prev, next, settingsRaw) {
     if (candidates.some((e) => sameRelease(e, entry))) continue;
     candidates.push(cloneReleaseEntry(entry));
   }
-  const history = candidates.slice(0, settings.downloadsMaxOld);
-  const spilled = candidates.slice(settings.downloadsMaxOld);
+  candidates.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+
+  const history = unionHistoryEntries([
+    selectHistoryForPlatform(candidates, "exe", settings.downloadsMaxOldExe),
+    selectHistoryForPlatform(candidates, "apk", settings.downloadsMaxOldApk),
+  ]);
+  const spilled = candidates.filter(
+    (entry) => !history.some((kept) => sameRelease(kept, entry))
+  );
   const deleteEntries = [];
   let outdated = [];
 
@@ -244,16 +333,74 @@ function reconcileManifestWithSettings(manifest, settingsRaw) {
   return reconcileDownloadsSettings(manifest, settingsRaw);
 }
 
+function buildPublicDownloadEntries(manifest, settingsRaw, platformKind) {
+  const settings = normalizeReleaseSettings(settingsRaw);
+  const platform = platformKind === "android" ? "apk" : "exe";
+  const maxOld = downloadsMaxOldForPlatform(settings, platform);
+  const ref = manifest || {};
+  const pool = mergeOlderPool(ref);
+  const older = selectHistoryForPlatform(pool, platform, maxOld);
+  const out = [];
+
+  if (platform === "exe" && ref.windows?.url) {
+    out.push({
+      date: ref.date || "",
+      windows: ref.windows,
+      android: null,
+      latest: true,
+    });
+  } else if (platform === "apk") {
+    const latestApk = ref.android && isApkAndroid(ref.android) ? ref.android : null;
+    if (latestApk) {
+      out.push({
+        date: ref.date || "",
+        windows: null,
+        android: latestApk,
+        latest: true,
+      });
+    }
+  }
+
+  for (const entry of older) {
+    if (platform === "exe" && entry.windows?.url) {
+      out.push({
+        date: entry.date || "",
+        windows: entry.windows,
+        android: null,
+        latest: false,
+      });
+    } else if (platform === "apk") {
+      const entryApk = entry.android && isApkAndroid(entry.android) ? entry.android : null;
+      if (entryApk) {
+        out.push({
+          date: entry.date || "",
+          windows: null,
+          android: entryApk,
+          latest: false,
+        });
+      }
+    }
+  }
+
+  return out.slice(0, maxOld + 1);
+}
+
 module.exports = {
   DEFAULTS,
   normalizeReleaseSettings,
+  parseReleaseSettingsJson,
   fetchReleaseSettings,
+  fetchReleaseSettingsRaw,
   readLocalReleaseSettings,
+  writeLocalReleaseSettings,
   buildReleaseRotation,
+  buildPublicDownloadEntries,
   reconcileDownloadsSettings,
   reconcileHiddenSettings,
   reconcileManifestWithSettings,
   cloneReleaseEntry,
   sameRelease,
+  entryHasPlatform,
+  downloadsMaxOldForPlatform,
   settingsPublicUrl,
 };

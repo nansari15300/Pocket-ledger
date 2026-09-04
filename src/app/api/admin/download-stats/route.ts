@@ -9,6 +9,7 @@ import {
   type WebsiteDownloadEvent,
   type WebsiteDownloadPlatform,
 } from "@/lib/websiteDownloadStats";
+import { loadEmailCompanyProfiles } from "@/lib/downloadStatsEmailCompanies";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +41,7 @@ export async function GET(req: NextRequest) {
     const db = getAdminDb();
     const [statsSnap, eventsSnap] = await Promise.all([
       db.doc(DOWNLOAD_STATS_DOC).get(),
-      db.collection(DOWNLOAD_EVENTS_COLLECTION).orderBy("createdAtMs", "desc").limit(100).get(),
+      db.collection(DOWNLOAD_EVENTS_COLLECTION).orderBy("createdAtMs", "desc").limit(500).get(),
     ]);
     const stats = mergeDownloadStatsDoc(statsSnap.exists ? statsSnap.data() : undefined);
     const recent: WebsiteDownloadEvent[] = eventsSnap.docs.map((d) => {
@@ -52,6 +53,8 @@ export async function GET(req: NextRequest) {
         version: row.version ? String(row.version) : undefined,
         fileName: row.fileName ? String(row.fileName) : undefined,
         source: row.source ? String(row.source) : undefined,
+        userId: row.userId ? String(row.userId) : undefined,
+        userEmail: row.userEmail ? String(row.userEmail) : undefined,
         createdAtMs: Number(row.createdAtMs) || 0,
       };
     });
@@ -60,10 +63,16 @@ export async function GET(req: NextRequest) {
       .map(([country, count]) => ({ country, count }))
       .sort((a, b) => b.count - a.count || a.country.localeCompare(b.country));
 
+    const uniqueEmails = recent
+      .map((row) => row.userEmail)
+      .filter((email): email is string => Boolean(email && String(email).trim()));
+    const emailProfiles = await loadEmailCompanyProfiles(db, uniqueEmails);
+
     return NextResponse.json({
       stats,
       byCountry: byCountryRows,
       recent,
+      emailProfiles,
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

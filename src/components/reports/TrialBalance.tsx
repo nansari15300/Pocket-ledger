@@ -41,6 +41,13 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import { cn } from "@/lib/utils";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import {
+  computeOpeningBalanceLedgerBreakdown,
+  type OpeningBalanceLedgerAccountRow,
+} from "@/lib/reports/openingBalanceLedgerAccounts";
+import { OpeningBalanceMasterEditHost } from "@/components/reports/OpeningBalanceMasterEditHost";
+import { OpeningBalanceLedgerAccountsTable } from "@/components/reports/OpeningBalanceLedgerAccountsTable";
+import { computeExpectedSystemOpeningBalance, collectMasterOpeningBalanceEntities } from "@/lib/reports/systemOpeningBalanceEquity";
 
 /**
  * TYPES
@@ -201,6 +208,9 @@ export function TrialBalancePage() {
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [showPrintDialog, setShowPrintDialog] = useState(false);
   const [showDetailPrintDialog, setShowDetailPrintDialog] = useState(false);
+  const [openingBalanceEditRow, setOpeningBalanceEditRow] =
+    useState<OpeningBalanceLedgerAccountRow | null>(null);
+  const [openingBalanceEditOpen, setOpeningBalanceEditOpen] = useState(false);
 
   // Reset all local state when company changes
   useEffect(() => {
@@ -218,6 +228,16 @@ export function TrialBalancePage() {
   }, [companyId]);
 
   const trialBalanceData = useMemo((): TrialBalanceRow[] => {
+    const expectedSystemOpeningBalance = computeExpectedSystemOpeningBalance(
+      collectMasterOpeningBalanceEntities({
+        processedParties,
+        processedAccounts,
+        processedStaff,
+        processedTaxes,
+        processedExpenseAccounts,
+      })
+    );
+
     // 1. Gather all individual ledgers with their final balances
     const allLedgers: TrialBalanceRow[] = [
       ...processedParties,
@@ -235,9 +255,11 @@ export function TrialBalancePage() {
       .map(l => {
         // For Opening Balance ledger, always use openingBalance field for balance calculation
         const isOpeningBalanceLedger = l.id === 'opening_balance_ledger';
-        const openingBalanceValue = Number((l as any).openingBalance) || 0;
-        const effectiveBalance = isOpeningBalanceLedger 
-          ? openingBalanceValue  // Use openingBalance directly for Opening Balance ledger
+        const openingBalanceValue = isOpeningBalanceLedger
+          ? expectedSystemOpeningBalance
+          : Number((l as any).openingBalance) || 0;
+        const effectiveBalance = isOpeningBalanceLedger
+          ? openingBalanceValue
           : l.balance;
         
         return {
@@ -333,9 +355,8 @@ export function TrialBalancePage() {
     };
     sortRows(finalHierarchy);
     
-    // Note: Opening balances are now automatically balanced with Capital Account's 
-    // "Opening Balance" ledger through the balanceOpeningBalanceWithCapital function.
-    // This ensures double-entry bookkeeping is maintained at the data level.
+    // System Opening Balance ledger is reconciled deterministically from current master OBs
+    // via scheduleSystemOpeningBalanceReconcile (see systemOpeningBalanceEquityClient).
     
     return finalHierarchy;
 
@@ -540,165 +561,57 @@ export function TrialBalancePage() {
     userNames
   );
 
-  // Get all accounts with opening balances for Opening Balance ledger (must be defined before use)
-  const accountsWithOpeningBalances = useMemo(() => {
-    if (!activeAccount || activeAccount.id !== 'opening_balance_ledger') return [];
-    
-    const accounts: Array<{
-      id: string;
-      name: string;
-      openingBalance: number;
-      openingBalanceDate: Date | null;
-      debit: number;
-      credit: number;
-      runningBalance: number;
-    }> = [];
-    
-    // First, collect all accounts with opening balances (without calculating running balance)
-    
-    // Add parties with opening balances
-    processedParties
-      .filter(p => p.id !== 'opening_balance_ledger' && (Number(p.openingBalance) || 0) !== 0)
-      .forEach(p => {
-        const ob = Number(p.openingBalance) || 0;
-        const debit = ob > 0 ? ob : 0;
-        const credit = ob < 0 ? Math.abs(ob) : 0;
-        accounts.push({
-          id: p.id,
-          name: p.name,
-          openingBalance: ob,
-          openingBalanceDate: p.openingBalanceDate?.toDate ? p.openingBalanceDate.toDate() : (p.openingBalanceDate instanceof Date ? p.openingBalanceDate : null),
-          debit,
-          credit,
-          runningBalance: 0, // Will be calculated after sorting
-        });
-      });
-    
-    // Add staff with opening balances
-    processedStaff
-      .filter(s => (Number(s.openingBalance) || 0) !== 0)
-      .forEach(s => {
-        const ob = Number(s.openingBalance) || 0;
-        const debit = ob > 0 ? ob : 0;
-        const credit = ob < 0 ? Math.abs(ob) : 0;
-        accounts.push({
-          id: s.id,
-          name: s.name,
-          openingBalance: ob,
-          openingBalanceDate: s.openingBalanceDate?.toDate ? s.openingBalanceDate.toDate() : (s.openingBalanceDate instanceof Date ? s.openingBalanceDate : null),
-          debit,
-          credit,
-          runningBalance: 0, // Will be calculated after sorting
-        });
-      });
-    
-    // Add bank/cash accounts with opening balances
-    processedAccounts
-      .filter(a => (Number(a.openingBalance) || 0) !== 0)
-      .forEach(a => {
-        const ob = Number(a.openingBalance) || 0;
-        const debit = ob > 0 ? ob : 0;
-        const credit = ob < 0 ? Math.abs(ob) : 0;
-        accounts.push({
-          id: a.id,
-          name: a.accountName,
-          openingBalance: ob,
-          openingBalanceDate: a.openingBalanceDate?.toDate ? a.openingBalanceDate.toDate() : (a.openingBalanceDate instanceof Date ? a.openingBalanceDate : null),
-          debit,
-          credit,
-          runningBalance: 0, // Will be calculated after sorting
-        });
-      });
-    
-    // Add taxes with opening balances
-    processedTaxes
-      .filter(t => (Number(t.openingBalance) || 0) !== 0)
-      .forEach(t => {
-        const ob = Number(t.openingBalance) || 0;
-        const debit = ob > 0 ? ob : 0;
-        const credit = ob < 0 ? Math.abs(ob) : 0;
-        accounts.push({
-          id: t.id,
-          name: t.name,
-          openingBalance: ob,
-          openingBalanceDate: t.openingBalanceDate?.toDate ? t.openingBalanceDate.toDate() : (t.openingBalanceDate instanceof Date ? t.openingBalanceDate : null),
-          debit,
-          credit,
-          runningBalance: 0, // Will be calculated after sorting
-        });
-      });
-    
-    // Add expense accounts with opening balances
-    processedExpenseAccounts
-      .filter(e => (Number((e as any).openingBalance) || 0) !== 0)
-      .forEach(e => {
-        const ob = Number((e as any).openingBalance) || 0;
-        const debit = ob > 0 ? ob : 0;
-        const credit = ob < 0 ? Math.abs(ob) : 0;
-        accounts.push({
-          id: e.id,
-          name: e.name,
-          openingBalance: ob,
-          openingBalanceDate: (e as any).openingBalanceDate?.toDate ? (e as any).openingBalanceDate.toDate() : ((e as any).openingBalanceDate instanceof Date ? (e as any).openingBalanceDate : null),
-          debit,
-          credit,
-          runningBalance: 0, // Will be calculated after sorting
-        });
-      });
-    
-    // Sort by opening balance date (oldest first), then by name
-    const sortedAccounts = accounts.sort((a, b) => {
-      if (a.openingBalanceDate && b.openingBalanceDate) {
-        return a.openingBalanceDate.getTime() - b.openingBalanceDate.getTime();
-      }
-      if (a.openingBalanceDate) return -1;
-      if (b.openingBalanceDate) return 1;
-      return a.name.localeCompare(b.name);
+  const openingBalanceLedgerBreakdown = useMemo(() => {
+    if (activeAccount?.id !== "opening_balance_ledger") return null;
+    return computeOpeningBalanceLedgerBreakdown({
+      processedParties,
+      processedStaff,
+      processedAccounts,
+      processedTaxes,
+      processedExpenseAccounts,
     });
-    
-    // Filter by date range if provided
-    let filteredAccounts = sortedAccounts;
-    if (dateRange?.from || dateRange?.to) {
-      const fromDate = dateRange?.from ? new Date(dateRange.from.getFullYear(), dateRange.from.getMonth(), dateRange.from.getDate(), 0, 0, 0) : null;
-      const toDate = dateRange?.to ? new Date(dateRange.to.getFullYear(), dateRange.to.getMonth(), dateRange.to.getDate(), 23, 59, 59) : null;
-      
-      filteredAccounts = sortedAccounts.filter(acc => {
-        if (!acc.openingBalanceDate) return false; // Exclude accounts without dates if filtering
-        const accDate = new Date(acc.openingBalanceDate.getFullYear(), acc.openingBalanceDate.getMonth(), acc.openingBalanceDate.getDate());
-        if (fromDate && accDate < fromDate) return false;
-        if (toDate && accDate > toDate) return false;
-        return true;
-      });
-    }
-    
-    // Now calculate running balance chronologically from top to bottom
-    let runningBalance = 0;
-    return filteredAccounts.map(acc => {
-      runningBalance += acc.openingBalance;
-      return {
-        ...acc,
-        runningBalance,
-      };
-    });
-  }, [activeAccount, processedParties, processedStaff, processedAccounts, processedTaxes, processedExpenseAccounts, dateRange]);
+  }, [
+    activeAccount?.id,
+    processedParties,
+    processedStaff,
+    processedAccounts,
+    processedTaxes,
+    processedExpenseAccounts,
+  ]);
 
-  // For Opening Balance ledger, calculate closing balance from accounts list
+  const handleOpeningBalanceRowActivate = useCallback(
+    (row: OpeningBalanceLedgerAccountRow) => {
+      setOpeningBalanceEditRow(row);
+      setOpeningBalanceEditOpen(true);
+    },
+    []
+  );
+
+  const handleOpeningBalanceEditOpenChange = useCallback((open: boolean) => {
+    setOpeningBalanceEditOpen(open);
+    if (!open) setOpeningBalanceEditRow(null);
+  }, []);
+
+  // For Opening Balance ledger, calculate closing balance from current master snapshot
   const openingBalanceClosingBalance = useMemo(() => {
     if (!isOpeningBalanceLedger) return normalClosingBalance;
-    return accountsWithOpeningBalances.length > 0 
-      ? accountsWithOpeningBalances[accountsWithOpeningBalances.length - 1].runningBalance 
-      : (activeAccount?.openingBalance || 0);
-  }, [isOpeningBalanceLedger, accountsWithOpeningBalances, activeAccount, normalClosingBalance]);
+    if (openingBalanceLedgerBreakdown) {
+      return -openingBalanceLedgerBreakdown.masterTotals.netSigned;
+    }
+    return Number(activeAccount?.openingBalance) || 0;
+  }, [
+    isOpeningBalanceLedger,
+    openingBalanceLedgerBreakdown,
+    activeAccount,
+    normalClosingBalance,
+  ]);
   
   const closingBalance = isOpeningBalanceLedger ? openingBalanceClosingBalance : normalClosingBalance;
 
   // Get transaction dates for calendar highlighting
   const transactionDates = useMemo(() => {
     if (activeAccount?.id === 'opening_balance_ledger') {
-      // For Opening Balance ledger, use opening balance dates
-      return accountsWithOpeningBalances
-        .map(acc => acc.openingBalanceDate)
-        .filter((d): d is Date => d !== null);
+      return [];
     }
     if (!activeAccount?.transactions) return [];
     return activeAccount.transactions
@@ -707,11 +620,11 @@ export function TrialBalancePage() {
         return isNaN(date.getTime()) ? null : date;
       })
       .filter((d): d is Date => d !== null);
-  }, [activeAccount, accountsWithOpeningBalances]);
+  }, [activeAccount]);
 
-  // For Opening Balance ledger, only check dateRange (no other filters)
-  const isFilterActive = activeAccount?.id === 'opening_balance_ledger' 
-    ? dateRange !== undefined
+  // Opening Balance ledger: current snapshot only — no date-range filter
+  const isFilterActive = activeAccount?.id === 'opening_balance_ledger'
+    ? false
     : (dateRange !== undefined || Object.values(filters).some((v) => v));
 
   const clearFilters = () => {
@@ -870,20 +783,17 @@ export function TrialBalancePage() {
     // For Opening Balance ledger, create custom print data
     if (activeAccount.id === 'opening_balance_ledger') {
       const dateRangeText = "All Time";
-      
-      // Create transactions-like structure for print
-      // Ensure debit and credit are numbers and properly formatted
-      const printTransactions = accountsWithOpeningBalances.map((acc, index) => ({
+      const rows = openingBalanceLedgerBreakdown?.masterRows ?? [];
+      const printTransactions = rows.map((acc, index) => ({
         id: `ob_${acc.id}_${index}`,
-        date: acc.openingBalanceDate || new Date(),
+        date: new Date(),
         type: 'opening_balance',
         voucherNumber: '',
-        narration: `Opening Balance - ${acc.name}`,
+        narration: acc.accountName,
         debit: Number(acc.debit) || 0,
         credit: Number(acc.credit) || 0,
-        runningBalance: Number(acc.runningBalance) || 0,
-        accountName: acc.name,
-        // Add amount field for compatibility
+        runningBalance: Number(acc.openingBalance) || 0,
+        accountName: acc.accountName,
         amount: acc.openingBalance,
         total: acc.openingBalance,
       }));
@@ -1249,101 +1159,15 @@ export function TrialBalancePage() {
             {activeAccount && (
               <div className="print:p-0">
                 {activeAccount.id === 'opening_balance_ledger' ? (
-                  // Special view for Opening Balance ledger
                   <div className="py-4">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-[30%]">Account Name</TableHead>
-                          {dateSystem === "Both" ? (
-                            <>
-                              <TableHead className="w-[12%]">Date (BS)</TableHead>
-                              <TableHead className="w-[12%]">Date (AD)</TableHead>
-                            </>
-                          ) : (
-                            <TableHead className="w-[15%]">Date</TableHead>
-                          )}
-                          <TableHead className="text-right w-[10%]">Debit</TableHead>
-                          <TableHead className="text-right w-[10%]">Credit</TableHead>
-                          <TableHead className="text-right w-[20%]">Running Balance</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {accountsWithOpeningBalances.length === 0 ? (
-                          <TableRow>
-                            <TableCell colSpan={dateSystem === "Both" ? 6 : 5} className="text-center py-8 text-muted-foreground">
-                              No accounts with opening balances found.
-                            </TableCell>
-                          </TableRow>
-                        ) : (
-                          accountsWithOpeningBalances.map((acc) => {
-                            const displayDate = () => {
-                              if (!acc.openingBalanceDate) return '-';
-                              switch (dateSystem) {
-                                case 'AD': return formatDate(acc.openingBalanceDate);
-                                case 'BS': return formatDateBS(acc.openingBalanceDate);
-                                case 'Both': return formatDateBS(acc.openingBalanceDate);
-                                default: return formatDateBS(acc.openingBalanceDate);
-                              }
-                            };
-                            
-                            const displayDateAD = () => {
-                              if (!acc.openingBalanceDate) return '-';
-                              return formatDate(acc.openingBalanceDate);
-                            };
-                            
-                            return (
-                              <TableRow key={acc.id}>
-                                <TableCell className="font-medium">{acc.name}</TableCell>
-                                {dateSystem === "Both" ? (
-                                  <>
-                                    <TableCell>
-                                      {acc.openingBalanceDate ? formatDateBS(acc.openingBalanceDate) : '-'}
-                                    </TableCell>
-                                    <TableCell>
-                                      {acc.openingBalanceDate ? formatDate(acc.openingBalanceDate) : '-'}
-                                    </TableCell>
-                                  </>
-                                ) : (
-                                  <TableCell>
-                                    {displayDate()}
-                                  </TableCell>
-                                )}
-                                <TableCell className="text-right tabular-nums text-green-600">
-                                  {acc.debit > 0 ? formatCurrency(acc.debit) : '-'}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums text-red-600">
-                                  {acc.credit > 0 ? formatCurrency(acc.credit) : '-'}
-                                </TableCell>
-                                <TableCell className={cn(
-                                  "text-right tabular-nums font-medium",
-                                  acc.runningBalance >= 0 ? "text-green-600" : "text-red-600"
-                                )}>
-                                  {formatCurrency(acc.runningBalance, { showDrCr: true })}
-                                </TableCell>
-                              </TableRow>
-                            );
-                          })
-                        )}
-                      </TableBody>
-                      <TableFooter>
-                        <TableRow>
-                          <TableCell colSpan={dateSystem === "Both" ? 3 : 2} className="font-bold">TOTAL</TableCell>
-                          <TableCell className="text-right font-bold tabular-nums text-green-600">
-                            {formatCurrency(accountsWithOpeningBalances.reduce((sum, acc) => sum + acc.debit, 0))}
-                          </TableCell>
-                          <TableCell className="text-right font-bold tabular-nums text-red-600">
-                            {formatCurrency(accountsWithOpeningBalances.reduce((sum, acc) => sum + acc.credit, 0))}
-                          </TableCell>
-                          <TableCell className={cn(
-                            "text-right font-bold tabular-nums",
-                            closingBalance >= 0 ? "text-green-600" : "text-red-600"
-                          )}>
-                            {formatCurrency(closingBalance, { showDrCr: true })}
-                          </TableCell>
-                        </TableRow>
-                      </TableFooter>
-                    </Table>
+                    {openingBalanceLedgerBreakdown ? (
+                      <OpeningBalanceLedgerAccountsTable
+                        breakdown={openingBalanceLedgerBreakdown}
+                        formatCurrency={formatCurrency}
+                        interactionLocked={openingBalanceEditOpen}
+                        onRowActivate={handleOpeningBalanceRowActivate}
+                      />
+                    ) : null}
                   </div>
                 ) : (
                   // Normal transactions table for other ledgers
@@ -1376,6 +1200,11 @@ export function TrialBalancePage() {
           // For detail dialog, both options print the same (current transactions)
           handlePrint();
         }}
+      />
+      <OpeningBalanceMasterEditHost
+        row={openingBalanceEditRow}
+        open={openingBalanceEditOpen}
+        onOpenChange={handleOpeningBalanceEditOpenChange}
       />
     </div>
   );

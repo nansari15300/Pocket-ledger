@@ -48,9 +48,20 @@ import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import {
+  guardMasterEditOutsideDismiss,
+  masterEditBackdropClassName,
+  masterEditPopoverContentClassName,
+  NESTED_LEDGER_MASTER_EDIT_CONTENT_CN,
+  NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN,
+  type MasterEditPresentationMode,
+} from "@/lib/nestedLedgerMasterEditPresentation";
+import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
+import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
-import { Combobox } from "../ui/combobox";
+import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
+import { TAX_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useDate } from "@/hooks/useDate";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -69,38 +80,47 @@ import { compressFile } from "@/lib/compression";
 import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
-import { isSystemParentGroup } from "@/lib/system-groups";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { useVouchers } from "@/hooks/useVouchers";
-import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Account name must be at least 2 characters." }),
   phone: z.string().optional(),
+  whatsapp: z.boolean().optional(),
   rate: z.number().min(0, "Tax rate cannot be negative.").max(100, "Tax rate cannot be over 100."),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
   groupId: z.string().optional(),
   openingBalanceNarration: z.string().optional(),
-});
+}).superRefine(refineMasterOpeningBalanceDateRequired);
 
 type FormValues = z.infer<typeof formSchema>;
 
 const MAX_FILE_SIZE_MB = 0.5;
 
-export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, children, hasTransactions }: {
+export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, children, hasTransactions, isOpen: controlledIsOpen, onOpenChange, presentationMode = "default" }: {
   tax: Tax;
   allTaxes: Tax[];
   onTaxUpdated: (updated?: Partial<Tax>) => void;
   onTaxDeleted: (id: string) => void;
   children: React.ReactNode;
   hasTransactions: boolean;
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  presentationMode?: MasterEditPresentationMode;
 }) {
   const [isLoading, setIsLoading] = useState(false);
   const isCompressing = useImageCompressionProcessing();
-  const [isOpen, setIsOpen] = useState(false);
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isOpen = controlledIsOpen ?? internalIsOpen;
+  const setIsOpen = useCallback((open: boolean) => {
+    if (controlledIsOpen === undefined) {
+      setInternalIsOpen(open);
+    }
+    onOpenChange?.(open);
+  }, [controlledIsOpen, onOpenChange]);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
   const { companyId, company } = useCompany();
@@ -167,6 +187,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     defaultValues: {
       name: tax.name,
       phone: tax.phone ?? "",
+      whatsapp: tax.whatsapp === true,
       rate: tax.rate,
       openingBalance: tax.openingBalance || 0,
       openingBalanceDate: (tax as any).openingBalanceDate?.toDate ? (tax as any).openingBalanceDate.toDate() : undefined,
@@ -174,6 +195,8 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
       openingBalanceNarration: tax.openingBalanceNarration ?? "",
     },
   });
+
+  const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
 
   useEffect(() => {
     if (isOpen) {
@@ -318,6 +341,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
         const updatePayload = {
           name: values.name,
           phone: values.phone?.trim() || null,
+          whatsapp: values.whatsapp === true,
           rate: values.rate,
           openingBalance: newOpeningBalance,
           openingBalanceDate: values.openingBalanceDate || null,
@@ -471,19 +495,6 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     setIsCreateGroupOpen(false);
   };
 
-  const groupOptions = useMemo(() => {
-    const userGroups = (groups || []).filter(
-      (g) => !(g as any).isSystemReserved && !isSystemParentGroup("tax_groups", g.id)
-    );
-    const options = userGroups.map((g) => ({ value: g.id, label: g.name }));
-    const ungroupedId = getUngroupedGroupId("tax");
-    if (!options.some((opt) => opt.value === ungroupedId)) {
-      // Ensure local/system ungrouped bucket is always selectable in edit form.
-      options.unshift({ value: ungroupedId, label: "Ungrouped" });
-    }
-    return options;
-  }, [groups]);
-
   const removeAvatar = () => {
     setFile(null);
     if (avatarInputRef.current) avatarInputRef.current.value = "";
@@ -541,13 +552,27 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     <>
       <Dialog open={isOpen} onOpenChange={setIsOpen} modal={false}>
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-        {isOpen && <div className="fixed inset-0 bg-black/45 backdrop-blur-sm z-40" />}
+        {isOpen && <div className={masterEditBackdropClassName(presentationMode)} />}
         <DialogContent
-            className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-2xl")}
+            overlayClassName={
+              presentationMode === "nested-ledger" ? NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN : undefined
+            }
+            className={cn(
+              cnMasterEntityDialogContent(isMobile),
+              "sm:max-w-2xl",
+              presentationMode === "nested-ledger" && NESTED_LEDGER_MASTER_EDIT_CONTENT_CN
+            )}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
-            onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
-            onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
+            onPointerDownOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e, isCreateGroupOpen);
+            }}
+            onInteractOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e, isCreateGroupOpen);
+            }}
+            onFocusOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e);
+            }}
         >
           <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Edit Tax</DialogTitle>
@@ -585,8 +610,12 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                   render={({ field }: any) => (
                     <FormItem>
                       <FormLabel>Group</FormLabel>
-                      <Combobox
-                        options={groupOptions}
+                      <MasterGroupTreeCombobox
+                        preset={TAX_ENTITY_GROUP_PRESET}
+                        groups={groups}
+                        processedGroups={processedTaxGroups as TaxGroup[]}
+                        popoverModal={false}
+                        confirmWithOk
                         value={field.value}
                         onChange={(value, newName) => {
                           if (value === "add-new") {
@@ -599,7 +628,8 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                           }
                         }}
                         placeholder="Select a group"
-                        addNewLabel="+ Add New Group"
+                        searchPlaceholder="Search groups..."
+                        addNewLabel="Add New Group"
                       />
                       <FormMessage />
                     </FormItem>
@@ -651,13 +681,18 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                     />
                      <FormField
                       control={form.control}
-                      name="openingBalanceDate"
-                      render={({ field }: any) => (
-                        <FormItem>
+                    name="openingBalanceDate"
+                    render={({ field }: any) => (
+                      <FormItem data-opening-balance-date>
                           <FormLabel>As on Date</FormLabel>
                            <div className={cn("grid", dateSystem === 'Both' && "grid-cols-1 sm:grid-cols-2 gap-2")}>
                                 {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                                    <BsDatePicker valueAD={field.value} onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} />
+                                    <BsDatePicker
+                                      valueAD={field.value}
+                                      onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }}
+                                      isRange={false}
+                                      popoverContentClassName={masterEditPopoverContentClassName(presentationMode)}
+                                    />
                                 )}
                                 {(dateSystem === 'AD' || dateSystem === 'Both') && (
                                     <Popover modal={true} open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
@@ -672,7 +707,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                                           </Button>
                                         </FormControl>
                                       </PopoverTrigger>
-                                      <PopoverContent className="w-auto p-0 z-[102]" align="start">
+                                      <PopoverContent className={masterEditPopoverContentClassName(presentationMode, "w-auto p-0")} align="start">
                                         <Calendar mode="single" selected={field.value} onSelect={(date) => { field.onChange(date); setIsCalendarOpen(false); }} initialFocus />
                                       </PopoverContent>
                                     </Popover>
@@ -751,9 +786,11 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
+                <Button type={openingBalanceDateMissing ? "button" : "submit"} disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0" onClick={() => {
+                  if (openingBalanceDateMissing) document.querySelector("[data-opening-balance-date]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}>
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Save Changes
+                  {openingBalanceDateMissing ? "Pick a date" : "Save Changes"}
                 </Button>
               </DialogFooter>
             </form>

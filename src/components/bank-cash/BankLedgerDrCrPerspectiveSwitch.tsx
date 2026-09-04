@@ -4,11 +4,11 @@
  * Company | green Switch (always) | Bank — i icon inside the track (knob ke opposite side).
  * Tone = header file-preview switch (pale mint + green border).
  */
-import { Info } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
 import {
   BANK_LEDGER_DRCR_PERSPECTIVE_INFO,
   type BankLedgerDrCrPerspective,
@@ -79,22 +79,18 @@ export function BankLedgerDrCrPerspectiveSwitch({
 
         <Popover>
           <PopoverTrigger asChild>
-            <button
-              type="button"
+            <AppFreshInfoButton
+              size="embedded"
               data-pl-bank-drcr-perspective-info=""
               className={cn(
-                "absolute top-1/2 z-[2] flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full border-0 bg-transparent p-0 shadow-none",
-                "text-sky-400 hover:bg-sky-100/50 hover:text-sky-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300",
-                "dark:text-sky-300 dark:hover:bg-sky-950/40",
-                infoOnRight ? "right-0" : "left-0"
+                "absolute top-1/2 z-[2] -translate-y-1/2 shadow-none",
+                infoOnRight ? "right-[2px]" : "left-[3px]"
               )}
               aria-label="About Company vs Bank Dr/Cr"
               title="Company vs Bank Dr/Cr help"
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
-            >
-              <Info className="size-3.5 shrink-0 -translate-y-px" strokeWidth={2.25} aria-hidden />
-            </button>
+            />
           </PopoverTrigger>
           <PopoverContent align="end" className="z-[80] w-[min(92vw,22rem)] space-y-2 p-3 text-left">
             <p className="text-sm font-semibold">{BANK_LEDGER_DRCR_PERSPECTIVE_INFO.title}</p>

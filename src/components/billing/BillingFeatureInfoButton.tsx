@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, type MouseEvent, type ReactNode } from "react";
-import { Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
 import {
   Dialog,
   DialogContent,
@@ -36,13 +36,9 @@ export function BillingFeatureInfoButton({ helpKey, className }: Props) {
 
   return (
     <>
-      <button
-        type="button"
-        data-pl-billing-feature-info=""
-        className={cn(
-          "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-0 bg-transparent text-sky-500 hover:bg-sky-100 hover:text-sky-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400",
-          className
-        )}
+      <AppFreshInfoButton
+        size="xs"
+        className={className}
         aria-label={`About ${copy.title.en}`}
         onClick={(e) => {
           stop(e);
@@ -51,9 +47,7 @@ export function BillingFeatureInfoButton({ helpKey, className }: Props) {
         }}
         onMouseDown={stop}
         onPointerDown={stop}
-      >
-        <Info className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden />
-      </button>
+      />
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in — Pocket Ledger</title>
+  <meta name="description" content="Sign in to download Pocket Ledger for Windows and Android." />
+  <link rel="stylesheet" href="../styles.css" />
+  <style>
+    .login-shell {
+      min-height: calc(100vh - 4rem);
+      display: grid;
+      place-items: center;
+      padding: 2rem 1rem 3rem;
+    }
+    .login-card {
+      width: min(28rem, 100%);
+      padding: 1.5rem 1.35rem;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--white);
+      box-shadow: 0 12px 40px rgba(15, 23, 42, 0.06);
+    }
+    .login-card h1 {
+      margin: 0 0 0.45rem;
+      font-size: 1.45rem;
+    }
+    .login-card p {
+      margin: 0 0 1.1rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .login-status {
+      min-height: 1.25rem;
+      margin-top: 0.85rem;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+    .login-status.err { color: #b91c1c; }
+    .login-status.ok { color: #047857; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap nav">
+      <a class="brand" href="../">
+        <span class="brand-mark" aria-hidden="true"></span>
+        Pocket Ledger
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="../">Home</a>
+        <a href="../downloads/">Downloads</a>
+      </nav>
+      <a class="btn btn-outline btn-sm" href="../downloads/">Back</a>
+    </div>
+  </header>
+
+  <main class="login-shell">
+    <div class="login-card">
+      <h1>Sign in to download</h1>
+      <p>Use your Google account to continue. After sign-in you will return to Downloads and your file will start.</p>
+      <button type="button" class="btn btn-primary" id="googleBtn" style="width:100%">Sign in with Google</button>
+      <p class="login-status" id="loginStatus" aria-live="polite"></p>
+    </div>
+  </main>
+
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="../js/firebase-config.js"></script>
+  <script src="../js/website-login.js"></script>
+</body>
+</html>

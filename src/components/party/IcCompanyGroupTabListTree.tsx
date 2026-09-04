@@ -27,6 +27,7 @@ import {
   parseIcPeerListExpandKey,
   toggleGroupListAccordionExpand,
 } from "@/lib/groupListExpand";
+import { highlightQueryInText } from "@/lib/highlightQueryInText";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -76,6 +77,8 @@ type IcCompanyGroupTabListTreeProps = {
   /** List-level accordion — coordinates with sibling group rows in PartyGroupList. */
   expandedListNodeId?: string | null;
   onExpandedListNodeIdChange?: (next: string | null) => void;
+  searchTerm?: string;
+  onFocusGroup?: () => void;
 };
 
 export function IcCompanyGroupTabListTree({
@@ -95,8 +98,11 @@ export function IcCompanyGroupTabListTree({
   layoutHoldMs,
   expandedListNodeId: expandedListNodeIdProp,
   onExpandedListNodeIdChange,
+  searchTerm = "",
+  onFocusGroup,
 }: IcCompanyGroupTabListTreeProps) {
   const { formatCurrency } = useDate();
+  const highlightQuery = searchTerm.trim();
   const icCompanyRowProps = { "data-pl-ic-company-row": "" } as const;
   const href = getItemHref?.(group);
 
@@ -116,6 +122,9 @@ export function IcCompanyGroupTabListTree({
 
   const toggleLevel1 = useCallback(() => {
     const next = level1Expanded ? null : group.id;
+    if (!level1Expanded) {
+      onFocusGroup?.();
+    }
     if (isListAccordionControlled) {
       onExpandedListNodeIdChange?.(next);
     } else {
@@ -126,6 +135,7 @@ export function IcCompanyGroupTabListTree({
     isListAccordionControlled,
     level1Expanded,
     onExpandedListNodeIdChange,
+    onFocusGroup,
   ]);
 
   const togglePeerCompany = useCallback(
@@ -240,7 +250,7 @@ export function IcCompanyGroupTabListTree({
         </div>
         <div className="flex min-w-0 flex-1 items-start gap-0.5 overflow-hidden">
           <MasterListNameTooltip
-            measureKey={`${primary}|${secondary ?? ""}`}
+            measureKey={`${primary}|${secondary ?? ""}|${highlightQuery}`}
             className={cn("min-w-0 flex-1", secondary && "items-start py-0.5")}
             tooltipContent={
               <>
@@ -255,7 +265,7 @@ export function IcCompanyGroupTabListTree({
                   compactPrimary ? "text-[11px] font-medium leading-tight" : undefined
                 )}
               >
-                {primary}
+                {highlightQuery ? highlightQueryInText(primary, highlightQuery) : primary}
               </span>
               {secondary ? (
                 <span
@@ -263,7 +273,7 @@ export function IcCompanyGroupTabListTree({
                     "text-[11px] font-normal leading-tight text-muted-foreground"
                   )}
                 >
-                  {secondary}
+                  {highlightQuery ? highlightQueryInText(secondary, highlightQuery) : secondary}
                 </span>
               ) : null}
             </span>
@@ -319,7 +329,10 @@ export function IcCompanyGroupTabListTree({
 
   const level1Row = renderRowShell(
     isLevel1Selected,
-    () => onSelect({ peerCompanyId: null, memberAccountId: null }),
+    () => {
+      onFocusGroup?.();
+      onSelect({ peerCompanyId: null, memberAccountId: null });
+    },
     level1Content,
     href
   );

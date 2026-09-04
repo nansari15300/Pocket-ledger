@@ -9,6 +9,7 @@ import { PermissionButton } from "@/components/permission";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
 import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2, X } from "lucide-react";
+import { collectExpenseGroupScopeAccounts, collectExpenseGroupScopeGroupIds } from "@/lib/expenseGroupTree";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
@@ -185,10 +186,14 @@ export default function DesktopExpenseStatementPage() {
   // Build group entity with items and expenseGroupIds for useTransactions
   const groupEntity = useMemo(() => {
     if (!selectedGroup) return null;
-    const accountsInGroup = processedExpenseAccounts.filter((a) => a.groupId === selectedGroup.id);
-    const expenseGroupIds = [selectedGroup.id];
+    const accountsInGroup = collectExpenseGroupScopeAccounts(
+      selectedGroup.id,
+      processedExpenseGroups,
+      processedExpenseAccounts
+    );
+    const expenseGroupIds = collectExpenseGroupScopeGroupIds(selectedGroup.id, processedExpenseGroups);
     return { ...selectedGroup, items: accountsInGroup, expenseGroupIds };
-  }, [selectedGroup, processedExpenseAccounts]);
+  }, [selectedGroup, processedExpenseAccounts, processedExpenseGroups]);
 
   const activeEntity = selectedAccount || groupEntity;
   const activeContext = selectedAccount ? "expense" : "group";

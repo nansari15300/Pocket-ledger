@@ -4,7 +4,7 @@
 
 import * as React from "react";
 import { toast } from "sonner";
-import { openPrintDirect } from "@/lib/printDirect";
+import { openPrintDirect, getPdfBlob } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { Party, Group } from "@/components/party/types";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
@@ -101,11 +101,19 @@ import {
 } from "@/lib/masterAccountFreeze/partyFreezeAdapter";
 import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { useMasterAccountFreezeFeature } from "@/hooks/useMasterAccountFreezeFeature";
+import { useLedgerConfirmationSendPill } from "@/hooks/useLedgerConfirmationSendPill";
+import { ledgerConfirmationPrintVisibleColumns } from "@/lib/reports/ledgerConfirmationShare";
 import {
   BillWiseAutoLinkPromptDialog,
   usePartyBillWiseAutoLinkPrompt,
 } from "@/components/vouchers/BillWiseAutoLinkPrompt";
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
+import { OpeningBalanceLedgerAccountsTable } from "@/components/reports/OpeningBalanceLedgerAccountsTable";
+import {
+  computeOpeningBalanceLedgerBreakdown,
+  type OpeningBalanceLedgerAccountRow,
+} from "@/lib/reports/openingBalanceLedgerAccounts";
+import { OpeningBalanceMasterEditHost } from "@/components/reports/OpeningBalanceMasterEditHost";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
@@ -121,6 +129,10 @@ import {
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
+import {
+  computeAccountConfirmationSummary,
+  formatAccountConfirmationFyLabel,
+} from "@/lib/reports/accountConfirmationSummary";
 
 import { useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
 import {
@@ -270,6 +282,9 @@ export function PartyDetails({
   /** IC / Ac company filter — is peer company ke saare accounts ka merged ledger. */
   icGroupMemberParties,
   icGroupMemberFilterId = null,
+  confirmationFyKey,
+  confirmationFyRange,
+  confirmationAllVouchers,
 }: {
   party: Party & { saleTotal?: number; purchaseTotal?: number };
   allParties?: Party[];
@@ -289,12 +304,24 @@ export function PartyDetails({
   icGroupMemberParties?: Party[];
   icGroupMemberFilterId?: string | null;
   mobileReportStickyTitle?: string;
+  confirmationFyKey?: string;
+  confirmationFyRange?: { start: Date; end: Date };
+  confirmationAllVouchers?: any[];
 }) {
   const { company, companyId } = useCompany();
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } =
     useDate();
-  const { vouchers, vouchersAll, processedParties, journalAccountNames: voucherJournalAccountNames } = useVouchers();
+  const {
+    vouchers,
+    vouchersAll,
+    processedParties,
+    processedStaff,
+    processedAccounts,
+    processedTaxes,
+    processedExpenseAccounts,
+    journalAccountNames: voucherJournalAccountNames,
+  } = useVouchers();
   // Auto link must see every DR/CR row of the party, not just the current view filter.
   const vouchersForAutoLink = vouchersAll?.length ? vouchersAll : vouchers;
   const handlePartyUpdated = useMasterEntityLivePatch<Party>({
@@ -347,6 +374,9 @@ export function PartyDetails({
     setCurrentPage(1);
   }, [isAllVouchersView]);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
+  const [openingBalanceEditRow, setOpeningBalanceEditRow] =
+    useState<OpeningBalanceLedgerAccountRow | null>(null);
+  const [openingBalanceEditOpen, setOpeningBalanceEditOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
     if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
@@ -569,6 +599,20 @@ export function PartyDetails({
   const canShowAdjustBalance =
     party.id !== "all" && !(party as any).isSystemAccount;
 
+  const buildStatementPdfRef = useRef<(() => Promise<Blob | null>) | null>(null);
+
+  const confirmationSendPill = useLedgerConfirmationSendPill({
+    entity: headerIdentityParty,
+    collection: "parties",
+    eligible:
+      canShowAdjustBalance && (!isIcCompanyGroupView || Boolean(icGroupFilteredMember)),
+    onEntityUpdated: handlePartyUpdated,
+    buildStatementPdfBlob: useCallback(async () => {
+      if (!buildStatementPdfRef.current) return null;
+      return buildStatementPdfRef.current();
+    }, []),
+  });
+
   const { enabled: freezeFeatureEnabled } = useMasterAccountFreezeFeature();
   const [partyBannerToggleFits, setPartyBannerToggleFits] = useState(true);
 
@@ -643,12 +687,13 @@ export function PartyDetails({
         </Button>
       </AddVoucherDialog>
     ) : null;
-    if (!isPartyFrozen && !partyFreezeToggle && !adjustBalance) return null;
+    if (!isPartyFrozen && !partyFreezeToggle && !adjustBalance && !confirmationSendPill) return null;
     if (isPartyFrozen) {
       const footerToggle = isMobile && !partyBannerToggleFits ? partyFreezeToggle : null;
       return (
         <div className="flex flex-wrap items-center gap-2">
           {footerToggle}
+          {confirmationSendPill}
           {adjustBalance}
         </div>
       );
@@ -656,10 +701,12 @@ export function PartyDetails({
     return (
       <div className="flex flex-wrap items-center gap-2">
         {partyFreezeToggle}
+        {confirmationSendPill}
         {adjustBalance}
       </div>
     );
   }, [
+    confirmationSendPill,
     isPartyFrozen,
     isMobile,
     partyBannerToggleFits,
@@ -722,6 +769,29 @@ export function PartyDetails({
       ? "group"
       : "party";
   const ledgerContextId = String(transactionEntity.id || party.id);
+
+  const isOpeningBalanceLedger = party.id === "opening_balance_ledger";
+
+  const openingBalanceLedgerBreakdown = useMemo(
+    () =>
+      isOpeningBalanceLedger
+        ? computeOpeningBalanceLedgerBreakdown({
+            processedParties,
+            processedStaff,
+            processedAccounts,
+            processedTaxes,
+            processedExpenseAccounts,
+          })
+        : null,
+    [
+      isOpeningBalanceLedger,
+      processedParties,
+      processedStaff,
+      processedAccounts,
+      processedTaxes,
+      processedExpenseAccounts,
+    ]
+  );
   
   const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(transactionEntity, transactionContext, dateRange, undefined, allParties, passedTransactions, context, filters, undefined, resolvedJournalAccountNames, mergedUserNames);
 
@@ -870,8 +940,11 @@ export function PartyDetails({
     });
   }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, mergedUserNames, mobileSearchNames, party.id]);
 
-  /** Top header balance = same as table last running balance (includes Book Opening). */
+  /** Opening Balance ledger header = system equity closing (− master net). */
   const headerClosingBalance = useMemo(() => {
+    if (isOpeningBalanceLedger && openingBalanceLedgerBreakdown) {
+      return -openingBalanceLedgerBreakdown.masterTotals.netSigned;
+    }
     const list = searchFilteredTransactions as any[];
     if (list.length > 0) {
       const last = list[list.length - 1];
@@ -879,7 +952,14 @@ export function PartyDetails({
       if (typeof bal === "number" && Number.isFinite(bal)) return bal;
     }
     return ledgerOpeningForRunning + (Number(periodDr) || 0) - (Number(periodCr) || 0);
-  }, [searchFilteredTransactions, ledgerOpeningForRunning, periodDr, periodCr]);
+  }, [
+    isOpeningBalanceLedger,
+    openingBalanceLedgerBreakdown,
+    searchFilteredTransactions,
+    ledgerOpeningForRunning,
+    periodDr,
+    periodCr,
+  ]);
 
   // Statement check mode + tail paging (PC footer Check mode + hidden-row totals)
   const {
@@ -981,6 +1061,20 @@ export function PartyDetails({
     return dateRangeText;
   };
 
+  const confirmationStatementTransactions = useMemo(() => {
+    const source = passedTransactions ?? vouchersAll.filter((v: any) =>
+      v.partyId === party.id ||
+      (Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId === party.id))
+    );
+    if (!confirmationFyRange) return source;
+    return source.filter((v: any) => {
+      const raw = v?.date;
+      const value = raw?.toDate ? raw.toDate() : raw;
+      const date = value instanceof Date ? value : new Date(value);
+      return Number.isNaN(date.getTime()) || (date >= confirmationFyRange.start && date <= confirmationFyRange.end);
+    });
+  }, [passedTransactions, vouchersAll, party.id, confirmationFyRange]);
+
   const getPrintTitle = (variant: "statement" | "bill_wise") => {
     let title = `Party Statement: ${party.name}`;
     if (context === 'sale') {
@@ -1016,6 +1110,35 @@ export function PartyDetails({
           title: getPrintTitle(variant),
           context: "party",
           contextId: party.id,
+          printConfirmationTabs: context === "report",
+          ...(context === "report" && confirmationFyKey && confirmationFyRange
+            ? {
+                confirmationSummary: computeAccountConfirmationSummary(
+                  party,
+                  "party",
+                  confirmationAllVouchers ?? vouchersAll ?? vouchers,
+                  confirmationFyRange.start,
+                  confirmationFyRange.end
+                ),
+                confirmationFyLabel: formatAccountConfirmationFyLabel(confirmationFyKey),
+                confirmationFyRangeLabel:
+                  dateSystem === "AD"
+                    ? `${formatDate(confirmationFyRange.start)} to ${formatDate(confirmationFyRange.end)}`
+                    : dateSystem === "BS"
+                      ? `${formatDateBS(confirmationFyRange.start)} to ${formatDateBS(confirmationFyRange.end)}`
+                      : `AD: ${formatDate(confirmationFyRange.start)} to ${formatDate(confirmationFyRange.end)} (BS: ${formatDateBS(confirmationFyRange.start)} to ${formatDateBS(confirmationFyRange.end)})`,
+                confirmationRecipientName: party.name,
+                confirmationRecipientPan: party.pan,
+                confirmationRecipientAddress: party.address,
+                confirmationLetterDate:
+                  dateSystem === "AD"
+                    ? formatDate(new Date())
+                    : dateSystem === "BS"
+                      ? formatDateBS(new Date())
+                      : `AD: ${formatDate(new Date())} (BS: ${formatDateBS(new Date())})`,
+                statementAllTransactions: confirmationStatementTransactions.map((t: any) => ({ ...t, dueDate: t.dueDate ?? t.due_date })),
+              }
+            : {}),
           dateSystem: dateSystem,
           dateRangeText: dateRangeText || "All Time",
           vouchersCount: paginatedTransactions.length,
@@ -1048,6 +1171,73 @@ export function PartyDetails({
       true
     );
   };
+
+  const buildStatementPdfBlob = useCallback(async () => {
+    if (!company) return null;
+    const printVisibleColumns = ledgerConfirmationPrintVisibleColumns(visibleColumns);
+    const payload = applyLedgerPageToPrintPayload(
+      {
+        company: {
+          name: company.name,
+          pan: company.pan,
+          phone: company.phone,
+          address: company.address,
+          decimalPlaces: company.decimalPlaces,
+          showDrCr: company.showDrCr,
+          showCurrencySymbol: company.showCurrencySymbol,
+          logoUrl: company.logoUrl,
+        },
+        title: getPrintTitle("statement"),
+        context: "party",
+        contextId: party.id,
+        dateSystem: dateSystem,
+        dateRangeText: buildDateRangeText() || "All Time",
+        vouchersCount: paginatedTransactions.length,
+        openingBalance: desktopPaginationMeta.openingForPage,
+        openingBalanceDate: (party as any).openingBalanceDate,
+        openingBalanceNarration: party.openingBalanceNarration ?? null,
+        transactions: paginatedTransactions.map((t: any) => ({ ...t, dueDate: t.dueDate ?? t.due_date })),
+        showNarration: showNarration,
+        includeNotes: showNotes,
+        visibleColumns: printVisibleColumns,
+        userNames: mergedUserNames,
+        journalAccountNames: resolvedJournalAccountNames,
+        billWise: false,
+      },
+      {
+        paginatedTransactions,
+        openingForPage: desktopPaginationMeta.openingForPage,
+        periodDrForPage: desktopPaginationMeta.periodDrForPage,
+        periodCrForPage: desktopPaginationMeta.periodCrForPage,
+        closingForPage: desktopPaginationMeta.closingForPage,
+        booksOpeningBalance: Number(party.openingBalance) || 0,
+        ledgerShowBookOpeningRow: rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0,
+        ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
+        openingBalancePeriodStartDate: ledgerOpeningPeriodStartDate,
+        masterOpeningBalanceDate: (party as any).openingBalanceDate,
+        dateRange,
+      }
+    );
+    return getPdfBlob(payload);
+  }, [
+    company,
+    visibleColumns,
+    party,
+    dateSystem,
+    paginatedTransactions,
+    desktopPaginationMeta,
+    showNarration,
+    showNotes,
+    mergedUserNames,
+    resolvedJournalAccountNames,
+    rowsPerPage,
+    dateRange,
+    ledgerOpeningPeriodStartDate,
+    getPrintTitle,
+    buildDateRangeText,
+  ]);
+
+  buildStatementPdfRef.current = buildStatementPdfBlob;
 
   const handlePrint = () => {
     (async () => {
@@ -1174,6 +1364,38 @@ export function PartyDetails({
         vouchers={vouchersForAutoLink}
       />
     ) : null;
+
+  const handleOpeningBalanceRowActivate = useCallback(
+    (row: OpeningBalanceLedgerAccountRow) => {
+      setOpeningBalanceEditRow(row);
+      setOpeningBalanceEditOpen(true);
+    },
+    []
+  );
+
+  const handleOpeningBalanceEditOpenChange = useCallback((open: boolean) => {
+    setOpeningBalanceEditOpen(open);
+    if (!open) setOpeningBalanceEditRow(null);
+  }, []);
+
+  const openingBalanceMasterEditUi = (
+    <OpeningBalanceMasterEditHost
+      row={openingBalanceEditRow}
+      open={openingBalanceEditOpen}
+      onOpenChange={handleOpeningBalanceEditOpenChange}
+      onMasterUpdated={() => onPartyUpdated()}
+    />
+  );
+
+  const openingBalanceLedgerTable = isOpeningBalanceLedger && openingBalanceLedgerBreakdown ? (
+    <OpeningBalanceLedgerAccountsTable
+      breakdown={openingBalanceLedgerBreakdown}
+      formatCurrency={formatCurrency}
+      className="px-1 pb-2"
+      interactionLocked={openingBalanceEditOpen}
+      onRowActivate={handleOpeningBalanceRowActivate}
+    />
+  ) : null;
 
   if (isMobile) {
     const isReportMobileChrome = mobileFooterVariant === "report";
@@ -1311,7 +1533,9 @@ export function PartyDetails({
             style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
             <div className="pb-2">
-            {mobileReportView === "chart" ? (
+            {isOpeningBalanceLedger ? (
+              openingBalanceLedgerTable
+            ) : mobileReportView === "chart" ? (
               <RunningBalanceFullChart
                 transactions={searchFilteredTransactions}
                 openingBalance={openingBalanceForPeriod}
@@ -1629,6 +1853,7 @@ export function PartyDetails({
           />
         )}
         {autoLinkPromptUi}
+        {openingBalanceMasterEditUi}
       </>
     );
   }
@@ -1637,7 +1862,8 @@ export function PartyDetails({
     <>
       {party?.id && <EntityAlarmPopup context="Party" entityId={party.id} />}
       {autoLinkPromptUi}
-      <div className="h-full min-h-full flex flex-col overflow-hidden">
+      {openingBalanceMasterEditUi}
+      <div className="h-full min-h-0 flex flex-1 flex-col overflow-hidden">
         {/* Header: identity + pills ek hi gap (pill gap); Party name chhoti width pe max 2 line (avatar h-12), pattika height nahi badhe */}
         <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
@@ -1791,6 +2017,7 @@ export function PartyDetails({
                 </Button>
               )}
               <NotificationBell context="Party" entityId={party.id} />
+              {!isOpeningBalanceLedger ? (
               <LedgerViewModePills
                 value={balanceMode}
                 onChange={setBalanceMode}
@@ -1799,6 +2026,7 @@ export function PartyDetails({
                   { value: "bill_wise", label: "Bill wise" },
                 ]}
               />
+              ) : null}
               <Button
                 variant="outline"
                 size="sm"
@@ -1838,6 +2066,9 @@ export function PartyDetails({
             <MasterAccountFreezeTxnShell
               overlay={partyFreezeOverlay}
             >
+            {isOpeningBalanceLedger ? (
+              openingBalanceLedgerTable
+            ) : (
             <TransactionsTable
               transactions={paginatedTransactions}
               context={transactionContext}
@@ -1897,6 +2128,7 @@ export function PartyDetails({
               statusFilterIdPrefix="party"
               {...statementCheck.tableProps}
             />
+            )}
             </MasterAccountFreezeTxnShell>
           </div>
         </div>
@@ -1907,7 +2139,7 @@ export function PartyDetails({
               <LedgerFooterCheckboxPill
                 id="show-narration-party"
                 checked={showNarration}
-                onCheckedChange={(checked) => (checked: boolean) => handleShowNarrationChange(Boolean(checked))}
+                onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
               <LedgerFooterColumnsMenu>

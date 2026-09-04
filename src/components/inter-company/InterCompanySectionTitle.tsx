@@ -6,6 +6,8 @@
 import type { ReactNode } from "react";
 import { FormLabel } from "@/components/ui/form";
 import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -15,6 +17,8 @@ type Props = {
   /** Revert accept — Payment Out/In ke left blue pill */
   showRevertedBadge?: boolean;
   trailingAction?: ReactNode;
+  /** Helper text — ⓘ popover me (title ke paas) */
+  infoHint?: string | null;
 };
 
 /** Ledger type pill jaisa — reverted IC voucher header */
@@ -26,10 +30,33 @@ export function InterCompanySectionTitle({
   flowBadge,
   showRevertedBadge = false,
   trailingAction,
+  infoHint,
 }: Props) {
+  const hint = String(infoHint || "").trim();
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-[5ch] gap-y-1">
-      <FormLabel className="!mt-0 shrink-0">{title}</FormLabel>
+      <div className="flex min-w-0 items-center gap-1.5">
+        <FormLabel className="!mt-0 shrink-0">{title}</FormLabel>
+        {hint ? (
+          <Popover>
+            <PopoverTrigger asChild>
+              <AppFreshInfoButton
+                size="xs"
+                aria-label={`${title} — help`}
+                title={title}
+              />
+            </PopoverTrigger>
+            <PopoverContent
+              side="bottom"
+              align="start"
+              className="max-w-xs p-2.5 text-left text-xs leading-snug"
+              onOpenAutoFocus={(event) => event.preventDefault()}
+            >
+              {hint}
+            </PopoverContent>
+          </Popover>
+        ) : null}
+      </div>
       {/* Title ke just ~5 spaces baad — far-right nahi, chhoti screen pe full dikhe */}
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         {showRevertedBadge ? (

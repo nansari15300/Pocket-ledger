@@ -78,7 +78,7 @@ const ScrollBar = React.forwardRef<
         icVoucherChrome
           ? "bg-[#d1d5db] hover:bg-[#b8bcc4]"
           : listChrome
-            ? "bg-[#a6a6a6] hover:bg-[#8f8f8f]"
+            ? "bg-muted-foreground/25 hover:bg-muted-foreground/40"
             : "bg-border"
       )}
     />

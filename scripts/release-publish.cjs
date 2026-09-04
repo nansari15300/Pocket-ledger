@@ -10,6 +10,8 @@ const fs = require("fs");
 const path = require("path");
 const {
   fetchReleaseSettings,
+  fetchReleaseSettingsRaw,
+  writeLocalReleaseSettings,
   buildReleaseRotation,
 } = require("./release-settings.cjs");
 
@@ -155,6 +157,21 @@ async function uploadStagedRelease(date) {
   }
 
   const settings = await fetchReleaseSettings(bucket);
+  const settingsRemote = await fetchReleaseSettingsRaw(bucket, prefix);
+  if (!settingsRemote.raw) {
+    const settingsLocal = writeLocalReleaseSettings(root, settings);
+    console.log("[release-publish] Repairing invalid release-settings.json on Firebase Storage");
+    gsutil([
+      "-h",
+      "Content-Type:application/json",
+      "-h",
+      "Cache-Control:public,max-age=60",
+      "cp",
+      settingsLocal,
+      `${gsUri}/${prefix}/release-settings.json`,
+    ]);
+  }
+
   const latest = { date, stagedAt: new Date().toISOString(), windows: null, android: null };
 
   if (exeName) {

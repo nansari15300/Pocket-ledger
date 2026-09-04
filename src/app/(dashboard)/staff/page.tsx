@@ -70,11 +70,23 @@ import {
 } from "@/lib/staffEntityDisplayName";
 import { isLoanLiabilityStaff } from "@/modules/loans/utils/loanLiabilityStaff";
 import { LOAN_LIABILITY_GROUP_ID } from "@/modules/loans/constants/loanConstants";
+import { STAFF_SYSTEM_GROUP_ID } from "@/lib/staffSystemGroups";
 import {
   buildStaffPageLiabilityGroupTree,
   staffMembersForGroupSelection,
 } from "@/lib/staffPageLiabilityGroupTree";
 import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
+import { createMasterEntityGroupMoveHandler } from "@/lib/createMasterEntityGroupMoveHandler";
+import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
+import { STAFF_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { staffGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
+import { staffGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
+import { STAFF_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import {
+  appendMasterEntitySystemBranchGroups,
+  resolveMasterEntityGroupForSelection,
+  resolveStaffListGroupBucketId,
+} from "@/lib/masterEntitySystemGroups";
 import { StaffPayEmiFlow } from "@/modules/loans/components/StaffPayEmiFlow";
 import { useStaffPayEmiButtonState } from "@/modules/loans/hooks/useStaffPayEmiButtonState";
 import { payEmiButtonClassName, payEmiButtonVariant } from "@/modules/loans/utils/payEmiButtonStyle";
@@ -108,10 +120,7 @@ function StaffPageContent() {
     processedStaff.forEach((s: any) => {
       const n = pendingApprovalByStaffId[s.id] || 0;
       if (!n) return;
-      const gid =
-        s.groupId && String(s.groupId).trim() !== "" && s.groupId !== "ungrouped_staff"
-          ? s.groupId
-          : "ungrouped";
+      const gid = resolveStaffListGroupBucketId(s);
       map[gid] = (map[gid] || 0) + n;
     });
     return map;
@@ -173,7 +182,7 @@ function StaffPageContent() {
     processedStaff,
     selectedAccountId: payEmiSelectedAccountId,
   });
-  const selectedGroup = activeView === 'groups' ? selected as StaffGroup : null;
+  const selectedGroupRaw = activeView === 'groups' ? selected as StaffGroup : null;
   const handleStaffUpdated = useCallback((patch?: Partial<Staff>) => {
     if (!patch?.id || !selectedStaffRaw || selectedStaffRaw.id !== patch.id) return;
     setSelected({ ...selectedStaffRaw, ...patch });
@@ -240,33 +249,35 @@ function StaffPageContent() {
       </div>
     );
   }, [isMobile, selected]);
-  useSyncMasterDetailHeaderId("staff", selectedStaff?.id ?? selectedGroup?.id ?? null);
+  useSyncMasterDetailHeaderId("staff", selectedStaff?.id ?? selectedGroupRaw?.id ?? null);
 
   const processedStaffGroups = useMemo(() => {
-    // Show Ungrouped row only when at least one staff is in the Ungrouped bucket.
-    const ungrouped = processedStaff.filter((p: any) => !p.groupId || p.groupId === "ungrouped_staff");
-    // Hide auto-created Ungrouped base doc; system groups sirf Reports me – list pages pe nahi
-    const baseGroups = initialProcessedStaffGroups.filter((g) => {
+    const userGroups = initialProcessedStaffGroups.filter((g) => {
       const anyG = g as any;
       if (anyG.isAutoUngrouped === true) return false;
       if (anyG.isReportOnly === true || anyG.isSystemReserved === true) return false;
       if (isSystemParentGroup("staff_groups", anyG.id)) return false;
       return true;
     });
-    if (ungrouped.length > 0) {
-      const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
-      const ungroupedGroup: StaffGroup = {
-        id: 'ungrouped',
-        name: 'Ungrouped',
-        balance: ungroupedBalance,
-        companyId: companyId || '',
-        debit: ungrouped.reduce((sum, p) => sum + p.debit, 0),
-        credit: ungrouped.reduce((sum, p) => sum + p.credit, 0),
-      };
-      return [...baseGroups, ungroupedGroup];
-    }
-    return baseGroups;
-  }, [processedStaff, initialProcessedStaffGroups, companyId]);
+    return appendMasterEntitySystemBranchGroups(
+      userGroups,
+      STAFF_ENTITY_GROUP_PRESET,
+      companyId || ""
+    );
+  }, [initialProcessedStaffGroups, companyId]);
+
+  const selectedGroup = useMemo(
+    () =>
+      selectedGroupRaw
+        ? (resolveMasterEntityGroupForSelection(
+            selectedGroupRaw.id,
+            processedStaffGroups,
+            STAFF_ENTITY_GROUP_PRESET,
+            companyId || ""
+          ) as StaffGroup | null)
+        : null,
+    [selectedGroupRaw, processedStaffGroups, companyId]
+  );
 
   const processedStaffGroupsForList = useMemo(() => {
     if (!showOnlyStaffGroupsWithPendingApproval || !showApproveOnList) return processedStaffGroups;
@@ -290,12 +301,22 @@ function StaffPageContent() {
   );
 
   const pendingApprovalByStaffGroupIdWithParent = useMemo(() => {
-    const total = Object.values(pendingApprovalByStaffGroupId).reduce((sum, n) => sum + n, 0);
+    let loanMemberPending = 0;
+    let staffMemberPending = 0;
+    for (const [staffId, count] of Object.entries(pendingApprovalByStaffId)) {
+      const row = processedStaff.find((s) => s.id === staffId);
+      if (!row || count <= 0) continue;
+      if (isLoanLiabilityStaff(row)) loanMemberPending += count;
+      else staffMemberPending += count;
+    }
     return {
       ...pendingApprovalByStaffGroupId,
-      [LOAN_LIABILITY_GROUP_ID]: total,
+      [LOAN_LIABILITY_GROUP_ID]:
+        (pendingApprovalByStaffGroupId[LOAN_LIABILITY_GROUP_ID] ?? 0) + loanMemberPending,
+      [STAFF_SYSTEM_GROUP_ID]:
+        (pendingApprovalByStaffGroupId[STAFF_SYSTEM_GROUP_ID] ?? 0) + staffMemberPending,
     };
-  }, [pendingApprovalByStaffGroupId]);
+  }, [pendingApprovalByStaffGroupId, pendingApprovalByStaffId, processedStaff]);
 
   /** Party-style tab switch — EXE/APK stale ?selected= snap-back band. */
   const handleStaffTabChange = useCallback(
@@ -420,18 +441,23 @@ function StaffPageContent() {
     if (activeView === 'staff') {
       return processedStaff.reduce((acc, staff) => acc + staff.balance, 0);
     }
-    return Number(staffLiabilityGroupTree.systemGroup.balance) || 0;
-  }, [activeView, processedStaff, staffLiabilityGroupTree.systemGroup.balance]);
+    return processedStaff.reduce((acc, staff) => acc + staff.balance, 0);
+  }, [activeView, processedStaff]);
 
-  // Filtered group count (nested under Loan & Liabilities parent)
   const filteredStaffGroupCount = useMemo(() => {
     const q = searchTerm.trim();
-    if (!q) return Math.max(1, staffLiabilityGroupTree.childGroups.length || 1);
+    const systemGroups =
+      staffLiabilityGroupTree.systemGroups?.length > 0
+        ? staffLiabilityGroupTree.systemGroups
+        : [staffLiabilityGroupTree.systemGroup];
+    if (!q) return Math.max(1, staffLiabilityGroupTree.childGroups.length + 1);
     const childMatches = staffLiabilityGroupTree.childGroups.filter((group) =>
       masterEntityTextMatchesSearch(group.name, searchTerm)
     ).length;
-    if (childMatches > 0) return childMatches;
-    return masterEntityTextMatchesSearch(staffLiabilityGroupTree.systemGroup.name, searchTerm) ? 1 : 0;
+    const systemMatches = systemGroups.filter((group) =>
+      masterEntityTextMatchesSearch(group.name, searchTerm)
+    ).length;
+    return childMatches + systemMatches;
   }, [staffLiabilityGroupTree, searchTerm]);
 
   const handleSelect = useCallback((item: Staff | StaffGroup, options?: GroupListSelectOptions) => {
@@ -473,6 +499,31 @@ function StaffPageContent() {
 
   const staffGroupMembersByGroupId = staffLiabilityGroupTree.groupMembersByGroupId;
 
+  const handleMoveStaffToGroup = useCallback(
+    (staff: Staff, targetGroupId: string) =>
+      createMasterEntityGroupMoveHandler({
+        companyId,
+        company,
+        groupsForName: staffLiabilityGroupTree.allGroups,
+        moveHelpers: staffGroupAccountMove,
+        entityLabel: "Staff",
+      })(staff, targetGroupId),
+    [companyId, company, staffLiabilityGroupTree.allGroups]
+  );
+
+  const handleMoveStaffGroupToGroup = useCallback(
+    (sourceGroupId: string, targetGroupId: string) =>
+      createMasterEntityGroupTreeMoveHandler({
+        companyId,
+        company,
+        groupsForName: staffLiabilityGroupTree.allGroups,
+        allGroups: initialProcessedStaffGroups,
+        config: STAFF_GROUP_LIST_CONFIG,
+        moveHelpers: staffGroupTreeMove,
+      })(sourceGroupId, targetGroupId),
+    [companyId, company, staffLiabilityGroupTree.allGroups, initialProcessedStaffGroups]
+  );
+
   if (vouchersLoading) {
     return <LoadingSpinner />;
   }
@@ -506,7 +557,7 @@ function StaffPageContent() {
       <div className={mlc.searchWrap}>
         <Search className={mlc.searchIcon} />
         <Input
-          placeholder={activeView === 'staff' ? STAFF_ENTITY_SEARCH_PLACEHOLDER : 'Search groups...'}
+          placeholder={activeView === 'staff' ? STAFF_ENTITY_SEARCH_PLACEHOLDER : 'Search groups/staff'}
           listChrome
           listChromeSearch
           value={searchTerm}
@@ -624,6 +675,12 @@ function StaffPageContent() {
           quickFilter={groupListQuickFilter}
           onQuickFilterChange={setGroupListQuickFilter}
           hideQuickFilterBar
+          moveAccountsEnabled={!!companyId}
+          onMoveAccountToGroup={handleMoveStaffToGroup}
+          canMoveMember={staffGroupAccountMove.canMoveAccount}
+          onMoveGroupToGroup={handleMoveStaffGroupToGroup}
+          canMoveGroup={staffGroupTreeMove.canMoveGroup}
+          allGroupsForMove={initialProcessedStaffGroups}
         />
       )}
     </MasterListViewShell>
@@ -685,6 +742,11 @@ function StaffPageContent() {
       mobileListOnly={true}
       hasSelectedItem={!!selected}
       onBackToList={onBackToList}
+      mobileListSelectionKey={
+        selected
+          ? `${selected.id}:${activeView === "groups" ? groupMemberFilterId ?? "" : ""}`
+          : null
+      }
     />
     <AddVoucherDialog
         isOpen={isVoucherDialogOpen}

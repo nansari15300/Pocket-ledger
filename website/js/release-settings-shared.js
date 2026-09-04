@@ -1,6 +1,7 @@
 (function (global) {
   var DEFAULTS = {
-    downloadsMaxOld: 5,
+    downloadsMaxOldExe: 5,
+    downloadsMaxOldApk: 5,
     outdatedPolicy: "keep",
     outdatedMaxKeep: 20,
   };
@@ -11,13 +12,42 @@
     return Math.max(min, Math.min(max, Math.trunc(v)));
   }
 
+  function isMissingSettingValue(value) {
+    return value === undefined || value === null || value === "";
+  }
+
   function normalizeReleaseSettings(raw) {
     var src = raw && typeof raw === "object" ? raw : {};
+    var legacy = isMissingSettingValue(src.downloadsMaxOld)
+      ? null
+      : clamp(src.downloadsMaxOld, 0, 20);
     return {
-      downloadsMaxOld: clamp(src.downloadsMaxOld, 0, 20),
+      downloadsMaxOldExe: isMissingSettingValue(src.downloadsMaxOldExe)
+        ? legacy !== null
+          ? legacy
+          : DEFAULTS.downloadsMaxOldExe
+        : clamp(src.downloadsMaxOldExe, 0, 20),
+      downloadsMaxOldApk: isMissingSettingValue(src.downloadsMaxOldApk)
+        ? legacy !== null
+          ? legacy
+          : DEFAULTS.downloadsMaxOldApk
+        : clamp(src.downloadsMaxOldApk, 0, 20),
       outdatedPolicy: src.outdatedPolicy === "auto_delete" ? "auto_delete" : "keep",
-      outdatedMaxKeep: clamp(src.outdatedMaxKeep, 0, 100),
+      outdatedMaxKeep: isMissingSettingValue(src.outdatedMaxKeep)
+        ? DEFAULTS.outdatedMaxKeep
+        : clamp(src.outdatedMaxKeep, 0, 100),
     };
+  }
+
+  function parseReleaseSettingsJson(text) {
+    var trimmed = String(text == null ? "" : text).trim();
+    if (!trimmed || trimmed === "undefined" || trimmed === "null") return null;
+    try {
+      var parsed = JSON.parse(trimmed);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   function isApkAndroid(item) {
@@ -74,13 +104,71 @@
     return pool;
   }
 
+  function entryHasPlatform(entry, platform) {
+    if (platform === "apk") {
+      return Boolean(entry && entry.android && isApkAndroid(entry.android));
+    }
+    return Boolean(entry && entry.windows && entry.windows.url);
+  }
+
+  function downloadsMaxOldForPlatform(settings, platform) {
+    return platform === "apk" ? settings.downloadsMaxOldApk : settings.downloadsMaxOldExe;
+  }
+
+  function selectHistoryForPlatform(pool, platform, maxOld) {
+    var selected = [];
+    for (var i = 0; i < pool.length; i++) {
+      var entry = pool[i];
+      if (!entryHasPlatform(entry, platform)) continue;
+      selected.push(cloneReleaseEntry(entry));
+      if (selected.length >= maxOld) break;
+    }
+    return selected;
+  }
+
+  function unionHistoryEntries(lists) {
+    var out = [];
+    for (var l = 0; l < lists.length; l++) {
+      var list = lists[l] || [];
+      for (var i = 0; i < list.length; i++) {
+        var entry = list[i];
+        if (!entry) continue;
+        var dup = false;
+        for (var j = 0; j < out.length; j++) {
+          if (sameRelease(out[j], entry)) {
+            dup = true;
+            break;
+          }
+        }
+        if (dup) continue;
+        out.push(cloneReleaseEntry(entry));
+      }
+    }
+    out.sort(function (a, b) {
+      return String(b.date || "").localeCompare(String(a.date || ""));
+    });
+    return out;
+  }
+
   function splitPoolForDownloads(pool, settings, prevHistoryLen) {
-    var history = pool.slice(0, settings.downloadsMaxOld);
-    var afterDownloads = pool.slice(settings.downloadsMaxOld);
+    var exeHist = selectHistoryForPlatform(pool, "exe", settings.downloadsMaxOldExe);
+    var apkHist = selectHistoryForPlatform(pool, "apk", settings.downloadsMaxOldApk);
+    var history = unionHistoryEntries([exeHist, apkHist]);
+    var afterDownloads = [];
+    for (var i = 0; i < pool.length; i++) {
+      var entry = pool[i];
+      var inHist = false;
+      for (var h = 0; h < history.length; h++) {
+        if (sameRelease(history[h], entry)) {
+          inHist = true;
+          break;
+        }
+      }
+      if (!inHist) afterDownloads.push(entry);
+    }
     var deleteEntries = [];
-    var outdated = [];
     var promotedCount = Math.max(0, history.length - prevHistoryLen);
-    var spilledCount = Math.max(0, prevHistoryLen - settings.downloadsMaxOld);
+    var spilledCount = Math.max(0, prevHistoryLen - history.length);
 
     if (settings.outdatedPolicy === "auto_delete") {
       for (var d = 0; d < afterDownloads.length; d++) {
@@ -228,7 +316,6 @@
 
   function buildReleaseRotation(prev, next, settingsRaw) {
     var settings = normalizeReleaseSettings(settingsRaw);
-    var maxOld = settings.downloadsMaxOld;
     var candidates = [];
     if (prev && (prev.windows || prev.android) && !sameRelease(prev, next)) {
       candidates.push(cloneReleaseEntry(prev));
@@ -247,8 +334,25 @@
       if (dup) continue;
       candidates.push(cloneReleaseEntry(entry));
     }
-    var history = candidates.slice(0, maxOld);
-    var spilled = candidates.slice(maxOld);
+    candidates.sort(function (a, b) {
+      return String(b.date || "").localeCompare(String(a.date || ""));
+    });
+    var history = unionHistoryEntries([
+      selectHistoryForPlatform(candidates, "exe", settings.downloadsMaxOldExe),
+      selectHistoryForPlatform(candidates, "apk", settings.downloadsMaxOldApk),
+    ]);
+    var spilled = [];
+    for (var s = 0; s < candidates.length; s++) {
+      var candidate = candidates[s];
+      var kept = false;
+      for (var h = 0; h < history.length; h++) {
+        if (sameRelease(history[h], candidate)) {
+          kept = true;
+          break;
+        }
+      }
+      if (!kept) spilled.push(candidate);
+    }
     var deleteEntries = [];
     var outdated = [];
     if (settings.outdatedPolicy === "auto_delete") {
@@ -291,15 +395,70 @@
     return reconcileDownloadsSettings(manifest, settingsRaw);
   }
 
+  /** Latest + older builds for one platform in the public Downloads dropdown. */
+  function buildPublicDownloadEntries(manifest, settingsRaw, platformKind) {
+    var settings = normalizeReleaseSettings(settingsRaw);
+    var platform = platformKind === "android" ? "apk" : "exe";
+    var maxOld = downloadsMaxOldForPlatform(settings, platform);
+    var ref = manifest || {};
+    var pool = mergeOlderPool(ref);
+    var older = selectHistoryForPlatform(pool, platform, maxOld);
+    var out = [];
+    if (platform === "exe" && ref.windows && ref.windows.url) {
+      out.push({
+        date: ref.date || "",
+        windows: ref.windows,
+        android: null,
+        latest: true,
+      });
+    } else if (platform === "apk") {
+      var latestApk = ref.android && isApkAndroid(ref.android) ? ref.android : null;
+      if (latestApk) {
+        out.push({
+          date: ref.date || "",
+          windows: null,
+          android: latestApk,
+          latest: true,
+        });
+      }
+    }
+    for (var i = 0; i < older.length; i++) {
+      var entry = older[i];
+      if (platform === "exe" && entry.windows && entry.windows.url) {
+        out.push({
+          date: entry.date || "",
+          windows: entry.windows,
+          android: null,
+          latest: false,
+        });
+      } else if (platform === "apk") {
+        var entryApk = entry.android && isApkAndroid(entry.android) ? entry.android : null;
+        if (entryApk) {
+          out.push({
+            date: entry.date || "",
+            windows: null,
+            android: entryApk,
+            latest: false,
+          });
+        }
+      }
+    }
+    return out.slice(0, maxOld + 1);
+  }
+
   global.reconcileDownloadsSettings = reconcileDownloadsSettings;
   global.reconcileHiddenSettings = reconcileHiddenSettings;
+  global.buildPublicDownloadEntries = buildPublicDownloadEntries;
 
   global.POCKET_LEDGER_RELEASE_SETTINGS_DEFAULTS = DEFAULTS;
+  global.parseReleaseSettingsJson = parseReleaseSettingsJson;
   global.normalizeReleaseSettings = normalizeReleaseSettings;
   global.isApkAndroidRelease = isApkAndroid;
   global.buildReleaseRotation = buildReleaseRotation;
   global.reconcileManifestWithSettings = reconcileManifestWithSettings;
   global.cloneReleaseEntry = cloneReleaseEntry;
   global.sameReleaseEntry = sameRelease;
-  global.POCKET_LEDGER_RELEASE_MAX_OLD = DEFAULTS.downloadsMaxOld;
+  global.entryHasPlatformRelease = entryHasPlatform;
+  global.downloadsMaxOldForPlatform = downloadsMaxOldForPlatform;
+  global.POCKET_LEDGER_RELEASE_MAX_OLD = DEFAULTS.downloadsMaxOldExe;
 })(typeof window !== "undefined" ? window : globalThis);

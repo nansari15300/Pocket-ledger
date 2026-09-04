@@ -666,9 +666,26 @@ export async function pullCompanyDocFromFirestoreToLocalDb(
   }
   const raw = { ...snap.data(), id: snap.id } as Record<string, unknown> & { id: string };
   const decrypted = await decryptFirestoreCompanyDocIfNeeded(raw, cryptoCtx, localId);
-  if (!decrypted || (decrypted as { isDeleted?: unknown }).isDeleted === true) {
+  if (!decrypted) {
     await deleteCompanyDocFromBrowserDb(localId, path, id, { force: true, notify: true });
     return null;
+  }
+  if ((decrypted as { isDeleted?: unknown }).isDeleted === true) {
+    let toMirror = decrypted as Record<string, unknown>;
+    try {
+      const localRow = (await getCompanyDocFromBrowserDb(localId, path, id, {
+        includeDeleted: true,
+      })) as Record<string, unknown> | null;
+      if (localRow) {
+        toMirror = mergeDocAttachmentFieldsForPull(toMirror, localRow, localId);
+      }
+    } catch {
+      /* optional merge */
+    }
+    await mirrorCollectionDocsToBrowserDbSilent(localId, path, [toMirror], {
+      cloudBackedOfflineCache: !isLocalOnlyMode(),
+    });
+    return toMirror;
   }
   let toMirror = decrypted as Record<string, unknown>;
   // Delta sync raw Firestore bake se local empty attachments undo na ho.

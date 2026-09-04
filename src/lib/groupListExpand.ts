@@ -1,4 +1,5 @@
 import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
+import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
 
 export const GROUP_LIST_CHILD_INDENT_CLASS = "pl-[10px]";
 
@@ -18,6 +19,37 @@ export type GroupListSortableMember = {
   balance?: number;
   openingBalanceDate?: unknown;
 };
+
+const epsSettled = 1e-6;
+
+function isGroupListAmountSettled(n: unknown): boolean {
+  const v = Number(n);
+  if (Number.isNaN(v)) return false;
+  return Math.abs(v) < epsSettled;
+}
+
+/** Footer quick filter — hide rows that do not match Dr/Cr/Settled (same as flat account lists). */
+export function filterGroupListMembersByQuickFilter<T extends GroupListSortableMember>(
+  rows: T[],
+  quickFilter: EntityListQuickFilter
+): T[] {
+  if (
+    quickFilter === "default" ||
+    quickFilter === "name" ||
+    quickFilter === "date"
+  ) {
+    return rows;
+  }
+  return rows.filter((row) => {
+    const balRaw = row.balance;
+    const bal = typeof balRaw === "number" && !Number.isNaN(balRaw) ? balRaw : null;
+    if (quickFilter === "dr") return bal !== null && bal > 0;
+    if (quickFilter === "cr") return bal !== null && bal < 0;
+    if (quickFilter === "settled") return bal !== null && isGroupListAmountSettled(bal);
+    if (quickFilter === "non_settled") return bal === null || !isGroupListAmountSettled(bal);
+    return true;
+  });
+}
 
 function openingDateMs(raw: unknown): number {
   if (!raw) return 0;
@@ -53,6 +85,26 @@ export function sortGroupListMembers<T extends GroupListSortableMember>(
   nameOf?: (row: T) => string
 ): T[] {
   return [...rows].sort((a, b) => compareGroupListMembers(a, b, quickFilter, nameOf));
+}
+
+/** Search mode — sirf naam match wale accounts; group name match se saare accounts mat dikhao. */
+export function filterGroupListMembersBySearch<T extends { name?: string }>(
+  rows: T[],
+  searchTerm: string
+): T[] {
+  if (!String(searchTerm || "").trim()) return rows;
+  return rows.filter((row) => masterEntityTextMatchesSearch(row.name, searchTerm));
+}
+
+export function groupListMembersForDisplay<T extends GroupListSortableMember & { name?: string }>(
+  rows: T[],
+  quickFilter: EntityListQuickFilter,
+  searchTerm: string,
+  nameOf?: (row: T) => string
+): T[] {
+  const filtered = filterGroupListMembersByQuickFilter(rows, quickFilter);
+  const sorted = sortGroupListMembers(filtered, quickFilter, nameOf);
+  return filterGroupListMembersBySearch(sorted, searchTerm);
 }
 
 export type GroupListSelectOptions = { memberId?: string | null };

@@ -56,7 +56,7 @@ import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEve
 import { toast as sonnerToast } from "sonner";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { CreateGroupDialog } from "./CreateGroupDialog";
-import { Combobox } from "../ui/combobox";
+import { PartyGroupTreeCombobox } from "@/components/party/PartyGroupTreeCombobox";
 import { saveVoucher, balanceOpeningBalanceWithCapital } from "@/lib/voucherActionsClient";
 import { useVouchers } from "@/hooks/useVouchers";
 import usePermissions from "@/hooks/usePermissions";
@@ -64,8 +64,15 @@ import Link from "next/link";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Party, Group } from "./types";
 import { format } from "date-fns";
-import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
-import { isSystemParentGroup } from "@/lib/system-groups";
+import {
+  PARTY_DEFAULT_SYSTEM_GROUP_ID,
+  PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID,
+  PARTY_SYSTEM_CREDITORS_ID,
+  PARTY_SYSTEM_DEBTORS_ID,
+  PARTY_SYSTEM_GROUP_OPTIONS,
+  normalizePartyGroupIdForStorage,
+} from "@/lib/partySystemGroups";
+import { resolvePartyGroupBranchIdForGroup } from "@/lib/partyGroupCombobox";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
@@ -82,6 +89,8 @@ import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
+import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 import {
   fetchRemoteUrlAsFile,
   partyPrefillPartsFromPartyRow,
@@ -91,12 +100,16 @@ import { MasterPdfAsImageToggle } from "@/components/common/EntityProfileDocumen
 
 const formSchema = z
   .object({
+    accountType: z.enum([PARTY_SYSTEM_DEBTORS_ID, PARTY_SYSTEM_CREDITORS_ID], {
+      required_error: "Select account type.",
+    }),
     name: z.string().min(2, "Party name is required."),
     groupId: z.string().optional(),
     openingBalance: z.coerce.number(),
     openingBalanceDate: z.date().optional(),
     address: z.string().optional(),
-    phone: z.string().optional(),
+  phone: z.string().optional(),
+  whatsapp: z.boolean().optional(),
     email: z
       .union([z.string().email({ message: "Please enter a valid email." }), z.literal("")])
       .optional(),
@@ -114,7 +127,8 @@ const formSchema = z
       return true;
     },
     { message: "Passwords do not match.", path: ["confirmPassword"] }
-  );
+  )
+  .superRefine(refineMasterOpeningBalanceDateRequired);
 
 type FormValues = z.infer<typeof formSchema>;
 
@@ -189,6 +203,7 @@ export function CreatePartyForm({
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
     defaultValues: {
+      accountType: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID,
       name: "",
       address: "",
       phone: "",
@@ -198,11 +213,14 @@ export function CreatePartyForm({
       password: "",
       confirmPassword: "",
       openingBalance: 0,
-      groupId: "",
+      groupId: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID,
     },
     mode: "onChange",
   });
 
+  const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
+
+  const accountType = form.watch("accountType");
 
   const displayDate = (date?: Date) => {
     if (!date || isNaN(date.getTime())) return "Pick a date";
@@ -332,14 +350,16 @@ export function CreatePartyForm({
       /** Pure-local APK: Firestore-backed ungrouped seed mat chalao; cloud APK me server canonical ID chahiye. */
       if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         const current = form.getValues("groupId");
-        if (!current) form.setValue("groupId", getUngroupedGroupId("party"), { shouldDirty: false });
+        if (!current) form.setValue("groupId", PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID, { shouldDirty: false });
+        if (!form.getValues("accountType")) {
+          form.setValue("accountType", PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID, { shouldDirty: false });
+        }
         return;
       }
-      // Keep Party create default on canonical Ungrouped bucket.
-      const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "party");
+      const defaultGroupId = PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID;
       if (!alive) return;
       const current = form.getValues("groupId");
-      if (!current) form.setValue("groupId", ungroupedId, { shouldDirty: false });
+      if (!current) form.setValue("groupId", defaultGroupId, { shouldDirty: false });
     })();
     return () => {
       alive = false;
@@ -371,7 +391,8 @@ export function CreatePartyForm({
         openingBalance: defaults.openingBalance,
         openingBalanceDate: defaults.openingBalanceDate,
         openingBalanceNarration: defaults.openingBalanceNarration,
-        groupId: getUngroupedGroupId("party"),
+        groupId: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID,
+        accountType: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID,
         password: "",
         confirmPassword: "",
       });
@@ -482,7 +503,7 @@ export function CreatePartyForm({
             return;
           }
         }
-        const resolvedGroupId = values.groupId?.trim() || getUngroupedGroupId("party");
+        const resolvedGroupId = normalizePartyGroupIdForStorage(values.groupId?.trim());
         const localId = createLocalEntityId("party");
         const stagedLocal = await stageEntityAvatarAndDocuments({
           companyId: companyId!,
@@ -497,6 +518,7 @@ export function CreatePartyForm({
           name: values.name,
           address: values.address,
           phone: values.phone,
+          whatsapp: values.whatsapp === true,
           email: values.email,
           pan: values.pan,
           openingBalance: values.openingBalance,
@@ -522,7 +544,7 @@ export function CreatePartyForm({
           description: showSyncHint ? "Background" : values.name,
         });
         if (saveAndNew) {
-          form.reset({ name: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: getUngroupedGroupId("party") });
+          form.reset({ accountType: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID, name: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID });
           removeAvatar();
           setDocumentFiles([]);
         }
@@ -572,7 +594,7 @@ export function CreatePartyForm({
       }
 
       const resolvedGroupId =
-        values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "party"));
+        normalizePartyGroupIdForStorage(values.groupId?.trim());
       const partyRef = doc(collection(firestore, `companies/${companyId}/parties`));
       const newPartyId = partyRef.id;
       // Online: direct Storage → HTTPS URLs in Firestore (dusre device; `local:` + syncPendingFiles par depend nahi)
@@ -589,6 +611,7 @@ export function CreatePartyForm({
         name: values.name,
         address: values.address,
         phone: values.phone,
+        whatsapp: values.whatsapp === true,
         email: values.email,
         pan: values.pan,
         openingBalance: values.openingBalance,
@@ -596,7 +619,7 @@ export function CreatePartyForm({
         openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
         ownerId: user.uid,
         companyId,
-        groupId: resolvedGroupId || getUngroupedGroupId("party"),
+        groupId: resolvedGroupId || PARTY_DEFAULT_SYSTEM_GROUP_ID,
         balance: values.openingBalance,
         isDeleted: false,
         createdAt: serverTimestamp(),
@@ -619,7 +642,7 @@ export function CreatePartyForm({
       sonnerToast.success("Saved", { duration: PARTY_TOAST_OK_MS, description: values.name });
 
       if (saveAndNew) {
-        form.reset({ name: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: getUngroupedGroupId("party") });
+        form.reset({ accountType: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID, name: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID });
         removeAvatar();
         setDocumentFiles([]);
       }
@@ -643,8 +666,7 @@ export function CreatePartyForm({
             );
             if (!lim.allowed) throw new Error(lim.message || "Storage limit reached.");
           }
-          const resolvedGroupId =
-            values.groupId?.trim() || getUngroupedGroupId("party");
+          const resolvedGroupId = normalizePartyGroupIdForStorage(values.groupId?.trim());
           const localId = createLocalEntityId("party");
           const stagedCatch = await stageEntityAvatarAndDocuments({
             companyId: companyId!,
@@ -660,6 +682,7 @@ export function CreatePartyForm({
             name: values.name,
             address: values.address,
             phone: values.phone,
+            whatsapp: values.whatsapp === true,
             email: values.email,
             pan: values.pan,
             openingBalance: values.openingBalance,
@@ -667,7 +690,7 @@ export function CreatePartyForm({
             openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
             ownerId: user?.uid || "local_guest_user",
             companyId,
-            groupId: resolvedGroupId || getUngroupedGroupId("party"),
+            groupId: resolvedGroupId || PARTY_DEFAULT_SYSTEM_GROUP_ID,
             balance: values.openingBalance,
             isDeleted: false,
             createdAt: nowTs,
@@ -688,7 +711,7 @@ export function CreatePartyForm({
             description: showSyncHint ? "Background" : values.name,
           });
           if (saveAndNew) {
-            form.reset({ name: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: getUngroupedGroupId("party") });
+            form.reset({ accountType: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID, name: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID });
             removeAvatar();
             setDocumentFiles([]);
           }
@@ -709,30 +732,6 @@ export function CreatePartyForm({
 
   // Dropdown: `companies/${companyId}/groups` listener (`groups`) must win over `processedGroups` alone —
   // useVouchers uses `authoritativeCompanyId` for reads; CreateGroupDialog writes under registry `companyId`, so mismatch par sirf Ungrouped na dikhe.
-  const partyGroupOptions = React.useMemo(() => {
-    const selectable = (g: any) =>
-      g?.id &&
-      !g.isDeleted &&
-      !g.isSystemReserved &&
-      g.isAutoUngrouped !== true &&
-      g.isReportOnly !== true &&
-      !isSystemParentGroup("groups", g.id);
-
-    const byId = new Map<string, Group>();
-    for (const g of groups) {
-      if (g?.id) byId.set(g.id, g);
-    }
-    for (const g of processedGroups) {
-      if (g?.id && !byId.has(g.id)) byId.set(g.id, g);
-    }
-    const merged = [...byId.values()].filter(selectable);
-    return [
-      { value: getUngroupedGroupId("party"), label: "Ungrouped" },
-      ...merged
-        .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
-        .map((g) => ({ value: g.id, label: g.name || g.id })),
-    ];
-  }, [groups, processedGroups]);
 
   return (
     <>
@@ -742,6 +741,41 @@ export function CreatePartyForm({
         className="flex min-h-0 flex-1 flex-col"
       >
         <div className="pl-master-form-scroll min-h-0 flex-1 space-y-6 overflow-y-auto py-1 pr-1">
+        <FormField
+          control={form.control}
+          name="accountType"
+          render={({ field }: any) => (
+            <FormItem>
+              <FormLabel>Account Type</FormLabel>
+              <FormControl>
+                <RadioGroup
+                  className="flex flex-col gap-2 sm:flex-row sm:gap-6"
+                  value={field.value}
+                  onValueChange={(next) => {
+                    field.onChange(next);
+                    const currentBranch = resolvePartyGroupBranchIdForGroup(
+                      form.getValues("groupId"),
+                      processedGroups
+                    );
+                    if (currentBranch !== next) {
+                      form.setValue("groupId", next, { shouldDirty: true });
+                    }
+                  }}
+                >
+                  {PARTY_SYSTEM_GROUP_OPTIONS.map((branch) => (
+                    <FormItem key={branch.id} className="flex items-center space-x-2 space-y-0">
+                      <FormControl>
+                        <RadioGroupItem value={branch.id} />
+                      </FormControl>
+                      <FormLabel className="cursor-pointer font-normal">{branch.name}</FormLabel>
+                    </FormItem>
+                  ))}
+                </RadioGroup>
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
         <MasterFormNameAcNoRow
           entityKind="party"
           mode="create"
@@ -770,9 +804,17 @@ export function CreatePartyForm({
             render={({ field }: any) => (
               <FormItem>
                 <FormLabel>Group</FormLabel>
-                <Combobox
-                  options={partyGroupOptions}
+                <PartyGroupTreeCombobox
+                  groups={groups}
+                  processedGroups={processedGroups}
+                  popoverModal={false}
                   value={field.value}
+                  confirmWithOk
+                  onAccountTypeChange={(branchId) => {
+                    form.setValue("accountType", branchId as typeof PARTY_SYSTEM_DEBTORS_ID | typeof PARTY_SYSTEM_CREDITORS_ID, {
+                      shouldDirty: true,
+                    });
+                  }}
                   onChange={(val, newName) => {
                     if (val === "add-new") {
                       setIsCreateGroupOpen(true);
@@ -784,7 +826,8 @@ export function CreatePartyForm({
                     }
                   }}
                   placeholder="Select a group"
-                  addNewLabel="+ Add New Group"
+                  searchPlaceholder="Search groups..."
+                  addNewLabel="Add New Group"
                 />
                 <FormMessage />
               </FormItem>
@@ -1040,21 +1083,28 @@ export function CreatePartyForm({
                 variant="ghost"
                 className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                 onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                disabled={isLoading || isCompressing || apkOfflineViewOnly}
+                disabled={isLoading || isCompressing || apkOfflineViewOnly || openingBalanceDateMissing}
               >
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save & New
               </Button>
             ) : null}
           </div>
-          <Button type="submit" className="shrink-0" disabled={isLoading || isCompressing || apkOfflineViewOnly}>
+          <Button type="submit" className="shrink-0" disabled={isLoading || isCompressing || apkOfflineViewOnly || openingBalanceDateMissing}>
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create Party
           </Button>
         </div>
       </form>
     </Form>
-     <CreateGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} />
+     <CreateGroupDialog
+       onGroupCreated={handleGroupCreated}
+       isOpen={isCreateGroupOpen}
+       onOpenChange={setIsCreateGroupOpen}
+       groups={groups}
+       confirmLabel="Done"
+       initialSystemBranch={accountType}
+     />
     </>
   );
 }

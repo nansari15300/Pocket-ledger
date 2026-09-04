@@ -76,3 +76,15 @@ export function filterAndSortMasterEntityListRows<T extends MasterEntityListRowL
     return bb - ba;
   });
 }
+
+export function sumMasterEntityListDrCr<T extends { debit?: unknown; credit?: unknown }>(
+  rows: T[]
+): { debit: number; credit: number } {
+  return rows.reduce(
+    (acc, row) => ({
+      debit: acc.debit + (Number(row.debit) || 0),
+      credit: acc.credit + (Number(row.credit) || 0),
+    }),
+    { debit: 0, credit: 0 }
+  );
+}

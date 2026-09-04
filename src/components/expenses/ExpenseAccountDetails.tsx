@@ -942,7 +942,7 @@ export function ExpenseAccountDetails({
               <LedgerFooterCheckboxPill
                 id="show-narration-account"
                 checked={showNarration}
-                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
               <LedgerFooterColumnsMenu>
@@ -1059,7 +1059,7 @@ export function ExpenseAccountDetails({
 
     return (
       <>
-      <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
+      <div className="flex h-full flex-col flex-1 min-h-0 overflow-hidden w-full">
           {isReportMobileChrome && onBack ? (
             <header className="sticky top-0 z-10 flex-shrink-0 border-b bg-white p-3 dark:bg-card">
               <div className="flex min-w-0 items-center gap-2">

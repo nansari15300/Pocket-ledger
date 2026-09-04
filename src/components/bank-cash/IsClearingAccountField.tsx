@@ -1,11 +1,11 @@
 "use client";
 
-import { Info } from "lucide-react";
 import type { Control, FieldPath, FieldValues } from "react-hook-form";
 import { FormControl, FormField, FormItem, FormLabel } from "@/components/ui/form";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
 
 /** IC clearing picker — tooltip copy (i icon me) */
 export const IS_CLEARING_ACCOUNT_INFO =
@@ -46,13 +46,7 @@ export function IsClearingAccountField<T extends FieldValues>({
             <TooltipProvider delayDuration={200}>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    className="shrink-0 text-blue-500 hover:text-blue-700"
-                    aria-label="About is clearing account"
-                  >
-                    <Info className="h-3.5 w-3.5" aria-hidden />
-                  </button>
+                  <AppFreshInfoButton size="xs" aria-label="About is clearing account" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-sm text-xs leading-relaxed">
                   {IS_CLEARING_ACCOUNT_INFO}

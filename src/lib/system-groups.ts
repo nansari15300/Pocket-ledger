@@ -1,6 +1,6 @@
 export const SYSTEM_PARENT_GROUP_IDS = {
   groups: ["sundry_debtors", "sundry_creditors"],
-  staff_groups: ["loans_liabilities"],
+  staff_groups: ["loans_liabilities", "staff_system"],
   tax_groups: ["duties_taxes"],
   account_groups: ["bank_accounts_group", "cash_in_hand_group"],
   expense_groups: [],

@@ -50,6 +50,19 @@ import {
 import type { DateRange } from "@/components/ui/ad-calendar";
 import type { GroupListSelectOptions } from "@/lib/groupListExpand";
 import { isSystemParentGroup } from "@/lib/system-groups";
+import { createMasterEntityGroupMoveHandler } from "@/lib/createMasterEntityGroupMoveHandler";
+import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
+import { TAX_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { taxGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
+import { taxGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
+import { TAX_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { filterMembersByMasterGroupScope } from "@/lib/masterGroupMemberScope";
+import {
+  appendMasterEntitySystemBranchGroups,
+  isMasterEntitySystemGroupId,
+  resolveMasterEntityGroupForSelection,
+  resolveTaxListGroupBucketId,
+} from "@/lib/masterEntitySystemGroups";
 
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
@@ -101,10 +114,7 @@ function TaxPageContent() {
     processedTaxes.forEach((tax: any) => {
       const n = pendingApprovalByTaxId[tax.id] || 0;
       if (!n) return;
-      const gid =
-        tax.groupId && String(tax.groupId).trim() !== "" && tax.groupId !== "ungrouped_tax"
-          ? tax.groupId
-          : "ungrouped";
+      const gid = resolveTaxListGroupBucketId(tax);
       map[gid] = (map[gid] || 0) + n;
     });
     return map;
@@ -166,7 +176,7 @@ function TaxPageContent() {
     () => resolveMasterListSelection(selectedTaxRaw, processedTaxes),
     [selectedTaxRaw, processedTaxes]
   );
-  const selectedGroup = activeView === 'groups' ? selected as TaxGroup : null;
+  const selectedGroupRaw = activeView === 'groups' ? selected as TaxGroup : null;
   const handleTaxUpdated = useCallback((patch?: Partial<Tax>) => {
     if (!patch?.id || !selectedTaxRaw || selectedTaxRaw.id !== patch.id) return;
     setSelected({ ...selectedTaxRaw, ...patch });
@@ -233,33 +243,35 @@ function TaxPageContent() {
     );
   }, [isMobile, selected]);
   const taxMasterDetailTitle = activeView === "groups" ? "Tax Group" : "Tax";
-  useSyncMasterDetailHeaderId("tax", selectedTax?.id ?? selectedGroup?.id ?? null);
+  useSyncMasterDetailHeaderId("tax", selectedTax?.id ?? selectedGroupRaw?.id ?? null);
   
   const processedTaxGroups = useMemo(() => {
-    // Hide auto-created Ungrouped base doc; system groups sirf Reports me – list pages pe nahi
-    const baseGroups = initialProcessedTaxGroups.filter((g) => {
+    const userGroups = initialProcessedTaxGroups.filter((g) => {
       const anyG = g as any;
       if (anyG.isAutoUngrouped === true) return false;
       if (anyG.isReportOnly === true || anyG.isSystemReserved === true) return false;
       if (isSystemParentGroup("tax_groups", anyG.id)) return false;
       return true;
     });
-    // Show Ungrouped row only when at least one tax is in the Ungrouped bucket.
-    const ungrouped = processedTaxes.filter((p: any) => !p.groupId || p.groupId === "ungrouped_tax");
-    if (ungrouped.length > 0) {
-      const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
-      const ungroupedGroup: TaxGroup = {
-        id: 'ungrouped',
-        name: 'Ungrouped',
-        balance: ungroupedBalance,
-        companyId: companyId || '',
-        debit: ungrouped.reduce((sum, p) => sum + p.debit, 0),
-        credit: ungrouped.reduce((sum, p) => sum + p.credit, 0),
-      };
-      return [...baseGroups, ungroupedGroup];
-    }
-    return baseGroups;
-  }, [processedTaxes, initialProcessedTaxGroups, companyId]);
+    return appendMasterEntitySystemBranchGroups(
+      userGroups,
+      TAX_ENTITY_GROUP_PRESET,
+      companyId || ""
+    );
+  }, [initialProcessedTaxGroups, companyId]);
+
+  const selectedGroup = useMemo(
+    () =>
+      selectedGroupRaw
+        ? (resolveMasterEntityGroupForSelection(
+            selectedGroupRaw.id,
+            processedTaxGroups,
+            TAX_ENTITY_GROUP_PRESET,
+            companyId || ""
+          ) as TaxGroup | null)
+        : null,
+    [selectedGroupRaw, processedTaxGroups, companyId]
+  );
 
   const handleTaxTabChange = useCallback(
     (value: string) => {
@@ -464,11 +476,15 @@ function TaxPageContent() {
 
   const taxesForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
-    if (selectedGroup.id === 'ungrouped') {
-      return processedTaxes.filter((p: any) => !p.groupId || p.groupId === "ungrouped_tax");
-    }
-    return processedTaxes.filter(p => p.groupId === selectedGroup.id);
-  }, [selectedGroup, processedTaxes]);
+    return filterMembersByMasterGroupScope<Tax>(
+      selectedGroup.id,
+      processedTaxes,
+      processedTaxGroups,
+      resolveTaxListGroupBucketId,
+      (id) => isMasterEntitySystemGroupId(TAX_ENTITY_GROUP_PRESET, id),
+      (tax, branchId) => resolveTaxListGroupBucketId(tax) === branchId
+    );
+  }, [selectedGroup, processedTaxes, processedTaxGroups]);
 
   const processedTaxGroupsForList = useMemo(() => {
     if (!showOnlyTaxGroupsWithPendingApproval || !showApproveOnList) return processedTaxGroups;
@@ -487,15 +503,13 @@ function TaxPageContent() {
 
   const taxGroupMembersByGroupId = useMemo(() => {
     const map: Record<string, Tax[]> = {};
-    for (const g of processedTaxGroupsForList) {
-      if (g.id === "ungrouped") {
-        map[g.id] = processedTaxes.filter((t) => !t.groupId || t.groupId === "ungrouped_tax");
-      } else {
-        map[g.id] = processedTaxes.filter((t) => t.groupId === g.id);
-      }
+    for (const tax of processedTaxes) {
+      const bucket = resolveTaxListGroupBucketId(tax);
+      if (!map[bucket]) map[bucket] = [];
+      map[bucket].push(tax);
     }
     return map;
-  }, [processedTaxGroupsForList, processedTaxes]);
+  }, [processedTaxes]);
 
   // Filtered group count (matches TaxGroupList: exclude report-only + system groups; apply search)
   const filteredGroupCount = useMemo(() => {
@@ -508,6 +522,31 @@ function TaxPageContent() {
       return g.name && (searchLower ? g.name.toLowerCase().includes(searchLower) : true);
     }).length;
   }, [processedTaxGroupsForList, searchTerm]);
+
+  const handleMoveTaxToGroup = useCallback(
+    (tax: Tax, targetGroupId: string) =>
+      createMasterEntityGroupMoveHandler({
+        companyId,
+        company,
+        groupsForName: processedTaxGroups,
+        moveHelpers: taxGroupAccountMove,
+        entityLabel: "Tax",
+      })(tax, targetGroupId),
+    [companyId, company, processedTaxGroups]
+  );
+
+  const handleMoveTaxGroupToGroup = useCallback(
+    (sourceGroupId: string, targetGroupId: string) =>
+      createMasterEntityGroupTreeMoveHandler({
+        companyId,
+        company,
+        groupsForName: processedTaxGroups,
+        allGroups: initialProcessedTaxGroups,
+        config: TAX_GROUP_LIST_CONFIG,
+        moveHelpers: taxGroupTreeMove,
+      })(sourceGroupId, targetGroupId),
+    [companyId, company, processedTaxGroups, initialProcessedTaxGroups]
+  );
 
   if (vouchersLoading) {
     return <LoadingSpinner />;
@@ -541,7 +580,7 @@ function TaxPageContent() {
     <div className={mlc.searchRow}>
       <div className={mlc.searchWrap}>
         <Search className={mlc.searchIcon} />
-        <Input placeholder={activeView === 'taxes' ? 'Search taxes...' : 'Search groups...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
+        <Input placeholder={activeView === 'taxes' ? 'Search taxes...' : 'Search groups/tax'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
       </div>
       {activeView === "taxes" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
         <PendingApprovalListFilterBadge compact
@@ -629,6 +668,12 @@ function TaxPageContent() {
           quickFilter={groupListQuickFilter}
           onQuickFilterChange={setGroupListQuickFilter}
           hideQuickFilterBar
+          moveAccountsEnabled={!!companyId}
+          onMoveAccountToGroup={handleMoveTaxToGroup}
+          canMoveMember={taxGroupAccountMove.canMoveAccount}
+          onMoveGroupToGroup={handleMoveTaxGroupToGroup}
+          canMoveGroup={taxGroupTreeMove.canMoveGroup}
+          allGroupsForMove={initialProcessedTaxGroups}
         />
       )}
     </MasterListViewShell>
@@ -668,6 +713,11 @@ function TaxPageContent() {
       mobileListOnly={true}
       hasSelectedItem={!!selected}
       onBackToList={onBackToList}
+      mobileListSelectionKey={
+        selected
+          ? `${selected.id}:${activeView === "groups" ? groupMemberFilterId ?? "" : ""}`
+          : null
+      }
     />
   );
 }

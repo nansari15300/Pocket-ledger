@@ -34,6 +34,11 @@
           Windows EXE for desktop. Android APK installs directly on your phone.
         </p>
         <p id="releaseNote" style="margin:0.75rem 0 0;color:var(--muted)"></p>
+        <div class="download-auth-banner" id="downloadAuthBanner" hidden>
+          <span id="downloadAuthText"></span>
+          <a class="btn btn-outline btn-sm" id="downloadSignInBtn" href="/login/?return=/downloads/">Sign in</a>
+          <button type="button" class="btn btn-outline btn-sm" id="downloadSignOutBtn" hidden>Sign out</button>
+        </div>
       </div>
     </section>
 
@@ -92,6 +97,8 @@
       </div>
     </div>
   </footer>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
   <script src="../js/firebase-config.js"></script>
   <script src="../js/release-settings-shared.js"></script>
   <script src="../js/downloads.js"></script>

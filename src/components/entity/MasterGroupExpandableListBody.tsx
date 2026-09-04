@@ -11,10 +11,7 @@ import {
   GroupListMemberRow,
   renderGroupListRowShell,
 } from "@/components/entity/GroupListMemberRow";
-import {
-  toggleGroupListAccordionExpand,
-  type GroupListSelectOptions,
-} from "@/lib/groupListExpand";
+import { formatGroupListCardCountSubtitle } from "@/lib/groupListCardCounts";
 import { groupListMemberAvatarFromRow } from "@/components/entity/GroupListMemberAvatar";
 import { MasterListGroupIcon } from "@/components/entity/MasterListGroupIcon";
 
@@ -93,6 +90,8 @@ export function MasterGroupExpandableListBody<
         const groupBalance = Number(group.balance || 0);
         const groupLeading = renderGroupLeading?.(group) ?? defaultLeading;
 
+        const groupCountSubtitle = formatGroupListCardCountSubtitle(0, members.length);
+
         const renderGroupCard = (expandControl: React.ReactNode | null) => (
           <div className="pl-master-list-row">
             <div className="pl-master-list-row-leading">
@@ -112,6 +111,7 @@ export function MasterGroupExpandableListBody<
                 name={group.name}
                 expandControl={expandControl}
                 pendingCount={groupPending}
+                secondaryLabel={groupCountSubtitle}
               />
             </div>
             <p

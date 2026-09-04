@@ -1,21 +1,15 @@
 
 "use client";
 
-import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Trash2 } from "lucide-react";
-import { useState, useEffect, useMemo } from "react";
-import { useForm } from "react-hook-form";
-import { z } from "zod";
-import { doc, updateDoc, serverTimestamp, Timestamp } from "firebase/firestore";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { doc, updateDoc } from "firebase/firestore";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import type { Group } from "@/components/party/types";
 import { useCompany } from "@/hooks/useCompany";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
@@ -33,16 +27,21 @@ import {
 } from "@/lib/masterDialogFooterStyles";
 import { useAuth } from "@/hooks/useAuth";
 import { toast as sonnerToast } from "sonner";
+import { cn } from "@/lib/utils";
+import { MasterEntityNestedGroupFields } from "@/components/entity/MasterEntityNestedGroupFields";
+import {
+  decodeMasterEntityGroupParentPath,
+  resolveMasterEntityGroupParentIdFromPath,
+} from "@/lib/masterEntityGroupTreeForm";
+import { PARTY_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { createOnePartyGroup } from "@/lib/partyGroupWrite";
+import { isSystemGroupName } from "@/lib/system-group-names";
+import {
+  permanentDeleteCompanySubdocFromRecycleBin,
+  softDeleteCompanySubdocToRecycleBin,
+} from "@/lib/recycleBinEntityLifecycle";
 
-const formSchema = z.object({
-  name: z.string().min(2, { message: "Group name must be at least 2 characters." }),
-  parentId: z.string().min(1, "Parent group is required."),
-});
-
-const systemGroups = [
-  { id: "sundry_debtors", name: "Sundry Debtors" },
-  { id: "sundry_creditors", name: "Sundry Creditors" },
-];
+const systemGroupIds = new Set(["sundry_debtors", "sundry_creditors"]);
 
 export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDeleted, children, hasAccounts }: {
   group: Group;
@@ -55,32 +54,81 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
   const [isLoading, setIsLoading] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [systemBranch, setSystemBranch] = useState(PARTY_ENTITY_GROUP_PRESET.defaultBranch);
+  const [parentPathIds, setParentPathIds] = useState<string[]>([]);
+  const [childPathIds, setChildPathIds] = useState<string[]>([]);
+  const [groupName, setGroupName] = useState("");
+  const formResetKey = isOpen ? `edit-${group.id}` : "edit-closed";
   const { toast } = useToast();
   const { user } = useAuth();
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
   const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
   const apkOfflineViewOnly = useMemo(() => apkCloudCompanyOfflineViewOnly(company, navigatorOnline), [company, navigatorOnline]);
-
-  const form = useForm<z.infer<typeof formSchema>>({
-    resolver: zodResolver(formSchema),
-    defaultValues: {
-      name: group.name,
-      parentId: group.parentId || "",
-    },
-  });
+  const liveGroup = useMemo(
+    () => allGroups.find((g) => g.id === group.id) || group,
+    [allGroups, group]
+  );
+  const isSystemGroup = systemGroupIds.has(group.id);
+  const hasDirectChildGroups = useMemo(
+    () => allGroups.some((g) => g?.id && g.id !== group.id && String(g.parentId || "").trim() === group.id),
+    [allGroups, group.id]
+  );
+  const canDeleteGroup =
+    !isSystemGroup && !hasAccounts && !hasDirectChildGroups && !apkOfflineViewOnly;
 
   useEffect(() => {
     if (isOpen) {
-      form.reset({
-        name: group.name,
-        parentId: group.parentId || "",
-      });
+      const decoded = decodeMasterEntityGroupParentPath(
+        liveGroup,
+        allGroups,
+        PARTY_ENTITY_GROUP_PRESET.config,
+        { legacyParentIds: PARTY_ENTITY_GROUP_PRESET.legacyParentIds }
+      );
+      setGroupName(liveGroup.name || "");
+      setSystemBranch(decoded.systemBranch);
+      setParentPathIds(decoded.parentPathIds);
+      setChildPathIds([]);
     }
-  }, [isOpen, group, form]);
+  }, [isOpen, liveGroup, allGroups]);
 
-  function onSubmit(values: z.infer<typeof formSchema>): void {
-    if (!companyId) {
+  const handleAddNewParentAtLevel = useCallback(
+    async (levelIndex: number, name: string) => {
+      if (!user || !companyId || !name.trim()) return;
+      if (isSystemGroupName("party", name.trim())) {
+        toast({
+          variant: "destructive",
+          title: "System Group Name",
+          description: `"${name}" is a system group name.`,
+        });
+        return;
+      }
+      const parentId =
+        levelIndex <= 1
+          ? group.id
+          : childPathIds[levelIndex - 2] || group.id;
+      try {
+        const newId = await createOnePartyGroup({
+          company,
+          companyId,
+          userId: user.uid,
+          name: name.trim(),
+          parentId,
+        });
+        const next = [...childPathIds];
+        next[levelIndex - 1] = newId;
+        setChildPathIds(next.slice(0, levelIndex));
+        toast({ title: "Group added", description: `"${name.trim()}" parent list me add ho gaya.` });
+      } catch (error) {
+        console.error("Error creating parent group:", error);
+        toast({ variant: "destructive", title: "Error", description: "Parent group create nahi ho saka." });
+      }
+    },
+    [user, companyId, company, group.id, childPathIds, toast]
+  );
+
+  function handleSubmit(): void {
+    if (!companyId || !user) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
@@ -88,8 +136,30 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
       sonnerToast.error("Offline — view only.");
       return;
     }
+    if (isSystemGroup) return;
+
+    const editedName = groupName.trim();
+    if (editedName.length < 2) {
+      toast({
+        variant: "destructive",
+        title: "Invalid name",
+        description: "Group name must be at least 2 characters.",
+      });
+      return;
+    }
+    if (isSystemGroupName("party", editedName)) {
+      toast({
+        variant: "destructive",
+        title: "System Group Name",
+        description: "This is a system group name. Please use another name.",
+      });
+      return;
+    }
+
+    const resolvedParentId = resolveMasterEntityGroupParentIdFromPath(systemBranch, parentPathIds);
     const gid = group.id;
-    setIsOpen(false); // Dialog turant; `updateDoc` background — RHF submit block nahi rakhta
+    setIsOpen(false);
+
     void (async () => {
       setIsLoading(true);
       try {
@@ -99,7 +169,7 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
             (fromDb as Record<string, unknown> | null) ?? {
               id: gid,
               companyId,
-              ownerId: user?.uid ?? "",
+              ownerId: user.uid,
               name: group.name,
               parentId: group.parentId || "",
               isDeleted: false,
@@ -108,23 +178,23 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
             ...base,
             id: gid,
             companyId,
-            name: values.name.trim(),
-            parentId: values.parentId,
+            name: editedName,
+            parentId: resolvedParentId,
           };
           await upsertCompanyDocInBrowserDb(companyId, "groups", gid, payload);
           await enqueueCompanyDocOutbox(companyId, "groups", "update", gid, payload);
-          toast({ title: "Group Updated!", description: `"${values.name}" saved locally — will sync when online.` });
+          toast({ title: "Group Updated!", description: `"${editedName}" saved locally — will sync when online.` });
           onGroupUpdated();
           return;
         }
 
         const groupRef = doc(firestore, `companies/${companyId}/groups`, gid);
         await updateDoc(groupRef, {
-          name: values.name,
-          parentId: values.parentId,
+          name: editedName,
+          parentId: resolvedParentId,
         });
 
-        toast({ title: "Group Updated!", description: `"${values.name}" has been successfully updated.` });
+        toast({ title: "Group Updated!", description: `"${editedName}" has been successfully updated.` });
         onGroupUpdated();
       } catch (error) {
         console.error("Error updating group:", error);
@@ -135,13 +205,17 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
     })();
   }
 
-  const handleDelete = async () => {
-    if (!companyId) {
-        toast({ variant: "destructive", title: "Error", description: "No company selected." });
-        return;
+  const handleMoveToBin = async () => {
+    if (!companyId || !user?.uid) {
+      toast({ variant: "destructive", title: "Error", description: "No company selected." });
+      return;
     }
-    if (hasAccounts) {
-      sonnerToast.error("Cannot Delete", { description: "This group has accounts and cannot be deleted." });
+    if (hasAccounts || hasDirectChildGroups) {
+      sonnerToast.error("Cannot Delete", {
+        description: hasDirectChildGroups
+          ? "This group has nested child groups and cannot be deleted."
+          : "This group has accounts and cannot be deleted.",
+      });
       setIsDeleteDialogOpen(false);
       return;
     }
@@ -152,54 +226,66 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
     }
     setIsLoading(true);
     try {
-        if (localSqlMirror) {
-          const fromDb = await getCompanyDocFromBrowserDb(companyId, "groups", group.id);
-          const base: Record<string, unknown> =
-            (fromDb as Record<string, unknown> | null) ?? {
-              id: group.id,
-              companyId,
-              ownerId: user?.uid ?? "",
-              name: group.name,
-              parentId: group.parentId || "",
-              isDeleted: false,
-            };
-          const payload: Record<string, unknown> = {
-            ...base,
-            id: group.id,
-            companyId,
-            isDeleted: true,
-            deletedAt: Timestamp.now(),
-            deletedBy: user?.uid || "",
-          };
-          await upsertCompanyDocInBrowserDb(companyId, "groups", group.id, payload);
-          await enqueueCompanyDocOutbox(companyId, "groups", "update", group.id, payload);
-        } else {
-          await updateDoc(doc(firestore, `companies/${companyId}/groups`, group.id), {
-            isDeleted: true,
-            deletedAt: serverTimestamp(),
-            deletedBy: user?.uid || "",
-          });
-        }
-        toast({ title: "Group Moved to Recycle Bin", description: `"${group.name}" has been moved.`});
-        onGroupDeleted();
-        setIsOpen(false); // Only close the main dialog
+      const res = await softDeleteCompanySubdocToRecycleBin(companyId, "groups", group.id, user.uid);
+      if (!res.ok) {
+        throw new Error("error" in res ? res.error : "Move to bin failed");
+      }
+      toast({ title: "Group Moved to Recycle Bin", description: `"${group.name}" has been moved.` });
+      onGroupDeleted();
+      setIsOpen(false);
     } catch (error) {
-        console.error("Error deleting group: ", error);
-        toast({
-            variant: "destructive",
-            title: "Delete Failed",
-            description: "An error occurred while deleting the group.",
-        });
+      console.error("Error moving group to bin:", error);
+      toast({
+        variant: "destructive",
+        title: "Delete Failed",
+        description: "An error occurred while moving the group to the recycle bin.",
+      });
     } finally {
-        setIsLoading(false);
-        setIsDeleteDialogOpen(false); // Ensure this is also closed
+      setIsLoading(false);
+      setIsDeleteDialogOpen(false);
     }
-   }
-  
-  const systemGroupIds = systemGroups.map((g) => g.id);
-  const userDefinedGroups = allGroups.filter((g) => g.id !== group.id && !systemGroupIds.includes(g.id));
-  const isSystemGroup = systemGroupIds.includes(group.id);
+  };
 
+  const handlePermanentDelete = async () => {
+    if (!companyId) {
+      toast({ variant: "destructive", title: "Error", description: "No company selected." });
+      return;
+    }
+    if (hasAccounts || hasDirectChildGroups) {
+      sonnerToast.error("Cannot Delete", {
+        description: hasDirectChildGroups
+          ? "This group has nested child groups and cannot be deleted."
+          : "This group has accounts and cannot be deleted.",
+      });
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await permanentDeleteCompanySubdocFromRecycleBin(companyId, "groups", group.id);
+      toast({
+        title: "Group Deleted Permanently",
+        description: `"${group.name}" has been permanently removed.`,
+      });
+      onGroupDeleted();
+      setIsOpen(false);
+    } catch (error) {
+      console.error("Error permanently deleting group:", error);
+      toast({
+        variant: "destructive",
+        title: "Delete Failed",
+        description: "An error occurred while permanently deleting the group.",
+      });
+    } finally {
+      setIsLoading(false);
+      setIsDeleteDialogOpen(false);
+    }
+  };
 
   return (
     <>
@@ -208,105 +294,111 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Edit Group</DialogTitle>
-            <DialogDescription>Update the details for {group.name}.</DialogDescription>
+            <DialogDescription>
+              System group → Users Parent group → Child group. Add Child group se unlimited tree depth.
+            </DialogDescription>
           </DialogHeader>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4">
-              <FormField
-                control={form.control}
-                name="name"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel>Group Name</FormLabel>
-                    <FormControl>
-                      <Input placeholder="e.g., Sundry Debtors" {...field} disabled={isSystemGroup} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="parentId"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel>Parent Group</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value} disabled={isSystemGroup}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select a parent group" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          <SelectGroup>
-                            <SelectLabel>System Groups</SelectLabel>
-                            {systemGroups.map((sg) => (
-                              <SelectItem key={sg.id} value={sg.id}>
-                                {sg.name}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
+          <div className="space-y-4 py-4">
+            <MasterEntityNestedGroupFields
+              allGroups={allGroups}
+              config={PARTY_ENTITY_GROUP_PRESET.config}
+              topParentOptions={PARTY_ENTITY_GROUP_PRESET.topParentOptions}
+              legacyParentIds={PARTY_ENTITY_GROUP_PRESET.legacyParentIds}
+              excludeGroupId={group.id}
+              systemBranch={systemBranch}
+              onSystemBranchChange={setSystemBranch}
+              parentPathIds={parentPathIds}
+              onParentPathIdsChange={setParentPathIds}
+              childPathIds={childPathIds}
+              onChildPathIdsChange={setChildPathIds}
+              onAddNewAtLevel={(level, name) => void handleAddNewParentAtLevel(level, name)}
+              groupName={groupName}
+              onGroupNameChange={setGroupName}
+              mode="edit"
+              editingGroup={liveGroup}
+              disabled={isLoading || isSystemGroup || apkOfflineViewOnly}
+              formResetKey={formResetKey}
+              editLevel0Trailing={
+                canDeleteGroup ? (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-9 w-9 shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          onClick={() => setIsDeleteDialogOpen(true)}
+                          disabled={isLoading}
+                          aria-label="Delete group"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Delete empty group</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : null
+              }
+            />
+            <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
                 <DialogClose asChild>
                   <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>
                     Cancel
                   </Button>
                 </DialogClose>
-                <div className="flex min-w-0 flex-1 justify-center px-1">
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex max-w-full min-w-0 shrink" tabIndex={0}>
-                          <Button
-                            type="button"
-                            variant="destructive"
-                            className="shrink-0 px-3 sm:px-4"
-                            onClick={() => setIsDeleteDialogOpen(true)}
-                            disabled={isLoading || isSystemGroup || hasAccounts || apkOfflineViewOnly}
-                          >
-                            <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Delete
-                          </Button>
-                        </span>
-                      </TooltipTrigger>
-                      {!hasAccounts && apkOfflineViewOnly && (
-                        <TooltipContent>
-                          <p>Offline — view only.</p>
-                        </TooltipContent>
-                      )}
-                    </Tooltip>
-                  </TooltipProvider>
-                </div>
-                <Button type="submit" disabled={isLoading || isSystemGroup || apkOfflineViewOnly} className="shrink-0">
+                <Button
+                  type="button"
+                  onClick={() => handleSubmit()}
+                  disabled={isLoading || isSystemGroup || apkOfflineViewOnly}
+                  className="ml-auto shrink-0"
+                >
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>
               </DialogFooter>
-            </form>
-          </Form>
+          </div>
         </DialogContent>
       </Dialog>
       <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogTitle>Delete group?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action will move the group <span className="font-semibold text-foreground">{group.name}</span> to the recycle bin.
+              Choose how to remove{" "}
+              <span className="font-semibold text-foreground">{group.name}</span>. This group has no
+              accounts.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS} disabled={isLoading}>
+          <AlertDialogFooter className="flex flex-row flex-nowrap items-center gap-2 sm:flex-row sm:justify-stretch sm:space-x-0">
+            <AlertDialogCancel
+              className={cn(MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS, "min-w-0 flex-1")}
+              disabled={isLoading}
+            >
               Cancel
             </AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} disabled={isLoading || apkOfflineViewOnly} className="bg-destructive hover:bg-destructive/90">
+            <Button
+              type="button"
+              variant="outline"
+              className="min-w-0 flex-1"
+              onClick={() => void handleMoveToBin()}
+              disabled={isLoading || apkOfflineViewOnly}
+            >
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Move to Recycle Bin
-            </AlertDialogAction>
+              Move to Bin
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              className="min-w-0 flex-1 px-2 text-xs sm:px-3 sm:text-sm"
+              onClick={() => void handlePermanentDelete()}
+              disabled={isLoading || apkOfflineViewOnly}
+            >
+              {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Delete permanently
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

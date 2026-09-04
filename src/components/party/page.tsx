@@ -31,6 +31,10 @@ import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateGroupDialog } from "@/components/party/CreateGroupDialog";
 import { useVouchers } from "@/hooks/useVouchers";
 import type { Party, Group } from "@/components/party/types";
+import {
+  isPartyDirectOnSystemBranch,
+  isPartySystemGroupId,
+} from "@/lib/partySystemGroups";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
@@ -76,22 +80,8 @@ export default function PartyPage() {
   const selectedGroup = activeView === 'groups' ? selected as Group : null;
   
    const processedGroups = useMemo(() => {
-    // Treat both blank groupId and storage ungrouped id as Ungrouped bucket.
-    const ungrouped = processedParties.filter(p => !p.groupId || p.groupId === "ungrouped_party");
-    if (ungrouped.length > 0) {
-      const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
-      const ungroupedGroup: Group = {
-        id: 'ungrouped',
-        name: 'Ungrouped',
-        balance: ungroupedBalance,
-        companyId: companyId || '',
-        debit: ungrouped.reduce((sum, p) => sum + p.debit, 0),
-        credit: ungrouped.reduce((sum, p) => sum + p.credit, 0),
-      };
-      return [...initialProcessedGroups, ungroupedGroup];
-    }
     return initialProcessedGroups;
-  }, [processedParties, initialProcessedGroups, companyId]);
+  }, [initialProcessedGroups]);
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     // Check both vouchersUserNames and localUserNames
@@ -243,11 +233,10 @@ export default function PartyPage() {
 
   const partiesForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
-    if (selectedGroup.id === 'ungrouped') {
-        // Keep Ungrouped group selection aligned with stored ungrouped ids.
-        return processedParties.filter(p => !p.groupId || p.groupId === "ungrouped_party");
+    if (isPartySystemGroupId(selectedGroup.id)) {
+      return processedParties.filter((p) => isPartyDirectOnSystemBranch(p, selectedGroup.id));
     }
-    return processedParties.filter(p => p.groupId === selectedGroup.id);
+    return processedParties.filter((p) => p.groupId === selectedGroup.id);
   }, [selectedGroup, processedParties]);
 
 

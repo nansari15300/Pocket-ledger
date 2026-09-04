@@ -150,10 +150,38 @@ export const interCompanyPanelScrollOuterClass = cn(
   "[-webkit-overflow-scrolling:touch]"
 );
 
+/** Simple view — extra columns nahi, horizontal scroll hide */
+export const interCompanyPanelScrollOuterSimpleClass = cn(
+  "inter-company-panel-x-scroll",
+  "min-w-0 max-w-full flex-1 overflow-x-hidden overflow-y-hidden"
+);
+
 /** Panel ke andar — min width; niche padding kam taaki scrollbar card border ke paas rahe */
 export const interCompanyPanelScrollInnerClass = cn(
+  "inter-company-panel-x-scroll-inner",
   "flex w-max min-w-full flex-col gap-3 px-3 pt-3 pb-2",
   "min-w-[34rem]"
+);
+
+/** Simple view — panel andar fit; horizontal scroll band */
+export const interCompanyPanelScrollInnerSimpleClass = cn(
+  "inter-company-panel-x-scroll-inner",
+  "flex w-full min-w-0 max-w-full flex-col gap-3 px-3 pt-3 pb-2"
+);
+
+/** Company row — simple view: sirf company naam */
+export const interCompanyCompanyFieldsRowSimpleClass = "grid w-full min-w-0 grid-cols-1 items-end gap-2";
+
+/** Account row — simple view: Type + Account name fit in panel */
+export const interCompanyAccountFieldsRowSimpleClass = cn(
+  "ic-account-lookup-simple-row",
+  "grid w-full min-w-0 grid-cols-[minmax(6.5rem,8.5rem)_minmax(0,1fr)] items-end gap-2"
+);
+
+/** Simple view + other charge — Type | Account name | Bank out total */
+export const interCompanyAccountFieldsRowSimpleWithTotalClass = cn(
+  "ic-account-lookup-simple-row",
+  "grid w-full min-w-0 grid-cols-[minmax(6.5rem,8.5rem)_minmax(0,1fr)_minmax(6rem,8rem)] items-end gap-2"
 );
 
 /** Company row: naam | Code | A/c | PAN | Mobile */

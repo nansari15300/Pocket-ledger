@@ -4,7 +4,11 @@
 import * as React from "react";
 import { openPrintDirect } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
+import { resolveGroupBooksOpeningBalance } from "@/lib/ledgerOpeningBalanceDisplay";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
+import { collectExpenseGroupScopeAccounts, collectExpenseGroupScopeGroupIds } from "@/lib/expenseGroupTree";
+import { EXPENSE_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { isMasterEntitySystemGroupId } from "@/lib/masterEntitySystemGroups";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Edit, Printer, Users, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Columns3, Search, Pencil, Lock } from "lucide-react";
@@ -90,6 +94,9 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { EditExpenseAccountDialog } from "./EditExpenseAccountDialog";
+import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
+import { useGroupMemberAccountLedgerChrome } from "@/hooks/useGroupMemberAccountLedgerChrome";
+import { EXPENSE_FREEZE_COLLECTION } from "@/lib/masterAccountFreeze/freezeAdapter";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -165,15 +172,15 @@ export function ExpenseGroupDetails({
   const { showNotes, setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode } = useBalanceMode();
   const { can } = usePermissions();
+  const isSystemBranchGroup = isMasterEntitySystemGroupId(EXPENSE_ENTITY_GROUP_PRESET, group.id);
   const accountsInGroup = useMemo(() => {
-    if (group.id === "ungrouped") {
-      return accounts.filter((a) => !a.groupId || a.groupId === "ungrouped_expense");
-    }
-    if (accounts.length > 0) {
-      return accounts;
-    }
-    return processedExpenseAccounts.filter((a) => a.groupId === group.id);
-  }, [processedExpenseAccounts, accounts, group.id]);
+    if (accounts.length > 0) return accounts;
+    return collectExpenseGroupScopeAccounts(
+      group.id,
+      allGroups,
+      processedExpenseAccounts
+    );
+  }, [processedExpenseAccounts, accounts, group.id, allGroups]);
   const mobileSearchNames = useMemo(
     () => ({
       ...journalAccountNames,
@@ -193,6 +200,15 @@ export function ExpenseGroupDetails({
     () => trimEntityFileUrlForPreview(selectedMemberAccount?.fileUrl),
     [selectedMemberAccount?.fileUrl, selectedMemberAccount?.id]
   );
+
+  const { memberFreezeOverlay, memberClosingBalanceActions } = useGroupMemberAccountLedgerChrome({
+    companyId,
+    collection: EXPENSE_FREEZE_COLLECTION,
+    patchCollection: "expense_accounts",
+    selectedMember: selectedMemberAccount,
+    adjustmentEntityType: "expense",
+    onMemberUpdated: onAccountUpdated,
+  });
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
@@ -228,11 +244,10 @@ export function ExpenseGroupDetails({
   }, [dateRange]);
   
   const groupEntity = useMemo(() => {
-    // Include expenseGroupIds so useTransactions can identify income/expense groups
-    const expenseGroupIds = [group.id];
+    const expenseGroupIds = collectExpenseGroupScopeGroupIds(group.id, allGroups);
     const entity = { ...group, items: accountsInGroup, expenseGroupIds };
     return entity;
-  }, [group, accountsInGroup]);
+  }, [group, accountsInGroup, allGroups]);
 
   const groupMemberTransactions = useMemo(() => {
     if (!accountsInGroup.length) return [];
@@ -574,7 +589,7 @@ export function ExpenseGroupDetails({
           periodDrForPage: desktopPaginationMeta.periodDrForPage,
           periodCrForPage: desktopPaginationMeta.periodCrForPage,
           closingForPage: desktopPaginationMeta.closingForPage,
-          booksOpeningBalance: Number(group.openingBalance) || 0,
+          booksOpeningBalance: resolveGroupBooksOpeningBalance(group, accountsInGroup),
           ledgerShowBookOpeningRow: currentPage === 1,
           ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
           openingBalancePeriodStartDate: dateRange?.from,
@@ -632,7 +647,7 @@ export function ExpenseGroupDetails({
                   />
                 </div>
               )}
-              {group.id !== "ungrouped" && (
+              {!isSystemBranchGroup && (
                 <EditExpenseGroupDialog
                   group={group}
                   allGroups={allGroups}
@@ -666,6 +681,7 @@ export function ExpenseGroupDetails({
               style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
             >
             <div className="pb-2">
+            <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable
               transactions={mobileTransactionsToShow}
               context="group"
@@ -686,9 +702,11 @@ export function ExpenseGroupDetails({
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
               closingBalance={desktopPaginationMeta.closingForPage}
+              closingBalanceActions={memberClosingBalanceActions}
               scrollOnlyTransactions
             
               {...statementCheck.tableProps}/>
+            </MasterAccountFreezeTxnShell>
             </div>
             </div>
             <MobileTransactionsPager
@@ -919,7 +937,7 @@ export function ExpenseGroupDetails({
                         {getInitials(group.name)}
                       </AvatarFallback>
                     </Avatar>
-                    {group.id !== "ungrouped" && (
+                    {!isSystemBranchGroup && (
                       <EditExpenseGroupDialog
                         group={group}
                         allGroups={allGroups}
@@ -1036,6 +1054,7 @@ export function ExpenseGroupDetails({
         </div>
         <ScrollArea className="min-h-0 flex-1">
           <div className="py-4">
+            <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable
               transactions={paginatedTransactions}
               context="group"
@@ -1055,7 +1074,9 @@ export function ExpenseGroupDetails({
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
               closingBalance={desktopPaginationMeta.closingForPage}
+              closingBalanceActions={memberClosingBalanceActions}
             />
+            </MasterAccountFreezeTxnShell>
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">
                 No transactions found for the selected period.
@@ -1072,7 +1093,7 @@ export function ExpenseGroupDetails({
               <LedgerFooterCheckboxPill
                 id="show-narration-expense-group"
                 checked={showNarration}
-                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
               <LedgerFooterColumnsMenu>

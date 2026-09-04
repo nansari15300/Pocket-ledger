@@ -16,7 +16,13 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon, Loader2, Trash2, Upload, FileText, PlusCircle, Crown, Printer, Link2, History, CheckCircle, Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { mapPartiesForVoucherCombobox } from "@/lib/masterAccountFreeze/comboboxOptions";
+import {
+  mapPartiesForVoucherCombobox,
+  mapStaffForVoucherCombobox,
+  mapTaxesForVoucherCombobox,
+  mapExpenseAccountsForVoucherCombobox,
+  withMasterAccountFreezeComboboxOption,
+} from "@/lib/masterAccountFreeze/comboboxOptions";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
@@ -626,7 +632,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const staffComboboxOptions = useMemo(
     () =>
       withSelectedComboboxOption(
-        processedStaff.map((s) => ({ value: s.id, label: s.name })),
+        mapStaffForVoucherCombobox(processedStaff),
         staffId,
         processedStaff.find((s) => s.id === staffId)?.name
       ),
@@ -635,7 +641,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const taxComboboxOptions = useMemo(
     () =>
       withSelectedComboboxOption(
-        processedTaxes.map((t) => ({ value: t.id, label: (t as any).name ?? (t as any).label ?? "" })),
+        mapTaxesForVoucherCombobox(processedTaxes),
         taxAccountId,
         (processedTaxes.find((t) => t.id === taxAccountId) as any)?.name ?? (processedTaxes.find((t) => t.id === taxAccountId) as any)?.label
       ),
@@ -644,7 +650,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const expenseComboboxOptions = useMemo(
     () =>
       withSelectedComboboxOption(
-        expenseAccounts.map((e) => ({ value: e.id, label: e.name })),
+        mapExpenseAccountsForVoucherCombobox(expenseAccounts),
         expenseAccountId,
         expenseAccounts.find((e) => e.id === expenseAccountId)?.name
       ),
@@ -2028,16 +2034,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   // Use the same computed account balances shown above the field; disable non-positive balances in dropdown.
   const bankCashAccountOptions = useMemo(
     () =>
-      availableAccounts.map((a: any) => ({
-        value: a.id,
-        // Keep selected field clean (without balance); show balance only in dropdown list rows.
-        triggerLabel: `${a.accountName} (${a.accountType})`,
-        // Keep list balance short as requested: "2,000.00 Dr" (no "Balance:" / no currency prefix).
-        label: `${a.accountName} (${a.accountType}) — ${formatCurrencyForPrint(Number(a.balance) || 0, { showDrCr: true, noSuffix: true, noAnimation: true })}`,
-        isSpecial: a.isSpecial,
-        disabled:
-          !bankAccountAllowsVoucherMinusBalance(a) && (Number(a.balance) || 0) <= 0,
-      })),
+      availableAccounts.map((a: any) =>
+        withMasterAccountFreezeComboboxOption(a, {
+          value: a.id,
+          triggerLabel: `${a.accountName} (${a.accountType})`,
+          label: `${a.accountName} (${a.accountType}) — ${formatCurrencyForPrint(Number(a.balance) || 0, { showDrCr: true, noSuffix: true, noAnimation: true })}`,
+          isSpecial: a.isSpecial,
+          disabled:
+            !bankAccountAllowsVoucherMinusBalance(a) && (Number(a.balance) || 0) <= 0,
+        })
+      ),
     [availableAccounts, formatCurrencyForPrint]
   );
   const voucherPrefixes = useMemo(() => company?.voucherPrefixes?.[voucherType] || [getVoucherPrefix()], [company, voucherType]);

@@ -27,6 +27,7 @@ import { useVouchers } from "@/hooks/useVouchers";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { buildStaffPageLiabilityGroupTree, staffMembersForGroupSelection } from "@/lib/staffPageLiabilityGroupTree";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
@@ -216,14 +217,27 @@ export default function StaffPage() {
     }
   };
 
+  const staffLiabilityGroupTree = useMemo(
+    () =>
+      buildStaffPageLiabilityGroupTree(
+        processedStaffGroups,
+        processedStaff,
+        companyId || ""
+      ),
+    [processedStaffGroups, processedStaff, companyId]
+  );
+
   const staffForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
-    if (selectedGroup.id === 'ungrouped') {
-      // Keep Ungrouped group selection aligned with stored ungrouped ids.
-      return processedStaff.filter(p => !p.groupId || p.groupId === "ungrouped_staff");
+    if (selectedGroup.id === "ungrouped") {
+      return processedStaff.filter((p) => !p.groupId || p.groupId === "ungrouped_staff");
     }
-    return processedStaff.filter(p => p.groupId === selectedGroup.id);
-  }, [selectedGroup, processedStaff]);
+    return staffMembersForGroupSelection(
+      selectedGroup.id,
+      processedStaff,
+      staffLiabilityGroupTree
+    );
+  }, [selectedGroup, processedStaff, staffLiabilityGroupTree]);
 
   if (vouchersLoading) {
     return <LoadingSpinner />;

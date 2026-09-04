@@ -14,6 +14,8 @@ import { cn } from "@/lib/utils";
 import {
   interCompanyAccountFieldColClass,
   interCompanyAccountFieldsRowClass,
+  interCompanyAccountFieldsRowSimpleClass,
+  interCompanyAccountFieldsRowSimpleWithTotalClass,
   interCompanyAccountNameFieldColClass,
   interCompanyDropdownContentClass,
   interCompanyIcAccountComboboxTriggerClass,
@@ -22,6 +24,7 @@ import {
   interCompanyIcSectionDividerClass,
   interCompanyIcTypeSelectTriggerClass,
   interCompanyInputClass,
+  interCompanyAmountInputSizingClass,
   interCompanyReadOnlyCopyInputClass,
   interCompanyViewOnlyAllowCopyClass,
 } from "@/lib/interCompany/interCompanyVoucherChrome";
@@ -114,6 +117,8 @@ type Props = {
   voucherCreateLookup?: boolean;
   /** Target view — mask + visibility in detail card */
   partnerViewPrivacy?: InterCompanyPartnerPrivacy | null;
+  /** Simple view — sirf Type + Account name (extra lookup fields hide) */
+  simpleView?: boolean;
   /** Company bank row — Type lock (e.g. sirf Bank) */
   lockEntityKind?: InterCompanyEntityKind;
   /** Company row search — entity hit parent se seed (company + account ek saath) */
@@ -121,6 +126,9 @@ type Props = {
   onSeedEntityHitHandled?: () => void;
   /** Company row search tick — auto-fill reset jab dubara search ho */
   companySearchTick?: number;
+  /** Simple view + other charge — transfer + charge ka bank out total (account name ke right) */
+  simpleViewBankOutTotal?: number | null;
+  formatCurrencyForPrint?: (amount: number, options?: { noSuffix?: boolean }) => string;
 };
 
 function entityRowKey(row: InterCompanyEntityDetail): string {
@@ -166,10 +174,13 @@ export function InterCompanyAccountLookupSection({
   partnerSearchBy,
   voucherCreateLookup = false,
   partnerViewPrivacy = null,
+  simpleView = false,
   lockEntityKind,
   seedEntityHit = null,
   onSeedEntityHitHandled,
   companySearchTick = 0,
+  simpleViewBankOutTotal = null,
+  formatCurrencyForPrint,
 }: Props) {
   const [accountAcInput, setAccountAcInput] = useState("");
   const [accountPanInput, setAccountPanInput] = useState("");
@@ -767,6 +778,15 @@ export function InterCompanyAccountLookupSection({
   /** Mask mode — search ke baad raw value edit mat karo */
   const partnerFieldReadOnly = viewOnlyCopyMode || maskPartnerFields;
 
+  const showSimpleViewBankOutTotal =
+    simpleView && simpleViewBankOutTotal != null && Boolean(formatCurrencyForPrint);
+  const bankOutTotalDisplay =
+    showSimpleViewBankOutTotal && Number(simpleViewBankOutTotal) > 0
+      ? `${formatCurrencyForPrint!(Number(simpleViewBankOutTotal), { noSuffix: true })} Cr`
+      : showSimpleViewBankOutTotal
+        ? "0.00 Cr"
+        : "";
+
   // Type badle to purana account clear — nayi kind ke list par dubara search
   useEffect(() => {
     if (lockEntityKind && entityKind !== lockEntityKind) return;
@@ -819,7 +839,16 @@ export function InterCompanyAccountLookupSection({
         <p className="text-sm text-muted-foreground">{disabledHint}</p>
       ) : (
         <>
-          <div className={interCompanyAccountFieldsRowClass}>
+          <div
+            className={cn(
+              simpleView
+                ? showSimpleViewBankOutTotal
+                  ? interCompanyAccountFieldsRowSimpleWithTotalClass
+                  : interCompanyAccountFieldsRowSimpleClass
+                : interCompanyAccountFieldsRowClass
+            )}
+            data-simple-view={simpleView ? "1" : "0"}
+          >
             <div className={interCompanyAccountFieldColClass}>
               <Label className="block text-xs text-muted-foreground">Type</Label>
               {viewOnlyCopyMode ? (
@@ -913,6 +942,26 @@ export function InterCompanyAccountLookupSection({
                 )}
               </div>
             </div>
+            {showSimpleViewBankOutTotal ? (
+              <div className={interCompanyAccountFieldColClass}>
+                <Label className="block text-xs text-muted-foreground">Total Cr</Label>
+                <Input
+                  readOnly
+                  tabIndex={-1}
+                  value={bankOutTotalDisplay}
+                  aria-label={`Total bank out ${bankOutTotalDisplay}`}
+                  className={cn(
+                    interCompanyInputClass,
+                    interCompanyAmountInputSizingClass,
+                    interCompanyIcReadonlyFieldClass,
+                    interCompanyReadOnlyCopyInputClass,
+                    "min-w-[25mm] text-right tabular-nums"
+                  )}
+                />
+              </div>
+            ) : null}
+            {!simpleView ? (
+              <div className="ic-account-lookup-extra-fields contents">
             <div className={interCompanyAccountFieldColClass}>
               <Label className="block text-xs text-muted-foreground">A/c No</Label>
               <div className="relative">
@@ -1007,9 +1056,11 @@ export function InterCompanyAccountLookupSection({
                 }
               />
             </div>
+              </div>
+            ) : null}
           </div>
 
-          {showDetails && selectedEntity ? (
+          {showDetails && !simpleView && selectedEntity ? (
             <InterCompanyEntityDetailsCard
               entity={selectedEntity}
               companyAcNo={companyAcNo}

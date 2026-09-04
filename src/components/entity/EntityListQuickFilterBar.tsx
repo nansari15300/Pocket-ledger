@@ -33,7 +33,7 @@ const FILTERS: Array<{ key: EntityListQuickFilter; label: string }> = [
 export function EntityListQuickFilterBar({ active, onChange, className }: Props) {
   return (
     <div className={cn("border-t border-blue-300/60 bg-blue-100/80 px-2 py-1.5", className)}>
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto scrollbar-hover-dim">
         <div className="flex w-max items-center gap-1">
           {FILTERS.map((f) => (
             <Button

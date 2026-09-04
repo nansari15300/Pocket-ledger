@@ -1254,6 +1254,42 @@ span.video-star { cursor: default; }
   font: inherit;
   color: var(--ink);
 }
+.download-auth-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  font-size: 0.92rem;
+}
+.download-auth-banner[hidden] {
+  display: none !important;
+}
+.download-auth-banner.is-signed-in {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+.download-auth-banner.is-signed-out {
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+.download-auth-banner span {
+  flex: 1 1 12rem;
+  color: var(--ink);
+}
+.download-id-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  word-break: break-all;
+}
+.download-email-cell {
+  font-size: 0.82rem;
+  word-break: break-all;
+}
 .sr-only {
   position: absolute;
   width: 1px;

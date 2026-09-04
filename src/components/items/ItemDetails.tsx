@@ -1228,7 +1228,7 @@ export default function ItemDetails({
               <LedgerFooterCheckboxPill
                 id="show-narration-item"
                 checked={showNarration}
-                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
                <LedgerFooterColumnsMenu>

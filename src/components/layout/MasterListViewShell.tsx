@@ -17,6 +17,7 @@ export function MasterListViewShell({
   tabs,
   quickFilter,
   onQuickFilterChange,
+  footerSummary,
   children,
 }: {
   isMobile: boolean;
@@ -26,10 +27,26 @@ export function MasterListViewShell({
   tabs?: React.ReactNode;
   quickFilter?: EntityListQuickFilter;
   onQuickFilterChange?: (next: EntityListQuickFilter) => void;
+  footerSummary?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const showQuickFilter =
     quickFilter != null && onQuickFilterChange != null;
+
+  const quickFilterBar = showQuickFilter ? (
+    <EntityListQuickFilterBar
+      active={quickFilter}
+      onChange={onQuickFilterChange}
+      className={footerSummary ? "border-t-0 pt-0" : undefined}
+    />
+  ) : null;
+
+  const footerDock = showQuickFilter || footerSummary ? (
+    <div className="flex-shrink-0 border-t border-blue-300/60 bg-blue-100/80">
+      {footerSummary}
+      {quickFilterBar}
+    </div>
+  ) : null;
 
   const mobileDock = isMobile ? (
     <div className={mlc.mobileListDock} data-pl-mobile-list-dock="">
@@ -37,12 +54,7 @@ export function MasterListViewShell({
       {sectionLabel}
       {actionRow}
       {tabs ? <div className={mlc.tabsRow}>{tabs}</div> : null}
-      {showQuickFilter ? (
-        <EntityListQuickFilterBar
-          active={quickFilter}
-          onChange={onQuickFilterChange}
-        />
-      ) : null}
+      {footerDock}
     </div>
   ) : null;
 
@@ -56,15 +68,7 @@ export function MasterListViewShell({
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {!isMobile ? sectionLabel : null}
         <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
-        {!isMobile && showQuickFilter ? (
-          <div className="flex-shrink-0 border-t border-blue-300/60 bg-blue-100/80">
-            <EntityListQuickFilterBar
-              active={quickFilter}
-              onChange={onQuickFilterChange}
-              className="border-t-0"
-            />
-          </div>
-        ) : null}
+        {!isMobile ? footerDock : null}
       </div>
       {mobileDock}
     </div>

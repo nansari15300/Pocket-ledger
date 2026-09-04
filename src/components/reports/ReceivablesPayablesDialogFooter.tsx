@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { RP_DIALOG_DIM_GREEN_BORDER } from "@/components/reports/ReceivablesPayablesDialogEntityList";
 
 export type RpDialogBalance = {
   amount: number;
@@ -31,17 +32,32 @@ export function ReceivablesPayablesDialogFooter({
       )}
     >
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        <div className="p-2 border rounded-lg font-bold flex justify-between bg-emerald-50/90 dark:bg-emerald-950/35">
+        <div
+          className={cn(
+            "p-2 rounded-lg font-bold flex justify-between bg-emerald-50/90 dark:bg-emerald-950/35",
+            RP_DIALOG_DIM_GREEN_BORDER
+          )}
+        >
           <span>Total Receivable</span>
           <span className="text-green-700 dark:text-green-400 tabular-nums">{formatAmount(receivableSum)}</span>
         </div>
-        <div className="p-2 border rounded-lg font-bold flex justify-between bg-emerald-50/90 dark:bg-emerald-950/35">
+        <div
+          className={cn(
+            "p-2 rounded-lg font-bold flex justify-between bg-emerald-50/90 dark:bg-emerald-950/35",
+            RP_DIALOG_DIM_GREEN_BORDER
+          )}
+        >
           <span>Total Payable</span>
           <span className="text-red-600 dark:text-red-400 tabular-nums">{formatAmount(payableSum)}</span>
         </div>
       </div>
       {balance.side !== "equal" && balance.amount > 0 && (
-        <div className="rounded-lg border border-border bg-gradient-to-br from-green-50/90 via-muted/40 to-red-50/90 dark:from-green-950/35 dark:via-background dark:to-red-950/35 p-3 shadow-sm">
+        <div
+          className={cn(
+            "rounded-lg bg-gradient-to-br from-green-50/90 via-muted/40 to-red-50/90 dark:from-green-950/35 dark:via-background dark:to-red-950/35 p-3 shadow-sm",
+            RP_DIALOG_DIM_GREEN_BORDER
+          )}
+        >
           {balance.side === "receivable" && (
             <div className="flex w-full flex-wrap items-baseline justify-start gap-x-2 gap-y-0">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Balance</span>

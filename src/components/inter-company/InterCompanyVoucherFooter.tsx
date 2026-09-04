@@ -168,16 +168,65 @@ export function InterCompanyVoucherFooter({
       <div
         className={cn(
           "border-t min-w-0 max-w-full overflow-x-hidden",
-          inDialog ? "mt-[3px] pt-[3px] pb-[3px]" : "pt-4",
-          VOUCHER_BUTTONS_CLASS
+          inDialog ? "mt-[3px] pt-[3px] pb-[3px]" : "pt-4"
         )}
       >
-        <div className="flex w-full min-w-0 flex-col gap-2">
-          {deleteButton}
-          <Button type="button" onClick={onCancel} className={cn("w-full rounded-full", BTN_CANCEL_CLASS)}>
+        <div className={cn("grid grid-cols-3 gap-2 w-full min-w-0", VOUCHER_BUTTONS_CLASS)}>
+          {/* Row 0: Delete | History | Save & Print — Sale / Journal mobile jaisa */}
+          {onDelete ? (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="w-full"
+                  disabled={deleteDisabled || isLoading}
+                >
+                  Delete
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete this company&apos;s copy?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Only this company&apos;s Inter Company voucher goes to the recycle bin. The other company keeps
+                    their copy.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => onDelete?.()} className="bg-destructive hover:bg-destructive/90">
+                    Delete my copy
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          ) : (
+            <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">
+              —
+            </Button>
+          )}
+          <Button
+            type="button"
+            onClick={onOpenHistory ?? (() => {})}
+            disabled={historyDisabled}
+            className={cn("w-full", BTN_HISTORY_CLASS)}
+          >
+            History
+          </Button>
+          <Button
+            type="button"
+            disabled={printDisabled}
+            onClick={onPrint}
+            className={cn("w-full", BTN_PRINT_CLASS)}
+          >
+            Save & Print
+          </Button>
+          {/* Row 1: Cancel | Save | Approve */}
+          <Button type="button" onClick={onCancel} className={cn("w-full", BTN_CANCEL_CLASS)}>
             Cancel
           </Button>
-          <Button type="submit" disabled={saveDisabled} className={cn("w-full rounded-full", BTN_SAVE_CLASS)}>
+          <Button type="submit" disabled={saveDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
             {isLoading ? "..." : "Save"}
           </Button>
           {onApprove ? (
@@ -186,29 +235,15 @@ export function InterCompanyVoucherFooter({
               disabled={approveDisabled}
               title={approveBlockedHint || undefined}
               onClick={() => onApprove()}
-              className={cn("w-full rounded-full", BTN_APPROVE_CLASS)}
+              className={cn("w-full", BTN_APPROVE_CLASS)}
             >
               {approveLabel}
             </Button>
-          ) : null}
-          <Button
-            type="button"
-            disabled={printDisabled}
-            onClick={onPrint}
-            className={cn("w-full rounded-full", BTN_PRINT_CLASS)}
-          >
-            Save & Print
-          </Button>
-          {showHistoryButton ? (
-            <Button
-              type="button"
-              onClick={onOpenHistory ?? (() => {})}
-              disabled={historyDisabled}
-              className={cn("w-full rounded-full", BTN_HISTORY_CLASS)}
-            >
-              <History className="mr-2 h-4 w-4" /> History
+          ) : (
+            <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">
+              —
             </Button>
-          ) : null}
+          )}
         </div>
       </div>
     );

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Info } from "lucide-react";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -18,13 +18,9 @@ export function SettingsInfoTip({ label, description, className }: SettingsInfoT
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-            open && "bg-muted/60 text-foreground",
-            className
-          )}
+        <AppFreshInfoButton
+          size="md"
+          className={cn(open && "border-blue-400 bg-blue-200/80 text-blue-400", className)}
           aria-label={`About ${label}`}
           aria-expanded={open}
           onClick={(e) => {
@@ -32,9 +28,7 @@ export function SettingsInfoTip({ label, description, className }: SettingsInfoT
             e.stopPropagation();
             setOpen((v) => !v);
           }}
-        >
-          <Info className="h-3.5 w-3.5" />
-        </button>
+        />
       </PopoverTrigger>
       <PopoverContent
         side="top"

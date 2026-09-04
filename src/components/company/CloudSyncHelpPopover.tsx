@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Info } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
 
 /** (i) icon — cloud sync settings help (English). */
 export function CloudSyncHelpPopover({
@@ -21,13 +21,9 @@ export function CloudSyncHelpPopover({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-emerald-800 hover:bg-emerald-100 dark:text-emerald-200 dark:hover:bg-emerald-900/50",
-            open && "bg-emerald-100 dark:bg-emerald-900/40",
-            hasError && "text-destructive ring-1 ring-destructive/40"
-          )}
+        <AppFreshInfoButton
+          size="md"
+          className={cn(hasError && "ring-1 ring-destructive/40", open && "border-blue-400 bg-blue-200/80 text-blue-400")}
           aria-label={label}
           aria-expanded={open}
           onClick={(e) => {
@@ -35,9 +31,7 @@ export function CloudSyncHelpPopover({
             e.stopPropagation();
             setOpen((v) => !v);
           }}
-        >
-          <Info className="h-3.5 w-3.5" />
-        </button>
+        />
       </PopoverTrigger>
       <PopoverContent
         side={side}

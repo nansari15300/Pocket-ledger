@@ -11,6 +11,8 @@ import { useAuth } from "./useAuth";
 import usePermissions from "./usePermissions";
 import type { Party, Group } from "@/components/party/types";
 import type { Staff, StaffGroup } from "@/components/staff/types";
+import { normalizeStaffSystemGroupRow } from "@/lib/staffSystemGroups";
+import { ensureStaffModuleSystemGroups } from "@/lib/staffModuleSystemGroups";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { normalizeBankAccountRow } from "@/lib/bankAccountDisplayName";
 import type { Tax, TaxGroup } from "@/components/tax/types";
@@ -1020,6 +1022,15 @@ export const VoucherProvider = ({
   const [expenseGroups, setExpenseGroups] = useState<ExpenseGroup[]>([]);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [journalAccountNames, setJournalAccountNames] = useState<Record<string, string>>({});
+  const staffModuleSystemGroupsEnsuredRef = useRef("");
+
+  useEffect(() => {
+    const cid = String(companyId || "").trim();
+    const uid = String(user?.uid || company?.ownerId || "").trim();
+    if (!cid || !uid || staffModuleSystemGroupsEnsuredRef.current === cid) return;
+    staffModuleSystemGroupsEnsuredRef.current = cid;
+    void ensureStaffModuleSystemGroups(cid, uid);
+  }, [companyId, user?.uid, company?.ownerId]);
 
   /** Voucher attachment save — turant vouchers cache patch (ledger/dialog live). */
   const patchVoucherInCache = useCallback((voucherId: string, patch: Record<string, unknown>) => {
@@ -3346,8 +3357,15 @@ export const VoucherProvider = ({
       return Array.from(groupMap.values()).filter(g => !g.isDeleted);
   }, []);
 
+  const staffGroupsForProcessing = useMemo(
+    () => staffGroups.map((g) => normalizeStaffSystemGroupRow(g)),
+    [staffGroups]
+  );
   const processedGroups = useMemo(() => processGroups(groups, processedParties), [groups, processedParties, processGroups]);
-  const processedStaffGroups = useMemo(() => processGroups(staffGroups, processedStaff), [staffGroups, processedStaff, processGroups]);
+  const processedStaffGroups = useMemo(
+    () => processGroups(staffGroupsForProcessing, processedStaff),
+    [staffGroupsForProcessing, processedStaff, processGroups]
+  );
   const processedAccountGroups = useMemo(() => processGroups(accountGroups, processedAccounts), [accountGroups, processedAccounts, processGroups]);
   const processedTaxGroups = useMemo(() => processGroups(taxGroups, processedTaxes), [taxGroups, processedTaxes, processGroups]);
   const processedItemGroups = useMemo(() => processGroups(itemGroups, processedItems), [itemGroups, processedItems, processGroups]);

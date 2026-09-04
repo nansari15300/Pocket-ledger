@@ -74,6 +74,19 @@ import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilt
 import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
 import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
+import { createMasterEntityGroupMoveHandler } from "@/lib/createMasterEntityGroupMoveHandler";
+import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
+import { BANK_ACCOUNT_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { bankGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
+import { bankGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
+import { filterMembersByMasterGroupScope } from "@/lib/masterGroupMemberScope";
+import { BANK_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import {
+  appendMasterEntitySystemBranchGroups,
+  isMasterEntitySystemGroupId,
+  resolveBankListGroupBucketId,
+  resolveMasterEntityGroupForSelection,
+} from "@/lib/masterEntitySystemGroups";
 
 function BankCashPageContent() {
   const { user } = useAuth();
@@ -112,11 +125,7 @@ function BankCashPageContent() {
     processedAccounts.forEach((a: any) => {
       const n = pendingApprovalByAccountId[a.id] || 0;
       if (!n) return;
-      // Synthetic `AccountGroupList` row `id: 'ungrouped'` — `ungrouped_account` bucket yahi
-      const gid =
-        a.groupId && String(a.groupId).trim() !== "" && a.groupId !== "ungrouped_account"
-          ? a.groupId
-          : "ungrouped";
+      const gid = resolveBankListGroupBucketId(a);
       map[gid] = (map[gid] || 0) + n;
     });
     return map;
@@ -176,7 +185,7 @@ function BankCashPageContent() {
     () => resolveMasterListSelection(selectedAccountRaw, processedAccounts),
     [selectedAccountRaw, processedAccounts]
   );
-  const selectedGroup = activeView === 'groups' ? selected as AccountGroup : null;
+  const selectedGroupRaw = activeView === "groups" ? (selected as AccountGroup) : null;
   const handleAccountUpdated = useCallback((patch?: Partial<Account>) => {
     if (!patch?.id || !selectedAccountRaw || selectedAccountRaw.id !== patch.id) return;
     setSelected({ ...selectedAccountRaw, ...patch });
@@ -207,7 +216,7 @@ function BankCashPageContent() {
     return nm && String(nm).trim() ? String(nm).trim() : null;
   }, [selected, activeView, groupMemberFilterId, processedAccounts, mobileBankCashSelectionLabelClassName]);
   const bankCashMasterDetailTitle = activeView === "groups" ? "Bank Groups" : "Bank & Cash";
-  useSyncMasterDetailHeaderId("bank-cash", selectedAccount?.id ?? selectedGroup?.id ?? null);
+  useSyncMasterDetailHeaderId("bank-cash", selectedAccount?.id ?? selectedGroupRaw?.id ?? null);
 
   useEffect(() => {
     if (!isMobile || activeView === "groups") setBankMobileVoucherStats(null);
@@ -257,16 +266,8 @@ function BankCashPageContent() {
   
    const processedAccountGroups = useMemo(() => {
     const canViewSpecialBalance = can('view_special_account_balance');
-    const accountsForUngrouped = processedAccounts.filter((acc: any) => {
-        if (!acc.groupId || acc.groupId === "ungrouped_account") {
-            return !acc.isSpecial || canViewSpecialBalance;
-        }
-        return false;
-    });
 
-    const ungroupedBalance = accountsForUngrouped.reduce((sum, acc) => sum + acc.balance, 0);
-
-    const initialGroupsWithChildData = initialProcessedAccountGroups
+    const userDefinedGroups = initialProcessedAccountGroups
         .filter((group: any) => {
           if (group.isAutoUngrouped === true) return false;
           if (group.isReportOnly === true || group.isSystemReserved === true) return false;
@@ -282,20 +283,25 @@ function BankCashPageContent() {
         return { ...group, hasSpecial, balance };
     });
 
-    if (accountsForUngrouped.length > 0) {
-        const ungroupedGroup: any = {
-            id: 'ungrouped',
-            name: 'Ungrouped',
-            balance: ungroupedBalance,
-            companyId: companyId || '',
-            debit: accountsForUngrouped.reduce((sum, acc) => sum + acc.debit, 0),
-            credit: accountsForUngrouped.reduce((sum, acc) => sum + acc.credit, 0),
-            hasSpecial: false,
-        };
-        return [...initialGroupsWithChildData, ungroupedGroup];
-    }
-    return initialGroupsWithChildData;
+    return appendMasterEntitySystemBranchGroups(
+      userDefinedGroups,
+      BANK_ENTITY_GROUP_PRESET,
+      companyId || ""
+    );
   }, [processedAccounts, initialProcessedAccountGroups, companyId, can]);
+
+  const selectedGroup = useMemo(
+    () =>
+      selectedGroupRaw
+        ? (resolveMasterEntityGroupForSelection(
+            selectedGroupRaw.id,
+            processedAccountGroups,
+            BANK_ENTITY_GROUP_PRESET,
+            companyId || ""
+          ) as AccountGroup | null)
+        : null,
+    [selectedGroupRaw, processedAccountGroups, companyId]
+  );
 
 
   // ========== MEMORY LOGIC ==========
@@ -519,11 +525,15 @@ function BankCashPageContent() {
   
   const accountsForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
-    if (selectedGroup.id === 'ungrouped') {
-        return processedAccounts.filter((acc: any) => !acc.groupId || acc.groupId === "ungrouped_account");
-    }
-    return processedAccounts.filter(p => p.groupId === selectedGroup.id);
-  }, [selectedGroup, processedAccounts]);
+    return filterMembersByMasterGroupScope<Account>(
+      selectedGroup.id,
+      processedAccounts,
+      processedAccountGroups,
+      resolveBankListGroupBucketId,
+      (id) => isMasterEntitySystemGroupId(BANK_ENTITY_GROUP_PRESET, id),
+      (account, branchId) => resolveBankListGroupBucketId(account) === branchId
+    );
+  }, [selectedGroup, processedAccounts, processedAccountGroups]);
 
   const accountsForGroupDetails = useMemo(() => {
     if (!groupMemberFilterId) return accountsForSelectedGroup;
@@ -542,17 +552,13 @@ function BankCashPageContent() {
 
   const accountGroupMembersByGroupId = useMemo(() => {
     const map: Record<string, Account[]> = {};
-    for (const g of processedAccountGroupsForList) {
-      if (g.id === "ungrouped") {
-        map[g.id] = processedAccounts.filter(
-          (acc) => !acc.groupId || acc.groupId === "ungrouped_account"
-        );
-      } else {
-        map[g.id] = processedAccounts.filter((acc) => acc.groupId === g.id);
-      }
+    for (const acc of processedAccounts) {
+      const bucket = resolveBankListGroupBucketId(acc);
+      if (!map[bucket]) map[bucket] = [];
+      map[bucket].push(acc);
     }
     return map;
-  }, [processedAccountGroupsForList, processedAccounts]);
+  }, [processedAccounts]);
 
   // Filtered group count (matches AccountGroupList: search + exclude report-only + exclude system groups)
   const filteredGroupCount = useMemo(() => {
@@ -564,6 +570,31 @@ function BankCashPageContent() {
       return g.name && masterEntityTextMatchesSearch(g.name, searchTerm);
     }).length;
   }, [processedAccountGroupsForList, searchTerm]);
+
+  const handleMoveAccountToGroup = useCallback(
+    (account: Account, targetGroupId: string) =>
+      createMasterEntityGroupMoveHandler({
+        companyId,
+        company,
+        groupsForName: processedAccountGroups,
+        moveHelpers: bankGroupAccountMove,
+        entityLabel: "Account",
+      })(account, targetGroupId),
+    [companyId, company, processedAccountGroups]
+  );
+
+  const handleMoveAccountGroupToGroup = useCallback(
+    (sourceGroupId: string, targetGroupId: string) =>
+      createMasterEntityGroupTreeMoveHandler({
+        companyId,
+        company,
+        groupsForName: processedAccountGroups,
+        allGroups: initialProcessedAccountGroups,
+        config: BANK_ACCOUNT_GROUP_LIST_CONFIG,
+        moveHelpers: bankGroupTreeMove,
+      })(sourceGroupId, targetGroupId),
+    [companyId, company, processedAccountGroups, initialProcessedAccountGroups]
+  );
 
   if (pageColdLoading) {
     return <LoadingSpinner />;
@@ -598,7 +629,7 @@ function BankCashPageContent() {
     <div className={mlc.searchRow}>
       <div className={mlc.searchWrap}>
         <Search className={mlc.searchIcon} />
-        <Input placeholder={activeView === 'groups' ? 'Search groups...' : 'Search accounts...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
+        <Input placeholder={activeView === 'groups' ? 'Search groups/account' : 'Search accounts...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
       </div>
       {activeView === "accounts" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
         <PendingApprovalListFilterBadge compact
@@ -707,6 +738,12 @@ function BankCashPageContent() {
           quickFilter={groupListQuickFilter}
           onQuickFilterChange={setGroupListQuickFilter}
           hideQuickFilterBar
+          moveAccountsEnabled={!!companyId}
+          onMoveAccountToGroup={handleMoveAccountToGroup}
+          canMoveMember={bankGroupAccountMove.canMoveAccount}
+          onMoveGroupToGroup={handleMoveAccountGroupToGroup}
+          canMoveGroup={bankGroupTreeMove.canMoveGroup}
+          allGroupsForMove={initialProcessedAccountGroups}
         />
       )}
     </MasterListViewShell>
@@ -768,6 +805,11 @@ function BankCashPageContent() {
       mobileListOnly={true}
       hasSelectedItem={!!selected}
       onBackToList={onBackToList}
+      mobileListSelectionKey={
+        selected
+          ? `${selected.id}:${activeView === "groups" ? groupMemberFilterId ?? "" : ""}`
+          : null
+      }
     />
   );
 }

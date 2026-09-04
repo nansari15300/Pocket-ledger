@@ -98,6 +98,15 @@ export function interCompanyVoucherTouchesEntity(
   if (srcKind === kind && String(transaction.sourceEntityId || "").trim() === id) return true;
   if (tgtKind === kind && String(transaction.targetEntityId || "").trim() === id) return true;
 
+  if (interCompanyVoucherViewerSide(transaction) === "source") {
+    const ocId = String(transaction.otherChargeAccountId || "").trim();
+    const ocAmt = Number(transaction.otherChargeAmount || 0);
+    if (ocAmt > 0 && ocId === id) {
+      const ocKind = normKind(transaction.otherChargeKind);
+      if (ocKind === kind) return true;
+    }
+  }
+
   return false;
 }
 

@@ -130,8 +130,15 @@ export function LoanAccountingGroupPicker({
     await persistGroup(nextGroupId);
   };
 
-  const handleGroupCreated = async (newGroupId: string) => {
+  const handleGroupCreated = async (newGroupId: string, created?: { id: string; name: string; parentId: string }) => {
     setIsCreateGroupOpen(false);
+    if (created?.id) {
+      patchMasterEntity("expense_groups", created.id, {
+        id: created.id,
+        name: created.name,
+        parentId: created.parentId,
+      });
+    }
     if (draftMode && onDraftGroupChange) {
       onDraftGroupChange(newGroupId);
       return;

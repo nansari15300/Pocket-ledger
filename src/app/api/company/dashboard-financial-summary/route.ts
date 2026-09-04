@@ -92,13 +92,14 @@ export async function POST(req: NextRequest) {
       return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     };
 
-    const [voucherRows, parties, staff, taxes, items, expenseAccounts] = await Promise.all([
+    const [voucherRows, parties, staff, taxes, items, expenseAccounts, bankAccounts] = await Promise.all([
       sub("vouchers"),
       sub("parties"),
       sub("staff"),
       sub("taxes"),
       sub("items"),
       sub("expense_accounts"),
+      sub("bank_accounts"),
     ]);
 
     const vouchers = voucherRows.filter((r: Record<string, unknown>) => r.isDeleted !== true);
@@ -108,7 +109,8 @@ export async function POST(req: NextRequest) {
       staff.some((r) => isEncryptedDoc(r)) ||
       taxes.some((r) => isEncryptedDoc(r)) ||
       items.some((r) => isEncryptedDoc(r)) ||
-      expenseAccounts.some((r) => isEncryptedDoc(r));
+      expenseAccounts.some((r) => isEncryptedDoc(r)) ||
+      bankAccounts.some((r) => isEncryptedDoc(r));
 
     if (anyEnc) {
       return NextResponse.json({
@@ -133,6 +135,8 @@ export async function POST(req: NextRequest) {
       processedParties,
       processedStaff,
       processedTaxes,
+      processedAccounts: bankAccounts.filter((r: Record<string, unknown>) => r.isDeleted !== true),
+      processedExpenseAccounts: expenseAccounts,
       receivablesDateRange,
       loading: false,
     });

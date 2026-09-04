@@ -2,6 +2,12 @@
 
 import * as React from "react";
 import type { Staff, StaffGroup } from "@/components/staff/types";
+import { filterMembersByMasterGroupScope } from "@/lib/masterGroupMemberScope";
+import { LOAN_LIABILITY_GROUP_ID } from "@/modules/loans/constants/loanConstants";
+import { STAFF_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { isMasterEntitySystemGroupId, resolveStaffListGroupBucketId } from "@/lib/masterEntitySystemGroups";
+import { STAFF_SYSTEM_GROUP_ID } from "@/lib/staffSystemGroups";
+import { isLoanLiabilityStaff } from "@/modules/loans/utils/loanLiabilityStaff";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills } from "@/components/ui/LedgerViewModePills";
 import { Edit, Printer, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, ChevronDown, Columns3, Search, Pencil } from "lucide-react";
@@ -73,6 +79,7 @@ import { Checkbox } from "../ui/checkbox";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
+import { resolveGroupBooksOpeningBalance } from "@/lib/ledgerOpeningBalanceDisplay";
 import { useTransactions } from "@/hooks/use-transactions";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -83,6 +90,9 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { EditStaffDialog } from "./EditStaffDialog";
+import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
+import { useGroupMemberAccountLedgerChrome } from "@/hooks/useGroupMemberAccountLedgerChrome";
+import { STAFF_FREEZE_COLLECTION } from "@/lib/masterAccountFreeze/freezeAdapter";
 import { Input } from "../ui/input";
 import {
   DropdownMenu,
@@ -152,13 +162,24 @@ export function StaffGroupDetails({
   const { company, companyId } = useCompany();
   const { processedStaff, processedParties, processedAccounts, processedTaxes, processedExpenseAccounts, journalAccountNames, vouchers } = useVouchers();
   const { balanceMode, setBalanceMode } = useBalanceMode();
+  const isSystemBranchGroup = isMasterEntitySystemGroupId(STAFF_ENTITY_GROUP_PRESET, group.id);
   const staffInGroup = useMemo(() => {
-    if (group.id === "ungrouped") {
-      // Ungrouped should include both empty groupId and persisted ungrouped id rows.
-      return staff.filter((s) => !s.groupId || s.groupId === "ungrouped_staff");
+    if (staff.length > 0) return staff;
+    const gid = group.id;
+    if (gid === LOAN_LIABILITY_GROUP_ID) {
+      return processedStaff.filter((row) => isLoanLiabilityStaff(row));
     }
-    return staff.filter((s) => s.groupId === group.id);
-  }, [staff, group.id]);
+    if (gid === STAFF_SYSTEM_GROUP_ID) {
+      return processedStaff.filter((row) => !isLoanLiabilityStaff(row));
+    }
+    return filterMembersByMasterGroupScope<Staff>(
+      gid,
+      processedStaff,
+      allGroups,
+      resolveStaffListGroupBucketId,
+      (id) => isMasterEntitySystemGroupId(STAFF_ENTITY_GROUP_PRESET, id) || id === LOAN_LIABILITY_GROUP_ID
+    );
+  }, [staff, group.id, allGroups, processedStaff]);
   const childGroups = useMemo(() => allGroups.filter((g) => g.parentId === group.id), [allGroups, group.id]);
 
   const selectedMemberStaff = useMemo(() => {
@@ -170,6 +191,15 @@ export function StaffGroupDetails({
     () => trimEntityFileUrlForPreview(selectedMemberStaff?.fileUrl),
     [selectedMemberStaff?.fileUrl, selectedMemberStaff?.id]
   );
+
+  const { memberFreezeOverlay, memberClosingBalanceActions } = useGroupMemberAccountLedgerChrome({
+    companyId,
+    collection: STAFF_FREEZE_COLLECTION,
+    patchCollection: "staff",
+    selectedMember: selectedMemberStaff,
+    adjustmentEntityType: "staff",
+    onMemberUpdated: onStaffUpdated,
+  });
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
@@ -585,7 +615,7 @@ export function StaffGroupDetails({
             periodDrForPage: desktopPageLedgerStats.periodDrForPage,
             periodCrForPage: desktopPageLedgerStats.periodCrForPage,
             closingForPage: desktopPageLedgerStats.closingForPage,
-            booksOpeningBalance: Number(group.openingBalance) || 0,
+            booksOpeningBalance: resolveGroupBooksOpeningBalance(group, staff),
             ledgerShowBookOpeningRow: currentPage === 1,
             ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
             openingBalancePeriodStartDate: dateRange?.from,
@@ -688,6 +718,7 @@ export function StaffGroupDetails({
               style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
             >
             <div className="pb-2">
+            <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable
               transactions={mobileTransactionsToShow}
               context="group"
@@ -711,9 +742,11 @@ export function StaffGroupDetails({
               periodDr={desktopPageLedgerStats.periodDrForPage}
               periodCr={desktopPageLedgerStats.periodCrForPage}
               closingBalance={desktopPageLedgerStats.closingForPage}
+              closingBalanceActions={memberClosingBalanceActions}
               scrollOnlyTransactions
               {...statementCheck.tableProps}
             />
+            </MasterAccountFreezeTxnShell>
             </div>
             </div>
             <MobileTransactionsPager
@@ -1101,6 +1134,7 @@ export function StaffGroupDetails({
         {/* Table area: same layout as StaffDetails + scrollOnlyTransactions so table gets focus and one Enter opens edit (statement & bill wise) */}
         <div className="flex-1 flex flex-col min-h-0 overflow-x-auto">
           <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
+            <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable
               transactions={paginatedTransactions}
               context="group"
@@ -1136,11 +1170,13 @@ export function StaffGroupDetails({
               periodDr={desktopPageLedgerStats.periodDrForPage}
               periodCr={desktopPageLedgerStats.periodCrForPage}
               closingBalance={desktopPageLedgerStats.closingForPage}
+              closingBalanceActions={memberClosingBalanceActions}
               scrollOnlyTransactions
               hideDebitColumn={false}
               hideCreditColumn={false}
               {...statementCheck.tableProps}
             />
+            </MasterAccountFreezeTxnShell>
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">No transactions found for the selected period.</div>
             )}

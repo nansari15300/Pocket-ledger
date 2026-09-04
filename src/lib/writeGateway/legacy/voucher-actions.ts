@@ -54,8 +54,8 @@ export async function initializeCompanyData(companyId: string, userId: string) {
     
     // For Staff Menu
     { col: "staff_groups", id: "loans_liabilities", name: "Loans & Liabilities", type: "Liability", parentId: "liabilities", isSystemReserved: true, isReportOnly: false },
+    { col: "staff_groups", id: "staff_system", name: "Staff", type: "General", parentId: "loans_liabilities", isSystemReserved: true, isReportOnly: false },
     // Auto-created Ungrouped buckets (kept hidden in UI lists unless real ungrouped records exist).
-    { col: "groups", id: "ungrouped_party", name: "Ungrouped", type: "General", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
     { col: "staff_groups", id: "ungrouped_staff", name: "Ungrouped", type: "General", parentId: "loans_liabilities", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
     { col: "tax_groups", id: "ungrouped_tax", name: "Ungrouped", type: "General", parentId: "duties_taxes", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
     { col: "account_groups", id: "ungrouped_account", name: "Ungrouped", type: "General", parentId: "bank_accounts_group", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },

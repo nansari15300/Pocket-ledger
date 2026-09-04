@@ -21,7 +21,31 @@ type UseMasterAccountFreezeDetailsChromeOpts<T extends MasterAccountFreezeFields
   entityEligible: boolean;
   onEntityUpdated: (patch: Partial<T> & MasterAccountFreezeFields) => void;
   adjustBalanceActions: React.ReactNode;
+  prependClosingBalanceActions?: React.ReactNode;
 };
+
+type MobileClosingBalanceActionsProps = {
+  freezeToggle: React.ReactNode;
+  prepend: React.ReactNode;
+  adjustBalance: React.ReactNode;
+};
+
+/** Phone footer: keep the action row narrow and let touch swipes switch actions one at a time. */
+function MobileClosingBalanceActions({
+  freezeToggle,
+  prepend,
+  adjustBalance,
+}: MobileClosingBalanceActionsProps) {
+  if (!freezeToggle && !prepend && !adjustBalance) return null;
+
+  return (
+    <div className="flex min-w-0 max-w-full flex-1 flex-wrap items-center gap-2">
+      {freezeToggle}
+      {prepend}
+      {adjustBalance}
+    </div>
+  );
+}
 
 /** Shared freeze toggle, overlay, and footer actions for master account details pages. */
 export function useMasterAccountFreezeDetailsChrome<T extends MasterAccountFreezeFields>({
@@ -32,6 +56,7 @@ export function useMasterAccountFreezeDetailsChrome<T extends MasterAccountFreez
   entityEligible,
   onEntityUpdated,
   adjustBalanceActions,
+  prependClosingBalanceActions,
 }: UseMasterAccountFreezeDetailsChromeOpts<T>) {
   const { enabled: freezeFeatureEnabled } = useMasterAccountFreezeFeature();
   const isMobile = useIsMobile();
@@ -102,23 +127,47 @@ export function useMasterAccountFreezeDetailsChrome<T extends MasterAccountFreez
 
   const closingBalanceActions = React.useMemo(() => {
     const adjustBalance = adjustBalanceActions;
-    if (!isFrozen && !freezeToggle && !adjustBalance) return null;
+    const prepend = prependClosingBalanceActions;
+    if (!isFrozen && !freezeToggle && !adjustBalance && !prepend) return null;
     if (isFrozen) {
       const footerToggle = isMobile && !bannerToggleFits ? freezeToggle : null;
       return (
-        <div className="flex flex-wrap items-center gap-2">
-          {footerToggle}
-          {adjustBalance}
-        </div>
+        isMobile ? (
+          <MobileClosingBalanceActions
+            freezeToggle={footerToggle}
+            prepend={prepend}
+            adjustBalance={adjustBalance}
+          />
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            {footerToggle}
+            {prepend}
+            {adjustBalance}
+          </div>
+        )
       );
     }
-    return (
+    return isMobile ? (
+      <MobileClosingBalanceActions
+        freezeToggle={freezeToggle}
+        prepend={prepend}
+        adjustBalance={adjustBalance}
+      />
+    ) : (
       <div className="flex flex-wrap items-center gap-2">
         {freezeToggle}
+        {prepend}
         {adjustBalance}
       </div>
     );
-  }, [isFrozen, isMobile, bannerToggleFits, freezeToggle, adjustBalanceActions]);
+  }, [
+    isFrozen,
+    isMobile,
+    bannerToggleFits,
+    freezeToggle,
+    adjustBalanceActions,
+    prependClosingBalanceActions,
+  ]);
 
   return {
     showAccountFreezeChrome,

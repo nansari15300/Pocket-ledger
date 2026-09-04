@@ -216,6 +216,37 @@ export function interCompanyUsesConduitParty(voucher: Record<string, unknown>): 
   );
 }
 
+/** Source company — Payment Out style bank outflow (transfer + optional other charge). */
+export function readInterCompanyOtherCharge(voucher: Record<string, unknown>): {
+  accountId: string;
+  amount: number;
+} {
+  const side = resolveInterCompanyViewerSide(voucher);
+  if (side !== "source") return { accountId: "", amount: 0 };
+  const amount = round2(Number(voucher.otherChargeAmount) || 0);
+  const accountId = String(voucher.otherChargeAccountId || "").trim();
+  if (amount <= 0 || !accountId) return { accountId: "", amount: 0 };
+  return { accountId, amount };
+}
+
+export function interCompanySourceBankOutflowAmount(voucher: Record<string, unknown>): number {
+  const transfer = round2(Number(voucher.amount ?? voucher.total) || 0);
+  const { amount: other } = readInterCompanyOtherCharge(voucher);
+  return round2(transfer + other);
+}
+
+function appendInterCompanyOtherChargeSourceLeg(
+  legs: InterCompanyLedgerLeg[],
+  otherChargeAccountId: string | undefined,
+  otherChargeAmount: number | undefined,
+  otherChargeKind: InterCompanyEntityKind | null | undefined
+): void {
+  const otherAmt = round2(Number(otherChargeAmount) || 0);
+  const accountId = String(otherChargeAccountId || "").trim();
+  if (otherAmt <= 0 || !accountId || !otherChargeKind) return;
+  legs.push({ kind: otherChargeKind, accountId, debit: otherAmt, credit: 0 });
+}
+
 /** Source company — save/unapproved: amount clearing pe Cr (Payment Out); destination baad me. */
 export function buildSourceInterCompanyLegs(args: {
   amount: number;
@@ -224,16 +255,27 @@ export function buildSourceInterCompanyLegs(args: {
   companyBankAccountId: string;
   interCompanyCounterpartyPartyId: string;
   useIcConduit?: boolean;
+  otherChargeAccountId?: string;
+  otherChargeAmount?: number;
+  otherChargeKind?: InterCompanyEntityKind | null;
 }): InterCompanyLedgerLeg[] {
   const amt = round2(Number(args.amount) || 0);
-  if (amt <= 0) return [];
+  const otherAmt = round2(Number(args.otherChargeAmount) || 0);
+  const bankOut = round2(amt + otherAmt);
+  if (amt <= 0 && otherAmt <= 0) return [];
   const { companyBankAccountId: bankId, interCompanyCounterpartyPartyId: icId } = args;
   const useConduit = args.useIcConduit === true;
   const legs: InterCompanyLedgerLeg[] = [];
-  appendIcComSourceLeg(legs, icId, amt, useConduit);
-  if (bankId) {
-    legs.push({ kind: "bank", accountId: bankId, debit: 0, credit: amt });
+  if (amt > 0) appendIcComSourceLeg(legs, icId, amt, useConduit);
+  if (bankId && bankOut > 0) {
+    legs.push({ kind: "bank", accountId: bankId, debit: 0, credit: bankOut });
   }
+  appendInterCompanyOtherChargeSourceLeg(
+    legs,
+    args.otherChargeAccountId,
+    otherAmt,
+    args.otherChargeKind
+  );
   return legs;
 }
 
@@ -294,27 +336,44 @@ export function buildSourceInterCompanyLegsApproved(args: {
   companyBankAccountId: string;
   interCompanyCounterpartyPartyId: string;
   useIcConduit?: boolean;
+  otherChargeAccountId?: string;
+  otherChargeAmount?: number;
+  otherChargeKind?: InterCompanyEntityKind | null;
 }): InterCompanyLedgerLeg[] {
   const amt = round2(Number(args.amount) || 0);
-  if (amt <= 0) return [];
+  const otherAmt = round2(Number(args.otherChargeAmount) || 0);
+  const bankOut = round2(amt + otherAmt);
+  if (amt <= 0 && otherAmt <= 0) return [];
   const { entityKind, entityId, companyBankAccountId: bankId, interCompanyCounterpartyPartyId: icId } = args;
   const useConduit = args.useIcConduit === true;
   const destination = isInterCompanyDestinationAccount(entityKind, entityId, bankId);
   const legs: InterCompanyLedgerLeg[] = [];
-  appendIcComSourceLeg(legs, icId, amt, useConduit);
+  if (amt > 0) appendIcComSourceLeg(legs, icId, amt, useConduit);
   if (destination && entityId) {
     const sideAmt = destinationLegAmount("source", entityKind, amt);
     legs.push({ kind: entityKind, accountId: entityId, debit: sideAmt.debit, credit: sideAmt.credit });
-    if (bankId) {
+    if (bankId && bankOut > 0) {
       // Approved: clearing pe dono side (path-through) — destination alag one-side
-      legs.push({ kind: "bank", accountId: bankId, debit: amt, credit: amt });
+      legs.push({ kind: "bank", accountId: bankId, debit: bankOut, credit: bankOut });
     }
+    appendInterCompanyOtherChargeSourceLeg(
+      legs,
+      args.otherChargeAccountId,
+      otherAmt,
+      args.otherChargeKind
+    );
     return legs;
   }
-  if (bankId) {
+  if (bankId && bankOut > 0) {
     // Destination missing — amount clearing pe one-side (Payment Out = Cr)
-    legs.push({ kind: "bank", accountId: bankId, debit: 0, credit: amt });
+    legs.push({ kind: "bank", accountId: bankId, debit: 0, credit: bankOut });
   }
+  appendInterCompanyOtherChargeSourceLeg(
+    legs,
+    args.otherChargeAccountId,
+    otherAmt,
+    args.otherChargeKind
+  );
   return legs;
 }
 
@@ -459,6 +518,8 @@ export function getInterCompanyLegAmounts(
 
   const side = resolveInterCompanyViewerSide(voucher);
   const amt = round2(Number(voucher.amount ?? voucher.total) || 0);
+  const bankOut = interCompanySourceBankOutflowAmount(voucher);
+  const otherCharge = readInterCompanyOtherCharge(voucher);
   const icCounterpartyId = String(voucher.interCompanyCounterpartyPartyId || "").trim();
   const isIcComLedger = context === "party" && icCounterpartyId && id === icCounterpartyId;
 
@@ -489,10 +550,10 @@ export function getInterCompanyLegAmounts(
         return finalizeIcLegAmounts(voucher, { touched: true, debit: amt, credit: 0 });
       }
     }
-    if (side === "source" && context === "account" && amt > 0) {
+    if (side === "source" && context === "account" && bankOut > 0) {
       const bankId = resolveInterCompanyBankIdForLegs(voucher);
       if (bankId && id === bankId) {
-        return finalizeIcLegAmounts(voucher, { touched: true, debit: 0, credit: amt });
+        return finalizeIcLegAmounts(voucher, { touched: true, debit: 0, credit: bankOut });
       }
     }
 
@@ -521,6 +582,39 @@ export function getInterCompanyLegAmounts(
       }
     }
 
+    // Unapproved source — other charge account (Payment Out jaisa)
+    if (
+      side === "source" &&
+      otherCharge.amount > 0 &&
+      otherCharge.accountId === id
+    ) {
+      const storedKind = String(voucher.otherChargeKind || "").trim() as InterCompanyEntityKind;
+      let ocCtx: typeof context | null = null;
+      if (storedKind === "party") ocCtx = "party";
+      else if (storedKind === "staff") ocCtx = "staff";
+      else if (storedKind === "expense") ocCtx = "expense";
+      else {
+        const storedLegs = resolveInterCompanyLegsForVoucher(voucher);
+        const leg = storedLegs.find(
+          (row) =>
+            String(row.accountId) === id &&
+            row.debit > 0 &&
+            (row.kind === "party" || row.kind === "staff" || row.kind === "expense")
+        );
+        if (leg) {
+          ocCtx =
+            leg.kind === "staff" ? "staff" : leg.kind === "expense" ? "expense" : "party";
+        }
+      }
+      if (ocCtx === context) {
+        return finalizeIcLegAmounts(voucher, {
+          touched: true,
+          debit: otherCharge.amount,
+          credit: 0,
+        });
+      }
+    }
+
     // Destination account — unapprove tak hide (purani legs bhi)
     return empty;
   }
@@ -544,7 +638,12 @@ export function getInterCompanyLegAmounts(
       }
       // Bypass / incomplete legs — display pe Dr+Cr dikhao
       if (!(clearingDebit > 0 && clearingCredit > 0)) {
-        return finalizeIcLegAmounts(voucher, { touched: true, debit: amt, credit: amt });
+        const clearingCreditAmt = side === "source" ? bankOut : amt;
+        return finalizeIcLegAmounts(voucher, {
+          touched: true,
+          debit: amt,
+          credit: clearingCreditAmt,
+        });
       }
     }
   }
@@ -563,7 +662,7 @@ export function getInterCompanyLegAmounts(
         return finalizeIcLegAmounts(voucher, { touched: true, debit: amt, credit: 0 });
       }
       if (side === "source") {
-        return finalizeIcLegAmounts(voucher, { touched: true, debit: 0, credit: amt });
+        return finalizeIcLegAmounts(voucher, { touched: true, debit: 0, credit: bankOut });
       }
     }
   }

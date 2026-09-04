@@ -16,8 +16,10 @@ export type Tax = {
   openingBalanceNarration?: string;
   documentFileUrls?: string[];
   phone?: string;
+  whatsapp?: boolean;
   isFrozen?: boolean;
   freezeMessage?: string | null;
+  anusuchi13ConfirmationByFy?: Record<string, { sent?: boolean; completed?: boolean; statementSent?: boolean }>;
 };
 
 export type TaxGroup = {

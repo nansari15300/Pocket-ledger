@@ -1,22 +1,27 @@
 
 "use client";
 
-import type { TaxGroup, Tax } from "@/components/tax/types";
+import React, { useCallback, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
-import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { TooltipProvider } from "../ui/tooltip";
-import { useMemo, useState } from "react";
+import type { TaxGroup, Tax } from "@/components/tax/types";
 import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
-import { filterAndSortEntityGroups } from "@/lib/entityGroupListQuickFilter";
 import { motion } from "framer-motion";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { masterListShellCn } from "@/lib/masterListChrome";
 import type { GroupListSelectOptions } from "@/lib/groupListExpand";
-import { MasterGroupExpandableListBody } from "@/components/entity/MasterGroupExpandableListBody";
+import { MasterGroupNestedListBody } from "@/components/entity/MasterGroupNestedListBody";
+import { TAX_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { useMasterGroupListForest } from "@/hooks/useMasterGroupListForest";
+import { GroupListMemberRow } from "@/components/entity/GroupListMemberRow";
+import { groupListMemberAvatarFromRow } from "@/components/entity/GroupListMemberAvatar";
+import { Users } from "lucide-react";
+import { MasterListGroupIcon } from "@/components/entity/MasterListGroupIcon";
 
 export function TaxGroupList({
   groups,
@@ -31,6 +36,12 @@ export function TaxGroupList({
   groupMembersByGroupId = {},
   selectedGroupMemberFilterId = null,
   pendingApprovalByMemberId = {},
+  moveAccountsEnabled = false,
+  onMoveAccountToGroup,
+  canMoveMember,
+  onMoveGroupToGroup,
+  canMoveGroup,
+  allGroupsForMove,
 }: {
   groups: TaxGroup[];
   searchTerm: string;
@@ -44,6 +55,12 @@ export function TaxGroupList({
   groupMembersByGroupId?: Record<string, Tax[]>;
   selectedGroupMemberFilterId?: string | null;
   pendingApprovalByMemberId?: Record<string, number>;
+  moveAccountsEnabled?: boolean;
+  onMoveAccountToGroup?: (tax: Tax, targetGroupId: string) => void | Promise<void>;
+  canMoveMember?: (tax: Tax) => boolean;
+  onMoveGroupToGroup?: (sourceGroupId: string, targetGroupId: string) => void | Promise<void>;
+  canMoveGroup?: (group: TaxGroup) => boolean;
+  allGroupsForMove?: TaxGroup[];
 }) {
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } =
@@ -52,28 +69,23 @@ export function TaxGroupList({
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
 
-  const filteredAndSortedGroups = useMemo(() => {
-    const base = groups.filter((group) => {
-      const isReportOnly = (group as any).isReportOnly === true;
-      const isSystemParent =
-        (group as any).isSystemReserved === true ||
-        isSystemParentGroup("tax_groups", (group as any).id);
-      if (isReportOnly || isSystemParent) return false;
-      return !!group.name;
-    });
-    return filterAndSortEntityGroups(base, searchTerm, quickFilter);
-  }, [groups, searchTerm, quickFilter]);
+  const visibleGroupFilter = useCallback((group: TaxGroup) => {
+    const isReportOnly = (group as { isReportOnly?: boolean }).isReportOnly === true;
+    const isSystemParent =
+      (group as { isSystemReserved?: boolean }).isSystemReserved === true ||
+      isSystemParentGroup("tax_groups", group.id);
+    if (isReportOnly || isSystemParent) return false;
+    return !!group.name;
+  }, []);
 
-  const listOrderKey = useMemo(
-    () => masterListOrderKey(filteredAndSortedGroups.map((g) => g.id)),
-    [filteredAndSortedGroups]
-  );
-
-  const { displayRows: displayListRows, displayOrderKey } = useMasterListDisplayRows(
-    filteredAndSortedGroups,
-    listOrderKey,
-    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
-  );
+  const { forest, visibleGroups, displayOrderKey } = useMasterGroupListForest({
+    groups,
+    config: TAX_GROUP_LIST_CONFIG,
+    searchTerm,
+    quickFilter,
+    groupMembersByGroupId,
+    visibleGroupFilter,
+  });
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -85,9 +97,12 @@ export function TaxGroupList({
           onViewportTouchMove={markListScrolling}
         >
           <ul className="pl-master-list-ul">
-            <MasterGroupExpandableListBody
-              displayListRows={displayListRows}
+            <MasterGroupNestedListBody
+              config={TAX_GROUP_LIST_CONFIG}
+              forest={forest}
+              allGroups={allGroupsForMove ?? visibleGroups}
               displayOrderKey={displayOrderKey}
+              searchTerm={searchTerm}
               selectedGroup={selectedGroup}
               selectedGroupMemberFilterId={selectedGroupMemberFilterId}
               groupMembersByGroupId={groupMembersByGroupId}
@@ -100,12 +115,35 @@ export function TaxGroupList({
               rowMotionProps={rowMotionProps}
               isRowAnimationEnabled={isRowAnimationEnabled}
               layoutHoldMs={layoutHoldMs}
-              expandAriaLabel="taxes"
-              formatCurrency={formatCurrency}
+              formatCurrency={(amount, options) =>
+                formatCurrency(amount, { ...options, noAnimation: true }) as React.ReactNode
+              }
+              renderGroupLeading={() => (
+                <MasterListGroupIcon>
+                  <Users className="h-5 w-5" />
+                </MasterListGroupIcon>
+              )}
+              renderMemberRow={(member, group, ctx) => (
+                <GroupListMemberRow
+                  key={member.id || `${group.id}-member-${member.name}`}
+                  name={member.name}
+                  balance={member.balance}
+                  isSelected={ctx.isSelected}
+                  onClick={ctx.onClick}
+                  pendingCount={ctx.pendingCount}
+                  leading={groupListMemberAvatarFromRow(member)}
+                  highlightQuery={ctx.highlightQuery}
+                  isAccountFrozen={Boolean((member as Tax).isFrozen)}
+                  rowDimClass={ctx.rowDimClass}
+                  {...ctx.memberMoveProps}
+                />
+              )}
+              moveAccountsEnabled={moveAccountsEnabled}
+              onMoveAccountToGroup={onMoveAccountToGroup}
+              canMoveMember={canMoveMember}
+              onMoveGroupToGroup={onMoveGroupToGroup}
+              canMoveGroup={canMoveGroup}
             />
-            {displayListRows.length === 0 && (
-              <div className="text-center text-muted-foreground p-8">No groups found.</div>
-            )}
           </ul>
         </ScrollArea>
         {!hideQuickFilterBar ? (

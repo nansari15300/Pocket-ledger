@@ -3,7 +3,14 @@
 import { useParams } from 'next/navigation';
 import { StaffGroupDetails } from '@/components/staff/StaffGroupDetails';
 import { useVouchers } from '@/hooks/useVouchers';
-import { useState } from 'react';
+import type { Staff } from '@/components/staff/types';
+import { useMemo, useState } from 'react';
+import { filterMembersByMasterGroupScope } from '@/lib/masterGroupMemberScope';
+import { STAFF_ENTITY_GROUP_PRESET } from '@/lib/masterEntityGroupFormPresets';
+import { isMasterEntitySystemGroupId, resolveStaffListGroupBucketId } from '@/lib/masterEntitySystemGroups';
+import { STAFF_SYSTEM_GROUP_ID } from '@/lib/staffSystemGroups';
+import { LOAN_LIABILITY_GROUP_ID } from '@/modules/loans/constants/loanConstants';
+import { isLoanLiabilityStaff } from '@/modules/loans/utils/loanLiabilityStaff';
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useRouter } from 'next/navigation';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
@@ -15,7 +22,21 @@ export function StaffGroupDetailsClient() {
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const groupId = params.id as string;
   const group = processedStaffGroups.find((g) => g.id === groupId);
-  const staffInGroup = processedStaff.filter(s => s.groupId === groupId);
+  const staffInGroup = useMemo(() => {
+    if (groupId === LOAN_LIABILITY_GROUP_ID) {
+      return processedStaff.filter((row) => isLoanLiabilityStaff(row));
+    }
+    if (groupId === STAFF_SYSTEM_GROUP_ID) {
+      return processedStaff.filter((row) => !isLoanLiabilityStaff(row));
+    }
+    return filterMembersByMasterGroupScope<Staff>(
+      groupId,
+      processedStaff,
+      processedStaffGroups,
+      resolveStaffListGroupBucketId,
+      (id) => isMasterEntitySystemGroupId(STAFF_ENTITY_GROUP_PRESET, id) || id === LOAN_LIABILITY_GROUP_ID
+    );
+  }, [groupId, processedStaff, processedStaffGroups]);
 
   if (loading) return <LoadingSpinner />;
   if (!group) return <div className="flex items-center justify-center h-full"><p>Group not found.</p></div>;

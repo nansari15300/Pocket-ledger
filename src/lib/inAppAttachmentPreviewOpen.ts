@@ -50,6 +50,15 @@ export function markInAppAttachmentPreviewClosing(): void {
 /** Multi-file gallery overlay (voucher / entity docs) — hardware back + `isInAppAttachmentPreviewOpen` */
 const previewLayerSelector = `[data-in-app-pdf-preview], [data-in-app-image-preview], [data-in-app-attachment-gallery], [${IN_APP_ATTACHMENT_PREVIEW_CLICK_SHIELD}]`;
 
+/** Ledger/file hover portal (`AttachmentHoverPortal`) — txn dialog ke upar step-by-step dismiss */
+const attachmentHoverPortalSelector =
+  '[data-attachment-preview-portal], [data-attachment-preview-backdrop]';
+
+export function isAttachmentHoverPortalOpen(): boolean {
+  if (typeof document === "undefined") return false;
+  return Boolean(document.querySelector(attachmentHoverPortalSelector));
+}
+
 /**
  * DOM hataune lai aglo frame samma — same gesture ma dismiss pipeline pura huda samma `[data-in-app-*]` rahos.
  * Ghost tap: root hataisake *pachi* chadai transparent shield (Close sanga agadi overlap hudaina).
@@ -148,7 +157,9 @@ export function tryConsumeAttachmentPreviewHardwareBack(): boolean {
 export function isInAppAttachmentPreviewOpen(): boolean {
   if (typeof document === "undefined") return false;
   if (Date.now() < previewClosingGraceUntilMs) return true;
-  return Boolean(document.querySelector(previewLayerSelector));
+  return (
+    Boolean(document.querySelector(previewLayerSelector)) || isAttachmentHoverPortalOpen()
+  );
 }
 
 /**

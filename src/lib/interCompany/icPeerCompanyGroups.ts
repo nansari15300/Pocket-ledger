@@ -47,6 +47,12 @@ export type IcPeerCompanyGroupRow = Party & {
   icMemberParties: Party[];
 };
 
+/** Parties tab flat IC card — second row: `IC Com ------> Peer Name`. */
+export function icPartyListFlatSecondaryLabel(peerCompanyName: string): string {
+  const peer = String(peerCompanyName || "").trim() || "—";
+  return `IC Com ------> ${peer}`;
+}
+
 /** IC company group subtitle — e.g. `IC Company 2 Accounts`. */
 export function icPeerCompanyGroupSecondaryLabel(accountCount: number): string {
   const count = Math.max(0, Number(accountCount) || 0);

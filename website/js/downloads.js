@@ -1,6 +1,11 @@
 (function () {
   var LOCAL_MANIFEST = "/releases/latest.json";
-  var cachedSettings = { downloadsMaxOld: 5 };
+  var cachedSettings = { downloadsMaxOldExe: 5, downloadsMaxOldApk: 5 };
+  var PENDING_DOWNLOAD_KEY = "pl_pending_download";
+  var auth = null;
+  var currentUser = null;
+  var authReady = false;
+  var resumeChecked = false;
 
   function isLocalHost() {
     var h = location.hostname;
@@ -38,11 +43,12 @@
   function normalizeSettings(raw) {
     return typeof window.normalizeReleaseSettings === "function"
       ? window.normalizeReleaseSettings(raw)
-      : { downloadsMaxOld: 5, outdatedPolicy: "keep", outdatedMaxKeep: 20 };
+      : { downloadsMaxOldExe: 5, downloadsMaxOldApk: 5, outdatedPolicy: "keep", outdatedMaxKeep: 20 };
   }
 
-  function maxKeep() {
-    return cachedSettings.downloadsMaxOld + 1;
+  function maxKeep(kind) {
+    if (kind === "android") return cachedSettings.downloadsMaxOldApk + 1;
+    return cachedSettings.downloadsMaxOldExe + 1;
   }
 
   function $(id) {
@@ -70,7 +76,11 @@
     return isApkAndroid(data.android) ? data.android : null;
   }
 
-  function keptEntries(data) {
+  function keptEntries(data, kind) {
+    if (typeof window.buildPublicDownloadEntries === "function") {
+      return window.buildPublicDownloadEntries(data, cachedSettings, kind);
+    }
+    var platformKey = kind === "android" ? "android" : "windows";
     var out = [];
     if (data && (data.windows || pickApkEntry(data))) {
       out.push({
@@ -94,7 +104,7 @@
         latest: false,
       });
     });
-    return out.slice(0, maxKeep());
+    return out.slice(0, maxKeep(platformKey === "android" ? "android" : "windows"));
   }
 
   function optionLabel(entry, kind) {
@@ -139,24 +149,176 @@
     meta.textContent = bits.join(" · ");
   }
 
-  function trackDownload(platform, extras) {
+  function loginPageUrl() {
+    return "/login/?return=" + encodeURIComponent(location.pathname + location.search);
+  }
+
+  function readPendingDownload() {
     try {
-      var payload = {
+      var raw = sessionStorage.getItem(PENDING_DOWNLOAD_KEY);
+      if (!raw) return null;
+      var row = JSON.parse(raw);
+      if (!row || !row.url || !row.platform) return null;
+      return row;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function writePendingDownload(row) {
+    try {
+      sessionStorage.setItem(PENDING_DOWNLOAD_KEY, JSON.stringify(row));
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function clearPendingDownload() {
+    try {
+      sessionStorage.removeItem(PENDING_DOWNLOAD_KEY);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function updateAuthBanner() {
+    var banner = $("downloadAuthBanner");
+    var text = $("downloadAuthText");
+    var signInBtn = $("downloadSignInBtn");
+    var signOutBtn = $("downloadSignOutBtn");
+    if (!banner) return;
+    banner.hidden = false;
+    banner.classList.remove("is-signed-in", "is-signed-out");
+    if (currentUser && currentUser.email) {
+      banner.classList.add("is-signed-in");
+      if (text) {
+        text.textContent = "Signed in as " + currentUser.email + ". You can download now.";
+      }
+      if (signInBtn) signInBtn.hidden = true;
+      if (signOutBtn) signOutBtn.hidden = false;
+      return;
+    }
+    banner.classList.add("is-signed-out");
+    if (text) {
+      text.textContent = "Sign in is required before EXE, APK, or Play Store download.";
+    }
+    if (signInBtn) {
+      signInBtn.hidden = false;
+      signInBtn.href = loginPageUrl();
+    }
+    if (signOutBtn) signOutBtn.hidden = true;
+  }
+
+  function startFileDownload(url) {
+    if (!url) return;
+    var frame = document.createElement("iframe");
+    frame.style.display = "none";
+    frame.src = url;
+    document.body.appendChild(frame);
+    window.setTimeout(function () {
+      if (frame.parentNode) frame.parentNode.removeChild(frame);
+    }, 120000);
+    window.location.href = url;
+  }
+
+  function trackDownload(platform, extras, token) {
+    var headers = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = "Bearer " + token;
+    return fetch("/app/api/public/download-events", {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify({
         platform: platform,
         version: (extras && extras.version) || "",
         fileName: (extras && extras.fileName) || "",
         source: (extras && extras.source) || "",
-      };
-      void fetch("/app/api/public/download-events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        keepalive: true,
-        cache: "no-store",
+      }),
+      keepalive: true,
+      cache: "no-store",
+    }).catch(function () {
+      return null;
+    });
+  }
+
+  function downloadExtrasFromLink(link) {
+    return {
+      version: link.getAttribute("data-track-version") || "",
+      fileName: link.getAttribute("data-track-file") || "",
+      source: link.getAttribute("data-track-source") || "",
+    };
+  }
+
+  function beginTrackedDownload(link) {
+    if (!link || link.getAttribute("aria-disabled") === "true") return;
+    var platform = link.getAttribute("data-track-platform");
+    var url = link.getAttribute("href") || "";
+    if (!platform || !url || url === "#") return;
+
+    if (!currentUser) {
+      writePendingDownload({
+        platform: platform,
+        url: url,
+        version: link.getAttribute("data-track-version") || "",
+        fileName: link.getAttribute("data-track-file") || "",
+        source: link.getAttribute("data-track-source") || "",
       });
-    } catch (_) {
-      /* analytics must never block download */
+      location.href = loginPageUrl();
+      return;
     }
+
+    currentUser
+      .getIdToken()
+      .then(function (token) {
+        return trackDownload(platform, downloadExtrasFromLink(link), token);
+      })
+      .finally(function () {
+        if (platform === "play") {
+          window.open(url, "_blank", "noopener,noreferrer");
+        } else {
+          startFileDownload(url);
+        }
+      });
+  }
+
+  function maybeResumePendingDownload() {
+    if (!authReady || resumeChecked || !currentUser) return;
+    resumeChecked = true;
+    var pending = readPendingDownload();
+    if (!pending) return;
+    clearPendingDownload();
+    currentUser
+      .getIdToken()
+      .then(function (token) {
+        return trackDownload(pending.platform, pending, token);
+      })
+      .finally(function () {
+        if (pending.platform === "play") {
+          window.open(pending.url, "_blank", "noopener,noreferrer");
+        } else {
+          startFileDownload(pending.url);
+        }
+      });
+  }
+
+  function initDownloadAuth() {
+    var signOutBtn = $("downloadSignOutBtn");
+    if (signOutBtn) {
+      signOutBtn.onclick = function () {
+        if (auth) auth.signOut();
+      };
+    }
+    if (!window.firebase || !window.POCKET_LEDGER_FIREBASE) {
+      updateAuthBanner();
+      return;
+    }
+    if (!firebase.apps.length) firebase.initializeApp(window.POCKET_LEDGER_FIREBASE);
+    auth = firebase.auth();
+    auth.onAuthStateChanged(function (user) {
+      currentUser = user;
+      authReady = true;
+      updateAuthBanner();
+      maybeResumePendingDownload();
+    });
   }
 
   function bindDownloadTracking() {
@@ -165,11 +327,8 @@
       if (!target || !target.closest) return;
       var link = target.closest("a[data-track-platform]");
       if (!link || link.getAttribute("aria-disabled") === "true") return;
-      trackDownload(link.getAttribute("data-track-platform"), {
-        version: link.getAttribute("data-track-version") || "",
-        fileName: link.getAttribute("data-track-file") || "",
-        source: link.getAttribute("data-track-source") || "",
-      });
+      event.preventDefault();
+      beginTrackedDownload(link);
     });
   }
 
@@ -226,11 +385,46 @@
   }
 
   async function loadSettings() {
-    if (isLocalHost()) return cachedSettings;
+    async function applySettingsText(text) {
+      var raw =
+        typeof window.parseReleaseSettingsJson === "function"
+          ? window.parseReleaseSettingsJson(text)
+          : null;
+      if (!raw) return false;
+      cachedSettings = normalizeSettings(raw);
+      return true;
+    }
+
+    if (isLocalHost()) {
+      var remoteUrl = firebaseSettingsUrl();
+      if (remoteUrl) {
+        try {
+          var remoteRes = await fetch(remoteUrl, { cache: "no-store" });
+          if (remoteRes.ok && (await applySettingsText(await remoteRes.text()))) {
+            return cachedSettings;
+          }
+        } catch (_) {
+          /* try local file */
+        }
+      }
+      try {
+        var localRes = await fetch("/releases/release-settings.json", { cache: "no-store" });
+        if (localRes.ok && (await applySettingsText(await localRes.text()))) {
+          return cachedSettings;
+        }
+      } catch (_) {
+        /* use defaults */
+      }
+      cachedSettings = normalizeSettings(null);
+      return cachedSettings;
+    }
+
     var url = firebaseSettingsUrl();
     if (!url) return cachedSettings;
     try {
-      cachedSettings = normalizeSettings(await fetchJson(url));
+      var res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) throw new Error(String(res.status));
+      if (!(await applySettingsText(await res.text()))) throw new Error("invalid settings");
     } catch (_) {
       cachedSettings = normalizeSettings(null);
     }
@@ -272,9 +466,10 @@
           : "No published installer yet.";
       }
     }
-    var entries = keptEntries(data);
-    setupVersionSelect("windows", entries, source);
-    setupVersionSelect("android", entries, source);
+    var entriesWindows = keptEntries(data, "windows");
+    var entriesAndroid = keptEntries(data, "android");
+    setupVersionSelect("windows", entriesWindows, source);
+    setupVersionSelect("android", entriesAndroid, source);
     var playBtn = $("playStoreBtn");
     if (playBtn) {
       var playUrl = (data.android && data.android.playStoreUrl) || data.playStoreUrl;
@@ -288,4 +483,5 @@
   });
 
   bindDownloadTracking();
+  initDownloadAuth();
 })();

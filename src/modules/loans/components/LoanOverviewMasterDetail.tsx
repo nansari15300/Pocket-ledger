@@ -19,6 +19,11 @@ import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import { resolveMasterListSelection } from "@/lib/masterEntityLiveUpdate";
 import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
+import { createMasterEntityGroupMoveHandler } from "@/lib/createMasterEntityGroupMoveHandler";
+import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
+import { staffGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
+import { staffGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
+import { LOAN_ACCOUNT_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
 import { bankAccountDisplayName } from "@/lib/bankAccountDisplayName";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import type { GroupListSelectOptions } from "@/lib/groupListExpand";
@@ -50,7 +55,7 @@ export function LoanOverviewMasterDetail({
 }) {
   const { formatCurrencyForPrint } = useDate();
   const isMobile = useIsMobile();
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
   const { loading: vouchersLoading, processedStaff, processedStaffGroups, processedAccounts } = useVouchers();
   const [searchTerm, setSearchTerm] = useState("");
   const [accountListQuickFilter, setAccountListQuickFilter] = useState<EntityListQuickFilter>("default");
@@ -126,6 +131,31 @@ export function LoanOverviewMasterDetail({
 
   const groupMembersByGroupId = loanGroupTree.groupMembersByGroupId;
 
+  const handleMoveLoanAccountToGroup = useCallback(
+    (staff: Staff, targetGroupId: string) =>
+      createMasterEntityGroupMoveHandler({
+        companyId,
+        company,
+        groupsForName: loanGroupTree.allGroups,
+        moveHelpers: staffGroupAccountMove,
+        entityLabel: "Account",
+      })(staff, targetGroupId),
+    [companyId, company, loanGroupTree.allGroups]
+  );
+
+  const handleMoveLoanGroupToGroup = useCallback(
+    (sourceGroupId: string, targetGroupId: string) =>
+      createMasterEntityGroupTreeMoveHandler({
+        companyId,
+        company,
+        groupsForName: loanGroupTree.allGroups,
+        allGroups: processedStaffGroups || [],
+        config: LOAN_ACCOUNT_GROUP_LIST_CONFIG,
+        moveHelpers: staffGroupTreeMove,
+      })(sourceGroupId, targetGroupId),
+    [companyId, company, loanGroupTree.allGroups, processedStaffGroups]
+  );
+
   const handleSelectAccount = useCallback(
     (account: Staff) => {
       setGroupMemberFilterId(null);
@@ -194,7 +224,7 @@ export function LoanOverviewMasterDetail({
       <div className={mlc.searchWrap}>
         <Search className={mlc.searchIcon} />
         <Input
-          placeholder={activeView === "groups" ? "Search groups..." : "Search accounts..."}
+          placeholder={activeView === "groups" ? "Search groups/account" : "Search accounts..."}
           listChrome
           listChromeSearch
           value={searchTerm}
@@ -270,6 +300,12 @@ export function LoanOverviewMasterDetail({
           quickFilter={groupListQuickFilter}
           onQuickFilterChange={setGroupListQuickFilter}
           hideQuickFilterBar
+          moveAccountsEnabled={!!companyId}
+          onMoveAccountToGroup={handleMoveLoanAccountToGroup}
+          canMoveMember={staffGroupAccountMove.canMoveAccount}
+          onMoveGroupToGroup={handleMoveLoanGroupToGroup}
+          canMoveGroup={staffGroupTreeMove.canMoveGroup}
+          allGroupsForMove={processedStaffGroups || []}
         />
       )}
     </MasterListViewShell>
@@ -363,6 +399,11 @@ export function LoanOverviewMasterDetail({
           setGroupMemberFilterId(null);
           onSelectAccountId(null, activeView);
         }}
+        mobileListSelectionKey={
+          selected
+            ? `${selected.id}:${activeView === "groups" ? groupMemberFilterId ?? "" : ""}`
+            : null
+        }
         mobileSelectionLabel={
           activeView === "groups"
             ? selectedGroup?.name

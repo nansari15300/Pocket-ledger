@@ -49,6 +49,9 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams } from "next/navigation";
+import { filterMembersByMasterGroupScope } from "@/lib/masterGroupMemberScope";
+import { ITEM_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { isMasterEntitySystemGroupId, resolveItemListGroupBucketId } from "@/lib/masterEntitySystemGroups";
 
 
 type DisplayUnitState = Record<string, string>;
@@ -308,11 +311,18 @@ export default function ItemsPage() {
 
   const selectedGroupItems = useMemo(() => {
     if (!selectedItemGroup) return [];
-    if (selectedItemGroup.id === 'ungrouped') {
-        return processedItems.filter(p => !p.groupId);
+    if (selectedItemGroup.id === "ungrouped") {
+      return processedItems.filter((p) => !p.groupId);
     }
-    return processedItems.filter((p) => p.groupId === selectedItemGroup.id);
-  }, [selectedItemGroup, processedItems]);
+    return filterMembersByMasterGroupScope<Item>(
+      selectedItemGroup.id,
+      processedItems,
+      processedItemGroups,
+      resolveItemListGroupBucketId,
+      (id) => isMasterEntitySystemGroupId(ITEM_ENTITY_GROUP_PRESET, id),
+      (item, branchId) => resolveItemListGroupBucketId(item) === branchId
+    );
+  }, [selectedItemGroup, processedItems, processedItemGroups]);
 
   const NoDataFound = () => (
     <div className="flex flex-1 items-center justify-center h-full p-4">

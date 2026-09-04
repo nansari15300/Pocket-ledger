@@ -21,6 +21,7 @@ type CurrencyFormattingOptions = {
   noAnimation?: boolean;
   duration?: number;
   context?: 'dashboard' | 'list' | 'details' | 'transaction';
+  hideCurrencySymbol?: boolean;
 }
 
 type DateContextType = {
@@ -134,7 +135,7 @@ export const DateProvider = ({ children }: { children: ReactNode }) => {
     
     let formattedAmount = new Intl.NumberFormat('en-IN', intlOptions).format(Math.abs(amount));
 
-    if (showCurrencySymbol) {
+    if (showCurrencySymbol && !options?.hideCurrencySymbol) {
         formattedAmount = `${currencySymbol} ${formattedAmount}`;
     }
 

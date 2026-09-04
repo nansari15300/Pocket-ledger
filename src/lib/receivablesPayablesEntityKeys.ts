@@ -6,18 +6,17 @@ import type {
 } from "@/lib/receivablesPayablesFinancialSummary";
 
 /** Outstanding visibility — category tick (individual account nahi). */
-export type RpVisibilityCategory = "party" | "bank" | "staff" | "tax" | "income_expense";
+export type RpVisibilityCategory = "party" | "bank" | "staff" | "tax";
 
 export const RP_VISIBILITY_CATEGORIES: { id: RpVisibilityCategory; label: string }[] = [
   { id: "party", label: "Party" },
   { id: "bank", label: "Bank / Cash" },
   { id: "staff", label: STAFF_ENTITY_LABEL },
   { id: "tax", label: "Tax" },
-  { id: "income_expense", label: "Income / Expense" },
 ];
 
-/** Naya company / saved setting nahi: Income & Expense hide (untick). */
-export const DEFAULT_RP_HIDDEN_CATEGORIES: RpVisibilityCategory[] = ["income_expense"];
+/** Naya company / saved setting nahi: sab categories show. */
+export const DEFAULT_RP_HIDDEN_CATEGORIES: RpVisibilityCategory[] = [];
 
 export function resolveRpHiddenCategories(
   saved: string[] | null | undefined
@@ -44,8 +43,9 @@ function filterSideByCategories(side: RpSideBuckets, hidden: Set<RpVisibilityCat
     accounts: hidden.has("bank") ? [] : side.accounts,
     staff: hidden.has("staff") ? [] : side.staff,
     taxes: hidden.has("tax") ? [] : side.taxes,
-    income: hidden.has("income_expense") ? [] : side.income,
-    expenses: hidden.has("income_expense") ? [] : side.expenses,
+    /** Income/Expense P&L heads — outstanding / len-den me kabhi nahi. */
+    income: [],
+    expenses: [],
   };
 }
 

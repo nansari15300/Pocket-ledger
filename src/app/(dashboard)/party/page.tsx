@@ -66,10 +66,27 @@ import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transac
 
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
+import {
+  buildPartySystemBranchSelectionGroup,
+  isPartyDirectOnSystemBranch,
+  isPartySystemGroupId,
+  normalizePartyGroupIdForStorage,
+  PARTY_DEFAULT_SYSTEM_GROUP_ID,
+  PARTY_SYSTEM_DEBTORS_ID,
+  PARTY_SYSTEM_GROUP_OPTIONS,
+  resolvePartyGroupForSelection,
+  resolvePartyListGroupBucketId,
+} from "@/lib/partySystemGroups";
+import { filterPartiesForPartyGroupScope } from "@/lib/partyGroupScope";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { appendPreservedModalQueryToHref } from "@/lib/modalUrlSync";
 import { browserHistoryHref } from "@/lib/webAppBasePath";
+import { createMasterEntityGroupMoveHandler } from "@/lib/createMasterEntityGroupMoveHandler";
+import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
+import { PARTY_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { partyGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
+import { partyGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
 import { consumeMasterDetailSidebarListNav } from "@/lib/masterDetailSidebarNav";
 import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesPartyLedger";
@@ -201,12 +218,9 @@ function PartyPageContent() {
     processedParties.forEach((p: Party) => {
       const n = pendingApprovalByPartyId[p.id] || 0;
       if (!n) return;
-      // `PartyGroupList` ka synthetic row `id: 'ungrouped'` — bina groupId / `ungrouped_party` wale parties yahi pe
       const gid = isInterCompanyPartyListAccount(p)
         ? IC_COMPANY_PARTY_GROUP_ID
-        : p.groupId && String(p.groupId).trim() !== "" && p.groupId !== "ungrouped_party"
-          ? p.groupId
-          : "ungrouped";
+        : resolvePartyListGroupBucketId(p);
       byGroup[gid] = (byGroup[gid] || 0) + n;
     });
     return byGroup;
@@ -451,12 +465,10 @@ function PartyPageContent() {
         ? partiesForList.filter((p) => (pendingApprovalByPartyId[p.id] ?? 0) > 0)
         : partiesForList;
     const regular = base.filter((p) => !isInterCompanyPartyListAccount(p));
-    const icGrouped = buildIcPeerCompanyGroupRows(
-      dedupeInterCompanyClearingParties(
-        base.filter((p) => isInterCompanyPartyListAccount(p))
-      )
+    const icFlat = dedupeInterCompanyClearingParties(
+      base.filter((p) => isInterCompanyPartyListAccount(p))
     );
-    return [...regular, ...icGrouped];
+    return [...regular, ...icFlat];
   }, [
     partiesForList,
     showOnlyPartiesWithPendingApproval,
@@ -535,12 +547,6 @@ function PartyPageContent() {
   }, [isMobile, selectedParty]);
 
    const processedGroups = useMemo(() => {
-    const ungrouped = processedPartiesForSelection.filter(
-      (p: any) =>
-        (!p.groupId || p.groupId === "ungrouped_party") &&
-        !isInterCompanyPartyListAccount(p)
-    );
-
     // Filter out report-only groups (isReportOnly: true) and system parent groups
     const userDefinedGroups = initialProcessedGroups.filter(g => {
         const anyG = g as any;
@@ -555,6 +561,13 @@ function PartyPageContent() {
 
     const syntheticGroups: Group[] = [];
 
+    // usePageMemory + URL ?selected= must resolve system branches (not in Firestore rows).
+    for (const branch of PARTY_SYSTEM_GROUP_OPTIONS) {
+      syntheticGroups.push(
+        buildPartySystemBranchSelectionGroup(branch.id, companyId || "", 0) as Group
+      );
+    }
+
     if (icParties.length > 0) {
       syntheticGroups.push({
         id: IC_COMPANY_PARTY_GROUP_ID,
@@ -563,22 +576,12 @@ function PartyPageContent() {
         companyId: companyId || "",
         debit: icParties.reduce((sum, p) => sum + p.debit, 0),
         credit: icParties.reduce((sum, p) => sum + p.credit, 0),
-      });
-    }
-
-    if (ungrouped.length > 0) {
-      syntheticGroups.push({
-        id: "ungrouped",
-        name: "Ungrouped",
-        balance: ungrouped.reduce((sum, p) => sum + p.balance, 0),
-        companyId: companyId || "",
-        debit: ungrouped.reduce((sum, p) => sum + p.debit, 0),
-        credit: ungrouped.reduce((sum, p) => sum + p.credit, 0),
+        parentId: PARTY_SYSTEM_DEBTORS_ID,
       });
     }
 
     return [...userDefinedGroups, ...syntheticGroups];
-  }, [processedPartiesForSelection, initialProcessedGroups, companyId, icParties]);
+  }, [initialProcessedGroups, companyId, icParties]);
 
   const groupsForPartyGroupListView = useMemo(() => {
     if (!showOnlyPartyGroupsWithPendingApproval || !showApproveOnList) return processedGroups;
@@ -588,9 +591,9 @@ function PartyPageContent() {
   const selectedGroup = useMemo(
     () =>
       selectedGroupRaw
-        ? processedGroups.find((group) => group.id === selectedGroupRaw.id) ?? null
+        ? resolvePartyGroupForSelection(selectedGroupRaw.id, processedGroups, companyId || "")
         : null,
-    [processedGroups, selectedGroupRaw]
+    [processedGroups, selectedGroupRaw, companyId]
   );
 
   // Header Report: sessionStorage sync — URL ?selected= flicker / router.replace race se button stable rahe
@@ -712,7 +715,11 @@ function PartyPageContent() {
       }
       return;
     }
-    const groupItem = processedGroupsRef.current.find((i) => i.id === selectedId);
+    const groupItem = resolvePartyGroupForSelection(
+      selectedId,
+      processedGroupsRef.current,
+      companyId || ""
+    );
     const icGroupItem =
       partiesForPartyListViewRef.current.find((i) => i.id === selectedId) ??
       icListRowsForViewRef.current.find((i) => i.id === selectedId);
@@ -748,6 +755,7 @@ function PartyPageContent() {
     viewFromUrl,
     selectedIdFromUrl,
     pageDataLoading,
+    companyId,
     setSelected,
     setActiveView,
     router,
@@ -1019,19 +1027,47 @@ function PartyPageContent() {
 
   const partyGroupMembersByGroupId = useMemo(() => {
     const map: Record<string, Party[]> = {};
-    for (const g of groupsForPartyGroupListView) {
-      if (g.id === IC_COMPANY_PARTY_GROUP_ID) continue;
-      if (g.id === "ungrouped") {
-        map[g.id] = processedPartiesForSelection.filter(
-          (p) =>
-            (!p.groupId || p.groupId === "ungrouped_party") && !isInterCompanyPartyListAccount(p)
-        );
-      } else {
-        map[g.id] = processedPartiesForSelection.filter((p) => p.groupId === g.id);
+    const push = (key: string, party: Party) => {
+      if (!map[key]) map[key] = [];
+      map[key]!.push(party);
+    };
+
+    for (const p of processedPartiesForSelection) {
+      if (isInterCompanyPartyListAccount(p)) continue;
+      const gid = String(p.groupId ?? "").trim();
+      if (isPartySystemGroupId(gid) || !gid || gid === "ungrouped_party" || gid === "ungrouped") {
+        push(resolvePartyListGroupBucketId(p), p);
+        continue;
       }
+      push(gid, p);
     }
     return map;
-  }, [groupsForPartyGroupListView, processedPartiesForSelection]);
+  }, [processedPartiesForSelection]);
+
+  const handleMovePartyToGroup = useCallback(
+    (party: Party, targetGroupId: string) =>
+      createMasterEntityGroupMoveHandler({
+        companyId,
+        company,
+        groupsForName: processedGroups,
+        moveHelpers: partyGroupAccountMove,
+        entityLabel: "Party",
+      })(party, targetGroupId),
+    [companyId, company, processedGroups]
+  );
+
+  const handleMovePartyGroupToGroup = useCallback(
+    (sourceGroupId: string, targetGroupId: string) =>
+      createMasterEntityGroupTreeMoveHandler({
+        companyId,
+        company,
+        groupsForName: processedGroups,
+        allGroups: initialProcessedGroups,
+        config: PARTY_GROUP_LIST_CONFIG,
+        moveHelpers: partyGroupTreeMove,
+      })(sourceGroupId, targetGroupId),
+    [companyId, company, processedGroups, initialProcessedGroups]
+  );
 
   const handleSelectIcCompanyGroup = useCallback(
     (options?: { peerCompanyId?: string | null; memberAccountId?: string | null }) => {
@@ -1100,15 +1136,12 @@ function PartyPageContent() {
     if (selectedGroup.id === IC_COMPANY_PARTY_GROUP_ID) {
       return buildIcPeerCompanyGroupRows(icParties);
     }
-    if (selectedGroup.id === "ungrouped") {
-      return processedPartiesForSelection.filter(
-        (p: any) =>
-          (!p.groupId || p.groupId === "ungrouped_party") &&
-          !isInterCompanyPartyListAccount(p)
-      );
-    }
-    return processedPartiesForSelection.filter((p) => p.groupId === selectedGroup.id);
-  }, [selectedGroup, processedPartiesForSelection, icParties]);
+    return filterPartiesForPartyGroupScope(
+      selectedGroup.id,
+      processedPartiesForSelection,
+      processedGroups
+    );
+  }, [selectedGroup, processedPartiesForSelection, processedGroups, icParties]);
 
   // Filtered count for party list (matches PartyList logic: search + exclude system accounts)
   const filteredPartyCount = useMemo(() => {
@@ -1247,7 +1280,7 @@ function PartyPageContent() {
               ? "Search parties..."
               : activeView === "ic_ac"
                 ? "Search companies..."
-                : "Search groups..."
+                : "Search groups/party"
           }
           listChrome
           listChromeSearch
@@ -1400,6 +1433,12 @@ function PartyPageContent() {
             onQuickFilterChange={setGroupListQuickFilter}
             hideQuickFilterBar
             hideCategoryHeaders
+            moveAccountsEnabled={!!companyId}
+            onMoveAccountToGroup={handleMovePartyToGroup}
+            canMoveMember={partyGroupAccountMove.canMoveAccount}
+            onMoveGroupToGroup={handleMovePartyGroupToGroup}
+            canMoveGroup={partyGroupTreeMove.canMoveGroup}
+            allGroupsForMove={initialProcessedGroups}
           />
         </div>
         <div
@@ -1485,7 +1524,7 @@ function PartyPageContent() {
           groupMemberFilterId={groupMemberFilterId}
           onGroupUpdated={() => {}}
           onGroupDeleted={() => setSelected(null)}
-          onPartyUpdated={() => {}}
+          onPartyUpdated={handlePartyUpdated}
           dateRange={groupDetailsDateRange}
           onDateRangeChange={setGroupDetailsDateRange}
           userNames={mergedUserNames}
@@ -1711,6 +1750,11 @@ function PartyPageContent() {
         mobileListOnly={true}
         hasSelectedItem={!!selected}
         onBackToList={onBackToList}
+        mobileListSelectionKey={
+          selected
+            ? `${selected.id}:${activeView === "groups" ? groupMemberFilterId ?? "" : ""}`
+            : null
+        }
       />
       <AddVoucherDialog
         isOpen={!!overdueVoucherToEdit}

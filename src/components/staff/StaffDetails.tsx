@@ -2,7 +2,7 @@
 "use client";
 
 import * as React from "react";
-import { openPrintDirect } from "@/lib/printDirect";
+import { openPrintDirect, getPdfBlob } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { ReconciliationAccountButton } from "@/components/reconciliation/ReconciliationAccountButton";
@@ -110,6 +110,8 @@ import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
 import { useMasterAccountFreezeDetailsChrome } from "@/hooks/useMasterAccountFreezeDetailsChrome";
+import { useLedgerConfirmationSendPill } from "@/hooks/useLedgerConfirmationSendPill";
+import { ledgerConfirmationPrintVisibleColumns } from "@/lib/reports/ledgerConfirmationShare";
 import { STAFF_FREEZE_COLLECTION } from "@/lib/masterAccountFreeze/freezeAdapter";
 import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
@@ -284,6 +286,7 @@ export function StaffDetails({
   });
 
   const staffFreezeEligible = !isAllVouchersView && staff.id !== "all";
+  const buildStatementPdfRef = useRef<(() => Promise<Blob | null>) | null>(null);
   const staffAdjustBalanceActions = staffFreezeEligible ? (
     <AddVoucherDialog
       defaultTab="adjustment"
@@ -305,6 +308,17 @@ export function StaffDetails({
     </AddVoucherDialog>
   ) : null;
 
+  const confirmationSendPill = useLedgerConfirmationSendPill({
+    entity: staff,
+    collection: "staff",
+    eligible: staffFreezeEligible,
+    onEntityUpdated: handleStaffUpdated,
+    buildStatementPdfBlob: useCallback(async () => {
+      if (!buildStatementPdfRef.current) return null;
+      return buildStatementPdfRef.current();
+    }, []),
+  });
+
   const {
     blockNewTransactions: blockStaffNewTransactions,
     freezeOverlay: staffFreezeOverlay,
@@ -317,6 +331,7 @@ export function StaffDetails({
     entityEligible: staffFreezeEligible,
     onEntityUpdated: handleStaffUpdated,
     adjustBalanceActions: staffAdjustBalanceActions,
+    prependClosingBalanceActions: confirmationSendPill,
   });
 
   const staffHeaderAttachmentUrl = useMemo(
@@ -731,7 +746,7 @@ export function StaffDetails({
           periodCrForPage: desktopPaginationMeta.periodCrForPage,
           closingForPage: desktopPaginationMeta.closingForPage,
           booksOpeningBalance: masterStaffOpening,
-          ledgerShowBookOpeningRow: !taxDetailsMode && currentPage === 1,
+          ledgerShowBookOpeningRow: !taxDetailsMode && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0),
           ledgerDateFilterActive: hasLedgerDateFilter,
           openingBalancePeriodStartDate: dateRange?.from,
           masterOpeningBalanceDate: (staff as any).openingBalanceDate,
@@ -741,6 +756,72 @@ export function StaffDetails({
       true
     );
   };
+
+  const buildStatementPdfBlob = useCallback(async () => {
+    if (!company) return null;
+    const printVisibleColumns = ledgerConfirmationPrintVisibleColumns(visibleColumns);
+    const payload = applyLedgerPageToPrintPayload(
+      {
+        company: {
+          name: company.name,
+          pan: company.pan,
+          phone: company.phone,
+          address: company.address,
+          decimalPlaces: company.decimalPlaces,
+          showDrCr: company.showDrCr,
+          showCurrencySymbol: company.showCurrencySymbol,
+          logoUrl: company.logoUrl,
+        },
+        title: `Staff Statement: ${staff.name}`,
+        context: "staff",
+        contextId: staff.id,
+        dateSystem: dateSystem,
+        dateRangeText: buildDateRangeText(),
+        vouchersCount: paginatedTransactions.length,
+        openingBalance: desktopPaginationMeta.openingForPage,
+        openingBalanceDate: (staff as any).openingBalanceDate,
+        openingBalanceNarration: staff.openingBalanceNarration ?? null,
+        transactions: paginatedTransactions,
+        showNarration: showNarration,
+        includeNotes: includeNotesInTable,
+        visibleColumns: printVisibleColumns,
+        userNames: userNames,
+        billWise: false,
+      },
+      {
+        paginatedTransactions,
+        openingForPage: desktopPaginationMeta.openingForPage,
+        periodDrForPage: desktopPaginationMeta.periodDrForPage,
+        periodCrForPage: desktopPaginationMeta.periodCrForPage,
+        closingForPage: desktopPaginationMeta.closingForPage,
+        booksOpeningBalance: masterStaffOpening,
+        ledgerShowBookOpeningRow: !taxDetailsMode && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0),
+        ledgerDateFilterActive: hasLedgerDateFilter,
+        openingBalancePeriodStartDate: dateRange?.from,
+        masterOpeningBalanceDate: (staff as any).openingBalanceDate,
+        dateRange,
+      }
+    );
+    return getPdfBlob(payload);
+  }, [
+    company,
+    visibleColumns,
+    staff,
+    dateSystem,
+    paginatedTransactions,
+    desktopPaginationMeta,
+    showNarration,
+    includeNotesInTable,
+    userNames,
+    masterStaffOpening,
+    taxDetailsMode,
+    rowsPerPage,
+    hasLedgerDateFilter,
+    dateRange,
+    buildDateRangeText,
+  ]);
+
+  buildStatementPdfRef.current = buildStatementPdfBlob;
 
   const handlePrintBillWise = () => {
     if (!company) return;
@@ -784,7 +865,7 @@ export function StaffDetails({
           periodCrForPage: desktopPaginationMeta.periodCrForPage,
           closingForPage: desktopPaginationMeta.closingForPage,
           booksOpeningBalance: masterStaffOpening,
-          ledgerShowBookOpeningRow: !taxDetailsMode && currentPage === 1,
+          ledgerShowBookOpeningRow: !taxDetailsMode && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0),
           ledgerDateFilterActive: hasLedgerDateFilter,
           openingBalancePeriodStartDate: dateRange?.from,
           masterOpeningBalanceDate: (staff as any).openingBalanceDate,
@@ -1201,7 +1282,7 @@ export function StaffDetails({
           openingBalance={taxDetailsMode ? 0 : mobilePaginationMeta.openingForPage}
           booksOpeningBalance={taxDetailsMode ? 0 : masterStaffOpening}
           ledgerDateFilterActive={hasLedgerDateFilter}
-          ledgerShowBookOpeningRow={!taxDetailsMode && currentPage === 1}
+          ledgerShowBookOpeningRow={!taxDetailsMode && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
           hideLedgerOpeningRows={taxDetailsMode}
           openingBalancePeriodStartDate={dateRange?.from}
           dateRange={dateRange}
@@ -1713,7 +1794,7 @@ export function StaffDetails({
                   openingBalance={taxDetailsMode ? 0 : desktopPaginationMeta.openingForPage}
                   booksOpeningBalance={taxDetailsMode ? 0 : masterStaffOpening}
                   ledgerDateFilterActive={hasLedgerDateFilter}
-                  ledgerShowBookOpeningRow={!taxDetailsMode && currentPage === 1}
+                  ledgerShowBookOpeningRow={!taxDetailsMode && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
                   hideLedgerOpeningRows={taxDetailsMode}
                   openingBalancePeriodStartDate={dateRange?.from}
                   dateRange={dateRange}
@@ -1777,7 +1858,7 @@ export function StaffDetails({
               <LedgerFooterCheckboxPill
                 id="show-narration-staff"
                 checked={showNarration}
-                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
             <LedgerFooterColumnsMenu>

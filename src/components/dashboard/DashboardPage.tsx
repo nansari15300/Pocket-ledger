@@ -94,7 +94,7 @@ import {
   type RpCategoryFilter,
 } from "@/lib/receivablesPayablesDialogUi";
 import { ReceivablesPayablesDialogFooter } from "@/components/reports/ReceivablesPayablesDialogFooter";
-import { ReceivablesPayablesDialogEntityList, rpDialogListScrollHandlers } from "@/components/reports/ReceivablesPayablesDialogEntityList";
+import { ReceivablesPayablesDialogEntityList, RP_DIALOG_DIM_GREEN_BORDER, rpDialogListScrollHandlers } from "@/components/reports/ReceivablesPayablesDialogEntityList";
 import { ReceivablesPayablesEntitySettings } from "@/components/reports/ReceivablesPayablesEntitySettings";
 import { useReceivablesPayablesEntityVisibility } from "@/hooks/useReceivablesPayablesEntityVisibility";
 import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
@@ -1114,10 +1114,29 @@ export default function DashboardPage() {
       for (const section of sections) {
         if (section.rows.length === 0) continue;
         body.push([
-          { text: `${section.label} (${section.rows.length})`, bold: true, color: "#64748b" },
+          { text: `${section.label} (${section.rowCount ?? section.rows.length})`, bold: true, color: "#64748b" },
           "",
         ]);
         for (const item of section.rows) {
+          if (item.isIcPeerCompanyGroup && item.icChildren?.length) {
+            body.push([
+              { text: item.party, bold: true },
+              {
+                text: formatCurrencyForPrint(Math.abs(item.balance), { noSuffix: true, noAnimation: true }),
+                alignment: "right",
+              },
+            ]);
+            for (const child of item.icChildren) {
+              body.push([
+                { text: `    ${child.party}`, color: "#64748b" },
+                {
+                  text: formatCurrencyForPrint(Math.abs(child.balance), { noSuffix: true, noAnimation: true }),
+                  alignment: "right",
+                },
+              ]);
+            }
+            continue;
+          }
           body.push([
             item.party,
             {
@@ -1543,7 +1562,7 @@ export default function DashboardPage() {
                                         {(isMobile ? receivablesPayablesTab === "receivables" : true) && (
                                             <div className="flex flex-col min-h-0 h-full">
                                                 {!isMobile && <h3 className="text-lg font-semibold mb-2 text-green-600 shrink-0">Receivables ({receivablesDialogCount})</h3>}
-                                                <div className={cn("flex-1 min-h-0 border rounded-lg bg-muted/20 p-1.5 overflow-y-auto overflow-x-hidden", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
+                                                <div className={cn("flex-1 min-h-0 rounded-lg bg-emerald-50/20 dark:bg-emerald-950/10 p-1.5 overflow-y-auto overflow-x-hidden border", RP_DIALOG_DIM_GREEN_BORDER, RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
                                                     <ReceivablesPayablesDialogEntityList
                                                         sections={receivablesDialogSections}
                                                         side="receivables"
@@ -1557,7 +1576,7 @@ export default function DashboardPage() {
                                         {(isMobile ? receivablesPayablesTab === "payables" : true) && (
                                             <div className="flex flex-col min-h-0 h-full">
                                                 {!isMobile && <h3 className="text-lg font-semibold mb-2 text-red-600 shrink-0">Payables ({payablesDialogCount})</h3>}
-                                                <div className={cn("flex-1 min-h-0 border rounded-lg bg-muted/20 p-1.5 overflow-y-auto overflow-x-hidden", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
+                                                <div className={cn("flex-1 min-h-0 rounded-lg bg-emerald-50/20 dark:bg-emerald-950/10 p-1.5 overflow-y-auto overflow-x-hidden border", RP_DIALOG_DIM_GREEN_BORDER, RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
                                                     <ReceivablesPayablesDialogEntityList
                                                         sections={payablesDialogSections}
                                                         side="payables"

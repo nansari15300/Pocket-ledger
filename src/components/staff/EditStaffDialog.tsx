@@ -45,7 +45,8 @@ import Link from "next/link";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { MasterFormNameAcNoRow, MasterMobileNoField, masterFormTwoColClass } from "@/components/inter-company/MasterFormLayout";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import { Combobox } from "../ui/combobox";
+import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
+import { STAFF_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useDate } from "@/hooks/useDate";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -66,7 +67,18 @@ import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useIm
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
-import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import {
+  getDefaultSystemGroupId,
+  normalizeStaffGroupIdForStorage,
+} from "@/lib/masterEntitySystemGroups";
+import { resolveMasterGroupTreeBranchIdForGroup } from "@/lib/masterGroupTreeCombobox";
+import { LOAN_LIABILITY_GROUP_ID } from "@/modules/loans/constants/loanConstants";
+import {
+  STAFF_SYSTEM_GROUP_ID,
+  staffAccountTypeFromRow,
+  type StaffAccountTypeId,
+} from "@/lib/staffSystemGroups";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 import {
@@ -74,18 +86,33 @@ import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import {
+  guardMasterEditOutsideDismiss,
+  masterEditBackdropClassName,
+  masterEditPopoverContentClassName,
+  NESTED_LEDGER_MASTER_EDIT_CONTENT_CN,
+  NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN,
+  type MasterEditPresentationMode,
+} from "@/lib/nestedLedgerMasterEditPresentation";
+import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
+import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 
-/** CreateStaffForm jaisa: Ungrouped bucket → form value `ungrouped_staff` (null / empty legacy). */
-function normalizeStaffEditGroupId(groupId: string | null | undefined): string {
-  const u = getUngroupedGroupId("staff");
-  if (!groupId || groupId === u) return u;
-  return groupId;
+/** Form load: legacy ungrouped ids → system branch by account type. */
+function normalizeStaffEditGroupId(
+  groupId: string | null | undefined,
+  accountType: StaffAccountTypeId
+): string {
+  return normalizeStaffGroupIdForStorage(groupId, accountType);
 }
 
 const formSchema = z.object({
+  accountType: z.enum([LOAN_LIABILITY_GROUP_ID, STAFF_SYSTEM_GROUP_ID], {
+    message: "Account type is required.",
+  }),
   name: z.string().min(2, { message: "Staff name must be at least 2 characters." }),
   email: z.string().optional(),
   phone: z.string().optional(),
+  whatsapp: z.boolean().optional(),
   address: z.string().optional(),
   salary: z.coerce.number().optional(),
   openingBalance: z.coerce.number().optional(),
@@ -93,11 +120,22 @@ const formSchema = z.object({
   salaryPeriod: z.enum(["Daily", "Weekly", "Monthly", "Yearly"]).optional(),
   groupId: z.string().optional(),
   openingBalanceNarration: z.string().optional(),
-});
+}).superRefine(refineMasterOpeningBalanceDateRequired);
 
 const MAX_FILE_SIZE_MB = 0.5;
 
-export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdated, onStaffDeleted, children, isOpen, onOpenChange, hasTransactions }: {
+export function EditStaffDialog({
+  staff,
+  allGroups = [],
+  allStaff,
+  onStaffUpdated,
+  onStaffDeleted,
+  children,
+  isOpen,
+  onOpenChange,
+  hasTransactions,
+  presentationMode = "default",
+}: {
   staff: Staff;
   allGroups?: StaffGroup[];
   allStaff?: Staff[];
@@ -107,6 +145,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
   hasTransactions?: boolean;
+  presentationMode?: MasterEditPresentationMode;
 }) {
   const [isLoading, setIsLoading] = useState(false);
   const isCompressing = useImageCompressionProcessing();
@@ -180,18 +219,27 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
     defaultValues: {
+      accountType: staffAccountTypeFromRow(staff as Staff & { isLoanAccount?: boolean }),
       name: staff.name,
       email: staff.email || "",
       phone: staff.phone || "",
+      whatsapp: staff.whatsapp === true,
       address: staff.address || "",
       salary: staff.salary,
       openingBalance: staff.openingBalance || 0,
       openingBalanceDate: (staff as any).openingBalanceDate?.toDate ? (staff as any).openingBalanceDate.toDate() : undefined,
       salaryPeriod: staff.salaryPeriod || "Monthly",
-      groupId: normalizeStaffEditGroupId(staff.groupId),
+      groupId: normalizeStaffEditGroupId(
+        staff.groupId,
+        staffAccountTypeFromRow(staff as Staff & { isLoanAccount?: boolean })
+      ),
       openingBalanceNarration: staff.openingBalanceNarration ?? "",
     },
   });
+
+  const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
+
+  const accountType = form.watch("accountType");
 
   useEffect(() => {
     if (dialogOpen) {
@@ -207,15 +255,20 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           finalDate = undefined;
       }
       form.reset({
+        accountType: staffAccountTypeFromRow(staff as Staff & { isLoanAccount?: boolean }),
         name: staff.name,
         email: staff.email || "",
         phone: staff.phone || "",
+        whatsapp: staff.whatsapp === true,
         address: staff.address || "",
         salary: staff.salary,
         openingBalance: staff.openingBalance || 0,
         openingBalanceDate: finalDate,
         salaryPeriod: staff.salaryPeriod || "Monthly",
-      groupId: normalizeStaffEditGroupId(staff.groupId),
+        groupId: normalizeStaffEditGroupId(
+          staff.groupId,
+          staffAccountTypeFromRow(staff as Staff & { isLoanAccount?: boolean })
+        ),
         openingBalanceNarration: staff.openingBalanceNarration ?? "",
     });
       setFile(staff.fileUrl || null);
@@ -358,13 +411,15 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
             name: values.name,
             email: values.email ?? "",
             phone: values.phone ?? "",
+            whatsapp: values.whatsapp === true,
             address: values.address ?? "",
             salary: values.salary,
             salaryPeriod: values.salaryPeriod,
             openingBalance: newOpeningBalance,
             openingBalanceDate: values.openingBalanceDate ?? null,
             openingBalanceNarration: narrationClean,
-            groupId: values.groupId || null,
+            groupId: normalizeStaffGroupIdForStorage(values.groupId, values.accountType),
+            isLoanAccount: values.accountType === LOAN_LIABILITY_GROUP_ID,
             companyId,
             fileUrl: fileUrl ?? (base.fileUrl as string | null) ?? null,
             documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
@@ -413,6 +468,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           name: values.name,
           email: values.email ?? "",
           phone: values.phone ?? "",
+          whatsapp: values.whatsapp === true,
           address: values.address ?? "",
           salary: values.salary,
           salaryPeriod: values.salaryPeriod,
@@ -427,7 +483,8 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
             ),
             canUnlockLockedPdf: can("unlock_locked_pdf"),
           }),
-          groupId: values.groupId || null,
+          groupId: normalizeStaffGroupIdForStorage(values.groupId, values.accountType),
+          isLoanAccount: values.accountType === LOAN_LIABILITY_GROUP_ID,
           updatedAt: serverTimestamp(),
         });
         await syncEntityAttachmentsAfterSave(companyId);
@@ -589,30 +646,32 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   };
 
   // CreateStaffForm ke saath: synthetic Ungrouped; `ungrouped_staff` doc list se isAutoUngrouped filter se hat jata hai
-  const staffGroupOptions = useMemo(
-    () => [
-      { value: getUngroupedGroupId("staff"), label: "Ungrouped" },
-      ...groups
-        .filter(
-          (g) =>
-            !(g as any).isSystemReserved && (g as any).isAutoUngrouped !== true
-        )
-        .map((g) => ({ value: g.id, label: g.name })),
-    ],
-    [groups]
-  );
 
   return (
     <>
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen} modal={false}>
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-        {dialogOpen && <div className="fixed inset-0 bg-black/45 backdrop-blur-sm z-40" />}
+        {dialogOpen && <div className={masterEditBackdropClassName(presentationMode)} />}
         <DialogContent
-            className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-2xl")}
+            overlayClassName={
+              presentationMode === "nested-ledger" ? NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN : undefined
+            }
+            className={cn(
+              cnMasterEntityDialogContent(isMobile),
+              "sm:max-w-2xl",
+              presentationMode === "nested-ledger" && NESTED_LEDGER_MASTER_EDIT_CONTENT_CN
+            )}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
-            onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
-            onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
+            onPointerDownOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e, isCreateGroupOpen);
+            }}
+            onInteractOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e, isCreateGroupOpen);
+            }}
+            onFocusOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e);
+            }}
         >
           <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Edit Staff Member</DialogTitle>
@@ -628,6 +687,48 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
               className="flex min-h-0 flex-1 flex-col"
             >
             <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
+              <FormField
+                control={form.control}
+                name="accountType"
+                render={({ field }: any) => (
+                  <FormItem>
+                    <FormLabel>Account Type</FormLabel>
+                    <RadioGroup
+                      className="flex flex-col gap-2 sm:flex-row sm:gap-6"
+                      value={field.value}
+                      onValueChange={(next: StaffAccountTypeId) => {
+                        field.onChange(next);
+                        const currentBranch = resolveMasterGroupTreeBranchIdForGroup(
+                          form.getValues("groupId"),
+                          processedStaffGroups as StaffGroup[],
+                          STAFF_ENTITY_GROUP_PRESET
+                        );
+                        if (currentBranch !== next) {
+                          form.setValue(
+                            "groupId",
+                            getDefaultSystemGroupId("staff", { accountType: next }),
+                            { shouldDirty: true }
+                          );
+                        }
+                      }}
+                    >
+                      <FormItem className="flex items-center space-x-2 space-y-0">
+                        <FormControl>
+                          <RadioGroupItem value={STAFF_SYSTEM_GROUP_ID} />
+                        </FormControl>
+                        <FormLabel className="cursor-pointer font-normal">Staff</FormLabel>
+                      </FormItem>
+                      <FormItem className="flex items-center space-x-2 space-y-0">
+                        <FormControl>
+                          <RadioGroupItem value={LOAN_LIABILITY_GROUP_ID} />
+                        </FormControl>
+                        <FormLabel className="cursor-pointer font-normal">Loan & Liabilities</FormLabel>
+                      </FormItem>
+                    </RadioGroup>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
               <div className={masterFormTwoColClass}>
                 <MasterFormNameAcNoRow
                   entityKind="staff"
@@ -657,9 +758,23 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                       <FormLabel>Group/Department (Optional)</FormLabel>
                       <FormControl>
                         <div className="w-full">
-                           <Combobox
-                              options={staffGroupOptions}
+                           <MasterGroupTreeCombobox
+                              preset={STAFF_ENTITY_GROUP_PRESET}
+                              groups={groups}
+                              processedGroups={processedStaffGroups as StaffGroup[]}
+                              popoverModal={false}
+                              confirmWithOk
                               value={field.value}
+                              onBranchChange={(branchId) => {
+                                if (
+                                  branchId === LOAN_LIABILITY_GROUP_ID ||
+                                  branchId === STAFF_SYSTEM_GROUP_ID
+                                ) {
+                                  form.setValue("accountType", branchId as StaffAccountTypeId, {
+                                    shouldDirty: true,
+                                  });
+                                }
+                              }}
                               onChange={(val, newName) => {
                                   if (val === 'add-new') {
                                     setIsCreateGroupOpen(true);
@@ -667,11 +782,28 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                                       document.dispatchEvent(new CustomEvent('prefill-create-staff-group-name', { detail: newName }));
                                     }, 100);
                                   } else {
-                                    field.onChange(val === 'none' ? '' : val);
+                                    const gid = val === 'none' ? '' : val;
+                                    field.onChange(gid);
+                                    if (gid) {
+                                      const branchId = resolveMasterGroupTreeBranchIdForGroup(
+                                        gid,
+                                        processedStaffGroups as StaffGroup[],
+                                        STAFF_ENTITY_GROUP_PRESET
+                                      );
+                                      if (
+                                        branchId === LOAN_LIABILITY_GROUP_ID ||
+                                        branchId === STAFF_SYSTEM_GROUP_ID
+                                      ) {
+                                        form.setValue("accountType", branchId as StaffAccountTypeId, {
+                                          shouldDirty: true,
+                                        });
+                                      }
+                                    }
                                   }
                               }}
                               placeholder="Select a group"
-                              addNewLabel="+ Add New Group"
+                              searchPlaceholder="Search groups..."
+                              addNewLabel="Add New Group"
                             />
                         </div>
                       </FormControl>
@@ -761,13 +893,18 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                     />
                     <FormField
                       control={form.control}
-                      name="openingBalanceDate"
-                      render={({ field }: any) => (
-                        <FormItem>
+                    name="openingBalanceDate"
+                    render={({ field }: any) => (
+                      <FormItem data-opening-balance-date>
                           <FormLabel>As on Date</FormLabel>
                            <div className={cn("grid", dateSystem === 'Both' && "grid-cols-1 sm:grid-cols-2 gap-2")}>
                                 {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                                    <BsDatePicker valueAD={field.value} onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} />
+                                    <BsDatePicker
+                                      valueAD={field.value}
+                                      onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }}
+                                      isRange={false}
+                                      popoverContentClassName={masterEditPopoverContentClassName(presentationMode)}
+                                    />
                                 )}
                                 {(dateSystem === 'AD' || dateSystem === 'Both') && (
                                     <Popover modal={true} open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
@@ -782,7 +919,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                                           </Button>
                                         </FormControl>
                                       </PopoverTrigger>
-                                      <PopoverContent className="w-auto p-0 z-[102]" align="start">
+                                      <PopoverContent className={masterEditPopoverContentClassName(presentationMode, "w-auto p-0")} align="start">
                                         <Calendar mode="single" selected={field.value} onSelect={(date) => { field.onChange(date); setIsCalendarOpen(false); }} initialFocus />
                                       </PopoverContent>
                                     </Popover>
@@ -861,9 +998,11 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
+                <Button type={openingBalanceDateMissing ? "button" : "submit"} disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0" onClick={() => {
+                  if (openingBalanceDateMissing) document.querySelector("[data-opening-balance-date]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}>
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Save Changes
+                  {openingBalanceDateMissing ? "Pick a date" : "Save Changes"}
                 </Button>
               </DialogFooter>
             </form>
@@ -887,7 +1026,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <CreateStaffGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} />
+      <CreateStaffGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} initialSystemBranch={accountType} />
     </>
   );
 }

@@ -1,6 +1,17 @@
 
 "use client";
 
+import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
+import { BANK_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import {
+  BANK_SYSTEM_BANK_BRANCH_ID,
+  BANK_SYSTEM_CASH_BRANCH_ID,
+  getDefaultSystemGroupId,
+  normalizeBankGroupIdForStorage,
+} from "@/lib/masterEntitySystemGroups";
+import { resolveMasterGroupTreeBranchIdForGroup } from "@/lib/masterGroupTreeCombobox";
+import { useVouchers } from "@/hooks/useVouchers";
+
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, CalendarIcon, Upload } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -52,13 +63,14 @@ import type { AccountGroup } from "@/components/bank-cash/types";
 import { CreateAccountGroupDialog } from "./CreateAccountGroupDialog";
 import { Switch } from "@/components/ui/switch";
 import usePermissions from "@/hooks/usePermissions";
-import { Combobox } from "../ui/combobox";
 import { useDate } from "@/hooks/useDate";
 import { cn } from "@/lib/utils";
 import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
+import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -69,7 +81,6 @@ import {
 import { MasterFormTwoColGrid } from "@/components/inter-company/MasterFormLayout";
 import { BankAccountToggleFlagsRow } from "@/components/bank-cash/BankAccountToggleFlagsRow";
 import {
-  masterFormRadioGroupClassName,
   masterSpecialAccountPanelClassName,
   masterSpecialAccountPanelTitleClassName,
 } from "@/lib/masterFormPillChrome";
@@ -89,7 +100,6 @@ import { ScrollArea } from "../ui/scroll-area";
 import { MasterPdfAsImageToggle } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
 import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
-import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { EntityOpeningBalanceNarrationField } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
@@ -131,7 +141,7 @@ const formSchema = z.object({
     in: z.array(z.string()),
     out: z.array(z.string()),
   }).optional(),
-});
+}).superRefine(refineMasterOpeningBalanceDateRequired);
 
 export function CreateBankAccountDialog({
   onAccountCreated,
@@ -153,6 +163,7 @@ export function CreateBankAccountDialog({
   const { user } = useAuth();
   const { company, companyId } = useCompany();
   const [groups, setGroups] = useState<AccountGroup[]>([]);
+  const { processedAccountGroups } = useVouchers();
   const { can, canAddAvatar, canAddFileImagePdf } = usePermissions();
   // Documents: voucher-files entitlement ya avatar — party form jaisa
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
@@ -181,7 +192,7 @@ export function CreateBankAccountDialog({
       bankName: "",
       accountNumber: "",
       ifscCode: "",
-      groupId: "",
+      groupId: getDefaultSystemGroupId("bank", { accountType: "Bank" }),
       isSpecial: false,
       allowVoucherMinusBalance: false,
       isClearing: false,
@@ -192,6 +203,8 @@ export function CreateBankAccountDialog({
       openingBalanceNarration: "",
     },
   });
+
+  const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
 
   const accountType = form.watch("accountType");
   const isSpecial = form.watch("isSpecial");
@@ -281,17 +294,9 @@ export function CreateBankAccountDialog({
     let alive = true;
     void (async () => {
       if (!companyId || !user?.uid || !isOpen) return;
-      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
-        // Pure-local APK: Firestore ungrouped ensure skip — canonical local ID.
-        const current = form.getValues("groupId");
-        if (!current) form.setValue("groupId", getUngroupedGroupId("bank"), { shouldDirty: false });
-        return;
-      }
-      // Keep Bank/Cash create default on canonical Ungrouped bucket.
-      const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "bank");
-      if (!alive) return;
+      const defaultBranch = getDefaultSystemGroupId("bank", { accountType: form.getValues("accountType") });
       const current = form.getValues("groupId");
-      if (!current) form.setValue("groupId", ungroupedId, { shouldDirty: false });
+      if (!current) form.setValue("groupId", defaultBranch, { shouldDirty: false });
     })();
     return () => {
       alive = false;
@@ -309,23 +314,12 @@ export function CreateBankAccountDialog({
       document.removeEventListener('prefill-create-bank-account-name', handlePrefill);
     };
   }, [form]);
-  
-  useEffect(() => {
-    // Do not auto-assign system parent groups; let accounts start Ungrouped unless user picks a custom group
-    if (!isOpen) return;
-    const anyCurrent = form.getValues("groupId");
-    if (!anyCurrent && groups.some(g => !(g as any).isSystemReserved)) {
-      const firstCustom = groups.find(g => !(g as any).isSystemReserved);
-      if (firstCustom) form.setValue("groupId", firstCustom.id);
-    }
-  }, [isOpen, groups, form]);
-
 
   const handleGroupCreated = (newGroupId: string) => {
-    form.setValue('groupId', newGroupId);
+    form.setValue("groupId", newGroupId);
     setTimeout(() => setIsCreateGroupOpen(false), 50);
   };
-  
+
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.length) return;
     if (!canAddAvatar) {
@@ -409,7 +403,7 @@ export function CreateBankAccountDialog({
         accountNumber: defaults.accountNumber,
         ifscCode: defaults.ifscCode,
         openingBalanceNarration: defaults.openingBalanceNarration,
-        groupId: getUngroupedGroupId("bank"),
+        groupId: getDefaultSystemGroupId("bank", { accountType: defaults.accountType }),
         isSpecial: defaults.isSpecial,
         useFor:
           defaults.useFor ?? {
@@ -512,7 +506,7 @@ export function CreateBankAccountDialog({
         const payload = {
           id: localId,
           ...values,
-          groupId: values.groupId?.trim() || getUngroupedGroupId("bank"),
+          groupId: normalizeBankGroupIdForStorage(values.groupId, values.accountType),
           openingBalanceDate: values.openingBalanceDate || null,
           openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
           fileUrl: stagedLocal.fileUrl ?? null,
@@ -533,7 +527,7 @@ export function CreateBankAccountDialog({
         });
         onAccountCreated(localId);
         if (saveAndNew) {
-          form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
+          form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getDefaultSystemGroupId("bank", { accountType: values.accountType }), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
           clearUploads();
         }
         return;
@@ -582,8 +576,7 @@ export function CreateBankAccountDialog({
       }
 
       // Pehle doc id — staging `entityId` isi se match karega (`setDoc`, `addDoc` nahi)
-      const resolvedGroupId =
-        values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "bank"));
+      const normalizedGroupId = normalizeBankGroupIdForStorage(values.groupId, values.accountType);
       const accountRef = doc(collection(firestore, `companies/${companyId}/bank_accounts`));
       const newAccountId = accountRef.id;
       const staged = await uploadEntityAvatarAndDocumentsRemote({
@@ -596,7 +589,7 @@ export function CreateBankAccountDialog({
 
       await setDoc(accountRef, {
         ...values,
-        groupId: resolvedGroupId || getUngroupedGroupId("bank"),
+        groupId: normalizedGroupId,
         openingBalanceDate: values.openingBalanceDate || null,
         openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
         fileUrl: staged.fileUrl,
@@ -625,7 +618,7 @@ export function CreateBankAccountDialog({
       onAccountCreated(newAccountId);
 
       if (saveAndNew) {
-        form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
+        form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getDefaultSystemGroupId("bank", { accountType: values.accountType }), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
         clearUploads();
       }
     } catch (error) {
@@ -644,7 +637,7 @@ export function CreateBankAccountDialog({
             );
             if (!lim.allowed) throw new Error(lim.message || "Storage limit reached.");
           }
-          const resolvedGroupId = values.groupId?.trim() || getUngroupedGroupId("bank");
+          const normalizedGroupId = normalizeBankGroupIdForStorage(values.groupId, values.accountType);
           const localId = createLocalEntityId("bank");
           const stagedCatch = await stageEntityAvatarAndDocuments({
             companyId: companyId!,
@@ -656,7 +649,7 @@ export function CreateBankAccountDialog({
           const payload = {
             id: localId,
             ...values,
-            groupId: resolvedGroupId,
+            groupId: normalizedGroupId,
             openingBalanceDate: values.openingBalanceDate || null,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
             fileUrl: stagedCatch.fileUrl ?? null,
@@ -677,7 +670,7 @@ export function CreateBankAccountDialog({
           });
           onAccountCreated(localId);
           if (saveAndNew) {
-            form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
+            form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getDefaultSystemGroupId("bank", { accountType: values.accountType }), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
             clearUploads();
           }
         } catch (offlineErr) {
@@ -700,7 +693,7 @@ export function CreateBankAccountDialog({
             );
             if (!lim.allowed) throw new Error(lim.message || "Storage limit reached.");
           }
-          const resolvedGroupId = values.groupId?.trim() || getUngroupedGroupId("bank");
+          const normalizedGroupId = normalizeBankGroupIdForStorage(values.groupId, values.accountType);
           const localId = createLocalEntityId("bank");
           const stagedCatch = await stageEntityAvatarAndDocuments({
             companyId: companyId!,
@@ -713,7 +706,7 @@ export function CreateBankAccountDialog({
           const payload: Record<string, unknown> = {
             id: localId,
             ...values,
-            groupId: resolvedGroupId,
+            groupId: normalizedGroupId,
             openingBalanceDate: values.openingBalanceDate || null,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
             fileUrl: stagedCatch.fileUrl ?? null,
@@ -731,7 +724,7 @@ export function CreateBankAccountDialog({
           });
           onAccountCreated(localId);
           if (saveAndNew) {
-            form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
+            form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getDefaultSystemGroupId("bank", { accountType: values.accountType }), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
             clearUploads();
           }
         } catch {
@@ -784,6 +777,46 @@ export function CreateBankAccountDialog({
           <Form {...form}>
             <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
             <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+              <FormField
+                control={form.control}
+                name="accountType"
+                render={({ field }: any) => (
+                  <FormItem>
+                    <FormLabel>Account Type</FormLabel>
+                    <RadioGroup
+                      className="flex flex-col gap-2 sm:flex-row sm:gap-6"
+                      value={field.value}
+                      onValueChange={(next: "Bank" | "Cash") => {
+                        field.onChange(next);
+                        const currentBranch = resolveMasterGroupTreeBranchIdForGroup(
+                          form.getValues("groupId"),
+                          processedAccountGroups as AccountGroup[],
+                          BANK_ENTITY_GROUP_PRESET
+                        );
+                        const expectedBranch =
+                          next === "Cash" ? BANK_SYSTEM_CASH_BRANCH_ID : BANK_SYSTEM_BANK_BRANCH_ID;
+                        if (currentBranch !== expectedBranch) {
+                          form.setValue(
+                            "groupId",
+                            getDefaultSystemGroupId("bank", { accountType: next }),
+                            { shouldDirty: true }
+                          );
+                        }
+                      }}
+                    >
+                      <FormItem className="flex items-center space-x-2 space-y-0">
+                        <FormControl><RadioGroupItem value="Bank" /></FormControl>
+                        <FormLabel className="cursor-pointer font-normal">Bank Account</FormLabel>
+                      </FormItem>
+                      <FormItem className="flex items-center space-x-2 space-y-0">
+                        <FormControl><RadioGroupItem value="Cash" /></FormControl>
+                        <FormLabel className="cursor-pointer font-normal">Cash in Hand</FormLabel>
+                      </FormItem>
+                    </RadioGroup>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
               <MasterFormTwoColGrid>
                 <FormField
                   control={form.control}
@@ -798,30 +831,7 @@ export function CreateBankAccountDialog({
                     </FormItem>
                   )}
                 />
-                <FormField
-                  control={form.control}
-                  name="accountType"
-                  render={({ field }: any) => (
-                    <FormItem>
-                      <FormLabel>Account Type</FormLabel>
-                      <RadioGroup
-                        onValueChange={field.onChange}
-                        value={field.value}
-                        className={masterFormRadioGroupClassName}
-                      >
-                        <FormItem className="flex items-center space-x-2 space-y-0">
-                          <FormControl><RadioGroupItem value="Bank" /></FormControl>
-                          <FormLabel className="font-normal">Bank Account</FormLabel>
-                        </FormItem>
-                        <FormItem className="flex items-center space-x-2 space-y-0">
-                          <FormControl><RadioGroupItem value="Cash" /></FormControl>
-                          <FormLabel className="font-normal">Cash in Hand</FormLabel>
-                        </FormItem>
-                      </RadioGroup>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                <div aria-hidden className="hidden sm:block" />
               </MasterFormTwoColGrid>
               <BankAccountToggleFlagsRow control={form.control} />
 
@@ -834,17 +844,20 @@ export function CreateBankAccountDialog({
                         <FormItem>
                         <FormLabel>Group</FormLabel>
                         <FormControl>
-                            <Combobox
-                                options={[
-                                    { value: getUngroupedGroupId("bank"), label: "Ungrouped" },
-                                    ...groups
-                                      .filter((group) => !(group as any).isSystemReserved && (group as any).isAutoUngrouped !== true)
-                                      .map((group) => ({
-                                        value: group.id,
-                                        label: group.name,
-                                      })),
-                                ]}
+                            <MasterGroupTreeCombobox
+                                preset={BANK_ENTITY_GROUP_PRESET}
+                                groups={groups}
+                                processedGroups={processedAccountGroups as AccountGroup[]}
+                                popoverModal
+                                confirmWithOk
                                 value={field.value}
+                                onBranchChange={(branchId) => {
+                                  if (branchId === BANK_SYSTEM_BANK_BRANCH_ID) {
+                                    form.setValue("accountType", "Bank", { shouldDirty: true });
+                                  } else if (branchId === BANK_SYSTEM_CASH_BRANCH_ID) {
+                                    form.setValue("accountType", "Cash", { shouldDirty: true });
+                                  }
+                                }}
                                 onChange={(val, newName) => {
                                     if (val === "add-new") {
                                     setIsCreateGroupOpen(true);
@@ -852,10 +865,24 @@ export function CreateBankAccountDialog({
                                         document.dispatchEvent(new CustomEvent('prefill-create-account-group-name', { detail: newName }));
                                     }, 100);
                                     } else {
-                                    field.onChange(val === "none" ? "" : val);
+                                    const gid = val === "none" ? "" : val;
+                                    field.onChange(gid);
+                                    if (gid) {
+                                      const branchId = resolveMasterGroupTreeBranchIdForGroup(
+                                        gid,
+                                        processedAccountGroups as AccountGroup[],
+                                        BANK_ENTITY_GROUP_PRESET
+                                      );
+                                      if (branchId === BANK_SYSTEM_CASH_BRANCH_ID) {
+                                        form.setValue("accountType", "Cash", { shouldDirty: true });
+                                      } else if (branchId === BANK_SYSTEM_BANK_BRANCH_ID) {
+                                        form.setValue("accountType", "Bank", { shouldDirty: true });
+                                      }
+                                    }
                                     }
                                 }}
                                 placeholder="Select or search a group"
+                                searchPlaceholder="Search groups..."
                                 addNewLabel="Create New Group"
                                 disabled={isLoading || isCompressing}
                                 />
@@ -1133,13 +1160,13 @@ export function CreateBankAccountDialog({
                       variant="ghost"
                       className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                       onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                      disabled={isLoading || isCompressing || apkOfflineViewOnly}
+                      disabled={isLoading || isCompressing || apkOfflineViewOnly || openingBalanceDateMissing}
                     >
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & New
                     </Button>
                   </div>
-                  <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly} className="shrink-0">
+                  <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly || openingBalanceDateMissing} className="shrink-0">
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Create Account
                   </Button>

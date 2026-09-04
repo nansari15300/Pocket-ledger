@@ -70,7 +70,13 @@ import {
 import { useCompany } from "@/hooks/useCompany";
 import { EditAccountGroupDialog } from "@/components/bank-cash/EditAccountGroupDialog";
 import { EditAccountDialog } from "@/components/bank-cash/EditAccountDialog";
+import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
+import { useGroupMemberAccountLedgerChrome } from "@/hooks/useGroupMemberAccountLedgerChrome";
+import { BANK_ACCOUNT_FREEZE_COLLECTION } from "@/lib/masterAccountFreeze/freezeAdapter";
 import { bankAccountDisplayName } from "@/lib/bankAccountDisplayName";
+import { filterMembersByMasterGroupScope } from "@/lib/masterGroupMemberScope";
+import { BANK_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { isMasterEntitySystemGroupId, resolveBankListGroupBucketId } from "@/lib/masterEntitySystemGroups";
 import { bankLedgerDepositWithdrawColumnLabels } from "@/lib/bankLedgerDrCrPerspective";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
@@ -97,6 +103,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { getOpeningBalanceBaseAmount, getOpeningBalanceVoucherLabel, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
+import { resolveGroupBooksOpeningBalance } from "@/lib/ledgerOpeningBalanceDisplay";
 import {
   attachSpendWisePageEdgeFlags,
   buildSpendWiseDisplayBlocks,
@@ -208,13 +215,18 @@ export function AccountGroupDetails({
     });
     return () => cancelAnimationFrame(id);
   }, [disableTableLayoutAnimation]);
+  const isSystemBranchGroup = isMasterEntitySystemGroupId(BANK_ENTITY_GROUP_PRESET, group.id);
   const accountsInGroup = useMemo(() => {
-    if (group.id === "ungrouped") {
-      // Ungrouped should include both empty groupId and persisted ungrouped id rows.
-      return accounts.filter((a) => !a.groupId || a.groupId === "ungrouped_account");
-    }
-    return accounts.filter((a) => a.groupId === group.id);
-  }, [accounts, group.id]);
+    if (accounts.length > 0) return accounts;
+    return filterMembersByMasterGroupScope<Account>(
+      group.id,
+      processedAccounts,
+      allGroups,
+      resolveBankListGroupBucketId,
+      (id) => isMasterEntitySystemGroupId(BANK_ENTITY_GROUP_PRESET, id),
+      (account, branchId) => resolveBankListGroupBucketId(account) === branchId
+    );
+  }, [accounts, group.id, allGroups, processedAccounts]);
 
   const selectedMemberAccount = useMemo(() => {
     if (!groupMemberFilterId) return null;
@@ -228,6 +240,22 @@ export function AccountGroupDetails({
     () => trimEntityFileUrlForPreview(selectedMemberAccount?.fileUrl),
     [selectedMemberAccount?.fileUrl, selectedMemberAccount?.id]
   );
+
+  const { memberFreezeOverlay, memberClosingBalanceActions } = useGroupMemberAccountLedgerChrome({
+    companyId,
+    collection: BANK_ACCOUNT_FREEZE_COLLECTION,
+    patchCollection: "bank_accounts",
+    selectedMember: selectedMemberAccount
+      ? {
+          ...selectedMemberAccount,
+          name: selectedMemberDisplayName ?? selectedMemberAccount.accountName,
+        }
+      : null,
+    adjustmentEntityType: "account",
+    adjustmentDisplayName: selectedMemberDisplayName ?? selectedMemberAccount?.accountName,
+    onMemberUpdated: onAccountUpdated,
+  });
+
   const accountIdsInGroup = useMemo(() => accountsInGroup.map((a) => a.id), [accountsInGroup]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
 
@@ -492,7 +520,7 @@ export function AccountGroupDetails({
       if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}`, _rowKey: `grp-spacer-end-${groupId}` });
     });
     // Build Opening Balance group — books master OB se (date-range period carry se group mat todo).
-    const masterBooksOb = Number(group.openingBalance) || openingBalanceForPeriod;
+    const masterBooksOb = resolveGroupBooksOpeningBalance(group, accounts);
     const openingSide = masterBooksOb >= 0 ? "dr" : "cr";
     const openingBase = getOpeningBalanceBaseAmount(masterBooksOb, openingSide);
     if (openingBase > 0 && ((openingSide === "cr" && openingLinkedInIds.size > 0) || (openingSide === "dr" && openingLinkedOutIds.size > 0))) {
@@ -779,7 +807,7 @@ export function AccountGroupDetails({
   /** Party/bank ledger: dated opening row ke liye range-from. */
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
   const tableLedgerDateFilterActive = spendWiseView ? false : hasLedgerDateFilter;
-  const booksOpeningForAccountGroup = Number((group as any).openingBalance) || 0;
+  const booksOpeningForAccountGroup = resolveGroupBooksOpeningBalance(group, accounts);
   
   const clearFilters = () => {
     onDateRangeChange(undefined);
@@ -1378,7 +1406,7 @@ export function AccountGroupDetails({
                   </EditAccountDialog>
                 )
               ) : (
-                group.id !== "ungrouped" && (
+                !isSystemBranchGroup && (
                   <EditAccountGroupDialog
                     group={group}
                     allGroups={allGroups}
@@ -1414,6 +1442,7 @@ export function AccountGroupDetails({
             >
             <div className="pb-2">
             {/* Bank/Cash group pages use their own Statement/Spend-wise toggle, so shared bill-wise preference must stay off here. */}
+            <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable
               transactions={mobileTransactionsToShow}
               context="group"
@@ -1444,6 +1473,7 @@ export function AccountGroupDetails({
               periodDr={isBalanceMasked ? undefined : mobilePageLedgerStats.periodDrForPage}
               periodCr={isBalanceMasked ? undefined : mobilePageLedgerStats.periodCrForPage}
               closingBalance={isBalanceMasked ? undefined : mobilePageLedgerStats.closingForPage}
+              closingBalanceActions={memberClosingBalanceActions}
               isBalanceMasked={isBalanceMasked}
               scrollOnlyTransactions
               disableLayoutAnimation={disableTableLayoutAnimation}
@@ -1452,6 +1482,7 @@ export function AccountGroupDetails({
               {...statementCheck.tableProps}
               {...bankLedgerDepositWithdrawColumnLabels("bank")}
             />
+            </MasterAccountFreezeTxnShell>
             </div>
             </div>
             <MobileTransactionsPager
@@ -1703,7 +1734,7 @@ export function AccountGroupDetails({
                         <Users className="h-6 w-6" />
                       </AvatarFallback>
                     </Avatar>
-                    {group.id !== "ungrouped" && (
+                    {!isSystemBranchGroup && (
                       <EditAccountGroupDialog
                         group={group}
                         allGroups={allGroups}
@@ -1840,6 +1871,7 @@ export function AccountGroupDetails({
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-auto scrollbar-slim-dim scroll-touch">
           <div className={cn("py-4 min-w-0", spendWiseView && "p-[2px]")}>
             {/* Bank/Cash group pages use their own Statement/Spend-wise toggle, so shared bill-wise preference must stay off here. */}
+            <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable
               transactions={paginatedTransactions}
               context="group"
@@ -1859,7 +1891,7 @@ export function AccountGroupDetails({
               openingBalanceNarration={(group as any).openingBalanceNarration}
               openingBalanceDate={(group as any).openingBalanceDate}
               openingBalanceActions={
-                group.id !== "ungrouped" ? (
+                !isSystemBranchGroup ? (
                   <EditAccountGroupDialog
                     group={group}
                     allGroups={allGroups}
@@ -1884,6 +1916,7 @@ export function AccountGroupDetails({
               periodDr={isBalanceMasked ? undefined : desktopPageLedgerStats.periodDrForPage}
               periodCr={isBalanceMasked ? undefined : desktopPageLedgerStats.periodCrForPage}
               closingBalance={isBalanceMasked ? undefined : desktopPageLedgerStats.closingForPage}
+              closingBalanceActions={memberClosingBalanceActions}
               isBalanceMasked={isBalanceMasked}
               disableLayoutAnimation={disableTableLayoutAnimation}
               blinkMode={spendWiseBlinkMode}
@@ -1891,6 +1924,7 @@ export function AccountGroupDetails({
               {...statementCheck.tableProps}
               {...bankLedgerDepositWithdrawColumnLabels("bank")}
             />
+            </MasterAccountFreezeTxnShell>
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">
                 No transactions found for the selected period.

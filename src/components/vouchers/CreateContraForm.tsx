@@ -16,6 +16,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon, Loader2, Trash2, PlusCircle, Upload, FileText, Crown, History, CheckCircle, Printer, Link2, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { withMasterAccountFreezeComboboxOption } from "@/lib/masterAccountFreeze/comboboxOptions";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
@@ -1378,16 +1379,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   // Contra out (from account): show balance in option label and block non-positive balances.
   const fromBankCashAccountOptions = useMemo(
     () =>
-      availableFromAccounts.map((a: any) => ({
-        value: a.id,
-        // Keep selected field clean (without balance); show balance only in dropdown list rows.
-        triggerLabel: `${a.accountName} (${a.accountType})`,
-        // Keep list balance short as requested: "2,000.00 Dr" (no "Balance:" / no currency prefix).
-        label: `${a.accountName} (${a.accountType}) — ${formatCurrencyForPrint(Number(a.balance) || 0, { showDrCr: true, noSuffix: true, noAnimation: true })}`,
-        isSpecial: a.isSpecial,
-        disabled:
-          !bankAccountAllowsVoucherMinusBalance(a) && (Number(a.balance) || 0) <= 0,
-      })),
+      availableFromAccounts.map((a: any) =>
+        withMasterAccountFreezeComboboxOption(a, {
+          value: a.id,
+          triggerLabel: `${a.accountName} (${a.accountType})`,
+          label: `${a.accountName} (${a.accountType}) — ${formatCurrencyForPrint(Number(a.balance) || 0, { showDrCr: true, noSuffix: true, noAnimation: true })}`,
+          isSpecial: a.isSpecial,
+          disabled:
+            !bankAccountAllowsVoucherMinusBalance(a) && (Number(a.balance) || 0) <= 0,
+        })
+      ),
     [availableFromAccounts, formatCurrencyForPrint]
   );
   // Contra safety: same account ko From/To dono side par select karne ki गलती रोकने के लिए opposite side me disable karo.
@@ -1402,12 +1403,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   // Opposite side guard: From me selected account To list me disabled dikhe.
   const contraToAccountOptions = useMemo(
     () =>
-      availableToAccounts.map((a: any) => ({
-        value: a.id,
-        label: `${a.accountName} (${a.accountType})`,
-        isSpecial: a.isSpecial,
-        disabled: !!fromAccountId && String(a.id) === String(fromAccountId),
-      })),
+      availableToAccounts.map((a: any) =>
+        withMasterAccountFreezeComboboxOption(a, {
+          value: a.id,
+          label: `${a.accountName} (${a.accountType})`,
+          isSpecial: a.isSpecial,
+          disabled: !!fromAccountId && String(a.id) === String(fromAccountId),
+        })
+      ),
     [availableToAccounts, fromAccountId]
   );
   /** Copy-draft helpers: source mismatch ho tabhi account Copy chip dikhe (Sale/Purchase jaisa). */

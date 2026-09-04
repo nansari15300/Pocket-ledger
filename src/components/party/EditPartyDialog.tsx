@@ -4,7 +4,7 @@
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Trash2, CalendarIcon, Upload } from "lucide-react";
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, collection, query, Timestamp } from "firebase/firestore";
@@ -30,6 +30,7 @@ import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Textarea } from "../ui/textarea";
+import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { CreateGroupDialog } from "./CreateGroupDialog";
 import { toast as sonnerToast } from "sonner";
 import {
@@ -37,7 +38,7 @@ import {
   MasterMobileNoField,
   MasterFormTwoColGrid,
 } from "@/components/inter-company/MasterFormLayout";
-import { Combobox } from "../ui/combobox";
+import { PartyGroupTreeCombobox } from "@/components/party/PartyGroupTreeCombobox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useDate } from "@/hooks/useDate";
 import { fireRecycleBinMovedAlertForCompanyDoc } from "@/lib/transactionAlerts";
@@ -70,13 +71,30 @@ function isInterCompanyAutoParty(party: Party): boolean {
   if (String(party.id || "").startsWith("ic_peer_")) return true;
   return isInterCompanyCounterpartyPartyName(party.name);
 }
-import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import {
+  normalizePartyGroupIdForForm,
+  normalizePartyGroupIdForStorage,
+  PARTY_SYSTEM_CREDITORS_ID,
+  PARTY_SYSTEM_DEBTORS_ID,
+  PARTY_SYSTEM_GROUP_OPTIONS,
+} from "@/lib/partySystemGroups";
+import { resolvePartyGroupBranchIdForGroup } from "@/lib/partyGroupCombobox";
 import { parseOpeningBalanceDateToLocalNoon } from "@/lib/voucherDateNormalize";
 import {
   MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import {
+  guardMasterEditOutsideDismiss,
+  masterEditBackdropClassName,
+  masterEditPopoverContentClassName,
+  NESTED_LEDGER_MASTER_EDIT_CONTENT_CN,
+  NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN,
+  type MasterEditPresentationMode,
+} from "@/lib/nestedLedgerMasterEditPresentation";
+import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
+import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   cnMasterEntityDialogContent,
@@ -86,36 +104,41 @@ import {
 import { MasterPdfAsImageToggle } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import { attachmentLockFieldsForFinalUrls, readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 
-/** Create form jaisa: combobox value hamesha `ungrouped_party` ho jab party bucket “Ungrouped” ho (null / legacy empty). */
+/** Legacy ungrouped / empty → Sundry Creditors for combobox + save. */
 function normalizePartyEditGroupId(groupId: string | null | undefined): string {
-  const u = getUngroupedGroupId("party");
-  if (!groupId || groupId === u) return u;
-  return groupId;
+  return normalizePartyGroupIdForForm(groupId);
 }
 
 const formSchema = z.object({
+  accountType: z.enum([PARTY_SYSTEM_DEBTORS_ID, PARTY_SYSTEM_CREDITORS_ID], {
+    required_error: "Select account type.",
+  }),
   name: z.string().min(2, { message: "Party name must be at least 2 characters." }),
   email: z.string().email({ message: "Please enter a valid email." }).optional().or(z.literal("")),
   phone: z.string().optional(),
+  whatsapp: z.boolean().optional(),
   pan: z.string().optional(),
   address: z.string().optional(),
   groupId: z.string().optional(),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
   openingBalanceNarration: z.string().optional(),
-});
+}).superRefine(refineMasterOpeningBalanceDateRequired);
 
 const MAX_FILE_SIZE_MB = 0.5;
 
 /** Save toast — lamba "Saving…" hata, chhota feedback (PC/mobile). */
 const PARTY_TOAST_OK_MS = 1000;
 
-export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, children, hasTransactions }: {
+export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, children, hasTransactions, isOpen: controlledIsOpen, onOpenChange, presentationMode = "default" }: {
   party: Party;
   onPartyUpdated: (updatedParty: Partial<Party>) => void;
   onPartyDeleted: (deletedId: string) => void;
   children: React.ReactNode;
   hasTransactions: boolean;
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  presentationMode?: MasterEditPresentationMode;
 }) {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -137,7 +160,14 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { dateSystem } = useDate();
   const isMobile = useIsMobile();
-  const [isOpen, setIsOpen] = useState(false);
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isOpen = controlledIsOpen ?? internalIsOpen;
+  const setIsOpen = useCallback((open: boolean) => {
+    if (controlledIsOpen === undefined) {
+      setInternalIsOpen(open);
+    }
+    onOpenChange?.(open);
+  }, [controlledIsOpen, onOpenChange]);
   const [isLoading, setIsLoading] = useState(false);
   const isCompressing = useImageCompressionProcessing();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -187,9 +217,14 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
     defaultValues: {
+        accountType: (resolvePartyGroupBranchIdForGroup(
+          normalizePartyEditGroupId(party.groupId),
+          processedGroups
+        ) ?? PARTY_SYSTEM_CREDITORS_ID) as typeof PARTY_SYSTEM_DEBTORS_ID | typeof PARTY_SYSTEM_CREDITORS_ID,
         name: party.name,
         email: party.email || "",
         phone: party.phone || "",
+        whatsapp: party.whatsapp === true,
         pan: party.pan || "",
         address: party.address || "",
         groupId: normalizePartyEditGroupId(party.groupId),
@@ -199,7 +234,11 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         openingBalanceNarration: party.openingBalanceNarration ?? "",
     },
   });
-  
+
+  const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
+
+  const accountType = form.watch("accountType");
+
   const handleGroupCreated = (newGroupId: string) => {
     form.setValue('groupId', newGroupId);
     setTimeout(() => setIsCreateGroupOpen(false), 50);
@@ -291,9 +330,14 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
       const finalDate = parseOpeningBalanceDateToLocalNoon(dateValue) ?? undefined;
 
       form.reset({
+        accountType: (resolvePartyGroupBranchIdForGroup(
+          normalizePartyEditGroupId(party.groupId),
+          processedGroups
+        ) ?? PARTY_SYSTEM_CREDITORS_ID) as typeof PARTY_SYSTEM_DEBTORS_ID | typeof PARTY_SYSTEM_CREDITORS_ID,
         name: party.name,
         email: party.email || "",
         phone: party.phone || "",
+        whatsapp: party.whatsapp === true,
         pan: party.pan || "",
         address: party.address || "",
         groupId: normalizePartyEditGroupId(party.groupId),
@@ -379,7 +423,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
 
         const oldOpeningBalance = partyRefSnap.openingBalance || 0;
         const newOpeningBalance = values.openingBalance || 0;
-        const resolvedGroupId = values.groupId?.trim() || getUngroupedGroupId("party");
+        const resolvedGroupId = normalizePartyGroupIdForStorage(values.groupId?.trim());
         const narrationClean = values.openingBalanceNarration?.trim() || null;
 
         /** Firestore `undefined` field skip / local mirror — explicit payload (EditAccountDialog jaisa) */
@@ -387,6 +431,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           name: values.name,
           address: values.address ?? "",
           phone: values.phone ?? "",
+          whatsapp: values.whatsapp === true,
           email: values.email ?? "",
           pan: values.pan ?? "",
           openingBalance: newOpeningBalance,
@@ -624,30 +669,30 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
 
   const removeDocAt = (idx: number) => setDocSlots((p) => p.filter((_, i) => i !== idx));
 
-  const partyGroupOptions = React.useMemo(() => {
-    // CreatePartyForm ke saath milao: pehle synthetic Ungrouped; `ungrouped_party` doc list se `isAutoUngrouped` filter se hat jata hai
-    return [
-      { value: getUngroupedGroupId("party"), label: "Ungrouped" },
-      ...groups
-        .filter(
-          (group) =>
-            !(group as any).isSystemReserved && (group as any).isAutoUngrouped !== true
-        )
-        .map((group) => ({ value: group.id, label: group.name })),
-    ];
-  }, [groups]);
-
   return (
     <>
       <Dialog open={isOpen} onOpenChange={setIsOpen} modal={false}>
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-        {isOpen && <div className="fixed inset-0 bg-black/45 backdrop-blur-sm z-40" />}
+        {isOpen && <div className={masterEditBackdropClassName(presentationMode)} />}
         <DialogContent
-            className={cnMasterEntityDialogContent(isMobile)}
+            overlayClassName={
+              presentationMode === "nested-ledger" ? NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN : undefined
+            }
+            className={cn(
+              cnMasterEntityDialogContent(isMobile),
+              presentationMode === "nested-ledger" && NESTED_LEDGER_MASTER_EDIT_CONTENT_CN
+            )}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
-            onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
-            onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
+            onPointerDownOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e, isCreateGroupOpen);
+            }}
+            onInteractOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e, isCreateGroupOpen);
+            }}
+            onFocusOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e);
+            }}
         >
           <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Edit Party</DialogTitle>
@@ -658,6 +703,41 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             {/* Scroll body + ek hi row footer: Cancel • Bin • Save — pehle grid me Save neeche doosri line tha */}
             <form onSubmit={form.handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
             <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
+              <FormField
+                control={form.control}
+                name="accountType"
+                render={({ field }: any) => (
+                  <FormItem>
+                    <FormLabel>Account Type</FormLabel>
+                    <FormControl>
+                      <RadioGroup
+                        className="flex flex-col gap-2 sm:flex-row sm:gap-6"
+                        value={field.value}
+                        onValueChange={(next) => {
+                          field.onChange(next);
+                          const currentBranch = resolvePartyGroupBranchIdForGroup(
+                            form.getValues("groupId"),
+                            processedGroups
+                          );
+                          if (currentBranch !== next) {
+                            form.setValue("groupId", next, { shouldDirty: true });
+                          }
+                        }}
+                      >
+                        {PARTY_SYSTEM_GROUP_OPTIONS.map((branch) => (
+                          <FormItem key={branch.id} className="flex items-center space-x-2 space-y-0">
+                            <FormControl>
+                              <RadioGroupItem value={branch.id} />
+                            </FormControl>
+                            <FormLabel className="cursor-pointer font-normal">{branch.name}</FormLabel>
+                          </FormItem>
+                        ))}
+                      </RadioGroup>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
               <MasterFormNameAcNoRow
                   entityKind="party"
                   entityId={party.id}
@@ -685,9 +765,17 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                   render={({ field }: any) => (
                     <FormItem>
                       <FormLabel>Group</FormLabel>
-                      <Combobox
-                        options={partyGroupOptions}
+                      <PartyGroupTreeCombobox
+                        groups={groups}
+                        processedGroups={processedGroups}
+                        popoverModal={false}
                         value={field.value}
+                        confirmWithOk
+                        onAccountTypeChange={(branchId) => {
+                          form.setValue("accountType", branchId as typeof PARTY_SYSTEM_DEBTORS_ID | typeof PARTY_SYSTEM_CREDITORS_ID, {
+                            shouldDirty: true,
+                          });
+                        }}
                         onChange={(val, newName) => {
                           if (val === "add-new") {
                             setIsCreateGroupOpen(true);
@@ -701,7 +789,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                           }
                         }}
                         placeholder="Select a group"
-                        addNewLabel="+ Add New Group"
+                        searchPlaceholder="Search groups..."
+                        addNewLabel="Add New Group"
                       />
                       <FormMessage />
                     </FormItem>
@@ -769,11 +858,16 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                     control={form.control}
                     name="openingBalanceDate"
                     render={({ field }: any) => (
-                      <FormItem>
+                      <FormItem data-opening-balance-date>
                         <FormLabel>As on Date</FormLabel>
                          <div className={cn("grid", dateSystem === 'Both' && "grid-cols-1 sm:grid-cols-2 gap-2")}>
                               {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                                  <BsDatePicker valueAD={field.value} onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} />
+                                  <BsDatePicker
+                                    valueAD={field.value}
+                                    onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }}
+                                    isRange={false}
+                                    popoverContentClassName={masterEditPopoverContentClassName(presentationMode)}
+                                  />
                               )}
                               {(dateSystem === 'AD' || dateSystem === 'Both') && (
                                   <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
@@ -788,7 +882,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                                         </Button>
                                       </FormControl>
                                     </PopoverTrigger>
-                                    <PopoverContent className="w-auto p-0 z-[102]" align="start">
+                                    <PopoverContent className={masterEditPopoverContentClassName(presentationMode, "w-auto p-0")} align="start">
                                       <Calendar mode="single" selected={field.value} onSelect={(date) => { field.onChange(date); setIsCalendarOpen(false); }} initialFocus />
                                     </PopoverContent>
                                   </Popover>
@@ -964,9 +1058,20 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                   </TooltipProvider>
                 </div>
                 {/* APK cloud offline par submit band — sirf Cancel/close chalu */}
-                <Button type="submit" className="shrink-0" disabled={isLoading || isCompressing || apkOfflineViewOnly}>
+                <Button
+                  type={openingBalanceDateMissing ? "button" : "submit"}
+                  className="shrink-0"
+                  disabled={isLoading || isCompressing || apkOfflineViewOnly}
+                  onClick={() => {
+                    if (!openingBalanceDateMissing) return;
+                    document.querySelector("[data-opening-balance-date]")?.scrollIntoView({
+                      behavior: "smooth",
+                      block: "center",
+                    });
+                  }}
+                >
                   {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Save Changes
+                  {openingBalanceDateMissing ? "Pick a date" : "Save Changes"}
                 </Button>
               </DialogFooter>
             </form>
@@ -998,7 +1103,14 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <CreateGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} />
+      <CreateGroupDialog
+        onGroupCreated={handleGroupCreated}
+        isOpen={isCreateGroupOpen}
+        onOpenChange={setIsCreateGroupOpen}
+        groups={groups}
+        confirmLabel="Done"
+        initialSystemBranch={accountType}
+      />
     </>
   );
 }

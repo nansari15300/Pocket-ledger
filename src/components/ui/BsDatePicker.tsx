@@ -24,6 +24,8 @@ type BsDatePickerBaseProps = {
   rangeEmptyLabel?: string;
   /** true = `data-theme-detail="date-range"` mat lagao — global black border override avoid (recon ribbon blue pill). */
   skipDateRangeThemeDetail?: boolean;
+  /** Nested ledger edit dialog ke upar calendar popover (z-index). */
+  popoverContentClassName?: string;
 };
 
 type BsDatePickerConditionalProps =
@@ -65,6 +67,7 @@ export default function BsDatePicker({
   hideTriggerIcon = false,
   rangeEmptyLabel,
   skipDateRangeThemeDetail = false,
+  popoverContentClassName,
 }: BsDatePickerProps) {
   const [open, setOpen] = React.useState(false);
   const { formatDateBS } = useDate();
@@ -162,7 +165,8 @@ export default function BsDatePicker({
         className={cn(
           "w-auto p-0 z-50",
           // Narrow viewports: keep popover in screen; inner NepaliCalendar scrolls (presets + calendar)
-          "max-w-[calc(100vw-1rem)] sm:max-w-none"
+          "max-w-[calc(100vw-1rem)] sm:max-w-none",
+          popoverContentClassName
         )}
       >
         <NepaliCalendar

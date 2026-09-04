@@ -22,6 +22,9 @@ import { cn } from "@/lib/utils";
 import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
 import { pathnameForModalRouterReplace } from "@/lib/modalUrlSync";
 import { appNavHref } from "@/lib/appNavHref";
+import { LEDGER_HEADER_RIBBON_WRAP_CN } from "@/lib/ledgerHeaderChrome";
+import { useReportPage } from "@/contexts/ReportPageContext";
+import { ResizeWidthHandle, useResizablePixelWidth } from "@/components/layout/ResizablePaneWidth";
 
 const ReportDetails = dynamic(
   () => import("@/components/reports/ReportDetails").then((m) => m.ReportDetails),
@@ -60,6 +63,12 @@ export default function ReportsPage() {
       </Suspense>
     </PermissionRouteGuard>
   );
+}
+
+function ReportsPageDetailRibbon() {
+  const { detailRibbonContent } = useReportPage();
+  if (!detailRibbonContent) return null;
+  return <div className="min-w-0 flex-1">{detailRibbonContent}</div>;
 }
 
 function ReportsPageContent() {
@@ -150,6 +159,12 @@ function ReportsPageContent() {
   );
 
   const { reportListOpen, setReportListOpen } = useReportList();
+  const { widthPx: reportListWidthPx, beginResize: beginReportListResize } = useResizablePixelWidth({
+    storageKey: "pl-reports-list-width-px",
+    defaultPx: 320,
+    minPx: Math.round(256 * 0.7),
+    maxPx: Math.round(256 * 1.3),
+  });
 
   const openReportListSheet = useCallback(() => setReportListOpen(true), [setReportListOpen]);
   /** Mobile report detail: daen kinara se swipe left → list Sheet (header icon jaisa) */
@@ -255,15 +270,24 @@ function ReportsPageContent() {
 
   return (
     <ReportPageProvider onBackToReportList={() => setSelectedReportWithUrl(null)}>
-      <div className="grid h-full overflow-hidden md:grid-cols-[auto_minmax(0,1fr)]">
+      <div
+        className="grid h-full overflow-hidden"
+        style={{
+          gridTemplateColumns: isDesktopReportListOpen
+            ? `${reportListWidthPx}px minmax(0, 1fr)`
+            : "0 minmax(0, 1fr)",
+        }}
+      >
         {/* Desktop report list behaves like collapsible app sidebar. */}
         <div
           className={cn(
             "border-r overflow-hidden transition-all duration-300",
-            isDesktopReportListOpen ? "w-[320px] opacity-100" : "w-0 opacity-0"
+            isDesktopReportListOpen ? "opacity-100" : "w-0 opacity-0"
           )}
+          style={{ width: isDesktopReportListOpen ? reportListWidthPx : 0 }}
         >
-          <div className="h-full min-w-[320px]">
+          <div className="relative h-full min-w-0">
+            <ResizeWidthHandle onPointerDown={beginReportListResize} title="Resize reports list" />
             <div className="p-4 border-b flex items-center justify-between gap-2">
               <h1 className="text-xl font-bold font-headline">Reports</h1>
               {/* Dedicated hide control for report list panel. */}
@@ -277,24 +301,35 @@ function ReportsPageContent() {
                 <PanelRight className="h-4 w-4" />
               </Button>
             </div>
-            <div className="h-[calc(100%-65px)]">{listView}</div>
+            <div className="h-[calc(100%-65px)] min-w-0">{listView}</div>
           </div>
         </div>
         <div className="min-w-0 flex flex-col overflow-hidden">
-          <div className="p-2 border-b flex items-center gap-2">
+          <div
+            className={cn(
+              "flex shrink-0 gap-2",
+              selectedReport?.ledgerDetailTopRibbon
+                ? cn(LEDGER_HEADER_RIBBON_WRAP_CN, "items-center py-1")
+                : "items-center border-b p-2"
+            )}
+          >
             {/* Sidebar-like show control for report list panel. */}
             <Button
               variant="outline"
-              size="sm"
+              size="icon"
               onClick={() => setIsDesktopReportListOpen((prev) => !prev)}
-              className="gap-2"
+              className="h-10 w-10 shrink-0 rounded-full"
+              title={isDesktopReportListOpen ? "Hide report list" : "Show report list"}
+              aria-label={isDesktopReportListOpen ? "Hide report list" : "Show report list"}
             >
               <PanelRight className="h-4 w-4" />
-              {isDesktopReportListOpen ? "Hide List" : "Show List"}
             </Button>
-            <span className="text-sm text-muted-foreground truncate">
-              {selectedReport ? selectedReport.name : "Select a report"}
-            </span>
+            <ReportsPageDetailRibbon />
+            {!selectedReport?.ledgerDetailTopRibbon ? (
+              <span className="truncate text-sm text-muted-foreground">
+                {selectedReport ? selectedReport.name : "Select a report"}
+              </span>
+            ) : null}
           </div>
           <div className="flex-1 min-h-0 overflow-hidden">{detailView}</div>
         </div>

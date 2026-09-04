@@ -22,6 +22,7 @@ import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { MobileMasterDetailNestedName } from "@/components/entity/MobileMasterDetailNestedName";
 import { mlc } from "@/lib/mobileListChrome";
 import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
+import { EntityListDrCrBalanceSummary } from "@/components/entity/EntityListDrCrBalanceSummary";
 import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -71,6 +72,34 @@ import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachm
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
+import { moveExpenseAccountToGroup } from "@/lib/expenseGroupAccountMove";
+import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
+import { expenseGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
+import { EXPENSE_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import {
+  buildExpenseGroupForest,
+  buildExpenseGroupSystemBranchGroup,
+  collectExpenseGroupScopeAccounts,
+  countVisibleExpenseGroupForestNodes,
+  filterExpenseGroupForest,
+  isExpenseGroupSystemListBranchId,
+  sortExpenseGroupTreeNodes,
+  splitExpenseGroupForestByBranch,
+  sumExpenseGroupSystemBranchBalancesFromAccounts,
+  sumExpenseGroupSystemBranchBalancesFromForest,
+} from "@/lib/expenseGroupTree";
+import { isSystemParentGroup } from "@/lib/system-groups";
+import { toast as sonnerToast } from "sonner";
+import {
+  filterAndSortMasterEntityListRows,
+} from "@/lib/filterMasterEntityListRows";
+import { EXPENSE_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import {
+  appendMasterEntitySystemBranchGroups,
+  isMasterEntitySystemGroupId,
+  resolveExpenseListGroupBucketId,
+  resolveMasterEntityGroupForSelection,
+} from "@/lib/masterEntitySystemGroups";
 
 function IncomeExpensePageContent() {
   const CORE_EXPENSE_GROUP_IDS = useMemo(
@@ -117,10 +146,7 @@ function IncomeExpensePageContent() {
     processedExpenseAccounts.forEach((account: any) => {
       const n = pendingApprovalByExpenseAccountId[account.id] || 0;
       if (!n) return;
-      const gid =
-        account.groupId && String(account.groupId).trim() !== "" && account.groupId !== "ungrouped_expense"
-          ? account.groupId
-          : "ungrouped";
+      const gid = resolveExpenseListGroupBucketId(account);
       map[gid] = (map[gid] || 0) + n;
     });
     return map;
@@ -180,7 +206,7 @@ function IncomeExpensePageContent() {
   const { featureConfig } = useCachedFeatureConfig({});
 
   const selectedAccount = activeView === 'accounts' ? selected as ExpenseAccount : null;
-  const selectedGroup = activeView === 'groups' ? selected as ExpenseGroup : null;
+  const selectedGroupRaw = activeView === 'groups' ? selected as ExpenseGroup : null;
   const mobileIncomesSelectionLabelClassName = useMemo(() => {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as ExpenseAccount | ExpenseGroup).balance);
@@ -249,7 +275,7 @@ function IncomeExpensePageContent() {
     );
   }, [isMobile, selected]);
   const incomesMasterDetailTitle = activeView === "groups" ? "Income & Expense Groups" : "Income & Expense";
-  useSyncMasterDetailHeaderId("incomes", selectedAccount?.id ?? selectedGroup?.id ?? null);
+  useSyncMasterDetailHeaderId("incomes", selectedAccount?.id ?? selectedGroupRaw?.id ?? null);
   const incomesMenuEnabled = featureConfig.incomes !== false;
   const incomesListEnabled = incomesMenuEnabled && featureConfig.incomes_list !== false;
   const accountsTabEnabled = incomesListEnabled && featureConfig.incomes_accounts_tab !== false;
@@ -269,30 +295,32 @@ function IncomeExpensePageContent() {
       }
       return g;
     };
-    // Hide auto-created Ungrouped base doc; system groups (isSystemReserved) sirf Reports me – list pages pe nahi
-    const normalized = (initialProcessedExpenseGroups || [])
+    const userGroups = (initialProcessedExpenseGroups || [])
       .map(normalizeGroup)
       .filter((g: any) => {
         if (g.isAutoUngrouped === true) return false;
         if (g.isReportOnly === true || g.isSystemReserved === true) return false;
         return true;
       });
-    // Show Ungrouped row only when at least one account is in the Ungrouped bucket.
-    const ungrouped = processedExpenseAccounts.filter((p: any) => !p.groupId || p.groupId === "ungrouped_expense");
-    if (ungrouped.length > 0) {
-      const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
-      const ungroupedGroup: ExpenseGroup = {
-        id: 'ungrouped',
-        name: 'Ungrouped',
-        balance: ungroupedBalance,
-        companyId: companyId || '',
-        debit: ungrouped.reduce((sum, p) => sum + p.debit, 0),
-        credit: ungrouped.reduce((sum, p) => sum + p.credit, 0),
-      };
-      return [...normalized, ungroupedGroup];
-    }
-    return normalized;
-  }, [processedExpenseAccounts, initialProcessedExpenseGroups, companyId, CORE_EXPENSE_GROUP_IDS]);
+    return appendMasterEntitySystemBranchGroups(
+      userGroups,
+      EXPENSE_ENTITY_GROUP_PRESET,
+      companyId || ""
+    );
+  }, [initialProcessedExpenseGroups, companyId, CORE_EXPENSE_GROUP_IDS]);
+
+  const selectedGroup = useMemo(
+    () =>
+      selectedGroupRaw
+        ? (resolveMasterEntityGroupForSelection(
+            selectedGroupRaw.id,
+            processedExpenseGroups,
+            EXPENSE_ENTITY_GROUP_PRESET,
+            companyId || ""
+          ) as ExpenseGroup | null)
+        : null,
+    [selectedGroupRaw, processedExpenseGroups, companyId]
+  );
 
   useEffect(() => {
     if (!companyId) return;
@@ -371,13 +399,6 @@ function IncomeExpensePageContent() {
     showApproveOnList,
     pendingApprovalByExpenseGroupId,
   ]);
-  const filteredExpenseGroupListCount = useMemo(() => {
-    const searchLower = (searchTerm || "").toLowerCase();
-    return expenseGroupsForList.filter(
-      (g) => (g as any).isReportOnly !== true && g.name && g.name.toLowerCase().includes(searchLower)
-    ).length;
-  }, [expenseGroupsForList, searchTerm]);
-
   /** Party-style tab switch — set view + row + URL together (EXE/APK stale ?selected= snap-back band). */
   const handleIncomesTabChange = useCallback(
     (value: string) => {
@@ -436,7 +457,30 @@ function IncomeExpensePageContent() {
     }
     const groupItem = processedExpenseGroups.find((i) => i.id === selectedId);
     const accountItem = processedExpenseAccounts.find((i) => i.id === selectedId);
-    if (view === "groups" && groupItem) setActiveView("groups");
+    if (view === "groups" && isExpenseGroupSystemListBranchId(selectedId)) {
+      setActiveView("groups");
+      const visibleGroups = expenseGroupsForList.filter((group) => {
+        const isReportOnly = (group as any).isReportOnly === true;
+        const isSystem =
+          (group as any).isSystemReserved === true ||
+          isSystemParentGroup("expense_groups", (group as any).id);
+        if (isReportOnly || isSystem) return false;
+        return !!group.name;
+      });
+      const { income, expenses } = splitExpenseGroupForestByBranch(
+        buildExpenseGroupForest(visibleGroups)
+      );
+      const branchForest = selectedId === "income" ? income : expenses;
+      const systemBranchGroup = buildExpenseGroupSystemBranchGroup(
+        selectedId,
+        branchForest,
+        companyId || ""
+      );
+      if (selected?.id !== systemBranchGroup.id) {
+        setSelected(systemBranchGroup);
+        setGroupMemberFilterId(null);
+      }
+    } else if (view === "groups" && groupItem) setActiveView("groups");
     else if (view === "accounts" && accountItem) setActiveView("accounts");
     const item =
       groupItem && accountItem
@@ -462,7 +506,8 @@ function IncomeExpensePageContent() {
     activeView,
     setSelected,
     setActiveView,
-    router,
+    companyId,
+    expenseGroupsForList,
   ]);
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
@@ -586,42 +631,11 @@ function IncomeExpensePageContent() {
     ]
   );
 
-  const accountsForSelectedGroup = useMemo(() => {
-    if (!selectedGroup) return [];
-    if (selectedGroup.id === 'ungrouped') {
-      return processedExpenseAccounts.filter((p: any) => !p.groupId || p.groupId === "ungrouped_expense");
-    }
-    let groupAccounts = processedExpenseAccounts.filter(p => p.groupId === selectedGroup.id);
-    
-    // For Direct Income group, explicitly include sales_account if it exists
-    if (selectedGroup.id === 'direct_income') {
-        const salesAccount = processedExpenseAccounts.find(acc => acc.id === 'sales_account');
-        if (salesAccount && !groupAccounts.find(acc => acc.id === 'sales_account')) {
-            groupAccounts = [...groupAccounts, salesAccount];
-        }
-    }
-    
-    // For Direct Expenses group, explicitly include purchase_account if it exists
-    if (selectedGroup.id === 'direct_expense') {
-        const purchaseAccount = processedExpenseAccounts.find(acc => acc.id === 'purchase_account');
-        if (purchaseAccount && !groupAccounts.find(acc => acc.id === 'purchase_account')) {
-            groupAccounts = [...groupAccounts, purchaseAccount];
-        }
-    }
-    
-    return groupAccounts;
-  }, [selectedGroup, processedExpenseAccounts]);
-
-  const accountsForGroupDetails = useMemo(() => {
-    if (!groupMemberFilterId) return accountsForSelectedGroup;
-    return accountsForSelectedGroup.filter((a) => a.id === groupMemberFilterId);
-  }, [accountsForSelectedGroup, groupMemberFilterId]);
-
   const resolveExpenseGroupMembers = useCallback(
     (groupId: string) => {
-      if (groupId === "ungrouped") {
+      if (isMasterEntitySystemGroupId(EXPENSE_ENTITY_GROUP_PRESET, groupId)) {
         return processedExpenseAccounts.filter(
-          (p) => !p.groupId || p.groupId === "ungrouped_expense"
+          (acc) => resolveExpenseListGroupBucketId(acc) === groupId
         );
       }
       let groupAccounts = processedExpenseAccounts.filter((p) => p.groupId === groupId);
@@ -642,13 +656,135 @@ function IncomeExpensePageContent() {
     [processedExpenseAccounts]
   );
 
+  const accountsForSelectedGroup = useMemo(() => {
+    if (!selectedGroup) return [];
+    return collectExpenseGroupScopeAccounts(
+      selectedGroup.id,
+      processedExpenseGroups,
+      processedExpenseAccounts,
+      resolveExpenseGroupMembers
+    );
+  }, [selectedGroup, processedExpenseAccounts, processedExpenseGroups, resolveExpenseGroupMembers]);
+
+  const accountsForGroupDetails = useMemo(() => {
+    if (!groupMemberFilterId) return accountsForSelectedGroup;
+    return accountsForSelectedGroup.filter((a) => a.id === groupMemberFilterId);
+  }, [accountsForSelectedGroup, groupMemberFilterId]);
+
   const expenseGroupMembersByGroupId = useMemo(() => {
     const map: Record<string, ExpenseAccount[]> = {};
+    for (const acc of processedExpenseAccounts) {
+      const bucket = resolveExpenseListGroupBucketId(acc);
+      if (!map[bucket]) map[bucket] = [];
+      map[bucket].push(acc);
+    }
     for (const g of expenseGroupsForList) {
-      map[g.id] = resolveExpenseGroupMembers(g.id);
+      if (g.id === "direct_income" || g.id === "direct_expense") {
+        map[g.id] = resolveExpenseGroupMembers(g.id);
+      }
     }
     return map;
-  }, [expenseGroupsForList, resolveExpenseGroupMembers]);
+  }, [processedExpenseAccounts, expenseGroupsForList, resolveExpenseGroupMembers]);
+
+  const expenseGroupListVisibleForest = useMemo(() => {
+    const visibleGroups = expenseGroupsForList.filter((group) => {
+      const isReportOnly = (group as any).isReportOnly === true;
+      const isSystem =
+        (group as any).isSystemReserved === true ||
+        isSystemParentGroup("expense_groups", (group as any).id);
+      if (isReportOnly || isSystem) return false;
+      return !!group.name;
+    });
+    const forest = buildExpenseGroupForest(visibleGroups);
+    const filtered = filterExpenseGroupForest(
+      forest,
+      searchTerm,
+      groupListQuickFilter,
+      expenseGroupMembersByGroupId
+    );
+    return sortExpenseGroupTreeNodes(filtered, groupListQuickFilter);
+  }, [
+    expenseGroupsForList,
+    searchTerm,
+    groupListQuickFilter,
+    expenseGroupMembersByGroupId,
+  ]);
+
+  const filteredExpenseGroupListCount = useMemo(
+    () => countVisibleExpenseGroupForestNodes(expenseGroupListVisibleForest),
+    [expenseGroupListVisibleForest]
+  );
+
+  const incomeExpenseSystemBranchFooter = useMemo(() => {
+    if (activeView === "groups") {
+      return sumExpenseGroupSystemBranchBalancesFromForest(expenseGroupListVisibleForest);
+    }
+    if (activeView === "accounts") {
+      const visible = filterAndSortMasterEntityListRows(
+        expenseAccountsForList,
+        searchTerm,
+        accountListQuickFilter
+      );
+      return sumExpenseGroupSystemBranchBalancesFromAccounts(visible, processedExpenseGroups);
+    }
+    return null;
+  }, [
+    activeView,
+    expenseGroupListVisibleForest,
+    expenseAccountsForList,
+    searchTerm,
+    accountListQuickFilter,
+    processedExpenseGroups,
+  ]);
+
+  const incomesListFooterSummary = useMemo(() => {
+    if (!incomeExpenseSystemBranchFooter) return undefined;
+    return (
+      <EntityListDrCrBalanceSummary
+        expenseSystemBalance={incomeExpenseSystemBranchFooter.expenses}
+        incomeSystemBalance={incomeExpenseSystemBranchFooter.income}
+        formatAmount={(amount, options) =>
+          formatCurrency(amount, { ...options, noAnimation: true }) as React.ReactNode
+        }
+      />
+    );
+  }, [incomeExpenseSystemBranchFooter, formatCurrency]);
+
+  const handleMoveExpenseAccountToGroup = useCallback(
+    async (account: ExpenseAccount, targetGroupId: string) => {
+      if (!companyId) return;
+      const targetName =
+        expenseGroupsForList.find((g) => g.id === targetGroupId)?.name || "group";
+      try {
+        await moveExpenseAccountToGroup({
+          companyId,
+          company,
+          account,
+          targetListGroupId: targetGroupId,
+        });
+        sonnerToast.success("Account moved", {
+          description: `"${account.name}" moved to ${targetName}.`,
+        });
+      } catch (err) {
+        console.error("move expense account", err);
+        sonnerToast.error("Could not move account");
+      }
+    },
+    [companyId, company, expenseGroupsForList]
+  );
+
+  const handleMoveExpenseGroupToGroup = useCallback(
+    (sourceGroupId: string, targetGroupId: string) =>
+      createMasterEntityGroupTreeMoveHandler({
+        companyId,
+        company,
+        groupsForName: expenseGroupsForList,
+        allGroups: processedExpenseGroups,
+        config: EXPENSE_GROUP_LIST_CONFIG,
+        moveHelpers: expenseGroupTreeMove,
+      })(sourceGroupId, targetGroupId),
+    [companyId, company, expenseGroupsForList, processedExpenseGroups]
+  );
 
   const openVoucherDialog = (type: 'direct_income' | 'direct_expense' | 'add_salary') => {
     setDefaultTab(type);
@@ -687,7 +823,7 @@ function IncomeExpensePageContent() {
     <div className={cn(mlc.searchRow, listDisabled && "pointer-events-none opacity-60")}>
       <div className={mlc.searchWrap}>
         <Search className={mlc.searchIcon} />
-        <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
+        <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups/account'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
       </div>
       {activeView === "accounts" &&
       showApproveOnList &&
@@ -772,6 +908,7 @@ function IncomeExpensePageContent() {
       tabs={incomesTabsEl}
       quickFilter={activeView === "accounts" ? accountListQuickFilter : groupListQuickFilter}
       onQuickFilterChange={activeView === "accounts" ? setAccountListQuickFilter : setGroupListQuickFilter}
+      footerSummary={incomesListFooterSummary}
     >
       <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
         {activeView === "accounts" ? (
@@ -803,6 +940,11 @@ function IncomeExpensePageContent() {
             quickFilter={groupListQuickFilter}
             onQuickFilterChange={setGroupListQuickFilter}
             hideQuickFilterBar
+            moveAccountsEnabled={!listDisabled && groupDetailsEnabled}
+            onMoveAccountToGroup={handleMoveExpenseAccountToGroup}
+            onMoveGroupToGroup={handleMoveExpenseGroupToGroup}
+            canMoveGroup={expenseGroupTreeMove.canMoveGroup}
+            allGroupsForMove={processedExpenseGroups}
           />
         )}
         {listDisabled && (
@@ -872,6 +1014,11 @@ function IncomeExpensePageContent() {
         mobileListOnly={true}
         hasSelectedItem={!!selected}
         onBackToList={onBackToList}
+        mobileListSelectionKey={
+          selected
+            ? `${selected.id}:${activeView === "groups" ? groupMemberFilterId ?? "" : ""}`
+            : null
+        }
       />
       </div>
       <AddVoucherDialog 

@@ -48,6 +48,8 @@ import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
+import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -97,7 +99,8 @@ import {
 } from "@/lib/fileUploadLimits";
 import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
-import { isSystemParentGroup } from "@/lib/system-groups";
+import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
+import { ITEM_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
@@ -105,7 +108,6 @@ import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { itemStrippedRowToCreateItemFormPatch } from "@/lib/crossCompanyMasterPrefill";
 import { upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
-import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import {
   Tooltip,
   TooltipContent,
@@ -161,7 +163,7 @@ const formSchema = z.object({
   saleTaxId: z.string().optional(),
   purchaseTaxId: z.string().optional(),
   openingBalanceNarration: z.string().optional(),
-});
+}).superRefine(refineMasterOpeningBalanceDateRequired);
 
 function getInitialFormValues(itemType: 'item' | 'service' | 'finished_good' = 'item'): z.infer<typeof formSchema> {
     return {
@@ -251,6 +253,8 @@ export function CreateItemDialog({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
     defaultValues: getInitialFormValues(defaultType),
   });
+
+  const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
 
   const itemType = form.watch('type');
   
@@ -352,20 +356,6 @@ export function CreateItemDialog({
   }, [isCreateGroupOpen, isCreateTaxOpen, form]);
 
   // Hide system item groups (Stock Items, Services) from dropdown — only user-created groups
-  const itemGroupOptions = React.useMemo(
-    () => {
-      const ungroupedId = getUngroupedGroupId("item");
-      const filtered = groups
-        .filter((g) => !isSystemParentGroup("item_groups", g.id))
-        .map((g) => ({ value: g.id, label: g.name }));
-      // Ensure Ungrouped option is always visible in Add Item group dropdown.
-      if (!filtered.some((g) => g.value === ungroupedId)) {
-        filtered.unshift({ value: ungroupedId, label: "Ungrouped" });
-      }
-      return filtered;
-    },
-    [groups]
-  );
 
   const taxOptions = React.useMemo(
     () => [
@@ -990,8 +980,12 @@ const capitalizeFirstLetter = (str: string) => {
                   render={({ field }: any) => (
                     <FormItem>
                       <FormLabel>Group</FormLabel>
-                      <Combobox
-                        options={itemGroupOptions}
+                      <MasterGroupTreeCombobox
+                        preset={ITEM_ENTITY_GROUP_PRESET}
+                        groups={groups}
+                        processedGroups={processedItemGroups as unknown as ItemGroup[]}
+                        popoverModal={false}
+                        confirmWithOk
                         value={field.value}
                         onChange={(value, newName) => {
                           if (value === "add-new") {
@@ -1004,8 +998,8 @@ const capitalizeFirstLetter = (str: string) => {
                           }
                         }}
                         placeholder="Select a group"
-                        addNewLabel="+ Add New Group"
-                        triggerClassName="h-9"
+                        searchPlaceholder="Search groups..."
+                        addNewLabel="Add New Group"
                       />
                       <FormMessage />
                     </FormItem>
@@ -1361,13 +1355,13 @@ const capitalizeFirstLetter = (str: string) => {
                     variant="ghost"
                     className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                     onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                    disabled={isLoading || isCompressing || apkOfflineViewOnly}
+                    disabled={isLoading || isCompressing || apkOfflineViewOnly || openingBalanceDateMissing}
                   >
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save &amp; New
                   </Button>
                 </div>
-                <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly} className="shrink-0">
+                <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly || openingBalanceDateMissing} className="shrink-0">
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Create Item
                 </Button>

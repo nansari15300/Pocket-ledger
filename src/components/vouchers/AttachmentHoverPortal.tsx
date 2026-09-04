@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useFileHoverPreview } from "@/contexts/FileHoverPreviewContext";
 import { AttachmentPreviewGalleryContext } from "@/components/vouchers/attachmentPreviewGalleryContext";
 import { registerImperativeDialogBack } from "@/contexts/DialogBackHandlerContext";
+import { markInAppAttachmentPreviewClosing } from "@/lib/inAppAttachmentPreviewOpen";
 
 /** Tooltip se zyada: fixed portal + solid bg taaki table/parent overflow ya blend se file transparent na dikhe */
 const HOVER_CLOSE_MS = 280;
@@ -31,10 +32,29 @@ const FIT_ZOOM_MIN = 0.02;
  * zoom up/down vibrate. Viewport-max se thoda chhota scale = scrollbar trigger nahi.
  */
 const FIT_WINDOW_SAFETY = 0.96;
+/** Portal photo fit window: auto-zoom 40%–75% (beech me calculated fit) */
+const PORTAL_PHOTO_MIN_FIT_ZOOM = 0.4;
+const PORTAL_PHOTO_MAX_FIT_ZOOM = 0.75;
 const ZOOM_EQ_EPS = 0.008;
 
 function nearlyEqualZoom(a: number, b: number): boolean {
   return Math.abs(a - b) < ZOOM_EQ_EPS;
+}
+
+function clampPortalPhotoFitZoom(z: number): number {
+  return Math.min(PORTAL_PHOTO_MAX_FIT_ZOOM, Math.max(PORTAL_PHOTO_MIN_FIT_ZOOM, z));
+}
+
+function clampPortalZoom(z: number): number {
+  return Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, z));
+}
+
+function parseZoomPercentInput(raw: string): number | null {
+  const trimmed = raw.trim().replace(/%$/, "");
+  if (!trimmed) return null;
+  const n = Number.parseFloat(trimmed);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return clampPortalZoom(n / 100);
 }
 
 function getPreviewViewportSize(): { width: number; height: number } {
@@ -66,6 +86,20 @@ function getViewportFitBox(galleryActive: boolean): {
   };
 }
 
+/** 16:9 landscape — is aspect se zyada height (portrait/tall) par width-fit + scroll */
+const PORTAL_LANDSCAPE_W_OVER_H = 16 / 9;
+
+type PortalFitNatural = {
+  width: number;
+  height: number;
+  isMultiPageStitch: boolean;
+};
+
+function isTallPortalPhoto(fullNatural: { width: number; height: number }): boolean {
+  if (fullNatural.width < 2 || fullNatural.height < 2) return false;
+  return fullNatural.width / fullNatural.height < PORTAL_LANDSCAPE_W_OVER_H;
+}
+
 /** Fit window: natural size × stable viewport box (clientWidth mat use — scrollbar loop) */
 function computeFitWindowZoomFromNatural(
   natural: { width: number; height: number },
@@ -76,6 +110,37 @@ function computeFitWindowZoomFromNatural(
   const zh = maxContentH / Math.max(natural.height, 1);
   const z = Math.min(zw, zh) * FIT_WINDOW_SAFETY;
   return Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, z));
+}
+
+/** Photo: auto fit clamped 40–75%; tall + overflow ho to width-fit + scroll */
+function computePortalPhotoFitWindow(
+  natural: { width: number; height: number },
+  maxContentW: number,
+  maxContentH: number
+): { zoom: number; widthFitScroll: boolean } {
+  const zw = (maxContentW / Math.max(natural.width, 1)) * FIT_WINDOW_SAFETY;
+  const zh = (maxContentH / Math.max(natural.height, 1)) * FIT_WINDOW_SAFETY;
+  const autoFit = clampPortalPhotoFitZoom(Math.min(zw, zh));
+
+  if (isTallPortalPhoto(natural) && natural.height * autoFit > maxContentH + 2) {
+    return { zoom: clampPortalPhotoFitZoom(zw), widthFitScroll: true };
+  }
+  return { zoom: autoFit, widthFitScroll: false };
+}
+
+function resolvePortalFitWindowScale(
+  natural: PortalFitNatural,
+  maxContentW: number,
+  maxContentH: number
+): { scale: number; widthFitScroll: boolean } {
+  if (natural.isMultiPageStitch) {
+    return {
+      scale: computeFitWindowZoomFromNatural(natural, maxContentW, maxContentH),
+      widthFitScroll: true,
+    };
+  }
+  const photoFit = computePortalPhotoFitWindow(natural, maxContentW, maxContentH);
+  return { scale: photoFit.zoom, widthFitScroll: photoFit.widthFitScroll };
 }
 
 function clampPanelSize(value: number, min: number, max: number): number {
@@ -98,35 +163,63 @@ function getImageStackNaturalSize(root: HTMLElement): { width: number; height: n
 }
 
 /** Multi-page portal PDF stitch: fit/zoom uses 1 page height, scroll for baaki pages. */
-function getPortalPdfFitNatural(
-  root: HTMLElement,
-  fullNatural: { width: number; height: number }
-): { width: number; height: number; isMultiPageStitch: boolean } {
-  const img = root.querySelector("img[data-pdf-portal-pages]");
+function inferPortalPdfOnePageFromStack(
+  fullNatural: { width: number; height: number },
+  minPageRatio = 1.85
+): { width: number; height: number; isMultiPageStitch: boolean } | null {
+  if (fullNatural.width < 2 || fullNatural.height < 2) return null;
+  const estSinglePageH = fullNatural.width * (297 / 210);
+  const pageRatio = fullNatural.height / estSinglePageH;
+  if (pageRatio < minPageRatio) return null;
+  const pages = Math.max(2, Math.round(pageRatio));
+  const onePageH = fullNatural.height / pages;
+  return { width: fullNatural.width, height: onePageH, isMultiPageStitch: true };
+}
+
+function getPortalPdfFitNatural(root: HTMLElement, fullNatural: { width: number; height: number }): PortalFitNatural {
+  const img = root.querySelector("img[data-pdf-portal-page], img[data-pdf-portal-pages]");
+  /** Normal photo/image — poora frame fit window; PDF multi-page infer mat */
   if (!(img instanceof HTMLImageElement)) {
-    return { width: fullNatural.width, height: fullNatural.height, isMultiPageStitch: false };
+    return {
+      width: fullNatural.width,
+      height: fullNatural.height,
+      isMultiPageStitch: false,
+    };
   }
-  const pages = Number.parseInt(img.dataset.pdfPortalPages || "1", 10);
-  const onePageH = Number.parseFloat(img.dataset.pdfPortalOnePageH || "0");
+  let pages = Number.parseInt(img.dataset.pdfPortalPages || "1", 10);
+  let onePageH = Number.parseFloat(img.dataset.pdfPortalOnePageH || "0");
+
+  if (pages > 1 && onePageH <= 1 && fullNatural.height > 1) {
+    onePageH = fullNatural.height / pages;
+  }
+
   if (pages > 1 && onePageH > 1) {
     return { width: fullNatural.width, height: onePageH, isMultiPageStitch: true };
   }
+
+  /** Portal PDF raster, meta missing: stitched JPEG — photos se alag (lower ratio) */
+  if (pages <= 1 && img.hasAttribute("data-pdf-portal-page")) {
+    const inferred = inferPortalPdfOnePageFromStack(fullNatural, 1.32);
+    if (inferred) {
+      return { width: inferred.width, height: inferred.height, isMultiPageStitch: inferred.isMultiPageStitch };
+    }
+    return { width: fullNatural.width, height: fullNatural.height, isMultiPageStitch: false };
+  }
+
   return { width: fullNatural.width, height: fullNatural.height, isMultiPageStitch: false };
 }
 
-function getFitNaturalSize(
-  root: HTMLElement
-): { width: number; height: number; isMultiPageStitch: boolean } | null {
+function getFitNaturalSize(root: HTMLElement): PortalFitNatural | null {
   const full = getImageStackNaturalSize(root);
   if (!full) return null;
   return getPortalPdfFitNatural(root, full);
 }
 
-function isMultiPagePortalPdfRoot(root: HTMLElement | null): boolean {
+function isPortalVerticalScrollRoot(root: HTMLElement | null): boolean {
   if (!root) return false;
-  const img = root.querySelector("img[data-pdf-portal-pages]");
-  if (!(img instanceof HTMLImageElement)) return false;
-  return Number.parseInt(img.dataset.pdfPortalPages || "1", 10) > 1;
+  const natural = getFitNaturalSize(root);
+  if (natural?.isMultiPageStitch) return true;
+  return root.dataset.portalWidthFitScroll === "1";
 }
 
 type PanSession = {
@@ -219,7 +312,9 @@ export function AttachmentHoverPortal({
   const [panelWidth, setPanelWidth] = React.useState<number | null>(null);
   const [panelHeight, setPanelHeight] = React.useState<number | null>(null);
   const [scrollable, setScrollable] = React.useState(false);
-  const [portalPdfMultiPage, setPortalPdfMultiPage] = React.useState(false);
+  const [portalVerticalScroll, setPortalVerticalScroll] = React.useState(false);
+  const [zoomInputFocused, setZoomInputFocused] = React.useState(false);
+  const [zoomInputDraft, setZoomInputDraft] = React.useState("");
   const [pos, setPos] = React.useState({ top: 0, left: 0 });
   const normalizedGalleryUrls = React.useMemo(
     () => (Array.isArray(galleryUrls) ? galleryUrls.map((u) => String(u || "").trim()).filter(Boolean) : []),
@@ -309,7 +404,13 @@ export function AttachmentHoverPortal({
       if (n > 48) return;
       const natural = getFitNaturalSize(root);
       if (natural) {
-        const fitWindowScale = computeFitWindowZoomFromNatural(natural, maxContentW, maxContentH);
+        const { scale: fitWindowScale, widthFitScroll } = resolvePortalFitWindowScale(
+          natural,
+          maxContentW,
+          maxContentH
+        );
+        root.dataset.portalWidthFitScroll = widthFitScroll ? "1" : "0";
+        setPortalVerticalScroll(natural.isMultiPageStitch || widthFitScroll);
         const fitWidthScale = maxContentW / natural.width;
         const fitHeightScale = (maxContentH / Math.max(natural.height, 1)) * FIT_WINDOW_SAFETY;
         const scale =
@@ -326,7 +427,10 @@ export function AttachmentHoverPortal({
           setZoom((prev) => (nearlyEqualZoom(prev, safeScale) ? prev : safeScale));
         }
         const desiredW = natural.width * safeScale + PANEL_CONTENT_PAD_W + (galleryActive ? 20 : 0);
-        const desiredH = natural.height * safeScale + PANEL_CHROME_H + PANEL_CONTENT_PAD_H + galleryExtraH;
+        const desiredH =
+          widthFitScroll && fitMode === "window"
+            ? maxH
+            : natural.height * safeScale + PANEL_CHROME_H + PANEL_CONTENT_PAD_H + galleryExtraH;
         const nextW = clampPanelSize(desiredW, PANEL_MIN_W, maxW);
         const nextH = clampPanelSize(desiredH, PANEL_MIN_H, maxH);
         setPanelWidth((prev) => (prev === nextW ? prev : nextW));
@@ -363,6 +467,17 @@ export function AttachmentHoverPortal({
   const setZoomIfChanged = React.useCallback((next: number) => {
     setZoom((prev) => (nearlyEqualZoom(prev, next) ? prev : next));
   }, []);
+
+  const applyTypedZoom = React.useCallback(
+    (raw: string) => {
+      const next = parseZoomPercentInput(raw);
+      if (next == null) return;
+      fitModeRef.current = "free";
+      setFitMode("free");
+      setZoomIfChanged(next);
+    },
+    [setZoomIfChanged]
+  );
 
   const applyFitWidth = React.useCallback(() => {
     const root = scrollRef.current;
@@ -434,7 +549,9 @@ export function AttachmentHoverPortal({
         requestAnimationFrame(() => attempt(n + 1));
         return;
       }
-      const z = computeFitWindowZoomFromNatural(natural, maxContentW, maxContentH);
+      const { scale: z, widthFitScroll } = resolvePortalFitWindowScale(natural, maxContentW, maxContentH);
+      root.dataset.portalWidthFitScroll = widthFitScroll ? "1" : "0";
+      setPortalVerticalScroll(natural.isMultiPageStitch || widthFitScroll);
       setZoomIfChanged(z);
       requestAnimationFrame(() => {
         const r = scrollRef.current;
@@ -480,7 +597,9 @@ export function AttachmentHoverPortal({
       setGalleryIndex(0);
       setPanelWidth(null);
       setPanelHeight(null);
-      setPortalPdfMultiPage(false);
+      setPortalVerticalScroll(false);
+      setZoomInputFocused(false);
+      setZoomInputDraft("");
       return;
     }
     if (clickOrTapOpenMode) return;
@@ -559,7 +678,7 @@ export function AttachmentHoverPortal({
   React.useLayoutEffect(() => {
     if (!open) {
       setScrollable(false);
-      setPortalPdfMultiPage(false);
+      setPortalVerticalScroll(false);
       lastFitSignatureRef.current = "";
       return;
     }
@@ -569,10 +688,10 @@ export function AttachmentHoverPortal({
     const syncScrollable = () => {
       const r = scrollRef.current;
       if (!r) return;
-      const multiPagePdf = isMultiPagePortalPdfRoot(r);
-      setPortalPdfMultiPage((prev) => (prev === multiPagePdf ? prev : multiPagePdf));
-      /** Fit window/height: overflow hidden — unless multi-page portal PDF (scroll for page 2+) */
-      if ((fitModeRef.current === "window" || fitModeRef.current === "height") && !multiPagePdf) {
+      const verticalScroll = isPortalVerticalScrollRoot(r);
+      setPortalVerticalScroll((prev) => (prev === verticalScroll ? prev : verticalScroll));
+      /** Fit window/height: overflow hidden — unless tall photo / multi-page PDF (scroll) */
+      if ((fitModeRef.current === "window" || fitModeRef.current === "height") && !verticalScroll) {
         setScrollable(false);
         return;
       }
@@ -596,7 +715,7 @@ export function AttachmentHoverPortal({
     const fitSignature = () => {
       const natural = getFitNaturalSize(root);
       if (!natural) return "";
-      const mp = natural.isMultiPageStitch ? ":mp" : "";
+      const mp = natural.isMultiPageStitch ? ":mp" : root.dataset.portalWidthFitScroll === "1" ? ":scroll" : "";
       return `${fitModeRef.current}:${natural.width}x${natural.height}${mp}`;
     };
 
@@ -719,10 +838,59 @@ export function AttachmentHoverPortal({
     setStickOpen(false);
   }, [cancelClose]);
 
+  const openRef = React.useRef(open);
+  openRef.current = open;
+  /** Portal band hone ke baad isi pointer gesture ka pointerup/click txn dialog tak na jaye */
+  const outsideDismissGraceUntilRef = React.useRef(0);
+
   React.useEffect(() => {
     if (!open) return;
     return registerImperativeDialogBack(closePanel);
   }, [open, closePanel]);
+
+  /**
+   * Panel ke bahar click → sirf portal band; pointerup/click swallow taaki txn popup pe action na ho.
+   */
+  React.useEffect(() => {
+    const inDismissGrace = () => Date.now() < outsideDismissGraceUntilRef.current;
+
+    const swallowEvent = (ev: Event) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+    };
+
+    const onPointerDownCapture = (ev: PointerEvent) => {
+      if (inDismissGrace()) {
+        swallowEvent(ev);
+        return;
+      }
+      if (ev.button !== 0) return;
+      if (!openRef.current) return;
+      const t = ev.target as Node;
+      if (panelRef.current?.contains(t)) return;
+
+      closePanel();
+      markInAppAttachmentPreviewClosing();
+      outsideDismissGraceUntilRef.current = Date.now() + 480;
+      swallowEvent(ev);
+    };
+
+    const onPointerUpOrClickCapture = (ev: Event) => {
+      if (!inDismissGrace()) return;
+      swallowEvent(ev);
+    };
+
+    const cap = { capture: true, passive: false } as const;
+    document.addEventListener("pointerdown", onPointerDownCapture, cap);
+    document.addEventListener("pointerup", onPointerUpOrClickCapture, cap);
+    document.addEventListener("click", onPointerUpOrClickCapture, cap);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDownCapture, cap);
+      document.removeEventListener("pointerup", onPointerUpOrClickCapture, cap);
+      document.removeEventListener("click", onPointerUpOrClickCapture, cap);
+    };
+  }, [closePanel]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -877,35 +1045,27 @@ export function AttachmentHoverPortal({
     panelHeight != null ? Math.min(panelHeight, viewportMaxPanelH) : viewportMaxPanelH;
   const measuredPanelHeight = panelHeight != null;
   const panelHeightStyle = measuredPanelHeight ? effectivePanelH : undefined;
-  const measuredContentFrame = measuredPanelHeight && (fitMode === "window" || fitMode === "height") && !portalPdfMultiPage;
+  const portalVerticalScrollOpen =
+    portalVerticalScroll ||
+    (scrollRef.current ? isPortalVerticalScrollRoot(scrollRef.current) : false);
+  const measuredContentFrame =
+    measuredPanelHeight && (fitMode === "window" || fitMode === "height") && !portalVerticalScrollOpen;
 
   const portalTree =
     open &&
     typeof document !== "undefined" &&
     createPortal(
       <>
-        {/* Centered click/tap: hamesha backdrop; side-anchored desktop: sirf `stickOpen` — bahar click = close */}
-        {(clickOrTapOpenMode || stickOpen) ? (
-          <div
-            className={cn("fixed inset-0", clickOrTapOpenMode ? "bg-black/45" : "bg-transparent")}
-            style={{ zIndex: BACKDROP_Z }}
-            data-attachment-preview-backdrop=""
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onPointerUp={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              closePanel();
-            }}
-            aria-hidden
-          />
-        ) : null}
+        {/* Khula portal: hamesha backdrop — bahar click se band (click/tap centered = dim overlay) */}
+        <div
+          className={cn(
+            "fixed inset-0",
+            clickOrTapOpenMode ? "bg-black/45" : stickOpen ? "bg-black/20" : "bg-transparent"
+          )}
+          style={{ zIndex: BACKDROP_Z, pointerEvents: "auto" }}
+          data-attachment-preview-backdrop=""
+          aria-hidden
+        />
         <div
           ref={panelRef}
           className={cn(
@@ -995,7 +1155,7 @@ export function AttachmentHoverPortal({
               className={cn(
                 "min-h-0 select-none bg-white px-2 pb-2 pt-1 dark:bg-zinc-950",
                 measuredPanelHeight ? "flex-1" : "shrink-0",
-                /** Fit window/height: overflow hidden — tall file pe scrollbar zoom loop band */
+                /** Fit window/height: overflow hidden — tall photo / multi-page PDF scroll */
                 measuredContentFrame ? "overflow-hidden" : "overflow-auto",
                 scrollable ? "cursor-grab active:cursor-grabbing" : "cursor-default"
               )}
@@ -1045,7 +1205,50 @@ export function AttachmentHoverPortal({
             >
               <ZoomOut className="h-4 w-4" />
             </Button>
-            <span className="min-w-[3rem] text-center text-xs font-medium tabular-nums">{Math.round(zoom * 100)}%</span>
+            <label className="relative flex h-9 w-[3.75rem] shrink-0 items-center">
+              <span className="sr-only">Zoom percent</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="Zoom percent"
+                title="Type zoom % and press Enter"
+                className={cn(
+                  "h-9 w-full rounded-md border border-input bg-background px-1 text-center text-xs font-medium tabular-nums",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/40"
+                )}
+                value={zoomInputFocused ? zoomInputDraft : `${Math.round(zoom * 100)}%`}
+                onFocus={(e) => {
+                  setZoomInputFocused(true);
+                  setZoomInputDraft(String(Math.round(zoom * 100)));
+                  e.currentTarget.select();
+                }}
+                onChange={(e) => {
+                  setZoomInputDraft(e.target.value.replace(/[^\d.%]/g, ""));
+                }}
+                onBlur={() => {
+                  applyTypedZoom(zoomInputDraft);
+                  setZoomInputFocused(false);
+                }}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    applyTypedZoom(zoomInputDraft);
+                    e.currentTarget.blur();
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setZoomInputFocused(false);
+                    e.currentTarget.blur();
+                  }
+                }}
+                onClick={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+              />
+            </label>
             <Button
               type="button"
               variant="outline"

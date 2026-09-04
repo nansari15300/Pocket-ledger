@@ -2072,7 +2072,7 @@ export function AccountDetails({
               <LedgerFooterCheckboxPill
                 id="show-narration-account"
                 checked={showNarration}
-                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
               <LedgerFooterColumnsMenu>

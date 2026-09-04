@@ -37,6 +37,16 @@ import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import {
+  guardMasterEditOutsideDismiss,
+  masterEditBackdropClassName,
+  masterEditPopoverContentClassName,
+  NESTED_LEDGER_MASTER_EDIT_CONTENT_CN,
+  NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN,
+  type MasterEditPresentationMode,
+} from "@/lib/nestedLedgerMasterEditPresentation";
+import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
+import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import {
   MasterFormNameAcNoRow,
@@ -44,7 +54,6 @@ import {
   MasterMobileNoField,
 } from "@/components/inter-company/MasterFormLayout";
 import {
-  masterFormRadioGroupClassName,
   masterSpecialAccountPanelClassName,
   masterSpecialAccountPanelTitleClassName,
 } from "@/lib/masterFormPillChrome";
@@ -54,7 +63,8 @@ import { CreateAccountGroupDialog } from "./CreateAccountGroupDialog";
 import { Switch } from "../ui/switch";
 import usePermissions from "@/hooks/usePermissions";
 import { attachmentLockFieldsForFinalUrls, readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
-import { Combobox } from "../ui/combobox";
+import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
+import { BANK_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useDate } from "@/hooks/useDate";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -78,7 +88,13 @@ import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@
 import { toast as sonnerToast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
 import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
-import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import {
+  BANK_SYSTEM_BANK_BRANCH_ID,
+  BANK_SYSTEM_CASH_BRANCH_ID,
+  getDefaultSystemGroupId,
+  normalizeBankGroupIdForStorage,
+} from "@/lib/masterEntitySystemGroups";
+import { resolveMasterGroupTreeBranchIdForGroup } from "@/lib/masterGroupTreeCombobox";
 import {
   EntityOpeningBalanceNarrationField,
   MasterPdfAsImageToggle,
@@ -89,11 +105,12 @@ import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRed
 import { persistLedgerModalParentFromBrowser } from "@/lib/modalUrlSync";
 import { BankAccountToggleFlagsRow } from "@/components/bank-cash/BankAccountToggleFlagsRow";
 
-/** CreateBankAccountDialog jaisa: combobox value `ungrouped_account` jab account Ungrouped bucket mein ho (null / empty legacy). */
-function normalizeBankAccountEditGroupId(groupId: string | null | undefined): string {
-  const u = getUngroupedGroupId("bank");
-  if (!groupId || groupId === u) return u;
-  return groupId;
+/** Legacy empty/ungrouped ids → system branch for combobox display. */
+function normalizeBankAccountEditGroupId(
+  groupId: string | null | undefined,
+  accountType?: string | null
+): string {
+  return normalizeBankGroupIdForStorage(groupId, accountType);
 }
 
 const MAX_FILE_SIZE_MB = 0.5;
@@ -101,6 +118,7 @@ const MAX_FILE_SIZE_MB = 0.5;
 const formSchema = z.object({
   accountName: z.string().min(2, { message: "Account name must be at least 2 characters." }),
   phone: z.string().optional(),
+  whatsapp: z.boolean().optional(),
   accountType: z.enum(["Bank", "Cash"]),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.any().optional(),
@@ -116,11 +134,11 @@ const formSchema = z.object({
     in: z.array(z.string()),
     out: z.array(z.string()),
   }).optional(),
-});
+}).superRefine(refineMasterOpeningBalanceDateRequired);
 
 type FormValues = z.infer<typeof formSchema>;
 
-export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAccountDeleted, children, hasTransactions, isOpen: controlledIsOpen, onOpenChange }: {
+export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAccountDeleted, children, hasTransactions, isOpen: controlledIsOpen, onOpenChange, presentationMode = "default" }: {
   account: Account;
   allAccounts?: Account[];
   onAccountUpdated: (updatedAccount: Partial<Account>) => void;
@@ -129,6 +147,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   hasTransactions: boolean;
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
+  presentationMode?: MasterEditPresentationMode;
 }) {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -215,13 +234,14 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     defaultValues: {
         accountName: account.accountName,
         phone: account.phone ?? "",
+        whatsapp: account.whatsapp === true,
         accountType: account.accountType,
         openingBalance: account.openingBalance,
         openingBalanceDate: (account as any).openingBalanceDate?.toDate ? (account as any).openingBalanceDate.toDate() : undefined,
         bankName: account.bankName || "",
         accountNumber: account.accountNumber || "",
         ifscCode: account.ifscCode || "",
-        groupId: normalizeBankAccountEditGroupId(account.groupId),
+        groupId: normalizeBankAccountEditGroupId(account.groupId, account.accountType),
         isSpecial: account.isSpecial || false,
         allowVoucherMinusBalance: account.allowVoucherMinusBalance === true,
         isClearing: account.isClearing === true,
@@ -232,6 +252,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         openingBalanceNarration: account.openingBalanceNarration ?? "",
     },
   });
+
+  const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
   
   const accountType = form.watch("accountType");
   const isSpecial = form.watch("isSpecial");
@@ -348,7 +370,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         bankName: account.bankName || "",
         accountNumber: account.accountNumber || "",
         ifscCode: account.ifscCode || "",
-        groupId: normalizeBankAccountEditGroupId(account.groupId),
+        groupId: normalizeBankAccountEditGroupId(account.groupId, account.accountType),
         isSpecial: account.isSpecial || false,
         allowVoucherMinusBalance: account.allowVoucherMinusBalance === true,
         isClearing: account.isClearing === true,
@@ -446,6 +468,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         const updatePayload: Record<string, unknown> = {
           accountName: values.accountName,
           phone: values.phone?.trim() || null,
+          whatsapp: values.whatsapp === true,
           accountType: values.accountType,
           bankName: values.bankName ?? "",
           accountNumber: values.accountNumber ?? "",
@@ -453,7 +476,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           openingBalance: newOpeningBalance,
           openingBalanceDate: values.openingBalanceDate ?? null,
           openingBalanceNarration: narrationClean,
-          groupId: values.groupId || null,
+          groupId: normalizeBankGroupIdForStorage(values.groupId, values.accountType),
           isSpecial: values.isSpecial,
           allowVoucherMinusBalance: values.allowVoucherMinusBalance === true,
           isClearing: values.isClearing === true,
@@ -687,34 +710,33 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   };
 
   // Create dialog ke saath: synthetic Ungrouped row; `ungrouped_account` doc list se isAutoUngrouped filter se nahi aata
-  const accountGroupOptions = useMemo(
-    () => [
-      { value: getUngroupedGroupId("bank"), label: "Ungrouped" },
-      ...groups
-        .filter(
-          (g) =>
-            !(g as any).isSystemReserved && (g as any).isAutoUngrouped !== true
-        )
-        .map((g) => ({ value: g.id, label: g.name })),
-    ],
-    [groups]
-  );
 
   return (
     <>
       <Dialog open={isOpen} onOpenChange={setIsOpen} modal={false}>
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-        {isOpen && <div className="fixed inset-0 bg-black/45 backdrop-blur-sm z-40" />}
+        {isOpen && <div className={masterEditBackdropClassName(presentationMode)} />}
         <DialogContent
+            overlayClassName={
+              presentationMode === "nested-ledger" ? NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN : undefined
+            }
             className={cn(
               cnMasterEntityDialogContent(isMobile),
               "sm:max-w-2xl",
-              staticMobileFullscreen && "min-h-0 h-[100dvh] max-h-[100dvh]"
+              staticMobileFullscreen && "min-h-0 h-[100dvh] max-h-[100dvh]",
+              presentationMode === "nested-ledger" && NESTED_LEDGER_MASTER_EDIT_CONTENT_CN
             )}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
-            onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
-            onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
+            onPointerDownOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e, isCreateGroupOpen);
+            }}
+            onInteractOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e, isCreateGroupOpen);
+            }}
+            onFocusOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e);
+            }}
         >
           <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Edit Account</DialogTitle>
@@ -730,6 +752,48 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
               className="flex min-h-0 flex-1 flex-col"
             >
             <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-2">
+                <FormField
+                  control={form.control}
+                  name="accountType"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Account Type</FormLabel>
+                      <FormControl>
+                        <RadioGroup
+                          className="flex flex-col gap-2 sm:flex-row sm:gap-6"
+                          value={field.value}
+                          onValueChange={(next: "Bank" | "Cash") => {
+                            field.onChange(next);
+                            const currentBranch = resolveMasterGroupTreeBranchIdForGroup(
+                              form.getValues("groupId"),
+                              processedAccountGroups as AccountGroup[],
+                              BANK_ENTITY_GROUP_PRESET
+                            );
+                            const expectedBranch =
+                              next === "Cash" ? BANK_SYSTEM_CASH_BRANCH_ID : BANK_SYSTEM_BANK_BRANCH_ID;
+                            if (currentBranch !== expectedBranch) {
+                              form.setValue(
+                                "groupId",
+                                getDefaultSystemGroupId("bank", { accountType: next }),
+                                { shouldDirty: true }
+                              );
+                            }
+                          }}
+                        >
+                          <FormItem className="flex items-center space-x-2 space-y-0">
+                            <FormControl><RadioGroupItem value="Bank" /></FormControl>
+                            <FormLabel className="cursor-pointer font-normal">Bank Account</FormLabel>
+                          </FormItem>
+                          <FormItem className="flex items-center space-x-2 space-y-0">
+                            <FormControl><RadioGroupItem value="Cash" /></FormControl>
+                            <FormLabel className="cursor-pointer font-normal">Cash in Hand</FormLabel>
+                          </FormItem>
+                        </RadioGroup>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
                 <MasterFormNameAcNoRow
                   entityKind="bank"
                   entityId={account.id}
@@ -753,33 +817,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                     />
                   }
                 />
-                <MasterFormTwoColGrid>
-                  <MasterMobileNoField control={form.control} />
-                    <FormField
-                    control={form.control}
-                    name="accountType"
-                    render={({ field }: any) => (
-                        <FormItem>
-                        <FormLabel>Account Type</FormLabel>
-                        <RadioGroup
-                            onValueChange={field.onChange}
-                            defaultValue={field.value}
-                            className={masterFormRadioGroupClassName}
-                            >
-                            <FormItem className="flex items-center space-x-2 space-y-0">
-                                <FormControl><RadioGroupItem value="Bank" /></FormControl>
-                                <FormLabel className="font-normal">Bank Account</FormLabel>
-                            </FormItem>
-                            <FormItem className="flex items-center space-x-2 space-y-0">
-                                <FormControl><RadioGroupItem value="Cash" /></FormControl>
-                                <FormLabel className="font-normal">Cash in Hand</FormLabel>
-                            </FormItem>
-                            </RadioGroup>
-                        <FormMessage />
-                        </FormItem>
-                    )}
-                    />
-                </MasterFormTwoColGrid>
+                <MasterMobileNoField control={form.control} />
                 <MasterFormTwoColGrid>
                 <FormField
                   control={form.control}
@@ -789,9 +827,20 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                       <FormLabel>Group (Optional)</FormLabel>
                       <FormControl>
                         <div className="w-full">
-                           <Combobox
-                              options={accountGroupOptions}
+                           <MasterGroupTreeCombobox
+                              preset={BANK_ENTITY_GROUP_PRESET}
+                              groups={groups}
+                              processedGroups={processedAccountGroups as AccountGroup[]}
+                              popoverModal={false}
+                              confirmWithOk
                               value={field.value}
+                              onBranchChange={(branchId) => {
+                                if (branchId === BANK_SYSTEM_BANK_BRANCH_ID) {
+                                  form.setValue("accountType", "Bank", { shouldDirty: true });
+                                } else if (branchId === BANK_SYSTEM_CASH_BRANCH_ID) {
+                                  form.setValue("accountType", "Cash", { shouldDirty: true });
+                                }
+                              }}
                               onChange={(val, newName) => {
                                   if (val === 'add-new') {
                                     setIsCreateGroupOpen(true);
@@ -799,11 +848,25 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                                       document.dispatchEvent(new CustomEvent('prefill-create-account-group-name', { detail: newName }));
                                     }, 100);
                                   } else {
-                                    field.onChange(val === 'none' ? '' : val);
+                                    const gid = val === 'none' ? '' : val;
+                                    field.onChange(gid);
+                                    if (gid) {
+                                      const branchId = resolveMasterGroupTreeBranchIdForGroup(
+                                        gid,
+                                        processedAccountGroups as AccountGroup[],
+                                        BANK_ENTITY_GROUP_PRESET
+                                      );
+                                      if (branchId === BANK_SYSTEM_CASH_BRANCH_ID) {
+                                        form.setValue("accountType", "Cash", { shouldDirty: true });
+                                      } else if (branchId === BANK_SYSTEM_BANK_BRANCH_ID) {
+                                        form.setValue("accountType", "Bank", { shouldDirty: true });
+                                      }
+                                    }
                                   }
                               }}
                               placeholder="Select a group"
-                              addNewLabel="+ Add New Group"
+                              searchPlaceholder="Search groups..."
+                              addNewLabel="Add New Group"
                             />
                         </div>
                       </FormControl>
@@ -847,11 +910,16 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                     control={form.control}
                     name="openingBalanceDate"
                     render={({ field }: any) => (
-                      <FormItem>
+                      <FormItem data-opening-balance-date>
                         <FormLabel>As on Date</FormLabel>
                           <div className={cn("grid", dateSystem === 'Both' && "grid-cols-2 gap-2")}>
                               {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                                  <BsDatePicker valueAD={field.value} onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} />
+                                  <BsDatePicker
+                                    valueAD={field.value}
+                                    onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }}
+                                    isRange={false}
+                                    popoverContentClassName={masterEditPopoverContentClassName(presentationMode)}
+                                  />
                               )}
                               {(dateSystem === 'AD' || dateSystem === 'Both') && (
                                   <Popover modal={true} open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
@@ -866,7 +934,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                                         </Button>
                                       </FormControl>
                                     </PopoverTrigger>
-                                    <PopoverContent className="w-auto p-0 z-[102]" align="start">
+                                    <PopoverContent className={masterEditPopoverContentClassName(presentationMode, "w-auto p-0")} align="start">
                                       <Calendar mode="single" selected={field.value} onSelect={(date) => { field.onChange(date); setIsCalendarOpen(false); }} initialFocus />
                                     </PopoverContent>
                                   </Popover>
@@ -1094,9 +1162,11 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
+                <Button type={openingBalanceDateMissing ? "button" : "submit"} disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0" onClick={() => {
+                  if (openingBalanceDateMissing) document.querySelector("[data-opening-balance-date]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}>
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Save Changes
+                  {openingBalanceDateMissing ? "Pick a date" : "Save Changes"}
                 </Button>
               </DialogFooter>
             </form>

@@ -48,10 +48,21 @@ import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import {
+  guardMasterEditOutsideDismiss,
+  masterEditBackdropClassName,
+  masterEditPopoverContentClassName,
+  NESTED_LEDGER_MASTER_EDIT_CONTENT_CN,
+  NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN,
+  type MasterEditPresentationMode,
+} from "@/lib/nestedLedgerMasterEditPresentation";
+import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
+import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 import { useCompany } from "@/hooks/useCompany";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { CreateExpenseGroupDialog } from "./CreateExpenseGroupDialog";
-import { Combobox } from "../ui/combobox";
+import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
+import { EXPENSE_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useDate } from "@/hooks/useDate";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -66,7 +77,8 @@ import {
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { toast as sonnerToast } from "sonner";
-import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { normalizeExpenseGroupIdForStorage } from "@/lib/masterEntitySystemGroups";
+import type { ExpenseGroupCreatedPayload } from "./CreateExpenseGroupDialog";
 import {
   apkCloudEntityMasterReadFromSqliteMirror,
   apkCloudCompanyOfflineViewOnly,
@@ -76,34 +88,46 @@ import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
 
-/** CreateExpenseAccountDialog jaisa: Ungrouped bucket → form value `ungrouped_expense`. */
-function normalizeExpenseAccountEditGroupId(groupId: string | null | undefined): string {
-  const u = getUngroupedGroupId("expense");
-  if (!groupId || groupId === u) return u;
-  return groupId;
+/** Form load: legacy ungrouped ids → system branch (Income / Expenses). */
+function normalizeExpenseAccountEditGroupId(
+  groupId: string | null | undefined,
+  accountType?: string | null
+): string {
+  return normalizeExpenseGroupIdForStorage(groupId, accountType);
 }
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Account name must be at least 2 characters." }),
   phone: z.string().optional(),
+  whatsapp: z.boolean().optional(),
   groupId: z.string().optional(),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
   openingBalanceNarration: z.string().optional(),
-});
+}).superRefine(refineMasterOpeningBalanceDateRequired);
 
 const MAX_FILE_SIZE_MB = 0.5;
 
-export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountDeleted, children, hasTransactions }: {
+export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountDeleted, children, hasTransactions, isOpen: controlledIsOpen, onOpenChange, presentationMode = "default" }: {
   account: ExpenseAccount;
   onAccountUpdated: (updated?: Partial<ExpenseAccount>) => void;
   onAccountDeleted: (id: string) => void;
   children: React.ReactNode;
   hasTransactions: boolean;
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  presentationMode?: MasterEditPresentationMode;
 }) {
   const [isLoading, setIsLoading] = useState(false);
   const isCompressing = useImageCompressionProcessing();
-  const [isOpen, setIsOpen] = useState(false);
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isOpen = controlledIsOpen ?? internalIsOpen;
+  const setIsOpen = useCallback((open: boolean) => {
+    if (controlledIsOpen === undefined) {
+      setInternalIsOpen(open);
+    }
+    onOpenChange?.(open);
+  }, [controlledIsOpen, onOpenChange]);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
   const { companyId, company } = useCompany();
@@ -174,12 +198,15 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
     defaultValues: {
       name: account.name,
       phone: account.phone ?? "",
-      groupId: normalizeExpenseAccountEditGroupId(account.groupId),
+      whatsapp: account.whatsapp === true,
+      groupId: normalizeExpenseAccountEditGroupId(account.groupId, account.type),
       openingBalance: account.openingBalance || 0,
       openingBalanceDate: (account as any).openingBalanceDate?.toDate ? (account as any).openingBalanceDate.toDate() : undefined,
       openingBalanceNarration: account.openingBalanceNarration ?? "",
     },
   });
+
+  const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
 
   useEffect(() => {
     if (isOpen) {
@@ -197,7 +224,8 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
       form.reset({
         name: account.name,
         phone: account.phone ?? "",
-        groupId: normalizeExpenseAccountEditGroupId(account.groupId),
+        whatsapp: account.whatsapp === true,
+        groupId: normalizeExpenseAccountEditGroupId(account.groupId, account.type),
         openingBalance: account.openingBalance || 0,
         openingBalanceDate: finalDate,
         openingBalanceNarration: account.openingBalanceNarration ?? "",
@@ -326,6 +354,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
         const updatePayload = {
           name: values.name,
           phone: values.phone?.trim() || null,
+          whatsapp: values.whatsapp === true,
           groupId: values.groupId || null,
           openingBalance: newOpeningBalance,
           openingBalanceDate: values.openingBalanceDate || null,
@@ -459,29 +488,33 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
     }
   }
   
-  const handleGroupCreated = (newGroupId: string) => {
-    form.setValue("groupId", newGroupId);
-    setIsCreateGroupOpen(false);
+  const mergeCreatedGroup = (created?: ExpenseGroupCreatedPayload) => {
+    if (!created?.id) return;
+    setGroups((prev) => {
+      const existing = prev.find((g) => g.id === created.id);
+      if (existing) {
+        return prev.map((g) =>
+          g.id === created.id ? { ...g, name: created.name, parentId: created.parentId } : g
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: created.id,
+          name: created.name,
+          parentId: created.parentId,
+          balance: 0,
+        } as ExpenseGroup,
+      ];
+    });
   };
 
-  // CreateExpenseAccountDialog ke saath: Ungrouped synthetic row + isAutoUngrouped hatao + parent labels
-  const allGroupOptions = useMemo(() => {
-    const getParentLabel = (parentId?: string) => {
-      if (parentId === "income" || parentId === "direct_income" || parentId === "indirect_income") return "Income";
-      if (parentId === "expenses" || parentId === "direct_expense" || parentId === "indirect_expense") return "Expenses";
-      return "";
-    };
-    return [
-      { value: getUngroupedGroupId("expense"), label: "Ungrouped" },
-      ...groups
-        .filter((g) => (g as any).isReportOnly !== true)
-        .filter((g) => (g as any).isAutoUngrouped !== true)
-        .map((g: any) => {
-          const parent = getParentLabel(g.parentId);
-          return { value: g.id, label: parent ? `${parent} / ${g.name}` : g.name };
-        }),
-    ];
-  }, [groups]);
+  const handleGroupCreated = (newGroupId: string, created?: ExpenseGroupCreatedPayload) => {
+    if (!newGroupId) return;
+    mergeCreatedGroup(created ?? { id: newGroupId, name: "", parentId: "" });
+    form.setValue("groupId", newGroupId, { shouldDirty: true, shouldValidate: true });
+    setIsCreateGroupOpen(false);
+  };
 
   const removeAvatar = () => {
     setFile(null);
@@ -539,13 +572,27 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
     <>
       <Dialog open={isOpen} onOpenChange={setIsOpen} modal={false}>
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-        {isOpen && <div className="fixed inset-0 bg-black/45 backdrop-blur-sm z-40" />}
+        {isOpen && <div className={masterEditBackdropClassName(presentationMode)} />}
         <DialogContent 
-            className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-2xl")}
+            overlayClassName={
+              presentationMode === "nested-ledger" ? NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN : undefined
+            }
+            className={cn(
+              cnMasterEntityDialogContent(isMobile),
+              "sm:max-w-2xl",
+              presentationMode === "nested-ledger" && NESTED_LEDGER_MASTER_EDIT_CONTENT_CN
+            )}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
-            onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
-            onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
+            onPointerDownOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e, isCreateGroupOpen);
+            }}
+            onInteractOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e, isCreateGroupOpen);
+            }}
+            onFocusOutside={(e) => {
+              guardMasterEditOutsideDismiss(presentationMode, e);
+            }}
         >
           <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Edit Expense Account</DialogTitle>
@@ -589,8 +636,12 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                   render={({ field }: any) => (
                     <FormItem>
                       <FormLabel>Group (Optional)</FormLabel>
-                      <Combobox
-                        options={allGroupOptions}
+                      <MasterGroupTreeCombobox
+                        preset={EXPENSE_ENTITY_GROUP_PRESET}
+                        groups={groups}
+                        processedGroups={processedExpenseGroups as ExpenseGroup[]}
+                        popoverModal={false}
+                        confirmWithOk
                         value={field.value}
                         onChange={(value, newName) => {
                           if (value === "add-new") {
@@ -605,7 +656,8 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                           }
                         }}
                         placeholder="Select a group"
-                        addNewLabel="+ Add New Group"
+                        searchPlaceholder="Search groups..."
+                        addNewLabel="Add New Group"
                       />
                       <FormMessage />
                     </FormItem>
@@ -628,13 +680,18 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                 />
                 <FormField
                   control={form.control}
-                  name="openingBalanceDate"
-                  render={({ field }: any) => (
-                    <FormItem>
+                    name="openingBalanceDate"
+                    render={({ field }: any) => (
+                      <FormItem data-opening-balance-date>
                     <FormLabel>As on Date</FormLabel>
                       <div className={cn("grid", dateSystem === 'Both' && "grid-cols-2 gap-2")}>
                           {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                              <BsDatePicker isRange={false} valueAD={field.value} onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }} />
+                              <BsDatePicker
+                                isRange={false}
+                                valueAD={field.value}
+                                onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }}
+                                popoverContentClassName={masterEditPopoverContentClassName(presentationMode)}
+                              />
                           )}
                           {(dateSystem === 'AD' || dateSystem === 'Both') && (
                               <Popover modal={true} open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
@@ -649,7 +706,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                                     </Button>
                                   </FormControl>
                                 </PopoverTrigger>
-                                <PopoverContent className="w-auto p-0 z-[102]" align="start">
+                                <PopoverContent className={masterEditPopoverContentClassName(presentationMode, "w-auto p-0")} align="start">
                                   <Calendar mode="single" selected={field.value} onSelect={(date) => { field.onChange(date); setIsCalendarOpen(false); }} initialFocus />
                                 </PopoverContent>
                               </Popover>
@@ -729,9 +786,11 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
+                <Button type={openingBalanceDateMissing ? "button" : "submit"} disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0" onClick={() => {
+                  if (openingBalanceDateMissing) document.querySelector("[data-opening-balance-date]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}>
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Save Changes
+                  {openingBalanceDateMissing ? "Pick a date" : "Save Changes"}
                 </Button>
               </DialogFooter>
             </form>

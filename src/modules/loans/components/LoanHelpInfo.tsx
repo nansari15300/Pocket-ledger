@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, type MouseEvent } from "react";
-import { Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
 import {
   Dialog,
   DialogContent,
@@ -42,13 +42,9 @@ export function LoanHelpInfo({ introKey, compact = false, className }: Props) {
       <TooltipProvider delayDuration={250}>
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-              type="button"
-              className={cn(
-                "inline-flex shrink-0 items-center justify-center rounded-full text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-700 dark:text-sky-400 dark:hover:bg-sky-950/40",
-                compact ? "h-3.5 w-3.5" : "h-4 w-4",
-                className
-              )}
+            <AppFreshInfoButton
+              size={compact ? "xs" : "sm"}
+              className={className}
               aria-label={`${copy.en.title} — information`}
               onClick={(e) => {
                 stop(e);
@@ -58,9 +54,7 @@ export function LoanHelpInfo({ introKey, compact = false, className }: Props) {
               }}
               onMouseDown={stop}
               onPointerDown={stop}
-            >
-              <Info className={cn(compact ? "h-3.5 w-3.5" : "h-4 w-4", "stroke-[2]")} aria-hidden />
-            </button>
+            />
           </TooltipTrigger>
           <TooltipContent side="bottom" className="max-w-[260px] text-xs">
             Click for full introduction (English / हिन्दी / नेपाली). Default English.

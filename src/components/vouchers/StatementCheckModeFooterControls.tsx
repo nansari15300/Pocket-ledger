@@ -1,16 +1,14 @@
 ﻿"use client";
 
 import { Checkbox } from "@/components/ui/checkbox";
-import { Button } from "@/components/ui/button";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Info } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { LedgerFooterChromePill, LEDGER_FOOTER_PILL_H } from "@/components/vouchers/ledgerFooterChrome";
-import { cn } from "@/lib/utils";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
+import { LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
 
 type Props = {
   idPrefix: string;
@@ -42,24 +40,16 @@ export function StatementCheckModeFooterControls({
       />
       <label
         htmlFor={checkId}
-        className="cursor-pointer whitespace-nowrap text-sm font-medium leading-none"
+        className="cursor-pointer whitespace-nowrap text-sm font-medium leading-none text-blue-900"
       >
         Check mode
         {enabled && hiddenCount > 0 ? (
-          <span className="font-normal text-muted-foreground"> ({hiddenCount} hidden)</span>
+          <span className="font-normal text-blue-800/70"> ({hiddenCount} hidden)</span>
         ) : null}
       </label>
       <Popover>
         <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className={cn(LEDGER_FOOTER_PILL_H, "w-8 shrink-0 rounded-full px-0")}
-            aria-label="Check mode shortcuts"
-          >
-            <Info className="h-4 w-4 text-muted-foreground" />
-          </Button>
+          <AppFreshInfoButton size="sm" aria-label="Check mode shortcuts" />
         </PopoverTrigger>
         <PopoverContent align="start" className="w-80 text-sm">
           <p className="mb-2 font-semibold">Check mode</p>

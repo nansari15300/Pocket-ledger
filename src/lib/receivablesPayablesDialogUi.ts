@@ -1,14 +1,24 @@
-import type { ReceivablesPayablesFinancialSummary } from "@/lib/receivablesPayablesFinancialSummary";
+import type {
+  ReceivablesPayablesFinancialSummary,
+  RpEntityRow,
+} from "@/lib/receivablesPayablesFinancialSummary";
 import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
+import {
+  isInterCompanyAccountClearingPartyName,
+  readInterCompanyClearingMode,
+} from "@/lib/interCompany/interCompanyCounterpartyPartyName";
+import {
+  icPeerCompanyGroupId,
+  icPeerCompanyGroupSecondaryLabel,
+  interCompanyClearingAccountDisplayName,
+} from "@/lib/interCompany/icPeerCompanyGroups";
 
 export type RpCategoryFilter =
   | "all"
   | "party"
   | "bank"
   | "staff"
-  | "tax"
-  | "income"
-  | "expense";
+  | "tax";
 
 export type RpEntityKind = "party" | "bank" | "staff" | "tax" | "income" | "expense";
 
@@ -18,12 +28,21 @@ export type RpDialogRow = {
   fileUrl?: string;
   kind: RpEntityKind;
   entityId: string;
+  /** IC peer company group — nested IC Account rows (party list jaisa). */
+  isIcPeerCompanyGroup?: boolean;
+  secondaryLabel?: string;
+  icChildren?: RpDialogRow[];
+  interCompanyPeerCompanyId?: string;
+  interCompanyPeerCompanyName?: string;
+  interCompanyPeerEntityLabel?: string;
 };
 
 export type RpDialogSection = {
   kind: RpEntityKind;
   label: string;
   rows: RpDialogRow[];
+  /** Leaf account count — IC tree me company group ke andar ke accounts bhi ginne hain. */
+  rowCount: number;
 };
 
 export const RP_DIALOG_FILTER_OPTIONS: { id: RpCategoryFilter; label: string }[] = [
@@ -32,20 +51,113 @@ export const RP_DIALOG_FILTER_OPTIONS: { id: RpCategoryFilter; label: string }[]
   { id: "bank", label: "Bank/Cash" },
   { id: "staff", label: STAFF_ENTITY_LABEL },
   { id: "tax", label: "Tax" },
-  { id: "income", label: "Income" },
-  { id: "expense", label: "Expense" },
 ];
 
+/** Outstanding dialog — Party / Bank / Staff / Tax only (Income/Expense P&L heads, len-den nahi). */
 const CATEGORY_META: { kind: RpEntityKind; label: string; filter: RpCategoryFilter }[] = [
   { kind: "party", label: "Party", filter: "party" },
   { kind: "bank", label: "Bank / Cash", filter: "bank" },
   { kind: "staff", label: STAFF_ENTITY_LABEL, filter: "staff" },
   { kind: "tax", label: "Tax", filter: "tax" },
-  { kind: "income", label: "Income", filter: "income" },
-  { kind: "expense", label: "Expense", filter: "expense" },
 ];
 
 const notOB = (p: { party: string }) => p.party !== "Opening Balance";
+
+function isIcAccountClearingPartyRow(row: {
+  party: string;
+  entityId?: string;
+  interCompanyClearingMode?: string;
+}): boolean {
+  if (
+    readInterCompanyClearingMode({
+      id: row.entityId,
+      name: row.party,
+      interCompanyClearingMode: row.interCompanyClearingMode,
+    }) === "account"
+  ) {
+    return true;
+  }
+  return isInterCompanyAccountClearingPartyName(row.party);
+}
+
+function toRpDialogRow(row: RpEntityRow, kind: RpEntityKind): RpDialogRow {
+  return {
+    party: row.party,
+    balance: row.balance,
+    fileUrl: row.fileUrl,
+    kind,
+    entityId: row.entityId,
+    interCompanyPeerCompanyId: row.interCompanyPeerCompanyId,
+    interCompanyPeerCompanyName: row.interCompanyPeerCompanyName,
+    interCompanyPeerEntityLabel: row.interCompanyPeerEntityLabel,
+  };
+}
+
+/** IC Account clearing parties → peer company tree (company name → account names). */
+function groupIcAccountPartyRowsForRpDialog(rows: RpDialogRow[]): RpDialogRow[] {
+  const regular: RpDialogRow[] = [];
+  const icAccounts: RpDialogRow[] = [];
+  for (const row of rows) {
+    if (isIcAccountClearingPartyRow(row)) icAccounts.push(row);
+    else regular.push(row);
+  }
+  if (icAccounts.length === 0) return rows;
+
+  const buckets = new Map<
+    string,
+    { peerCompanyId: string; peerCompanyName: string; members: RpDialogRow[] }
+  >();
+  for (const row of icAccounts) {
+    const peerCompanyId = String(row.interCompanyPeerCompanyId || "").trim();
+    const peerCompanyName = String(row.interCompanyPeerCompanyName || "").trim() || "Company";
+    const bucketKey = peerCompanyId || peerCompanyName.toLowerCase();
+    const prev = buckets.get(bucketKey);
+    if (prev) prev.members.push(row);
+    else buckets.set(bucketKey, { peerCompanyId, peerCompanyName, members: [row] });
+  }
+
+  const icGroups: RpDialogRow[] = [];
+  for (const bucket of buckets.values()) {
+    const children = bucket.members
+      .map((member) => ({
+        ...member,
+        party: interCompanyClearingAccountDisplayName({
+          name: member.party,
+          interCompanyPeerEntityLabel: member.interCompanyPeerEntityLabel,
+        } as { name?: string; interCompanyPeerEntityLabel?: string }),
+      }))
+      .sort((a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0));
+    const balance = children.reduce((sum, child) => sum + (Number(child.balance) || 0), 0);
+    icGroups.push({
+      party: bucket.peerCompanyName,
+      balance,
+      kind: "party",
+      entityId: icPeerCompanyGroupId(bucket.peerCompanyId, bucket.peerCompanyName),
+      isIcPeerCompanyGroup: true,
+      secondaryLabel: icPeerCompanyGroupSecondaryLabel(children.length),
+      interCompanyPeerCompanyId: bucket.peerCompanyId,
+      interCompanyPeerCompanyName: bucket.peerCompanyName,
+      icChildren: children,
+    });
+  }
+
+  return [...regular, ...icGroups].sort(
+    (a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0)
+  );
+}
+
+function flattenRpDialogRows(rows: RpDialogRow[]): RpDialogRow[] {
+  const out: RpDialogRow[] = [];
+  for (const row of rows) {
+    if (row.isIcPeerCompanyGroup && row.icChildren?.length) out.push(...row.icChildren);
+    else out.push(row);
+  }
+  return out;
+}
+
+function rpDialogLeafCount(rows: RpDialogRow[]): number {
+  return flattenRpDialogRows(rows).length;
+}
 
 function includeCategory(filter: RpCategoryFilter, kind: RpEntityKind): boolean {
   if (filter === "all") return true;
@@ -70,10 +182,12 @@ function rowsForKind(
             : kind === "income"
               ? bucket.income
               : bucket.expenses;
-  return raw
-    .filter(notOB)
-    .map((p) => ({ ...p, kind, entityId: p.entityId }))
-    .sort((a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0));
+  const mapped = raw.filter(notOB).map((p) => toRpDialogRow(p, kind));
+  const sorted = mapped.sort(
+    (a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0)
+  );
+  if (kind === "party") return groupIcAccountPartyRowsForRpDialog(sorted);
+  return sorted;
 }
 
 /** Receivables / Payables dialog: category headers + sorted rows. */
@@ -82,11 +196,15 @@ export function buildRpDialogSections(
   summary: ReceivablesPayablesFinancialSummary,
   filter: RpCategoryFilter
 ): RpDialogSection[] {
-  return CATEGORY_META.filter((c) => includeCategory(filter, c.kind)).map(({ kind, label }) => ({
-    kind,
-    label,
-    rows: rowsForKind(side, summary, kind),
-  }));
+  return CATEGORY_META.filter((c) => includeCategory(filter, c.kind)).map(({ kind, label }) => {
+    const rows = rowsForKind(side, summary, kind);
+    return {
+      kind,
+      label,
+      rows,
+      rowCount: rpDialogLeafCount(rows),
+    };
+  });
 }
 
 /** Flat rows (print / legacy) — category order preserved, amount desc within each group. */
@@ -95,7 +213,7 @@ export function buildRpDialogRowsFlat(
   summary: ReceivablesPayablesFinancialSummary,
   filter: RpCategoryFilter
 ): RpDialogRow[] {
-  return buildRpDialogSections(side, summary, filter).flatMap((s) => s.rows);
+  return flattenRpDialogRows(buildRpDialogSections(side, summary, filter).flatMap((s) => s.rows));
 }
 
 export function sumRpDialogSide(

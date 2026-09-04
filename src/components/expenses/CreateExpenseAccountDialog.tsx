@@ -24,7 +24,8 @@ import { useCompany } from "@/hooks/useCompany";
 import { firestore } from "@/lib/firebase";
 import type { ExpenseGroup } from "./types";
 import { CreateExpenseGroupDialog } from "./CreateExpenseGroupDialog";
-import { Combobox } from "../ui/combobox";
+import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
+import { EXPENSE_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
 import { useDate } from "@/hooks/useDate";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
@@ -34,6 +35,8 @@ import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
+import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -44,7 +47,11 @@ import {
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { toast as sonnerToast } from "sonner";
-import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import {
+  getDefaultSystemGroupId,
+  normalizeExpenseGroupIdForStorage,
+} from "@/lib/masterEntitySystemGroups";
+import type { ExpenseGroupCreatedPayload } from "./CreateExpenseGroupDialog";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
 import {
@@ -73,6 +80,23 @@ import { compressFile } from "@/lib/compression";
 import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { expenseAccountPrefillPartsFromRow, fetchRemoteUrlAsFile } from "@/lib/crossCompanyMasterPrefill";
+function defaultExpenseGroupId(defaultGroupType?: "income" | "expense"): string {
+  return getDefaultSystemGroupId("expense", {
+    accountType: defaultGroupType === "income" ? "Income" : "Expense",
+  });
+}
+
+function resolveExpenseAccountType(
+  groupId: string,
+  allGroups: ExpenseGroup[],
+  defaultGroupType: "income" | "expense" | undefined,
+  incomeGroupIds: Set<string>
+): "Income" | "Expense" {
+  const selectedGroup = allGroups.find((g) => g.id === groupId);
+  const fromGroup = (selectedGroup as { type?: string })?.type;
+  if (fromGroup === "Income" || fromGroup === "Expense") return fromGroup;
+  return defaultGroupType === "income" || incomeGroupIds.has(groupId) ? "Income" : "Expense";
+}
 
 function createLocalEntityId(prefix: string): string {
   // Local-first mode me account create ke liye stable client-side id use karo.
@@ -87,11 +111,12 @@ function createLocalEntityId(prefix: string): string {
 const formSchema = z.object({
   name: z.string().min(2, { message: "Account name must be at least 2 characters." }),
   phone: z.string().optional(),
+  whatsapp: z.boolean().optional(),
   groupId: z.string().min(1, "A group is required."),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
   openingBalanceNarration: z.string().optional(),
-});
+}).superRefine(refineMasterOpeningBalanceDateRequired);
 
 const MAX_FILE_SIZE_MB = 0.5;
 
@@ -152,6 +177,8 @@ export function CreateExpenseAccountDialog({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
     defaultValues: { name: "", openingBalance: 0, groupId: "", openingBalanceNarration: "" },
   });
+
+  const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
   
   /** Local / APK cloud: vouchers context + SQLite `expense_groups` — redundant `onSnapshot` avoid. */
   useEffect(() => {
@@ -218,11 +245,11 @@ export function CreateExpenseAccountDialog({
         if (alive && firstIncomeId) form.setValue("groupId", firstIncomeId, { shouldDirty: false });
         return;
       }
-      const ungroupedId = apkEntityWriteUsesLocalSqliteMirror(company)
-        ? getUngroupedGroupId("expense")
-        : await ensureUngroupedGroup(companyId, user.uid, "expense");
+      const defaultGroupId = getDefaultSystemGroupId("expense", {
+        accountType: defaultGroupType === "income" ? "Income" : "Expense",
+      });
       if (!alive) return;
-      form.setValue("groupId", ungroupedId, { shouldDirty: false });
+      form.setValue("groupId", defaultGroupId, { shouldDirty: false });
     })();
     return () => {
       alive = false;
@@ -241,8 +268,31 @@ export function CreateExpenseAccountDialog({
     };
   }, [form]);
 
-  const handleGroupCreated = (newGroupId: string) => {
-    form.setValue("groupId", newGroupId);
+  const mergeCreatedGroup = (created?: ExpenseGroupCreatedPayload) => {
+    if (!created?.id) return;
+    setGroups((prev) => {
+      const existing = prev.find((g) => g.id === created.id);
+      if (existing) {
+        return prev.map((g) =>
+          g.id === created.id ? { ...g, name: created.name, parentId: created.parentId } : g
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: created.id,
+          name: created.name,
+          parentId: created.parentId,
+          balance: 0,
+        } as ExpenseGroup,
+      ];
+    });
+  };
+
+  const handleGroupCreated = (newGroupId: string, created?: ExpenseGroupCreatedPayload) => {
+    if (!newGroupId) return;
+    mergeCreatedGroup(created ?? { id: newGroupId, name: "", parentId: "" });
+    form.setValue("groupId", newGroupId, { shouldDirty: true, shouldValidate: true });
     setIsCreateGroupOpen(false);
   };
 
@@ -318,7 +368,7 @@ export function CreateExpenseAccountDialog({
         openingBalance: defaults.openingBalance,
         openingBalanceDate: defaults.openingBalanceDate,
         openingBalanceNarration: defaults.openingBalanceNarration,
-        groupId: getUngroupedGroupId("expense"),
+        groupId: defaultExpenseGroupId(defaultGroupType),
       });
       if (remoteAvatarUrl?.trim() && canAddAvatar) {
         try {
@@ -388,14 +438,13 @@ export function CreateExpenseAccountDialog({
     try {
       // Local-first: CreatePartyForm jaisa — pehle browser DB + outbox; Firestore getDocs (duplicate) / Capital OB mat chalao.
       if (apkEntityWriteUsesLocalSqliteMirror(company)) {
-        const resolvedGroupId =
-          values.groupId?.trim() || getUngroupedGroupId("expense");
-        const selectedGroup = groups.find((g) => g.id === resolvedGroupId);
-        const accountType =
-          (selectedGroup as any)?.type ||
-          (defaultGroupType === "income" || incomeGroupIds.has(resolvedGroupId)
-            ? "Income"
-            : "Expense");
+        const accountType = resolveExpenseAccountType(
+          values.groupId?.trim() || defaultExpenseGroupId(defaultGroupType),
+          groups,
+          defaultGroupType,
+          incomeGroupIds
+        );
+        const resolvedGroupId = normalizeExpenseGroupIdForStorage(values.groupId, accountType);
         const createdId = createLocalEntityId("expense_account");
         const totalAttachBytesLocal =
           (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + (f instanceof File ? f.size : 0), 0);
@@ -424,7 +473,8 @@ export function CreateExpenseAccountDialog({
           id: createdId,
           name: values.name.trim(),
           phone: values.phone?.trim() || null,
-          groupId: resolvedGroupId || getUngroupedGroupId("expense"),
+          whatsapp: values.whatsapp === true,
+          groupId: resolvedGroupId,
           openingBalance: values.openingBalance || 0,
           openingBalanceDate: values.openingBalanceDate || null,
           openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
@@ -447,7 +497,7 @@ export function CreateExpenseAccountDialog({
           form.reset({
             name: "",
             openingBalance: 0,
-            groupId: getUngroupedGroupId("expense"),
+            groupId: defaultExpenseGroupId(defaultGroupType),
             openingBalanceDate: undefined,
             openingBalanceNarration: "",
           });
@@ -481,15 +531,13 @@ export function CreateExpenseAccountDialog({
         return;
       }
 
-      const resolvedGroupId =
-        values.groupId?.trim() ||
-        (await ensureUngroupedGroup(companyId!, user.uid, "expense"));
-      const selectedGroup = groups.find((g) => g.id === resolvedGroupId);
-      const accountType =
-        (selectedGroup as any)?.type ||
-        (defaultGroupType === "income" || incomeGroupIds.has(resolvedGroupId)
-          ? "Income"
-          : "Expense");
+      const accountType = resolveExpenseAccountType(
+        values.groupId?.trim() || defaultExpenseGroupId(defaultGroupType),
+        groups,
+        defaultGroupType,
+        incomeGroupIds
+      );
+      const resolvedGroupId = normalizeExpenseGroupIdForStorage(values.groupId, accountType);
 
       const totalAttachBytes =
         (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + (f instanceof File ? f.size : 0), 0);
@@ -521,7 +569,8 @@ export function CreateExpenseAccountDialog({
       await setDoc(accRef, {
         name: values.name.trim(),
         phone: values.phone?.trim() || null,
-        groupId: resolvedGroupId || getUngroupedGroupId("expense"),
+        whatsapp: values.whatsapp === true,
+        groupId: resolvedGroupId,
         openingBalance: values.openingBalance || 0,
         openingBalanceDate: values.openingBalanceDate || null,
         openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
@@ -561,7 +610,7 @@ export function CreateExpenseAccountDialog({
         form.reset({
           name: "",
           openingBalance: 0,
-          groupId: getUngroupedGroupId("expense"),
+          groupId: defaultExpenseGroupId(defaultGroupType),
           openingBalanceDate: undefined,
           openingBalanceNarration: "",
         });
@@ -582,14 +631,14 @@ export function CreateExpenseAccountDialog({
             );
             if (!lim.allowed) throw new Error(lim.message || "Storage limit reached.");
           }
-          const resolvedGroupId =
-            form.getValues("groupId")?.trim() || getUngroupedGroupId("expense");
-          const selectedGroup = groups.find((g) => g.id === resolvedGroupId);
-          const accountType =
-            (selectedGroup as any)?.type ||
-            (defaultGroupType === "income" || incomeGroupIds.has(resolvedGroupId)
-              ? "Income"
-              : "Expense");
+          const v = form.getValues();
+          const accountType = resolveExpenseAccountType(
+            v.groupId?.trim() || defaultExpenseGroupId(defaultGroupType),
+            groups,
+            defaultGroupType,
+            incomeGroupIds
+          );
+          const resolvedGroupId = normalizeExpenseGroupIdForStorage(v.groupId, accountType);
           const localId = createLocalEntityId("expense_account");
           const interCompanyAccountNo = await interCompanyAcNoForNewEntity("expense");
           const stagedCatch = await stageEntityAvatarAndDocuments({
@@ -599,12 +648,12 @@ export function CreateExpenseAccountDialog({
             avatarFile: avatarToUpload?.file ?? null,
             documentFiles: documentFiles.filter((f): f is File => f instanceof File),
           });
-          const v = form.getValues();
           const payload: Record<string, unknown> = {
             id: localId,
             name: v.name.trim(),
             phone: v.phone?.trim() || null,
-            groupId: resolvedGroupId || getUngroupedGroupId("expense"),
+            whatsapp: v.whatsapp === true,
+            groupId: resolvedGroupId,
             openingBalance: v.openingBalance || 0,
             openingBalanceDate: v.openingBalanceDate || null,
             openingBalanceNarration: v.openingBalanceNarration?.trim() || null,
@@ -644,43 +693,12 @@ export function CreateExpenseAccountDialog({
     }
   }
   
-  // Sab groups: pehle `groups` (Firestore/registry path), phir `processedExpenseGroups` se gap bharein — dono khali na rahen.
-  const allGroupOptions = useMemo(() => {
-    const getParentLabel = (parentId?: string) => {
-      // Show two logical parent buckets in picker labels so users can classify account clearly.
-      if (parentId === "income" || parentId === "direct_income" || parentId === "indirect_income") return "Income";
-      if (parentId === "expenses" || parentId === "direct_expense" || parentId === "indirect_expense") return "Expenses";
-      return "";
-    };
-    const byId = new Map<string, ExpenseGroup>();
-    for (const g of groups) {
-      if (g?.id) byId.set(g.id, g);
-    }
-    for (const g of processedExpenseGroups) {
-      if (g?.id && !byId.has(g.id)) byId.set(g.id, g as ExpenseGroup);
-    }
-    const merged = [...byId.values()];
-    return [
-      { value: getUngroupedGroupId("expense"), label: "Ungrouped" },
-      ...merged
-        .filter((g) => !(g as any).isDeleted)
-        .filter((g) => (g as any).isReportOnly !== true)
-        .filter((g) => (g as any).isAutoUngrouped !== true)
-        .map((g: any) => {
-          const parent = getParentLabel(g.parentId);
-          return { value: g.id, label: parent ? `${parent} / ${g.name}` : g.name };
-        }),
-    ];
-  }, [groups, processedExpenseGroups]);
-
   useEffect(() => {
-    if (allGroupOptions.length === 0) return;
     const current = form.getValues("groupId");
-    const isValid = allGroupOptions.some(o => o.value === current);
-    if (!current || !isValid) {
-      form.setValue("groupId", allGroupOptions[0].value);
+    if (!current) {
+      form.setValue("groupId", defaultExpenseGroupId(defaultGroupType), { shouldDirty: false });
     }
-  }, [allGroupOptions, form]);
+  }, [groups, processedExpenseGroups, form, defaultGroupType]);
 
   return (
     <>
@@ -751,8 +769,12 @@ export function CreateExpenseAccountDialog({
               render={({ field }: any) => (
                 <FormItem>
                   <FormLabel>Group</FormLabel>
-                  <Combobox
-                    options={allGroupOptions}
+                  <MasterGroupTreeCombobox
+                    preset={EXPENSE_ENTITY_GROUP_PRESET}
+                    groups={groups}
+                    processedGroups={processedExpenseGroups as ExpenseGroup[]}
+                    popoverModal={false}
+                    confirmWithOk
                     value={field.value}
                     onChange={(value, newName) => {
                       if (value === "add-new") {
@@ -765,7 +787,8 @@ export function CreateExpenseAccountDialog({
                       }
                     }}
                     placeholder="Select a group"
-                    addNewLabel="+ Add New Group"
+                    searchPlaceholder="Search groups..."
+                    addNewLabel="Add New Group"
                   />
                   <FormMessage />
                 </FormItem>
@@ -859,13 +882,13 @@ export function CreateExpenseAccountDialog({
                   variant="ghost"
                   className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                   onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                  disabled={isLoading || isCompressing || apkOfflineViewOnly}
+                  disabled={isLoading || isCompressing || apkOfflineViewOnly || openingBalanceDateMissing}
                 >
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save & New
                 </Button>
               </div>
-              <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
+              <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly || openingBalanceDateMissing} className="shrink-0">
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Create
               </Button>

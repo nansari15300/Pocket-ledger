@@ -19,6 +19,7 @@ import { getPrintColorPalette, type PrintColorMode } from "@/lib/printColorPalet
 import { getInterCompanyLedgerAmounts } from "@/lib/interCompany/interCompanyLedgerAmounts";
 import { sumJournalAmountsForAccount } from "@/lib/journalLedgerAmounts";
 import type { Context as LedgerContext } from "@/components/vouchers/transactionTableShared";
+import type { AccountConfirmationSummary } from "@/lib/reports/accountConfirmationSummary";
 import {
   injectSpendWiseEmbeddedOpeningPrintRows,
   resolveLedgerOpeningPrintRows,
@@ -164,6 +165,20 @@ export type PrintPayload = {
   fiscalPartitionLabel?: string | null;
   /** openPrintDirect: dialog mat dikhao (chhota receipt / programmatic). */
   skipPrintOptionsDialog?: boolean;
+  /** Anusuchi-13 confirmation report: show Confirmation / Statement / Both print tabs. */
+  printConfirmationTabs?: boolean;
+  /** Selected confirmation print tab. Set by the print options dialog. */
+  printReportKind?: "confirmation" | "statement" | "both";
+  /** Dedicated account confirmation letter data. */
+  confirmationSummary?: AccountConfirmationSummary;
+  confirmationFyLabel?: string;
+  confirmationFyRangeLabel?: string;
+  confirmationRecipientName?: string;
+  confirmationRecipientPan?: string;
+  confirmationRecipientAddress?: string;
+  confirmationLetterDate?: string;
+  /** Full ledger rows used by Both mode instead of the currently paged screen slice. */
+  statementAllTransactions?: any[];
   /** PDF header me logo / placeholder — false = bilkul na (dialog ya manual). */
   printIncludeLogo?: boolean;
   /** PDF header me company name, address, phone, PAN — false par sirf date range line. */
@@ -281,7 +296,7 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
   let printMasterIncludeBalance = true;
   if (!payload.skipPrintOptionsDialog) {
     const { promptPrintOptions } = await import("@/components/print/PrintOptionsPrompt");
-    const opts = await promptPrintOptions();
+    const opts = await promptPrintOptions({ showConfirmationTabs: payload.printConfirmationTabs === true });
     if (!opts) {
       return;
     }
@@ -312,6 +327,17 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
         ...(typeof opts.printIncludeFileColumn === "boolean" ? { file: opts.printIncludeFileColumn } : {}),
       },
       printColorMode: opts.printColorMode ?? "color",
+      ...(opts.printReportKind
+        ? {
+            printReportKind: opts.printReportKind,
+            title:
+              opts.printReportKind === "confirmation"
+                ? `${payload.title} - Confirmation`
+                : opts.printReportKind === "both"
+                  ? `${payload.title} - Confirmation and Statement`
+                  : payload.title,
+          }
+        : {}),
     };
   }
 
@@ -338,7 +364,57 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
       dateSystem,
     });
   } else {
-    docDefinition = buildDocDefinition(processedPayload);
+    const isConfirmation = processedPayload.printReportKind === "confirmation";
+    const isBoth = processedPayload.printReportKind === "both";
+    if ((isConfirmation || isBoth) && processedPayload.confirmationSummary) {
+      const confirmationDoc = buildAccountConfirmationDocDefinition(processedPayload);
+      if (isBoth) {
+        const statementPayload = processedPayload.statementAllTransactions
+          ? {
+              ...processedPayload,
+              transactions: processedPayload.statementAllTransactions,
+              vouchersCount: processedPayload.statementAllTransactions.length,
+              openingBalance: processedPayload.confirmationSummary?.openingBalance ?? processedPayload.openingBalance,
+              booksOpeningBalance: undefined,
+              ledgerShowBookOpeningRow: false,
+              ledgerDateFilterActive: false,
+              openingBalancePeriodStartDate: undefined,
+              ledgerPagePeriodDr: undefined,
+              ledgerPagePeriodCr: undefined,
+              ledgerPageClosingBalance: undefined,
+            }
+          : processedPayload;
+        const statementDoc = buildDocDefinition(statementPayload);
+        docDefinition = {
+          ...confirmationDoc,
+          content: [
+            ...(Array.isArray(confirmationDoc.content) ? confirmationDoc.content : [confirmationDoc.content]),
+            { text: "", pageBreak: "before" },
+            ...(Array.isArray(statementDoc.content) ? statementDoc.content : [statementDoc.content]),
+          ],
+          styles: { ...(confirmationDoc.styles ?? {}), ...(statementDoc.styles ?? {}) },
+        };
+      } else {
+        docDefinition = confirmationDoc;
+      }
+    } else {
+      const statementPayload = processedPayload.printReportKind === "statement" && processedPayload.statementAllTransactions
+        ? {
+            ...processedPayload,
+            transactions: processedPayload.statementAllTransactions,
+            vouchersCount: processedPayload.statementAllTransactions.length,
+            openingBalance: processedPayload.confirmationSummary?.openingBalance ?? processedPayload.openingBalance,
+            booksOpeningBalance: undefined,
+            ledgerShowBookOpeningRow: false,
+            ledgerDateFilterActive: false,
+            openingBalancePeriodStartDate: undefined,
+            ledgerPagePeriodDr: undefined,
+            ledgerPagePeriodCr: undefined,
+            ledgerPageClosingBalance: undefined,
+          }
+        : processedPayload;
+      docDefinition = buildDocDefinition(statementPayload);
+    }
   }
   const pdfDoc = pdfMake.createPdf(docDefinition);
 
@@ -463,7 +539,10 @@ export async function getPdfBlob(payload: PrintPayload): Promise<Blob | null> {
 
   const processedPayload = await applyLogoToPrintPayload(payload);
 
-  const docDefinition = buildDocDefinition(processedPayload);
+  const docDefinition =
+    processedPayload.printReportKind === "confirmation" && processedPayload.confirmationSummary
+      ? buildAccountConfirmationDocDefinition(processedPayload)
+      : buildDocDefinition(processedPayload);
   const pdfDoc = pdfMake.createPdf(docDefinition);
   const buffer = await getPdfBuffer(pdfDoc);
   return new Blob([buffer as BlobPart], { type: "application/pdf" });
@@ -497,6 +576,174 @@ const getAutoFontSize = (text: string | number, baseSize: number): number => {
 
 
 // ------------ INTERNALS ------------
+
+function confirmationBalanceText(value: number, formatCurrencyForPrint: Function): string {
+  if (!Number.isFinite(value) || Math.abs(value) < 0.0000001) return "-";
+  return formatCurrencyForPrint(value);
+}
+
+function confirmationAmountText(value: number, formatCurrencyForPrint: Function): string {
+  if (!Number.isFinite(value) || Math.abs(value) < 0.0000001) return "-";
+  return formatCurrencyForPrint(Math.abs(value), { noSuffix: true });
+}
+
+function confirmationSideAmountText(
+  debit: number,
+  credit: number,
+  formatCurrencyForPrint: Function,
+  palette: { debit: string; credit: string }
+): any {
+  const values: any[] = [];
+  if (Math.abs(debit) >= 0.0000001) values.push({ text: `${confirmationAmountText(debit, formatCurrencyForPrint)} Dr`, color: palette.debit });
+  if (Math.abs(credit) >= 0.0000001) {
+    if (values.length) values.push({ text: "\n" });
+    values.push({ text: `${confirmationAmountText(credit, formatCurrencyForPrint)} Cr`, color: palette.credit });
+  }
+  return values.length ? { text: values } : "-";
+}
+
+function addConfirmationAmount(target: any, amount: any): void {
+  target.exVatDr += Number(amount.exVatDr) || 0;
+  target.exVatCr += Number(amount.exVatCr) || 0;
+  target.vatDr += Number(amount.vatDr) || 0;
+  target.vatCr += Number(amount.vatCr) || 0;
+  target.totalDr += Number(amount.totalDr) || 0;
+  target.totalCr += Number(amount.totalCr) || 0;
+}
+
+/** Formal letter used by the Anusuchi-13 Confirmation print tab. */
+function buildAccountConfirmationDocDefinition(p: PrintPayload): TDocumentDefinitions {
+  const summary = p.confirmationSummary!;
+  const { formatCurrencyForPrint } = getFormatters(p);
+  const palette = getPrintColorPalette(p.printColorMode);
+  const includeLogo = p.printIncludeLogo !== false && Boolean(p.company.logoUrl);
+  const includeCompanyDetails = p.printIncludeCompanyDetails !== false;
+  const companyContact = [p.company.phone ? `Phone: ${p.company.phone}` : "", p.company.pan ? `PAN: ${p.company.pan}` : ""]
+    .filter(Boolean)
+    .join(" | ");
+  const recipientName = p.confirmationRecipientName || p.title;
+  const recipientDetails = [
+    `To: ${recipientName}`,
+    p.confirmationRecipientPan ? `PAN/VAT no: ${p.confirmationRecipientPan}` : "",
+    p.confirmationRecipientAddress || "",
+  ].filter(Boolean);
+  const activityRow = (label: string, amount: any) => [
+    label,
+    confirmationSideAmountText(amount.exVatDr, amount.exVatCr, formatCurrencyForPrint, palette),
+    confirmationSideAmountText(amount.vatDr, amount.vatCr, formatCurrencyForPrint, palette),
+    confirmationSideAmountText(amount.totalDr, amount.totalCr, formatCurrencyForPrint, palette),
+  ];
+  const activityRows = [
+    activityRow("Sales Turnover", summary.sales),
+    activityRow("Sales Return", summary.salesReturn),
+    activityRow("Purchase Turnover", summary.purchases),
+    activityRow("Purchase Return", summary.purchaseReturn),
+    activityRow("Payment In / Out", summary.payments),
+    activityRow("TDS Deducted", { exVatDr: 0, exVatCr: 0, vatDr: 0, vatCr: 0, totalDr: 0, totalCr: summary.tdsDeducted }),
+  ];
+  const totalActivity = ["Total", { exVatDr: 0, exVatCr: 0, vatDr: 0, vatCr: 0, totalDr: 0, totalCr: 0 }] as [string, any];
+  for (const amount of [summary.sales, summary.salesReturn, summary.purchases, summary.purchaseReturn, summary.payments]) {
+    addConfirmationAmount(totalActivity[1], amount);
+  }
+  totalActivity[1].totalCr += summary.tdsDeducted;
+  if (summary.openingBalance >= 0) {
+    totalActivity[1].totalDr += summary.openingBalance;
+  } else {
+    totalActivity[1].totalCr += Math.abs(summary.openingBalance);
+  }
+  const rows = [
+    [
+      { text: "Particulars", bold: true },
+      { text: "Amount\nExcluding VAT", bold: true, alignment: "center" },
+      { text: "VAT Amount", bold: true, alignment: "center" },
+      { text: "Total Amount", bold: true, alignment: "center" },
+    ],
+    ["Opening Balance", "", "", confirmationSideAmountText(Math.max(0, summary.openingBalance), Math.max(0, -summary.openingBalance), formatCurrencyForPrint, palette)],
+    ...activityRows,
+    ["Total", confirmationSideAmountText(totalActivity[1].exVatDr, totalActivity[1].exVatCr, formatCurrencyForPrint, palette), confirmationSideAmountText(totalActivity[1].vatDr, totalActivity[1].vatCr, formatCurrencyForPrint, palette), confirmationSideAmountText(totalActivity[1].totalDr, totalActivity[1].totalCr, formatCurrencyForPrint, palette)],
+    [
+      Math.abs(summary.closingBalance) < 0.0000001
+        ? { text: [{ text: "Closing Balance\n" }, { text: "Settled", color: "#16803c", bold: true }] }
+        : "Closing Balance",
+      "",
+      "",
+      confirmationSideAmountText(Math.max(0, summary.closingBalance), Math.max(0, -summary.closingBalance), formatCurrencyForPrint, palette),
+    ],
+  ];
+
+  const header: Content = {
+    stack: [
+      ...(includeLogo ? [{ image: p.company.logoUrl!, fit: [58, 58], alignment: "center", margin: [0, 0, 0, 4] }] : []),
+      ...(includeCompanyDetails
+        ? [
+            { text: p.company.name, style: "companyName", alignment: "center" },
+            { text: p.company.address || "", style: "companyAddress", alignment: "center" },
+            { text: companyContact, style: "companyContact", alignment: "center" },
+          ]
+        : []),
+      { canvas: [{ type: "line", x1: 0, y1: 5, x2: 515, y2: 5, lineWidth: 1, lineColor: "#1f6b89" }], margin: [0, 8, 0, 22] },
+    ],
+  };
+
+  return {
+    pageSize: "A4",
+    pageMargins: [55, 32, 55, 58],
+    header,
+    footer: () => ({
+      table: {
+        widths: ["*"],
+        body: [[{
+          stack: [
+            { text: "Contact Us:", bold: true, fontSize: 11 },
+            { text: companyContact || p.company.phone || "", fontSize: 9 },
+          ],
+          color: "white",
+          fillColor: "#176784",
+          margin: [38, 9, 38, 9],
+        }]],
+      },
+      layout: "noBorders",
+    } as any),
+    content: [
+      { text: `Date: ${p.confirmationLetterDate || new Date().toLocaleDateString("en-CA")}`, alignment: "right", fontSize: 9, margin: [0, 0, 0, 18] },
+      ...recipientDetails.map((text) => ({ text, fontSize: 9, margin: [0, 0, 0, 5] })),
+      { text: `Subject: Account Confirmation for ${p.confirmationFyLabel || p.confirmationFyRangeLabel || p.dateRangeText}`, bold: true, decoration: "underline", alignment: "center", margin: [0, 10, 0, 22] },
+      { text: "Dear Sir/Madam,", fontSize: 9, margin: [0, 0, 0, 16] },
+      { text: `As per our account records, all the transactions with your organization for the FY ${p.confirmationFyRangeLabel || p.confirmationFyLabel || p.dateRangeText} are as follows:`, fontSize: 9, lineHeight: 1.25, margin: [0, 0, 0, 14] },
+      {
+        table: { headerRows: 1, widths: ["*", 125, 95, 125], body: rows },
+        layout: {
+          fillColor: (rowIndex: number) => rowIndex === 0 ? "#d9d9d9" : null,
+          hLineWidth: () => 0.7,
+          vLineWidth: () => 0.7,
+          hLineColor: () => "#111111",
+          vLineColor: () => "#111111",
+          paddingLeft: () => 5,
+          paddingRight: () => 5,
+          paddingTop: () => 6,
+          paddingBottom: () => 6,
+        },
+        fontSize: 8.5,
+        margin: [0, 0, 0, 20],
+      },
+      { text: "We would highly appreciate it if you could kindly review and confirm the above account details. Please provide your duly signed and sealed confirmation as acknowledgment of the above account balance.", fontSize: 9, lineHeight: 1.3, margin: [0, 0, 0, 10] },
+      { text: "Should there be any discrepancies, please inform us of the difference along with the reason within 7 days; failure to reconcile within 7 days will be assumed that the account is reconciled with us.", fontSize: 9, lineHeight: 1.3, margin: [0, 0, 0, 18] },
+      { text: "Thank you for your co-operation.", fontSize: 9, margin: [0, 0, 0, 26] },
+      {
+        columns: [
+          { stack: [{ text: "____________________________", fontSize: 9 }, { text: "For and on behalf of", bold: true, fontSize: 8 }, { text: p.company.name, bold: true, fontSize: 9 }, { text: "Authorized Signatory", fontSize: 8 }], width: "50%" },
+          { stack: [{ text: "____________________________", fontSize: 9 }, { text: "Acceptance on behalf of", bold: true, fontSize: 8 }, { text: recipientName, bold: true, fontSize: 9 }, { text: "Name / Designation / Seal", fontSize: 8 }], width: "50%" },
+        ],
+      },
+    ],
+    styles: {
+      companyName: { fontSize: 16, bold: true, color: "#1e5f86" },
+      companyAddress: { fontSize: 10, bold: true, margin: [0, 2, 0, 0] },
+      companyContact: { fontSize: 8, margin: [0, 2, 0, 0] },
+    },
+    defaultStyle: { font: "Roboto" },
+  } as TDocumentDefinitions;
+}
 
 function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
   const computed = computeRows(p);
@@ -2495,38 +2742,48 @@ const getColumnWidths = (p: PrintPayload): (string | number)[] => {
   
   if (p.context === 'overdue') {
     const w: (string | number)[] = [];
-    if (p.dateSystem === 'Both') w.push('auto', 'auto');
-    else w.push('auto');
-    w.push('auto', 'auto', '*', 'auto', 'auto', 'auto', 'auto');
+    if (p.dateSystem === 'Both') w.push(46, 46);
+    else w.push(48);
+    w.push(40, '*', 50, 50, 44, 76);
     return w;
   }
+
+  const wideLedger = ["party", "staff", "tax", "account", "group", "expense"].includes(p.context);
   
   const widths: (string | number)[] = [];
+  let flexAssigned = false;
+  const pushFlex = () => {
+    if (!flexAssigned) {
+      widths.push("*");
+      flexAssigned = true;
+    } else {
+      widths.push(wideLedger ? 40 : "auto");
+    }
+  };
   
   if (isColVisible(p, "date")) {
     if (p.dateSystem === 'Both') {
-      widths.push('auto', 'auto');
+      widths.push(wideLedger ? 46 : 'auto', wideLedger ? 46 : 'auto');
     } else {
-      widths.push('auto');
+      widths.push(wideLedger ? 48 : 'auto');
     }
   }
   
-  if (isColVisible(p, "type")) widths.push('auto');
-  if (isColVisible(p, "voucherNo")) widths.push('*'); 
+  if (isColVisible(p, "type")) widths.push(wideLedger ? 40 : 'auto');
+  if (isColVisible(p, "voucherNo")) pushFlex();
   
   if (p.context === 'daybook') {
-      widths.push('*'); 
+      pushFlex();
   }
-  if (isColVisible(p, "user")) widths.push('auto');
-  if (isColVisible(p, "file")) widths.push('auto');
+  if (isColVisible(p, "user")) widths.push(wideLedger ? 38 : 'auto');
+  if (isColVisible(p, "file")) widths.push(wideLedger ? 22 : 'auto');
 
-  // --- KEPT 'auto' for dynamic width ---
-  if (isColVisible(p, "dr")) widths.push('auto');
-  if (isColVisible(p, "cr")) widths.push('auto');
+  if (isColVisible(p, "dr")) widths.push(wideLedger ? 50 : 'auto');
+  if (isColVisible(p, "cr")) widths.push(wideLedger ? 50 : 'auto');
   if (isBillWiseContext(p) && isColVisible(p, "status")) {
-    widths.push('auto'); // Status
+    widths.push(wideLedger ? 44 : 'auto');
   }
-  if (isColVisible(p, "runningBalance")) widths.push('auto'); // Balance
+  if (isColVisible(p, "runningBalance")) widths.push(wideLedger ? 76 : 'auto');
 
   return widths;
 };

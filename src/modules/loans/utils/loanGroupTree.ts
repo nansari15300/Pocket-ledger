@@ -1,4 +1,7 @@
 import type { Staff, StaffGroup } from "@/components/staff/types";
+import { filterMembersByMasterGroupScope } from "@/lib/masterGroupMemberScope";
+import { STAFF_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { isMasterEntitySystemGroupId, resolveStaffListGroupBucketId } from "@/lib/masterEntitySystemGroups";
 import {
   LOAN_LIABILITY_GROUP_ID,
   LOAN_UNGROUPED_GROUP_ID,
@@ -76,7 +79,7 @@ export function buildLoanGroupTree(params: {
         ...stats,
       });
     }
-    return rows.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+    return rows;
   })();
 
   const ungroupedMembers = loanAccounts.filter(isLoanUngroupedAccount);
@@ -117,5 +120,11 @@ export function loanAccountsForGroupSelection(
   if (selectedGroupId === LOAN_UNGROUPED_UI_ID) {
     return tree.groupMembersByGroupId[LOAN_UNGROUPED_UI_ID] || [];
   }
-  return tree.groupMembersByGroupId[selectedGroupId] || loanAccounts.filter((a) => a.groupId === selectedGroupId);
+  return filterMembersByMasterGroupScope<Staff>(
+    selectedGroupId,
+    loanAccounts,
+    tree.allGroups,
+    resolveStaffListGroupBucketId,
+    (id) => isMasterEntitySystemGroupId(STAFF_ENTITY_GROUP_PRESET, id) || id === LOAN_LIABILITY_GROUP_ID
+  );
 }

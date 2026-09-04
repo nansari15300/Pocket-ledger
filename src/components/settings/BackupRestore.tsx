@@ -2238,6 +2238,11 @@ export function BackupRestore() {
         notifyBrowserDbCollectionUpdated(targetCompanyId, colName);
       }
 
+      const { scheduleSystemOpeningBalanceReconcile } = await import(
+        "@/lib/reports/systemOpeningBalanceEquityClient"
+      );
+      scheduleSystemOpeningBalanceReconcile(targetCompanyId);
+
       const existing = await getLocalCompanyById(targetCompanyId, { includeDeleted: true });
       const restoredCompanyDetails = (dataToWrite.companyDetails || backupData.companyDetails) as Array<Record<string, unknown>>;
       const { id: _bid, ownerId: _boid, ownerEmail: _boe, ...restDetails } = restoredCompanyDetails[0];

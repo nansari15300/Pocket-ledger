@@ -656,9 +656,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     setSavePdfAsImage,
   });
 
-  /** Recon sync / compare: scoped accounts load hone ke baad pre-filled accountId ka label + entityType sync */
+  /** Edit / seeded draft: masters load hone ke baad accountId se entityType sync (Entity dropdown "All" na rahe). */
   useEffect(() => {
-    if (voucher?.id || !voucher) return;
+    if (!voucher) return;
     const lines = form.getValues("lines") || [];
     lines.forEach((line: { accountId?: string; entityType?: string }, idx: number) => {
       const accId = String(line?.accountId ?? "").trim();

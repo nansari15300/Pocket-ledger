@@ -17,6 +17,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
 import { registerImperativeDialogBack } from "@/contexts/DialogBackHandlerContext";
 import type { PrintColorMode } from "@/lib/printColorPalette";
 import type { MasterPrintKind } from "@/lib/printMastersTypes";
@@ -35,12 +37,13 @@ export type PrintOptionsResult = {
   printIncludeNotes?: boolean;
   printColorMode?: PrintColorMode;
   printDestination?: "internal" | "external";
+  printReportKind?: "confirmation" | "statement" | "both";
   printMasterTypes?: MasterPrintKind[];
   printIncludeZeroBalanceMasters?: boolean;
   printMasterIncludeBalance?: boolean;
 };
 
-export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
+export function promptPrintOptions({ showConfirmationTabs = false }: { showConfirmationTabs?: boolean } = {}): Promise<PrintOptionsResult | null> {
   return new Promise((resolve) => {
     const container = document.createElement("div");
     document.body.appendChild(container);
@@ -66,6 +69,7 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
       const [printFileColumn, setPrintFileColumn] = React.useState(false);
       const [printNotes, setPrintNotes] = React.useState(false);
       const [printColorMode, setPrintColorMode] = React.useState<PrintColorMode>("color");
+      const [printReportKind, setPrintReportKind] = React.useState<"confirmation" | "statement" | "both">("confirmation");
 
       const finishReportPrint = (destination: "internal" | "external") => {
         finish({
@@ -78,6 +82,7 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
           printIncludeNotes: printNotes,
           printColorMode,
           printDestination: destination,
+          ...(showConfirmationTabs ? { printReportKind } : {}),
         });
       };
 
@@ -130,12 +135,48 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
             ) : (
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <DialogHeader className="shrink-0 pr-8">
-                <DialogTitle>Print options</DialogTitle>
+                <div className="flex items-center gap-1.5">
+                  <DialogTitle>Print options</DialogTitle>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <AppFreshInfoButton
+                        size="xs"
+                        aria-label="Print options help"
+                        title="Print options help"
+                      />
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-[min(360px,calc(100vw-2rem))] text-xs leading-relaxed">
+                      Choose what appears in the PDF header. Cancel stops printing. Internal opens in-app
+                      preview; External opens your device PDF app. Use Print masters for a masters-only list.
+                    </PopoverContent>
+                  </Popover>
+                </div>
                 <DialogDescription id="print-options-desc">
-                  Choose what appears in the PDF header. Cancel stops printing. Internal opens in-app
-                  preview; External opens your device PDF app. Use Print masters for a masters-only list.
+                  Select the print options below.
                 </DialogDescription>
               </DialogHeader>
+              {showConfirmationTabs ? (
+                <div className="mb-2 flex gap-1 rounded-lg border p-1" role="tablist" aria-label="Print report type">
+                  {([
+                    ["confirmation", "Confirmation"],
+                    ["statement", "Statement"],
+                    ["both", "Both"],
+                  ] as const).map(([value, label]) => (
+                    <Button
+                      key={value}
+                      type="button"
+                      size="sm"
+                      variant={printReportKind === value ? "default" : "outline"}
+                      className="h-7 flex-1 px-2 text-xs"
+                      role="tab"
+                      aria-selected={printReportKind === value}
+                      onClick={() => setPrintReportKind(value)}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
               {/* APK/WebView: sirf beech scroll — footer buttons hamesha viewport ke andar */}
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain touch-pan-y [-webkit-overflow-scrolling:touch] pr-1">
               <div className="flex flex-col gap-4 py-2">

@@ -9,6 +9,8 @@ export type WebsiteDownloadEvent = {
   version?: string;
   fileName?: string;
   source?: string;
+  userId?: string;
+  userEmail?: string;
   createdAtMs: number;
 };
 

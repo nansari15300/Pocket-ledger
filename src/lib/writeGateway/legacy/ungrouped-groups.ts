@@ -1,5 +1,5 @@
-import { doc, getDoc, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
+import { getDefaultSystemGroupId } from "@/lib/masterEntitySystemGroups";
+import { PARTY_DEFAULT_SYSTEM_GROUP_ID } from "@/lib/partySystemGroups";
 
 export type UngroupedEntityType = "party" | "staff" | "tax" | "bank" | "expense" | "item";
 
@@ -19,49 +19,18 @@ const UNGROUPED_CONFIG: Record<UngroupedEntityType, UngroupedConfig> = {
   item: { collection: "item_groups", id: "ungrouped_item", type: "General", parentId: null },
 };
 
+/** Legacy storage ids — new saves use system branch ids (see masterEntitySystemGroups.ts). */
 export function getUngroupedGroupId(type: UngroupedEntityType): string {
   return UNGROUPED_CONFIG[type].id;
 }
 
 export async function ensureUngroupedGroup(
-  companyId: string,
-  ownerId: string,
+  _companyId: string,
+  _ownerId: string,
   type: UngroupedEntityType
 ): Promise<string> {
-  const config = UNGROUPED_CONFIG[type];
-  const groupRef = doc(firestore, `companies/${companyId}/${config.collection}`, config.id);
-  const snap = await getDoc(groupRef);
-
-  if (!snap.exists()) {
-    // Always recreate canonical Ungrouped doc if it is missing.
-    await setDoc(groupRef, {
-      name: "Ungrouped",
-      type: config.type,
-      parentId: config.parentId,
-      companyId,
-      ownerId,
-      isDeleted: false,
-      isSystemReserved: false,
-      isReportOnly: false,
-      isAutoUngrouped: true,
-      createdAt: serverTimestamp(),
-    });
-    return config.id;
+  if (type === "party") {
+    return PARTY_DEFAULT_SYSTEM_GROUP_ID;
   }
-
-  const data = snap.data() as any;
-  const patch: Record<string, unknown> = {};
-  // Keep canonical metadata so Ungrouped can be reliably auto-selected everywhere.
-  if (data?.name !== "Ungrouped") patch.name = "Ungrouped";
-  if (data?.isDeleted === true) patch.isDeleted = false;
-  if (data?.isAutoUngrouped !== true) patch.isAutoUngrouped = true;
-  if (data?.isSystemReserved !== false) patch.isSystemReserved = false;
-  if (data?.isReportOnly !== false) patch.isReportOnly = false;
-  if ((data?.parentId ?? null) !== config.parentId) patch.parentId = config.parentId;
-  if ((data?.type ?? null) !== config.type) patch.type = config.type;
-  if (Object.keys(patch).length > 0) {
-    patch.updatedAt = serverTimestamp();
-    await updateDoc(groupRef, patch);
-  }
-  return config.id;
+  return getDefaultSystemGroupId(type);
 }

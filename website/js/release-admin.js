@@ -14,31 +14,35 @@
   var progressEl = document.getElementById("progress");
   var outBtn = document.getElementById("outBtn");
   var adminListEl = document.getElementById("adminList");
-  var outdatedListEl = document.getElementById("outdatedList");
-  var outdatedEmptyEl = document.getElementById("outdatedEmpty");
   var deleteAllOutdatedBtn = document.getElementById("deleteAllOutdatedBtn");
-  var visibleReleaseListEl = document.getElementById("visibleReleaseList");
-  var visibleReleaseEmptyEl = document.getElementById("visibleReleaseEmpty");
-  var downloadsMaxOldInput = document.getElementById("downloadsMaxOld");
+  var visibleReleaseTableExe = document.getElementById("visibleReleaseTableExe");
+  var visibleReleaseTableApk = document.getElementById("visibleReleaseTableApk");
+  var visibleReleaseEmptyExe = document.getElementById("visibleReleaseEmptyExe");
+  var visibleReleaseEmptyApk = document.getElementById("visibleReleaseEmptyApk");
+  var outdatedTableExe = document.getElementById("outdatedTableExe");
+  var outdatedTableApk = document.getElementById("outdatedTableApk");
+  var outdatedEmptyExe = document.getElementById("outdatedEmptyExe");
+  var outdatedEmptyApk = document.getElementById("outdatedEmptyApk");
+  var downloadsMaxOldExeInput = document.getElementById("downloadsMaxOldExe");
+  var downloadsMaxOldApkInput = document.getElementById("downloadsMaxOldApk");
   var outdatedPolicySelect = document.getElementById("outdatedPolicy");
   var outdatedMaxKeepInput = document.getElementById("outdatedMaxKeep");
-  var outdatedMaxKeepRow = document.getElementById("outdatedMaxKeepRow");
   var saveSettingsBtn = document.getElementById("saveSettingsBtn");
   var saveDownloadsSettingsBtn = document.getElementById("saveDownloadsSettingsBtn");
-  var tabExeBtn = document.getElementById("tabExe");
-  var tabApkBtn = document.getElementById("tabApk");
-  var visibleListHint = document.getElementById("visibleListHint");
-  var outdatedListHint = document.getElementById("outdatedListHint");
+  var visibleListHintExe = document.getElementById("visibleListHintExe");
+  var visibleListHintApk = document.getElementById("visibleListHintApk");
+  var outdatedListHintExe = document.getElementById("outdatedListHintExe");
+  var outdatedListHintApk = document.getElementById("outdatedListHintApk");
   var storagePathHint = document.getElementById("storagePathHint");
   var cachedManifest = null;
   var cachedSettings = normalizeReleaseSettings(null);
-  var visibleListTab = "exe";
+  var settingsFileCorrupt = false;
   var SETTINGS_PATH = prefix + "/release-settings.json";
 
   function normalizeReleaseSettings(raw) {
     return typeof window.normalizeReleaseSettings === "function"
       ? window.normalizeReleaseSettings(raw)
-      : { downloadsMaxOld: 5, outdatedPolicy: "keep", outdatedMaxKeep: 20 };
+      : { downloadsMaxOldExe: 5, downloadsMaxOldApk: 5, outdatedPolicy: "keep", outdatedMaxKeep: 20 };
   }
 
   function cloneReleaseEntry(entry) {
@@ -68,10 +72,26 @@
 
   function readSettingsFromForm() {
     return normalizeReleaseSettings({
-      downloadsMaxOld: downloadsMaxOldInput && downloadsMaxOldInput.value,
+      downloadsMaxOldExe: downloadsMaxOldExeInput && downloadsMaxOldExeInput.value,
+      downloadsMaxOldApk: downloadsMaxOldApkInput && downloadsMaxOldApkInput.value,
       outdatedPolicy: outdatedPolicySelect && outdatedPolicySelect.value,
       outdatedMaxKeep: outdatedMaxKeepInput && outdatedMaxKeepInput.value,
     });
+  }
+
+  async function saveSettingsFile(settings) {
+    var payload = Object.assign({ updatedAt: new Date().toISOString() }, settings);
+    var json = JSON.stringify(payload, null, 2);
+    if (!json || json === "undefined") {
+      throw new Error("Invalid release settings payload.");
+    }
+    JSON.parse(json);
+    var blob = new Blob([json], { type: "application/json" });
+    await storage.ref().child(SETTINGS_PATH).put(blob, {
+      contentType: "application/json",
+      cacheControl: "public,max-age=60",
+    });
+    settingsFileCorrupt = false;
   }
 
   async function applySettingsSave(mode) {
@@ -122,11 +142,7 @@
       }
 
       cachedSettings = nextSettings;
-      var payload = Object.assign({ updatedAt: new Date().toISOString() }, cachedSettings);
-      await storage.ref().child(SETTINGS_PATH).put(JSON.stringify(payload, null, 2), {
-        contentType: "application/json",
-        cacheControl: "public,max-age=60",
-      });
+      await saveSettingsFile(cachedSettings);
       applySettingsToForm();
       if (mode === "downloads" && recon.spilledCount > 0 && nextSettings.outdatedPolicy === "keep") {
         setStatus(
@@ -281,12 +297,20 @@
     return (apk && apk.file) || "No APK file";
   }
 
-  function entryLabel(entry) {
-    return visibleListTab === "apk" ? entryLabelApk(entry) : entryLabelExe(entry);
+  function entryVersion(entry, platform) {
+    if (platform === "apk") {
+      var apk = entry && entry.android && isApkAndroid(entry.android) ? entry.android : null;
+      return (apk && apk.version) || "—";
+    }
+    return (entry && entry.windows && entry.windows.version) || "—";
   }
 
-  function entryFilesLine(entry) {
-    return visibleListTab === "apk" ? entryFilesLineApk(entry) : entryFilesLineExe(entry);
+  function entryLabel(entry, platform) {
+    return platform === "apk" ? entryLabelApk(entry) : entryLabelExe(entry);
+  }
+
+  function entryFilesLine(entry, platform) {
+    return platform === "apk" ? entryFilesLineApk(entry) : entryFilesLineExe(entry);
   }
 
   function entryHasPlatform(entry, platform) {
@@ -297,62 +321,115 @@
   }
 
   function updateSettingsHint() {
-    var maxOld = cachedSettings.downloadsMaxOld;
-    var total = maxOld + 1;
-    if (visibleListHint) {
-      visibleListHint.textContent =
-        "Users see latest + " +
-        maxOld +
-        " older build(s) (" +
-        total +
-        " max per platform in the Downloads dropdown).";
-    }
-    if (outdatedListHint) {
-      outdatedListHint.textContent =
-        cachedSettings.outdatedPolicy === "auto_delete"
-          ? "Hidden builds are auto-deleted from Firebase Storage when they leave the downloads list."
-          : cachedSettings.outdatedMaxKeep <= 0
-            ? "Hidden builds are kept here (no limit). Delete removes files permanently."
-            : "Hidden builds are kept here (max " +
-              cachedSettings.outdatedMaxKeep +
-              "). Delete removes files permanently.";
-    }
-    if (outdatedMaxKeepRow) {
-      outdatedMaxKeepRow.hidden = cachedSettings.outdatedPolicy !== "keep";
-    }
+    var maxExe = cachedSettings.downloadsMaxOldExe;
+    var maxApk = cachedSettings.downloadsMaxOldApk;
+    var exeHint =
+      "Users see latest + " +
+      maxExe +
+      " older EXE (" +
+      (maxExe + 1) +
+      " max) in the Downloads dropdown.";
+    var apkHint =
+      "Users see latest + " +
+      maxApk +
+      " older APK (" +
+      (maxApk + 1) +
+      " max) in the Downloads dropdown.";
+    if (visibleListHintExe) visibleListHintExe.textContent = exeHint;
+    if (visibleListHintApk) visibleListHintApk.textContent = apkHint;
+
+    var hiddenHint =
+      cachedSettings.outdatedPolicy === "auto_delete"
+        ? "Hidden builds are auto-deleted from Firebase Storage when they leave the downloads list."
+        : cachedSettings.outdatedMaxKeep <= 0
+          ? "Hidden builds are kept here (no limit). Delete removes files permanently."
+          : "Hidden builds are kept here (max " +
+            cachedSettings.outdatedMaxKeep +
+            "). Delete removes files permanently.";
+    if (outdatedListHintExe) outdatedListHintExe.textContent = hiddenHint;
+    if (outdatedListHintApk) outdatedListHintApk.textContent = hiddenHint;
   }
 
   function applySettingsToForm() {
-    if (downloadsMaxOldInput) downloadsMaxOldInput.value = String(cachedSettings.downloadsMaxOld);
+    if (downloadsMaxOldExeInput) {
+      downloadsMaxOldExeInput.value = String(cachedSettings.downloadsMaxOldExe);
+    }
+    if (downloadsMaxOldApkInput) {
+      downloadsMaxOldApkInput.value = String(cachedSettings.downloadsMaxOldApk);
+    }
     if (outdatedPolicySelect) outdatedPolicySelect.value = cachedSettings.outdatedPolicy;
     if (outdatedMaxKeepInput) outdatedMaxKeepInput.value = String(cachedSettings.outdatedMaxKeep);
     updateSettingsHint();
   }
 
+  function findHistoryIndex(entry, platform) {
+    if (!cachedManifest || !Array.isArray(cachedManifest.history)) return null;
+    for (var i = 0; i < cachedManifest.history.length; i++) {
+      var hist = cachedManifest.history[i];
+      if (platform === "apk") {
+        var apk = entry.android && isApkAndroid(entry.android) ? entry.android : null;
+        var histApk = hist.android && isApkAndroid(hist.android) ? hist.android : null;
+        if (apk && histApk && String(apk.url || "") === String(histApk.url || "")) return i;
+        if (
+          apk &&
+          histApk &&
+          String(entry.date || "") === String(hist.date || "") &&
+          String(apk.version || "") === String(histApk.version || "")
+        ) {
+          return i;
+        }
+      } else if (entry.windows && hist.windows) {
+        if (String(entry.windows.url || "") === String(hist.windows.url || "")) return i;
+        if (
+          String(entry.date || "") === String(hist.date || "") &&
+          String(entry.windows.version || "") === String(hist.windows.version || "")
+        ) {
+          return i;
+        }
+      }
+    }
+    return null;
+  }
+
+  function visibleEntriesForPlatform(platform) {
+    if (typeof window.buildPublicDownloadEntries !== "function" || !cachedManifest) return [];
+    var kind = platform === "apk" ? "android" : "windows";
+    return window.buildPublicDownloadEntries(cachedManifest, cachedSettings, kind);
+  }
+
   async function loadSettings() {
+    settingsFileCorrupt = false;
     try {
       var res = await fetch(settingsPublicUrl(), { cache: "no-store" });
       if (res.ok) {
-        cachedSettings = normalizeReleaseSettings(await res.json());
+        var text = await res.text();
+        var raw =
+          typeof window.parseReleaseSettingsJson === "function"
+            ? window.parseReleaseSettingsJson(text)
+            : null;
+        if (!raw) {
+          settingsFileCorrupt = true;
+        }
+        cachedSettings = normalizeReleaseSettings(raw);
       } else {
+        settingsFileCorrupt = res.status === 404;
         cachedSettings = normalizeReleaseSettings(null);
       }
     } catch (_) {
+      settingsFileCorrupt = true;
       cachedSettings = normalizeReleaseSettings(null);
     }
     applySettingsToForm();
+    if (settingsFileCorrupt && currentUser && allowedEmail(currentUser.email)) {
+      setStatus(
+        "Release settings file was missing or invalid — using defaults until you save.",
+        false
+      );
+    }
   }
 
   async function saveSettings() {
     await saveHiddenSettings();
-  }
-
-  function setVisibleListTab(tab) {
-    visibleListTab = tab === "apk" ? "apk" : "exe";
-    if (tabExeBtn) tabExeBtn.classList.toggle("is-active", visibleListTab === "exe");
-    if (tabApkBtn) tabApkBtn.classList.toggle("is-active", visibleListTab === "apk");
-    renderVisibleReleaseList();
-    renderOutdatedList();
   }
 
   function setStatus(msg, ok) {
@@ -497,104 +574,117 @@
   }
 
   function renderVisibleReleaseList() {
-    if (!visibleReleaseListEl) return;
-    visibleReleaseListEl.innerHTML = "";
+    renderVisiblePlatformTable("exe", visibleReleaseTableExe, visibleReleaseEmptyExe);
+    renderVisiblePlatformTable("apk", visibleReleaseTableApk, visibleReleaseEmptyApk);
+  }
+
+  function renderVisiblePlatformTable(platform, tbodyEl, emptyEl) {
+    if (!tbodyEl) return;
+    tbodyEl.innerHTML = "";
     if (!cachedManifest || (!cachedManifest.windows && !cachedManifest.android)) {
-      if (visibleReleaseEmptyEl) visibleReleaseEmptyEl.hidden = false;
+      if (emptyEl) emptyEl.hidden = false;
       return;
     }
 
-    var rows = [];
-    var latestEntry = cloneReleaseEntry({
-      date: cachedManifest.date,
-      windows: cachedManifest.windows,
-      android: cachedManifest.android,
-    });
-    if (entryHasPlatform(latestEntry, visibleListTab)) {
-      rows.push({ entry: latestEntry, roleLabel: "Latest (downloads default)", historyIndex: null });
+    var entries = visibleEntriesForPlatform(platform);
+    if (!entries.length) {
+      if (emptyEl) emptyEl.hidden = false;
+      return;
     }
+    if (emptyEl) emptyEl.hidden = true;
 
-    var history = Array.isArray(cachedManifest.history) ? cachedManifest.history : [];
     var olderNum = 0;
-    history.forEach(function (entry, idx) {
-      if (!entryHasPlatform(entry, visibleListTab)) return;
-      olderNum += 1;
-      rows.push({ entry: entry, roleLabel: "Older #" + olderNum, historyIndex: idx });
-    });
-
-    if (!rows.length) {
-      if (visibleReleaseEmptyEl) visibleReleaseEmptyEl.hidden = false;
-      return;
-    }
-    if (visibleReleaseEmptyEl) visibleReleaseEmptyEl.hidden = true;
-    rows.forEach(function (row) {
-      appendVisibleReleaseRow(row.entry, row.roleLabel, row.historyIndex);
+    entries.forEach(function (entry) {
+      var roleLabel;
+      var historyIndex;
+      if (entry.latest) {
+        roleLabel = "Latest";
+        historyIndex = null;
+      } else {
+        olderNum += 1;
+        roleLabel = "Older #" + olderNum;
+        historyIndex = findHistoryIndex(entry, platform);
+      }
+      appendVisibleReleaseTableRow(tbodyEl, entry, roleLabel, historyIndex, platform);
     });
   }
 
-  function appendVisibleReleaseRow(entry, roleLabel, historyIndex) {
-    var li = document.createElement("li");
-    var left = document.createElement("div");
-    var title = document.createElement("div");
-    title.textContent = roleLabel + " · " + entryLabel(entry);
-    var meta = document.createElement("div");
-    meta.className = "outdated-meta";
-    meta.textContent = entryFilesLine(entry);
-    left.appendChild(title);
-    left.appendChild(meta);
+  function appendVisibleReleaseTableRow(tbodyEl, entry, roleLabel, historyIndex, platform) {
+    var tr = document.createElement("tr");
+    var roleTd = document.createElement("td");
+    roleTd.textContent = roleLabel;
+    var versionTd = document.createElement("td");
+    versionTd.textContent = "v" + entryVersion(entry, platform);
+    var dateTd = document.createElement("td");
+    dateTd.textContent = entry.date || "—";
+    var fileTd = document.createElement("td");
+    fileTd.textContent = entryFilesLine(entry, platform);
+    var actionTd = document.createElement("td");
+    actionTd.className = "col-action";
     var del = document.createElement("button");
     del.type = "button";
     del.className = "btn btn-outline btn-sm btn-danger";
-    del.textContent = historyIndex === null ? "Cannot delete latest" : "Delete";
+    del.textContent = historyIndex === null ? "Latest" : "Delete";
     del.disabled = historyIndex === null;
     if (historyIndex !== null) {
       del.onclick = function () {
         void deleteHistoryRelease(historyIndex);
       };
     }
-    li.appendChild(left);
-    li.appendChild(del);
-    visibleReleaseListEl.appendChild(li);
+    actionTd.appendChild(del);
+    tr.appendChild(roleTd);
+    tr.appendChild(versionTd);
+    tr.appendChild(dateTd);
+    tr.appendChild(fileTd);
+    tr.appendChild(actionTd);
+    tbodyEl.appendChild(tr);
   }
 
   function renderOutdatedList() {
-    if (!outdatedListEl) return;
-    var list = (cachedManifest && Array.isArray(cachedManifest.outdated)
-      ? cachedManifest.outdated
-      : []
-    )
+    renderOutdatedPlatformTable("exe", outdatedTableExe, outdatedEmptyExe);
+    renderOutdatedPlatformTable("apk", outdatedTableApk, outdatedEmptyApk);
+  }
+
+  function renderOutdatedPlatformTable(platform, tbodyEl, emptyEl) {
+    if (!tbodyEl) return;
+    var list = (cachedManifest && Array.isArray(cachedManifest.outdated) ? cachedManifest.outdated : [])
       .filter(function (entry) {
-        return entryHasPlatform(entry, visibleListTab);
+        return entryHasPlatform(entry, platform);
       })
       .map(function (entry, filteredIdx) {
         var realIdx = cachedManifest.outdated.indexOf(entry);
         return { entry: entry, index: realIdx >= 0 ? realIdx : filteredIdx };
       });
-    outdatedListEl.innerHTML = "";
-    if (outdatedEmptyEl) outdatedEmptyEl.hidden = list.length > 0;
+    tbodyEl.innerHTML = "";
+    if (emptyEl) emptyEl.hidden = list.length > 0;
     list.forEach(function (row) {
-      var entry = row.entry;
-      var idx = row.index;
-      var li = document.createElement("li");
-      var left = document.createElement("div");
-      var title = document.createElement("div");
-      title.textContent = entryLabel(entry);
-      var meta = document.createElement("div");
-      meta.className = "outdated-meta";
-      meta.textContent = entryFilesLine(entry);
-      left.appendChild(title);
-      left.appendChild(meta);
-      var del = document.createElement("button");
-      del.type = "button";
-      del.className = "btn btn-outline btn-sm btn-danger";
-      del.textContent = "Delete";
-      del.onclick = function () {
-        void hardDeleteOutdated(idx);
-      };
-      li.appendChild(left);
-      li.appendChild(del);
-      outdatedListEl.appendChild(li);
+      appendOutdatedTableRow(tbodyEl, row.entry, row.index, platform);
     });
+  }
+
+  function appendOutdatedTableRow(tbodyEl, entry, index, platform) {
+    var tr = document.createElement("tr");
+    var versionTd = document.createElement("td");
+    versionTd.textContent = "v" + entryVersion(entry, platform);
+    var dateTd = document.createElement("td");
+    dateTd.textContent = entry.date || "—";
+    var fileTd = document.createElement("td");
+    fileTd.textContent = entryFilesLine(entry, platform);
+    var actionTd = document.createElement("td");
+    actionTd.className = "col-action";
+    var del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn btn-outline btn-sm btn-danger";
+    del.textContent = "Delete";
+    del.onclick = function () {
+      void hardDeleteOutdated(index);
+    };
+    actionTd.appendChild(del);
+    tr.appendChild(versionTd);
+    tr.appendChild(dateTd);
+    tr.appendChild(fileTd);
+    tr.appendChild(actionTd);
+    tbodyEl.appendChild(tr);
   }
 
   async function loadManifest() {
@@ -626,7 +716,7 @@
         title: "Remove from Downloads?",
         message:
           "Remove this build from the public Downloads list and delete its files from Firebase Storage?",
-        items: [entryLabel(entry)],
+        items: [entrySummaryLabel(entry)],
         confirmLabel: "Delete",
         danger: true,
       }))
@@ -643,7 +733,7 @@
       await saveManifest(next);
       renderVisibleReleaseList();
       renderOutdatedList();
-      setStatus("Deleted older release " + entryLabel(entry), true);
+      setStatus("Deleted older release " + entrySummaryLabel(entry), true);
     } catch (err) {
       setStatus(err.message || String(err), false);
     }
@@ -697,7 +787,7 @@
       !(await confirmDialog({
         title: "Hard delete?",
         message: "Hard delete this outdated release from Firebase Storage?",
-        items: [entryLabel(entry)],
+        items: [entrySummaryLabel(entry)],
         confirmLabel: "Delete",
         danger: true,
       }))
@@ -713,7 +803,7 @@
       });
       await saveManifest(next);
       renderOutdatedList();
-      setStatus("Hard-deleted outdated release " + entryLabel(entry), true);
+      setStatus("Hard-deleted outdated release " + entrySummaryLabel(entry), true);
     } catch (err) {
       setStatus(err.message || String(err), false);
     }
@@ -842,23 +932,6 @@
   if (saveDownloadsSettingsBtn) {
     saveDownloadsSettingsBtn.onclick = function () {
       void saveDownloadsSettings();
-    };
-  }
-  if (outdatedPolicySelect) {
-    outdatedPolicySelect.onchange = function () {
-      if (outdatedMaxKeepRow) {
-        outdatedMaxKeepRow.hidden = outdatedPolicySelect.value !== "keep";
-      }
-    };
-  }
-  if (tabExeBtn) {
-    tabExeBtn.onclick = function () {
-      setVisibleListTab("exe");
-    };
-  }
-  if (tabApkBtn) {
-    tabApkBtn.onclick = function () {
-      setVisibleListTab("apk");
     };
   }
 

@@ -37,7 +37,9 @@ import { Input } from "@/components/ui/input";
 import { Loader2, Trash2, FileText, CalendarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CreateTaxGroupDialog } from "./CreateTaxGroupDialog";
-import { Combobox } from "../ui/combobox";
+import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
+import { TAX_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { useVouchers } from "@/hooks/useVouchers";
 import { compressFile } from "@/lib/compression";
 import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import {
@@ -56,10 +58,14 @@ import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
+import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { format } from "date-fns";
-import { isSystemParentGroup } from "@/lib/system-groups";
-import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import {
+  getDefaultSystemGroupId,
+  normalizeTaxGroupIdForStorage,
+} from "@/lib/masterEntitySystemGroups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
 import {
@@ -83,12 +89,13 @@ function createLocalEntityId(prefix: string): string {
 const formSchema = z.object({
   name: z.string().min(2, { message: "Tax name must be at least 2 characters." }),
   phone: z.string().optional(),
+  whatsapp: z.boolean().optional(),
   rate: z.number().min(0, "Tax rate cannot be negative.").max(100, "Tax rate cannot be over 100."),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
   groupId: z.string().optional(),
   openingBalanceNarration: z.string().optional(),
-});
+}).superRefine(refineMasterOpeningBalanceDateRequired);
 
 const MAX_FILE_SIZE_MB = 0.5;
 
@@ -125,6 +132,7 @@ export function CreateTaxForm({
   const { dateSystem } = useDate();
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [groupSearchQuery, setGroupSearchQuery] = useState("");
+  const { processedTaxGroups } = useVouchers();
   const navigatorOnline = useNavigatorOnline();
   /** APK cloud company offline: tax create parity vouchers — Save band. */
   const apkOfflineViewOnly = useMemo(
@@ -138,10 +146,12 @@ export function CreateTaxForm({
       name: "",
       rate: 0,
       openingBalance: 0,
-      groupId: "",
+      groupId: getDefaultSystemGroupId("tax"),
       openingBalanceNarration: "",
     },
   });
+
+  const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
 
   React.useEffect(() => {
     if (prefillName && prefillName.trim()) {
@@ -160,24 +170,9 @@ export function CreateTaxForm({
   }, [form]);
 
   React.useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!companyId || !user?.uid) return;
-      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
-        // Local-only mode: keep tax default on local ungrouped without Firestore call.
-        const current = form.getValues("groupId");
-        if (!current) form.setValue("groupId", getUngroupedGroupId("tax"), { shouldDirty: false });
-        return;
-      }
-      // Keep Tax create default on canonical Ungrouped bucket.
-      const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "tax");
-      if (!alive) return;
-      const current = form.getValues("groupId");
-      if (!current) form.setValue("groupId", ungroupedId, { shouldDirty: false });
-    })();
-    return () => {
-      alive = false;
-    };
+    if (!companyId || !user?.uid) return;
+    const current = form.getValues("groupId");
+    if (!current) form.setValue("groupId", getDefaultSystemGroupId("tax"), { shouldDirty: false });
   }, [companyId, user?.uid, form]);
   
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -259,7 +254,7 @@ export function CreateTaxForm({
         rate: 0,
         openingBalance: 0,
         openingBalanceDate: undefined,
-        groupId: "",
+        groupId: getDefaultSystemGroupId("tax"),
         openingBalanceNarration: "",
         ...patch,
       } as z.infer<typeof formSchema>);
@@ -371,11 +366,12 @@ export function CreateTaxForm({
           id: localId,
           name: values.name.trim(),
           phone: values.phone?.trim() || null,
+          whatsapp: values.whatsapp === true,
           rate: values.rate,
           openingBalance: values.openingBalance || 0,
           openingBalanceDate: values.openingBalanceDate || null,
           openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
-          groupId: values.groupId?.trim() || getUngroupedGroupId("tax"),
+          groupId: normalizeTaxGroupIdForStorage(values.groupId),
           ownerId: user.uid,
           companyId,
           balance: values.openingBalance || 0,
@@ -400,7 +396,7 @@ export function CreateTaxForm({
             rate: 0,
             openingBalance: 0,
             openingBalanceDate: undefined,
-            groupId: getUngroupedGroupId("tax"),
+            groupId: getDefaultSystemGroupId("tax"),
             openingBalanceNarration: "",
           });
           clearUploads();
@@ -466,8 +462,7 @@ export function CreateTaxForm({
         }
       }
 
-      const resolvedGroupId =
-        values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "tax"));
+      const resolvedGroupId = normalizeTaxGroupIdForStorage(values.groupId);
       const taxRef = doc(collection(firestore, `companies/${companyId}/taxes`));
       const newTaxId = taxRef.id;
       const staged = await uploadEntityAvatarAndDocumentsRemote({
@@ -482,11 +477,12 @@ export function CreateTaxForm({
       await setDoc(taxRef, {
         name: values.name.trim(),
         phone: values.phone?.trim() || null,
+        whatsapp: values.whatsapp === true,
         rate: values.rate,
         openingBalance: values.openingBalance || 0,
         openingBalanceDate: values.openingBalanceDate || null,
         openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
-        groupId: resolvedGroupId || getUngroupedGroupId("tax"),
+        groupId: resolvedGroupId,
         ownerId: user.uid,
         companyId,
         balance: values.openingBalance || 0,
@@ -520,7 +516,7 @@ export function CreateTaxForm({
           rate: 0,
           openingBalance: 0,
           openingBalanceDate: undefined,
-          groupId: getUngroupedGroupId("tax"),
+          groupId: getDefaultSystemGroupId("tax"),
           openingBalanceNarration: "",
         });
         clearUploads();
@@ -568,7 +564,7 @@ export function CreateTaxForm({
             openingBalance: values.openingBalance || 0,
             openingBalanceDate: values.openingBalanceDate || null,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
-            groupId: values.groupId?.trim() || getUngroupedGroupId("tax"),
+            groupId: normalizeTaxGroupIdForStorage(values.groupId),
             ownerId: user.uid,
             companyId,
             balance: values.openingBalance || 0,
@@ -598,7 +594,7 @@ export function CreateTaxForm({
               rate: 0,
               openingBalance: 0,
               openingBalanceDate: undefined,
-              groupId: getUngroupedGroupId("tax"),
+              groupId: getDefaultSystemGroupId("tax"),
               openingBalanceNarration: "",
             });
             clearUploads();
@@ -622,13 +618,6 @@ export function CreateTaxForm({
     setIsCreateGroupOpen(false);
   };
   
-  const groupOptions = React.useMemo(() => {
-    const userGroups = (groups || []).filter(
-      (g) => !(g as any).isSystemReserved && !isSystemParentGroup("tax_groups", g.id) && (g as any).isAutoUngrouped !== true
-    );
-    return [{ value: getUngroupedGroupId("tax"), label: "Ungrouped" }, ...userGroups.map((g) => ({ value: g.id, label: g.name }))];
-  }, [groups]);
-
   const filteredGroups = React.useMemo(() => {
     if (!groupSearchQuery) return groups;
     return groups.filter((group) =>
@@ -669,8 +658,12 @@ export function CreateTaxForm({
               render={({ field }: any) => (
                 <FormItem>
                   <FormLabel>Group</FormLabel>
-                  <Combobox
-                    options={groupOptions}
+                  <MasterGroupTreeCombobox
+                    preset={TAX_ENTITY_GROUP_PRESET}
+                    groups={groups}
+                    processedGroups={processedTaxGroups as TaxGroup[]}
+                    popoverModal={false}
+                    confirmWithOk
                     value={field.value}
                     onChange={(value, newName) => {
                       if (value === "add-new") {
@@ -683,7 +676,8 @@ export function CreateTaxForm({
                       }
                     }}
                     placeholder="Select a group"
-                    addNewLabel="+ Add New Group"
+                    searchPlaceholder="Search groups..."
+                    addNewLabel="Add New Group"
                   />
                   <FormMessage />
                 </FormItem>
@@ -813,13 +807,13 @@ export function CreateTaxForm({
               variant="ghost"
               className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
               onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-              disabled={isLoading || isCompressing || apkOfflineViewOnly}
+              disabled={isLoading || isCompressing || apkOfflineViewOnly || openingBalanceDateMissing}
             >
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save & New
             </Button>
           </div>
-          <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly} className="shrink-0">
+          <Button type="submit" disabled={isLoading || isCompressing || !companyId || apkOfflineViewOnly || openingBalanceDateMissing} className="shrink-0">
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create Tax
           </Button>

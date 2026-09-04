@@ -5,51 +5,30 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
 import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
 import { motion } from "framer-motion";
-import { Users, ChevronDown } from "lucide-react";
+import { Users } from "lucide-react";
 import { LoanLiabilityEntityIcon } from "@/components/entity/LoanLiabilityEntityIcon";
-import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { masterDetailBalanceToneClass } from "@/lib/utils";
 import { masterListShellCn, MASTER_LIST_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN } from "@/lib/masterListChrome";
 import type { GroupListSelectOptions } from "@/lib/groupListExpand";
-import { GROUP_LIST_CHILD_INDENT_CLASS, toggleGroupListAccordionExpand } from "@/lib/groupListExpand";
-import { ExpandableGroupListTree } from "@/components/entity/ExpandableGroupListTree";
-import {
-  GroupListExpandNameRow,
-  GroupListMemberRow,
-  renderGroupListRowShell,
-} from "@/components/entity/GroupListMemberRow";
+import { MasterGroupNestedListBody } from "@/components/entity/MasterGroupNestedListBody";
+import { LOAN_ACCOUNT_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { useMasterGroupListForest } from "@/hooks/useMasterGroupListForest";
+import { GroupListMemberRow } from "@/components/entity/GroupListMemberRow";
 import { MasterListGroupIcon } from "@/components/entity/MasterListGroupIcon";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
-import { LOAN_LIABILITY_GROUP_ID } from "../constants/loanConstants";
-import { resolveLoanAccountAvatarUrl } from "../utils/resolveLoanAccountAvatarUrl";
 import type { Loan } from "../types/loanTypes";
 import { findLoanForAccount } from "../db/loanQueries";
-
-const LOAN_SYS_EXPAND_PREFIX = "loan-sys:";
-const LOAN_USR_EXPAND_PREFIX = "loan-usr:";
-
-function loanSysExpandKey() {
-  return `${LOAN_SYS_EXPAND_PREFIX}${LOAN_LIABILITY_GROUP_ID}`;
-}
-
-function loanUsrExpandKey(groupId: string) {
-  return `${LOAN_USR_EXPAND_PREFIX}${groupId}`;
-}
-
-function parseLoanUsrExpandKey(key: string | null): string | null {
-  if (!key?.startsWith(LOAN_USR_EXPAND_PREFIX)) return null;
-  const id = key.slice(LOAN_USR_EXPAND_PREFIX.length);
-  return id || null;
-}
+import { resolveLoanAccountAvatarUrl } from "../utils/resolveLoanAccountAvatarUrl";
 
 export function LoanAccountGroupList({
-  systemGroup,
+  systemGroup: _systemGroup,
   childGroups,
   groupMembersByGroupId,
   loans = [],
@@ -63,6 +42,12 @@ export function LoanAccountGroupList({
   hideQuickFilterBar = false,
   selectedGroupMemberFilterId = null,
   pendingApprovalByMemberId = {},
+  moveAccountsEnabled = false,
+  onMoveAccountToGroup,
+  canMoveMember,
+  onMoveGroupToGroup,
+  canMoveGroup,
+  allGroupsForMove,
 }: {
   systemGroup: StaffGroup;
   childGroups: StaffGroup[];
@@ -78,46 +63,31 @@ export function LoanAccountGroupList({
   hideQuickFilterBar?: boolean;
   selectedGroupMemberFilterId?: string | null;
   pendingApprovalByMemberId?: Record<string, number>;
+  moveAccountsEnabled?: boolean;
+  onMoveAccountToGroup?: (staff: Staff, targetGroupId: string) => void | Promise<void>;
+  canMoveMember?: (staff: Staff) => boolean;
+  onMoveGroupToGroup?: (sourceGroupId: string, targetGroupId: string) => void | Promise<void>;
+  canMoveGroup?: (group: StaffGroup) => boolean;
+  allGroupsForMove?: StaffGroup[];
 }) {
+  void _systemGroup;
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } =
     useMasterListRowMotion();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
-  const [expandedNodeId, setExpandedNodeId] = useState<string | null>(loanSysExpandKey());
 
-  const filteredChildGroups = useMemo(() => {
-    const q = searchTerm.trim().toLowerCase();
-    if (!q) return childGroups;
-    return childGroups.filter((group) => {
-      const nameMatch = String(group.name || "").toLowerCase().includes(q);
-      if (nameMatch) return true;
-      const members = groupMembersByGroupId[group.id] || [];
-      return members.some((m) => String(m.name || "").toLowerCase().includes(q));
-    });
-  }, [childGroups, groupMembersByGroupId, searchTerm]);
+  const visibleGroupFilter = useCallback((group: StaffGroup) => !!group?.name && !!group.id, []);
 
-  const systemExpanded = expandedNodeId === loanSysExpandKey() || expandedNodeId?.startsWith(LOAN_USR_EXPAND_PREFIX) === true;
-  const expandedUserGroupId = parseLoanUsrExpandKey(expandedNodeId);
-
-  const isSystemSelectedOnly =
-    selectedGroup?.id === systemGroup.id && !selectedGroupMemberFilterId;
-
-  const systemBalance = Number(systemGroup.balance) || 0;
-  const systemPending = pendingApprovalByGroupId[systemGroup.id] ?? 0;
-
-  const renderBalance = (balance: number, masked = false) => (
-    <p
-      data-pl-list-balance={balance >= 0 ? "dr" : "cr"}
-      className={cn(
-        "pl-master-list-row-amount-xs ml-1",
-        !masked && masterDetailBalanceToneClass(balance)
-      )}
-    >
-      {masked ? "*****" : formatCurrency(balance, { showDrCr: true })}
-    </p>
-  );
+  const { forest, visibleGroups, displayOrderKey } = useMasterGroupListForest({
+    groups: childGroups,
+    config: LOAN_ACCOUNT_GROUP_LIST_CONFIG,
+    searchTerm,
+    quickFilter,
+    groupMembersByGroupId,
+    visibleGroupFilter,
+  });
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -129,154 +99,77 @@ export function LoanAccountGroupList({
           onViewportTouchMove={markListScrolling}
         >
           <ul className="pl-master-list-ul">
-            <motion.li {...rowMotionProps}>
-              <div data-pl-group-expand-group="">
-                {renderGroupListRowShell(
-                  isSystemSelectedOnly,
-                  () => onSelectGroup(systemGroup, { memberId: null }),
-                  <div className="pl-master-list-row">
-                    <div className="pl-master-list-row-leading">
-                      <div className="relative flex-shrink-0">
-                        <MasterListGroupIcon>
-                          <Users className="h-5 w-5" />
-                        </MasterListGroupIcon>
-                      </div>
-                      <GroupListExpandNameRow
-                        name={systemGroup.name}
-                        expandControl={
-                          filteredChildGroups.length > 0 ? (
-                            <button
-                              type="button"
-                              aria-expanded={systemExpanded}
-                              aria-label={systemExpanded ? "Collapse groups" : "Expand groups"}
-                              className="mt-0.5 shrink-0 self-start rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setExpandedNodeId((prev) =>
-                                  prev === loanSysExpandKey() || prev?.startsWith(LOAN_USR_EXPAND_PREFIX)
-                                    ? null
-                                    : loanSysExpandKey()
-                                );
-                              }}
-                              onPointerDown={(e) => e.stopPropagation()}
-                            >
-                              <ChevronDown
-                                className={cn("h-3.5 w-3.5 transition-transform", !systemExpanded && "-rotate-90")}
-                              />
-                            </button>
-                          ) : null
-                        }
-                        pendingCount={systemPending}
-                      />
-                    </div>
-                    {renderBalance(systemBalance)}
-                  </div>
-                )}
-
-                {systemExpanded ? (
-                  <div className={cn("flex flex-col gap-1 pt-1", GROUP_LIST_CHILD_INDENT_CLASS)}>
-                    {filteredChildGroups.map((group) => {
-                      const members = groupMembersByGroupId[group.id] ?? [];
-                      const isGroupSelectedOnly =
-                        selectedGroup?.id === group.id && !selectedGroupMemberFilterId;
-                      const groupPending = pendingApprovalByGroupId[group.id] ?? 0;
-                      const groupBalance = Number(group.balance) || 0;
-
-                      const renderUserGroupCard = (expandControl: React.ReactNode | null) => (
-                        <div className="pl-master-list-row">
-                          <div className="pl-master-list-row-leading">
-                            <div className="relative flex-shrink-0">
-                              <MasterListGroupIcon>
-                                <Users className="h-5 w-5" />
-                              </MasterListGroupIcon>
-                            </div>
-                            <GroupListExpandNameRow
-                              name={group.name}
-                              expandControl={expandControl}
-                              pendingCount={groupPending}
-                            />
-                          </div>
-                          {renderBalance(groupBalance)}
-                        </div>
-                      );
-
-                      return (
-                        <ExpandableGroupListTree
-                          key={group.id}
-                          members={members}
-                          isGroupSelectedOnly={isGroupSelectedOnly}
-                          selectedMemberId={
-                            selectedGroup?.id === group.id ? selectedGroupMemberFilterId : null
-                          }
-                          expanded={expandedUserGroupId === group.id}
-                          onExpandedChange={() =>
-                            setExpandedNodeId((prev) => {
-                              const nextUsr = toggleGroupListAccordionExpand(expandedUserGroupId, group.id);
-                              return nextUsr ? loanUsrExpandKey(nextUsr) : loanSysExpandKey();
-                            })
-                          }
-                          onSelectGroup={() => onSelectGroup(group, { memberId: null })}
-                          onSelectMember={(memberId) => onSelectGroup(group, { memberId })}
-                          quickFilter={quickFilter}
-                          expandAriaLabel="loan accounts"
-                          animatePresenceMode={animatePresenceMode}
-                          rowMotionProps={rowMotionProps}
-                          isRowAnimationEnabled={isRowAnimationEnabled}
-                          layoutHoldMs={layoutHoldMs}
-                          renderGroupRow={({ expandControl }) =>
-                            renderGroupListRowShell(
-                              isGroupSelectedOnly,
-                              () => onSelectGroup(group, { memberId: null }),
-                              renderUserGroupCard(expandControl)
-                            )
-                          }
-                          renderMemberRow={(member, memberSelected, onClick) => {
-                            const linkedLoan = findLoanForAccount(loans, member.id);
-                            const attachmentPreviewUrl = resolveLoanAccountAvatarUrl(
-                              member,
-                              linkedLoan,
-                              bankAccounts
-                            );
-                            const avatarCompanyId =
-                              String(member.companyId || linkedLoan?.companyId || "").trim() || undefined;
-                            return (
-                              <div className={GROUP_LIST_CHILD_INDENT_CLASS}>
-                                <GroupListMemberRow
-                                  name={member.name}
-                                  balance={member.balance}
-                                  isSelected={memberSelected}
-                                  onClick={onClick}
-                                  pendingCount={pendingApprovalByMemberId[member.id] ?? 0}
-                                  leading={
-                                    <EntityFileAttachmentHover
-                                      fileUrl={attachmentPreviewUrl}
-                                      triggerClassName="inline-flex shrink-0 rounded-full"
-                                    >
-                                      <ResolvedEntityAvatar
-                                        className={MASTER_LIST_AVATAR_CN}
-                                        fallbackClassName={MASTER_LIST_AVATAR_FALLBACK_CN}
-                                        companyId={avatarCompanyId}
-                                        src={attachmentPreviewUrl ?? undefined}
-                                        alt={member.name}
-                                        fallbackSlot={<LoanLiabilityEntityIcon size="avatar" />}
-                                      />
-                                    </EntityFileAttachmentHover>
-                                  }
-                                />
-                              </div>
-                            );
-                          }}
+            <MasterGroupNestedListBody
+              config={LOAN_ACCOUNT_GROUP_LIST_CONFIG}
+              forest={forest}
+              allGroups={allGroupsForMove ?? visibleGroups}
+              displayOrderKey={displayOrderKey}
+              searchTerm={searchTerm}
+              selectedGroup={selectedGroup}
+              selectedGroupMemberFilterId={selectedGroupMemberFilterId}
+              groupMembersByGroupId={groupMembersByGroupId}
+              onSelectGroup={onSelectGroup}
+              pendingApprovalByGroupId={pendingApprovalByGroupId}
+              pendingApprovalByMemberId={pendingApprovalByMemberId}
+              quickFilter={quickFilter}
+              animatePresenceMode={animatePresenceMode}
+              rowMotionProps={rowMotionProps}
+              isRowAnimationEnabled={isRowAnimationEnabled}
+              layoutHoldMs={layoutHoldMs}
+              formatCurrency={(amount, options) =>
+                formatCurrency(amount, { ...options, noAnimation: true }) as React.ReactNode
+              }
+              balanceToneClass={masterDetailBalanceToneClass}
+              renderGroupLeading={() => (
+                <MasterListGroupIcon>
+                  <Users className="h-5 w-5" />
+                </MasterListGroupIcon>
+              )}
+              renderMemberRow={(member, group, ctx) => {
+                const linkedLoan = findLoanForAccount(loans, member.id);
+                const attachmentPreviewUrl = resolveLoanAccountAvatarUrl(
+                  member,
+                  linkedLoan,
+                  bankAccounts
+                );
+                const avatarCompanyId =
+                  String(member.companyId || linkedLoan?.companyId || "").trim() || undefined;
+                return (
+                  <GroupListMemberRow
+                    key={member.id || `${group.id}-member-${member.name}`}
+                    name={member.name}
+                    balance={member.balance}
+                    isSelected={ctx.isSelected}
+                    onClick={ctx.onClick}
+                    pendingCount={ctx.pendingCount}
+                    highlightQuery={ctx.highlightQuery}
+                    isAccountFrozen={Boolean(member.isFrozen)}
+                    rowDimClass={ctx.rowDimClass}
+                    {...ctx.memberMoveProps}
+                    leading={
+                      <EntityFileAttachmentHover
+                        fileUrl={attachmentPreviewUrl}
+                        triggerClassName="inline-flex shrink-0 rounded-full"
+                      >
+                        <ResolvedEntityAvatar
+                          className={MASTER_LIST_AVATAR_CN}
+                          fallbackClassName={MASTER_LIST_AVATAR_FALLBACK_CN}
+                          companyId={avatarCompanyId}
+                          src={attachmentPreviewUrl ?? undefined}
+                          alt={member.name}
+                          fallbackSlot={<LoanLiabilityEntityIcon size="avatar" />}
                         />
-                      );
-                    })}
-                    {filteredChildGroups.length === 0 ? (
-                      <div className="px-2 py-4 text-center text-xs text-muted-foreground">No groups found.</div>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            </motion.li>
+                      </EntityFileAttachmentHover>
+                    }
+                  />
+                );
+              }}
+              moveAccountsEnabled={moveAccountsEnabled}
+              onMoveAccountToGroup={onMoveAccountToGroup}
+              canMoveMember={canMoveMember}
+              onMoveGroupToGroup={onMoveGroupToGroup}
+              canMoveGroup={canMoveGroup}
+            />
           </ul>
         </ScrollArea>
         {!hideQuickFilterBar ? (

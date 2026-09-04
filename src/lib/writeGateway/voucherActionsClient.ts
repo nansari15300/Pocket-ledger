@@ -1136,125 +1136,21 @@ function buildInitialCreateHistoryChanges(args: {
 }
 
 /**
- * Client-only: Balance opening balance with Capital. Runs in browser so Firestore uses signed-in user auth.
+ * Reconcile System Opening Balance (Equity) from current master opening balances.
+ * Legacy signature kept — incremental old/new values are ignored; one authoritative formula applies.
  */
 export async function balanceOpeningBalanceWithCapital(
   companyId: string,
-  accountCollection: "parties" | "bank_accounts" | "staff" | "taxes" | "expense_accounts",
-  accountId: string,
-  oldOpeningBalance: number,
-  newOpeningBalance: number
+  _accountCollection?: "parties" | "bank_accounts" | "staff" | "taxes" | "expense_accounts",
+  _accountId?: string,
+  _oldOpeningBalance?: number,
+  _newOpeningBalance?: number
 ): Promise<{ success: boolean; error?: string }> {
-  try {
-    if (!companyId) throw new Error("Company ID is missing");
-    // OB↔capital adjust master write — APK par SQLite/Firestore ke beech wahi pathname/company glitch possible
-    beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
-    const difference = newOpeningBalance - oldOpeningBalance;
-    if (Math.abs(difference) < 0.01) return { success: true };
-
-    let currentCapitalOB = 0;
-
-    // APK/static/EXE/server-delta: OB ledger bhi SQLite-first. Firestore getDoc yahan foreground save ko atka sakta hai.
-    if (await shouldUseLocalVoucherPipeline(companyId)) {
-      const reg = await getLocalCompanyById(companyId);
-      let ownerId = String((reg as Record<string, unknown>)?.ownerId ?? "").trim();
-      if (!ownerId) {
-        ownerId = auth.currentUser?.uid || "local_guest_user";
-      }
-      const capitalOpeningBalanceDoc = await getCompanyDocFromBrowserDb(
-        companyId,
-        "parties",
-        "opening_balance_ledger",
-        { includeDeleted: true }
-      );
-      if (!capitalOpeningBalanceDoc) {
-        const createdAt = Date.now();
-        const createRes = await writeEntity({
-          companyId,
-          collectionName: "parties",
-          docId: "opening_balance_ledger",
-          operation: "create",
-          data: {
-            name: "Opening Balance",
-            groupId: "equity",
-            openingBalance: 0,
-            openingBalanceDate: null,
-            companyId,
-            ownerId,
-            isDeleted: false,
-            isSystemReserved: true,
-            isSystemAccount: true,
-            createdAt,
-            balance: 0,
-            debit: 0,
-            credit: 0,
-          },
-        });
-        if (createRes.ok === false) return { success: false, error: createRes.error };
-        currentCapitalOB = 0;
-      } else {
-        currentCapitalOB = Number(capitalOpeningBalanceDoc.openingBalance) || 0;
-      }
-      const newCapitalOB = currentCapitalOB - difference;
-      const capitalDebit = newCapitalOB > 0 ? newCapitalOB : 0;
-      const capitalCredit = newCapitalOB < 0 ? Math.abs(newCapitalOB) : 0;
-      const updRes = await writeEntity({
-        companyId,
-        collectionName: "parties",
-        docId: "opening_balance_ledger",
-        operation: "update",
-        data: {
-          openingBalance: newCapitalOB,
-          balance: newCapitalOB,
-          debit: capitalDebit,
-          credit: capitalCredit,
-        },
-      });
-      if (updRes.ok === false) return { success: false, error: updRes.error };
-      return { success: true };
-    }
-
-    const capitalOpeningBalanceRef = doc(firestore, `companies/${companyId}/parties`, "opening_balance_ledger");
-    const capitalOpeningBalanceSnap = await getDoc(capitalOpeningBalanceRef);
-
-    if (!capitalOpeningBalanceSnap.exists()) {
-      const companySnap = await getDoc(doc(firestore, "companies", companyId));
-      await setDoc(capitalOpeningBalanceRef, {
-        name: "Opening Balance",
-        groupId: "equity",
-        openingBalance: 0,
-        openingBalanceDate: null,
-        companyId,
-        ownerId: companySnap.data()?.ownerId || "",
-        isDeleted: false,
-        isSystemReserved: true,
-        isSystemAccount: true,
-        createdAt: serverTimestamp(),
-        balance: 0,
-        debit: 0,
-        credit: 0,
-      });
-      currentCapitalOB = 0;
-    } else {
-      currentCapitalOB = capitalOpeningBalanceSnap.data()?.openingBalance || 0;
-    }
-
-    const newCapitalOB = currentCapitalOB - difference;
-    const capitalDebit = newCapitalOB > 0 ? newCapitalOB : 0;
-    const capitalCredit = newCapitalOB < 0 ? Math.abs(newCapitalOB) : 0;
-
-    await updateDoc(capitalOpeningBalanceRef, {
-      openingBalance: newCapitalOB,
-      balance: newCapitalOB,
-      debit: capitalDebit,
-      credit: capitalCredit,
-    });
-    return { success: true };
-  } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error("Error balancing opening balance with capital:", error);
-    return { success: false, error: msg };
-  }
+  const { reconcileSystemOpeningBalanceLedger } = await import(
+    "@/lib/reports/systemOpeningBalanceEquityClient"
+  );
+  const result = await reconcileSystemOpeningBalanceLedger(companyId, { apply: true });
+  return { success: result.success, error: result.error };
 }
 
 /** Use in catch blocks: if true, show error.message and "Upgrade" action to /billing */

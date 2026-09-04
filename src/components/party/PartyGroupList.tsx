@@ -8,7 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
 import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { TooltipProvider } from "../ui/tooltip";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
@@ -32,9 +32,11 @@ import {
   renderGroupListRowShell,
 } from "@/components/entity/GroupListMemberRow";
 import type { GroupListSelectOptions } from "@/lib/groupListExpand";
+import { formatGroupListCardCountSubtitle } from "@/lib/groupListCardCounts";
 import { toggleGroupListAccordionExpand } from "@/lib/groupListExpand";
 import { GroupListMemberAvatar } from "@/components/entity/GroupListMemberAvatar";
 import { MasterListGroupIcon } from "@/components/entity/MasterListGroupIcon";
+import { PartyGroupNestedListSection } from "@/components/party/PartyGroupNestedListSection";
 
 type GroupWithType = Group & { groupType?: 'party' | 'tax' | 'staff' | 'account' | 'expense' | 'item' };
 
@@ -42,6 +44,38 @@ interface CategorySection {
   name: string;
   icon: React.ReactNode;
   groups: GroupWithType[];
+  /** Party nested list — search member/group names inside tree, not pre-filter group rows. */
+  nestedPartyList?: boolean;
+}
+
+function pushGroupByType(group: GroupWithType, buckets: {
+  party: GroupWithType[];
+  tax: GroupWithType[];
+  staff: GroupWithType[];
+  account: GroupWithType[];
+  expense: GroupWithType[];
+  item: GroupWithType[];
+}) {
+  const groupType = group.groupType || "party";
+  switch (groupType) {
+    case "tax":
+      buckets.tax.push(group);
+      break;
+    case "staff":
+      buckets.staff.push(group);
+      break;
+    case "account":
+      buckets.account.push(group);
+      break;
+    case "expense":
+      buckets.expense.push(group);
+      break;
+    case "item":
+      buckets.item.push(group);
+      break;
+    default:
+      buckets.party.push(group);
+  }
 }
 
 export function PartyGroupList({
@@ -64,6 +98,12 @@ export function PartyGroupList({
   pendingApprovalByPartyId = {},
   groupMembersByGroupId = {},
   selectedGroupMemberFilterId = null,
+  moveAccountsEnabled = false,
+  onMoveAccountToGroup,
+  canMoveMember,
+  onMoveGroupToGroup,
+  canMoveGroup,
+  allGroupsForMove,
 }: {
   groups: Group[];
   searchTerm: string;
@@ -88,6 +128,12 @@ export function PartyGroupList({
   /** Groups tab — party members per group for expand tree. */
   groupMembersByGroupId?: Record<string, Party[]>;
   selectedGroupMemberFilterId?: string | null;
+  moveAccountsEnabled?: boolean;
+  onMoveAccountToGroup?: (party: Party, targetGroupId: string) => void | Promise<void>;
+  canMoveMember?: (party: Party) => boolean;
+  onMoveGroupToGroup?: (sourceGroupId: string, targetGroupId: string) => void | Promise<void>;
+  canMoveGroup?: (group: Group) => boolean;
+  allGroupsForMove?: Group[];
 }) {
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } =
@@ -97,11 +143,41 @@ export function PartyGroupList({
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
   const [expandedListNodeId, setExpandedListNodeId] = useState<string | null>(null);
+  const [focusGroupId, setFocusGroupId] = useState<string | null>(null);
+  const searchActive = Boolean(searchTerm.trim());
+
+  useEffect(() => {
+    if (searchActive) {
+      setFocusGroupId(null);
+      return;
+    }
+    if (selectedGroup?.id === IC_COMPANY_PARTY_GROUP_ID) {
+      setFocusGroupId(IC_COMPANY_PARTY_GROUP_ID);
+      return;
+    }
+    if (selectedGroup?.id) {
+      setFocusGroupId(selectedGroup.id);
+      return;
+    }
+    setFocusGroupId(null);
+  }, [selectedGroup?.id, searchActive]);
+
+  const icCompanyGroup = useMemo(
+    () => groups.find((g) => g.id === IC_COMPANY_PARTY_GROUP_ID) ?? null,
+    [groups]
+  );
 
   const categories: CategorySection[] = useMemo(() => {
-    const sortedFlat = filterAndSortEntityGroups(groups || [], searchTerm, quickFilter);
+    const allGroups = (groups || []) as GroupWithType[];
+    const partyGroupsAll: GroupWithType[] = [];
+    for (const group of allGroups) {
+      if ((group.groupType || "party") === "party") {
+        partyGroupsAll.push(group);
+      }
+    }
 
-    const partyGroups: GroupWithType[] = [];
+    const sortedFlat = filterAndSortEntityGroups(allGroups, searchTerm, quickFilter);
+
     const taxGroups: GroupWithType[] = [];
     const staffGroups: GroupWithType[] = [];
     const accountGroups: GroupWithType[] = [];
@@ -109,30 +185,23 @@ export function PartyGroupList({
     const itemGroups: GroupWithType[] = [];
 
     sortedFlat.forEach((group) => {
-      const groupType = (group as GroupWithType).groupType || "party";
-      switch (groupType) {
-        case "tax":
-          taxGroups.push(group as GroupWithType);
-          break;
-        case "staff":
-          staffGroups.push(group as GroupWithType);
-          break;
-        case "account":
-          accountGroups.push(group as GroupWithType);
-          break;
-        case "expense":
-          expenseGroups.push(group as GroupWithType);
-          break;
-        case "item":
-          itemGroups.push(group as GroupWithType);
-          break;
-        default:
-          partyGroups.push(group as GroupWithType);
-      }
+      pushGroupByType(group as GroupWithType, {
+        party: [],
+        tax: taxGroups,
+        staff: staffGroups,
+        account: accountGroups,
+        expense: expenseGroups,
+        item: itemGroups,
+      });
     });
 
     return [
-      { name: "Party group", icon: <Users className="h-4 w-4" />, groups: partyGroups },
+      {
+        name: "Party group",
+        icon: <Users className="h-4 w-4" />,
+        groups: partyGroupsAll,
+        nestedPartyList: true,
+      },
       { name: "Tax", icon: <Receipt className="h-4 w-4" />, groups: taxGroups },
       { name: STAFF_ENTITY_LABEL, icon: <Building2 className="h-4 w-4" />, groups: staffGroups },
       { name: "Bank & Cash", icon: <CreditCard className="h-4 w-4" />, groups: accountGroups },
@@ -208,6 +277,37 @@ export function PartyGroupList({
                   {/* Groups under category - full width like party list */}
                   {(hideCategoryHeaders || isExpanded) && hasGroups && (
                     <ul className="pl-master-list-ul w-full">
+                      {categoryKey === "party group" ? (
+                        <>
+                          <PartyGroupNestedListSection
+                            groups={category.groups}
+                            searchTerm={searchTerm}
+                            selectedGroup={selectedGroup}
+                            onSelectGroup={onSelectGroup}
+                            pendingApprovalByGroupId={pendingApprovalByGroupId}
+                            pendingApprovalByPartyId={pendingApprovalByPartyId}
+                            groupMembersByGroupId={groupMembersByGroupId}
+                            getItemHref={getItemHref}
+                            quickFilter={quickFilter}
+                            selectedGroupMemberFilterId={selectedGroupMemberFilterId}
+                            focusGroupId={focusGroupId}
+                            onFocusGroupIdChange={setFocusGroupId}
+                            moveAccountsEnabled={moveAccountsEnabled}
+                            onMoveAccountToGroup={onMoveAccountToGroup}
+                            canMoveMember={canMoveMember}
+                            onMoveGroupToGroup={onMoveGroupToGroup}
+                            canMoveGroup={canMoveGroup}
+                            allGroupsForMove={allGroupsForMove}
+                            icCompanyGroup={icCompanyGroup}
+                            icPeerCompanyRows={icPeerCompanyRows}
+                            selectedIcPeerCompanyId={selectedIcPeerCompanyId}
+                            selectedIcMemberAccountId={selectedIcMemberAccountId}
+                            onSelectIcCompanyGroup={onSelectIcCompanyGroup}
+                            expandedIcListNodeId={expandedListNodeId}
+                            onExpandedIcListNodeIdChange={setExpandedListNodeId}
+                          />
+                        </>
+                      ) : (
                       <AnimatePresence mode={animatePresenceMode}>
                       {category.groups.map((group) => {
                         const isSystem = (group as any).isSystemReserved;
@@ -235,6 +335,7 @@ export function PartyGroupList({
                                 layoutHoldMs={layoutHoldMs}
                                 expandedListNodeId={expandedListNodeId}
                                 onExpandedListNodeIdChange={setExpandedListNodeId}
+                                searchTerm={searchTerm}
                               />
                             </motion.li>
                           );
@@ -247,6 +348,7 @@ export function PartyGroupList({
                               const isGroupSelectedOnly =
                                 selectedGroup?.id === group.id && !selectedGroupMemberFilterId;
                               const groupPending = pendingApprovalByGroupId[group.id] ?? 0;
+                              const groupCountSubtitle = formatGroupListCardCountSubtitle(0, members.length);
 
                               const renderGroupCard = (expandControl: React.ReactNode | null) => (
                                 <div className="pl-master-list-row">
@@ -270,6 +372,7 @@ export function PartyGroupList({
                                       expandControl={expandControl}
                                       pendingCount={groupPending}
                                       nameTriggerClassName={cn(masterListNameTriggerCn, "min-w-0 flex-1 text-sm font-semibold")}
+                                      secondaryLabel={groupCountSubtitle}
                                     />
                                   </div>
                                   <p
@@ -337,6 +440,7 @@ export function PartyGroupList({
                         );
                       })}
                       </AnimatePresence>
+                      )}
                     </ul>
                   )}
                 </div>

@@ -59,6 +59,8 @@ import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
+import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { toast as sonnerToast } from "sonner";
@@ -107,8 +109,9 @@ import {
 } from "@/lib/fileUploadLimits";
 import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
-import { isSystemParentGroup } from "@/lib/system-groups";
-import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { normalizeItemGroupIdForStorage } from "@/lib/masterEntitySystemGroups";
+import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
+import { ITEM_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
@@ -171,7 +174,7 @@ const formSchema = z.object({
   purchaseTaxId: z.string().optional(),
   /** Statement opening row — item ledger */
   openingBalanceNarration: z.string().optional(),
-});
+}).superRefine(refineMasterOpeningBalanceDateRequired);
 
 type ItemFormValues = z.infer<typeof formSchema>;
 
@@ -202,11 +205,12 @@ function computeItemStockQty(values: ItemFormValues): number {
   return (values.openingBalance || 0) * (factor || 1);
 }
 
-/** CreateItemDialog / list jaisa: Ungrouped bucket → combobox value `ungrouped_item` (empty / legacy null). */
-function normalizeItemEditGroupId(groupId: string | null | undefined): string {
-  const u = getUngroupedGroupId("item");
-  if (!groupId || groupId === u) return u;
-  return groupId;
+/** Form load: legacy ungrouped ids → system branch (Products / Services). */
+function normalizeItemEditGroupId(
+  groupId: string | null | undefined,
+  itemType?: string | null
+): string {
+  return normalizeItemGroupIdForStorage(groupId, itemType);
 }
 
 function getInitialFormValues(item?: Item): z.infer<typeof formSchema> {
@@ -222,7 +226,7 @@ function getInitialFormValues(item?: Item): z.infer<typeof formSchema> {
             openingBalance: 0,
             openingBalanceRate: 0,
             isOpeningBalanceTaxInclusive: false,
-            groupId: normalizeItemEditGroupId(""),
+            groupId: normalizeItemEditGroupId("", "item"),
             unitConversions: [{ fromUnit: "", toUnit: "", conversionFactor: 1 }],
             openingBalanceUnit: "",
             openingBalanceTaxId: "",
@@ -249,7 +253,7 @@ function getInitialFormValues(item?: Item): z.infer<typeof formSchema> {
         openingBalanceDate: (item as any).openingBalanceDate?.toDate ? (item as any).openingBalanceDate.toDate() : (item.openingBalanceDate ? new Date(item.openingBalanceDate) : undefined),
         openingBalanceRate: (item as any).openingBalanceRate || 0,
         isOpeningBalanceTaxInclusive: (item as any).isOpeningBalanceTaxInclusive || false,
-        groupId: normalizeItemEditGroupId(item.groupId),
+        groupId: normalizeItemEditGroupId(item.groupId, item.type),
         unitConversions: item.unitConversions || [],
         salePriceUnit: item.salePriceUnit || "",
         purchasePriceUnit: (item as any).purchasePriceUnit || "",
@@ -290,6 +294,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
     defaultValues: getInitialFormValues(item),
   });
+
+  const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
   
   const { fields, append, remove } = useFieldArray({
     control: form.control,
@@ -358,16 +364,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   };
 
   // CreateItemDialog jaisa: system parents chhupo + Ungrouped synthetic row (duplicate-safe)
-  const itemGroupOptions = React.useMemo(() => {
-    const ungroupedId = getUngroupedGroupId("item");
-    const filtered = groups
-      .filter((g) => !isSystemParentGroup("item_groups", g.id))
-      .map((g) => ({ value: g.id, label: g.name }));
-    if (!filtered.some((g) => g.value === ungroupedId)) {
-      filtered.unshift({ value: ungroupedId, label: "Ungrouped" });
-    }
-    return filtered;
-  }, [groups]);
   
   const handleTaxCreated = (newTaxId: string, newTax?: { id: string; name: string; rate: number; balance?: number; companyId: string; groupId?: string }) => {
     if (newTaxId) {
@@ -483,7 +479,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         openingBalanceDate: finalDate,
         openingBalanceRate: (item as any).openingBalanceRate || 0,
         isOpeningBalanceTaxInclusive: (item as any).isOpeningBalanceTaxInclusive || false,
-        groupId: normalizeItemEditGroupId(item.groupId),
+        groupId: normalizeItemEditGroupId(item.groupId, item.type),
         unitConversions: item.unitConversions || [],
         salePriceUnit: item.salePriceUnit || "",
         purchasePriceUnit: (item as any).purchasePriceUnit || "",
@@ -973,8 +969,12 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                 render={({ field }: any) => (
                   <FormItem>
                     <FormLabel>Group</FormLabel>
-                    <Combobox
-                      options={itemGroupOptions}
+                    <MasterGroupTreeCombobox
+                      preset={ITEM_ENTITY_GROUP_PRESET}
+                      groups={groups}
+                      processedGroups={processedItemGroups as unknown as ItemGroup[]}
+                      popoverModal={false}
+                      confirmWithOk
                       value={field.value}
                       onChange={(value, newName) => {
                         if (value === "add-new") {
@@ -987,8 +987,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                         }
                       }}
                       placeholder="Select a group"
-                      addNewLabel="+ Add New Group"
-                      triggerClassName="h-9"
+                      searchPlaceholder="Search groups..."
+                      addNewLabel="Add New Group"
                     />
                     <FormMessage />
                   </FormItem>
@@ -1352,7 +1352,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly} className="shrink-0">
+                <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly || openingBalanceDateMissing} className="shrink-0">
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>
