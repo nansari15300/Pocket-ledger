@@ -36,6 +36,8 @@ import {
   getPaymentStatus as getPaymentStatusResult,
   getPaymentInRemaining,
   getPaymentOutRemaining,
+  getPaymentOutPartyLinkAmount,
+  getOutflowBillWiseLinkAmount,
   getAllocationTotal,
   getNetFromAllocation,
   getTaxFromAllocation,
@@ -107,11 +109,16 @@ export const getTransactionAmounts = (
         ? toNum(transaction.total || transaction.amount || 0)
         : toNum(transaction.amount || transaction.total || 0);
     const paymentOutPayeeAmount =
-        transaction.type === 'payment_out' && toNum(transaction.payeeAmount) > 0
-            ? toNum(transaction.payeeAmount)
-            : amount;
-    const paymentOutOtherChargeAmount =
-        transaction.type === 'payment_out' ? toNum(transaction.otherChargeAmount) : 0;
+        transaction.type === 'payment_out' ? getPaymentOutPartyLinkAmount(transaction) : amount;
+    const paymentOutOtherChargeAmount = transaction.type === 'payment_out' ? Number(transaction.otherChargeAmount || 0) || 0 : 0;
+    const directExpenseMainAmount =
+        transaction.type === 'direct_expense' ? getOutflowBillWiseLinkAmount(transaction) : amount;
+    const directExpenseOtherChargeAmount =
+        transaction.type === 'direct_expense' ? Number(transaction.otherChargeAmount || 0) || 0 : 0;
+    const contraTransferAmount =
+        transaction.type === 'contra' ? getOutflowBillWiseLinkAmount(transaction) : amount;
+    const contraOtherChargeAmount =
+        transaction.type === 'contra' ? Number(transaction.otherChargeAmount || 0) || 0 : 0;
 
     if (['sale', 'purchase'].includes(transaction.type)) {
       const subTotal = toNum(transaction.subTotal);
@@ -144,10 +151,15 @@ export const getTransactionAmounts = (
             else if (entity && transaction.partyId === entity.id) {
                 if (["sale", "sale_service", "direct_income"].includes(transaction.type)) debit += amount;
                 if (transaction.type === "payment_out") debit += paymentOutPayeeAmount;
-                if (["purchase", "purchase_service", "payment_in", "direct_expense"].includes(transaction.type)) credit += amount;
+                if (["purchase", "purchase_service", "payment_in", "direct_expense"].includes(transaction.type)) {
+                    credit += transaction.type === "direct_expense" ? directExpenseMainAmount : amount;
+                }
             }
             if (entity && transaction.type === 'payment_out' && transaction.otherChargeAccountId === entity.id) {
                 debit += paymentOutOtherChargeAmount;
+            }
+            if (entity && transaction.type === 'direct_expense' && transaction.otherChargeAccountId === entity.id) {
+                debit += directExpenseOtherChargeAmount;
             }
 
             /** Party contra: sundry creditor/debtor ledger jahan party id bank leg jaisi `from/toAccountId` se juda ho — account context jaisa Dr/Cr. */
@@ -160,8 +172,11 @@ export const getTransactionAmounts = (
                 entity.id !== "purchase_account" &&
                 (transaction.fromAccountId === entity.id || transaction.toAccountId === entity.id)
             ) {
-                if (transaction.toAccountId === entity.id) debit += amount;
+                if (transaction.toAccountId === entity.id) debit += contraTransferAmount;
                 if (transaction.fromAccountId === entity.id) credit += amount;
+            }
+            if (entity && transaction.type === 'contra' && transaction.otherChargeAccountId === entity.id) {
+                debit += contraOtherChargeAmount;
             }
             
             if (isJournalLikeVoucher(transaction) && entity?.id) {
@@ -258,7 +273,7 @@ export const getTransactionAmounts = (
         case "expense":
             // Individual Expense Account Logic
             if (transaction.type === 'direct_expense' && (transaction.toAccountId || transaction.expenseAccountId) === entity.id) {
-                debit += amount;
+                debit += directExpenseMainAmount;
             }
             // Payment Out mapped to expense accounts should debit the selected account.
             if (transaction.type === 'payment_out' && (transaction.expenseAccountId || transaction.toAccountId) === entity.id) {
@@ -266,6 +281,9 @@ export const getTransactionAmounts = (
             }
             if (transaction.type === 'payment_out' && transaction.otherChargeAccountId === entity.id) {
                 debit += paymentOutOtherChargeAmount;
+            }
+            if (transaction.type === 'direct_expense' && transaction.otherChargeAccountId === entity.id) {
+                debit += directExpenseOtherChargeAmount;
             }
             // Add Salary Support for Individual Expense Account
             if (transaction.type === 'journal' && transaction.subType === 'add_salary') {

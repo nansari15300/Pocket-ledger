@@ -13,6 +13,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useDate } from "@/hooks/useDate";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
+import {
+  NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
+  NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN,
+} from "@/lib/dialogShellChrome";
 import { Link2, RotateCcw } from "lucide-react";
 import { getOpeningBalanceBaseAmount, getOpeningBalanceVoucherLabel, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
 import { getSpendWiseInflowPartyLabel } from "@/lib/paymentInAllocation";
@@ -293,7 +297,9 @@ export function LinkPaymentInToPaymentOutDialog({
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent
+        overlayClassName={NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN}
         className={cn(
+          NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
           "max-w-2xl md:max-w-[54.6rem] max-h-[85vh] flex flex-col overflow-hidden rounded-lg pt-3 px-[3px]",
           isMobile && "left-[2px] right-[2px] translate-x-0 w-auto max-w-none h-[85vh] max-h-[85vh] pt-2"
         )}

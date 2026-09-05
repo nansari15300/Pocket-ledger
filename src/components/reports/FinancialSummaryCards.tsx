@@ -64,6 +64,7 @@ import {
 } from "@/lib/receivablesPayablesDialogUi";
 import { ReceivablesPayablesDialogFooter } from "@/components/reports/ReceivablesPayablesDialogFooter";
 import { ReceivablesPayablesDialogEntityList, RP_DIALOG_DIM_GREEN_BORDER, rpDialogListScrollHandlers } from "@/components/reports/ReceivablesPayablesDialogEntityList";
+import { useReceivablesPayablesLedgerPopup } from "@/components/reports/ReceivablesPayablesLedgerPopup";
 import { ReceivablesPayablesEntitySettings } from "@/components/reports/ReceivablesPayablesEntitySettings";
 import {
     DaybookAccountDayPeekDialog,
@@ -491,6 +492,7 @@ export function FinancialSummaryCards({
 
     // Dashboard cards default to current month. Opening-style cards still roll older vouchers into the range opening.
     const [receivablesDateRange, setReceivablesDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
+    const rpLedgerPopup = useReceivablesPayablesLedgerPopup();
 
     /** Cloud: R/P totals server aggregation — vouchers par local reduce tabhi jab API use nahi ho sakti. */
     const {
@@ -3035,12 +3037,15 @@ export function FinancialSummaryCards({
                             <div className={topSummaryCardFooterClass}>
                                 <Dialog open={receivablesPayablesOpen} onOpenChange={(open) => {
                                     setReceivablesPayablesOpen(open);
-                                    if (!open) setReceivablesPayablesTab('both');
+                                    if (!open) {
+                                        setReceivablesPayablesTab('both');
+                                        rpLedgerPopup.resetDialogInteraction();
+                                    }
                                 }}>
                                     <DialogTrigger asChild>
                                         <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
                                     </DialogTrigger>
-                                    <DialogContent className="dashboard-financial-popup max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col overflow-hidden">
+                                    <DialogContent overlayClassName="bg-black/45 backdrop-blur-none" className="dashboard-financial-popup max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col overflow-hidden">
                                         <DialogHeader className="shrink-0 p-4 border-b flex flex-col space-y-3">
                                             <DialogTitle className="whitespace-nowrap text-base md:text-lg">Receivables & Payables Details</DialogTitle>
                                             <div className="flex items-center gap-2 flex-wrap">
@@ -3100,6 +3105,9 @@ export function FinancialSummaryCards({
                                                                 formatAmount={formatRpDialogAmount}
                                                                 isMobile={isMobile}
                                                                 listMotion={rpListMotion}
+                                                                selectedKey={rpLedgerPopup.selectedKey}
+                                                                onSelectRow={rpLedgerPopup.selectRow}
+                                                                onOpenRow={rpLedgerPopup.openRowLedger}
                                                             />
                                                         </div>
                                                     </div>
@@ -3112,6 +3120,9 @@ export function FinancialSummaryCards({
                                                                 formatAmount={formatRpDialogAmount}
                                                                 isMobile={isMobile}
                                                                 listMotion={rpListMotion}
+                                                                selectedKey={rpLedgerPopup.selectedKey}
+                                                                onSelectRow={rpLedgerPopup.selectRow}
+                                                                onOpenRow={rpLedgerPopup.openRowLedger}
                                                             />
                                                         </div>
                                                     </div>
@@ -3128,6 +3139,9 @@ export function FinancialSummaryCards({
                                                                     formatAmount={formatRpDialogAmount}
                                                                     isMobile={isMobile}
                                                                     listMotion={rpListMotion}
+                                                                    selectedKey={rpLedgerPopup.selectedKey}
+                                                                    onSelectRow={rpLedgerPopup.selectRow}
+                                                                    onOpenRow={rpLedgerPopup.openRowLedger}
                                                                 />
                                                             </div>
                                                         </div>
@@ -3142,6 +3156,9 @@ export function FinancialSummaryCards({
                                                                     formatAmount={formatRpDialogAmount}
                                                                     isMobile={isMobile}
                                                                     listMotion={rpListMotion}
+                                                                    selectedKey={rpLedgerPopup.selectedKey}
+                                                                    onSelectRow={rpLedgerPopup.selectRow}
+                                                                    onOpenRow={rpLedgerPopup.openRowLedger}
                                                                 />
                                                             </div>
                                                         </div>
@@ -3159,6 +3176,7 @@ export function FinancialSummaryCards({
                                         />
                                     </DialogContent>
                                 </Dialog>
+                                {rpLedgerPopup.popup}
                             </div>
                         )}
                     </CardContent>

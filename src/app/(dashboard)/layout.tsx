@@ -35,6 +35,7 @@ import { DeviceLimitProvider, useDeviceLimitContext } from "@/contexts/DeviceLim
 import { resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
 import { DEFAULT_PLANS, type PlanId } from "@/config/plans";
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
+import { withoutWebAppBasePath } from "@/lib/webAppBasePath";
 import { useMarkMessagesDelivered } from "@/hooks/useMarkMessagesDelivered";
 import { useCompany } from "@/hooks/useCompany";
 import { getOrCreateDeviceId, getDeviceLabel, resolveDeviceLabelForFirestoreAsync, removeThisDevice } from "@/lib/deviceLimitClient";
@@ -868,7 +869,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
       if (!(nativeCap || (isStaticAppBuild() && (narrowStaticMobile || isMobile)))) return;
 
       const handleSubmit = () => {
-        const livePath = (window.location.pathname.replace(/\/+$/, "") || "/").toLowerCase();
+        const livePath = withoutWebAppBasePath(window.location.pathname || "/").toLowerCase();
         if (livePath === "/" || livePath === "/company" || livePath === "/company/create") return;
         // Web mobile: intentional dashboard submit — shield mat lagao (native/APK ko `apkLedgerRouteShield` event dhak leta hai).
         if (livePath === "/dashboard" && !nativeCap) return;

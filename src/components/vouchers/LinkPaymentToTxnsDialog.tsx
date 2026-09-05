@@ -13,6 +13,10 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
+import {
+  NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
+  NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN,
+} from "@/lib/dialogShellChrome";
 import { RotateCcw, Link2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
@@ -23,6 +27,8 @@ import {
   getAllocatedByVoucherId,
   getAllocatedByVoucherIdFromPaymentOuts,
   getAllocationTotal,
+  getPaymentOutPartyLinkAmount,
+  getJournalPartyBillWiseAmountFromEntries,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
 import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
@@ -36,17 +42,6 @@ const safeToDate = (date: unknown): Date | null => {
   return isNaN(parsed.getTime()) ? null : parsed;
 };
 
-// Keep party bill-wise journal linking consistent by deriving party-side debit/credit from journal entries.
-const getJournalPartyAmount = (voucher: any, partyId: string) => {
-  if (voucher?.type !== "journal" || !Array.isArray(voucher?.entries)) return null;
-  const partyEntry = voucher.entries.find((e: any) => String(e?.accountId ?? "") === String(partyId));
-  if (!partyEntry) return null;
-  const debit = Number((partyEntry as any)?.debit) || 0;
-  const credit = Number((partyEntry as any)?.credit) || 0;
-  const total = debit > 0 ? debit : credit;
-  if (total <= 0) return null;
-  return { debit, credit, total };
-};
 
 export type LinkPaymentVariant = "payment_in" | "payment_out";
 
@@ -332,7 +327,7 @@ export function LinkPaymentToTxnsDialog({
         String((v as any).partyId ?? "") === String(partyId)
     );
     const paymentOuts = paymentOutsForParty.map((v) => {
-      const total = Number((v as any).amount ?? (v as any).total ?? 0) || 0;
+      const total = getPaymentOutPartyLinkAmount(v);
       const allocatedToOthers = getAllocatedToOthersFromTarget(getFreshTarget(v), v.id);
       const outstanding = Math.max(0, total - allocatedToOthers);
       return {
@@ -352,11 +347,11 @@ export function LinkPaymentToTxnsDialog({
         if (isCurrentVoucher(v) || v.type !== "journal") return false;
         if (!isJournalLinkDialog) return voucherTouchesParty(v);
         // Journal bill-wise: sirf jahan is party ki Dr entry ho — Cr-only ya counterparty lines exclude.
-        const partyAmount = getJournalPartyAmount(v, String(partyId));
+        const partyAmount = getJournalPartyBillWiseAmountFromEntries(v, String(partyId));
         return !!partyAmount && partyAmount.debit > 0;
       })
       .map((v) => {
-        const partyAmount = getJournalPartyAmount(v, String(partyId));
+        const partyAmount = getJournalPartyBillWiseAmountFromEntries(v, String(partyId));
         if (!partyAmount || partyAmount.debit <= 0) return null;
         const allocatedToOthers = getAllocatedToOthersFromTarget(getFreshTarget(v), v.id);
         const outstanding = Math.max(0, partyAmount.total - allocatedToOthers);
@@ -527,11 +522,11 @@ export function LinkPaymentToTxnsDialog({
         if (isCurrentVoucher(v) || v.type !== "journal") return false;
         if (!isJournalLinkDialog) return voucherTouchesParty(v);
         // Journal bill-wise: sirf jahan is party ki Cr entry ho — Dr-only ya counterparty lines exclude.
-        const partyAmount = getJournalPartyAmount(v, String(partyId));
+        const partyAmount = getJournalPartyBillWiseAmountFromEntries(v, String(partyId));
         return !!partyAmount && partyAmount.credit > 0;
       })
       .map((v) => {
-        const partyAmount = getJournalPartyAmount(v, String(partyId));
+        const partyAmount = getJournalPartyBillWiseAmountFromEntries(v, String(partyId));
         if (!partyAmount || partyAmount.credit <= 0) return null;
         const allocatedToOthers = getAllocatedToOthersFromTargetOut(getFreshTargetOut(v), v.id);
         const outstanding = Math.max(0, partyAmount.total - allocatedToOthers);
@@ -699,7 +694,9 @@ export function LinkPaymentToTxnsDialog({
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent
+        overlayClassName={NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN}
         className={cn(
+          NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
           "max-w-4xl max-h-[85vh] flex flex-col rounded-lg pt-3 px-[3px]",
           isMobile && "left-[2px] right-[2px] translate-x-0 w-auto max-w-none h-[85vh] max-h-[85vh] pt-2"
         )}

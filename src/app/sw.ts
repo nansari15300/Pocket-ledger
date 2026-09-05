@@ -9,7 +9,7 @@
  * **`StaleWhileRevalidate` + navigate** prepend: offline pe **cached shell** turant mile (fresh tab online flush).
  */
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
-import { Serwist, ExpirationPlugin, StaleWhileRevalidate, NetworkOnly } from "serwist";
+import { Serwist, ExpirationPlugin, StaleWhileRevalidate, NetworkOnly, NetworkFirst } from "serwist";
 import { defaultCache } from "@serwist/next/worker";
 
 declare global {
@@ -103,6 +103,22 @@ const serwist = new Serwist({
               String(request.headers.get("RSC") || "").trim() === "1")
         ),
       handler: new NetworkOnly(),
+    },
+    {
+      // Deploy ke baad purana chunk SW cache se mat chalao — stale webpack runtime 404 ChunkLoadError.
+      matcher: ({ url, sameOrigin }) =>
+        Boolean(sameOrigin && url.pathname.includes("/_next/static/chunks/")),
+      handler: new NetworkFirst({
+        cacheName: "pl-next-chunks",
+        networkTimeoutSeconds: 10,
+        plugins: [
+          new ExpirationPlugin({
+            maxEntries: 128,
+            maxAgeSeconds: 60 * 60,
+            maxAgeFrom: "last-used",
+          }),
+        ],
+      }),
     },
     {
       matcher: ({ request, sameOrigin }) =>

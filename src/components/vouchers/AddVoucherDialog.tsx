@@ -4734,9 +4734,10 @@ export function AddVoucherDialog(props: any) {
       {isDesktop ? (
         <DialogContent
           hideCloseButton
+          overlayClassName="z-[80] bg-black/45"
           onFocusOutside={(e) => e.preventDefault()}
           className={cn(
-            "flex flex-col p-0",
+            "z-[81] flex flex-col p-0",
             isAdjustmentOnlyDialog
               ? "left-1/2 top-1/2 h-auto max-h-[88vh] w-[min(760px,92vw)] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden"
               : "md:!left-0 md:!top-0 md:!translate-x-0 md:!translate-y-0 md:w-full md:h-full md:max-w-none md:max-h-none md:border-0 md:bg-transparent md:shadow-none md:rounded-none"
@@ -4818,9 +4819,10 @@ export function AddVoucherDialog(props: any) {
         // Mobile: full viewport — PWA, mobile browser aur static/Capacitor APK sab par yahi layout; safe-area env() 0 ho to asar nahi.
         <DialogContent
           hideCloseButton
+          overlayClassName="z-[80] bg-black/45"
           onFocusOutside={(e) => e.preventDefault()}
           className={cn(
-            "flex min-h-0 flex-col overflow-hidden p-0 !gap-0",
+            "z-[81] flex min-h-0 flex-col overflow-hidden p-0 !gap-0",
             "box-border h-[100dvh] max-h-[100dvh] w-full max-w-none !left-0 !top-0 !translate-x-0 !translate-y-0 rounded-none border-0 shadow-lg",
             "pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]"
           )}

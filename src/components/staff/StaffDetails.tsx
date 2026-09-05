@@ -262,23 +262,6 @@ export function StaffDetails({
     const email = String(user.email || "").trim().toLowerCase();
     return !!ownerEmail && !!email && ownerEmail === email;
   }, [customUser?.role, company, user]);
-  const autoLinkPrompt = usePartyBillWiseAutoLinkPrompt({
-    enabled: isCompanyAdmin && !!staff?.id && staff.id !== "all" && !(staff as any).isSystemAccount,
-    companyId,
-    userId: user?.uid || (isLocalMode && companyId ? "local" : null),
-    ledgerId: staff?.id,
-    ledgerName: staff?.name,
-    ledgerKind: "staff",
-    vouchers: vouchersForAutoLink,
-  });
-  const openBillWiseAutoLink = useCallback(() => {
-    if (autoLinkPrompt.proposal) {
-      autoLinkPrompt.setOpen(true);
-      return;
-    }
-    toast.info("No eligible unlinked bill-wise payment found for this staff ledger.");
-  }, [autoLinkPrompt.proposal, autoLinkPrompt.setOpen]);
-
   const handleStaffUpdated = useMasterEntityLivePatch<Staff>({
     collection: "staff",
     entityId: initialStaff.id,
@@ -458,6 +441,25 @@ export function StaffDetails({
     if (Math.abs(openingBalanceForPeriod) < 1e-6 && Math.abs(masterStaffOpening) > 1e-6) return masterStaffOpening;
     return openingBalanceForPeriod;
   }, [openingBalanceForPeriod, masterStaffOpening]);
+
+  const autoLinkPrompt = usePartyBillWiseAutoLinkPrompt({
+    enabled: isCompanyAdmin && !!staff?.id && staff.id !== "all" && !(staff as any).isSystemAccount,
+    companyId,
+    userId: user?.uid || (isLocalMode && companyId ? "local" : null),
+    ledgerId: staff?.id,
+    ledgerName: staff?.name,
+    ledgerKind: "staff",
+    vouchers: vouchersForAutoLink,
+    ledgerOpeningBalance: masterStaffOpening,
+    openingBalanceOutstanding,
+  });
+  const openBillWiseAutoLink = useCallback(() => {
+    if (autoLinkPrompt.proposal) {
+      autoLinkPrompt.setOpen(true);
+      return;
+    }
+    toast.info("No eligible unlinked bill-wise payment found for this staff ledger.");
+  }, [autoLinkPrompt.proposal, autoLinkPrompt.setOpen]);
 
   const clearFilters = () => {
     handleDateRangeChange(undefined);

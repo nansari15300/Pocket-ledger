@@ -133,6 +133,7 @@ import {
 import { isHostedPlanSyncDisabled } from "@/lib/hostedPlanSyncDisabled";
 import { shouldSkipEmbeddedStartupAuthChurn } from "@/lib/embeddedWarmBootstrapFlags";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import { withoutWebAppBasePath } from "@/lib/webAppBasePath";
 
 export type DisplaySettings = {
     showDebit?: boolean;
@@ -625,9 +626,9 @@ type CompanyContextType = {
 // for nested forms ke save target without touching global app state. Outer pages bina disturb hue rehte hain.
 export const CompanyContext = createContext<CompanyContextType | undefined>(undefined);
 
-/** Trailing slash hataune; Next `usePathname()` navigation par 1 frame purana ho sakta hai — `window.location` sath check karo */
+/** Trailing slash hataune; optional `/app` prefix hata ke route match karo. */
 function normalizeAppPath(p: string): string {
-  return (p || "").replace(/\/+$/, "") || "/";
+  return withoutWebAppBasePath((p || "").replace(/\/+$/, "") || "/");
 }
 
 /** Browser URL (Capacitor WebView ma `href` reliable) */

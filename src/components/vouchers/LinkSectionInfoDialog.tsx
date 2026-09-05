@@ -12,6 +12,10 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import {
+  NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
+  NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN,
+} from "@/lib/dialogShellChrome";
 
 // Keep link-help content grouped by language and section so every voucher can reuse one consistent "Read me" guide.
 const LINK_SECTION_INFO = {
@@ -176,7 +180,10 @@ export function LinkSectionInfoDialog({
   );
 
   const content = (
-    <DialogContent className={cn(dialogContentClass, className)}>
+    <DialogContent
+      overlayClassName={NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN}
+      className={cn(NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN, dialogContentClass, className)}
+    >
       <DialogHeader>
         <DialogTitle className="text-lg font-bold">{LINK_SECTION_INFO[tab].title}</DialogTitle>
       </DialogHeader>

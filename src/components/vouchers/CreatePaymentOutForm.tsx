@@ -919,8 +919,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const highlightPayToLabelCopyMismatch = showCopyPayeeMasterFromSource;
 
   const voucherType = defaultTab === 'direct_expense' ? 'direct_expense' : 'payment_out';
-  const showOtherChargeCard = voucherType === "payment_out" && (otherChargeEnabled || Boolean(otherChargeAccountId) || otherChargeAmountValue > 0);
-  const paymentOutTotalAmount = voucherType === "payment_out" ? payeeAmountValue + otherChargeAmountValue : Number(form.watch("amount")) || 0;
+  const outflowSupportsOtherCharge = voucherType === "payment_out" || voucherType === "direct_expense";
+  const showOtherChargeCard = outflowSupportsOtherCharge && (otherChargeEnabled || Boolean(otherChargeAccountId) || otherChargeAmountValue > 0);
+  const outflowTotalAmount = outflowSupportsOtherCharge ? payeeAmountValue + otherChargeAmountValue : Number(form.watch("amount")) || 0;
   useEffect(() => {
     if (!showOtherChargeCard || otherChargeAccountId) return;
     try {
@@ -1006,13 +1007,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   }, [allVouchers, voucher?.id, savedVoucherId]);
   useEffect(() => {
     if (voucherType !== "payment_out") return;
-    const nextAmount = Math.max(0, Math.round(paymentOutTotalAmount * 100) / 100);
+    const nextAmount = Math.max(0, Math.round(outflowTotalAmount * 100) / 100);
     const currentAmount = Number(form.getValues("amount")) || 0;
     if (currentAmount !== nextAmount) {
       form.setValue("amount", nextAmount, { shouldDirty: false, shouldValidate: false });
     }
-  }, [voucherType, paymentOutTotalAmount, form]);
-  const amountPaid = voucherType === "payment_out" ? paymentOutTotalAmount : Number(form.watch("amount")) || 0;
+  }, [voucherType, outflowTotalAmount, form]);
+  const amountPaid = outflowSupportsOtherCharge ? outflowTotalAmount : Number(form.watch("amount")) || 0;
   const remainingToLink = Math.max(0, amountPaid - totalLinked);
   const linkedAmountByPaymentInId = useMemo(() => {
     const map = new Map<string, number>();
@@ -1335,7 +1336,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   // Amount guard पहले; फिर validated `data` — nested mobile date + `getValues()` से miss न हो
   function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
-    const enteredAmount = voucherType === "payment_out" ? paymentOutTotalAmount : Number(form.getValues("amount")) || 0;
+    const enteredAmount = outflowSupportsOtherCharge ? outflowTotalAmount : Number(form.getValues("amount")) || 0;
     if (isAmountExceedingSelectedAccount(enteredAmount)) {
       setIsAmountMoreThanAccountOpen(true);
       return;
@@ -1538,7 +1539,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       // Ensure amount is read directly from form and cleaned (remove any formatting)
       const formAmount = form.getValues('amount');
       const cleanAmount =
-        voucherType === "payment_out"
+        outflowSupportsOtherCharge
           ? Math.max(0, (Number(data.payeeAmount || 0) || 0) + (Number(data.otherChargeAmount || 0) || 0))
           : typeof formAmount === 'string'
             ? parseFloat(String(formAmount).replace(/,/g, '')) || 0
@@ -1635,6 +1636,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         submissionData.payToType = 'EXPENSE';
         submissionData.toAccountId = submissionData.expenseAccountId || submissionData.toAccountId;
         submissionData.expenseAccountId = submissionData.toAccountId;
+        submissionData.payeeAmount = Number(data.payeeAmount || cleanAmount) || cleanAmount;
+        submissionData.otherChargeAccountId = data.otherChargeAccountId || "";
+        submissionData.otherChargeAmount = Number(data.otherChargeAmount || 0) || 0;
+        if (!submissionData.otherChargeAmount) {
+          submissionData.otherChargeAccountId = "";
+        }
         if (submissionData.fromAccountId === submissionData.toAccountId) {
           sonnerToast.error("Validation Failed", { id: toastId, description: "From and To account cannot be the same." });
           setIsLoading(false);
@@ -2400,7 +2407,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               )}
                             </div>
                           </div>
-                          <div className="min-w-0 w-full overflow-hidden">
+                          <div className="min-w-0 w-full grid grid-cols-[minmax(0,1fr)_minmax(10ch,max-content)] gap-1 items-end">
+                            <div className="min-w-0 overflow-hidden">
                             <Combobox
                               triggerClassName="w-full min-w-0"
                               options={bankCashAccountOptions}
@@ -2421,13 +2429,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               highlightBalanceInOptions
                               disabled={deleteDisabledWhenLinked}
                             />
-                          </div>
-                          {voucherType === "payment_out" && (
-                            <div className="mt-2">
-                              <FormLabel className="text-[10px] text-muted-foreground">Amount Paid</FormLabel>
-                              <Input type="number" value={paymentOutTotalAmount || ""} readOnly className="mt-1 bg-muted font-semibold" />
                             </div>
-                          )}
+                            {outflowSupportsOtherCharge && (
+                              <div className="min-w-0">
+                                <FormLabel className="text-[10px] text-muted-foreground">
+                                  {voucherType === "payment_out" ? "Amount Paid" : "Amount"}
+                                </FormLabel>
+                                <Input
+                                  type="number"
+                                  value={outflowTotalAmount || ""}
+                                  readOnly
+                                  className="mt-1 h-9 text-xs min-w-[10ch] bg-muted font-semibold"
+                                  style={{ width: `${Math.max(8, String(outflowTotalAmount || "").length)}ch` }}
+                                />
+                              </div>
+                            )}
+                          </div>
                           <FormMessage />
                         </FormItem>
                       )}
@@ -2443,7 +2460,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               <FormLabel className={cn("text-xs", highlightPayToLabelCopyMismatch && "font-semibold text-red-600")}>
                                 Pay To
                               </FormLabel>
-                              {voucherType === "payment_out" && (
+                              {voucherType === "payment_out" && !showOtherChargeCard && (
                                 <Button
                                   type="button"
                                   variant="outline"
@@ -2451,14 +2468,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   className="h-8 rounded-full border-blue-300 bg-blue-100 px-3 text-xs font-semibold text-blue-900 hover:bg-blue-200"
                                   disabled={deleteDisabledWhenLinked}
                                   onClick={() => {
-                                    if (showOtherChargeCard) {
-                                      setOtherChargeEnabled(false);
-                                      form.setValue("otherChargeAccountId", "");
-                                      form.setValue("otherChargeAmount", 0);
-                                    } else {
-                                      setOtherChargeEnabled(true);
-                                      form.setValue("otherChargeAmount", 0);
-                                    }
+                                    setOtherChargeEnabled(true);
+                                    form.setValue("otherChargeAmount", 0);
                                   }}
                                 >
                                   <PlusCircle className="mr-1 h-3.5 w-3.5" /> Other charge
@@ -2624,6 +2635,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           <FormItem className="min-w-0">
                             <div className="flex justify-between items-baseline mb-1 min-w-0">
                               <FormLabel className="text-xs truncate">To (Expense)</FormLabel>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {voucherType === "direct_expense" && !showOtherChargeCard && (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-8 rounded-full border-blue-300 bg-blue-100 px-3 text-xs font-semibold text-blue-900 hover:bg-blue-200"
+                                    disabled={deleteDisabledWhenLinked}
+                                    onClick={() => {
+                                      setOtherChargeEnabled(true);
+                                      form.setValue("otherChargeAmount", 0);
+                                    }}
+                                  >
+                                    <PlusCircle className="mr-1 h-3.5 w-3.5" /> Other charge
+                                  </Button>
+                                )}
+                              </div>
                               {payeeBalance !== null && payeeBalance !== undefined && (
                                 <FormLabel className={cn("text-[10px] font-semibold mr-[2px] shrink-0", payeeBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
                                   {formatCurrencyForPrint(payeeBalance, { noSuffix: true, noAnimation: true })} {payeeBalance >= 0 ? 'Dr' : 'Cr'}
@@ -2653,7 +2681,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         )}
                       />
                     )}
-                    {voucherType === "payment_out" && (
+                    {outflowSupportsOtherCharge && (
                       <FormField
                         control={form.control}
                         name="payeeAmount"
@@ -2817,7 +2845,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               )}
                             </div>
                           </div>
-                          <div className={cn("mt-auto grid gap-3 items-end pt-8", voucherType === "payment_out" ? "grid-cols-[minmax(0,1fr)_minmax(12ch,max-content)]" : "grid-cols-1")}>
+                          <div className={cn("mt-auto grid gap-3 items-end pt-8 grid-cols-[minmax(0,1fr)_minmax(12ch,max-content)]")}>
                             <div className="min-w-0">
                            <Combobox
                                 options={bankCashAccountOptions}
@@ -2839,15 +2867,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 disabled={deleteDisabledWhenLinked}
                             />
                             </div>
-                              {voucherType === "payment_out" && (
+                              {outflowSupportsOtherCharge && (
                             <div className="min-w-0">
-                              <FormLabel className="text-xs text-muted-foreground">Amount Paid</FormLabel>
+                              <FormLabel className="text-xs text-muted-foreground">
+                                {voucherType === "payment_out" ? "Amount Paid" : "Amount"}
+                              </FormLabel>
                               <Input
                                 type="number"
-                                value={paymentOutTotalAmount || ""}
+                                value={outflowTotalAmount || ""}
                                 readOnly
                                 className="mt-1 min-w-[12ch] bg-muted font-semibold"
-                                style={{ width: `${Math.max(10, String(paymentOutTotalAmount || "").length)}ch` }}
+                                style={{ width: `${Math.max(10, String(outflowTotalAmount || "").length)}ch` }}
                               />
                             </div>
                           )}
@@ -2892,7 +2922,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </RadioGroup>
                             </FormControl>
                             <div className="ml-auto flex items-center gap-2">
-                            {voucherType === "payment_out" && (
+                            {voucherType === "payment_out" && !showOtherChargeCard && (
                               <Button
                                 type="button"
                                 variant="outline"
@@ -2900,14 +2930,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 className="h-8 rounded-full border-blue-300 bg-blue-100 px-3 text-xs font-semibold text-blue-900 hover:bg-blue-200"
                                 disabled={deleteDisabledWhenLinked}
                                 onClick={() => {
-                                  if (showOtherChargeCard) {
-                                    setOtherChargeEnabled(false);
-                                    form.setValue("otherChargeAccountId", "");
-                                    form.setValue("otherChargeAmount", 0);
-                                  } else {
-                                    setOtherChargeEnabled(true);
-                                    form.setValue("otherChargeAmount", 0);
-                                  }
+                                  setOtherChargeEnabled(true);
+                                  form.setValue("otherChargeAmount", 0);
                                 }}
                               >
                                 <PlusCircle className="mr-1 h-3.5 w-3.5" /> Other charge
@@ -3051,6 +3075,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <FormItem>
                           <div className="flex justify-between items-baseline">
                             <FormLabel>To (Expense)</FormLabel>
+                            <div className="flex items-center gap-2">
+                              {voucherType === "direct_expense" && !showOtherChargeCard && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 rounded-full border-blue-300 bg-blue-100 px-3 text-xs font-semibold text-blue-900 hover:bg-blue-200"
+                                  disabled={deleteDisabledWhenLinked}
+                                  onClick={() => {
+                                    setOtherChargeEnabled(true);
+                                    form.setValue("otherChargeAmount", 0);
+                                  }}
+                                >
+                                  <PlusCircle className="mr-1 h-3.5 w-3.5" /> Other charge
+                                </Button>
+                              )}
                             {payeeBalance !== null && payeeBalance !== undefined && (
                                 <FormLabel className={cn("text-xs font-semibold", payeeBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
                                    {payeeBalance >= 0 
@@ -3059,6 +3099,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                    }
                                 </FormLabel>
                             )}
+                            </div>
                           </div>
                             <Combobox
                                 options={expenseComboboxOptions}
@@ -3080,7 +3121,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       )}
                     />
                  )}
-                  {voucherType === "payment_out" && (
+                  {outflowSupportsOtherCharge && (
                     <div className="space-y-3">
                         <FormField
                           control={form.control}
@@ -3215,42 +3256,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               </div>
               )}
 
-
-              {voucherType === "direct_expense" && (
-                <FormField
-                  control={form.control}
-                  name="amount"
-                  render={({ field }: any) => {
-                    const hasLinks = allocations.length > 0;
-                    const amountDisabled = hasLinks || deleteDisabledWhenLinked;
-                    return (
-                    <FormItem>
-                      <FormLabel>Amount Paid</FormLabel>
-                      <FormControl>
-                        <Input
-                          type="number"
-                          value={field.value ?? ''}
-                          onChange={(e) => {
-                            if (amountDisabled) return;
-                            const nextAmount = e.target.value === '' ? 0 : Number(e.target.value);
-                            if (isAmountExceedingSelectedAccount(nextAmount)) {
-                              field.onChange(lastValidAmountRef.current);
-                              setIsAmountMoreThanAccountOpen(true);
-                              return;
-                            }
-                            field.onChange(nextAmount);
-                            lastValidAmountRef.current = nextAmount;
-                          }}
-                          disabled={amountDisabled}
-                          className={amountDisabled ? "bg-muted" : ""}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                    );
-                  }}
-                />
-              )}
               </div>
               {/* Section 3 (Attachment + Narration): single grouped container for file + narration fields. */}
               <div className="rounded-lg border border-indigo-300/80 bg-indigo-50 p-3">
@@ -4048,7 +4053,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           variant="payment_out"
           partyId={partyId}
           partyName={processedParties.find((p) => p.id === partyId)?.name ?? "Party"}
-          receivedAmount={Number(form.watch("amount")) || 0}
+          receivedAmount={payeeAmountValue}
           existingAllocations={allocations}
           paymentOutId={voucher?.id ?? savedVoucherId ?? undefined}
           accountId={form.watch("accountId") || undefined}

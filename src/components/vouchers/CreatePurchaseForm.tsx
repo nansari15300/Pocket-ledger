@@ -84,7 +84,7 @@ import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from
 import { LinkAdvancesToVoucherDialog, applyAdvancesAllocationsToServer } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
 import { useAdvancesLinkableCount } from "@/hooks/useAdvancesForVoucher";
-import { getLinkedAmountsToVoucher, getLinkedAmountRowsFromPending, getOutgoingLinkedAmountRows, mergeLinkedRows, hasPaymentLinks, getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { getLinkedAmountsToVoucher, getLinkedAmountRowsFromPending, getOutgoingLinkedAmountRows, mergeLinkedRows, hasPaymentLinks, getAllocationTotal, getPaymentOutPartyLinkAmount, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 
 import { firestore, storage } from "@/lib/firebase";
@@ -568,7 +568,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (!vouchers?.length) return m;
     for (const v of vouchers) {
       if (v.type !== "payment_out" && v.type !== "direct_expense") continue;
-      const total = Number((v as any).amount ?? (v as any).total ?? 0) || 0;
+      const total =
+        v.type === "payment_out"
+          ? getPaymentOutPartyLinkAmount(v)
+          : Number((v as any).amount ?? (v as any).total ?? 0) || 0;
       const allocations = ((v as any).allocations as { amount?: number; voucherId?: string }[] | undefined) || [];
       const totalAllocated = allocations.reduce((s, a) => s + getAllocationTotal(a as any), 0);
       m.set(v.id, { total, totalAllocated });

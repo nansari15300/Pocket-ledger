@@ -44,7 +44,7 @@ try {
 const devPort = "3000";
 const lanIps = listLanIPv4Addresses();
 // eslint-disable-next-line no-console
-console.log(`[dev-stable] Local dev → http://localhost:${devPort}`);
+console.log(`[dev-stable] Local dev → http://localhost:${devPort}/app`);
 if (lanIps.length) {
   // eslint-disable-next-line no-console
   console.log("[dev-stable] LAN — same Wi‑Fi / cable devices par yeh URL use karo (Next ka 0.0.0.0 yahan replace):");
@@ -75,9 +75,13 @@ const child = spawn(process.execPath, args, {
   env: {
     ...process.env,
     PORT: devPort,
+    WEB_APP_BASE_PATH: "/app",
+    NEXT_PUBLIC_WEB_APP_BASE_PATH: "/app",
     PL_PROJECT_ROOT: projectRoot,
     /** Browser Settings → Server: dev API (`/api/dev-pl-local-server`) — client bundle me inline */
     NEXT_PUBLIC_PL_DEV_LOCAL_SERVER: "1",
+    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || `http://localhost:${devPort}/app`,
+    NEXT_PUBLIC_BASE_URL: process.env.NEXT_PUBLIC_BASE_URL || `http://localhost:${devPort}/app`,
   },
 });
 

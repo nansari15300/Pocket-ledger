@@ -301,6 +301,64 @@ export function getTaxNetAllocatedByVoucherIdFromPaymentOuts(vouchers: any[]): M
   return map;
 }
 
+/** Outflow vouchers: main/payee leg only — other charge excluded from bill-wise linking. */
+export function getOutflowBillWiseLinkAmount(v: any): number {
+  const type = String(v?.type ?? "");
+  if (type !== "payment_out" && type !== "direct_expense" && type !== "contra") {
+    return Number(v?.amount ?? v?.total ?? 0) || 0;
+  }
+  const total = Number(v?.amount ?? v?.total ?? 0) || 0;
+  const explicitPayee = Number(v?.payeeAmount);
+  if (Number.isFinite(explicitPayee) && explicitPayee > 0) return explicitPayee;
+  const charge = Number(v?.otherChargeAmount) || 0;
+  return Math.max(0, total - charge);
+}
+
+/**
+ * Payment Out party/staff bill-wise linkable amount — payee leg only.
+ * Other charge (expense account) is excluded from party bill-wise linking.
+ */
+export function getPaymentOutPartyLinkAmount(v: any): number {
+  if (v?.type === "payment_out" || v?.type === "direct_expense" || v?.type === "contra") {
+    return getOutflowBillWiseLinkAmount(v);
+  }
+  return Number(v?.amount ?? v?.total ?? 0) || 0;
+}
+
+/** Journal party/staff line bill-wise linkable amount — excludes voucher-level other charge on that account. */
+export function getJournalPartyBillWiseLinkAmount(v: any, ledgerId: string, lineAmount: number): number {
+  const amt = Number(lineAmount) || 0;
+  if (amt <= 0) return 0;
+  const charge = Number(v?.otherChargeAmount) || 0;
+  if (charge <= 0) return amt;
+  const chargeParty = String(v?.otherChargePartyAccountId ?? "").trim();
+  if (chargeParty && chargeParty === String(ledgerId)) {
+    return Math.max(0, amt - charge);
+  }
+  return amt;
+}
+
+/** Journal party/staff entry Dr/Cr for bill-wise — other charge excluded when charge ties to this account. */
+export function getJournalPartyBillWiseAmountFromEntries(
+  voucher: any,
+  ledgerId: string
+): { debit: number; credit: number; total: number } | null {
+  if (voucher?.type !== "journal" || !Array.isArray(voucher?.entries)) return null;
+  const partyEntry = voucher.entries.find(
+    (e: any) => String(e?.accountId ?? "") === String(ledgerId)
+  );
+  if (!partyEntry) return null;
+  const rawDebit = Number((partyEntry as any)?.debit) || 0;
+  const rawCredit = Number((partyEntry as any)?.credit) || 0;
+  const debit =
+    rawDebit > 0 ? getJournalPartyBillWiseLinkAmount(voucher, ledgerId, rawDebit) : 0;
+  const credit =
+    rawCredit > 0 ? getJournalPartyBillWiseLinkAmount(voucher, ledgerId, rawCredit) : 0;
+  const total = debit > 0 ? debit : credit;
+  if (total <= 0) return null;
+  return { debit, credit, total };
+}
+
 /**
  * For a payment_in voucher: total allocated = sum(allocations). Remaining = amount - total allocated.
  */
@@ -312,10 +370,14 @@ export function getPaymentInRemaining(v: any): number {
 }
 
 /**
- * For a payment_out voucher: total allocated = sum(allocations). Remaining = amount - total allocated.
+ * For a payment_out voucher: total allocated = sum(allocations). Remaining = payee amount - total allocated.
  */
 export function getPaymentOutRemaining(v: any): number {
-  const amount = Number(v.amount ?? v.total ?? 0);
+  const type = String(v?.type ?? "");
+  const amount =
+    type === "payment_out" || type === "direct_expense" || type === "contra"
+      ? getOutflowBillWiseLinkAmount(v)
+      : Number(v?.amount ?? v?.total ?? 0) || 0;
   const allocations = (v.allocations as Allocation[] | undefined) || [];
   const allocated = allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
   return Math.max(0, amount - allocated);

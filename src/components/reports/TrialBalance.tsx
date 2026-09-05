@@ -194,7 +194,7 @@ export function TrialBalancePage() {
     userNames,
   } = useVouchers();
   
-  const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
+  const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } = useDate();
   const { company, companyId } = useCompany();
   
   const [query, setQuery] = useState("");
@@ -1163,9 +1163,7 @@ export function TrialBalancePage() {
                     {openingBalanceLedgerBreakdown ? (
                       <OpeningBalanceLedgerAccountsTable
                         breakdown={openingBalanceLedgerBreakdown}
-                        formatCurrency={(amount, options) =>
-                          String(formatCurrency(amount, options ?? {}))
-                        }
+                        formatCurrency={formatCurrencyForPrint}
                         interactionLocked={openingBalanceEditOpen}
                         onRowActivate={handleOpeningBalanceRowActivate}
                       />

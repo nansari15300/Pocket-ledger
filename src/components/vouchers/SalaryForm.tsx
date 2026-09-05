@@ -1741,7 +1741,19 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
       if (savedDoc && savedDoc.id) {
           markCopiedDraftPersisted();
           if (isMounted.current) setSavedVoucherIdRef(savedDoc.id);
-          if (companyId) {
+      } else {
+          throw new Error("Failed to save voucher and get ID.");
+      }
+
+        sonnerToast.success("Voucher saved successfully!", { id: toastId });
+        if (isMounted.current) setIsLoading(false);
+
+        if (!saveAndNew) {
+          onVoucherAction?.("saved", false, savedDoc.id);
+        }
+
+        const postSaveTail = async () => {
+          if (companyId && savedDoc.id) {
             try {
               const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
                 companyId,
@@ -1757,65 +1769,58 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
               console.warn("[SalaryForm] post-save attachment finalize", attachErr);
             }
           }
-          // Bill-wise links are local-first; push them only after the salary voucher itself exists/saves successfully.
           if (!isPaymentMode) {
             await syncSalaryBillWiseLinks(savedDoc.id);
           }
           if (originalVoucherIdToDelete) {
-              // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
-              await patchVoucherFields(companyId, originalVoucherIdToDelete, {
-                isDeleted: true,
-                deletedAt: voucherRecycleBinDeletedAt(),
-                convertedToType: 'journal',
-                convertedToVoucherNumber: submissionData.voucherNumber,
+            await patchVoucherFields(companyId, originalVoucherIdToDelete, {
+              isDeleted: true,
+              deletedAt: voucherRecycleBinDeletedAt(),
+              convertedToType: "journal",
+              convertedToVoucherNumber: submissionData.voucherNumber,
+            });
+          }
+          if (companyId && company) {
+            const isEdit = !!voucher?.id;
+            const amount = Number(submissionData.total ?? data.total) || 0;
+            const vid = savedVoucherIdRef || voucher?.id;
+            if (isEdit) {
+              const oldV = voucher as any;
+              const changes = getChangedFieldLabels(
+                { total: oldV?.total ?? oldV?.amount, narration: oldV?.narration, date: oldV?.date?.toDate?.() ?? oldV?.date, voucherNumber: oldV?.voucherNumber, accountId: oldV?.accountId },
+                { total: submissionData.total, narration: submissionData.narration, date: submissionData.date, voucherNumber: submissionData.voucherNumber, accountId: submissionData.accountId },
+                [
+                  { key: "total", label: "Amount" },
+                  { key: "narration", label: "Narration" },
+                  { key: "date", label: "Date" },
+                  { key: "voucherNumber", label: "Voucher number" },
+                  { key: "accountId", label: "Account" },
+                ]
+              );
+              await sendTransactionAlert(companyId, company, {
+                kind: "edited",
+                voucherId: vid,
+                voucherNumber: submissionData.voucherNumber,
+                voucherType: voucherType,
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+                changes: changes.length > 0 ? changes : undefined,
               });
+            } else if (isAmountOverOneLakh(amount)) {
+              await sendTransactionAlert(companyId, company, {
+                kind: "large_amount",
+                voucherId: vid,
+                voucherNumber: submissionData.voucherNumber,
+                voucherType: voucherType,
+                amount,
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+              });
+            }
           }
-      } else {
-          throw new Error("Failed to save voucher and get ID.");
-      }
-
-        sonnerToast.success("Voucher saved successfully!", { id: toastId });
-        if (companyId && company) {
-          const isEdit = !!voucher?.id;
-          const amount = Number(submissionData.total ?? data.total) || 0;
-          const vid = savedVoucherIdRef || voucher?.id;
-          if (isEdit) {
-            const oldV = voucher as any;
-            const changes = getChangedFieldLabels(
-              { total: oldV?.total ?? oldV?.amount, narration: oldV?.narration, date: oldV?.date?.toDate?.() ?? oldV?.date, voucherNumber: oldV?.voucherNumber, accountId: oldV?.accountId },
-              { total: submissionData.total, narration: submissionData.narration, date: submissionData.date, voucherNumber: submissionData.voucherNumber, accountId: submissionData.accountId },
-              [
-                { key: "total", label: "Amount" },
-                { key: "narration", label: "Narration" },
-                { key: "date", label: "Date" },
-                { key: "voucherNumber", label: "Voucher number" },
-                { key: "accountId", label: "Account" },
-              ]
-            );
-            await sendTransactionAlert(companyId, company, {
-              kind: "edited",
-              voucherId: vid,
-              voucherNumber: submissionData.voucherNumber,
-              voucherType: voucherType,
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-              changes: changes.length > 0 ? changes : undefined,
-            });
-          } else if (isAmountOverOneLakh(amount)) {
-            await sendTransactionAlert(companyId, company, {
-              kind: "large_amount",
-              voucherId: vid,
-              voucherNumber: submissionData.voucherNumber,
-              voucherType: voucherType,
-              amount,
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-            });
-          }
-        }
-        if (saveAndNew && isMounted.current) {
+          if (saveAndNew && isMounted.current) {
             form.reset(getInitialFormValues());
             setFiles([]);
             setSavePdfAsImage(false);
@@ -1824,14 +1829,22 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
             initialSalaryLinkMapRef.current = {};
             setLatestOBAllocated(0);
             initialOBAllocatedRef.current = 0;
-            // Save & New clears any local draft bill-wise state.
             setHasLocalBillWiseDraftEdits(false);
             fetchVoucherNumber();
+          }
+          onSuccess?.();
+          if (saveAndNew) {
+            onVoucherAction?.("saved", true, savedDoc.id);
+          }
+        };
+
+        if (!saveAndNew) {
+          void postSaveTail().catch((err) => {
+            console.warn("[SalaryForm] post-save tail failed", err);
+          });
+        } else {
+          await postSaveTail();
         }
-
-        onSuccess?.();
-
-        onVoucherAction?.("saved", saveAndNew, savedDoc.id);
     
     } catch (error) {
         if (error instanceof PermissionDeniedError) {

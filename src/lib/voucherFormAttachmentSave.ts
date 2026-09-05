@@ -534,8 +534,8 @@ export async function applyVoucherAttachmentsAfterFormSave(params: {
 }
 
 /**
- * Har voucher form: save ke turant baad attachment cache patch + outbox flush (cross-device snapshot).
- * `void apply…` mat chhodna — dialog band hone se pehle await karo.
+ * Har voucher form: save ke turant baad attachment cache patch (local) + outbox flush background.
+ * Dialog close pehle ho sakta hai — Firestore sync network pe block na kare.
  */
 export async function finalizeVoucherAttachmentsAfterFormSave(params: {
   companyId: string;
@@ -545,16 +545,22 @@ export async function finalizeVoucherAttachmentsAfterFormSave(params: {
   previousUrls?: readonly string[];
 }): Promise<string[]> {
   const persisted = await applyVoucherAttachmentsAfterFormSave(params);
-  try {
-    const { shouldAutoFlushOutboxAfterEnqueue } = await import("@/lib/apkOnlineFirestoreWritePolicy");
-    if (shouldAutoFlushOutboxAfterEnqueue()) {
+  scheduleBackgroundOutboxFlushAfterFormSave();
+  return persisted;
+}
+
+/** Online/local sqlite-first: outbox flush background — Save UI turant band ho. */
+export function scheduleBackgroundOutboxFlushAfterFormSave(): void {
+  void (async () => {
+    try {
+      const { shouldAutoFlushOutboxAfterEnqueue } = await import("@/lib/apkOnlineFirestoreWritePolicy");
+      if (!shouldAutoFlushOutboxAfterEnqueue()) return;
       const { flushVoucherOutbox } = await import("@/lib/localVoucherOutbox");
       await flushVoucherOutbox();
+    } catch (err) {
+      console.warn("[scheduleBackgroundOutboxFlushAfterFormSave] outbox flush", err);
     }
-  } catch (err) {
-    console.warn("[finalizeVoucherAttachmentsAfterFormSave] outbox flush", err);
-  }
-  return persisted;
+  })();
 }
 
 /**

@@ -6,6 +6,8 @@ import {
   getAllocatedByVoucherIdFromPaymentOuts,
   getPaymentInRemaining,
   getPaymentOutRemaining,
+  getPaymentOutPartyLinkAmount,
+  getJournalPartyBillWiseAmountFromEntries,
   getVoucherRemaining,
   getOutstanding,
   getAllocationTotal,
@@ -44,16 +46,8 @@ const CR_TYPES = ["payment_in", "direct_income", "purchase", "purchase_service"]
 /** Dr voucher types for party (Payment Out, Sale, Journal Dr) — used to settle Purchase (Cr). */
 const DR_TYPES = ["payment_out", "direct_expense", "sale", "sale_service"] as const;
 
-const getJournalPartyAmount = (voucher: any, partyId: string) => {
-  if (voucher?.type !== "journal" || !Array.isArray(voucher?.entries)) return null;
-  const partyEntry = voucher.entries.find((e: any) => String(e?.accountId ?? "") === String(partyId));
-  if (!partyEntry) return null;
-  const debit = Number((partyEntry as any)?.debit) || 0;
-  const credit = Number((partyEntry as any)?.credit) || 0;
-  const total = credit > 0 ? credit : debit;
-  if (total <= 0) return null;
-  return { debit, credit, total };
-};
+const getJournalPartyAmount = (voucher: any, partyId: string) =>
+  getJournalPartyBillWiseAmountFromEntries(voucher, partyId);
 
 
 /**
@@ -276,7 +270,9 @@ export function useAdvancesForPurchase(
       const t = (v.type || "").toLowerCase();
       const amount = (t === "sale" || t === "sale_service")
         ? Number(v.total ?? v.amount ?? 0)
-        : Number(v.amount ?? v.total ?? 0);
+        : v.type === "payment_out"
+          ? getPaymentOutPartyLinkAmount(v)
+          : Number(v.amount ?? v.total ?? 0);
       const remaining = v.type === "payment_out" || v.type === "direct_expense"
         ? getPaymentOutRemaining(v)
         : getVoucherRemaining(v);
@@ -431,7 +427,7 @@ export function usePaymentOutsByAccount(
     );
 
     return paymentOutVouchers.map((v) => {
-      const amount = Number(v.amount ?? v.total ?? 0);
+      const amount = getPaymentOutPartyLinkAmount(v);
       const remaining = getPaymentOutRemaining(v);
       const allocations = (v.allocations as Allocation[] | undefined) || [];
       const allocatedTotal = allocations.reduce((s, a) => s + getAllocationTotal(a), 0);

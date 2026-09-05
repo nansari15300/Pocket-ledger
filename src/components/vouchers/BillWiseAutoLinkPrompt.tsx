@@ -22,6 +22,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
+import { cn } from "@/lib/utils";
+import {
+  NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
+  NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN,
+} from "@/lib/dialogShellChrome";
 import { applyPaymentBillWiseLinkAllocations } from "@/lib/voucherActionsClient";
 import {
   applyBillWiseAutoLinkPromptChoice,
@@ -297,7 +302,10 @@ export function BillWiseAutoLinkPromptDialog({
         else onOpenChange(true);
       }}
     >
-      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col gap-3 rounded-lg pt-3 px-[3px]">
+      <DialogContent
+        overlayClassName={NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN}
+        className={cn(NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN, "max-w-4xl max-h-[85vh] flex flex-col gap-3 rounded-lg pt-3 px-[3px]")}
+      >
         <DialogHeader className="flex-shrink-0 space-y-0.5 text-center sm:text-center">
           <p className="text-xs text-muted-foreground leading-tight">
             Link for bill wise ({selectedCount})
@@ -497,8 +505,21 @@ export function usePartyBillWiseAutoLinkPrompt(opts: {
   ledgerName?: string | null;
   ledgerKind?: "party" | "staff";
   vouchers: any[];
+  /** Signed books opening: Dr > 0, Cr < 0. */
+  ledgerOpeningBalance?: number;
+  openingBalanceOutstanding?: number;
 }) {
-  const { enabled, companyId, userId, ledgerId, ledgerName, vouchers, ledgerKind = "party" } = opts;
+  const {
+    enabled,
+    companyId,
+    userId,
+    ledgerId,
+    ledgerName,
+    vouchers,
+    ledgerKind = "party",
+    ledgerOpeningBalance = 0,
+    openingBalanceOutstanding,
+  } = opts;
   const [open, setOpen] = React.useState(false);
   const [proposal, setProposal] = React.useState<BillWiseAutoLinkProposal | null>(null);
   const promptedFpRef = React.useRef<string | null>(null);
@@ -529,6 +550,8 @@ export function usePartyBillWiseAutoLinkPrompt(opts: {
       ledgerName: ledgerName || (ledgerKind === "staff" ? STAFF_ENTITY_LABEL : "Party"),
       ledgerKind,
       vouchers,
+      ledgerOpeningBalance,
+      openingBalanceOutstanding,
     });
     if (!built) {
       setProposal(null);
@@ -563,7 +586,18 @@ export function usePartyBillWiseAutoLinkPrompt(opts: {
     promptedFpRef.current = built.fingerprint;
     const t = window.setTimeout(() => setOpen(true), 600);
     return () => window.clearTimeout(t);
-  }, [enabled, companyId, userId, ledgerId, ledgerName, ledgerKind, voucherSig, vouchers]);
+  }, [
+    enabled,
+    companyId,
+    userId,
+    ledgerId,
+    ledgerName,
+    ledgerKind,
+    voucherSig,
+    vouchers,
+    ledgerOpeningBalance,
+    openingBalanceOutstanding,
+  ]);
 
   return { open, setOpen, proposal };
 }

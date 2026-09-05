@@ -50,7 +50,7 @@ import usePermissions, {
 import { companyUsesDeviceOrPlPermissionConfig, logPlPerm, summarizePermissionDateLimits } from "@/lib/permissionConfigSource";
 import { cn } from "@/lib/utils";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
-import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { isOfflineCompanyStorage, isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import { isLocalCompanyHostShareable } from "@/lib/listShareableLocalCompaniesForHost";
 import { isElectronLocalServerApiAvailable } from "@/lib/electronLocalServer";
 import { LocalPlServerSharePanel } from "@/components/settings/LocalPlServerSharePanel";
@@ -230,6 +230,12 @@ export function ManageShare() {
   const [optimisticRevokedEmails, setOptimisticRevokedEmails] = useState<string[]>([]);
   const [plServerHostShareable, setPlServerHostShareable] = useState(false);
   const [plServerHostShareableResolved, setPlServerHostShareableResolved] = useState(false);
+  /** EXE/local SQLite stamp par `sharedWith` miss ho to Firestore company doc se hydrate. */
+  const [firestoreShareRow, setFirestoreShareRow] = useState<{
+    sharedWith: SharedUser[];
+    ownerEmail?: string;
+  } | null>(null);
+  const [firestoreShareResolved, setFirestoreShareResolved] = useState(false);
   const hostShareableCompanyIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -262,19 +268,70 @@ export function ManageShare() {
     };
   }, [companyId, companyData, allCompanies, allCompaniesRegistry, localCompanyRegistryEpoch]);
 
+  const sharingCompanyData = useMemo(() => {
+    if (!companyData) return null;
+    const sharedWith =
+      (companyData.sharedWith?.length ?? 0) > 0
+        ? companyData.sharedWith!
+        : firestoreShareRow?.sharedWith ?? companyData.sharedWith ?? [];
+    const ownerEmail = companyData.ownerEmail || firestoreShareRow?.ownerEmail;
+    return { ...companyData, sharedWith, ownerEmail };
+  }, [companyData, firestoreShareRow]);
+
   useEffect(() => {
-    const sw = companyData?.sharedWith || [];
+    const cid = String(companyId || "").trim();
+    if (!cid || !companyData) {
+      setFirestoreShareRow(null);
+      setFirestoreShareResolved(false);
+      return;
+    }
+    const isPlShared = (companyData as { plServerShared?: boolean }).plServerShared === true;
+    const hydrateFromFirestore =
+      !isPlShared &&
+      (isCloudLinkedCompanyStorage(companyData) ||
+        (isOfflineCompanyStorage(companyData) && Boolean(companyData.ownerId)));
+    if (!hydrateFromFirestore) {
+      setFirestoreShareRow(null);
+      setFirestoreShareResolved(true);
+      return;
+    }
+    setFirestoreShareResolved(false);
+    const ref = doc(firestore, "companies", cid);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (!snap.exists()) {
+          setFirestoreShareRow(null);
+        } else {
+          const data = snap.data();
+          setFirestoreShareRow({
+            sharedWith: Array.isArray(data.sharedWith) ? (data.sharedWith as SharedUser[]) : [],
+            ownerEmail: typeof data.ownerEmail === "string" ? data.ownerEmail : undefined,
+          });
+        }
+        setFirestoreShareResolved(true);
+      },
+      () => {
+        setFirestoreShareRow(null);
+        setFirestoreShareResolved(true);
+      }
+    );
+    return () => unsub();
+  }, [companyId, companyData]);
+
+  useEffect(() => {
+    const sw = sharingCompanyData?.sharedWith || [];
     setOptimisticRevokedEmails((prev) =>
       prev.filter((email) => sw.some((u) => normalizeEmail(u.email) === normalizeEmail(email)))
     );
-  }, [companyData?.sharedWith]);
+  }, [sharingCompanyData?.sharedWith]);
 
   useEffect(() => {
-    if (!user || !companyData) return;
+    if (!user || !sharingCompanyData) return;
 
     const emails = [
-      companyData.ownerEmail,
-      ...(companyData.sharedWith || []).map((u: any) => u.email),
+      sharingCompanyData.ownerEmail,
+      ...(sharingCompanyData.sharedWith || []).map((u: any) => u.email),
     ].filter(Boolean).map((e: string) => normalizeEmail(e));
 
     const uniqueEmails = [...new Set(emails)];
@@ -305,7 +362,7 @@ export function ManageShare() {
     });
 
     return () => unsubs.forEach((u) => u());
-  }, [user, companyData]);
+  }, [user, sharingCompanyData]);
   
   const hasUnsavedChanges = useMemo(() => {
       return JSON.stringify(firestorePermissionConfig) !== JSON.stringify(editablePermissionConfig);
@@ -985,7 +1042,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
   }
   
   const allUsers = useMemo(() => {
-    if (!companyData || allAppUsers.length === 0) return [];
+    if (!sharingCompanyData) return [];
     
     const isUserOnline = (userInfo: any) => {
       if (!userInfo?.lastSeen?.toDate) return false;
@@ -994,10 +1051,10 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
     const uniqueUsers = new Map<string, SharedUser & { isOnline?: boolean; id?: string, photoURL?: string }>();
 
-    if (companyData.ownerEmail) {
-        const ownerInfo = allAppUsers.find(u => normalizeEmail(u.email) === normalizeEmail(companyData.ownerEmail));
-        uniqueUsers.set(companyData.ownerEmail, {
-            email: companyData.ownerEmail,
+    if (sharingCompanyData.ownerEmail) {
+        const ownerInfo = allAppUsers.find(u => normalizeEmail(u.email) === normalizeEmail(sharingCompanyData.ownerEmail));
+        uniqueUsers.set(sharingCompanyData.ownerEmail, {
+            email: sharingCompanyData.ownerEmail,
             name: ownerInfo?.displayName || "Admin", 
             role: 'owner',
             isOnline: isUserOnline(ownerInfo),
@@ -1006,7 +1063,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         });
     }
 
-    (companyData.sharedWith || [])
+    (sharingCompanyData.sharedWith || [])
       .filter(
         (user) =>
           user.email &&
@@ -1024,7 +1081,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
       });
     
     return Array.from(uniqueUsers.values());
-}, [companyData, allAppUsers, optimisticRevokedEmails]);
+}, [sharingCompanyData, allAppUsers, optimisticRevokedEmails]);
 
 
   if (loading) {
@@ -1066,6 +1123,16 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
   /** SQLite / device-only: email-based Firestore share yahan support nahi — Company login + Local users. */
   const isDeviceLocalCompany = isOfflineCompanyStorage(companyData);
+  const showOnlineFirestoreSharing =
+    isCloudLinkedCompanyStorage(companyData) ||
+    (companyData.sharedWith?.length ?? 0) > 0 ||
+    firestoreShareRow !== null;
+  const firestoreShareHydratePending =
+    isDeviceLocalCompany &&
+    !showOnlineFirestoreSharing &&
+    Boolean(companyData.ownerId) &&
+    !firestoreShareResolved &&
+    (companyData as { plServerShared?: boolean }).plServerShared !== true;
   const isPlServerHostShare =
     isDeviceLocalCompany &&
     plServerHostShareable &&
@@ -1073,12 +1140,13 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
   const hostShareablePending =
     isDeviceLocalCompany && isElectronLocalServerApiAvailable() && !plServerHostShareableResolved;
 
-  if (hostShareablePending) {
+  if (hostShareablePending || firestoreShareHydratePending) {
     return (
       <div className="p-4 sm:p-6 md:p-8">
         <Card className={cn("w-full max-w-lg mx-auto", settingsDetailCardShell)} {...{ [companyProfileChromeRoot]: "" }}>
           <CardContent className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Checking local server sharing…
+            <Loader2 className="h-4 w-4 animate-spin" />{" "}
+            {hostShareablePending ? "Checking local server sharing…" : "Loading online sharing…"}
           </CardContent>
         </Card>
       </div>
@@ -1112,7 +1180,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
               />
             </CardContent>
           </Card>
-        ) : isDeviceLocalCompany && companyData && companyId ? (
+        ) : isDeviceLocalCompany && !showOnlineFirestoreSharing && companyData && companyId ? (
           <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
             <CardContent className="p-4 text-sm text-muted-foreground">
               Local company login users are managed in{" "}
@@ -1193,7 +1261,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                             
                                 <div className="flex flex-col min-w-0 overflow-hidden">
                                     <span className="font-semibold text-sm truncate">{sharedUser.email}</span>
-                                    {sharedUser.email === companyData.ownerEmail && (
+                                    {sharedUser.email === sharingCompanyData?.ownerEmail && (
                                         <span className="text-[10px] text-amber-600 font-bold flex items-center gap-1">
                                             <Crown className="h-3 w-3" /> OWNER
                                         </span>
@@ -1201,7 +1269,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                 </div>
                             </TableCell>
                             <TableCell>
-                                {sharedUser.email === companyData.ownerEmail ? (
+                                {sharedUser.email === sharingCompanyData?.ownerEmail ? (
                                     <span>{sharedUser.name}</span>
                                 ) : (
                                     <Input 
@@ -1212,7 +1280,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                 )}
                             </TableCell>
                             <TableCell>
-                                {sharedUser.email === companyData.ownerEmail ? (
+                                {sharedUser.email === sharingCompanyData?.ownerEmail ? (
                                   <span className="inline-flex items-center text-sm font-medium text-amber-700">
                                     <Crown className="mr-1 h-3.5 w-3.5" /> Owner
                                   </span>
@@ -1246,7 +1314,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                             </TableCell>
                              <TableCell className="text-right">
                                 <div className="flex justify-end items-center gap-1">
-                                {sharedUser.email !== companyData.ownerEmail ? (
+                                {sharedUser.email !== sharingCompanyData?.ownerEmail ? (
                                     <>
                                         <ShareCompanyDialog 
                                         company={companyData} 

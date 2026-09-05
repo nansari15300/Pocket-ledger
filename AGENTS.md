@@ -255,6 +255,34 @@ When the human asks for PL Server fixes (including “make PL like online”):
 - Preserve local-first PL Server behavior.
 - Do not edit frozen Online Company Sync paths while doing PL work.
 
+## Freeze: Voucher save (local-first + instant dialog close)
+
+**Sep 2026:** All voucher types (sale, purchase, payment, journal, contra, salary, adjustment, note, production, inter-company) use **SQLite-first save → dialog closes immediately → Firestore/outbox sync in background** on web, EXE, and APK. **Do not edit unless the human explicitly asks to change voucher save / update UX or sync timing in that same message.**
+
+### Frozen paths (do not touch casually)
+
+- `src/lib/writeGateway/voucherActionsClient.ts` — `saveVoucher`, `patchVoucherFields` sqlite-first branches (no blocking inline Firestore on sqlite-first)
+- `src/lib/voucherFormAttachmentSave.ts` — `finalizeVoucherAttachmentsAfterFormSave`, `scheduleBackgroundOutboxFlushAfterFormSave`
+- `src/lib/apkOnlineFirestoreWritePolicy.ts` — `shouldAutoFlushOutboxAfterEnqueue` semantics for save UX
+
+### Stabilized behavior to preserve
+
+- Save/Update click → local SQLite write completes → voucher dialog hides (Save & Close).
+- Online company cloud mirror via outbox + **background** `flushVoucherOutbox` — Save UI must not await network.
+- `patchVoucherFields` on sqlite-first path: enqueue outbox only; no inline `updateDoc`/`setDoc` blocking save.
+- Salary / Adjustment forms: same dialog-close-first pattern as Sale/Purchase (post-save tail in background for Save & Close).
+
+### Do not
+
+- Re-introduce awaiting Firestore or full outbox flush before dialog close on any voucher form.
+- Change sqlite-first gating back to Firestore-first for online companies without explicit request.
+- Refactor voucher forms’ save handlers for unrelated UI work.
+
+### If the human explicitly asks to change voucher save
+
+- Keep the diff minimal and scoped to that request.
+- Preserve: instant local persist + dialog close + background sync on all platforms.
+
 ## Admin Panel Company (hard — every AI)
 
 **Any agent working on Admin Panel Company / Admin “Company” menu / admin subscription ledger / future PL Server Gold admin accounting must read this section (and `docs/ADMIN_PANEL_COMPANY_AGENT_RULES.md`, plus `.cursor/rules/admin-panel-company.mdc` when present) before editing.**

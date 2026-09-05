@@ -190,7 +190,7 @@ export function InterCompanyAmountDualFields({
                       />
                     </FormControl>
                   </InterCompanyAmountSideRow>
-                  {showOtherCharge && !sourceReadOnly ? (
+                  {showOtherCharge && !sourceReadOnly && !showOtherChargeCard ? (
                     <Button
                       type="button"
                       variant="outline"
@@ -198,11 +198,7 @@ export function InterCompanyAmountDualFields({
                       className="h-8 shrink-0 rounded-full border-blue-300 bg-blue-100 px-3 text-xs font-semibold text-blue-900 hover:bg-blue-200"
                       disabled={fieldsDisabled}
                       onClick={() => {
-                        if (showOtherChargeCard) {
-                          onOtherChargeEnabledChange?.(false);
-                        } else {
-                          onOtherChargeEnabledChange?.(true);
-                        }
+                        onOtherChargeEnabledChange?.(true);
                       }}
                     >
                       <PlusCircle className="mr-1 h-3.5 w-3.5" />

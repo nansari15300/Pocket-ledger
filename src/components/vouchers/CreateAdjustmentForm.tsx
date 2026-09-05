@@ -488,42 +488,57 @@ export function CreateAdjustmentForm({
       );
       setSavedVoucherId(saved.id);
       initialTargetRef.current = selectedTarget;
-      if (companyId && saved.id) {
-        try {
-          const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
-            companyId,
-            voucherId: saved.id,
-            rawFileUrls: fileUrls,
-            storageFolder: "adjustment",
-            previousUrls: initialFilesRef.current,
-          });
-          initialFilesRef.current = persistedUrls;
-          setFiles(persistedUrls);
-          setSavePdfAsImage(shouldSuggestPdfAsImage(persistedUrls));
-        } catch (attachErr) {
-          console.warn("[CreateAdjustmentForm] post-save attachment finalize", attachErr);
+      toast.success("Adjustment saved.", { id: toastId, duration: 1200 });
+      setIsLoading(false);
+      if (!saveAndNew) {
+        onVoucherAction?.("saved", false, saved.id);
+      }
+      const postSaveTail = async () => {
+        if (companyId && saved.id) {
+          try {
+            const persistedUrls = await finalizeVoucherAttachmentsAfterFormSave({
+              companyId,
+              voucherId: saved.id,
+              rawFileUrls: fileUrls,
+              storageFolder: "adjustment",
+              previousUrls: initialFilesRef.current,
+            });
+            initialFilesRef.current = persistedUrls;
+            setFiles(persistedUrls);
+            setSavePdfAsImage(shouldSuggestPdfAsImage(persistedUrls));
+          } catch (attachErr) {
+            console.warn("[CreateAdjustmentForm] post-save attachment finalize", attachErr);
+            initialFilesRef.current = fileUrls;
+            setFiles(fileUrls);
+          }
+        } else {
           initialFilesRef.current = fileUrls;
           setFiles(fileUrls);
+          setSavePdfAsImage(shouldSuggestPdfAsImage(fileUrls));
         }
+        if (printAfter && typeof window !== "undefined") {
+          window.setTimeout(() => window.print(), 250);
+        }
+        if (saveAndNew) {
+          form.reset({ ...form.getValues(), amount: 0, narration: "" });
+          setFiles([]);
+          initialFilesRef.current = [];
+        } else {
+          form.reset(data);
+        }
+        if (approveAfterSave && voucher?.id) onSuccess?.();
+        else if (!approveAfterSave) onSuccess?.();
+        if (saveAndNew) {
+          onVoucherAction?.("saved", true, saved.id);
+        }
+      };
+      if (!saveAndNew) {
+        void postSaveTail().catch((err) => {
+          console.warn("[CreateAdjustmentForm] post-save tail failed", err);
+        });
       } else {
-        initialFilesRef.current = fileUrls;
-        setFiles(fileUrls);
-        setSavePdfAsImage(shouldSuggestPdfAsImage(fileUrls));
+        await postSaveTail();
       }
-      toast.success("Adjustment saved.", { id: toastId, duration: 1200 });
-      if (printAfter && typeof window !== "undefined") {
-        window.setTimeout(() => window.print(), 250);
-      }
-      if (saveAndNew) {
-        form.reset({ ...form.getValues(), amount: 0, narration: "" });
-        setFiles([]);
-        initialFilesRef.current = [];
-      } else {
-        form.reset(data);
-      }
-      if (approveAfterSave && voucher?.id) onSuccess?.();
-      else if (!approveAfterSave) onSuccess?.();
-      onVoucherAction?.("saved", saveAndNew, saved.id);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Adjustment save failed.", { id: toastId });
     } finally {

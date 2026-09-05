@@ -199,6 +199,17 @@ export function PayeeDetails({
       return 'party'; 
   }, [party]);
 
+  const transactionDates = useMemo(() => {
+    if (!party || !passedTransactions) return [];
+    return passedTransactions.map((t: any) => {
+      if (t.date) {
+        const d = typeof t.date === 'string' ? new Date(t.date) : t.date.toDate();
+        return startOfDay(d);
+      }
+      return null;
+    }).filter(Boolean) as Date[];
+  }, [party, passedTransactions]);
+
   const { balanceMode } = useBalanceMode();
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
@@ -427,17 +438,6 @@ export function PayeeDetails({
   };
   
   if(!party) return null;
-
-  const transactionDates = useMemo(() => {
-    if (!party || !passedTransactions) return [];
-    return passedTransactions.map((t: any) => {
-      if (t.date) {
-        const d = typeof t.date === 'string' ? new Date(t.date) : t.date.toDate();
-        return startOfDay(d);
-      }
-      return null;
-    }).filter(Boolean) as Date[];
-  }, [party, passedTransactions]);
 
   return (
     <>

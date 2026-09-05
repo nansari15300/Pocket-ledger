@@ -15,6 +15,7 @@ import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { persistLedgerModalParentFromBrowser, readPersistedModalParentHref } from "@/lib/modalUrlSync";
+import { withoutWebAppBasePath, browserHistoryHref } from "@/lib/webAppBasePath";
 import { plNavDbg } from "@/lib/plNavRedirectDebug";
 
 const SESSION_PROTECT_UNTIL_KEY = "pl_voucher_approve_protect_until";
@@ -38,7 +39,8 @@ let lastDashboardGuardRestoreLogAt = 0;
 
 /** Static APK race me ye 2 fallback routes par galat jump dikha tha; guard in dono par restore karega. */
 function isUnexpectedFallbackRedirectPath(path: string): boolean {
-  return path === "/dashboard" || path === "/company";
+  const inner = withoutWebAppBasePath(path);
+  return inner === "/dashboard" || inner === "/company";
 }
 
 function normalizePath(p: string): string {
@@ -204,12 +206,14 @@ export function armDashboardRedirectGuard(
           to: guard.targetHref.slice(0, 160),
         });
       }
-      window.history.replaceState(window.history.state ?? null, "", guard.targetHref);
+      window.history.replaceState(window.history.state ?? null, "", browserHistoryHref(guard.targetHref));
     } catch {
       /* ignore */
     }
     try {
-      router.replace(guard.targetHref);
+      const routerPath = withoutWebAppBasePath((guard.targetHref || "/").split("?")[0] || "/");
+      const qs = guard.targetHref.includes("?") ? guard.targetHref.slice(guard.targetHref.indexOf("?")) : "";
+      router.replace(`${routerPath}${qs}`);
     } catch {
       /* ignore */
     }

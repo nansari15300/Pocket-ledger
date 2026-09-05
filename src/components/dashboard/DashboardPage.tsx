@@ -95,6 +95,7 @@ import {
 } from "@/lib/receivablesPayablesDialogUi";
 import { ReceivablesPayablesDialogFooter } from "@/components/reports/ReceivablesPayablesDialogFooter";
 import { ReceivablesPayablesDialogEntityList, RP_DIALOG_DIM_GREEN_BORDER, rpDialogListScrollHandlers } from "@/components/reports/ReceivablesPayablesDialogEntityList";
+import { useReceivablesPayablesLedgerPopup } from "@/components/reports/ReceivablesPayablesLedgerPopup";
 import { ReceivablesPayablesEntitySettings } from "@/components/reports/ReceivablesPayablesEntitySettings";
 import { useReceivablesPayablesEntityVisibility } from "@/hooks/useReceivablesPayablesEntityVisibility";
 import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
@@ -759,6 +760,7 @@ export default function DashboardPage() {
   } = useReceivablesPayablesEntityVisibility();
   const rpListMotion = useMasterListRowMotion();
   const rpListScrollHandlers = rpDialogListScrollHandlers(rpListMotion);
+  const rpLedgerPopup = useReceivablesPayablesLedgerPopup();
 
   const rawFinancialSummary = React.useMemo(() => {
     const raw = computeReceivablesPayablesFinancialSummary({
@@ -1473,12 +1475,15 @@ export default function DashboardPage() {
                         <div className="text-right pt-2">
                             <Dialog open={receivablesPayablesOpen} onOpenChange={(open) => {
                               setReceivablesPayablesOpen(open);
-                              if (!open) setReceivablesPayablesTab('receivables');
+                              if (!open) {
+                                setReceivablesPayablesTab('receivables');
+                                rpLedgerPopup.resetDialogInteraction();
+                              }
                             }}>
                                 <DialogTrigger asChild>
                                     <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
                                 </DialogTrigger>
-                                <DialogContent className="dashboard-financial-popup max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col overflow-hidden">
+                                <DialogContent overlayClassName="bg-black/45 backdrop-blur-none" className="dashboard-financial-popup max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col overflow-hidden">
                                     <DialogHeader className="shrink-0 p-4 border-b flex flex-col gap-3">
                                         {/* Title Row - Mobile: Title + Close Icon */}
                                         <div className="flex items-center justify-between">
@@ -1569,6 +1574,9 @@ export default function DashboardPage() {
                                                         formatAmount={formatRpDialogAmount}
                                                         isMobile={isMobile}
                                                         listMotion={rpListMotion}
+                                                        selectedKey={rpLedgerPopup.selectedKey}
+                                                        onSelectRow={rpLedgerPopup.selectRow}
+                                                        onOpenRow={rpLedgerPopup.openRowLedger}
                                                     />
                                                 </div>
                                             </div>
@@ -1583,6 +1591,9 @@ export default function DashboardPage() {
                                                         formatAmount={formatRpDialogAmount}
                                                         isMobile={isMobile}
                                                         listMotion={rpListMotion}
+                                                        selectedKey={rpLedgerPopup.selectedKey}
+                                                        onSelectRow={rpLedgerPopup.selectRow}
+                                                        onOpenRow={rpLedgerPopup.openRowLedger}
                                                     />
                                                 </div>
                                             </div>
@@ -1598,6 +1609,7 @@ export default function DashboardPage() {
                                     />
                                 </DialogContent>
                             </Dialog>
+                            {rpLedgerPopup.popup}
                         </div>
                     )}
                 </CardContent>

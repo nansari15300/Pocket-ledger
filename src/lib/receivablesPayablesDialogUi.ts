@@ -1,3 +1,4 @@
+import type { BalanceSheetRow } from "@/lib/reports/balanceSheetAccounting";
 import type {
   ReceivablesPayablesFinancialSummary,
   RpEntityRow,
@@ -292,5 +293,40 @@ export function normalizeReceivablesPayablesSummary(
     payables,
     recCount,
     payCount,
+  };
+}
+
+export function rpDialogRowSelectionKey(side: "receivables" | "payables", row: RpDialogRow): string {
+  return `${side}:${row.kind}:${row.entityId}`;
+}
+
+/** Party / Bank / Staff / Tax — Balance Sheet ledger popup. IC company group is not a ledger. */
+export function rpDialogRowCanOpenLedger(row: RpDialogRow): boolean {
+  if (row.isIcPeerCompanyGroup) return false;
+  return row.kind === "party" || row.kind === "bank" || row.kind === "staff" || row.kind === "tax";
+}
+
+export function rpDialogRowToBalanceSheetLedgerRow(row: RpDialogRow): BalanceSheetRow | null {
+  if (!rpDialogRowCanOpenLedger(row)) return null;
+  const entityType =
+    row.kind === "bank"
+      ? "account"
+      : row.kind === "party"
+        ? "party"
+        : row.kind === "staff"
+          ? "staff"
+          : row.kind === "tax"
+            ? "tax"
+            : null;
+  if (!entityType) return null;
+  return {
+    accountId: row.entityId,
+    accountName: row.party,
+    group: "",
+    category: "Assets",
+    ledgerClass: "Asset",
+    amount: Math.abs(row.balance),
+    signedBalance: row.balance,
+    entityType,
   };
 }

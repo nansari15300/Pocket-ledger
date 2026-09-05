@@ -52,6 +52,7 @@ import { LocalServerShareAutoConnectManager } from "@/components/settings/LocalS
 import { PlServerAuthoritativeReplayManager } from "@/components/PlServerAuthoritativeReplayManager";
 import { FirebaseLedgerDeltaSyncManager } from "@/components/FirebaseLedgerDeltaSyncManager";
 import { DaybookWedgeSyncManager } from "@/components/wedge/DaybookWedgeSyncManager";
+import { WebAppBasePathUrlGuard } from "@/components/WebAppBasePathUrlGuard";
 
 /** Local-only app start: sql.js init pehle se — refresh par company turant SQLite se load. */
 function SqlitePrewarmBootstrap() {
@@ -86,6 +87,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
     useEffect(() => {
       ensureClientRandomUUIDPolyfill();
       void import("@/lib/plServerFirebaseHitTrace").then((m) => m.installPlServerFirebaseNetworkTrace());
+      try {
+        sessionStorage.removeItem("pl_chunk_reload_v1");
+      } catch {
+        /* noop */
+      }
     }, []);
     useEffect(() => {
       if (!isPerfDebugEnabled()) return;
@@ -145,6 +151,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <FirstLoginWarmGateProvider>
                 <CapacitorAndroidBackButton />
                 <AppUiZoomBootstrap />
+                <WebAppBasePathUrlGuard />
                 <StaticFastResumeSyncManager />
                 {/* Offline→online: dashboard/company silent jump block; sync background me chale */}
                 <OnlineResumeRouteShield />

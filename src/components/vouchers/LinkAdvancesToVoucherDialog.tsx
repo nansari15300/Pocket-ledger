@@ -16,6 +16,10 @@ import { useDate } from "@/hooks/useDate";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { cn } from "@/lib/utils";
+import {
+  NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
+  NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN,
+} from "@/lib/dialogShellChrome";
 import { Link2, RotateCcw } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -421,7 +425,9 @@ export function LinkAdvancesToVoucherDialog({
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent
+        overlayClassName={NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN}
         className={cn(
+          NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
           "max-w-4xl max-h-[85vh] flex flex-col rounded-lg pt-3 px-[3px]",
           isMobile && "left-[2px] right-[2px] translate-x-0 w-auto max-w-none h-[85vh] max-h-[85vh] pt-2"
         )}

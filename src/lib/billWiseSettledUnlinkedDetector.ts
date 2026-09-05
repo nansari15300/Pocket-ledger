@@ -10,6 +10,8 @@ import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCom
 import {
   OPENING_BALANCE_VOUCHER_ID,
   getAllocationTotal,
+  getJournalPartyBillWiseLinkAmount,
+  getOutflowBillWiseLinkAmount,
   type Allocation,
 } from "@/lib/payment-allocation-utils";
 
@@ -99,7 +101,9 @@ function journalLedgerAmount(v: any, ledgerId: string): { debit: number; credit:
   if (!entry) return null;
   const debit = Number(entry.debit) || 0;
   const credit = Number(entry.credit) || 0;
-  const total = debit > 0 ? debit : credit;
+  const rawTotal = debit > 0 ? debit : credit;
+  if (rawTotal <= 0) return null;
+  const total = getJournalPartyBillWiseLinkAmount(v, ledgerId, rawTotal);
   if (total <= 0) return null;
   return { debit, credit, total };
 }
@@ -170,10 +174,10 @@ function buildLedgerRow(
     amount = Number(v.amount ?? v.total ?? 0);
     typeLabel = type === "payment_in" ? "Receipt" : "Direct Income";
     sourceRank = 0;
-  } else if (isLedgerEntity && (type === "payment_out" || type === "direct_expense")) {
+  } else if (isLedgerEntity && (type === "payment_out" || type === "direct_expense" || type === "contra")) {
     side = "dr";
-    amount = Number(v.amount ?? v.total ?? 0);
-    typeLabel = type === "payment_out" ? "Payment" : "Direct Expense";
+    amount = getOutflowBillWiseLinkAmount(v);
+    typeLabel = type === "payment_out" ? "Payment" : type === "direct_expense" ? "Direct Expense" : "Contra";
     sourceRank = 0;
   } else if (type === "journal") {
     const ledgerAmount = journalLedgerAmount(v, ledgerId);
@@ -254,6 +258,90 @@ function allocationBelongsToLedger(
   return ledgerVoucherIds.has(target);
 }
 
+/** How much of books opening balance is already consumed on this ledger. */
+function computeLedgerOpeningBalanceConsumed(
+  ledgerVouchers: any[],
+  ledgerId: string,
+  ledgerKind: "party" | "staff"
+): number {
+  const entityField = ledgerKind === "staff" ? "staffId" : "partyId";
+  const ledgerIdStr = String(ledgerId);
+
+  let fromPayments = 0;
+  for (const v of ledgerVouchers) {
+    const type = String(v?.type ?? "");
+    if (
+      !["payment_in", "direct_income", "payment_out", "direct_expense", "contra"].includes(type)
+    ) {
+      continue;
+    }
+    if (String(v?.[entityField] ?? "") !== ledgerIdStr) continue;
+    const allocs = (v.allocations as Allocation[] | undefined) || [];
+    for (const a of allocs) {
+      if (String(a?.voucherId ?? "") === OPENING_BALANCE_VOUCHER_ID) {
+        fromPayments += getAllocationTotal(a);
+      }
+    }
+  }
+
+  let fromBillwise = 0;
+  for (const v of ledgerVouchers) {
+    const type = String(v?.type ?? "");
+    if (!["sale", "sale_service", "purchase", "purchase_service"].includes(type)) continue;
+    if (String(v?.[entityField] ?? "") !== ledgerIdStr) continue;
+    fromBillwise += Number(v.openingBalanceAllocated) || 0;
+  }
+
+  let fromJournals = 0;
+  for (const v of ledgerVouchers) {
+    if (v?.type !== "journal" || !voucherTouchesLedger(v, ledgerId, ledgerKind)) continue;
+    const allocs = (v.allocations as Allocation[] | undefined) || [];
+    for (const a of allocs) {
+      if (String(a?.voucherId ?? "") !== OPENING_BALANCE_VOUCHER_ID) continue;
+      const linkedId = String((a as { linkedAccountId?: string }).linkedAccountId ?? "");
+      if (linkedId && linkedId !== ledgerIdStr) continue;
+      fromJournals += getAllocationTotal(a);
+    }
+  }
+
+  return roundMoney(fromPayments + fromBillwise + fromJournals);
+}
+
+/** Synthetic books opening row — same target id as manual link dialogs. */
+function buildOpeningBalanceLedgerRow(
+  ledgerOpeningBalance: number,
+  consumed: number,
+  openingBalanceOutstanding?: number
+): LedgerRow | null {
+  const signed = Number(ledgerOpeningBalance) || 0;
+  if (Math.abs(signed) < 1e-6) return null;
+
+  const side: BillWiseAutoLinkSide = signed > 0 ? "dr" : "cr";
+  const amount = roundMoney(Math.abs(signed));
+  const linked = roundMoney(consumed);
+  const remaining =
+    typeof openingBalanceOutstanding === "number" && openingBalanceOutstanding >= 0
+      ? roundMoney(openingBalanceOutstanding)
+      : roundMoney(Math.max(0, amount - linked));
+  if (remaining <= 0) return null;
+
+  return {
+    voucher: { id: OPENING_BALANCE_VOUCHER_ID, date: null },
+    voucherId: OPENING_BALANCE_VOUCHER_ID,
+    voucherNumber: "—",
+    type: "opening_balance",
+    typeLabel: "Book Opening",
+    side,
+    amount,
+    linked,
+    remaining,
+    time: 0,
+    // Prefer real vouchers (payment / journal) as allocation holder; OB is the target.
+    sourceRank: 10,
+    needsLinkedAccountId: false,
+  };
+}
+
 /** Allocations pointing at each voucher, counted only within this ledger. */
 function buildInboundAllocatedMap(
   ledgerVouchers: any[],
@@ -294,6 +382,10 @@ export function buildPartyBillWiseAutoLinkProposal(opts: {
   ledgerName: string;
   vouchers: any[];
   ledgerKind?: "party" | "staff";
+  /** Signed books opening: Dr > 0, Cr < 0. */
+  ledgerOpeningBalance?: number;
+  /** Bill-wise remaining on opening balance when known (overrides gross − consumed). */
+  openingBalanceOutstanding?: number;
 }): BillWiseAutoLinkProposal | null {
   const { ledgerName, vouchers } = opts;
   const ledgerKind = opts.ledgerKind ?? "party";
@@ -304,11 +396,19 @@ export function buildPartyBillWiseAutoLinkProposal(opts: {
   const ledgerVouchers = activeVouchers.filter((v) => voucherTouchesLedger(v, ledgerId, ledgerKind));
   const ledgerVoucherIds = new Set(ledgerVouchers.map((v) => String(v?.id ?? "")));
   const inboundAllocated = buildInboundAllocatedMap(ledgerVouchers, ledgerId, ledgerVoucherIds);
+  const obConsumed = computeLedgerOpeningBalanceConsumed(ledgerVouchers, ledgerId, ledgerKind);
+  const openingBalanceRow = buildOpeningBalanceLedgerRow(
+    Number(opts.ledgerOpeningBalance) || 0,
+    obConsumed,
+    opts.openingBalanceOutstanding
+  );
 
   const ledgerRows = ledgerVouchers
     .map((v) => buildLedgerRow(v, ledgerId, inboundAllocated, ledgerVoucherIds, ledgerKind))
     .filter((row): row is LedgerRow => !!row)
     .sort((a, b) => a.time - b.time || a.voucherId.localeCompare(b.voucherId));
+
+  if (openingBalanceRow) ledgerRows.unshift(openingBalanceRow);
 
   if (!ledgerRows.length) return null;
 
@@ -394,6 +494,8 @@ export function buildPartyBillWiseAutoLinkProposal(opts: {
       };
     })
     .sort((a, b) => {
+      if (a.voucherId === OPENING_BALANCE_VOUCHER_ID) return -1;
+      if (b.voucherId === OPENING_BALANCE_VOUCHER_ID) return 1;
       const voucherA = activeVouchers.find((v) => String(v?.id ?? "") === a.voucherId);
       const voucherB = activeVouchers.find((v) => String(v?.id ?? "") === b.voucherId);
       return voucherTime(voucherA) - voucherTime(voucherB) || a.voucherId.localeCompare(b.voucherId);

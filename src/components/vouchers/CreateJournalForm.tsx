@@ -37,7 +37,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
 } from "../ui/alert-dialog";
 
-import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, Wand2, History, CheckCircle, Link2 } from "lucide-react";
+import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, Wand2, History, CheckCircle, Link2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
@@ -119,7 +119,7 @@ import usePermissions from "@/hooks/usePermissions";
 import { useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { loadJournalLedgerScopeSnapshot, type JournalScopedLedgerSnapshot } from "@/lib/journalLedgerScopeLoad";
-import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID, getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts } from "@/lib/payment-allocation-utils";
+import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID, getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts, getJournalPartyBillWiseLinkAmount, getJournalPartyBillWiseAmountFromEntries, getPaymentOutPartyLinkAmount } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
@@ -189,6 +189,14 @@ const formSchema = z.object({
   total: z.number().optional(),
   files: z.array(fileSchema).optional(),
   unassignedFile: z.any().optional(),
+  otherChargeAccountId: z.string().optional(),
+  otherChargeAmount: z.coerce.number().optional(),
+  otherChargePartyAccountId: z.string().optional(),
+}).superRefine((data, ctx) => {
+  const chargeAmount = Number(data.otherChargeAmount || 0);
+  if (chargeAmount > 0 && !String(data.otherChargeAccountId || "").trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Please select other charge account.", path: ["otherChargeAccountId"] });
+  }
 });
 
 type JournalFormValues = z.infer<typeof formSchema>;
@@ -218,6 +226,9 @@ function getInitialFormValues(voucher?: any): JournalFormValues {
             ],
             total: 0,
             files: [],
+            otherChargeAccountId: "",
+            otherChargeAmount: 0,
+            otherChargePartyAccountId: "",
         };
     }
 
@@ -250,6 +261,9 @@ function getInitialFormValues(voucher?: any): JournalFormValues {
         total: voucher.total || 0,
         files: [],
         lines: lines,
+        otherChargeAccountId: voucher.otherChargeAccountId || "",
+        otherChargeAmount: Number(voucher.otherChargeAmount || 0),
+        otherChargePartyAccountId: voucher.otherChargePartyAccountId || "",
     };
 }
 
@@ -466,6 +480,9 @@ export function CreateJournalForm({
   const [selectedBillWiseCard, setSelectedBillWiseCard] = useState<"debit" | "credit" | null>(null);
   // Journal link cards hidden by default in add/new and non-linked edit; "Show Link" reveals them.
   const [showLinkSections, setShowLinkSections] = useState(false);
+  const [otherChargeEnabled, setOtherChargeEnabled] = useState(
+    Boolean(voucher?.otherChargeAccountId || Number(voucher?.otherChargeAmount || 0) > 0)
+  );
   /** Tracks whether we already applied initial focus for current voucher so we don’t override user selection. */
   const initialFocusAppliedRef = useRef<string | null>(null);
 
@@ -715,6 +732,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   // Watch current lines once so bill-wise summary card can react instantly to journal edits.
   const watchedLines = useWatch({ control: form.control, name: "lines" });
+  const otherChargeAccountId = form.watch("otherChargeAccountId");
+  const otherChargeAmountValue = Number(form.watch("otherChargeAmount")) || 0;
+  const showJournalOtherCharge =
+    otherChargeEnabled || Boolean(otherChargeAccountId) || otherChargeAmountValue > 0;
+  const otherChargeAccountOptions = useMemo(() => {
+    const rows = allAccountsWithEntity
+      .filter((a) => a.entityType === "party" || a.entityType === "staff" || a.entityType === "expense")
+      .map((a) => ({ value: a.value, label: a.label }));
+    const selected = allAccountsWithEntity.find((a) => a.value === otherChargeAccountId);
+    if (otherChargeAccountId && selected && !rows.some((r) => r.value === otherChargeAccountId)) {
+      return [{ value: otherChargeAccountId, label: selected.label }, ...rows];
+    }
+    return rows;
+  }, [allAccountsWithEntity, otherChargeAccountId]);
   /** Copy-draft: source account mismatch ho tab blank/invalid journal account lines par Copy chip dikhao. */
   const copyDraftAccountHelpersEnabled = Boolean(copySaveTargetCompanyId && onCopyMissingCategory);
   const hasSourceAccountMismatch = Boolean(
@@ -755,6 +786,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   // Build dedicated bill-wise source lines for both sides so Debit and Credit can each have their own card.
   const journalBillLinesBySide = useMemo(() => {
     const lines = Array.isArray(watchedLines) ? watchedLines : [];
+    const chargeCtx = {
+      otherChargeAmount: otherChargeAmountValue,
+      otherChargePartyAccountId: String(form.getValues("otherChargePartyAccountId") || ""),
+    };
     const findForSide = (side: "debit" | "credit") => {
       // Ledger context: sirf opened party/staff ki usi side (Dr/Cr) — doosre account par fallback mat karo.
       if (openedFromAccountId) {
@@ -766,9 +801,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             (Number(l?.amount) || 0) > 0
         );
         if (!openedLine) return null;
+        const rawAmount = Number(openedLine.amount) || 0;
         return {
           partyId: String(openedLine.accountId),
-          amount: Number(openedLine.amount) || 0,
+          amount: getJournalPartyBillWiseLinkAmount(chargeCtx, String(openedLine.accountId), rawAmount),
         };
       }
       const line = lines.find(
@@ -778,16 +814,36 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           (Number(l?.amount) || 0) > 0
       );
       if (!line) return null;
+      const rawAmount = Number(line.amount) || 0;
       return {
         partyId: String(line.accountId),
-        amount: Number(line.amount) || 0,
+        amount: getJournalPartyBillWiseLinkAmount(chargeCtx, String(line.accountId), rawAmount),
       };
     };
     return {
       debit: findForSide("debit"),
       credit: findForSide("credit"),
     };
-  }, [watchedLines, journalLinkableAccountIdSet, openedFromAccountId]);
+  }, [watchedLines, journalLinkableAccountIdSet, openedFromAccountId, otherChargeAmountValue, form]);
+
+  useEffect(() => {
+    if (!showJournalOtherCharge) {
+      form.setValue("otherChargePartyAccountId", "", { shouldDirty: true });
+      return;
+    }
+    const partyForCharge =
+      journalBillLinesBySide.debit?.partyId ||
+      journalBillLinesBySide.credit?.partyId ||
+      "";
+    if (partyForCharge) {
+      form.setValue("otherChargePartyAccountId", partyForCharge, { shouldDirty: true });
+    }
+  }, [
+    showJournalOtherCharge,
+    journalBillLinesBySide.debit?.partyId,
+    journalBillLinesBySide.credit?.partyId,
+    form,
+  ]);
 
   // In edit mode: auto-select Dr card (and blink Dr row) or Cr card when opening journal; once per voucher.
   useEffect(() => {
@@ -982,16 +1038,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   }, [vouchers, journalVoucherId]);
   // Build side-wise card data so Debit/Credit each get independent bill-wise rows and balances.
   const journalBillWiseBySide = useMemo(() => {
-    const getJournalPartyAmount = (voucher: any, accountId: string) => {
-      if (voucher?.type !== "journal" || !Array.isArray(voucher?.entries)) return null;
-      const partyEntry = voucher.entries.find((e: any) => String(e?.accountId ?? "") === String(accountId));
-      if (!partyEntry) return null;
-      const debit = Number((partyEntry as any)?.debit) || 0;
-      const credit = Number((partyEntry as any)?.credit) || 0;
-      const total = credit > 0 ? credit : debit;
-      if (total <= 0) return null;
-      return { debit, credit, total };
-    };
+    const getJournalPartyAmount = (voucher: any, accountId: string) =>
+      getJournalPartyBillWiseAmountFromEntries(voucher, accountId);
     const debitSourceTypes = new Set(["payment_in", "direct_income"]);
     const creditSourceTypes = new Set(["payment_out", "direct_expense"]);
     const voucherTouchesAccount = (voucherId: string, accountId: string) => {
@@ -1205,7 +1253,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             (v) => !isCurrentVoucher(v) && (v.type === "payment_out" || v.type === "direct_expense") && voucherTouchesAccountFn(v)
           );
           paymentOutsForParty.forEach((v) => {
-            const total = Number((v as any).amount ?? (v as any).total ?? 0) || 0;
+            const total = getPaymentOutPartyLinkAmount(v);
             const allocatedToOthers = getAllocatedToOthersFromTarget(v, v.id);
             const outstanding = Math.max(0, total - allocatedToOthers);
             if (outstanding <= 0 && !hasExistingAlloc(v.id)) return;
@@ -1657,7 +1705,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       return;
     }
 
-    const totalDebit = data.lines.filter(l => l.type === 'debit').reduce((sum, l) => sum + l.amount, 0);
+    const charge = Number((data as any).otherChargeAmount) || 0;
+    const totalDebit = data.lines.filter(l => l.type === 'debit').reduce((sum, l) => sum + l.amount, 0) + charge;
     const totalCredit = data.lines.filter(l => l.type === 'credit').reduce((sum, l) => sum + l.amount, 0);
 
     if (Math.abs(totalDebit - totalCredit) > 0.001) {
@@ -1782,11 +1831,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         narration: (data as any).narration ?? "",
         date: date.toISOString(),
         total: totalDebit,
-        entries: data.lines.map((line: any) => ({
-          accountId: line.accountId,
-          debit: line.type === "debit" ? line.amount : 0,
-          credit: line.type === "credit" ? line.amount : 0,
-        })),
+        entries: [
+          ...data.lines.map((line: any) => ({
+            accountId: line.accountId,
+            debit: line.type === "debit" ? line.amount : 0,
+            credit: line.type === "credit" ? line.amount : 0,
+          })),
+          ...(Number((data as any).otherChargeAmount || 0) > 0 && String((data as any).otherChargeAccountId || "").trim()
+            ? [{
+                accountId: String((data as any).otherChargeAccountId),
+                debit: Number((data as any).otherChargeAmount) || 0,
+                credit: 0,
+              }]
+            : []),
+        ],
+        otherChargeAccountId: String((data as any).otherChargeAccountId || ""),
+        otherChargeAmount: Number((data as any).otherChargeAmount || 0) || 0,
+        otherChargePartyAccountId: String((data as any).otherChargePartyAccountId || ""),
         // Persist links made from Journal debit/credit bill-wise cards.
         allocations: effectiveJournalAllocations,
         ...voucherAttachmentFieldsForSave(fileUrls, voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))),
@@ -2218,15 +2279,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const handleAmountChange = (index: number, value: number) => {
     // Add-row flow removed: rebalance only within the existing journal rows.
     const updatedLines = form.getValues("lines");
+    const charge = Number(form.getValues("otherChargeAmount")) || 0;
     if (updatedLines.length === 2) {
       const pairedIndex = index === 0 ? 1 : 0;
-      form.setValue(`lines.${pairedIndex}.amount`, value, {
+      form.setValue(`lines.${pairedIndex}.amount`, value + charge, {
         shouldDirty: true,
         shouldValidate: true,
       });
       return;
     }
-    let totalDebit = 0;
+    let totalDebit = charge;
     let totalCredit = 0;
 
     updatedLines.forEach((line, i) => {
@@ -2243,6 +2305,77 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     form.setValue(`lines.${newLastIndex}.amount`, absDiff, { shouldValidate: true });
     form.setValue(`lines.${newLastIndex}.type`, diff > 0 ? 'credit' : 'debit', { shouldValidate: true });
   }
+
+  const closeJournalOtherCharge = () => {
+    setOtherChargeEnabled(false);
+    form.setValue("otherChargeAccountId", "");
+    form.setValue("otherChargeAmount", 0);
+    const firstIdx = (form.getValues("lines") || []).findIndex((l: any) => !l?.isAutoLine);
+    if (firstIdx >= 0) {
+      handleAmountChange(firstIdx, Number(form.getValues(`lines.${firstIdx}.amount`)) || 0);
+    }
+  };
+
+  const journalOtherChargeCard = showJournalOtherCharge ? (
+    <div className="relative h-full min-h-0 rounded-lg border bg-muted/20 p-3 flex flex-col min-w-0">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="absolute right-3 top-3 h-8 w-8 rounded-full p-0"
+        disabled={deleteDisabledWhenLinked}
+        onClick={closeJournalOtherCharge}
+      >
+        <X className="h-4 w-4" />
+      </Button>
+      <div className="mt-auto space-y-3">
+        <FormField
+          control={form.control}
+          name="otherChargeAccountId"
+          render={({ field }: any) => (
+            <FormItem className="min-w-0">
+              <FormLabel className="text-xs">Other Charge</FormLabel>
+              <Combobox
+                triggerClassName="w-full min-w-0"
+                options={otherChargeAccountOptions}
+                value={field.value}
+                onChange={(val) => field.onChange(val)}
+                placeholder="Select account"
+                disabled={deleteDisabledWhenLinked}
+              />
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="otherChargeAmount"
+          render={({ field }: any) => (
+            <FormItem className="min-w-0">
+              <FormLabel className="text-xs">Amount</FormLabel>
+              <FormControl>
+                <Input
+                  type="number"
+                  className="min-w-[12ch] w-full"
+                  value={field.value ?? ""}
+                  disabled={deleteDisabledWhenLinked}
+                  onChange={(e) => {
+                    const next = e.target.value === "" ? 0 : Number(e.target.value);
+                    field.onChange(next);
+                    const firstIdx = (form.getValues("lines") || []).findIndex((l: any) => !l?.isAutoLine);
+                    if (firstIdx >= 0) {
+                      handleAmountChange(firstIdx, Number(form.getValues(`lines.${firstIdx}.amount`)) || 0);
+                    }
+                  }}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
+    </div>
+  ) : null;
 
   return (
     <>
@@ -2428,6 +2561,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   {/* Mobile: Journal Lines */}
                   {/* Journal entries section (mobile): rows grouped inside soft emerald ribbon container. */}
                   <div className="space-y-4 px-[2px] rounded-lg border border-emerald-300/80 bg-emerald-50 p-2">
+                    {!showJournalOtherCharge && (
+                      <div className="flex justify-end px-[2px]">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 rounded-full border-blue-300 bg-blue-100 px-3 text-xs font-semibold text-blue-900 hover:bg-blue-200"
+                          disabled={deleteDisabledWhenLinked}
+                          onClick={() => {
+                            setOtherChargeEnabled(true);
+                            form.setValue("otherChargeAmount", 0);
+                          }}
+                        >
+                          <PlusCircle className="mr-1 h-3.5 w-3.5" /> Other charge
+                        </Button>
+                      </div>
+                    )}
                     {fields.map((line, index) => {
                       const accountId = form.watch(`lines.${index}.accountId`);
                       const entityType = form.watch(`lines.${index}.entityType`) || "";
@@ -2567,7 +2717,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             control={form.control}
                             name={`lines.${index}.amount`}
                             render={({ field }: any) => (
-                              <FormItem className="flex-1 min-w-0">
+                              <FormItem className="min-w-0 max-w-[120px] justify-self-end w-full">
                                 <FormControl>
                                   <Input
                                     type="number"
@@ -2601,11 +2751,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </div>
                       );
                     })}
+                    {isMobile && journalOtherChargeCard}
                     {/* Mobile: totals ko isi outer journal section container ke andar hi rakho. */}
                     <div className="flex flex-col gap-2 px-[2px] pt-1">
                       <div className="flex gap-2 justify-end">
                         <div className="bg-green-100 px-3 py-2 rounded text-xs font-medium">
-                          Total Debit: {form.watch("lines").filter(l => l.type === "debit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
+                          Total Debit: {(form.watch("lines").filter(l => l.type === "debit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0) + otherChargeAmountValue).toFixed(2)}
                         </div>
                         <div className="bg-red-100 px-3 py-2 rounded text-xs font-medium">
                           Total Credit: {form.watch("lines").filter(l => l.type === "credit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
@@ -2618,13 +2769,32 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <>
                   {/* Desktop: Journal Lines */}
                   {/* Journal entries section (desktop): rows grouped inside soft emerald ribbon container. */}
-                  <div className="space-y-4 rounded-lg border border-emerald-300/80 bg-emerald-50 p-3">
-                    <div className="grid grid-cols-[minmax(100px,1fr)_2fr_auto_auto_1fr_48px] gap-2 items-end">
+                  <div className="rounded-lg border border-emerald-300/80 bg-emerald-50 p-3">
+                    <div className={cn("grid gap-4 min-w-0 items-stretch", showJournalOtherCharge ? "grid-cols-[minmax(0,3fr)_minmax(0,1fr)]" : "grid-cols-1")}>
+                    <div className="min-w-0 space-y-4">
+                    <div className="grid grid-cols-[minmax(100px,1fr)_2fr_auto_auto_minmax(72px,120px)_48px] gap-2 items-end">
                       <FormLabel>Entity</FormLabel>
                       <FormLabel>Account</FormLabel>
                       <div></div>
                       <div></div>
-                      <FormLabel>Amount</FormLabel>
+                      <div className="flex items-center justify-between gap-2 min-w-0">
+                        <FormLabel>Amount</FormLabel>
+                        {!showJournalOtherCharge && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 rounded-full border-blue-300 bg-blue-100 px-2 text-[10px] font-semibold text-blue-900 hover:bg-blue-200 shrink-0"
+                            disabled={deleteDisabledWhenLinked}
+                            onClick={() => {
+                              setOtherChargeEnabled(true);
+                              form.setValue("otherChargeAmount", 0);
+                            }}
+                          >
+                            <PlusCircle className="mr-0.5 h-3 w-3" /> Other charge
+                          </Button>
+                        )}
+                      </div>
                       <div></div>
                     </div>
 
@@ -2644,7 +2814,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           key={line.id}
                           className={cn(
                             // Remove inner card chrome on each row; keep only outer section container styling.
-                            "grid grid-cols-[minmax(100px,1fr)_2fr_auto_auto_1fr_48px] gap-2 items-start p-2",
+                            "grid grid-cols-[minmax(100px,1fr)_2fr_auto_auto_minmax(72px,120px)_48px] gap-2 items-start p-2",
                             linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50/60" : "bg-pink-50/60"),
                             selectedCardRelatedRowIndex === index && "animate-spend-wise-balance-blink"
                           )}
@@ -2821,11 +2991,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     {/* Desktop: totals ko isi outer journal section container ke andar hi rakho. */}
                     <div className="flex justify-end items-center mt-3 pt-1 gap-4">
                       <div className="bg-green-100 px-4 py-2 rounded text-sm font-medium">
-                        Total Debit: {form.watch("lines").filter(l => l.type === "debit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
+                        Total Debit: {(form.watch("lines").filter(l => l.type === "debit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0) + otherChargeAmountValue).toFixed(2)}
                       </div>
                       <div className="bg-red-100 px-4 py-2 rounded text-sm font-medium">
                         Total Credit: {form.watch("lines").filter(l => l.type === "credit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
                       </div>
+                    </div>
+                    </div>
+                    {journalOtherChargeCard}
                     </div>
                   </div>
                 </>

@@ -14,6 +14,7 @@ import {
 } from "@/hooks/useMasterListRowMotion";
 import { GROUP_LIST_CHILD_INDENT_CLASS } from "@/lib/groupListExpand";
 import type { RpDialogRow, RpDialogSection } from "@/lib/receivablesPayablesDialogUi";
+import { rpDialogRowSelectionKey } from "@/lib/receivablesPayablesDialogUi";
 import { DIALOG_DIM_GREEN_BORDER } from "@/lib/dialogShellChrome";
 
 export type RpDialogListMotion = ReturnType<typeof useMasterListRowMotion>;
@@ -34,6 +35,9 @@ type ReceivablesPayablesDialogEntityListProps = {
   formatAmount: (amount: number, abs?: boolean) => ReactNode;
   isMobile?: boolean;
   listMotion?: RpDialogListMotion;
+  selectedKey?: string | null;
+  onSelectRow?: (side: "receivables" | "payables", row: RpDialogRow) => void;
+  onOpenRow?: (side: "receivables" | "payables", row: RpDialogRow) => void;
 };
 
 const icCompanyRowProps = { "data-pl-ic-company-row": "" } as const;
@@ -48,6 +52,9 @@ function RpDialogEntityRow({
   displayOrderKey,
   indent = false,
   icAccountRow = false,
+  selected = false,
+  onSelect,
+  onOpen,
 }: {
   row: RpDialogRow;
   side: "receivables" | "payables";
@@ -59,6 +66,9 @@ function RpDialogEntityRow({
   indent?: boolean;
   /** IC company ke andar wale account — party list jaisa blue pill. */
   icAccountRow?: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
+  onOpen?: () => void;
 }) {
   return (
     <motion.li
@@ -67,8 +77,11 @@ function RpDialogEntityRow({
       {...rowMotionProps}
     >
       <MasterListRow
-        className={masterListRowUnselectedCn(false)}
+        selected={selected}
+        className={cn(masterListRowUnselectedCn(selected), "cursor-pointer select-none")}
         {...(icAccountRow ? icCompanyRowProps : {})}
+        onClick={onSelect}
+        onDoubleClick={onOpen}
       >
         <div className="pl-master-list-row">
           <div className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
@@ -124,6 +137,8 @@ function RpIcCompanyHeaderRow({
   amountClass,
   expanded,
   onToggle,
+  selected = false,
+  onSelect,
 }: {
   row: RpDialogRow;
   side: "receivables" | "payables";
@@ -132,9 +147,20 @@ function RpIcCompanyHeaderRow({
   amountClass: string;
   expanded: boolean;
   onToggle: () => void;
+  selected?: boolean;
+  onSelect?: () => void;
 }) {
   return (
-    <MasterListRow className={masterListRowUnselectedCn(false)} {...icCompanyRowProps}>
+    <MasterListRow
+      selected={selected}
+      className={cn(masterListRowUnselectedCn(selected), "cursor-pointer select-none")}
+      {...icCompanyRowProps}
+      onClick={onSelect}
+      onDoubleClick={(e) => {
+        e.preventDefault();
+        onToggle();
+      }}
+    >
       <div className="pl-master-list-row">
         <div className="flex min-w-0 flex-1 items-start gap-1 overflow-hidden">
           <div className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
@@ -173,6 +199,9 @@ function RpIcCompanyGroupRow({
   animatePresenceMode,
   expanded,
   onToggle,
+  selectedKey,
+  onSelectRow,
+  onOpenRow,
 }: {
   row: RpDialogRow;
   side: "receivables" | "payables";
@@ -184,6 +213,9 @@ function RpIcCompanyGroupRow({
   animatePresenceMode: "sync" | "wait" | "popLayout";
   expanded: boolean;
   onToggle: () => void;
+  selectedKey?: string | null;
+  onSelectRow?: (side: "receivables" | "payables", row: RpDialogRow) => void;
+  onOpenRow?: (side: "receivables" | "payables", row: RpDialogRow) => void;
 }) {
   const children = row.icChildren ?? [];
   const childOrderKey = useMemo(
@@ -200,6 +232,8 @@ function RpIcCompanyGroupRow({
       amountClass={amountClass}
       expanded={expanded}
       onToggle={onToggle}
+      selected={selectedKey === rpDialogRowSelectionKey(side, row)}
+      onSelect={() => onSelectRow?.(side, row)}
     />
   );
 
@@ -224,6 +258,9 @@ function RpIcCompanyGroupRow({
                     displayOrderKey={childOrderKey}
                     indent
                     icAccountRow
+                    selected={selectedKey === rpDialogRowSelectionKey(side, child)}
+                    onSelect={() => onSelectRow?.(side, child)}
+                    onOpen={() => onOpenRow?.(side, child)}
                   />
                 );
               })}
@@ -244,6 +281,9 @@ export function ReceivablesPayablesDialogEntityList({
   formatAmount,
   isMobile,
   listMotion: listMotionProp,
+  selectedKey,
+  onSelectRow,
+  onOpenRow,
 }: ReceivablesPayablesDialogEntityListProps) {
   const internalMotion = useMasterListRowMotion();
   const listMotion = listMotionProp ?? internalMotion;
@@ -325,6 +365,9 @@ export function ReceivablesPayablesDialogEntityList({
                         animatePresenceMode={animatePresenceMode}
                         expanded={isIcExpanded(row.entityId)}
                         onToggle={() => toggleIcExpanded(row.entityId)}
+                        selectedKey={selectedKey}
+                        onSelectRow={onSelectRow}
+                        onOpenRow={onOpenRow}
                       />
                     );
                   }
@@ -338,6 +381,9 @@ export function ReceivablesPayablesDialogEntityList({
                       amountClass={amountClass}
                       rowMotionProps={rowMotionProps}
                       displayOrderKey={displayOrderKey}
+                      selected={selectedKey === rpDialogRowSelectionKey(side, row)}
+                      onSelect={() => onSelectRow?.(side, row)}
+                      onOpen={() => onOpenRow?.(side, row)}
                     />
                   );
                 })}

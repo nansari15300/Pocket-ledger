@@ -227,6 +227,19 @@ export function getInterCompanyLedgerAmounts(
   });
 }
 
+/** IC transfer leg only — bill-wise party link excludes source other charge. */
+export function getInterCompanyTransferAmount(
+  voucher: Record<string, unknown> | null | undefined
+): number {
+  if (!voucher) return 0;
+  if (voucher.amount !== undefined && voucher.amount !== null && String(voucher.amount).trim() !== "") {
+    return Number(voucher.amount) || 0;
+  }
+  const total = Number(voucher.total ?? 0) || 0;
+  const charge = Number(voucher.otherChargeAmount) || 0;
+  return Math.max(0, total - charge);
+}
+
 /** Bill-wise link: party/staff pe IC row ka Dr/Cr amount (linkable list ke liye). */
 export function getInterCompanyEntityBillWiseAmount(
   voucher: Record<string, unknown> | null | undefined,
@@ -236,7 +249,7 @@ export function getInterCompanyEntityBillWiseAmount(
   if (!voucher || String(voucher.type || "") !== "inter_company") return null;
   const id = String(entityId || "").trim();
   if (!id) return null;
-  const amt = Number(voucher.amount ?? voucher.total ?? 0) || 0;
+  const amt = getInterCompanyTransferAmount(voucher);
   const r = getInterCompanyLedgerAmounts(voucher, context, id, amt);
   if (!r.touched) return null;
   const total = r.debit > 0 ? r.debit : r.credit;

@@ -17,6 +17,10 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
+import {
+  NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
+  NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN,
+} from "@/lib/dialogShellChrome";
 import { getAllocationTotal, getPaymentOutRemaining, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
@@ -209,7 +213,9 @@ export function LinkPaymentInToSalaryDialog({
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent
+        overlayClassName={NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN}
         className={cn(
+          NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
           "max-w-4xl max-h-[85vh] flex flex-col rounded-lg pt-3 px-[3px]",
           isMobile && "left-[2px] right-[2px] translate-x-0 w-auto max-w-none h-[85vh] max-h-[85vh] pt-2"
         )}

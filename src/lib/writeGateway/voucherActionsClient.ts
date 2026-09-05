@@ -78,6 +78,7 @@ import {
   apkCloudCompanyUsesSqliteFirstWrites,
   apkEmbeddedSqliteFirstWritesPreferred,
   isClientNavigatorOffline,
+  shouldAutoFlushOutboxAfterEnqueue,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
@@ -856,76 +857,16 @@ export async function patchVoucherFields(
       return;
     }
 
-    const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
     const canSync = await canSyncCompanyToServer(companyId);
-    const encFlag = Boolean(reg && (reg as Record<string, unknown>).encryptServerBackup === true);
 
-    if (canSync && !encFlag) {
-      // APK/static + "Server writes" OFF, ya device offline: Storage hydrate await na — outbox + baad mein `flushVoucherOutbox`.
-      if (apkEmbeddedSqliteFirstWritesPreferred() || isClientNavigatorOffline()) {
-        await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
-        // `enqueueVoucherOutbox` → awaited flush (static/APK vouchers) — yahan dubara `void flush` mat
-        return;
-      }
-      const fsCompanyId =
-        String((reg as Record<string, unknown> | null)?.authoritativeCompanyId || companyId).trim() || companyId;
-      // Firestore path: authoritative id (shared / mirror company) — same as updateDoc branch below.
-      const voucherFsRef = doc(firestore, `companies/${fsCompanyId}/vouchers`, voucherId);
-      try {
-        const awaitHydratePartial = shouldAwaitBlockingHydrateForFirestorePayload(partial as Record<string, unknown>);
-        const partialForFs = awaitHydratePartial
-          ? await voucherPayloadHydrateLocalFilesForFirestore(fsCompanyId, { ...partial })
-          : ({ ...partial } as Record<string, unknown>);
-        await updateDoc(voucherFsRef, partialForFs);
-        if (!awaitHydratePartial) {
-          await syncPendingAttachmentsAfterFirestoreWrite(partial as Record<string, unknown>);
-        }
-        await removeOutboxRowsForCompanyDoc(companyId, "vouchers", voucherId);
-        await mirrorVoucherDocToBrowserDb(companyId, voucherId);
-        schedulePatchAttachmentCleanup(payload);
-        return;
-      } catch (e) {
-        if (isLikelyOfflineFirestoreError(e)) {
-          await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
-          return;
-        }
-        // Naya voucher abhi sirf SQLite + create-outbox pe ho sakta hai; server pe doc nahi → updateDoc "No document to update".
-        // setDoc merge se poora local payload likho, warna SalaryForm ka syncSalaryBillWiseLinks throw karke Save success UI / dialog band nahi hota.
-        if (isCompanyNotFoundError(e)) {
-          if (isSoftDeleteLedgerPatch(partial)) {
-            return;
-          }
-          try {
-            const awaitHydrateFull = shouldAwaitBlockingHydrateForFirestorePayload(payload);
-            const payloadForFs = awaitHydrateFull
-              ? await voucherPayloadHydrateLocalFilesForFirestore(fsCompanyId, payload)
-              : (removeUndefined(payload) as Record<string, unknown>);
-            await setDoc(voucherFsRef, payloadForFs, { merge: true });
-            if (!awaitHydrateFull) {
-              await syncPendingAttachmentsAfterFirestoreWrite(payload);
-            }
-            await removeOutboxRowsForCompanyDoc(companyId, "vouchers", voucherId);
-            await mirrorVoucherDocToBrowserDb(companyId, voucherId);
-            schedulePatchAttachmentCleanup(payload);
-            return;
-          } catch (e2) {
-            if (isLikelyOfflineFirestoreError(e2)) {
-              await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
-              return;
-            }
-            throw e2;
-          }
-        }
-        throw e;
-      }
-    }
-
-    if (canSync && encFlag) {
+    // SQLite-first: local DB turant; cloud mirror background outbox flush (web/EXE/APK same).
+    if (canSync) {
       await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
-      // Encrypted outbox: turant return — `flushVoucherOutbox` background (local save success network pe depend na kare).
-      void flushVoucherOutbox().catch((e) => {
-        console.warn("[patchVoucherFields] background flush after enc outbox enqueue failed", e);
-      });
+      if (shouldAutoFlushOutboxAfterEnqueue()) {
+        void flushVoucherOutbox().catch((e) => {
+          console.warn("[patchVoucherFields] background flush after outbox enqueue failed", e);
+        });
+      }
       return;
     }
 

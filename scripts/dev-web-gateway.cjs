@@ -114,6 +114,20 @@ function missingAppPrefixRedirect(reqUrl) {
   const pathOnly = raw.split("?")[0] || "/";
   if (isAppPath(pathOnly)) return null;
   if (pathOnly === "/" || pathOnly === "") return null;
+
+  // App company picker lives under `/app/company`; marketing owns bare `/company` (about page).
+  if (pathOnly === "/company/create" || pathOnly.startsWith("/company/create/")) {
+    const qs = raw.includes("?") ? "?" + raw.split("?").slice(1).join("?") : "";
+    return "/app" + pathOnly + qs;
+  }
+  if (pathOnly === "/company" || pathOnly === "/company/") {
+    const qs = raw.includes("?") ? raw.slice(raw.indexOf("?")) : "";
+    if (qs.includes("pl_company=") || qs.includes("modal=")) {
+      return "/app/company" + qs;
+    }
+    return null;
+  }
+
   const first = pathOnly.split("/").filter(Boolean)[0];
   if (!first || !APP_ONLY_FIRST_SEGMENTS.has(first)) return null;
   const qs = raw.includes("?") ? "?" + raw.split("?").slice(1).join("?") : "";

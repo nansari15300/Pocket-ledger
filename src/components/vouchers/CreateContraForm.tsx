@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { CalendarIcon, Loader2, Trash2, PlusCircle, Upload, FileText, Crown, History, CheckCircle, Printer, Link2, Info } from "lucide-react";
+import { CalendarIcon, Loader2, Trash2, PlusCircle, Upload, FileText, Crown, History, CheckCircle, Printer, Link2, Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { withMasterAccountFreezeComboboxOption } from "@/lib/masterAccountFreeze/comboboxOptions";
 import { useToast } from "@/hooks/use-toast";
@@ -103,11 +103,78 @@ const formSchema = z.object({
   /** To-account leg: e.g. CNTR In - 001. Treated as voucher number; required. */
   voucherNumberIn: z.string().min(1, "Voucher No. (In) is required."),
   amount: z.coerce.number().min(0.01, "Amount must be positive."),
+  payeeAmount: z.coerce.number().optional(),
+  otherChargeAccountId: z.string().optional(),
+  otherChargeAmount: z.coerce.number().optional(),
   narration: z.string().optional(),
   files: z.array(fileSchema).optional(),
+}).superRefine((data, ctx) => {
+  const chargeAmount = Number(data.otherChargeAmount || 0);
+  if (chargeAmount > 0 && !data.otherChargeAccountId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Please select other charge account.", path: ["otherChargeAccountId"] });
+  }
 });
 
 type ContraFormValues = z.infer<typeof formSchema>;
+
+const getContraTotalAmount = (voucher: any) => Number(voucher?.total ?? voucher?.amount ?? 0) || 0;
+
+const getContraPayeeAmount = (voucher: any) => {
+  const explicit = Number(voucher?.payeeAmount);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  return Math.max(0, getContraTotalAmount(voucher) - (Number(voucher?.otherChargeAmount) || 0));
+};
+
+/** Combobox me selected id list me na ho to bhi label dikhao (edit / sparse snapshot). */
+function withSelectedComboboxOption(
+  options: { value: string; label: string }[],
+  selectedId: string | undefined,
+  fallbackLabel?: string
+): { value: string; label: string }[] {
+  const id = String(selectedId || "").trim();
+  if (!id || options.some((o) => o.value === id)) return options;
+  const label = (fallbackLabel || "").trim() || "—";
+  return [{ value: id, label }, ...options];
+}
+
+const getInitialContraFormValues = (voucher?: any): ContraFormValues => {
+  if (voucher) {
+    const rawDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date as string | number | Date);
+    const safeDate = Number.isFinite(rawDate.getTime()) ? rawDate : startOfDay(new Date());
+    const totalAmount =
+      typeof (voucher.total || voucher.amount) === "string"
+        ? parseFloat(String(voucher.total || voucher.amount).replace(/,/g, "")) || 0
+        : getContraTotalAmount(voucher);
+    return {
+      fromAccountId: voucher.fromAccountId || "",
+      toAccountId: voucher.toAccountId || "",
+      date: safeDate,
+      voucherNumber: voucher.voucherNumber || "",
+      voucherNumberOut: voucher.voucherNumberOut ?? "",
+      voucherNumberIn: voucher.voucherNumberIn ?? "",
+      amount: totalAmount,
+      payeeAmount: getContraPayeeAmount(voucher),
+      otherChargeAccountId: voucher.otherChargeAccountId || "",
+      otherChargeAmount: Number(voucher.otherChargeAmount || 0),
+      narration: voucher.narration || "",
+      files: [],
+    };
+  }
+  return {
+    fromAccountId: "",
+    toAccountId: "",
+    date: startOfDay(new Date()),
+    voucherNumber: "",
+    voucherNumberOut: "",
+    voucherNumberIn: "",
+    amount: 0,
+    payeeAmount: 0,
+    otherChargeAccountId: "",
+    otherChargeAmount: 0,
+    narration: "",
+    files: [],
+  };
+};
 
 const getVoucherPrefix = (prefixes?: Record<string, string[]>) => (prefixes?.contra && prefixes.contra[0]) || "CNTR-";
 /** Base prefix for Contra Out/In (e.g. "CNTR-" → "CNTR"). Used to build "CNTR Out - 001" and "CNTR In - 001". */
@@ -200,8 +267,11 @@ export function CreateContraForm({
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
   // Block overspending from selected from-account for all roles (including owner).
   const [isAmountMoreThanAccountOpen, setIsAmountMoreThanAccountOpen] = useState(false);
+  const [otherChargeEnabled, setOtherChargeEnabled] = useState(
+    Boolean(voucher?.otherChargeAccountId || Number(voucher?.otherChargeAmount || 0) > 0)
+  );
   // Track last valid amount so invalid keystroke can be reverted immediately.
-  const lastValidAmountRef = useRef<number>(Number(voucher?.amount ?? voucher?.total ?? 0) || 0);
+  const lastValidAmountRef = useRef<number>(getContraTotalAmount(voucher));
   const initialLinkedPaymentInIdsRef = useRef<string[]>([]);
   const resetLinksOnCopyTargetChange = useCallback(() => {
     setLinkedPaymentInIds([]);
@@ -236,18 +306,8 @@ export function CreateContraForm({
   const form = useForm<ContraFormValues>({
     resolver: zodResolver(formSchema) as Resolver<ContraFormValues>,
     defaultValues: voucher
-      ? { ...voucher, files:[], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date), voucherNumberOut: voucher.voucherNumberOut ?? "", voucherNumberIn: voucher.voucherNumberIn ?? "" }
-      : {
-          fromAccountId: "",
-          toAccountId: "",
-          date: startOfDay(new Date()),
-          voucherNumber: "",
-          voucherNumberOut: "",
-          voucherNumberIn: "",
-          amount: 0,
-          narration: "",
-          files: [],
-        },
+      ? getInitialContraFormValues(voucher)
+      : getInitialContraFormValues(),
   });
   
 const { isDirty: _isFormFieldsDirty } = form.formState;
@@ -267,7 +327,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     _isFormFieldsDirty || _isFileDirty || _isLinkDirty || _isSpendWiseLinkOutDirty || recurringVoucherAuxiliaryDirty;
   const fromAccountId = form.watch("fromAccountId");
   const toAccountId = form.watch("toAccountId");
-  const amount = Number(form.watch("amount")) || 0;
+  const payeeAmountValue = Number(form.watch("payeeAmount")) || 0;
+  const otherChargeAccountId = form.watch("otherChargeAccountId");
+  const otherChargeAmountValue = Number(form.watch("otherChargeAmount")) || 0;
+  const contraTotalAmount = payeeAmountValue + otherChargeAmountValue;
+  const amount = contraTotalAmount;
+  const showOtherChargeCard = otherChargeEnabled || Boolean(otherChargeAccountId) || otherChargeAmountValue > 0;
   // Keep edit context aligned with the clicked contra row; add-new defaults to Out leg.
   const selectedContraLeg: 'in' | 'out' = (voucher?._contraLeg === 'in' ? 'in' : 'out');
 
@@ -361,6 +426,59 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     processedExpenseAccounts?.forEach((e: any) => { m[e.id] = e.name ?? ""; });
     return m;
   }, [processedParties, processedStaff, processedTaxes, allProcessedAccounts, processedExpenseAccounts]);
+
+  const otherChargeAccountOptions = useMemo(() => {
+    const rows = [
+      ...processedParties.map((p) => ({ value: p.id, label: `Party: ${p.name}` })),
+      ...processedExpenseAccounts.map((e) => ({ value: e.id, label: `Expense: ${e.name}` })),
+      ...processedStaff.map((s) => ({ value: s.id, label: `Staff: ${s.name}` })),
+    ];
+    const selectedLabel =
+      processedParties.find((p) => p.id === otherChargeAccountId)?.name ??
+      processedExpenseAccounts.find((e) => e.id === otherChargeAccountId)?.name ??
+      processedStaff.find((s) => s.id === otherChargeAccountId)?.name;
+    return withSelectedComboboxOption(rows, otherChargeAccountId, selectedLabel);
+  }, [processedParties, processedExpenseAccounts, processedStaff, otherChargeAccountId]);
+  const otherChargeBalance = useMemo(() => {
+    if (!otherChargeAccountId) return null;
+    const party = processedParties.find((p) => p.id === otherChargeAccountId);
+    if (party) return Number((party as any).balance ?? 0);
+    const expense = processedExpenseAccounts.find((e) => e.id === otherChargeAccountId);
+    if (expense) return Number((expense as any).balance ?? 0);
+    const staffMember = processedStaff.find((s) => s.id === otherChargeAccountId);
+    if (staffMember) return Number((staffMember as any).balance ?? 0);
+    return null;
+  }, [otherChargeAccountId, processedParties, processedExpenseAccounts, processedStaff]);
+  const otherChargeDefaultStorageKey = useMemo(
+    () => `pocket-ledger:contra:other-charge-default:${companyId || "global"}`,
+    [companyId]
+  );
+  const setOtherChargeDefault = useCallback(() => {
+    const id = String(form.getValues("otherChargeAccountId") || "").trim();
+    if (!id) return;
+    try {
+      localStorage.setItem(otherChargeDefaultStorageKey, id);
+      sonnerToast.success("Default other charge account saved.");
+    } catch {
+      sonnerToast.error("Default save failed.");
+    }
+  }, [form, otherChargeDefaultStorageKey]);
+  useEffect(() => {
+    const nextAmount = Math.max(0, Math.round(contraTotalAmount * 100) / 100);
+    const currentAmount = Number(form.getValues("amount")) || 0;
+    if (currentAmount !== nextAmount) {
+      form.setValue("amount", nextAmount, { shouldDirty: false, shouldValidate: false });
+    }
+  }, [contraTotalAmount, form]);
+  useEffect(() => {
+    if (!showOtherChargeCard || otherChargeAccountId) return;
+    try {
+      const saved = String(localStorage.getItem(otherChargeDefaultStorageKey) || "").trim();
+      if (saved && otherChargeAccountOptions.some((option) => option.value === saved)) {
+        form.setValue("otherChargeAccountId", saved);
+      }
+    } catch {}
+  }, [showOtherChargeCard, otherChargeAccountId, otherChargeDefaultStorageKey, otherChargeAccountOptions, form]);
 
   const showSpendWiseSection = showLinkPayMode;
   const isInVoucherForAccountContra = (x: any, accId: string) =>
@@ -670,21 +788,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const isSameVoucher = lastResetVoucherIdRef.current === vid;
       if (isSameVoucher) return;
       lastResetVoucherIdRef.current = vid;
-      const initialValues: any = { ...voucher, files: [], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date) };
+      const initialValues = getInitialContraFormValues(voucher);
       if (isEditingAndConverting) {
         initialValues.voucherNumber = "";
       }
       const base = getContraBasePrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
       const prefix = getVoucherPrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
-      if (initialValues.voucherNumberOut == null || initialValues.voucherNumberOut === "") {
+      if (!initialValues.voucherNumberOut) {
         const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
         initialValues.voucherNumberOut = !isNaN(num) ? formatVoucherNumber(`${base} Out`, num) : (initialValues.voucherNumber || "");
       }
-      if (initialValues.voucherNumberIn == null || initialValues.voucherNumberIn === "") {
+      if (!initialValues.voucherNumberIn) {
         const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
         initialValues.voucherNumberIn = !isNaN(num) ? formatVoucherNumber(`${base} In`, num) : (initialValues.voucherNumber || "");
       }
       form.reset(initialValues);
+      setOtherChargeEnabled(Boolean(voucher.otherChargeAccountId || Number(voucher.otherChargeAmount || 0) > 0));
+      lastValidAmountRef.current = getContraTotalAmount(voucher);
       setSavedVoucherId(voucher.id);
       const urlsEdit = voucherAttachmentUrlsForFormState(voucher);
       setFiles(urlsEdit);
@@ -696,21 +816,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const isFirstNewContraHydrate = lastResetVoucherIdRef.current !== NEW_CONTRA;
       lastResetVoucherIdRef.current = NEW_CONTRA;
       if (isFirstNewContraHydrate) {
-        const initialValues: any = { ...voucher, files: [], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date) };
+        const initialValues = getInitialContraFormValues(voucher);
         if (isEditingAndConverting) {
           initialValues.voucherNumber = "";
         }
         const base = getContraBasePrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
         const prefix = getVoucherPrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
-        if (initialValues.voucherNumberOut == null || initialValues.voucherNumberOut === "") {
+        if (!initialValues.voucherNumberOut) {
           const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
           initialValues.voucherNumberOut = !isNaN(num) ? formatVoucherNumber(`${base} Out`, num) : (initialValues.voucherNumber || "");
         }
-        if (initialValues.voucherNumberIn == null || initialValues.voucherNumberIn === "") {
+        if (!initialValues.voucherNumberIn) {
           const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
           initialValues.voucherNumberIn = !isNaN(num) ? formatVoucherNumber(`${base} In`, num) : (initialValues.voucherNumber || "");
         }
         form.reset(initialValues);
+        setOtherChargeEnabled(Boolean(voucher.otherChargeAccountId || Number(voucher.otherChargeAmount || 0) > 0));
+        lastValidAmountRef.current = getContraTotalAmount(voucher);
         setSavedVoucherId(voucher?.id ?? null);
         const urlsNew = voucherAttachmentUrlsForFormState(voucher);
         setFiles(urlsNew);
@@ -812,7 +934,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const handleFormSubmit = useCallback(
     (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
       e?.preventDefault?.();
-      const enteredAmount = Number(form.getValues("amount")) || 0;
+      const enteredAmount =
+        (Number(form.getValues("payeeAmount")) || 0) + (Number(form.getValues("otherChargeAmount")) || 0);
       if (isAmountExceedingSelectedFromAccount(enteredAmount)) {
         setIsAmountMoreThanAccountOpen(true);
         return;
@@ -954,7 +1077,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
       
       const date = data.date instanceof Date ? data.date : new Date((data as any).date);
-      const amount = Number((data as any).amount || 0);
+      const cleanAmount = Math.max(0, (Number(data.payeeAmount || 0) || 0) + (Number(data.otherChargeAmount || 0) || 0));
+      const amount = cleanAmount;
 
       const filesForSave = await prepareVoucherAttachmentsForSave(files, {
           companyId,
@@ -973,9 +1097,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         date: date.toISOString(),
         amount,
         total: amount,
+        payeeAmount: Number(data.payeeAmount || cleanAmount) || cleanAmount,
+        otherChargeAccountId: data.otherChargeAccountId || "",
+        otherChargeAmount: Number(data.otherChargeAmount || 0) || 0,
         fileUrls: filesForSave.filter((f): f is string => typeof f === 'string'),
         type: 'contra',
       };
+      if (!submissionData.otherChargeAmount) {
+        submissionData.otherChargeAccountId = "";
+      }
       const linkIds = linkedPaymentInIds ?? [];
       submissionData.linkedPaymentInIds = linkIds;
       submissionData.linkedPaymentInAmounts =
@@ -1225,7 +1355,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           }
 
           if (saveAndNew) {
-            form.reset({ fromAccountId: "", toAccountId: "", date: startOfDay(new Date()), voucherNumber: "", voucherNumberOut: "", voucherNumberIn: "", amount: 0, narration: "" });
+            form.reset(getInitialContraFormValues());
+            setOtherChargeEnabled(false);
             setFiles([]);
             setSavePdfAsImage(false);
             setSavedVoucherId(null);
@@ -1532,8 +1663,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <Combobox 
                               triggerClassName={cn(
                                 "w-full min-w-0",
-                                // Copy visible ho to field bhi red cue de; select hote hi normal classes par wapas.
-                                // Mismatch state: Journal parity ke liye contra account field ko force-red rakho.
                                 showCopyFromAccountFromSource && "!border-red-400 !bg-red-100/80 !text-red-700"
                               )}
                               options={contraFromAccountOptions}
@@ -1545,16 +1674,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   form.clearErrors("fromAccountId");
                                 }
                               }}
-                              // Keep placeholder short and consistent across voucher forms.
                               placeholder="Select account" 
                               addNewLabel="+ Add New Account" 
-                              // Emphasize balance text in green inside dropdown options.
                               highlightBalanceInOptions
                               disabled={deleteDisabledWhenLinked}
                             />
                             </div>
                             {showCopyFromAccountFromSource && (
-                              // Mobile: Copy chip ko account field ki same line me fit rakho (Journal jaisa).
                               <Button
                                 type="button"
                                 size="sm"
@@ -1569,6 +1695,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </Button>
                             )}
                           </div>
+                          <div className="mt-2">
+                            <FormLabel className="text-[10px] text-muted-foreground">Total Out</FormLabel>
+                            <Input type="number" value={contraTotalAmount || ""} readOnly className="mt-1 bg-muted font-semibold h-9 text-xs" />
+                          </div>
                           <FormMessage />
                         </FormItem>
                       )}
@@ -1580,15 +1710,31 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <FormItem className="min-w-0">
                           <div className="flex justify-between items-baseline mb-1 min-w-0">
                             <FormLabel className={cn("text-xs truncate", showCopyToAccountFromSource && "text-red-600 font-semibold")}>To Account</FormLabel>
-                            {toAccountBalance !== null && <FormLabel className="text-[10px] text-muted-foreground shrink-0">Bal: {formatCurrencyForPrint(toAccountBalance, { noSuffix: true, noAnimation: true })}</FormLabel>}
+                            <div className="flex items-center gap-1 shrink-0">
+                              {!showOtherChargeCard && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 rounded-full border-blue-300 bg-blue-100 px-2 text-[10px] font-semibold text-blue-900 hover:bg-blue-200"
+                                disabled={deleteDisabledWhenLinked}
+                                onClick={() => {
+                                  setOtherChargeEnabled(true);
+                                  form.setValue("otherChargeAmount", 0);
+                                }}
+                              >
+                                <PlusCircle className="mr-0.5 h-3 w-3" /> Other charge
+                              </Button>
+                              )}
+                              {toAccountBalance !== null && <FormLabel className="text-[10px] text-muted-foreground shrink-0">Bal: {formatCurrencyForPrint(toAccountBalance, { noSuffix: true, noAnimation: true })}</FormLabel>}
+                            </div>
                           </div>
-                          <div className="min-w-0 w-full flex items-center gap-1">
+                          <div className="min-w-0 w-full grid grid-cols-[minmax(0,1fr)_minmax(10ch,max-content)] gap-1 items-end">
+                            <div className="min-w-0 flex items-center gap-1">
                             <div className="min-w-0 flex-1 overflow-hidden">
                             <Combobox 
                               triggerClassName={cn(
                                 "w-full min-w-0",
-                                // Copy pending state: destination account input ko red highlight karo.
-                                // Mismatch state: destination field ko bhi same force-red.
                                 showCopyToAccountFromSource && "!border-red-400 !bg-red-100/80 !text-red-700"
                               )}
                               options={contraToAccountOptions} 
@@ -1606,14 +1752,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             />
                             </div>
                             {showCopyToAccountFromSource && (
-                              // Mobile destination row me bhi chip same line par.
                               <Button
                                 type="button"
                                 size="sm"
                                 variant="outline"
                                 className="h-8 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
                                 onClick={() =>
-                                  // Mobile To row: source voucher ki destination bank id prefer — From ke साथ mix na ho.
                                   onCopyMissingCategory?.("account_bank", { contraAccountField: "toAccountId" })
                                 }
                                 disabled={isCopyingMissingMasters}
@@ -1621,31 +1765,113 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 {isCopyingMissingMasters ? "…" : "Copy"}
                               </Button>
                             )}
+                            </div>
+                            <FormField control={form.control} name="payeeAmount" render={({ field: payeeField }: any) => (<FormItem className="min-w-0"><FormLabel className="text-[10px] text-muted-foreground">Amount</FormLabel><FormControl><Input type="number" placeholder="0" className="h-9 text-xs min-w-[10ch]" style={{ width: `${Math.max(8, String(payeeField.value ?? "").length)}ch` }} {...payeeField} value={payeeField.value ?? ""} onChange={(e) => {
+                      const nextAmount = e.target.value === "" ? 0 : Number(e.target.value);
+                      if (isAmountExceedingSelectedFromAccount(nextAmount + otherChargeAmountValue)) {
+                        payeeField.onChange(Math.max(0, lastValidAmountRef.current - otherChargeAmountValue));
+                        setIsAmountMoreThanAccountOpen(true);
+                        return;
+                      }
+                      payeeField.onChange(nextAmount);
+                      lastValidAmountRef.current = nextAmount + otherChargeAmountValue;
+                      if (isAmountExceedingSelectedFromAccount(nextAmount + otherChargeAmountValue)) {
+                        setIsAmountMoreThanAccountOpen(true);
+                      }
+                    }} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/>
                           </div>
                           <FormMessage />
                         </FormItem>
                       )}
                     />
                   </div>
-                  {/* Amount block stays in same Section 2 container (below account row). */}
-                  <div>
-                    <FormField control={form.control} name="amount" render={({ field }: any) => (<FormItem><FormLabel>Amount</FormLabel><FormControl><Input type="number" placeholder="Enter amount" {...field} value={field.value ?? ""} onChange={(e) => {
-                      const nextAmount = e.target.value === "" ? 0 : Number(e.target.value);
-                      // If entered amount exceeds selected from-account balance, keep previous valid value.
-                      if (isAmountExceedingSelectedFromAccount(nextAmount)) {
-                        field.onChange(lastValidAmountRef.current);
-                        setIsAmountMoreThanAccountOpen(true);
-                        return;
-                      }
-                      field.onChange(nextAmount);
-                      // Persist last valid value so next invalid keystroke can rollback cleanly.
-                      lastValidAmountRef.current = nextAmount;
-                      if (isAmountExceedingSelectedFromAccount(nextAmount)) {
-                        // Show immediate popup feedback while typing if amount crosses selected account balance.
-                        setIsAmountMoreThanAccountOpen(true);
-                      }
-                    }} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/>
-                  </div>
+                  {showOtherChargeCard && (
+                    <div className="rounded-lg border bg-muted/20 p-2 space-y-2">
+                      <FormField
+                        control={form.control}
+                        name="otherChargeAccountId"
+                        render={({ field }: any) => (
+                          <FormItem className="min-w-0">
+                            <div className="flex justify-between items-center gap-2">
+                              <FormLabel className="text-xs">Other Charge</FormLabel>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 rounded-full px-2 text-xs"
+                                disabled={deleteDisabledWhenLinked}
+                                onClick={() => {
+                                  setOtherChargeEnabled(false);
+                                  form.setValue("otherChargeAccountId", "");
+                                  form.setValue("otherChargeAmount", 0);
+                                }}
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                            <div className="flex justify-end">
+                              {otherChargeBalance !== null && (
+                                <FormLabel className={cn("text-[10px] font-semibold shrink-0", otherChargeBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
+                                  {formatCurrencyForPrint(Math.abs(otherChargeBalance), { noSuffix: true, noAnimation: true })} {otherChargeBalance >= 0 ? 'Dr' : 'Cr'}
+                                </FormLabel>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <div className="min-w-0 flex-1">
+                                <Combobox
+                                  triggerClassName="w-full min-w-0"
+                                  options={otherChargeAccountOptions}
+                                  value={field.value}
+                                  onChange={(val) => field.onChange(val)}
+                                  placeholder="Select account"
+                                  disabled={deleteDisabledWhenLinked}
+                                />
+                              </div>
+                              {otherChargeAccountId && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-9 rounded-full px-3 text-sm font-medium"
+                                  onClick={setOtherChargeDefault}
+                                >
+                                  Default
+                                </Button>
+                              )}
+                            </div>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="otherChargeAmount"
+                        render={({ field }: any) => (
+                          <FormItem className="min-w-0">
+                            <FormLabel className="text-xs">Amount</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                value={field.value ?? ""}
+                                onChange={(e) => {
+                                  const nextAmount = e.target.value === "" ? 0 : Number(e.target.value);
+                                  if (isAmountExceedingSelectedFromAccount(payeeAmountValue + nextAmount)) {
+                                    field.onChange(0);
+                                    setIsAmountMoreThanAccountOpen(true);
+                                    return;
+                                  }
+                                  field.onChange(nextAmount);
+                                  lastValidAmountRef.current = payeeAmountValue + nextAmount;
+                                }}
+                                disabled={deleteDisabledWhenLinked}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  )}
                   </div>
                 </>
               ) : (
@@ -1738,19 +1964,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   {/* PC View: From Account and To Account */}
                   {/* Desktop Section 2: Account + Amount in one ribbon section. */}
                   <div className="rounded-lg border border-emerald-300/80 bg-emerald-50/70 p-3 space-y-3">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <FormField control={form.control} name="fromAccountId" render={({ field }: any) => (<FormItem>
+                  <div className={cn("grid gap-6 min-w-0 items-stretch", showOtherChargeCard ? "grid-cols-1 md:grid-cols-3" : "grid-cols-1 md:grid-cols-2")}>
+                    <div className="h-full min-h-0 rounded-lg border bg-muted/20 p-3 flex flex-col">
+                    <FormField control={form.control} name="fromAccountId" render={({ field }: any) => (<FormItem className="flex flex-col flex-1 min-h-0">
                         <div className="flex justify-between items-baseline">
                             <FormLabel className={cn(showCopyFromAccountFromSource && "text-red-600 font-semibold")}>Pay from (From account)</FormLabel>
                             {fromAccountBalance !== null && <FormLabel className={cn("text-xs font-semibold", fromAccountBalance >= 0 ? 'text-green-600' : 'text-red-600')}>{`Balance: ${formatCurrencyForPrint(fromAccountBalance, { showDrCr: true, noAnimation: true })}`}</FormLabel>}
                         </div>
-                        <div className="min-w-0 w-full flex items-center gap-1">
-                          <div className="min-w-0 flex-1 overflow-hidden">
-                            {/* Keep desktop placeholder text aligned with mobile to avoid mixed wording. */}
+                        <div className="mt-auto grid grid-cols-[minmax(0,1fr)_minmax(12ch,max-content)] gap-3 items-end pt-4">
+                          <div className="min-w-0 w-full flex items-center gap-1">
+                            <div className="min-w-0 flex-1 overflow-hidden">
                             <Combobox
                               triggerClassName={cn(
                                 "w-full min-w-0",
-                                // Desktop mismatch state: force-red field like Journal.
                                 showCopyFromAccountFromSource && "!border-red-400 !bg-red-100/80 !text-red-700"
                               )}
                               options={contraFromAccountOptions}
@@ -1767,35 +1993,64 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               highlightBalanceInOptions
                               disabled={deleteDisabledWhenLinked}
                             />
+                            </div>
+                            {showCopyFromAccountFromSource && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
+                                onClick={() =>
+                                  onCopyMissingCategory?.("account_bank", { contraAccountField: "fromAccountId" })
+                                }
+                                disabled={isCopyingMissingMasters}
+                              >
+                                {isCopyingMissingMasters ? "…" : "Copy"}
+                              </Button>
+                            )}
                           </div>
-                          {showCopyFromAccountFromSource && (
-                            // Desktop: copy chip ko account input row me fit rakho.
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-8 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
-                              onClick={() =>
-                                onCopyMissingCategory?.("account_bank", { contraAccountField: "fromAccountId" })
-                              }
-                              disabled={isCopyingMissingMasters}
-                            >
-                              {isCopyingMissingMasters ? "…" : "Copy"}
-                            </Button>
-                          )}
+                          <div className="min-w-0">
+                            <FormLabel className="text-xs text-muted-foreground">Total Out</FormLabel>
+                            <Input
+                              type="number"
+                              value={contraTotalAmount || ""}
+                              readOnly
+                              className="mt-1 min-w-[12ch] bg-muted font-semibold"
+                              style={{ width: `${Math.max(10, String(contraTotalAmount || "").length)}ch` }}
+                            />
+                          </div>
                         </div>
                         <FormMessage /></FormItem>)}/>
-                    <FormField control={form.control} name="toAccountId" render={({ field }: any) => (<FormItem>
-                         <div className="flex justify-between items-baseline">
+                    </div>
+                    <div className="h-full min-h-0 rounded-lg border bg-muted/20 p-3 flex flex-col min-w-0">
+                        <div className="flex justify-between items-baseline">
                             <FormLabel className={cn(showCopyToAccountFromSource && "text-red-600 font-semibold")}>To Account (Debit)</FormLabel>
-                            {toAccountBalance !== null && <FormLabel className={cn("text-xs font-semibold", toAccountBalance >= 0 ? 'text-green-600' : 'text-red-600')}>{`Balance: ${formatCurrencyForPrint(toAccountBalance, { showDrCr: true, noAnimation: true })}`}</FormLabel>}
+                            <div className="flex items-center gap-2">
+                              {!showOtherChargeCard && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 rounded-full border-blue-300 bg-blue-100 px-3 text-xs font-semibold text-blue-900 hover:bg-blue-200"
+                                disabled={deleteDisabledWhenLinked}
+                                onClick={() => {
+                                  setOtherChargeEnabled(true);
+                                  form.setValue("otherChargeAmount", 0);
+                                }}
+                              >
+                                <PlusCircle className="mr-1 h-3.5 w-3.5" /> Other charge
+                              </Button>
+                              )}
+                              {toAccountBalance !== null && <FormLabel className={cn("text-xs font-semibold", toAccountBalance >= 0 ? 'text-green-600' : 'text-red-600')}>{`Balance: ${formatCurrencyForPrint(toAccountBalance, { showDrCr: true, noAnimation: true })}`}</FormLabel>}
+                            </div>
                         </div>
+                        <div className="mt-auto grid grid-cols-[minmax(0,1fr)_minmax(12ch,max-content)] gap-3 items-end pt-4">
+                          <FormField control={form.control} name="toAccountId" render={({ field }: any) => (<FormItem className="min-w-0">
                         <div className="min-w-0 w-full flex items-center gap-1">
                           <div className="min-w-0 flex-1 overflow-hidden">
                             <Combobox
                               triggerClassName={cn(
                                 "w-full min-w-0",
-                                // Desktop destination mismatch state: force-red.
                                 showCopyToAccountFromSource && "!border-red-400 !bg-red-100/80 !text-red-700"
                               )}
                               options={contraToAccountOptions}
@@ -1813,7 +2068,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             />
                           </div>
                           {showCopyToAccountFromSource && (
-                            // Desktop destination account row me same inline chip.
                             <Button
                               type="button"
                               size="sm"
@@ -1829,25 +2083,117 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           )}
                         </div>
                         <FormMessage /></FormItem>)}/>
-                  </div>
-                  {/* Amount block sits below account row within Desktop Section 2. */}
-                  <div>
-                    <FormField control={form.control} name="amount" render={({ field }: any) => (<FormItem><FormLabel>Amount</FormLabel><FormControl><Input type="number" placeholder="Enter amount" {...field} value={field.value ?? ""} onChange={(e) => {
-                      const nextAmount = e.target.value === "" ? 0 : Number(e.target.value);
-                      // If entered amount exceeds selected from-account balance, keep previous valid value.
-                      if (isAmountExceedingSelectedFromAccount(nextAmount)) {
-                        field.onChange(lastValidAmountRef.current);
-                        setIsAmountMoreThanAccountOpen(true);
-                        return;
-                      }
-                      field.onChange(nextAmount);
-                      // Persist last valid value so next invalid keystroke can rollback cleanly.
-                      lastValidAmountRef.current = nextAmount;
-                      if (isAmountExceedingSelectedFromAccount(nextAmount)) {
-                        // Show immediate popup feedback while typing if amount crosses selected account balance.
-                        setIsAmountMoreThanAccountOpen(true);
-                      }
-                    }} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/>
+                          <FormField control={form.control} name="payeeAmount" render={({ field: payeeField }: any) => (<FormItem>
+                            <FormLabel className="text-xs text-muted-foreground">Amount (To account)</FormLabel>
+                            <FormControl>
+                              <Input type="number" placeholder="Enter amount" value={payeeField.value ?? ""} onChange={(e) => {
+                                const nextAmount = e.target.value === "" ? 0 : Number(e.target.value);
+                                if (isAmountExceedingSelectedFromAccount(nextAmount + otherChargeAmountValue)) {
+                                  payeeField.onChange(Math.max(0, lastValidAmountRef.current - otherChargeAmountValue));
+                                  setIsAmountMoreThanAccountOpen(true);
+                                  return;
+                                }
+                                payeeField.onChange(nextAmount);
+                                lastValidAmountRef.current = nextAmount + otherChargeAmountValue;
+                              }} disabled={deleteDisabledWhenLinked} className="min-w-[12ch] bg-background" style={{ width: `${Math.max(10, String(payeeField.value ?? "").length)}ch` }} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>)}/>
+                        </div>
+                    </div>
+                    {showOtherChargeCard && (
+                    <div className="relative h-full min-h-0 rounded-lg border bg-muted/20 p-3 flex flex-col min-w-0">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="absolute right-3 top-3 h-8 w-8 rounded-full p-0"
+                        disabled={deleteDisabledWhenLinked}
+                        onClick={() => {
+                          setOtherChargeEnabled(false);
+                          form.setValue("otherChargeAccountId", "");
+                          form.setValue("otherChargeAmount", 0);
+                        }}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                      <div className="mt-auto grid grid-cols-[minmax(0,1fr)_minmax(12ch,max-content)] gap-3 items-end">
+                      <FormField
+                        control={form.control}
+                        name="otherChargeAccountId"
+                        render={({ field }: any) => (
+                          <FormItem>
+                            <div className="flex justify-between items-center gap-2">
+                              <FormLabel>Other Charge</FormLabel>
+                            </div>
+                            <div className="flex justify-end">
+                              {otherChargeBalance !== null && (
+                                <FormLabel className={cn("text-xs font-semibold", otherChargeBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
+                                  {otherChargeBalance >= 0
+                                    ? `Receivable: ${formatCurrencyForPrint(otherChargeBalance, { noSuffix: true, noAnimation: true })} Dr`
+                                    : `Payable: ${formatCurrencyForPrint(Math.abs(otherChargeBalance), { noSuffix: true, noAnimation: true })} Cr`
+                                  }
+                                </FormLabel>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <div className="min-w-0 flex-1">
+                                <Combobox
+                                  options={otherChargeAccountOptions}
+                                  value={field.value}
+                                  onChange={(val) => field.onChange(val)}
+                                  placeholder="Select account"
+                                  disabled={deleteDisabledWhenLinked}
+                                />
+                              </div>
+                              {otherChargeAccountId && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-9 rounded-full px-3 text-sm font-medium"
+                                  onClick={setOtherChargeDefault}
+                                >
+                                  Default
+                                </Button>
+                              )}
+                            </div>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="otherChargeAmount"
+                        render={({ field }: any) => (
+                          <FormItem>
+                            <FormLabel>Amount</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                value={field.value ?? ""}
+                                onChange={(e) => {
+                                  const nextAmount = e.target.value === "" ? 0 : Number(e.target.value);
+                                  if (isAmountExceedingSelectedFromAccount(payeeAmountValue + nextAmount)) {
+                                    field.onChange(0);
+                                    setIsAmountMoreThanAccountOpen(true);
+                                    return;
+                                  }
+                                  field.onChange(nextAmount);
+                                  lastValidAmountRef.current = payeeAmountValue + nextAmount;
+                                }}
+                                disabled={deleteDisabledWhenLinked}
+                                className={cn("min-w-[12ch]", deleteDisabledWhenLinked ? "bg-muted" : "")}
+                                style={{ width: `${Math.max(10, String(field.value ?? "").length)}ch` }}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      </div>
+                    </div>
+                    )}
                   </div>
                   </div>
                 </>

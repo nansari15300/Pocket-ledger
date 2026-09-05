@@ -127,3 +127,80 @@ function ensureWebAppBasePathOnPathname(pathname: string, base: string): string 
   if (!p.startsWith("/")) return `${base}/${p}`;
   return `${base}${p}`;
 }
+
+/** Browser pathname → app route (strip optional `/app` + trailing slash). */
+export function withoutWebAppBasePath(pathname: string): string {
+  const base = webAppBasePath();
+  let p = (pathname || "/").replace(/\/+$/, "") || "/";
+  if (base && (p === base || p.startsWith(`${base}/`))) {
+    p = p.slice(base.length) || "/";
+  }
+  return p.replace(/\/+$/, "") || "/";
+}
+
+/** App-only first segment (hosted web: marketing owns bare `/company`). */
+const APP_ONLY_FIRST_SEGMENTS = new Set([
+  "dashboard",
+  "party",
+  "staff",
+  "bank-cash",
+  "items",
+  "tax",
+  "incomes",
+  "gate",
+  "settings",
+  "reports",
+  "billing",
+  "payment-in",
+  "payment-out",
+  "sale",
+  "purchase",
+  "journal",
+  "contra",
+  "notes",
+  "gallery",
+  "messages",
+  "admin",
+  "backup",
+  "recycle-bin",
+  "reconciliation",
+  "import-export",
+  "production",
+  "quotations",
+  "add-salary",
+  "inter-company",
+  "sale-note",
+  "purchase-note",
+  "distributor-signup",
+  "embed",
+  "company",
+  "loans",
+  "not-authorized",
+]);
+
+/** True when pathname is an in-app route missing the `/app` prefix (History API / stale href). */
+export function isAppUiPathMissingBasePrefix(pathname?: string): boolean {
+  const base = webAppBasePath();
+  if (!base || typeof window === "undefined") return false;
+  const raw = pathname ?? window.location.pathname ?? "/";
+  if (raw === base || raw.startsWith(`${base}/`)) return false;
+  const inner = withoutWebAppBasePath(raw);
+  if (inner === "/") return false;
+  const first = inner.split("/").filter(Boolean)[0];
+  return !!first && APP_ONLY_FIRST_SEGMENTS.has(first);
+}
+
+/**
+ * Restore `/app` on the address bar when basePath is active but History API dropped it.
+ * Next `router.push` already prefixes basePath; raw `replaceState` does not.
+ */
+export function repairAppUiPathInBrowser(): boolean {
+  if (typeof window === "undefined") return false;
+  if (!isAppUiPathMissingBasePrefix()) return false;
+  const fixed = browserHistoryHref(
+    `${window.location.pathname || "/"}${window.location.search || ""}${window.location.hash || ""}`
+  );
+  if (fixed === window.location.pathname + window.location.search + window.location.hash) return false;
+  window.history.replaceState(window.history.state, "", fixed);
+  return true;
+}

@@ -521,23 +521,6 @@ export function PartyDetails({
     return !!ownerEmail && !!email && ownerEmail === email;
   }, [customUser?.role, company, user]);
 
-  const autoLinkPrompt = usePartyBillWiseAutoLinkPrompt({
-    enabled: isCompanyAdmin && !!party?.id && party.id !== "all" && !(party as any).isSystemAccount,
-    companyId,
-    userId: user?.uid || (isLocalMode && companyId ? "local" : null),
-    ledgerId: party?.id,
-    ledgerName: party?.name,
-    ledgerKind: "party",
-    vouchers: vouchersForAutoLink,
-  });
-  const openBillWiseAutoLink = React.useCallback(() => {
-    if (autoLinkPrompt.proposal) {
-      autoLinkPrompt.setOpen(true);
-      return;
-    }
-    toast.info("No eligible unlinked bill-wise payment found for this ledger.");
-  }, [autoLinkPrompt.proposal, autoLinkPrompt.setOpen]);
-
   // Always seed current user's display name so own transactions never fall back to raw UID.
   useEffect(() => {
     if (!user?.uid) return;
@@ -802,6 +785,28 @@ export function PartyDetails({
     if (Math.abs(openingBalanceForPeriod) < 1e-6 && Math.abs(master) > 1e-6) return master;
     return openingBalanceForPeriod;
   }, [openingBalanceForPeriod, transactionEntity?.openingBalance, party?.openingBalance]);
+
+  const masterPartyOpeningForAutoLink =
+    Number(transactionEntity?.openingBalance ?? party?.openingBalance) || 0;
+  const autoLinkPrompt = usePartyBillWiseAutoLinkPrompt({
+    enabled: isCompanyAdmin && !!party?.id && party.id !== "all" && !(party as any).isSystemAccount,
+    companyId,
+    userId: user?.uid || (isLocalMode && companyId ? "local" : null),
+    ledgerId: party?.id,
+    ledgerName: party?.name,
+    ledgerKind: "party",
+    vouchers: vouchersForAutoLink,
+    ledgerOpeningBalance: masterPartyOpeningForAutoLink,
+    openingBalanceOutstanding:
+      balanceMode === "bill_wise" ? openingBalanceOutstanding : undefined,
+  });
+  const openBillWiseAutoLink = React.useCallback(() => {
+    if (autoLinkPrompt.proposal) {
+      autoLinkPrompt.setOpen(true);
+      return;
+    }
+    toast.info("No eligible unlinked bill-wise payment found for this ledger.");
+  }, [autoLinkPrompt.proposal, autoLinkPrompt.setOpen]);
 
   
   // Fetch missing user names directly from Firestore and store in local state
@@ -1303,16 +1308,6 @@ export function PartyDetails({
     return "Report";
   }, [mobileReportStickyTitle, context]);
 
-  if(!party) return null;
-
-  const dateRangeLabel = buildDateRangeText() || "All Time";
-  const balanceLabel = headerClosingBalance >= 0 ? "To Receive" : "To Pay";
-  const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
-  const masterPartyOpening = Number(transactionEntity?.openingBalance ?? party.openingBalance) || 0;
-  // Statement: full period opening in Balance. Bill-wise: same as print â€” remaining on OB, status + linked voucher nos.
-  const partyOpeningBalanceOutstandingForTable =
-    balanceMode === "bill_wise" ? openingBalanceOutstanding : undefined;
-
   const handleMobileBack = useCallback(() => {
     if (mobileFooterDialogOpen) {
       setMobileFooterDialogOpen(null);
@@ -1353,18 +1348,6 @@ export function PartyDetails({
     onBack?.();
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, historyVoucher, linkPaymentVoucher, linkAdvancesVoucher, closeModalInUrl, onBack]);
 
-  const autoLinkPromptUi =
-    companyId && (user?.uid || isLocalMode) ? (
-      <BillWiseAutoLinkPromptDialog
-        open={autoLinkPrompt.open}
-        onOpenChange={autoLinkPrompt.setOpen}
-        proposal={autoLinkPrompt.proposal}
-        companyId={companyId}
-        userId={user?.uid || "local"}
-        vouchers={vouchersForAutoLink}
-      />
-    ) : null;
-
   const handleOpeningBalanceRowActivate = useCallback(
     (row: OpeningBalanceLedgerAccountRow) => {
       setOpeningBalanceEditRow(row);
@@ -1378,6 +1361,28 @@ export function PartyDetails({
     if (!open) setOpeningBalanceEditRow(null);
   }, []);
 
+  if(!party) return null;
+
+  const dateRangeLabel = buildDateRangeText() || "All Time";
+  const balanceLabel = headerClosingBalance >= 0 ? "To Receive" : "To Pay";
+  const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+  const masterPartyOpening = Number(transactionEntity?.openingBalance ?? party.openingBalance) || 0;
+  // Statement: full period opening in Balance. Bill-wise: same as print â€” remaining on OB, status + linked voucher nos.
+  const partyOpeningBalanceOutstandingForTable =
+    balanceMode === "bill_wise" ? openingBalanceOutstanding : undefined;
+
+  const autoLinkPromptUi =
+    companyId && (user?.uid || isLocalMode) ? (
+      <BillWiseAutoLinkPromptDialog
+        open={autoLinkPrompt.open}
+        onOpenChange={autoLinkPrompt.setOpen}
+        proposal={autoLinkPrompt.proposal}
+        companyId={companyId}
+        userId={user?.uid || "local"}
+        vouchers={vouchersForAutoLink}
+      />
+    ) : null;
+
   const openingBalanceMasterEditUi = (
     <OpeningBalanceMasterEditHost
       row={openingBalanceEditRow}
@@ -1390,9 +1395,7 @@ export function PartyDetails({
   const openingBalanceLedgerTable = isOpeningBalanceLedger && openingBalanceLedgerBreakdown ? (
     <OpeningBalanceLedgerAccountsTable
       breakdown={openingBalanceLedgerBreakdown}
-      formatCurrency={(amount, options) =>
-        String(formatCurrency(amount, options ?? {}))
-      }
+      formatCurrency={formatCurrencyForPrint}
       className="px-1 pb-2"
       interactionLocked={openingBalanceEditOpen}
       onRowActivate={handleOpeningBalanceRowActivate}

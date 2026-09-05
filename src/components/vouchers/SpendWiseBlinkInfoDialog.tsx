@@ -12,6 +12,10 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import {
+  NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
+  NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN,
+} from "@/lib/dialogShellChrome";
 
 const BLINK_INFO = {
   en: {
@@ -74,7 +78,10 @@ export function SpendWiseBlinkInfoDialog({
           </Button>
         </DialogTrigger>
       )}
-      <DialogContent className={cn(dialogContentClass, className)}>
+      <DialogContent
+        overlayClassName={NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN}
+        className={cn(NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN, dialogContentClass, className)}
+      >
         <DialogHeader>
           <DialogTitle>{BLINK_INFO[tab].title}</DialogTitle>
         </DialogHeader>

@@ -7,6 +7,8 @@ import {
   getAllocatedByVoucherIdFromPaymentOuts,
   getOutstanding,
   getAllocationTotal,
+  getPaymentOutPartyLinkAmount,
+  getJournalPartyBillWiseAmountFromEntries,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
 import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
@@ -36,16 +38,8 @@ export function useLinkPaymentToTxnsLinkableCount(
       (Array.isArray((v as any)?.entries) &&
         (v as any).entries.some((e: any) => String(e?.accountId ?? "") === String(partyId)));
     // Derive bill-wise amount from party-side journal entry (Dr/Cr) for consistent popup/count behavior.
-    const getJournalPartyAmount = (voucher: any) => {
-      if (voucher?.type !== "journal" || !Array.isArray(voucher?.entries)) return null;
-      const partyEntry = voucher.entries.find((e: any) => String(e?.accountId ?? "") === String(partyId));
-      if (!partyEntry) return null;
-      const debit = Number((partyEntry as any)?.debit) || 0;
-      const credit = Number((partyEntry as any)?.credit) || 0;
-      const total = debit > 0 ? debit : credit;
-      if (total <= 0) return null;
-      return { debit, credit, total };
-    };
+    const getJournalPartyAmount = (voucher: any) =>
+      getJournalPartyBillWiseAmountFromEntries(voucher, partyIdStr);
 
     const partyIdStr = String(partyId);
     const payType = isOut ? ["payment_out", "direct_expense"] : ["payment_in", "direct_income"];
@@ -114,7 +108,7 @@ export function useLinkPaymentToTxnsLinkableCount(
           String((v as any).partyId ?? "") === String(partyId)
       );
       const paymentOutsFiltered = paymentOutsForParty.filter((v) => {
-        const total = Number((v as any).amount ?? (v as any).total ?? 0) || 0;
+        const total = getPaymentOutPartyLinkAmount(v);
         const allocated = totalAllocatedTo(v.id);
         const outstanding = getOutstanding(total, allocated);
         return outstanding > 0 || hasExistingAlloc(v.id);

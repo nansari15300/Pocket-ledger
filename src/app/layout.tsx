@@ -59,6 +59,12 @@ export default function RootLayout({
             __html: `(function(){try{var h=location.hostname;if(h!=="localhost"&&h!=="127.0.0.1")return;if("serviceWorker"in navigator){navigator.serviceWorker.getRegistrations().then(function(r){r.forEach(function(x){x.unregister();});});}if("caches"in window){caches.keys().then(function(names){names.forEach(function(n){var l=String(n).toLowerCase();if(l.indexOf("serwist")>-1||l.indexOf("workbox")>-1||l.indexOf("precache")>-1||l.indexOf("pl-navigate-shell")>-1)caches.delete(n);});});}}catch(e){}})();`,
           }}
         />
+        {/* Naya deploy + purana SW/cache: ChunkLoadError par ek baar SW/cache clear + reload */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var KEY="pl_chunk_reload_v1";function chunkMsg(m){m=String(m||"");return/ChunkLoadError|Loading chunk \\d+ failed/i.test(m);}async function recover(){if(sessionStorage.getItem(KEY)==="1")return;sessionStorage.setItem(KEY,"1");try{if("serviceWorker"in navigator){var regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(function(r){return r.unregister();}));}if("caches"in window){var names=await caches.keys();await Promise.all(names.map(function(n){return caches.delete(n);}));}}catch(e){}location.reload();}window.addEventListener("error",function(e){var t=e.target;if(t&&t.tagName==="SCRIPT"&&t.src&&/_next\\/static\\/chunks\\//.test(t.src)){recover();return;}if(chunkMsg(e.message))recover();},true);window.addEventListener("unhandledrejection",function(e){var r=e.reason;var m=r&&(r.message||r);if(chunkMsg(m))recover();});}catch(e){}})();`,
+          }}
+        />
         <PocketSerwistProvider>
           <Providers>
             {children}
