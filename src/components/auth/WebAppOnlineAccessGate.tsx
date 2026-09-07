@@ -49,6 +49,24 @@ export function WebAppOnlineAccessGate({ children }: { children: React.ReactNode
     router.replace("/");
   }, [authLoading, billingRoute, isEmbeddedApp, router, userUid]);
 
+  // Production hosted web: SPA redirect kabhi hydrate se pehle atak jata hai — hard fallback.
+  useEffect(() => {
+    if (isEmbeddedApp || billingRoute || userUid) return;
+    const loginHref = `${webAppBasePath()}/`;
+    const timer = window.setTimeout(() => {
+      if (userUid || authLoading) return;
+      if (auth.currentUser) return;
+      try {
+        const inner = pathname?.replace(/\/+$/, "") || "/";
+        if (inner === "/" || inner === "") return;
+      } catch {
+        /* ignore */
+      }
+      window.location.assign(loginHref);
+    }, 2200);
+    return () => window.clearTimeout(timer);
+  }, [authLoading, billingRoute, isEmbeddedApp, pathname, userUid]);
+
   useEffect(() => {
     if (isEmbeddedApp || billingRoute) {
       setChecking(false);
@@ -172,11 +190,19 @@ export function WebAppOnlineAccessGate({ children }: { children: React.ReactNode
   if (isEmbeddedApp || billingRoute) return <>{children}</>;
 
   if (!user) {
+    const loginHref = `${webAppBasePath()}/`;
     return (
       <div className="flex min-h-dvh items-center justify-center bg-background p-6">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Opening sign in…
+        <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {authLoading ? "Opening sign in…" : "Redirecting to sign in…"}
+          </div>
+          {!authLoading ? (
+            <Button variant="link" className="h-auto px-0" asChild>
+              <a href={loginHref}>Continue to sign in</a>
+            </Button>
+          ) : null}
         </div>
       </div>
     );

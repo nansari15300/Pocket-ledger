@@ -595,6 +595,22 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
     };
 
     const NULL_AUTH_DEBOUNCE_MS = 500;
+    /** Hosted web: kabhi `onAuthStateChanged` late — infinite spinner + gate redirect na ho. */
+    const authBootTimeout = window.setTimeout(() => {
+      if (fastLocalAuthRef.current) return;
+      if (auth.currentUser) return;
+      setLoading(false);
+    }, 6000);
+    void auth.authStateReady().then(() => {
+      if (fastLocalAuthRef.current) return;
+      if (auth.currentUser) return;
+      window.setTimeout(() => {
+        if (auth.currentUser || fastLocalAuthRef.current) return;
+        setLoading(false);
+      }, NULL_AUTH_DEBOUNCE_MS + 120);
+    }).catch(() => {
+      setLoading(false);
+    });
     // Teesra arg: token refresh / identity toolkit par network fail → kabhi-kabhi observer ke bagair error;
     // `auth/network-request-failed` pe session IndexedDB me ho to currentUser zinda rehta hai — logout mat karo.
     const unsubscribe = onAuthStateChanged(
@@ -640,6 +656,7 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
     );
 
     return () => {
+      window.clearTimeout(authBootTimeout);
       clearPendingNullAuthTimer();
       unsubscribe();
       if (unsubUserDocRef.current) {

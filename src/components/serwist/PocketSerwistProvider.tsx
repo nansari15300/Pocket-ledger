@@ -11,6 +11,7 @@ import { SerwistProvider } from "@serwist/next/react";
 import type { ReactNode } from "react";
 import { useEffect, useSyncExternalStore } from "react";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { publicAssetUrl } from "@/lib/webAppBasePath";
 
 function isPocketLedgerSwCacheName(name: string): boolean {
   const lower = name.toLowerCase();
@@ -70,7 +71,7 @@ export function PocketSerwistProvider({ children }: { children: ReactNode }) {
 
   return (
     <SerwistProvider
-      swUrl="/sw.js"
+      swUrl={publicAssetUrl("/sw.js")}
       disable={disable}
       cacheOnNavigation={cacheOnNavigation}
       // Serwist default `reloadOnOnline=true` = har `online` par `location.reload()` — static/APK me offline→online + kabhi dashboard link par bhi "refresh" + SW `claim` race (InvalidStateError).
