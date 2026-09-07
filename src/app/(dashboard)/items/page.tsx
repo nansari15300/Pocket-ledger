@@ -60,6 +60,7 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import { createMasterEntityGroupMoveHandler } from "@/lib/createMasterEntityGroupMoveHandler";
 import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
 import { ITEM_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { computeMasterGroupListSearchVisibleCount } from "@/lib/masterGroupListTree";
 import { itemGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
 import { itemGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
 import { ITEM_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
@@ -479,17 +480,36 @@ function ItemsPageContent() {
     pendingApprovalByItemGroupId,
   ]);
 
-  // Filtered group count (matches ItemGroupList: exclude report-only + system groups; apply search)
+  const itemGroupMembersByGroupId = useMemo(() => {
+    const map: Record<string, Item[]> = {};
+    for (const item of processedItems) {
+      const bucket = resolveItemListGroupBucketId(item);
+      if (!map[bucket]) map[bucket] = [];
+      map[bucket].push(item);
+    }
+    return map;
+  }, [processedItems]);
+
   const filteredGroupCount = useMemo(() => {
-    const searchLower = (searchTerm || "").toLowerCase();
-    return (processedItemGroupsForList || []).filter((g) => {
-      const anyG = g as any;
-      if (anyG.isReportOnly === true) return false;
-      const isSystemParent = anyG.isSystemReserved === true || isSystemParentGroup("item_groups", anyG.id);
-      if (isSystemParent) return false;
-      return g.name && (searchLower ? g.name.toLowerCase().includes(searchLower) : true);
-    }).length;
-  }, [processedItemGroupsForList, searchTerm]);
+    return computeMasterGroupListSearchVisibleCount({
+      groups: processedItemGroupsForList || [],
+      config: ITEM_GROUP_LIST_CONFIG,
+      searchTerm,
+      quickFilter: groupListQuickFilter,
+      groupMembersByGroupId: itemGroupMembersByGroupId,
+      visibleGroupFilter: (g) => {
+        const anyG = g as { isReportOnly?: boolean; isSystemReserved?: boolean };
+        if (anyG.isReportOnly === true) return false;
+        if (anyG.isSystemReserved === true || isSystemParentGroup("item_groups", g.id)) return false;
+        return !!g.name;
+      },
+    });
+  }, [
+    processedItemGroupsForList,
+    searchTerm,
+    groupListQuickFilter,
+    itemGroupMembersByGroupId,
+  ]);
 
   const handleSelect = useCallback((item: Item | ItemGroup, options?: GroupListSelectOptions) => {
     pendingItemsSelectIdRef.current = item.id;
@@ -521,16 +541,6 @@ function ItemsPageContent() {
     if (!groupMemberFilterId) return selectedGroupItems;
     return selectedGroupItems.filter((i) => i.id === groupMemberFilterId);
   }, [selectedGroupItems, groupMemberFilterId]);
-
-  const itemGroupMembersByGroupId = useMemo(() => {
-    const map: Record<string, Item[]> = {};
-    for (const item of processedItems) {
-      const bucket = resolveItemListGroupBucketId(item);
-      if (!map[bucket]) map[bucket] = [];
-      map[bucket].push(item);
-    }
-    return map;
-  }, [processedItems]);
 
   const handleMoveItemToGroup = useCallback(
     (item: Item, targetGroupId: string) =>

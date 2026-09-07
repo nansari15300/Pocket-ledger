@@ -26,6 +26,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "../ui/textarea";
 import { Separator } from "../ui/separator";
@@ -881,19 +882,7 @@ export function CreatePartyForm({
         
          {/* Opening balance | As on date — ek row, barabar size */}
          <MasterFormTwoColGrid>
-            <FormField
-              control={form.control}
-              name="openingBalance"
-              render={({ field }: any) => (
-                <FormItem>
-                  <FormLabel>Opening Balance</FormLabel>
-                  <FormControl>
-                    <Input type="number" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            <MasterOpeningBalanceAmountField control={form.control} />
             <FormField
                 control={form.control}
                 name="openingBalanceDate"

@@ -11,6 +11,7 @@ import { z } from "zod";
 import { collection, doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import { BankAccountToggleFlagsRow } from "@/components/bank-cash/BankAccountToggleFlagsRow";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -321,19 +322,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
             </MasterFormTwoColGrid>
 
             <MasterFormTwoColGrid>
-            <FormField
-            control={form.control}
-            name="openingBalance"
-            render={({ field }: any) => (
-                <FormItem>
-                <FormLabel>Opening Balance</FormLabel>
-                <FormControl>
-                    <Input type="number" {...field} />
-                </FormControl>
-                <FormMessage />
-                </FormItem>
-            )}
-            />
+            <MasterOpeningBalanceAmountField control={form.control} />
             <div />
             </MasterFormTwoColGrid>
 

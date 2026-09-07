@@ -32,6 +32,10 @@ import {
   decodeExpenseGroupParentPath,
   resolveExpenseGroupParentIdFromPath,
 } from "@/lib/expenseGroupTree";
+import {
+  applyMasterEntityGroupEditAddNewGroupId,
+  resolveMasterEntityGroupEditAddNewTarget,
+} from "@/lib/masterEntityGroupTreeForm";
 import type { ExpenseGroupListBranch } from "@/lib/expenseGroupTree";
 import { createOneExpenseGroup } from "@/lib/expenseGroupWrite";
 import { isSystemGroupName } from "@/lib/system-group-names";
@@ -93,28 +97,36 @@ export function EditExpenseGroupDialog({ group, allGroups, onGroupUpdated, onGro
         });
         return;
       }
-      const parentId =
-        levelIndex <= 1
-          ? group.id
-          : childPathIds[levelIndex - 2] || group.id;
+      const target = resolveMasterEntityGroupEditAddNewTarget(levelIndex, {
+        ancestorCount: parentPathIds.length,
+        systemBranch,
+        parentPathIds,
+        childPathIds,
+        editingGroupId: group.id,
+      });
       try {
         const newId = await createOneExpenseGroup({
           company,
           companyId,
           userId: user.uid,
           name: name.trim(),
-          parentId,
+          parentId: target.parentId,
         });
-        const next = [...childPathIds];
-        next[levelIndex - 1] = newId;
-        setChildPathIds(next.slice(0, levelIndex));
+        const next = applyMasterEntityGroupEditAddNewGroupId(
+          target,
+          newId,
+          parentPathIds,
+          childPathIds
+        );
+        setParentPathIds(next.parentPathIds);
+        setChildPathIds(next.childPathIds);
         toast({ title: "Group added", description: `"${name.trim()}" parent list me add ho gaya.` });
       } catch (error) {
         console.error("Error creating parent group:", error);
         toast({ variant: "destructive", title: "Error", description: "Parent group create nahi ho saka." });
       }
     },
-    [user, companyId, company, group.id, childPathIds, toast]
+    [user, companyId, company, group.id, childPathIds, parentPathIds, systemBranch, toast]
   );
 
   async function handleSubmit() {

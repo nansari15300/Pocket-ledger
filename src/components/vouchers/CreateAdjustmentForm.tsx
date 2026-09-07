@@ -6,7 +6,7 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { collection, doc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, CheckCircle, History, Loader2, PlusCircle, Printer, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCircle, FileText, History, Link2, Loader2, PlusCircle, Printer, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -84,6 +84,20 @@ import {
 } from "@/lib/voucherLocalAttachmentUpload";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
+import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
+import { LinkPaymentInToSalaryDialog } from "@/components/vouchers/LinkPaymentInToSalaryDialog";
+import { LinkPaymentOutToSalaryDialog } from "@/components/vouchers/LinkPaymentOutToSalaryDialog";
+import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
+import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
+import {
+  getAllocationTotal,
+  getPaymentInRemaining,
+  getPaymentOutPartyLinkAmount,
+  getTaxNetAllocatedByVoucherIdFromPaymentOuts,
+  OPENING_BALANCE_VOUCHER_ID,
+  type Allocation,
+} from "@/lib/payment-allocation-utils";
+import { useLinkPaymentToTxnsLinkableCount } from "@/hooks/useLinkPaymentToTxnsLinkableCount";
 
 type AdjustmentTarget = {
   id: string;
@@ -167,6 +181,9 @@ export function CreateAdjustmentForm({
   isApproving = false,
   recurringVoucherSaveBlocked = false,
   recurringVoucherAuxiliaryDirty = false,
+  ledgerEntityId,
+  ledgerOpeningBalanceOutstanding,
+  ledgerBooksOpeningBalanceSigned,
 }: {
   voucher?: any;
   defaultVoucherData?: any;
@@ -181,11 +198,14 @@ export function CreateAdjustmentForm({
   isApproving?: boolean;
   recurringVoucherSaveBlocked?: boolean;
   recurringVoucherAuxiliaryDirty?: boolean;
+  ledgerEntityId?: string;
+  ledgerOpeningBalanceOutstanding?: number;
+  ledgerBooksOpeningBalanceSigned?: number;
 }) {
   const { user, customUser } = useAuth();
   const { toast: uiToast } = useToast();
   const { companyId, company } = useCompany();
-  const { dateSystem, formatDate } = useDate();
+  const { dateSystem, formatDate, formatCurrencyForPrint } = useDate();
   const { can, canPerformBackdatedAction, canDeleteVoucher, allowAttachments, fileAttachmentLimits } = usePermissions();
   const {
     processedPartiesForSelection,
@@ -193,6 +213,7 @@ export function CreateAdjustmentForm({
     processedAccounts,
     processedExpenseAccounts,
     processedTaxes,
+    vouchers,
   } = useVouchers();
   const isMobile = useIsMobile();
   const [isLoading, setIsLoading] = useState(false);
@@ -213,6 +234,10 @@ export function CreateAdjustmentForm({
   const seedTarget = (defaultVoucherData?.adjustmentTarget || voucher?.adjustmentTarget) as AdjustmentTarget | undefined;
   const [selectedTarget, setSelectedTarget] = useState<AdjustmentTarget | null>(seedTarget?.id ? seedTarget : null);
   const initialTargetRef = React.useRef<AdjustmentTarget | null>(seedTarget?.id ? seedTarget : null);
+  const initialAdjustmentAllocationsRef = useRef<Allocation[]>([]);
+  const [adjustmentAllocations, setAdjustmentAllocations] = useState<Allocation[]>([]);
+  const [showLinkSection, setShowLinkSection] = useState(false);
+  const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema) as Resolver<FormValues>,
@@ -327,7 +352,16 @@ export function CreateAdjustmentForm({
   const _isTargetDirty =
     String(selectedTarget?.id || "") !== String(initialTargetRef.current?.id || "") ||
     String(selectedTarget?.entityType || "") !== String(initialTargetRef.current?.entityType || "");
-  const isFormDirty = _isFormFieldsDirty || _isFileDirty || _isTargetDirty || recurringVoucherAuxiliaryDirty;
+  const _isAllocationsDirty = (() => {
+    const norm = (a: Allocation[]) =>
+      JSON.stringify(
+        (a || [])
+          .map((x) => ({ v: x.voucherId, a: x.amount, l: (x as any).linkedAccountId }))
+          .sort((p, q) => String(p.v).localeCompare(String(q.v)))
+      );
+    return norm(adjustmentAllocations) !== norm(initialAdjustmentAllocationsRef.current);
+  })();
+  const isFormDirty = _isFormFieldsDirty || _isFileDirty || _isTargetDirty || _isAllocationsDirty || recurringVoucherAuxiliaryDirty;
 
   useEffect(() => {
     const NEW_ADJUSTMENT = "__new_adjustment__";
@@ -351,6 +385,15 @@ export function CreateAdjustmentForm({
         amount: Number(voucher.total || voucher.amount || 0) || 0,
         narration: voucher.narration || "",
       });
+      const rawAllocs = Array.isArray((voucher as any)?.allocations) ? ((voucher as any).allocations as Allocation[]) : [];
+      const targetId = String((voucher as any)?.adjustmentTarget?.id ?? seedTarget?.id ?? "");
+      const loaded = rawAllocs.filter((a) => {
+        const lid = String((a as any)?.linkedAccountId ?? "");
+        return !lid || !targetId || lid === targetId;
+      });
+      setAdjustmentAllocations(loaded);
+      initialAdjustmentAllocationsRef.current = [...loaded];
+      if (loaded.some((a) => getAllocationTotal(a) > 0)) setShowLinkSection(true);
     } else {
       if (lastResetVoucherIdRef.current === NEW_ADJUSTMENT && isFormDirty) return;
       const isFirstNewHydrate = lastResetVoucherIdRef.current !== NEW_ADJUSTMENT;
@@ -371,8 +414,352 @@ export function CreateAdjustmentForm({
   );
 
   const direction = form.watch("direction");
+  const watchedAmount = form.watch("amount");
   const targetSide = direction === "increase" ? "Dr" : "Cr";
   const adjustmentSide = direction === "increase" ? "Cr" : "Dr";
+  const adjustmentBillWiseSide: "debit" | "credit" = direction === "increase" ? "debit" : "credit";
+  const isBillWiseTarget = selectedTarget?.entityType === "party" || selectedTarget?.entityType === "staff";
+  const adjustmentVoucherId = (savedVoucherId || voucher?.id || "") as string;
+  const openedFromAccountId = String(ledgerEntityId || (voucher as any)?._openedFromAccountId || "");
+  const effectiveLedgerObOutstanding = useMemo(() => {
+    if (typeof ledgerOpeningBalanceOutstanding === "number") return ledgerOpeningBalanceOutstanding;
+    if (!openedFromAccountId || !selectedTarget?.id || openedFromAccountId !== selectedTarget.id) return undefined;
+    if (typeof ledgerBooksOpeningBalanceSigned === "number") return Math.abs(ledgerBooksOpeningBalanceSigned);
+    if (selectedTarget.entityType === "party") {
+      const p = (processedPartiesForSelection || []).find((x: any) => String(x.id) === selectedTarget.id);
+      return Math.abs(Number((p as any)?.openingBalance ?? 0));
+    }
+    if (selectedTarget.entityType === "staff") {
+      const s = (processedStaff || []).find((x: any) => String(x.id) === selectedTarget.id);
+      return Math.abs(Number((s as any)?.openingBalance ?? 0));
+    }
+    return undefined;
+  }, [
+    ledgerOpeningBalanceOutstanding,
+    openedFromAccountId,
+    selectedTarget,
+    processedPartiesForSelection,
+    processedStaff,
+    ledgerBooksOpeningBalanceSigned,
+  ]);
+  const adjustmentLinkedFromRows = useMemo(() => {
+    if (!adjustmentVoucherId || !vouchers?.length) {
+      return [] as Array<{ voucherId: string; voucherNumber: string; amount: number; date: Date | null; total: number; sourceType: string }>;
+    }
+    const rows: Array<{ voucherId: string; voucherNumber: string; amount: number; date: Date | null; total: number; sourceType: string }> = [];
+    (vouchers as any[]).forEach((v) => {
+      if (!v || String(v.id ?? "") === String(adjustmentVoucherId)) return;
+      const allocs = (v.allocations as any[] | undefined) || [];
+      const linkedAmount = allocs
+        .filter((a: any) => String(a?.voucherId ?? "") === String(adjustmentVoucherId))
+        .reduce((sum: number, a: any) => sum + getAllocationTotal(a), 0);
+      if (linkedAmount <= 0) return;
+      const rawDate = (v as any)?.date;
+      const parsedDate =
+        rawDate && typeof rawDate?.toDate === "function"
+          ? rawDate.toDate()
+          : rawDate
+            ? new Date(rawDate)
+            : null;
+      rows.push({
+        voucherId: String(v.id ?? ""),
+        voucherNumber: String(v.voucherNumber ?? v.voucher_number ?? "—"),
+        amount: linkedAmount,
+        date: parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null,
+        total: Number((v as any)?.total ?? (v as any)?.amount ?? 0) || 0,
+        sourceType: String((v as any)?.type ?? ""),
+      });
+    });
+    return rows;
+  }, [adjustmentVoucherId, vouchers]);
+  const adjustmentLinkedToRows = useMemo(() => {
+    const list = Array.isArray(adjustmentAllocations) ? adjustmentAllocations : [];
+    if (!list.length) return [] as Array<{ voucherId: string; voucherNumber: string; amount: number; date: Date | null; total: number }>;
+    return list
+      .filter((a: any) => Number(a?.amount) > 0)
+      .map((a: any) => {
+        if (String(a?.voucherId ?? "") === OPENING_BALANCE_VOUCHER_ID) {
+          return {
+            voucherId: OPENING_BALANCE_VOUCHER_ID,
+            voucherNumber: "Book Opening",
+            amount: getAllocationTotal(a),
+            date: null,
+            total: 0,
+          };
+        }
+        const target = (vouchers || []).find((v: any) => String(v?.id ?? "") === String(a?.voucherId ?? ""));
+        const rawDate = (target as any)?.date;
+        const parsedDate =
+          rawDate && typeof rawDate?.toDate === "function"
+            ? rawDate.toDate()
+            : rawDate
+              ? new Date(rawDate)
+              : null;
+        return {
+          voucherId: String(a?.voucherId ?? ""),
+          voucherNumber: String(target?.voucherNumber ?? target?.voucher_number ?? "—"),
+          amount: getAllocationTotal(a),
+          date: parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null,
+          total: Number((target as any)?.total ?? (target as any)?.amount ?? 0) || 0,
+        };
+      });
+  }, [adjustmentAllocations, vouchers]);
+  const adjustmentBillWiseSummary = useMemo(() => {
+    const sideAmount = Number(watchedAmount) || 0;
+    const outgoing = adjustmentAllocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+    const incoming = adjustmentLinkedFromRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const linkedRowsMap = new Map<string, { voucherId: string; voucherNumber: string; date: Date | null; total: number; linkedOnCurrent: number }>();
+    [...adjustmentLinkedFromRows, ...adjustmentLinkedToRows].forEach((row) => {
+      const key = String(row.voucherId);
+      const prev = linkedRowsMap.get(key);
+      if (prev) {
+        prev.linkedOnCurrent += Number(row.amount) || 0;
+        if (!prev.date && row.date) prev.date = row.date;
+        if (!prev.total && row.total) prev.total = row.total;
+      } else {
+        linkedRowsMap.set(key, {
+          voucherId: key,
+          voucherNumber: row.voucherNumber,
+          date: row.date ?? null,
+          total: Number(row.total) || 0,
+          linkedOnCurrent: Number(row.amount) || 0,
+        });
+      }
+    });
+    const rows = Array.from(linkedRowsMap.values()).filter((r) => r.linkedOnCurrent > 0);
+    const linkedTotal = outgoing + incoming;
+    return {
+      sideAmount,
+      linkedTotal,
+      linkableRemaining: Math.max(0, sideAmount - linkedTotal),
+      rows,
+    };
+  }, [watchedAmount, adjustmentAllocations, adjustmentLinkedFromRows, adjustmentLinkedToRows]);
+  const hasAdjustmentBillWiseLinks = adjustmentBillWiseSummary.rows.length > 0;
+  const shouldShowAdjustmentLinkSections = showLinkSection || (!!voucher?.id && hasAdjustmentBillWiseLinks);
+  const shouldShowAdjustmentLinkButton = isBillWiseTarget && !shouldShowAdjustmentLinkSections;
+  useEffect(() => {
+    if (voucher?.id && hasAdjustmentBillWiseLinks) {
+      setShowLinkSection(true);
+      return;
+    }
+    if (!voucher?.id) setShowLinkSection(false);
+  }, [voucher?.id, hasAdjustmentBillWiseLinks]);
+  const adjustmentLinkContext = useMemo(() => {
+    if (!selectedTarget?.id || !isBillWiseTarget) return null;
+    const accountId = String(selectedTarget.id);
+    if (selectedTarget.entityType === "party") {
+      const party = (processedPartiesForSelection || []).find((p: any) => String(p.id) === accountId);
+      return {
+        kind: "party" as const,
+        accountId,
+        label: party?.name || selectedTarget.name || "Party",
+        side: adjustmentBillWiseSide,
+        amount: Number(watchedAmount) || 0,
+        openingBalance: Number((party as any)?.openingBalance ?? 0),
+      };
+    }
+    const staff = (processedStaff || []).find((s: any) => String(s.id) === accountId);
+    return {
+      kind: "staff" as const,
+      accountId,
+      label: staff?.name || selectedTarget.name || STAFF_ENTITY_LABEL,
+      side: adjustmentBillWiseSide,
+      amount: Number(watchedAmount) || 0,
+      openingBalance: Number((staff as any)?.openingBalance ?? 0),
+    };
+  }, [selectedTarget, isBillWiseTarget, processedPartiesForSelection, processedStaff, adjustmentBillWiseSide, watchedAmount]);
+  const adjustmentDialogExistingAllocations = useMemo((): Allocation[] => {
+    if (!adjustmentLinkContext?.accountId) return [];
+    const accountId = adjustmentLinkContext.accountId;
+    const side = adjustmentLinkContext.side;
+    const byId = new Map<string, Allocation>();
+    for (const a of adjustmentAllocations) {
+      const id = String(a?.voucherId ?? "").trim();
+      if (!id || getAllocationTotal(a) <= 0) continue;
+      byId.set(id, { ...a, voucherId: id, amount: getAllocationTotal(a), linkedAccountId: accountId });
+    }
+    const debitSources = new Set(["payment_in", "direct_income", "purchase", "purchase_service"]);
+    const creditSources = new Set(["payment_out", "direct_expense", "sale", "sale_service"]);
+    const allowTypes = side === "credit" ? creditSources : debitSources;
+    const voucherTouchesAccount = (v: any) =>
+      String((v as any)?.partyId ?? "") === accountId ||
+      String((v as any)?.staffId ?? "") === accountId ||
+      String((v as any)?.adjustmentTarget?.id ?? "") === accountId ||
+      (Array.isArray((v as any)?.entries) &&
+        (v as any).entries.some((e: any) => String(e?.accountId ?? "") === accountId));
+    const entryMatchesSide = (v: any) => {
+      if (v?.type === "adjustment") {
+        const dir = String(v?.adjustmentDirection ?? "");
+        if (String(v?.adjustmentTarget?.id ?? "") !== accountId) return false;
+        return side === "debit" ? dir === "decrease" : dir === "increase";
+      }
+      if (!Array.isArray(v?.entries)) return false;
+      const entry = v.entries.find((e: any) => String(e?.accountId ?? "") === accountId);
+      if (!entry) return false;
+      return side === "credit"
+        ? (Number(entry.debit) || 0) > 0
+        : (Number(entry.credit) || 0) > 0;
+    };
+    const icMatchesSide = (v: any) => {
+      const amt = getInterCompanyEntityBillWiseAmount(
+        v,
+        accountId,
+        adjustmentLinkContext.kind === "staff" ? "staff" : "party"
+      );
+      if (!amt) return false;
+      return side === "credit" ? amt.debit > 0 : amt.credit > 0;
+    };
+    for (const row of adjustmentLinkedFromRows) {
+      const id = String(row.voucherId || "").trim();
+      if (!id) continue;
+      const src = (vouchers as any[])?.find((v: any) => String(v?.id ?? "") === id);
+      if (!src || !voucherTouchesAccount(src)) continue;
+      const st = String(row.sourceType || src.type || "").toLowerCase();
+      if (st === "journal" || st === "adjustment") {
+        if (!entryMatchesSide(src)) continue;
+      } else if (st === "inter_company") {
+        if (!icMatchesSide(src)) continue;
+      } else if (!allowTypes.has(st)) {
+        continue;
+      }
+      const amt = Number(row.amount) || 0;
+      if (amt <= 0) continue;
+      const prev = byId.get(id);
+      byId.set(id, {
+        voucherId: id,
+        amount: Math.max(prev ? getAllocationTotal(prev) : 0, amt),
+        linkedAccountId: accountId,
+      });
+    }
+    return Array.from(byId.values());
+  }, [adjustmentLinkContext, adjustmentAllocations, adjustmentLinkedFromRows, vouchers]);
+  const activePartySignedOpeningBalance = useMemo(() => {
+    if (!adjustmentLinkContext || adjustmentLinkContext.kind !== "party") return 0;
+    if (typeof ledgerBooksOpeningBalanceSigned === "number" && Math.abs(ledgerBooksOpeningBalanceSigned) > 1e-6) {
+      return ledgerBooksOpeningBalanceSigned;
+    }
+    const obRemaining =
+      typeof effectiveLedgerObOutstanding === "number" && effectiveLedgerObOutstanding > 0
+        ? effectiveLedgerObOutstanding
+        : null;
+    const signed = Number(adjustmentLinkContext.openingBalance ?? 0);
+    if (Math.abs(signed) > 1e-6) return signed;
+    if (obRemaining != null) {
+      return adjustmentLinkContext.side === "debit" ? -obRemaining : obRemaining;
+    }
+    return signed;
+  }, [adjustmentLinkContext, ledgerBooksOpeningBalanceSigned, effectiveLedgerObOutstanding]);
+  const adjustmentBillWiseLinkVariant = adjustmentBillWiseSide === "debit" ? "payment_out" : "payment_in";
+  const partyBillWiseLinkableCount = useLinkPaymentToTxnsLinkableCount(
+    adjustmentBillWiseLinkVariant,
+    selectedTarget?.entityType === "party" ? selectedTarget.id : null,
+    vouchers ?? [],
+    {
+      paymentInId: adjustmentBillWiseSide === "credit" ? adjustmentVoucherId || undefined : undefined,
+      paymentOutId: adjustmentBillWiseSide === "debit" ? adjustmentVoucherId || undefined : undefined,
+      existingAllocations: adjustmentAllocations,
+      partyOpeningBalance: activePartySignedOpeningBalance,
+    }
+  );
+  const staffBillWiseLinkableCount = useMemo(() => {
+    if (selectedTarget?.entityType !== "staff" || !selectedTarget.id || !vouchers?.length) return 0;
+    const staffId = selectedTarget.id;
+    const currentId = adjustmentVoucherId || null;
+    const hasExistingAlloc = (id: string) =>
+      adjustmentAllocations.some((a) => a.voucherId === id && getAllocationTotal(a) > 0);
+    if (adjustmentBillWiseSide === "debit") {
+      const otherPaymentOuts = (vouchers as any[]).filter(
+        (v: any) => (v.type === "payment_out" || v.type === "direct_expense") && v.id !== currentId
+      );
+      const allocatedMap = getTaxNetAllocatedByVoucherIdFromPaymentOuts(otherPaymentOuts);
+      const addSalaryCount = (vouchers as any[])
+        .filter((v: any) => v.type === "journal" && v.subType === "add_salary" && Array.isArray(v.entries))
+        .filter((v: any) => v.entries.some((e: any) => e.accountId === staffId && (Number(e.credit) || 0) > 0))
+        .filter((v: any) => {
+          const netTotal = v.entries
+            .filter((e: any) => (Number(e.credit) || 0) > 0 && !String(e.narration || "").includes("(Staff ID:"))
+            .reduce((s: number, e: any) => s + (Number(e.credit) || 0), 0);
+          const allocated = allocatedMap.get(v.id)?.net ?? 0;
+          const outstanding = Math.max(0, netTotal - allocated);
+          return outstanding > 0 || hasExistingAlloc(v.id);
+        }).length;
+      const paymentInCount = (vouchers as any[])
+        .filter((v: any) => (v.type === "payment_in" || v.type === "direct_income") && v.staffId === staffId)
+        .filter((v: any) => {
+          const allAllocs = (v.allocations as Allocation[] | undefined) || [];
+          const allocatedToOthers = currentId
+            ? allAllocs.filter((a) => a.voucherId !== currentId).reduce((s, a) => s + getAllocationTotal(a), 0)
+            : allAllocs.reduce((s, a) => s + getAllocationTotal(a), 0);
+          const currentAllocated = currentId
+            ? allAllocs.filter((a) => a.voucherId === currentId).reduce((s, a) => s + getAllocationTotal(a), 0)
+            : 0;
+          const outstanding = getPaymentInRemaining(v) + currentAllocated;
+          return outstanding > 0 || hasExistingAlloc(v.id);
+        }).length;
+      const staffOB = Number((processedStaff || []).find((s: any) => s.id === staffId)?.openingBalance ?? 0) || 0;
+      let obCount = 0;
+      if (staffOB < 0) {
+        const obAmount = Math.abs(staffOB);
+        const consumedByOthers = (vouchers as any[])
+          .filter((v: any) => (v.type === "payment_out" || v.type === "direct_expense") && v.staffId === staffId)
+          .reduce((sum: number, v: any) => {
+            const allocs = (v.allocations as Allocation[] | undefined) || [];
+            return sum + allocs.reduce((s: number, a: Allocation) => s + (a.voucherId === OPENING_BALANCE_VOUCHER_ID ? getAllocationTotal(a) : 0), 0);
+          }, 0);
+        const outstandingOB = Math.max(0, obAmount - consumedByOthers);
+        if (outstandingOB > 0 || hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID)) obCount = 1;
+      }
+      return addSalaryCount + paymentInCount + obCount;
+    }
+    const otherPaymentOuts = (vouchers as any[]).filter(
+      (v: any) => (v.type === "payment_out" || v.type === "direct_expense") && v.id !== currentId
+    );
+    const allocatedMap = getTaxNetAllocatedByVoucherIdFromPaymentOuts(otherPaymentOuts);
+    const addSalaryDrCount = (vouchers as any[])
+      .filter((v: any) => v.type === "journal" && v.subType === "add_salary" && Array.isArray(v.entries))
+      .filter((v: any) => v.entries.some((e: any) => e.accountId === staffId && (Number(e.debit) || 0) > 0))
+      .filter((v: any) => {
+        const netTotal = v.entries
+          .filter((e: any) => (Number(e.debit) || 0) > 0 && !String(e.narration || "").includes("(Staff ID:"))
+          .reduce((s: number, e: any) => s + (Number(e.debit) || 0), 0);
+        const allocated = allocatedMap.get(v.id)?.net ?? 0;
+        return Math.max(0, netTotal - allocated) > 0 || hasExistingAlloc(v.id);
+      }).length;
+    const paymentOutCount = (vouchers as any[])
+      .filter((v: any) => (v.type === "payment_out" || v.type === "direct_expense") && v.staffId === staffId)
+      .filter((v: any) => {
+        const total = getPaymentOutPartyLinkAmount(v);
+        const allAllocs = (v.allocations as Allocation[] | undefined) || [];
+        const allocated = allAllocs.reduce((s, a) => s + getAllocationTotal(a), 0);
+        return Math.max(0, total - allocated) > 0 || hasExistingAlloc(v.id);
+      }).length;
+    const staffOB = Number((processedStaff || []).find((s: any) => s.id === staffId)?.openingBalance ?? 0) || 0;
+    let obCount = 0;
+    if (staffOB > 0) {
+      const consumed = (vouchers as any[])
+        .filter((v: any) => (v.type === "payment_in" || v.type === "direct_income") && v.staffId === staffId)
+        .reduce((sum: number, v: any) => {
+          const allocs = (v.allocations as Allocation[] | undefined) || [];
+          return sum + allocs.reduce((s: number, a: Allocation) => s + (a.voucherId === OPENING_BALANCE_VOUCHER_ID ? getAllocationTotal(a) : 0), 0);
+        }, 0);
+      if (Math.max(0, staffOB - consumed) > 0 || hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID)) obCount = 1;
+    }
+    return addSalaryDrCount + paymentOutCount + obCount;
+  }, [
+    selectedTarget,
+    vouchers,
+    adjustmentBillWiseSide,
+    adjustmentVoucherId,
+    adjustmentAllocations,
+    processedStaff,
+  ]);
+  const adjustmentBillWiseLinkableCount =
+    selectedTarget?.entityType === "party"
+      ? partyBillWiseLinkableCount
+      : selectedTarget?.entityType === "staff"
+        ? staffBillWiseLinkableCount
+        : 0;
 
   const saveAdjustment = async (
     data: FormValues,
@@ -481,6 +868,10 @@ export function CreateAdjustmentForm({
           adjustmentTarget: selectedTarget,
           adjustmentExpenseAccountId: adjustmentExpenseId,
           entries,
+          allocations: adjustmentAllocations.map((a) => ({
+            ...a,
+            linkedAccountId: (a as any).linkedAccountId ?? selectedTarget.id,
+          })),
           ...voucherAttachmentFieldsForSave(fileUrls, voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))),
         },
         voucher?.id,
@@ -488,6 +879,10 @@ export function CreateAdjustmentForm({
       );
       setSavedVoucherId(saved.id);
       initialTargetRef.current = selectedTarget;
+      initialAdjustmentAllocationsRef.current = adjustmentAllocations.map((a) => ({
+        ...a,
+        linkedAccountId: (a as any).linkedAccountId ?? selectedTarget.id,
+      }));
       toast.success("Adjustment saved.", { id: toastId, duration: 1200 });
       setIsLoading(false);
       if (!saveAndNew) {
@@ -636,6 +1031,9 @@ export function CreateAdjustmentForm({
                         entityType: acc.entityType,
                         name: acc.nameOnly,
                       });
+                      setAdjustmentAllocations([]);
+                      initialAdjustmentAllocationsRef.current = [];
+                      setShowLinkSection(false);
                     }}
                     placeholder="Select account"
                     searchPlaceholder="Search party, staff, bank, expense, tax..."
@@ -798,6 +1196,121 @@ export function CreateAdjustmentForm({
             )} />
           </div>
         </div>
+        {isBillWiseTarget && (
+          <div className="space-y-3 w-full max-w-full min-w-0 px-[5px]">
+            {shouldShowAdjustmentLinkButton && (
+              <div className="pb-1">
+                <Button type="button" variant="outline" size="sm" onClick={() => setShowLinkSection(true)}>
+                  Show Link
+                </Button>
+              </div>
+            )}
+            {shouldShowAdjustmentLinkSections && (
+              <div
+                className={cn(
+                  "space-y-2 rounded-lg border-2 p-3 w-full max-w-full min-w-0 overflow-hidden",
+                  adjustmentBillWiseSide === "debit" ? "bg-green-50 border-green-300/80" : "bg-rose-50 border-rose-300/80"
+                )}
+              >
+                <div className="flex items-center gap-2 font-semibold border-b border-border/60 pb-2">
+                  <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span>Link for bill wise ({adjustmentBillWiseSide})</span>
+                </div>
+                <div
+                  className={cn(
+                    "w-fit rounded-md border px-2 py-1 text-xs",
+                    adjustmentBillWiseSide === "debit"
+                      ? "border-green-200 bg-green-50/40 text-green-800"
+                      : "border-pink-200 bg-pink-50/40 text-pink-800"
+                  )}
+                >
+                  Link account: <span className="font-semibold">{selectedTarget?.name || "—"}</span>
+                </div>
+                {!adjustmentVoucherId ? (
+                  <p className="text-sm text-blue-600">Save adjustment first to enable bill-wise linking.</p>
+                ) : (
+                  <>
+                    <p className="text-sm text-muted-foreground">
+                      {adjustmentBillWiseLinkableCount} voucher(s) available to link.
+                      {adjustmentBillWiseSummary.rows.length > 0 &&
+                        ` ${adjustmentBillWiseSummary.rows.length} linked.`}
+                    </p>
+                    {adjustmentBillWiseSummary.rows.length > 0 ? (
+                      <div className="overflow-x-auto -mx-1 min-w-0 scrollbar-slim-dim-extra">
+                        <table className="w-full text-sm border-collapse min-w-[320px]">
+                          <thead>
+                            <tr className="border-b bg-muted/50">
+                              <th className="text-left p-2 font-semibold text-black whitespace-nowrap">Date</th>
+                              <th className="text-left p-2 font-semibold text-black whitespace-nowrap">Voucher No.</th>
+                              <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Linked</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {adjustmentBillWiseSummary.rows.map((row) => (
+                              <tr key={row.voucherId} className="border-b border-border/30 last:border-b-0">
+                                <td className="p-2 text-muted-foreground whitespace-nowrap">
+                                  {row.voucherNumber === "Book Opening" ? "—" : row.date ? formatDate(row.date) : "—"}
+                                </td>
+                                <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
+                                <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">
+                                  {formatCurrencyForPrint(row.linkedOnCurrent, { noSuffix: true, noAnimation: true })}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
+                    <div className="pt-2 border-t flex justify-end">
+                      <div className="grid grid-cols-2 gap-1.5 text-sm w-fit min-w-0">
+                        <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center">
+                          <span className="text-muted-foreground leading-tight">Total linked</span>
+                        </div>
+                        <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end">
+                          <span className="text-right whitespace-nowrap leading-tight">
+                            {formatCurrencyForPrint(adjustmentBillWiseSummary.linkedTotal, { noSuffix: true, noAnimation: true })}
+                          </span>
+                        </div>
+                        <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium">
+                          <span className="leading-tight">Balance</span>
+                        </div>
+                        <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium">
+                          <span
+                            className={cn(
+                              "text-right whitespace-nowrap leading-tight",
+                              adjustmentBillWiseSummary.linkableRemaining === 0 ? "text-green-600 font-semibold" : ""
+                            )}
+                          >
+                            {adjustmentBillWiseSummary.linkableRemaining === 0
+                              ? "Settled"
+                              : formatCurrencyForPrint(adjustmentBillWiseSummary.linkableRemaining, {
+                                  noSuffix: true,
+                                  noAnimation: true,
+                                })}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    {can("add_link") && (
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="w-fit"
+                          onClick={() => setIsLinkDialogOpen(true)}
+                        >
+                          <Link2 className="h-4 w-4 mr-2" />
+                          {adjustmentBillWiseSide === "debit" ? "Link to Cr" : "Link to Dr"}
+                        </Button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         <div className={cn(
           "mt-auto border-t min-w-0 max-w-full overflow-x-hidden shrink-0 bg-background",
           isMobile ? "pt-[3px] pb-[max(6px,env(safe-area-inset-bottom,0px))]" : "pt-4 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4"
@@ -992,6 +1505,87 @@ export function CreateAdjustmentForm({
           )}
         </div>
       </form>
+      <LinkPaymentToTxnsDialog
+        isOpen={!!isLinkDialogOpen && adjustmentLinkContext?.kind === "party"}
+        onOpenChange={(open) => {
+          if (!open) setIsLinkDialogOpen(false);
+        }}
+        variant={adjustmentLinkContext?.side === "debit" ? "payment_out" : "payment_in"}
+        isJournalLinkDialog={adjustmentLinkContext?.kind === "party"}
+        partyId={adjustmentLinkContext?.kind === "party" ? adjustmentLinkContext.accountId : null}
+        partyName={adjustmentLinkContext?.kind === "party" ? adjustmentLinkContext.label : "Party"}
+        receivedAmount={Number(adjustmentLinkContext?.amount ?? 0) || 0}
+        existingAllocations={adjustmentDialogExistingAllocations}
+        paymentInId={adjustmentVoucherId || null}
+        paymentOutId={adjustmentVoucherId || null}
+        partyOpeningBalance={activePartySignedOpeningBalance}
+        partyOpeningBalanceOutstanding={effectiveLedgerObOutstanding}
+        ledgerBooksOpeningBalanceSigned={ledgerBooksOpeningBalanceSigned}
+        dialogTitle={
+          adjustmentLinkContext?.side === "debit"
+            ? "Link Adjustment Dr to Linkable Cr Txns"
+            : "Link Adjustment Cr to Linkable Dr Txns"
+        }
+        paymentInVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}
+        paymentOutVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}
+        paymentInDate={form.getValues("date")}
+        paymentOutDate={form.getValues("date")}
+        onDone={(allocations) => {
+          const accountId = adjustmentLinkContext?.accountId ?? "";
+          const tagged = (Array.isArray(allocations) ? allocations : []).map((a: any) => ({
+            ...a,
+            linkedAccountId: accountId,
+          }));
+          setAdjustmentAllocations(tagged);
+          setIsLinkDialogOpen(false);
+        }}
+      />
+      <LinkPaymentInToSalaryDialog
+        isOpen={!!isLinkDialogOpen && adjustmentLinkContext?.kind === "staff" && adjustmentLinkContext.side === "credit"}
+        onOpenChange={(open) => {
+          if (!open) setIsLinkDialogOpen(false);
+        }}
+        staffId={adjustmentLinkContext?.kind === "staff" ? adjustmentLinkContext.accountId : null}
+        staffName={adjustmentLinkContext?.kind === "staff" ? adjustmentLinkContext.label : STAFF_ENTITY_LABEL}
+        paymentInId={adjustmentVoucherId || null}
+        amountReceived={Number(adjustmentLinkContext?.amount ?? 0) || 0}
+        existingAllocations={adjustmentDialogExistingAllocations}
+        staffOpeningBalance={Number(adjustmentLinkContext?.openingBalance ?? 0) || 0}
+        paymentInVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}
+        paymentInDate={form.getValues("date")}
+        onDone={(allocations) => {
+          const accountId = adjustmentLinkContext?.accountId ?? "";
+          const tagged = (Array.isArray(allocations) ? allocations : []).map((a: any) => ({
+            ...a,
+            linkedAccountId: accountId,
+          }));
+          setAdjustmentAllocations(tagged);
+          setIsLinkDialogOpen(false);
+        }}
+      />
+      <LinkPaymentOutToSalaryDialog
+        isOpen={!!isLinkDialogOpen && adjustmentLinkContext?.kind === "staff" && adjustmentLinkContext.side === "debit"}
+        onOpenChange={(open) => {
+          if (!open) setIsLinkDialogOpen(false);
+        }}
+        staffId={adjustmentLinkContext?.kind === "staff" ? adjustmentLinkContext.accountId : null}
+        staffName={adjustmentLinkContext?.kind === "staff" ? adjustmentLinkContext.label : STAFF_ENTITY_LABEL}
+        paymentOutId={adjustmentVoucherId || null}
+        amountPaid={Number(adjustmentLinkContext?.amount ?? 0) || 0}
+        existingAllocations={adjustmentDialogExistingAllocations}
+        staffOpeningBalance={Number(adjustmentLinkContext?.openingBalance ?? 0) || 0}
+        paymentOutVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}
+        paymentOutDate={form.getValues("date")}
+        onDone={(allocations) => {
+          const accountId = adjustmentLinkContext?.accountId ?? "";
+          const tagged = (Array.isArray(allocations) ? allocations : []).map((a: any) => ({
+            ...a,
+            linkedAccountId: accountId,
+          }));
+          setAdjustmentAllocations(tagged);
+          setIsLinkDialogOpen(false);
+        }}
+      />
     </Form>
   );
 }

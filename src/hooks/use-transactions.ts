@@ -1629,23 +1629,27 @@ export function useTransactions(
                       Array.isArray((t as any).entries) &&
                       entityIdForLinks &&
                       (t as any).entries.some((e: any) => String(e?.accountId ?? '') === String(entityIdForLinks))) ||
+                    (t.type === 'adjustment' &&
+                      entityIdForLinks &&
+                      String((t as any)?.adjustmentTarget?.id ?? '') === String(entityIdForLinks)) ||
                     t.type === 'payment_in' ||
                     t.type === 'direct_income' ||
                     t.type === 'payment_out' ||
                     t.type === 'direct_expense'
                 );
-                if ((isBillWiseContext || context === 'account' || context === 'tax' || context === 'tax_group' || context === 'expense' || staffShowLinkDetails) && (paymentStatus != null || t.type === 'sale' || t.type === 'purchase' || t.type === 'payment_in' || t.type === 'payment_out' || t.type === 'direct_income' || t.type === 'direct_expense' || t.type === 'journal' || t.type === 'inter_company')) {
+                if ((isBillWiseContext || context === 'account' || context === 'tax' || context === 'tax_group' || context === 'expense' || staffShowLinkDetails) && (paymentStatus != null || t.type === 'sale' || t.type === 'purchase' || t.type === 'payment_in' || t.type === 'payment_out' || t.type === 'direct_income' || t.type === 'direct_expense' || t.type === 'journal' || t.type === 'adjustment' || t.type === 'inter_company')) {
                     if (t.type === 'sale' || t.type === 'purchase') {
-                        const payTypes = t.type === 'sale' ? ['payment_in', 'direct_income', 'purchase', 'purchase_service', 'journal', 'inter_company'] : ['payment_out', 'direct_expense', 'sale', 'sale_service', 'journal', 'inter_company'];
+                        const payTypes = t.type === 'sale' ? ['payment_in', 'direct_income', 'purchase', 'purchase_service', 'journal', 'adjustment', 'inter_company'] : ['payment_out', 'direct_expense', 'sale', 'sale_service', 'journal', 'adjustment', 'inter_company'];
                         const partyId = String((t as any).partyId ?? '');
                         /** Ek source voucher se multiple allocations same target ko push na duplice kare — pehle `some()` jaisa ek no per source */
                         const seenSrcForLinkedFrom = new Set<string>();
                         for (const { src: v } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
                             if (!payTypes.includes(v.type)) continue;
                             if (entityIdForLinks && partyId) {
-                                if (v.type === 'journal') {
+                                if (v.type === 'journal' || v.type === 'adjustment') {
                                     const touchesParty = String((v as any).partyId ?? '') === partyId ||
-                                        (Array.isArray((v as any).entries) && (v as any).entries.some((e: any) => String(e?.accountId ?? '') === partyId));
+                                        (Array.isArray((v as any).entries) && (v as any).entries.some((e: any) => String(e?.accountId ?? '') === partyId)) ||
+                                        String((v as any)?.adjustmentTarget?.id ?? '') === partyId;
                                     if (!touchesParty) continue;
                                 } else if (String((v as any).partyId ?? '') !== partyId) continue;
                             }
@@ -1685,7 +1689,7 @@ export function useTransactions(
                         if (Number((t as any).openingBalanceAllocated) > 0) {
                             linkedFromVoucherNos.push("Opening Balance");
                         }
-                    } else if (t.type === 'journal') {
+                    } else if (t.type === 'adjustment' || (t.type === 'journal' && t.subType !== 'add_salary')) {
                         /** Incoming journal links: sirf wo sources jinke allocation edge is row id ko point karte hain */
                         for (const { src: v } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
                             if (v.id === t.id) continue;
@@ -1798,7 +1802,7 @@ export function useTransactions(
                         // "From" side for bill-wise status: journal/IC → payment only (not spend-wise linkedPaymentInIds below).
                         const linkedFromVoucherNosBillWise: string[] = [];
                         for (const { src: v } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
-                            if (v.type !== 'journal' && v.type !== 'inter_company') continue;
+                            if (v.type !== 'journal' && v.type !== 'adjustment' && v.type !== 'inter_company') continue;
                             if (!isVoucherForCurrentEntity(v)) continue;
                             const no =
                                 v.type === 'inter_company'

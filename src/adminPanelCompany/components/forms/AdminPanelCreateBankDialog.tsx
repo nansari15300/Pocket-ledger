@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -37,7 +38,7 @@ const formSchema = z.object({
   accountType: z.enum(["Bank", "Cash"]),
   bankName: z.string().optional(),
   accountNumber: z.string().optional(),
-  openingBalance: z.coerce.number().min(0).optional(),
+  openingBalance: z.coerce.number().optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -182,19 +183,7 @@ export function AdminPanelCreateBankDialog({
                         </FormItem>
                       )}
                     />
-                    <FormField
-                      control={form.control}
-                      name="openingBalance"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Opening balance</FormLabel>
-                          <FormControl>
-                            <Input type="number" min={0} step="0.01" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                    <MasterOpeningBalanceAmountField control={form.control} label="Opening balance" />
                   </MasterFormTwoColGrid>
                 </div>
               </ScrollArea>

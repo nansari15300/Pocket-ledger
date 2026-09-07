@@ -1439,9 +1439,9 @@ function VoucherDialogContent({
               onEffectiveLinksChange={activeTab === 'sale' || activeTab === 'purchase' || activeTab === 'payment_in' || activeTab === 'direct_income' || activeTab === 'payment_out' || activeTab === 'direct_expense' || activeTab === 'add_salary' ? onEffectiveLinksChange : undefined}
               initialFocusSide={activeTab === 'journal' ? (initialVoucherData as any)?._journalFocusSide : undefined}
               {...(activeTab === "journal" && ledgerScopeCompanyId ? { ledgerScopeCompanyId } : {})}
-              {...(activeTab === "journal" && ledgerEntityId ? { ledgerEntityId } : {})}
-              {...(activeTab === "journal" && ledgerOpeningBalanceOutstanding != null ? { ledgerOpeningBalanceOutstanding } : {})}
-              {...(activeTab === "journal" && typeof ledgerBooksOpeningBalanceSigned === "number" ? { ledgerBooksOpeningBalanceSigned } : {})}
+              {...((activeTab === "journal" || activeTab === "adjustment") && ledgerEntityId ? { ledgerEntityId } : {})}
+              {...((activeTab === "journal" || activeTab === "adjustment") && ledgerOpeningBalanceOutstanding != null ? { ledgerOpeningBalanceOutstanding } : {})}
+              {...((activeTab === "journal" || activeTab === "adjustment") && typeof ledgerBooksOpeningBalanceSigned === "number" ? { ledgerBooksOpeningBalanceSigned } : {})}
               {...(copySaveTargetCompanyId ? { copySaveTargetCompanyId } : {})}
               {...(copyMismatchCategories ? { copyMismatchCategories } : {})}
               {...(onCopyMissingCategory ? { onCopyMissingCategory } : {})}

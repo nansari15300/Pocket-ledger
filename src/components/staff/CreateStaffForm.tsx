@@ -24,6 +24,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "../ui/textarea";
 import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
@@ -916,19 +917,7 @@ export function CreateStaffForm({
 
             {/* Opening Balance + Date */}
             <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="openingBalance"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel>Opening Balance</FormLabel>
-                    <FormControl>
-                      <Input type="number" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              <MasterOpeningBalanceAmountField control={form.control} />
 
               <FormField
                 control={form.control}

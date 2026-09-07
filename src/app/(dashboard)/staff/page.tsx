@@ -79,6 +79,7 @@ import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows"
 import { createMasterEntityGroupMoveHandler } from "@/lib/createMasterEntityGroupMoveHandler";
 import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
 import { STAFF_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { computeMasterGroupListSearchVisibleCount } from "@/lib/masterGroupListTree";
 import { staffGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
 import { staffGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
 import { STAFF_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
@@ -445,20 +446,15 @@ function StaffPageContent() {
   }, [activeView, processedStaff]);
 
   const filteredStaffGroupCount = useMemo(() => {
-    const q = searchTerm.trim();
-    const systemGroups =
-      staffLiabilityGroupTree.systemGroups?.length > 0
-        ? staffLiabilityGroupTree.systemGroups
-        : [staffLiabilityGroupTree.systemGroup];
-    if (!q) return Math.max(1, staffLiabilityGroupTree.childGroups.length + 1);
-    const childMatches = staffLiabilityGroupTree.childGroups.filter((group) =>
-      masterEntityTextMatchesSearch(group.name, searchTerm)
-    ).length;
-    const systemMatches = systemGroups.filter((group) =>
-      masterEntityTextMatchesSearch(group.name, searchTerm)
-    ).length;
-    return childMatches + systemMatches;
-  }, [staffLiabilityGroupTree, searchTerm]);
+    return computeMasterGroupListSearchVisibleCount({
+      groups: staffLiabilityGroupTree.childGroups,
+      config: STAFF_GROUP_LIST_CONFIG,
+      searchTerm,
+      quickFilter: groupListQuickFilter,
+      groupMembersByGroupId: staffLiabilityGroupTree.groupMembersByGroupId,
+      visibleGroupFilter: (g) => !!g?.name && !!g.id,
+    });
+  }, [staffLiabilityGroupTree.childGroups, staffLiabilityGroupTree.groupMembersByGroupId, searchTerm, groupListQuickFilter]);
 
   const handleSelect = useCallback((item: Staff | StaffGroup, options?: GroupListSelectOptions) => {
     // Staff rows have `groupId`; staff *groups* have `ownerId` too — `"ownerId" in item` breaks child pick.

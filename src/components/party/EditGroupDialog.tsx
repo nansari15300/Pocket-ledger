@@ -32,6 +32,8 @@ import { MasterEntityNestedGroupFields } from "@/components/entity/MasterEntityN
 import {
   decodeMasterEntityGroupParentPath,
   resolveMasterEntityGroupParentIdFromPath,
+  resolveMasterEntityGroupEditAddNewTarget,
+  applyMasterEntityGroupEditAddNewGroupId,
 } from "@/lib/masterEntityGroupTreeForm";
 import { PARTY_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
 import { createOnePartyGroup } from "@/lib/partyGroupWrite";
@@ -103,28 +105,36 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
         });
         return;
       }
-      const parentId =
-        levelIndex <= 1
-          ? group.id
-          : childPathIds[levelIndex - 2] || group.id;
+      const target = resolveMasterEntityGroupEditAddNewTarget(levelIndex, {
+        ancestorCount: parentPathIds.length,
+        systemBranch,
+        parentPathIds,
+        childPathIds,
+        editingGroupId: group.id,
+      });
       try {
         const newId = await createOnePartyGroup({
           company,
           companyId,
           userId: user.uid,
           name: name.trim(),
-          parentId,
+          parentId: target.parentId,
         });
-        const next = [...childPathIds];
-        next[levelIndex - 1] = newId;
-        setChildPathIds(next.slice(0, levelIndex));
+        const next = applyMasterEntityGroupEditAddNewGroupId(
+          target,
+          newId,
+          parentPathIds,
+          childPathIds
+        );
+        setParentPathIds(next.parentPathIds);
+        setChildPathIds(next.childPathIds);
         toast({ title: "Group added", description: `"${name.trim()}" parent list me add ho gaya.` });
       } catch (error) {
         console.error("Error creating parent group:", error);
         toast({ variant: "destructive", title: "Error", description: "Parent group create nahi ho saka." });
       }
     },
-    [user, companyId, company, group.id, childPathIds, toast]
+    [user, companyId, company, group.id, childPathIds, parentPathIds, systemBranch, toast]
   );
 
   function handleSubmit(): void {

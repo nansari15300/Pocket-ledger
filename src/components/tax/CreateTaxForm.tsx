@@ -27,6 +27,7 @@ import {
 } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import usePermissions from "@/hooks/usePermissions";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import {
   MasterFormNameAcNoRow,
   MasterFormTwoColGrid,
@@ -706,28 +707,7 @@ export function CreateTaxForm({
             />
             </MasterFormTwoColGrid>
              <MasterFormTwoColGrid>
-              <FormField
-              control={form.control}
-              name="openingBalance"
-              render={({ field }: any) => (
-                <FormItem>
-                  <FormLabel>Opening Balance</FormLabel>
-                  <FormControl>
-                    <Input 
-                      type="number" 
-                      placeholder="0" 
-                      value={field.value || ''} 
-                      onChange={(e) => {
-                        const value = e.target.value === '' ? 0 : parseFloat(e.target.value) || 0;
-                        field.onChange(value);
-                      }}
-                      onBlur={field.onBlur}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-              />
+              <MasterOpeningBalanceAmountField control={form.control} />
               <FormField
                   control={form.control}
                   name="openingBalanceDate"

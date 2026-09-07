@@ -3,8 +3,10 @@ import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickF
 import {
   compareGroupListMembers,
   filterGroupListMembersByQuickFilter,
+  resolveGroupListMemberSearchText,
   sortGroupListMembers,
 } from "@/lib/groupListExpand";
+import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
 import {
   isMasterEntityLegacyUngroupedGroupId,
   isMasterEntitySystemGroupId,
@@ -216,16 +218,27 @@ export function filterExpenseGroupForest(
   nodes: ExpenseGroupTreeNode[],
   searchTerm: string,
   quickFilter: string,
-  groupMembersByGroupId: Record<string, { name?: string }[]>
+  groupMembersByGroupId: Record<string, { name?: string; accountName?: string }[]>
 ): ExpenseGroupTreeNode[] {
   const q = searchTerm.trim().toLowerCase();
 
+  const collectDescendantMembers = (node: ExpenseGroupTreeNode) => {
+    const out: { name?: string; accountName?: string }[] = [
+      ...(groupMembersByGroupId[node.group.id] ?? []),
+    ];
+    for (const child of node.children) {
+      out.push(...collectDescendantMembers(child));
+    }
+    return out;
+  };
+
   const walk = (node: ExpenseGroupTreeNode): ExpenseGroupTreeNode | null => {
-    const nameMatch = !q || String(node.group.name || "").toLowerCase().includes(q);
-    const members = groupMembersByGroupId[node.group.id] ?? [];
+    const nameMatch = !q || masterEntityTextMatchesSearch(node.group.name, searchTerm);
     const memberMatch =
       q.length > 0 &&
-      members.some((m) => String(m.name || "").toLowerCase().includes(q));
+      collectDescendantMembers(node).some((m) =>
+        masterEntityTextMatchesSearch(resolveGroupListMemberSearchText(m), searchTerm)
+      );
     const selfMatch =
       (nameMatch || memberMatch) && nodeMatchesQuickFilter(node.group, quickFilter);
 

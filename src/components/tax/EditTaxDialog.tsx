@@ -33,6 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import {
   MasterFormNameAcNoRow,
   MasterFormTwoColGrid,
@@ -658,27 +659,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                 />
                 </MasterFormTwoColGrid>
                 <MasterFormTwoColGrid>
-                    <FormField
-                    control={form.control}
-                    name="openingBalance"
-                    render={({ field }: any) => (
-                        <FormItem>
-                        <FormLabel>Opening Balance</FormLabel>
-                        <FormControl>
-                            <Input 
-                              type="number" 
-                              value={field.value || ''} 
-                              onChange={(e) => {
-                                const value = e.target.value === '' ? 0 : parseFloat(e.target.value) || 0;
-                                field.onChange(value);
-                              }}
-                              onBlur={field.onBlur}
-                            />
-                        </FormControl>
-                        <FormMessage />
-                        </FormItem>
-                    )}
-                    />
+                    <MasterOpeningBalanceAmountField control={form.control} />
                      <FormField
                       control={form.control}
                     name="openingBalanceDate"

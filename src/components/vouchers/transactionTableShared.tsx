@@ -962,6 +962,42 @@ export const getStatusLabel = (t: any, context?: string) => {
   return "";
 };
 
+/** Status pill outline colors — Adjustment: Dr green, Cr red (party bill-wise ledger). */
+export function getStatusBadgeOutlineClassName(
+  statusLabel: string,
+  transaction: any,
+  opts?: { debit?: number; credit?: number }
+): string {
+  if (statusLabel === "Adjustment") {
+    const dr = Number(opts?.debit ?? toLedgerAmount(transaction.debit)) || 0;
+    const cr = Number(opts?.credit ?? toLedgerAmount(transaction.credit)) || 0;
+    if (dr > 0) return "text-green-600 border-green-600/50";
+    if (cr > 0) return "text-red-600 border-red-600/50";
+  }
+
+  if (["Journal", "Note", "Contra", "Salary"].includes(statusLabel)) {
+    return "text-muted-foreground border-muted-foreground/40";
+  }
+
+  if (statusLabel === "Paid" || (transaction as any).paymentStatus === "paid") {
+    return "text-green-600 border-green-600/50";
+  }
+
+  if (
+    statusLabel === "Partial" ||
+    statusLabel === "Unpaid" ||
+    statusLabel === "Overdue" ||
+    (transaction as any).paymentStatus === "unpaid" ||
+    (transaction as any).paymentStatus === "partially_paid" ||
+    (transaction as any).isOverdue ||
+    (transaction as any).paymentStatus === "overdue"
+  ) {
+    return "text-red-600 border-red-600/50";
+  }
+
+  return "text-muted-foreground";
+}
+
 /** Days overdue (today - dueDate). Returns 0 if not overdue or no dueDate. */
 const getOverdueDays = (t: any): number => {
   if (!(t.isOverdue || t.paymentStatus === "overdue")) return 0;
@@ -1661,9 +1697,6 @@ export const TransactionRow = React.memo(
               transaction.type === "journal" &&
               transaction.subType === "add_salary";
             const statusLabel = isDashboardAddSalary ? "Salary" : getStatusLabel(transaction, context);
-            const useNeutralBadge = ["Journal", "Note", "Contra", "Salary"].includes(statusLabel);
-            const paidByLabel = statusLabel === "Paid";
-            const unpaidByLabel = statusLabel === "Partial" || statusLabel === "Unpaid";
             const statusDetailText = getStatusDetail(transaction, { billWiseOnly: statusBillWiseOnly });
             // Keep status voucher-link text tied to the shared "Show Narration" toggle.
             const showStatusDetailText = showNarration && !!statusDetailText;
@@ -1681,17 +1714,7 @@ export const TransactionRow = React.memo(
                     className={cn(
                       // Keep status pill dimensions aligned with Type pill so it doesn't touch row lines.
                       "inline-flex h-6 items-center rounded-xl px-2.5 font-medium leading-none shrink-0",
-                      useNeutralBadge
-                        ? "text-muted-foreground border-muted-foreground/40"
-                        : paidByLabel || (transaction as any).paymentStatus === "paid"
-                          ? "text-green-600 border-green-600/50"
-                          : unpaidByLabel ||
-                              (transaction as any).paymentStatus === "unpaid" ||
-                              (transaction as any).paymentStatus === "partially_paid" ||
-                              (transaction as any).isOverdue ||
-                              (transaction as any).paymentStatus === "overdue"
-                            ? "text-red-600 border-red-600/50"
-                            : "text-muted-foreground"
+                      getStatusBadgeOutlineClassName(statusLabel, transaction, { debit, credit })
                     )}
                   >
                     {hlForColumn("status")(statusLabel || "-")}

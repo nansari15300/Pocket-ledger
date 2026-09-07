@@ -138,6 +138,52 @@ export function resolveMasterEntityGroupParentIdFromPath(
   return cleaned[cleaned.length - 1]!;
 }
 
+export type MasterEntityGroupEditAddNewTarget =
+  | { kind: "ancestor"; index: number; parentId: string }
+  | { kind: "child"; index: number; parentId: string };
+
+/** Edit group form — "+ Add New" parent resolve (ancestor chain vs child under edited group). */
+export function resolveMasterEntityGroupEditAddNewTarget(
+  levelIndex: number,
+  ctx: {
+    ancestorCount: number;
+    systemBranch: string;
+    parentPathIds: string[];
+    childPathIds: string[];
+    editingGroupId: string;
+  }
+): MasterEntityGroupEditAddNewTarget {
+  const { ancestorCount, systemBranch, parentPathIds, childPathIds, editingGroupId } = ctx;
+  const editNameLevelIndex = ancestorCount;
+
+  if (levelIndex < editNameLevelIndex) {
+    const parentId =
+      levelIndex === 0 ? systemBranch : parentPathIds[levelIndex - 1] || systemBranch;
+    return { kind: "ancestor", index: levelIndex, parentId };
+  }
+
+  const childIndex = levelIndex - editNameLevelIndex - 1;
+  const parentId =
+    childIndex <= 0 ? editingGroupId : childPathIds[childIndex - 1] || editingGroupId;
+  return { kind: "child", index: Math.max(0, childIndex), parentId };
+}
+
+export function applyMasterEntityGroupEditAddNewGroupId(
+  target: MasterEntityGroupEditAddNewTarget,
+  newGroupId: string,
+  parentPathIds: string[],
+  childPathIds: string[]
+): { parentPathIds: string[]; childPathIds: string[] } {
+  if (target.kind === "ancestor") {
+    const next = [...parentPathIds];
+    next[target.index] = newGroupId;
+    return { parentPathIds: next.slice(0, target.index + 1), childPathIds };
+  }
+  const next = [...childPathIds];
+  next[target.index] = newGroupId;
+  return { parentPathIds, childPathIds: next.slice(0, target.index + 1) };
+}
+
 export function listMasterEntityGroupChildrenForParent<G extends MasterGroupListRow>(
   allGroups: G[],
   parentId: string,

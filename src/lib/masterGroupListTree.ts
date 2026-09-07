@@ -4,6 +4,7 @@ import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickF
 import {
   compareGroupListMembers,
   filterGroupListMembersByQuickFilter,
+  resolveGroupListMemberSearchText,
   sortGroupListMembers,
 } from "@/lib/groupListExpand";
 import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
@@ -236,20 +237,40 @@ function nodeMatchesQuickFilter(group: MasterGroupListRow, quickFilter: string):
   return true;
 }
 
+type MasterGroupSearchMemberRow = { name?: string; accountName?: string };
+
+function masterGroupMemberListMatchesSearch(
+  members: MasterGroupSearchMemberRow[],
+  searchTerm: string
+): boolean {
+  return members.some((m) =>
+    masterEntityTextMatchesSearch(resolveGroupListMemberSearchText(m), searchTerm)
+  );
+}
+
+function collectMasterGroupNodeDescendantMembers<G extends MasterGroupListRow>(
+  node: MasterGroupTreeNode<G>,
+  groupMembersByGroupId: Record<string, MasterGroupSearchMemberRow[]>
+): MasterGroupSearchMemberRow[] {
+  const out: MasterGroupSearchMemberRow[] = [...(groupMembersByGroupId[node.group.id] ?? [])];
+  for (const child of node.children) {
+    out.push(...collectMasterGroupNodeDescendantMembers(child, groupMembersByGroupId));
+  }
+  return out;
+}
+
 export function filterMasterGroupForest<G extends MasterGroupListRow>(
   nodes: MasterGroupTreeNode<G>[],
   searchTerm: string,
   quickFilter: string,
-  groupMembersByGroupId: Record<string, { name?: string }[]>
+  groupMembersByGroupId: Record<string, MasterGroupSearchMemberRow[]>
 ): MasterGroupTreeNode<G>[] {
   const q = searchTerm.trim().toLowerCase();
 
   const walk = (node: MasterGroupTreeNode<G>): MasterGroupTreeNode<G> | null => {
     const nameMatch = masterEntityTextMatchesSearch(node.group.name, searchTerm);
-    const members = groupMembersByGroupId[node.group.id] ?? [];
-    const memberMatch =
-      q.length > 0 &&
-      members.some((m) => masterEntityTextMatchesSearch(m.name, searchTerm));
+    const descendantMembers = collectMasterGroupNodeDescendantMembers(node, groupMembersByGroupId);
+    const memberMatch = q.length > 0 && masterGroupMemberListMatchesSearch(descendantMembers, searchTerm);
     const selfMatch =
       (nameMatch || memberMatch) && nodeMatchesQuickFilter(node.group, quickFilter);
 
@@ -266,12 +287,46 @@ export function filterMasterGroupForest<G extends MasterGroupListRow>(
   return nodes.map((n) => walk(n)).filter((n): n is MasterGroupTreeNode<G> => Boolean(n));
 }
 
+/** Group tab section count — group names + nested accounts (search mode). */
+export function computeMasterGroupListSearchVisibleCount<G extends MasterGroupListRow>(args: {
+  groups: G[];
+  config: MasterGroupListConfig;
+  searchTerm: string;
+  quickFilter: EntityListQuickFilter;
+  groupMembersByGroupId: Record<string, MasterGroupSearchMemberRow[]>;
+  visibleGroupFilter: (group: G) => boolean;
+}): number {
+  const visibleGroups = (args.groups || []).filter(args.visibleGroupFilter);
+  const q = args.searchTerm.trim();
+  if (!q) return visibleGroups.length;
+
+  const raw = buildMasterGroupListForest(visibleGroups, args.config);
+  const filtered = filterMasterGroupForest(
+    raw,
+    args.searchTerm,
+    args.quickFilter,
+    args.groupMembersByGroupId
+  );
+  const nodeCount = flattenMasterGroupForest(filtered).length;
+  if (nodeCount > 0) return nodeCount;
+
+  const branchForests = splitMasterGroupForestByBranch(filtered, args.config, visibleGroups);
+  return masterGroupSearchHasVisibleResults(
+    args.config,
+    branchForests,
+    args.searchTerm,
+    args.groupMembersByGroupId
+  )
+    ? 1
+    : 0;
+}
+
 /** Search mode — koi branch / user group / direct member dikhe. */
 export function masterGroupSearchHasVisibleResults(
   config: MasterGroupListConfig,
   branchForests: Record<string, MasterGroupTreeNode[]>,
   searchTerm: string,
-  groupMembersByGroupId: Record<string, { name?: string }[]>
+  groupMembersByGroupId: Record<string, MasterGroupSearchMemberRow[]>
 ): boolean {
   const q = searchTerm.trim();
   if (!q) return true;
@@ -279,7 +334,7 @@ export function masterGroupSearchHasVisibleResults(
   for (const branch of config.branches) {
     if (masterEntityTextMatchesSearch(branch.name, searchTerm)) return true;
     const directMembers = groupMembersByGroupId[branch.id] ?? [];
-    if (directMembers.some((m) => masterEntityTextMatchesSearch(m.name, searchTerm))) {
+    if (masterGroupMemberListMatchesSearch(directMembers, searchTerm)) {
       return true;
     }
     if ((branchForests[branch.id] ?? []).length > 0) return true;

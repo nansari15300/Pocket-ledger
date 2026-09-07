@@ -42,6 +42,14 @@ const safeToDate = (date: unknown): Date | null => {
   return isNaN(parsed.getTime()) ? null : parsed;
 };
 
+function isEntryBasedBillWiseVoucher(v: any): boolean {
+  return v?.type === "journal" || v?.type === "adjustment";
+}
+
+function entryBasedBillWiseRowType(v: any, side: "Dr" | "Cr"): string {
+  const prefix = v?.type === "adjustment" ? "Adjustment" : "Journal";
+  return `${prefix} (${side})`;
+}
 
 export type LinkPaymentVariant = "payment_in" | "payment_out";
 
@@ -179,7 +187,7 @@ export function LinkPaymentToTxnsDialog({
       return sum + (Number((v as any).openingBalanceAllocated) || 0);
     }, 0);
     const fromJournals = (vouchersForAllocations as any[]).reduce((sum, v) => {
-      if (v.type !== "journal" || !voucherTouchesParty(v)) return sum;
+      if (!isEntryBasedBillWiseVoucher(v) || !voucherTouchesParty(v)) return sum;
       const allocs = (v.allocations as Allocation[] | undefined) || [];
       return sum + allocs
         .filter((a) => String(a?.voucherId ?? "") === OPENING_BALANCE_VOUCHER_ID && (!(a as any).linkedAccountId || String((a as any).linkedAccountId) === partyIdStr))
@@ -266,7 +274,7 @@ export function LinkPaymentToTxnsDialog({
           v.type !== "sale_service" &&
           v.type !== "purchase" &&
           v.type !== "purchase_service" &&
-          v.type !== "journal" &&
+          !isEntryBasedBillWiseVoucher(v) &&
           v.type !== "inter_company"
         ) continue;
         const allocations = (v.allocations as Allocation[] | undefined) || [];
@@ -344,7 +352,7 @@ export function LinkPaymentToTxnsDialog({
     // Payment In should link against Dr-side journals for the same party.
     const journalDrRows = (vouchers as any[])
       .filter((v) => {
-        if (isCurrentVoucher(v) || v.type !== "journal") return false;
+        if (isCurrentVoucher(v) || !isEntryBasedBillWiseVoucher(v)) return false;
         if (!isJournalLinkDialog) return voucherTouchesParty(v);
         // Journal bill-wise: sirf jahan is party ki Dr entry ho — Cr-only ya counterparty lines exclude.
         const partyAmount = getJournalPartyBillWiseAmountFromEntries(v, String(partyId));
@@ -358,7 +366,7 @@ export function LinkPaymentToTxnsDialog({
         return {
           id: v.id,
           date: v.date,
-          type: "Journal (Dr)" as const,
+          type: entryBasedBillWiseRowType(v, "Dr") as "Journal (Dr)",
           refNo: (v as any).voucherNumber ?? "—",
           total: partyAmount.total,
           outstanding,
@@ -440,7 +448,7 @@ export function LinkPaymentToTxnsDialog({
           v.type !== "sale_service" &&
           v.type !== "purchase" &&
           v.type !== "purchase_service" &&
-          v.type !== "journal" &&
+          !isEntryBasedBillWiseVoucher(v) &&
           v.type !== "inter_company"
         ) continue;
         const allocations = (v.allocations as Allocation[] | undefined) || [];
@@ -519,7 +527,7 @@ export function LinkPaymentToTxnsDialog({
     // Payment Out should link against Cr-side journals for the same party.
     const journalCrRows = (vouchers as any[])
       .filter((v) => {
-        if (isCurrentVoucher(v) || v.type !== "journal") return false;
+        if (isCurrentVoucher(v) || !isEntryBasedBillWiseVoucher(v)) return false;
         if (!isJournalLinkDialog) return voucherTouchesParty(v);
         // Journal bill-wise: sirf jahan is party ki Cr entry ho — Dr-only ya counterparty lines exclude.
         const partyAmount = getJournalPartyBillWiseAmountFromEntries(v, String(partyId));
@@ -533,7 +541,7 @@ export function LinkPaymentToTxnsDialog({
         return {
           id: v.id,
           date: v.date,
-          type: "Journal (Cr)" as const,
+          type: entryBasedBillWiseRowType(v, "Cr") as "Journal (Cr)",
           refNo: (v as any).voucherNumber ?? "—",
           total: partyAmount.total,
           outstanding,

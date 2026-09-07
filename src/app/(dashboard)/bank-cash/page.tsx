@@ -77,6 +77,7 @@ import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows"
 import { createMasterEntityGroupMoveHandler } from "@/lib/createMasterEntityGroupMoveHandler";
 import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
 import { BANK_ACCOUNT_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { computeMasterGroupListSearchVisibleCount } from "@/lib/masterGroupListTree";
 import { bankGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
 import { bankGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
 import { filterMembersByMasterGroupScope } from "@/lib/masterGroupMemberScope";
@@ -559,16 +560,34 @@ function BankCashPageContent() {
     return map;
   }, [processedAccounts]);
 
-  // Filtered group count (matches AccountGroupList: search + exclude report-only + exclude system groups)
+  const accountGroupMembersForSearch = useMemo(() => {
+    const out: Record<string, { name?: string }[]> = {};
+    for (const [groupId, members] of Object.entries(accountGroupMembersByGroupId)) {
+      out[groupId] = members.map((member) => ({ name: bankAccountDisplayName(member) }));
+    }
+    return out;
+  }, [accountGroupMembersByGroupId]);
+
   const filteredGroupCount = useMemo(() => {
-    return (processedAccountGroupsForList || []).filter((g) => {
-      const anyG = g as any;
-      if (anyG.isReportOnly === true) return false;
-      const isSystemParent = anyG.isSystemReserved === true || isSystemParentGroup("account_groups", anyG.id);
-      if (isSystemParent) return false;
-      return g.name && masterEntityTextMatchesSearch(g.name, searchTerm);
-    }).length;
-  }, [processedAccountGroupsForList, searchTerm]);
+    return computeMasterGroupListSearchVisibleCount({
+      groups: processedAccountGroupsForList || [],
+      config: BANK_ACCOUNT_GROUP_LIST_CONFIG,
+      searchTerm,
+      quickFilter: groupListQuickFilter,
+      groupMembersByGroupId: accountGroupMembersForSearch,
+      visibleGroupFilter: (g) => {
+        const anyG = g as { isReportOnly?: boolean; isSystemReserved?: boolean };
+        if (anyG.isReportOnly === true) return false;
+        if (anyG.isSystemReserved === true || isSystemParentGroup("account_groups", g.id)) return false;
+        return !!g.name;
+      },
+    });
+  }, [
+    processedAccountGroupsForList,
+    searchTerm,
+    groupListQuickFilter,
+    accountGroupMembersForSearch,
+  ]);
 
   const handleMoveAccountToGroup = useCallback(
     (account: Account, targetGroupId: string) =>

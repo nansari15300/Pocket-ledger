@@ -16,9 +16,18 @@ export function getEntityListInitials(name: string): string {
 
 export type GroupListSortableMember = {
   name?: string;
+  accountName?: string;
   balance?: number;
   openingBalanceDate?: unknown;
 };
+
+/** Master list member search — bank uses accountName, others use name. */
+export function resolveGroupListMemberSearchText(
+  row: { name?: unknown; accountName?: unknown } | null | undefined
+): string {
+  if (!row) return "";
+  return String(row.accountName ?? row.name ?? "").trim();
+}
 
 const epsSettled = 1e-6;
 
@@ -88,23 +97,27 @@ export function sortGroupListMembers<T extends GroupListSortableMember>(
 }
 
 /** Search mode — sirf naam match wale accounts; group name match se saare accounts mat dikhao. */
-export function filterGroupListMembersBySearch<T extends { name?: string }>(
+export function filterGroupListMembersBySearch<T extends GroupListSortableMember>(
   rows: T[],
-  searchTerm: string
+  searchTerm: string,
+  nameOf?: (row: T) => string
 ): T[] {
   if (!String(searchTerm || "").trim()) return rows;
-  return rows.filter((row) => masterEntityTextMatchesSearch(row.name, searchTerm));
+  return rows.filter((row) =>
+    masterEntityTextMatchesSearch(nameOf?.(row) ?? resolveGroupListMemberSearchText(row), searchTerm)
+  );
 }
 
-export function groupListMembersForDisplay<T extends GroupListSortableMember & { name?: string }>(
+export function groupListMembersForDisplay<T extends GroupListSortableMember>(
   rows: T[],
   quickFilter: EntityListQuickFilter,
   searchTerm: string,
   nameOf?: (row: T) => string
 ): T[] {
+  const labelOf = nameOf ?? ((row: T) => resolveGroupListMemberSearchText(row));
   const filtered = filterGroupListMembersByQuickFilter(rows, quickFilter);
-  const sorted = sortGroupListMembers(filtered, quickFilter, nameOf);
-  return filterGroupListMembersBySearch(sorted, searchTerm);
+  const sorted = sortGroupListMembers(filtered, quickFilter, labelOf);
+  return filterGroupListMembersBySearch(sorted, searchTerm, labelOf);
 }
 
 export type GroupListSelectOptions = { memberId?: string | null };

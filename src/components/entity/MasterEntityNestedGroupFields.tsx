@@ -135,6 +135,8 @@ export function MasterEntityNestedGroupFields<G extends MasterGroupListRow = Mas
 }: MasterEntityNestedGroupFieldsProps<G>) {
   const isEdit = mode === "edit" && Boolean(editingGroup?.id);
   const isCreate = mode === "create";
+  const editAncestorCount = isEdit ? parentPathIds.length : 0;
+  const editNameLevelIndex = editAncestorCount;
   const [slotCount, setSlotCount] = useState(1);
 
   useEffect(() => {
@@ -142,8 +144,11 @@ export function MasterEntityNestedGroupFields<G extends MasterGroupListRow = Mas
       setSlotCount(Math.max(1, chainSlots.length || 1));
       return;
     }
-    const extraSlots = isEdit ? childPathIds.length : parentPathIds.length;
-    setSlotCount(Math.max(1, extraSlots || 1));
+    if (isEdit) {
+      setSlotCount(parentPathIds.length + 1 + childPathIds.length);
+      return;
+    }
+    setSlotCount(Math.max(1, parentPathIds.length || 1));
   }, [formResetKey, parentPathIds.length, childPathIds.length, chainSlots.length, isCreate, isEdit]);
 
   const listOpts = { legacyParentIds };
@@ -206,19 +211,30 @@ export function MasterEntityNestedGroupFields<G extends MasterGroupListRow = Mas
     }
 
     if (value === "add-new" && newName?.trim()) {
-      if (levelIndex === 0) {
+      if (levelIndex === 0 && !isEdit) {
         onGroupNameChange(newName.trim());
-        if (!isEdit) onParentPathIdsChange([]);
+        onParentPathIdsChange([]);
+        return;
+      }
+      if (isEdit && levelIndex === editNameLevelIndex) {
+        onGroupNameChange(newName.trim());
         return;
       }
       onAddNewAtLevel?.(levelIndex, newName.trim());
       return;
     }
 
-    if (isEdit && levelIndex === 0) return;
+    if (isEdit && levelIndex === editNameLevelIndex) return;
+
+    if (isEdit && levelIndex < editNameLevelIndex) {
+      const next = [...parentPathIds];
+      next[levelIndex] = value;
+      onParentPathIdsChange(next.slice(0, levelIndex + 1));
+      return;
+    }
 
     if (isEdit) {
-      const childIndex = levelIndex - 1;
+      const childIndex = levelIndex - editNameLevelIndex - 1;
       const next = [...childPathIds];
       next[childIndex] = value;
       onChildPathIdsChange?.(next.slice(0, childIndex + 1));
@@ -264,8 +280,11 @@ export function MasterEntityNestedGroupFields<G extends MasterGroupListRow = Mas
       return;
     }
     if (isEdit) {
-      onChildPathIdsChange?.(childPathIds.filter((_, i) => i !== pathIndex));
-      setSlotCount((c) => Math.max(1, c - 1));
+      const childIndex = pathIndex;
+      if (childPathIds[childIndex]) {
+        onChildPathIdsChange?.(childPathIds.filter((_, i) => i !== childIndex));
+      }
+      setSlotCount((c) => Math.max(editNameLevelIndex + 1, c - 1));
       return;
     }
     const next = parentPathIds.filter((_, i) => i !== pathIndex);
@@ -357,46 +376,141 @@ export function MasterEntityNestedGroupFields<G extends MasterGroupListRow = Mas
     );
   };
 
+  const renderEditGroupNameSlot = () => {
+    const indentPx = (editNameLevelIndex + 1) * MASTER_ENTITY_NESTED_FORM_INDENT_PX;
+    return (
+      <div
+        key="edit-group-name"
+        className="flex items-start gap-1.5"
+        style={{ marginLeft: `${indentPx}px` }}
+      >
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <Label>Group name</Label>
+          <div className="flex items-center gap-1.5">
+            <Input
+              value={groupName}
+              onChange={(e) => onGroupNameChange(e.target.value)}
+              placeholder="Group name"
+              disabled={disabled}
+              className="h-9 min-w-0 flex-1"
+            />
+            {editLevel0Trailing ? <div className="shrink-0">{editLevel0Trailing}</div> : null}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderEditAncestorSlot = (levelIndex: number) => {
+    const parentForLevel =
+      levelIndex === 0 ? systemBranch : parentPathIds[levelIndex - 1] || systemBranch;
+    const options =
+      levelIndex === 0
+        ? listMasterEntityGroupLevelOptions(
+            allGroups,
+            config,
+            systemBranch,
+            [],
+            0,
+            excludeGroupId,
+            listOpts
+          )
+        : listMasterEntityGroupChildrenForParent(allGroups, String(parentForLevel), excludeGroupId);
+    const comboboxOptions = options.map((g) => ({ value: g.id, label: g.name }));
+    const selectedValue = parentPathIds[levelIndex] || "";
+    const indentPx = (levelIndex + 1) * MASTER_ENTITY_NESTED_FORM_INDENT_PX;
+
+    return (
+      <div
+        key={`edit-ancestor-${levelIndex}`}
+        className="flex items-start gap-1.5"
+        style={{ marginLeft: `${indentPx}px` }}
+      >
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <Label>{nestedLevelLabel(levelIndex)}</Label>
+          <Combobox
+            options={comboboxOptions}
+            value={selectedValue}
+            onChange={(val, newName) => handleLevelChange(levelIndex, val, newName)}
+            placeholder={parentGroupPlaceholder(levelIndex)}
+            searchPlaceholder="Search..."
+            addNewLabel="+ Add New"
+            disabled={disabled}
+            popoverModal={false}
+            autoFocusSearchOnOpen
+          />
+        </div>
+      </div>
+    );
+  };
+
+  const renderEditChildSlot = (childIndex: number) => {
+    const levelIndex = editNameLevelIndex + 1 + childIndex;
+    const parentForLevel =
+      childIndex === 0
+        ? editingGroup!.id
+        : childPathIds[childIndex - 1] || editingGroup!.id;
+    const options = listMasterEntityGroupChildrenForParent(
+      allGroups,
+      String(parentForLevel),
+      excludeGroupId
+    );
+    const comboboxOptions = options.map((g) => ({ value: g.id, label: g.name }));
+    const selectedValue = childPathIds[childIndex] || "";
+    const indentPx = (levelIndex + 1) * MASTER_ENTITY_NESTED_FORM_INDENT_PX;
+
+    return (
+      <div
+        key={`edit-child-${childIndex}`}
+        className="flex items-start gap-1.5"
+        style={{ marginLeft: `${indentPx}px` }}
+      >
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <Label>{nestedLevelLabel(editAncestorCount + childIndex)}</Label>
+          <Combobox
+            options={comboboxOptions}
+            value={selectedValue}
+            onChange={(val, newName) => handleLevelChange(levelIndex, val, newName)}
+            placeholder={parentGroupPlaceholder(editAncestorCount + childIndex)}
+            searchPlaceholder="Search..."
+            addNewLabel="+ Add New"
+            disabled={disabled || (childIndex > 0 && !childPathIds[childIndex - 1])}
+            popoverModal={false}
+            autoFocusSearchOnOpen
+          />
+        </div>
+        {slotCount > editNameLevelIndex + 1 && !childPathIds[childIndex] ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="mt-7 h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+            aria-label="Remove empty group field"
+            onClick={() => removeSlot(childIndex)}
+            disabled={disabled}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderLevelSlot = (levelIndex: number) => {
     if (isCreate) return renderCreateLevelSlot(levelIndex);
 
-    if (isEdit && levelIndex === 0) {
-      const indentPx = MASTER_ENTITY_NESTED_FORM_INDENT_PX;
-      return (
-        <div
-          key="edit-level-0"
-          className="flex items-start gap-1.5"
-          style={{ marginLeft: `${indentPx}px` }}
-        >
-          <div className="min-w-0 flex-1 space-y-1.5">
-            <Label>Group name</Label>
-            <div className="flex items-center gap-1.5">
-              <Input
-                value={groupName}
-                onChange={(e) => onGroupNameChange(e.target.value)}
-                placeholder="Group name"
-                disabled={disabled}
-                className="h-9 min-w-0 flex-1"
-              />
-              {editLevel0Trailing ? <div className="shrink-0">{editLevel0Trailing}</div> : null}
-            </div>
-          </div>
-        </div>
-      );
+    if (isEdit) {
+      if (levelIndex < editNameLevelIndex) return renderEditAncestorSlot(levelIndex);
+      if (levelIndex === editNameLevelIndex) return renderEditGroupNameSlot();
+      return renderEditChildSlot(levelIndex - editNameLevelIndex - 1);
     }
 
-    const pathIndex = isEdit ? levelIndex - 1 : levelIndex;
-    const activePathIds = isEdit ? childPathIds : parentPathIds;
+    const pathIndex = levelIndex;
+    const activePathIds = parentPathIds;
     const parentForLevel =
-      levelIndex === 0
-        ? systemBranch
-        : isEdit && levelIndex === 1
-          ? editingGroup!.id
-          : isEdit
-            ? childPathIds[pathIndex - 1] || editingGroup!.id
-            : parentPathIds[pathIndex - 1] || systemBranch;
+      levelIndex === 0 ? systemBranch : parentPathIds[pathIndex - 1] || systemBranch;
 
-    const levelDisabled = disabled || (levelIndex > 1 && !activePathIds[pathIndex - 1]);
+    const levelDisabled = disabled || (levelIndex > 0 && !parentPathIds[pathIndex - 1]);
 
     const options =
       levelIndex === 0
@@ -476,7 +590,7 @@ export function MasterEntityNestedGroupFields<G extends MasterGroupListRow = Mas
 
       {Array.from({ length: slotCount }).map((_, levelIndex) => renderLevelSlot(levelIndex))}
 
-      <div style={{ marginLeft: `${2 * MASTER_ENTITY_NESTED_FORM_INDENT_PX}px` }}>
+      <div style={{ marginLeft: `${(slotCount + 1) * MASTER_ENTITY_NESTED_FORM_INDENT_PX}px` }}>
         <Button
           type="button"
           variant="outline"

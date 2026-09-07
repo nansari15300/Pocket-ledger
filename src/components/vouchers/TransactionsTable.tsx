@@ -45,6 +45,7 @@ import {
   getParticularsText,
   getDisplayType,
   getStatusLabel,
+  getStatusBadgeOutlineClassName,
   getStatusDetail,
   getStatusDetailVouchers,
   LinkedVouchersColored,
@@ -2236,9 +2237,6 @@ export function TransactionsTable({
         t.type === "note"
           ? (String(t.title || "").trim() || String(t.narration || "").trim() || "—")
           : (String(t.narration || "").trim() || "—");
-      const useNeutralStatus = ["Journal", "Note", "Contra", "Salary"].includes(statusLabel);
-      const isPaidStatus = statusLabel === "Paid";
-      const isUnpaidStatus = statusLabel === "Partial" || statusLabel === "Unpaid" || statusLabel === "Overdue";
       const isPendingApproval = highlightPendingApproval && (t as any).isApproved !== true; // mobile card — theme stripe N/A
       const isPeerPendingChange =
         String((t as any).type || "") === "inter_company" &&
@@ -2376,7 +2374,7 @@ export function TransactionsTable({
                     variant="outline"
                     className={cn(
                       "text-xs font-semibold h-[22px]",
-                      useNeutralStatus ? "text-muted-foreground border-muted-foreground/40" : isPaidStatus ? "text-green-600 border-green-600/50" : isUnpaidStatus ? "text-red-600 border-red-600/50" : "text-muted-foreground border-muted-foreground/40"
+                      getStatusBadgeOutlineClassName(statusLabel, t, { debit, credit })
                     )}
                   >
                     {hl(statusLabel)}

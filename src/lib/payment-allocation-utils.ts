@@ -338,12 +338,16 @@ export function getJournalPartyBillWiseLinkAmount(v: any, ledgerId: string, line
   return amt;
 }
 
-/** Journal party/staff entry Dr/Cr for bill-wise — other charge excluded when charge ties to this account. */
+/** Journal or adjustment party/staff entry Dr/Cr for bill-wise — other charge excluded when charge ties to this account. */
 export function getJournalPartyBillWiseAmountFromEntries(
   voucher: any,
   ledgerId: string
 ): { debit: number; credit: number; total: number } | null {
-  if (voucher?.type !== "journal" || !Array.isArray(voucher?.entries)) return null;
+  if (
+    (voucher?.type !== "journal" && voucher?.type !== "adjustment") ||
+    !Array.isArray(voucher?.entries)
+  )
+    return null;
   const partyEntry = voucher.entries.find(
     (e: any) => String(e?.accountId ?? "") === String(ledgerId)
   );
@@ -674,6 +678,7 @@ export function hasAllocationsToVoucherId(voucherId: string, allVouchers: any[])
       "sale",
       "sale_service",
       "journal",
+      "adjustment",
       "inter_company",
     ].includes(type);
     if (!isBillWiseSource) continue;

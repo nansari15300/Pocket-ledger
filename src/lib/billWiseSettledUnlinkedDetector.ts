@@ -88,9 +88,9 @@ function isActiveVoucher(v: any): boolean {
   return true;
 }
 
-/** Party-side Dr/Cr of a manual journal line. */
+/** Party-side Dr/Cr of a manual journal or adjustment line. */
 function journalLedgerAmount(v: any, ledgerId: string): { debit: number; credit: number; total: number } | null {
-  if (v?.type !== "journal" || !Array.isArray(v?.entries)) return null;
+  if ((v?.type !== "journal" && v?.type !== "adjustment") || !Array.isArray(v?.entries)) return null;
   // Journal data has existed in more than one shape (accountId in current rows,
   // ledgerId/partyId in imported or older local records). All are the same
   // party-side ledger line for bill-wise purposes.
@@ -117,7 +117,7 @@ export function voucherTouchesLedger(
   if (!v || !ledgerId) return false;
   const entityField = ledgerKind === "staff" ? "staffId" : "partyId";
   if (String(v[entityField] || "") === ledgerId) return true;
-  if (v.type === "journal") return !!journalLedgerAmount(v, ledgerId);
+  if (v.type === "journal" || v.type === "adjustment") return !!journalLedgerAmount(v, ledgerId);
   if (v.type === "inter_company") {
     return !!getInterCompanyEntityBillWiseAmount(v, ledgerId, ledgerKind);
   }
@@ -179,19 +179,23 @@ function buildLedgerRow(
     amount = getOutflowBillWiseLinkAmount(v);
     typeLabel = type === "payment_out" ? "Payment" : type === "direct_expense" ? "Direct Expense" : "Contra";
     sourceRank = 0;
-  } else if (type === "journal") {
+  } else if (type === "journal" || type === "adjustment") {
     const ledgerAmount = journalLedgerAmount(v, ledgerId);
     if (!ledgerAmount) return null;
     side = ledgerAmount.debit > 0 ? "dr" : "cr";
     amount = ledgerAmount.total;
-    typeLabel =
-      v.subType === "add_salary"
-        ? ledgerAmount.debit > 0
-          ? "Add Salary (Dr)"
-          : "Add Salary (Cr)"
-        : ledgerAmount.debit > 0
-          ? "Journal (Dr)"
-          : "Journal (Cr)";
+    if (type === "adjustment") {
+      typeLabel = ledgerAmount.debit > 0 ? "Adjustment (Dr)" : "Adjustment (Cr)";
+    } else {
+      typeLabel =
+        v.subType === "add_salary"
+          ? ledgerAmount.debit > 0
+            ? "Add Salary (Dr)"
+            : "Add Salary (Cr)"
+          : ledgerAmount.debit > 0
+            ? "Journal (Dr)"
+            : "Journal (Cr)";
+    }
     needsLinkedAccountId = true;
     sourceRank = 1;
   } else if (type === "inter_company") {
@@ -294,7 +298,11 @@ function computeLedgerOpeningBalanceConsumed(
 
   let fromJournals = 0;
   for (const v of ledgerVouchers) {
-    if (v?.type !== "journal" || !voucherTouchesLedger(v, ledgerId, ledgerKind)) continue;
+    if (
+      (v?.type !== "journal" && v?.type !== "adjustment") ||
+      !voucherTouchesLedger(v, ledgerId, ledgerKind)
+    )
+      continue;
     const allocs = (v.allocations as Allocation[] | undefined) || [];
     for (const a of allocs) {
       if (String(a?.voucherId ?? "") !== OPENING_BALANCE_VOUCHER_ID) continue;

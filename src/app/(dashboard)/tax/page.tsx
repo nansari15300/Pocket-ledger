@@ -53,6 +53,7 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import { createMasterEntityGroupMoveHandler } from "@/lib/createMasterEntityGroupMoveHandler";
 import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
 import { TAX_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { computeMasterGroupListSearchVisibleCount } from "@/lib/masterGroupListTree";
 import { taxGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
 import { taxGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
 import { TAX_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
@@ -511,17 +512,21 @@ function TaxPageContent() {
     return map;
   }, [processedTaxes]);
 
-  // Filtered group count (matches TaxGroupList: exclude report-only + system groups; apply search)
   const filteredGroupCount = useMemo(() => {
-    const searchLower = (searchTerm || "").toLowerCase();
-    return (processedTaxGroupsForList || []).filter((g) => {
-      const anyG = g as any;
-      if (anyG.isReportOnly === true) return false;
-      const isSystemParent = anyG.isSystemReserved === true || isSystemParentGroup("tax_groups", anyG.id);
-      if (isSystemParent) return false;
-      return g.name && (searchLower ? g.name.toLowerCase().includes(searchLower) : true);
-    }).length;
-  }, [processedTaxGroupsForList, searchTerm]);
+    return computeMasterGroupListSearchVisibleCount({
+      groups: processedTaxGroupsForList || [],
+      config: TAX_GROUP_LIST_CONFIG,
+      searchTerm,
+      quickFilter: groupListQuickFilter,
+      groupMembersByGroupId: taxGroupMembersByGroupId,
+      visibleGroupFilter: (g) => {
+        const anyG = g as { isReportOnly?: boolean; isSystemReserved?: boolean };
+        if (anyG.isReportOnly === true) return false;
+        if (anyG.isSystemReserved === true || isSystemParentGroup("tax_groups", g.id)) return false;
+        return !!g.name;
+      },
+    });
+  }, [processedTaxGroupsForList, searchTerm, groupListQuickFilter, taxGroupMembersByGroupId]);
 
   const handleMoveTaxToGroup = useCallback(
     (tax: Tax, targetGroupId: string) =>

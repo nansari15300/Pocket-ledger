@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
+import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
@@ -893,19 +894,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                 )}
                 </MasterFormTwoColGrid>
                 <MasterFormTwoColGrid>
-                  <FormField
-                      control={form.control}
-                      name="openingBalance"
-                      render={({ field }: any) => (
-                          <FormItem>
-                          <FormLabel>Opening Balance</FormLabel>
-                          <FormControl>
-                              <Input type="number" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                          </FormItem>
-                      )}
-                  />
+                  <MasterOpeningBalanceAmountField control={form.control} />
                     <FormField
                     control={form.control}
                     name="openingBalanceDate"

@@ -46,6 +46,7 @@ import {
   FormMessage,
   FormDescription,
 } from "@/components/ui/form";
+import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -911,23 +912,7 @@ export function CreateBankAccountDialog({
               </MasterFormTwoColGrid>
 
               <MasterFormTwoColGrid>
-                <FormField
-                  control={form.control}
-                  name="openingBalance"
-                  render={({ field }: any) => (
-                    <FormItem>
-                      <FormLabel>Opening Balance</FormLabel>
-                      <FormControl>
-                        <Input 
-                          type="number" 
-                          {...field}
-                          onChange={(e) => field.onChange(e.target.valueAsNumber || 0)}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                <MasterOpeningBalanceAmountField control={form.control} />
                 <FormField
                   control={form.control}
                   name="openingBalanceDate"

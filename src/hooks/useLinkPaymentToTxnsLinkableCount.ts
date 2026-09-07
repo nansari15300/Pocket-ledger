@@ -13,6 +13,10 @@ import {
 } from "@/lib/payment-allocation-utils";
 import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 
+function isEntryBasedBillWiseVoucher(v: any): boolean {
+  return v?.type === "journal" || v?.type === "adjustment";
+}
+
 export type LinkPaymentVariant = "payment_in" | "payment_out";
 
 /** Same list logic as LinkPaymentToTxnsDialog so form count matches popup linkable rows. */
@@ -35,6 +39,7 @@ export function useLinkPaymentToTxnsLinkableCount(
     // Match party by explicit partyId OR by journal entry account id so journal rows are counted as linkable.
     const voucherTouchesParty = (v: any) =>
       String((v as any)?.partyId ?? "") === String(partyId) ||
+      String((v as any)?.adjustmentTarget?.id ?? "") === String(partyId) ||
       (Array.isArray((v as any)?.entries) &&
         (v as any).entries.some((e: any) => String(e?.accountId ?? "") === String(partyId)));
     // Derive bill-wise amount from party-side journal entry (Dr/Cr) for consistent popup/count behavior.
@@ -78,7 +83,7 @@ export function useLinkPaymentToTxnsLinkableCount(
             v.type !== "sale_service" &&
             v.type !== "purchase" &&
             v.type !== "purchase_service" &&
-            v.type !== "journal" &&
+            !isEntryBasedBillWiseVoucher(v) &&
             v.type !== "inter_company"
           ) continue;
           const allocations = (v.allocations as Allocation[] | undefined) || [];
@@ -115,7 +120,7 @@ export function useLinkPaymentToTxnsLinkableCount(
       });
       // Payment In links to Dr-side journals for the selected party.
       const journalsDrFiltered = (vouchers as any[]).filter((v) => {
-        if (v.type !== "journal" || !voucherTouchesParty(v)) return false;
+        if (!isEntryBasedBillWiseVoucher(v) || !voucherTouchesParty(v)) return false;
         const partyAmount = getJournalPartyAmount(v);
         if (!partyAmount || partyAmount.debit <= 0) return false;
         const allocated = totalAllocatedTo(v.id);
@@ -150,7 +155,7 @@ export function useLinkPaymentToTxnsLinkableCount(
           v.type !== "sale_service" &&
           v.type !== "purchase" &&
           v.type !== "purchase_service" &&
-          v.type !== "journal" &&
+          !isEntryBasedBillWiseVoucher(v) &&
           v.type !== "inter_company"
         ) continue;
         const allocations = (v.allocations as Allocation[] | undefined) || [];
@@ -188,7 +193,7 @@ export function useLinkPaymentToTxnsLinkableCount(
     });
     // Payment Out links to Cr-side journals for the selected party.
     const journalsCrFiltered = (vouchers as any[]).filter((v) => {
-      if (v.type !== "journal" || !voucherTouchesParty(v)) return false;
+      if (!isEntryBasedBillWiseVoucher(v) || !voucherTouchesParty(v)) return false;
       const partyAmount = getJournalPartyAmount(v);
       if (!partyAmount || partyAmount.credit <= 0) return false;
       const allocated = totalAllocatedToOut(v.id);
