@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
 import { fetchInterCompanyEntitiesForCompany } from "@/lib/interCompany/fetchInterCompanyEntities";
 
@@ -10,6 +10,11 @@ export type { InterCompanyEntityDetail };
 export function useInterCompanyEntities(companyId: string | null | undefined) {
   const [entities, setEntities] = useState<InterCompanyEntityDetail[]>([]);
   const [loading, setLoading] = useState(false);
+  const [reloadEpoch, setReloadEpoch] = useState(0);
+
+  const reload = useCallback(() => {
+    setReloadEpoch((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     if (!companyId) {
@@ -31,9 +36,9 @@ export function useInterCompanyEntities(companyId: string | null | undefined) {
     return () => {
       cancelled = true;
     };
-  }, [companyId]);
+  }, [companyId, reloadEpoch]);
 
-  return { entities, loading };
+  return { entities, loading, reload };
 }
 
 /** Current company — `useVouchers` lists ko detail rows me. */

@@ -16,6 +16,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon, Loader2, Trash2, Upload, FileText, PlusCircle, Crown, Printer, Link2, History, CheckCircle, Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { NESTED_VOUCHER_ALERT_SHELL, nestedVoucherAlertShell } from "@/lib/dialogShellChrome";
 import {
   mapPartiesForVoucherCombobox,
   mapStaffForVoucherCombobox,
@@ -86,6 +87,11 @@ import { FilePreview } from "../vouchers/FilePreview";
 import { useVouchers } from "@/hooks/useVouchers";
 import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDialog";
 import type { ExpenseAccount } from "../expenses/types";
+import {
+  dispatchOtherChargeAddNewPrefill,
+  OTHER_CHARGE_ADD_NEW_LABELS,
+  resolveOtherChargeAddNewType,
+} from "@/lib/otherChargeComboboxAddNew";
 import { Checkbox } from "../ui/checkbox";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { saveVoucher, isVoucherLimitError, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
@@ -359,6 +365,8 @@ export function CreatePaymentOutForm({
   const pendingTaxIdUntilInTaxesListRef = useRef<string | null>(null);
   const pendingExpenseAccountIdUntilInListRef = useRef<string | null>(null);
   const pendingToAccountIdUntilInListRef = useRef<string | null>(null);
+  /** Other Charge combobox se Add New — create callback `otherChargeAccountId` par set kare. */
+  const creatingOtherChargeAccountRef = useRef(false);
   const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [isCreateExpenseAccountOpen, setIsCreateExpenseAccountOpen] = useState(false);
@@ -692,6 +700,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       sonnerToast.error("Default save failed.");
     }
   }, [form, otherChargeDefaultStorageKey]);
+  const handleOtherChargeAccountChange = useCallback(
+    (fieldOnChange: (val: string) => void, val: string, newName?: string) => {
+      const createType = resolveOtherChargeAddNewType(val);
+      if (createType) {
+        creatingOtherChargeAccountRef.current = true;
+        if (createType === "party") setIsCreatePartyOpen(true);
+        if (createType === "staff") setIsCreateStaffOpen(true);
+        if (createType === "expense") setIsCreateExpenseAccountOpen(true);
+        dispatchOtherChargeAddNewPrefill(createType, newName);
+        return;
+      }
+      fieldOnChange(val);
+    },
+    []
+  );
   const otherToComboboxOptions = useMemo(
     () =>
       withSelectedComboboxOption(
@@ -1006,13 +1029,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     return getAllocatedByVoucherIdFromPaymentOuts(others);
   }, [allVouchers, voucher?.id, savedVoucherId]);
   useEffect(() => {
-    if (voucherType !== "payment_out") return;
+    if (!outflowSupportsOtherCharge) return;
     const nextAmount = Math.max(0, Math.round(outflowTotalAmount * 100) / 100);
     const currentAmount = Number(form.getValues("amount")) || 0;
     if (currentAmount !== nextAmount) {
       form.setValue("amount", nextAmount, { shouldDirty: false, shouldValidate: false });
     }
-  }, [voucherType, outflowTotalAmount, form]);
+  }, [outflowSupportsOtherCharge, outflowTotalAmount, form]);
   const amountPaid = outflowSupportsOtherCharge ? outflowTotalAmount : Number(form.watch("amount")) || 0;
   const remainingToLink = Math.max(0, amountPaid - totalLinked);
   const linkedAmountByPaymentInId = useMemo(() => {
@@ -1337,6 +1360,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
     const enteredAmount = outflowSupportsOtherCharge ? outflowTotalAmount : Number(form.getValues("amount")) || 0;
+    if (outflowSupportsOtherCharge) {
+      const nextAmount = Math.max(0, Math.round(outflowTotalAmount * 100) / 100);
+      if ((Number(form.getValues("amount")) || 0) !== nextAmount) {
+        form.setValue("amount", nextAmount, { shouldDirty: false, shouldValidate: false });
+      }
+    }
     if (isAmountExceedingSelectedAccount(enteredAmount)) {
       setIsAmountMoreThanAccountOpen(true);
       return;
@@ -2254,7 +2283,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                           </Button>
                                         </FormControl>
                                       </PopoverTrigger>
-                                      <PopoverContent className="w-auto p-0 z-50" align="start">
+                                      <PopoverContent className="w-auto p-0 z-[102]" align="start">
                                         <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
                                       </PopoverContent>
                                     </Popover>
@@ -2340,7 +2369,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     </Button>
                                   </FormControl>
                                 </PopoverTrigger>
-                                <PopoverContent className="w-auto p-0 z-50" align="start">
+                                <PopoverContent className="w-auto p-0 z-[102]" align="start">
                                   <Calendar mode="single" selected={field.value} onSelect={(date) => {
                                     if (date) {
                                       date.setHours(12, 0, 0, 0);
@@ -2755,8 +2784,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     triggerClassName="w-full min-w-0"
                                     options={otherChargeAccountOptions}
                                     value={field.value}
-                                    onChange={(val) => field.onChange(val)}
+                                    onChange={(val, newName) =>
+                                      handleOtherChargeAccountChange(field.onChange, val, newName)
+                                    }
                                     placeholder="Select account"
+                                    addNewLabels={OTHER_CHARGE_ADD_NEW_LABELS}
                                     disabled={deleteDisabledWhenLinked}
                                   />
                                 </div>
@@ -3201,8 +3233,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <Combobox
                                   options={otherChargeAccountOptions}
                                   value={field.value}
-                                  onChange={(val) => field.onChange(val)}
+                                  onChange={(val, newName) =>
+                                    handleOtherChargeAccountChange(field.onChange, val, newName)
+                                  }
                                   placeholder="Select account"
+                                  addNewLabels={OTHER_CHARGE_ADD_NEW_LABELS}
                                   disabled={deleteDisabledWhenLinked}
                                 />
                               </div>
@@ -3789,7 +3824,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           Delete
                         </Button>
                       </AlertDialogTrigger>
-                      <AlertDialogContent>
+                      <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                         <AlertDialogHeader>
                           <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                           <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
@@ -3827,7 +3862,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           Delete
                         </Button>
                       </AlertDialogTrigger>
-                      <AlertDialogContent>
+                      <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                         <AlertDialogHeader>
                           <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                           <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
@@ -3872,7 +3907,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <Trash2 className="mr-2 h-4 w-4" /> Delete
                           </Button>
                         </AlertDialogTrigger>
-                        <AlertDialogContent>
+                        <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                           <AlertDialogHeader>
                             <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                             <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
@@ -3927,7 +3962,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <Trash2 className="mr-2 h-4 w-4" /> Delete
                           </Button>
                         </AlertDialogTrigger>
-                        <AlertDialogContent>
+                        <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                           <AlertDialogHeader>
                             <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                             <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
@@ -3980,7 +4015,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         onPartyCreated={(id) => {
           pendingPartyIdUntilInPartiesListRef.current = id;
           setIsCreatePartyOpen(false);
-          form.setValue("partyId", id);
+          if (creatingOtherChargeAccountRef.current) {
+            creatingOtherChargeAccountRef.current = false;
+            form.setValue("otherChargeAccountId", id);
+          } else {
+            form.setValue("partyId", id);
+          }
           void onRefreshCopyMismatch?.();
         }}
         isOpen={isCreatePartyOpen}
@@ -3990,7 +4030,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         onStaffCreated={(id) => {
           pendingStaffIdUntilInStaffListRef.current = id;
           setIsCreateStaffOpen(false);
-          form.setValue("staffId", id);
+          if (creatingOtherChargeAccountRef.current) {
+            creatingOtherChargeAccountRef.current = false;
+            form.setValue("otherChargeAccountId", id);
+          } else {
+            form.setValue("staffId", id);
+          }
           void onRefreshCopyMismatch?.();
         }}
         isOpen={isCreateStaffOpen}
@@ -4023,7 +4068,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           }}
           onExpenseAccountCreated={(id) => {
             setIsCreateExpenseAccountOpen(false);
-            if (form.getValues("payeeType") === "other") {
+            if (creatingOtherChargeAccountRef.current) {
+              creatingOtherChargeAccountRef.current = false;
+              form.setValue("otherChargeAccountId", id);
+            } else if (form.getValues("payeeType") === "other") {
               pendingToAccountIdUntilInListRef.current = id;
               form.setValue("toAccountId", id);
             } else {
@@ -4084,7 +4132,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       )}
       {voucherType === "payment_out" && taxAccountId && (
         <Dialog open={isLinkToTaxDialogOpen} onOpenChange={setIsLinkToTaxDialogOpen}>
-          <DialogContent className="max-w-lg">
+          <DialogContent {...nestedVoucherAlertShell("max-w-lg")}>
             <DialogHeader>
               <DialogTitle>Link payment to tax</DialogTitle>
             </DialogHeader>
@@ -4120,7 +4168,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       )}
       <LinkSectionInfoDialog open={linkSectionInfoOpen} onOpenChange={setLinkSectionInfoOpen} />
       <Dialog open={isAmountMoreThanAccountOpen} onOpenChange={setIsAmountMoreThanAccountOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent {...nestedVoucherAlertShell("max-w-md")}>
           <DialogHeader>
             <DialogTitle>Cannot save voucher</DialogTitle>
           </DialogHeader>

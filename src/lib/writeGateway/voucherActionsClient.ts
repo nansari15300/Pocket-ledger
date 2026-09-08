@@ -1252,36 +1252,19 @@ type ApproveVoucherHistoryOptions = {
 };
 
 /**
- * IC: ek company/entity pe Approve → linked copy bhi approve (party vs bank / source vs target).
+ * IC: source approve → target par sirf visibility flag (`interCompanySourceApproved`).
+ * Target copy alag se approve hogi — peer par auto `isApproved` mat lagao.
  */
 async function approveInterCompanyPeerCopy(
   voucher: Record<string, unknown>,
-  approvedByUserId: string,
-  approvedByName?: string | null,
+  _approvedByUserId: string,
+  _approvedByName?: string | null,
   options?: ApproveVoucherHistoryOptions
 ): Promise<void> {
   if (options?.skipPeerApprove === true) return;
   if (String(voucher?.type || "") !== "inter_company") return;
-  const link = readInterCompanyLink(voucher);
-  if (!link?.peerCompanyId || !link?.peerVoucherId) return;
-  if (interCompanyVoucherViewerSide(voucher) === "source") {
-    await syncInterCompanySourceApprovedToPeerTarget(voucher);
-  }
-  try {
-    await approveVoucherWithHistory(link.peerCompanyId, link.peerVoucherId, approvedByUserId, approvedByName, {
-      skipUiNotify: options?.skipUiNotify,
-      skipPeerApprove: true,
-    });
-    dispatchVoucherLivePatch(link.peerCompanyId, link.peerVoucherId, {
-      id: link.peerVoucherId,
-      isApproved: true,
-      approvedByUserId,
-      approvedByUserName: approvedByName || approvedByUserId,
-      ...(interCompanyVoucherViewerSide(voucher) === "source" ? { interCompanySourceApproved: true } : {}),
-    });
-  } catch (e) {
-    console.warn("[approve] inter-company peer copy", e);
-  }
+  if (interCompanyVoucherViewerSide(voucher) !== "source") return;
+  await syncInterCompanySourceApprovedToPeerTarget(voucher);
 }
 
 /** Local mirror pe approve persist (local-only APK + Firebase mode offline fallback). */

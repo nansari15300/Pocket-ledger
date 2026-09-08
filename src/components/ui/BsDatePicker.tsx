@@ -11,6 +11,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { VOUCHER_DIALOG_CALENDAR_POPOVER_CN } from "@/lib/dialogShellChrome";
 
 type BsDatePickerBaseProps = {
   numberOfMonths?: number;
@@ -163,7 +164,8 @@ export default function BsDatePicker({
         align="start"
         collisionPadding={16}
         className={cn(
-          "w-auto p-0 z-50",
+          "w-auto p-0",
+          VOUCHER_DIALOG_CALENDAR_POPOVER_CN,
           // Narrow viewports: keep popover in screen; inner NepaliCalendar scrolls (presets + calendar)
           "max-w-[calc(100vw-1rem)] sm:max-w-none",
           popoverContentClassName

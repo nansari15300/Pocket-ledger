@@ -46,6 +46,11 @@ import {
 
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, UserPlus, Link2, Zap, X, RotateCcw, HelpCircle, History, CheckCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  NESTED_VOUCHER_ALERT_SHELL,
+  NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
+  NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN,
+} from "@/lib/dialogShellChrome";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
 import { beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
@@ -2907,7 +2912,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                       Delete
                     </Button>
                   </AlertDialogTrigger>
-                  <AlertDialogContent>
+                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                     <AlertDialogHeader>
                       <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                       <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
@@ -2949,7 +2954,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
                     </AlertDialogTrigger>
-                    <AlertDialogContent>
+                    <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                       <AlertDialogHeader>
                         <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                         <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
@@ -2992,7 +2997,9 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
       </Form>
       <Dialog open={isLinkPaymentDialogOpen} onOpenChange={setIsLinkPaymentDialogOpen}>
         <DialogContent
+          overlayClassName={NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN}
           className={cn(
+            NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
             "max-w-4xl max-h-[85vh] flex flex-col rounded-lg pt-3 px-[3px]",
             isMobile && "left-[2px] right-[2px] translate-x-0 w-auto max-w-none h-[85vh] max-h-[85vh] pt-2"
           )}

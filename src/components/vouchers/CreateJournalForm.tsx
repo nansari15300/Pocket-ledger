@@ -39,6 +39,7 @@ import {
 
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, Wand2, History, CheckCircle, Link2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
 import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
@@ -111,6 +112,10 @@ import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccountDialog";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
 import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDialog";
+import {
+  OTHER_CHARGE_ADD_NEW_LABELS,
+  OTHER_CHARGE_ADD_NEW_VALUE_TO_TYPE,
+} from "@/lib/otherChargeComboboxAddNew";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { LinkPaymentInToSalaryDialog } from "@/components/vouchers/LinkPaymentInToSalaryDialog";
@@ -469,6 +474,7 @@ export function CreateJournalForm({
   const [activeInput, setActiveInput] = React.useState<{ index: number, field: string } | null>(null);
   // Track which journal line requested "add new" so we can fill that exact row instead of appending extra rows.
   const [pendingCreateLineIndex, setPendingCreateLineIndex] = useState<number | null>(null);
+  const pendingOtherChargeCreateRef = useRef(false);
   // Keep allocations per account/side so debit card (Pashupati) and credit card (Kanhaiya) stay independent.
   const [journalAllocationsBySide, setJournalAllocationsBySide] = useState<{ debit: Allocation[]; credit: Allocation[] }>({
     debit: [],
@@ -2264,6 +2270,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   // Apply newly created account to the requested row to avoid extra debit rows being appended.
   const applyCreatedAccountToPendingRow = useCallback((id: string) => {
+    if (pendingOtherChargeCreateRef.current) {
+      pendingOtherChargeCreateRef.current = false;
+      form.setValue("otherChargeAccountId", id, { shouldDirty: true, shouldValidate: true });
+      return;
+    }
     if (pendingCreateLineIndex !== null) {
       form.setValue(`lines.${pendingCreateLineIndex}.accountId`, id, { shouldDirty: true, shouldValidate: true });
       setPendingCreateLineIndex(null);
@@ -2316,6 +2327,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
   };
 
+  const handleOtherChargeAccountChange = (
+    fieldOnChange: (val: string) => void,
+    val: string,
+    newName?: string
+  ) => {
+    const createType = OTHER_CHARGE_ADD_NEW_VALUE_TO_TYPE[val];
+    if (createType) {
+      pendingOtherChargeCreateRef.current = true;
+      handleCreateNew(createType, newName);
+      return;
+    }
+    fieldOnChange(val);
+  };
+
   const journalOtherChargeCard = showJournalOtherCharge ? (
     <div className="relative h-full min-h-0 rounded-lg border bg-muted/20 p-3 flex flex-col min-w-0">
       <Button
@@ -2339,8 +2364,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 triggerClassName="w-full min-w-0"
                 options={otherChargeAccountOptions}
                 value={field.value}
-                onChange={(val) => field.onChange(val)}
+                onChange={(val, newName) =>
+                  handleOtherChargeAccountChange(field.onChange, val, newName)
+                }
                 placeholder="Select account"
+                addNewLabels={OTHER_CHARGE_ADD_NEW_LABELS}
                 disabled={deleteDisabledWhenLinked}
               />
               <FormMessage />
@@ -3254,7 +3282,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       Delete
                     </Button>
                   </AlertDialogTrigger>
-                  <AlertDialogContent>
+                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                     <AlertDialogHeader>
                       <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                       <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
@@ -3305,7 +3333,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
                     </AlertDialogTrigger>
-                    <AlertDialogContent>
+                    <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                       <AlertDialogHeader>
                         <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                         <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>

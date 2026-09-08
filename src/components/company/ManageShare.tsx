@@ -624,6 +624,7 @@ export function ManageShare() {
 
 const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: number) => {
       if (selectedRoleForPermissions === 'owner') return;
+      hasUnsavedChangesRef.current = true;
       
       setEditablePermissionConfig(prevConfig => {
           const newConfig = JSON.parse(JSON.stringify(prevConfig));
@@ -640,6 +641,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
     const permissionIndex = flattenedPermissions.indexOf(permissionKey);
     if (permissionIndex === -1) return;
+    hasUnsavedChangesRef.current = true;
     
     setEditablePermissionConfig(prevConfig => {
       const newConfig = JSON.parse(JSON.stringify(prevConfig));
@@ -655,12 +657,22 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         const sharedListIdx = flattenedPermissions.indexOf('view_reconciliation_shared_list');
         if (sharedListIdx !== -1) newConfig.roles[selectedRoleForPermissions][sharedListIdx] = true;
       }
+      // IC write ke saath read bhi chahiye — memberUsers + Join tab
+      const icReadIdx = flattenedPermissions.indexOf('inter_company_read');
+      const icWriteIdx = flattenedPermissions.indexOf('inter_company_write');
+      if (permissionKey === 'inter_company_write' && checked && icReadIdx !== -1) {
+        newConfig.roles[selectedRoleForPermissions][icReadIdx] = true;
+      }
+      if (permissionKey === 'inter_company_read' && !checked && icWriteIdx !== -1) {
+        newConfig.roles[selectedRoleForPermissions][icWriteIdx] = false;
+      }
       return newConfig;
     });
   };
 
   const handleFileAttachmentLimitChange = (field: 'maxFileCount' | 'allowImage' | 'allowPDF' | 'allowDelete', value: number | boolean) => {
     if (selectedRoleForPermissions === 'owner') return;
+    hasUnsavedChangesRef.current = true;
     
     setEditablePermissionConfig(prevConfig => {
       const newConfig = JSON.parse(JSON.stringify(prevConfig));
@@ -676,6 +688,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
   };
 
   const handleAllowAttachmentsGlobalChange = (checked: boolean) => {
+    hasUnsavedChangesRef.current = true;
     setEditablePermissionConfig(prevConfig => {
       const newConfig = JSON.parse(JSON.stringify(prevConfig));
       newConfig.allowAttachments = checked;
@@ -709,10 +722,15 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
       const { shouldPersistPermissionConfigViaPlServerHost, notifyPlServerHostCompanyMetaSaved } = await import(
         "@/lib/plServerCompanyMetaSync"
       );
-      // Strict: local/PL/gate → always SQLite host path (never Firebase write).
+      const isOnlineFirebaseCompany =
+        !!companyData &&
+        isCloudLinkedCompanyStorage(companyData) &&
+        !companyUsesDeviceOrPlPermissionConfig(companyData);
+      // Strict: local/PL/gate → SQLite host path. Online Firebase → Firestore (SQLite mirror optional).
       const saveViaPlServerHost =
-        companyUsesDeviceOrPlPermissionConfig(companyData) ||
-        (await shouldPersistPermissionConfigViaPlServerHost(companyId, companyData));
+        !isOnlineFirebaseCompany &&
+        (companyUsesDeviceOrPlPermissionConfig(companyData) ||
+          (await shouldPersistPermissionConfigViaPlServerHost(companyId, companyData)));
 
       if (saveViaPlServerHost) {
         // Electron / PL host: SQLite `local_companies` delta export + staff meta ka source of truth.
@@ -768,8 +786,10 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
               new CustomEvent(PL_SERVER_COMPANY_META_UPDATED_EVENT, { detail: { companyId } })
             );
           }
-          // Live bump staff clients — await so gate gets full permissionConfig patch.
-          await notifyPlServerHostCompanyMetaSaved(companyId, { permissionConfig: configToSave });
+          // Live bump staff clients — best-effort; Save UI mat block karo agar host bump slow ho.
+          void notifyPlServerHostCompanyMetaSaved(companyId, { permissionConfig: configToSave }).catch(
+            () => undefined
+          );
           toast({
             title: "Success",
             description: "Permissions saved on this PC — staff clients sync via PL server.",

@@ -35,6 +35,7 @@ import {
   voucherAttachmentLockSaveOpts,
 } from "@/lib/voucherFormAttachmentSave";
 import { cn } from "@/lib/utils";
+import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Combobox } from "../ui/combobox";
@@ -1129,7 +1130,7 @@ export function CreateNoteForm({
                       <AlertDialogTrigger asChild>
                         <Button type="button" variant="destructive" className="w-full" disabled={!voucher?.id || editingDisabled || (!!voucher && !canDeleteVoucher(voucher))}>Delete</Button>
                       </AlertDialogTrigger>
-                      <AlertDialogContent>
+                      <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                         <AlertDialogHeader>
                           <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                           <AlertDialogDescription>This will move the note to the recycle bin.</AlertDialogDescription>
@@ -1166,7 +1167,7 @@ export function CreateNoteForm({
                           <Trash2 className="mr-2 h-4 w-4" /> Delete
                         </Button>
                       </AlertDialogTrigger>
-                      <AlertDialogContent>
+                      <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                         <AlertDialogHeader>
                           <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                           <AlertDialogDescription>This will move the note to the recycle bin.</AlertDialogDescription>

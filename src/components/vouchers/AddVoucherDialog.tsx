@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { DateFormatSettingsDialog } from "@/components/settings/DateFormatSettingsDialog";
 import { cn } from "@/lib/utils";
+import { nestedVoucherAlertShell } from "@/lib/dialogShellChrome";
 import { startOfDay } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { collection, doc, getDoc, deleteDoc, getDocs, onSnapshot, query, serverTimestamp, where, Timestamp } from "firebase/firestore";
@@ -4708,6 +4709,7 @@ export function AddVoucherDialog(props: any) {
       isOpen={!!historyVoucher}
       onOpenChange={(open) => !open && setHistoryVoucher(null)}
       onHistoryReset={() => setHistoryVoucher((prev: any) => (prev ? { ...prev, history: [] } : null))}
+      nestedInVoucherEdit
     />
     </>
   );
@@ -4920,12 +4922,10 @@ export function AddVoucherDialog(props: any) {
       {/* Auto Monthly: rate bump + Save / Generate Now — main voucher dialog ke upar nested portal. */}
       <Dialog open={recurringSettingsOpen} onOpenChange={setRecurringSettingsOpen}>
         <DialogContent
-          data-pl-auto-monthly-settings=""
-          className={cn(
-            "w-[95vw] max-w-md gap-3 rounded-xl border-2 border-solid border-blue-300 p-5 shadow-md sm:max-w-lg",
-            // Stock Summary green fill; outer border CSS se stable 2px pill-blue
-            "pl-dashboard-tone-card pl-dashboard-ribbon-emerald pl-dashboard-tone-emerald"
+          {...nestedVoucherAlertShell(
+            "w-[95vw] max-w-md gap-3 rounded-xl border-2 border-solid border-blue-300 p-5 shadow-md sm:max-w-lg pl-dashboard-tone-card pl-dashboard-ribbon-emerald pl-dashboard-tone-emerald"
           )}
+          data-pl-auto-monthly-settings=""
           aria-describedby="recurring-settings-desc"
         >
           <DialogHeader>
@@ -5188,7 +5188,9 @@ export function AddVoucherDialog(props: any) {
         }}
       >
         <DialogContent
-          className="flex max-h-[85vh] max-w-md flex-col gap-3 border-2 border-indigo-400 p-4 sm:max-w-lg dark:border-indigo-500"
+          {...nestedVoucherAlertShell(
+            "flex max-h-[85vh] max-w-md flex-col gap-3 border-2 border-indigo-400 p-4 sm:max-w-lg dark:border-indigo-500"
+          )}
           aria-describedby="recurring-generate-picker-desc"
         >
           <DialogHeader className="shrink-0 space-y-1">
@@ -5336,7 +5338,7 @@ export function AddVoucherDialog(props: any) {
         }
       >
         {/* User feedback: dialog thoda bada + text bolder rakho — chhoti screen par bhi readable rahe. */}
-        <DialogContent className="w-[95vw] max-w-2xl p-7 sm:max-w-2xl">
+        <DialogContent {...nestedVoucherAlertShell("w-[95vw] max-w-2xl p-7 sm:max-w-2xl")}>
           {/* Formal center popup: conversion/mapping edge case ko actionable wording ke saath explain karo. */}
           <DialogHeader>
             <DialogTitle className="text-xl font-bold tracking-tight">

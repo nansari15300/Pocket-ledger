@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { signOut } from "firebase/auth";
 import { CloudOff, Download, Loader2, LogOut, RefreshCw, ShieldCheck, TrendingUp } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
@@ -49,12 +49,25 @@ export function WebAppOnlineAccessGate({ children }: { children: React.ReactNode
     router.replace("/");
   }, [authLoading, billingRoute, isEmbeddedApp, router, userUid]);
 
-  // Production hosted web: SPA redirect kabhi hydrate se pehle atak jata hai — hard fallback.
+  // Signed-out + auth resolved: SPA `router.replace` miss ho to turant hard redirect.
+  useLayoutEffect(() => {
+    if (isEmbeddedApp || billingRoute || authLoading || userUid) return;
+    if (auth.currentUser) return;
+    try {
+      const inner = pathname?.replace(/\/+$/, "") || "/";
+      if (inner === "/" || inner === "") return;
+    } catch {
+      /* ignore */
+    }
+    window.location.assign(`${webAppBasePath()}/`);
+  }, [authLoading, billingRoute, isEmbeddedApp, pathname, userUid]);
+
+  // Production hosted web: authLoading kabhi atak jaye ya hydrate slow ho — unsigned hard fallback.
   useEffect(() => {
     if (isEmbeddedApp || billingRoute || userUid) return;
     const loginHref = `${webAppBasePath()}/`;
     const timer = window.setTimeout(() => {
-      if (userUid || authLoading) return;
+      if (userUid) return;
       if (auth.currentUser) return;
       try {
         const inner = pathname?.replace(/\/+$/, "") || "/";
@@ -63,9 +76,9 @@ export function WebAppOnlineAccessGate({ children }: { children: React.ReactNode
         /* ignore */
       }
       window.location.assign(loginHref);
-    }, 2200);
+    }, 8000);
     return () => window.clearTimeout(timer);
-  }, [authLoading, billingRoute, isEmbeddedApp, pathname, userUid]);
+  }, [billingRoute, isEmbeddedApp, pathname, userUid]);
 
   useEffect(() => {
     if (isEmbeddedApp || billingRoute) {
@@ -192,11 +205,14 @@ export function WebAppOnlineAccessGate({ children }: { children: React.ReactNode
   if (!user) {
     const loginHref = `${webAppBasePath()}/`;
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-background p-6">
+      <div
+        data-pl-web-auth-gate="1"
+        className="flex min-h-dvh items-center justify-center bg-background p-6"
+      >
         <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
             <Loader2 className="h-4 w-4 animate-spin" />
-            {authLoading ? "Opening sign in…" : "Redirecting to sign in…"}
+            {authLoading ? "Loading session…" : "Redirecting to sign in…"}
           </div>
           {!authLoading ? (
             <Button variant="link" className="h-auto px-0" asChild>

@@ -18,6 +18,7 @@ import {
   interCompanyReadOnlyCopyInputClass,
 } from "@/lib/interCompany/interCompanyVoucherChrome";
 import { cn } from "@/lib/utils";
+import { OTHER_CHARGE_ADD_NEW_LABELS, resolveOtherChargeAddNewType } from "@/lib/otherChargeComboboxAddNew";
 
 type FormatPrint = (amount: number, options?: { noSuffix?: boolean }) => string;
 
@@ -38,6 +39,8 @@ type Props = {
   otherChargeBalance?: number | null;
   onOtherChargeDefault?: () => void;
   otherChargeAccountId?: string;
+  otherChargeAddNewLabels?: { value: string; label: string }[];
+  onOtherChargeAccountChange?: (val: string, newName?: string) => void;
 };
 
 const AMOUNT_MEASURE_FALLBACK = "0.00 Cr";
@@ -130,6 +133,8 @@ export function InterCompanyAmountDualFields({
   otherChargeBalance = null,
   onOtherChargeDefault,
   otherChargeAccountId = "",
+  otherChargeAddNewLabels = OTHER_CHARGE_ADD_NEW_LABELS,
+  onOtherChargeAccountChange,
 }: Props) {
   const [sourceFocused, setSourceFocused] = useState(false);
   const [sourceDraft, setSourceDraft] = useState("");
@@ -251,8 +256,15 @@ export function InterCompanyAmountDualFields({
                         triggerClassName="w-full min-w-0"
                         options={otherChargeAccountOptions}
                         value={field.value}
-                        onChange={(val) => field.onChange(val)}
+                        onChange={(val, newName) => {
+                          if (resolveOtherChargeAddNewType(val)) {
+                            onOtherChargeAccountChange?.(val, newName);
+                            return;
+                          }
+                          field.onChange(val);
+                        }}
                         placeholder="Select account"
+                        addNewLabels={otherChargeAddNewLabels}
                         disabled={fieldsDisabled || sourceReadOnly}
                       />
                     </div>

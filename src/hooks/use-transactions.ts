@@ -81,6 +81,29 @@ const ledgerIdEq = (value: unknown, id: string): boolean => {
     return String(value).trim() === target;
 };
 
+/** Bill-wise status pill: linked voucher nos for these types (payment_* early-return separately). */
+const BILL_WISE_STATUS_LINK_TYPES = new Set([
+  "sale", "sale_service", "purchase", "purchase_service",
+  "payment_in", "payment_out", "direct_income", "direct_expense",
+  "journal", "adjustment", "inter_company", "contra", "production",
+]);
+
+function formatBillWiseLinkedVoucherNo(v: any): string {
+  if (!v) return "";
+  if (v.type === "inter_company") {
+    return (
+      formatInterCompanyLedgerVoucherNumber(v as Record<string, unknown>) ||
+      String(v.voucherNumber ?? v.voucher_number ?? "")
+    ).trim();
+  }
+  return String(v.voucherNumber ?? v.voucher_number ?? "").trim();
+}
+
+function pushUniqueLinkedVoucherNo(list: string[], no: string): void {
+  const n = String(no ?? "").trim();
+  if (n && !list.includes(n)) list.push(n);
+}
+
 export const getTransactionAmounts = (
     transaction: any,
     context: Context,
@@ -1327,6 +1350,8 @@ export function useTransactions(
             const currentId = String(entityIdForLinks);
             if (context === 'party') {
                 if (String((v as any)?.partyId ?? '') === currentId) return true;
+                if ((v as any)?.type === 'adjustment' && String((v as any)?.adjustmentTarget?.id ?? '') === currentId)
+                  return true;
                 if ((v as any)?.type === 'inter_company' && interCompanyVoucherTouchesEntity(v, currentId, 'party')) return true;
                 if ((v as any)?.type === 'contra' && ((v as any).fromAccountId === currentId || (v as any).toAccountId === currentId))
                   return true;
@@ -1336,12 +1361,16 @@ export function useTransactions(
             }
             if (context === 'staff') {
                 if (String((v as any)?.staffId ?? '') === currentId) return true;
+                if ((v as any)?.type === 'adjustment' && String((v as any)?.adjustmentTarget?.id ?? '') === currentId)
+                  return true;
                 if ((v as any)?.type === 'inter_company' && interCompanyVoucherTouchesEntity(v, currentId, 'staff')) return true;
                 if (isJournalLikeVoucher(v as any))
                     return (v as any).entries.some((e: any) => String(e?.accountId ?? '') === currentId);
                 return false;
             }
             if (context === 'account') {
+                if ((v as any)?.type === 'adjustment' && String((v as any)?.adjustmentTarget?.id ?? '') === currentId)
+                  return true;
                 return (
                     String((v as any)?.accountId ?? '') === currentId ||
                     ((v as any)?.type === 'inter_company' && interCompanyVoucherTouchesEntity(v, currentId, 'bank')) ||
@@ -1420,6 +1449,8 @@ export function useTransactions(
                     // For journal transactions in "all" view, running balance should remain at opening balance
                     // Since journals balance (debit = credit), debit - credit = 0, so balance doesn't change
                     runningBalance += amounts.debit - amounts.credit; // This will be 0 for balanced journal entries
+                } else if (t.type === "inter_company" && (t as { isApproved?: boolean }).isApproved !== true) {
+                    // IC unapproved — row dikhe, balance approve tak mat badlo
                 } else {
                     runningBalance += amounts.debit - amounts.credit;
                 }
@@ -1689,7 +1720,41 @@ export function useTransactions(
                         if (Number((t as any).openingBalanceAllocated) > 0) {
                             linkedFromVoucherNos.push("Opening Balance");
                         }
-                    } else if (t.type === 'adjustment' || (t.type === 'journal' && t.subType !== 'add_salary')) {
+                    } else if (t.type === 'adjustment') {
+                        /** Adjustment: own allocations → linked "to"; others allocating here → linked "from". No entity filter on targets. */
+                        for (const { src: v } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
+                            if (v.id === t.id) continue;
+                            pushUniqueLinkedVoucherNo(linkedFromVoucherNos, formatBillWiseLinkedVoucherNo(v));
+                        }
+                        const adjAllocs = (t.allocations as { voucherId: string; amount: number; linkedAccountId?: string }[] | undefined) || [];
+                        adjAllocs.forEach((a: any) => {
+                            if (!a?.voucherId) return;
+                            if (a.voucherId === OPENING_BALANCE_VOUCHER_ID) {
+                                pushUniqueLinkedVoucherNo(linkedToVoucherNos, "Opening Balance");
+                                return;
+                            }
+                            pushUniqueLinkedVoucherNo(linkedToVoucherNos, formatBillWiseLinkedVoucherNo(voucherById.get(String(a.voucherId))));
+                        });
+                        const adjAmountDr = Number(amounts.debit) || 0;
+                        const adjAmountCr = Number(amounts.credit) || 0;
+                        const adjBillAmount = Math.max(adjAmountDr, adjAmountCr);
+                        if (adjBillAmount > 0) {
+                            const incomingAllocated = (allocEdgesByTargetId.get(String(t.id)) ?? []).reduce(
+                                (sum: number, { alloc }) => sum + getAllocationTotal(alloc as any),
+                                0
+                            );
+                            const outgoingAllocated = adjAllocs.reduce((s: number, a: any) => s + getAllocationTotal(a), 0);
+                            const remaining = Math.max(0, adjBillAmount - incomingAllocated - outgoingAllocated);
+                            const hasAnyLinks =
+                                incomingAllocated > 0 ||
+                                outgoingAllocated > 0 ||
+                                linkedToVoucherNos.length > 0 ||
+                                linkedFromVoucherNos.length > 0;
+                            paymentStatus = remaining <= 0 ? 'paid' : hasAnyLinks ? 'partially_paid' : 'unpaid';
+                            outstanding = remaining;
+                            isOverdue = false;
+                        }
+                    } else if (t.type === 'journal' && t.subType !== 'add_salary') {
                         /** Incoming journal links: sirf wo sources jinke allocation edge is row id ko point karte hain */
                         for (const { src: v } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
                             if (v.id === t.id) continue;
@@ -1699,23 +1764,43 @@ export function useTransactions(
                         }
                         const ownAllocs = (t.allocations as { voucherId: string; amount: number; linkedAccountId?: string }[] | undefined) || [];
                         const journalAmountDr = Number(amounts.debit) || 0;
+                        const journalAmountCr = Number(amounts.credit) || 0;
+                        const journalHasEntitySideAmount = journalAmountDr > 0 || journalAmountCr > 0;
+                        const billWiseLinkTargetTypes = new Set([
+                          'sale', 'sale_service', 'purchase', 'purchase_service',
+                          'payment_in', 'payment_out', 'direct_income', 'direct_expense',
+                          'journal', 'adjustment', 'inter_company',
+                        ]);
+                        const pushLinkedTargetNo = (target: any) => {
+                            if (!target) return;
+                            const no =
+                                target.type === 'inter_company'
+                                    ? formatInterCompanyLedgerVoucherNumber(target as Record<string, unknown>) || String(target?.voucherNumber ?? target?.voucher_number ?? '')
+                                    : String(target?.voucherNumber ?? target?.voucher_number ?? '');
+                            if (no && !linkedToVoucherNos.includes(no)) linkedToVoucherNos.push(no);
+                        };
                         ownAllocs.forEach((a: any) => {
                             if (!a?.voucherId) return;
                             const lid = String(a?.linkedAccountId ?? "");
                             if (entityIdForLinks && lid && lid !== String(entityIdForLinks)) return;
-                            if (entityIdForLinks && !lid && journalAmountDr === 0) return;
+                            if (entityIdForLinks && !lid && !journalHasEntitySideAmount) return;
                             if (a.voucherId === OPENING_BALANCE_VOUCHER_ID) {
                                 if (!linkedToVoucherNos.includes("Opening Balance")) linkedToVoucherNos.push("Opening Balance");
                                 return;
                             }
                             const target = voucherById.get(String(a.voucherId));
-                            if (target && !isVoucherForCurrentEntity(target)) return;
-                            const no =
-                                target?.type === 'inter_company'
-                                    ? formatInterCompanyLedgerVoucherNumber(target as Record<string, unknown>) || String(target?.voucherNumber ?? target?.voucher_number ?? '')
-                                    : String(target?.voucherNumber ?? target?.voucher_number ?? '');
-                            if (no && !linkedToVoucherNos.includes(no)) linkedToVoucherNos.push(no);
+                            const skipTargetEntityCheck =
+                                t.type === 'adjustment' && target && billWiseLinkTargetTypes.has(String(target.type ?? ''));
+                            if (target && !skipTargetEntityCheck && !isVoucherForCurrentEntity(target)) return;
+                            pushLinkedTargetNo(target);
                         });
+                        // Adjustment bill-wise: allocations kabhi linkedAccountId/entity filter se chhoot jate hain — fallback.
+                        if (t.type === 'adjustment' && linkedToVoucherNos.length === 0) {
+                            ownAllocs.forEach((a: any) => {
+                                if (!a?.voucherId || a.voucherId === OPENING_BALANCE_VOUCHER_ID) return;
+                                pushLinkedTargetNo(voucherById.get(String(a.voucherId)));
+                            });
+                        }
                         // Bill-wise compute for normal journal: reduce by incoming (others→journal) and outgoing (journal→others) allocations.
                         const incomingAllocated = (allocEdgesByTargetId.get(String(t.id)) ?? []).reduce((sum: number, { src: v, alloc }) => {
                             if (v.id === t.id) return sum;
@@ -1725,12 +1810,11 @@ export function useTransactions(
                         const ownAllocsForEntity = (t.allocations as { voucherId: string; amount: number; linkedAccountId?: string }[] | undefined) || [];
                         const outgoingAllocated = (() => {
                             if (!entityIdForLinks) return ownAllocsForEntity.reduce((s: number, a: any) => s + getAllocationTotal(a), 0);
-                            const journalAmountDr = Number(amounts.debit) || 0;
                             return ownAllocsForEntity
                                 .filter((a: any) => {
                                     const lid = String(a?.linkedAccountId ?? "");
                                     if (lid) return lid === String(entityIdForLinks);
-                                    return journalAmountDr > 0;
+                                    return journalHasEntitySideAmount;
                                 })
                                 .reduce((s: number, a: any) => s + getAllocationTotal(a), 0);
                         })();
@@ -1873,8 +1957,8 @@ export function useTransactions(
                 // Sale/Purchase/Add Salary: dedupe so status lists each voucher no once (source: voucher allocations).
                 const fromUnique = Array.from(new Set(linkedFromVoucherNos));
                 const toUnique = Array.from(new Set(linkedToVoucherNos));
-                const linkedFromVoucherNosBillWise = (t.type === 'sale' || t.type === 'purchase' || t.type === 'journal' || t.type === 'inter_company') ? fromUnique : [];
-                const linkedToVoucherNosBillWise = (t.type === 'sale' || t.type === 'purchase' || t.type === 'journal' || t.type === 'inter_company') ? toUnique : [];
+                const linkedFromVoucherNosBillWise = BILL_WISE_STATUS_LINK_TYPES.has(String(t.type ?? "")) ? fromUnique : [];
+                const linkedToVoucherNosBillWise = BILL_WISE_STATUS_LINK_TYPES.has(String(t.type ?? "")) ? toUnique : [];
                 // Journal: clicked ledger row ki Dr/Cr side — edit dialog me sahi bill-wise card auto-select ho.
                 const _journalFocusSide =
                     t.type === 'journal' &&

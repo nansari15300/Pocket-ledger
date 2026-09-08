@@ -15,6 +15,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon, Loader2, Trash2, Upload, FileText, PlusCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
 import {
   mapPartiesForVoucherCombobox,
   mapStaffForVoucherCombobox,
@@ -883,7 +884,7 @@ export function CreatePaymentInForm({
                                       </Button>
                                     </FormControl>
                                   </PopoverTrigger>
-                                  <PopoverContent className="w-auto p-0 z-50" align="start">
+                                  <PopoverContent className="w-auto p-0 z-[102]" align="start">
                                     <Calendar mode="single" selected={field.value} onSelect={(date) => {field.onChange(date); setIsCalendarOpen(false);}} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
                                   </PopoverContent>
                                 </Popover>
@@ -1012,7 +1013,7 @@ export function CreatePaymentInForm({
                       <Trash2 className="mr-2 h-4 w-4" /> Delete
                     </Button>
                   </AlertDialogTrigger>
-                  <AlertDialogContent>
+                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                     <AlertDialogHeader>
                       <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                       <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>

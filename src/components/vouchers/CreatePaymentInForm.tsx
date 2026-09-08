@@ -16,6 +16,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon, Loader2, Trash2, Upload, FileText, PlusCircle, Crown, Printer, Link2, History, CheckCircle, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { NESTED_VOUCHER_ALERT_SHELL, nestedVoucherAlertShell } from "@/lib/dialogShellChrome";
 import {
   mapPartiesForVoucherCombobox,
   mapStaffForVoucherCombobox,
@@ -2070,7 +2071,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                           </Button>
                                         </FormControl>
                                       </PopoverTrigger>
-                                      <PopoverContent className="w-auto p-0 z-50" align="start">
+                                      <PopoverContent className="w-auto p-0 z-[102]" align="start">
                                         <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
                                       </PopoverContent>
                                     </Popover>
@@ -2156,7 +2157,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     </Button>
                                   </FormControl>
                                 </PopoverTrigger>
-                                <PopoverContent className="w-auto p-0 z-50" align="start">
+                                <PopoverContent className="w-auto p-0 z-[102]" align="start">
                                   <Calendar mode="single" selected={field.value} onSelect={(date) => {
                                     if (date) {
                                       date.setHours(12, 0, 0, 0);
@@ -3134,7 +3135,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       Delete
                     </Button>
                   </AlertDialogTrigger>
-                  <AlertDialogContent>
+                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                     <AlertDialogHeader>
                       <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                       <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
@@ -3185,7 +3186,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
                     </AlertDialogTrigger>
-                    <AlertDialogContent>
+                    <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                       <AlertDialogHeader>
                         <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                         <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>

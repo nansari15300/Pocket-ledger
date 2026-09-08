@@ -38,6 +38,7 @@ import {
 
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, ArrowRight, Link2, History, CheckCircle, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { NESTED_VOUCHER_ALERT_SHELL, nestedVoucherAlertShell } from "@/lib/dialogShellChrome";
 import { mapPartiesForVoucherCombobox } from "@/lib/masterAccountFreeze/comboboxOptions";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
@@ -1928,7 +1929,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                           </Button>
                                         </FormControl>
                                       </PopoverTrigger>
-                                      <PopoverContent className="w-auto p-0 z-50" align="start">
+                                      <PopoverContent className="w-auto p-0 z-[102]" align="start">
                                         <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
                                       </PopoverContent>
                                     </Popover>
@@ -2211,7 +2212,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         </Button>
                                       </FormControl>
                                     </PopoverTrigger>
-                                    <PopoverContent className="w-auto p-0 z-50" align="start">
+                                    <PopoverContent className="w-auto p-0 z-[102]" align="start">
                                       <Calendar mode="single" selected={field.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); field.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
                                     </PopoverContent>
                                   </Popover>
@@ -3405,9 +3406,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         render={({ field }: any) => (
                           <FormItem className={cn("w-full", dateSystem === 'Both' && "flex-1 min-w-0")}>
                             <FormLabel className="text-sm">Due Date</FormLabel>
-                            <div className={cn("flex gap-1", dateSystem === 'Both' && "gap-1")}>
+                            <div className={cn("flex w-full", dateSystem === 'Both' ? "flex-col gap-2" : "gap-1")}>
                               {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                                <div className={cn("flex-1 min-w-0", dateSystem === 'Both' && "flex-1")}>
+                                <div className={cn("min-w-0", dateSystem === 'Both' ? "w-full" : "flex-1")}>
                                   <BsDatePicker
                                     valueAD={field.value}
                                     onChangeAD={(d) => { field.onChange(d as Date); }}
@@ -3418,7 +3419,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 </div>
                               )}
                               {(dateSystem === 'AD' || dateSystem === 'Both') && (
-                                <div className={cn("flex-1 min-w-0", dateSystem === 'Both' && "flex-1")}>
+                                <div className={cn("min-w-0", dateSystem === 'Both' ? "w-full" : "flex-1")}>
                                   <Popover open={isDueDateCalendarOpen} onOpenChange={setIsDueDateCalendarOpen}>
                                     <PopoverTrigger asChild>
                                       <FormControl>
@@ -3432,7 +3433,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         </Button>
                                       </FormControl>
                                     </PopoverTrigger>
-                                    <PopoverContent className="w-auto p-0" align="start">
+                                    <PopoverContent className="w-auto p-0 z-[102]" align="start">
                                       <Calendar
                                         mode="single"
                                         selected={field.value ?? undefined}
@@ -3711,9 +3712,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         render={({ field }: any) => (
                           <FormItem className={cn("w-full", dateSystem === 'Both' && "min-w-[160px]")}>
                             <FormLabel>Due Date</FormLabel>
-                            <div className={cn("flex gap-1", dateSystem === 'Both' && "gap-2")}>
+                            <div className={cn("flex w-full", dateSystem === 'Both' ? "flex-col gap-2" : "gap-1")}>
                               {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                                <div className={cn("flex-1 min-w-0", dateSystem === 'Both' && "flex-1")}>
+                                <div className={cn("min-w-0", dateSystem === 'Both' ? "w-full" : "flex-1")}>
                                   <BsDatePicker
                                     valueAD={field.value}
                                     onChangeAD={(d) => { field.onChange(d as Date); }}
@@ -3724,7 +3725,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 </div>
                               )}
                               {(dateSystem === 'AD' || dateSystem === 'Both') && (
-                                <div className={cn("flex-1 min-w-0", dateSystem === 'Both' && "flex-1")}>
+                                <div className={cn("min-w-0", dateSystem === 'Both' ? "w-full" : "flex-1")}>
                                   <Popover open={isDueDateCalendarOpen} onOpenChange={setIsDueDateCalendarOpen}>
                                     <PopoverTrigger asChild>
                                       <FormControl>
@@ -3737,7 +3738,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         </Button>
                                       </FormControl>
                                     </PopoverTrigger>
-                                    <PopoverContent className="w-auto p-0" align="end">
+                                    <PopoverContent className="w-auto p-0 z-[102]" align="end">
                                       <Calendar
                                         mode="single"
                                         selected={field.value ?? undefined}
@@ -4022,7 +4023,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       Delete
                     </Button>
                   </AlertDialogTrigger>
-                  <AlertDialogContent>
+                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                     <AlertDialogHeader>
                       <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                       <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
@@ -4064,7 +4065,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
                     </AlertDialogTrigger>
-                    <AlertDialogContent>
+                    <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                       <AlertDialogHeader>
                         <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                         <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>

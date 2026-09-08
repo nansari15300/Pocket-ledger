@@ -38,6 +38,7 @@ import {
   masterEntityDialogHeaderClassName,
   masterEntityDialogFormWrapperClassName,
 } from "@/lib/masterEntityDialogClasses";
+import { NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN } from "@/lib/dialogShellChrome";
 import { CreateTaxForm } from "./CreateTaxForm";
 
 
@@ -126,7 +127,7 @@ export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups =
     <Dialog open={isOpen} onOpenChange={setOpen}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogPortal>
-        <DialogOverlay />
+        <DialogOverlay className={NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN} />
         <DialogContent
             className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-2xl")}
             onOpenAutoFocus={(e) => e.preventDefault()}

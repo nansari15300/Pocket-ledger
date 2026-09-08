@@ -1,6 +1,6 @@
 /**
  * Inter Company — compound ledger legs (clearing bank ↔ destination account ↔ IC conduit).
- * Unapproved: amount clearing bank pe one-side (source Cr / target Dr); destination nahi.
+ * Unapproved: clearing + destination row dikhe (Dr/Cr 0); balance approve ke baad.
  * Approved: clearing Dr+Cr (path-through) + destination one-side
  *   (party/staff/tax/expense/bank same — target bank select pe clearing bypass nahi).
  * Journal mode: target destination Dr/Cr ulta = Payment Out jaisa.
@@ -542,47 +542,38 @@ export function getInterCompanyLegAmounts(
 
   const keepAppliedPostingDuringPeerPending = voucherHasInterCompanyPeerPending(voucher);
 
+  const unapprovedPlaceholder = (): IcLegAmountResult =>
+    finalizeIcLegAmounts(voucher, { touched: true, debit: 0, credit: 0 });
+
   if (!isInterCompanyVoucherApproved(voucher) && !keepAppliedPostingDuringPeerPending) {
-    // Unapproved: amount sirf clearing bank pe (Payment Out=Cr / Payment In=Dr)
-    if (side === "target" && context === "account" && amt > 0) {
-      const bankId = resolveInterCompanyBankIdForLegs(voucher);
-      if (bankId && id === bankId) {
-        return finalizeIcLegAmounts(voucher, { touched: true, debit: amt, credit: 0 });
-      }
+    const bankId = resolveInterCompanyBankIdForLegs(voucher);
+    if (context === "account" && bankId && id === bankId) {
+      return unapprovedPlaceholder();
     }
-    if (side === "source" && context === "account" && bankOut > 0) {
-      const bankId = resolveInterCompanyBankIdForLegs(voucher);
-      if (bankId && id === bankId) {
-        return finalizeIcLegAmounts(voucher, { touched: true, debit: 0, credit: bankOut });
+
+    if (isIcComLedger && interCompanyUsesConduitParty(voucher)) {
+      return unapprovedPlaceholder();
+    }
+
+    if (side) {
+      const dest = inferInterCompanyEntity(voucher, side);
+      if (dest) {
+        const destCtx =
+          dest.kind === "bank"
+            ? "account"
+            : dest.kind === "staff"
+              ? "staff"
+              : dest.kind === "tax"
+                ? "tax"
+                : dest.kind === "expense"
+                  ? "expense"
+                  : "party";
+        if (destCtx === context && dest.id === id) {
+          return unapprovedPlaceholder();
+        }
       }
     }
 
-    // IC Com conduit — pending me bhi dikhao (com-to-com track)
-    if (isIcComLedger) {
-      const legs = resolveInterCompanyLegsForVoucher(voucher);
-      let debit = 0;
-      let credit = 0;
-      for (const leg of legs) {
-        if (leg.kind !== "party" || String(leg.accountId) !== id) continue;
-        debit += leg.debit;
-        credit += leg.credit;
-      }
-      if (debit > 0 || credit > 0) {
-        return finalizeIcLegAmounts(voucher, {
-          touched: true,
-          debit: round2(debit),
-          credit: round2(credit),
-        });
-      }
-      if (side === "source") {
-        return finalizeIcLegAmounts(voucher, { touched: true, debit: amt, credit: 0 });
-      }
-      if (side === "target") {
-        return finalizeIcLegAmounts(voucher, { touched: true, debit: 0, credit: amt });
-      }
-    }
-
-    // Unapproved source — other charge account (Payment Out jaisa)
     if (
       side === "source" &&
       otherCharge.amount > 0 &&
@@ -607,15 +598,10 @@ export function getInterCompanyLegAmounts(
         }
       }
       if (ocCtx === context) {
-        return finalizeIcLegAmounts(voucher, {
-          touched: true,
-          debit: otherCharge.amount,
-          credit: 0,
-        });
+        return unapprovedPlaceholder();
       }
     }
 
-    // Destination account — unapprove tak hide (purani legs bhi)
     return empty;
   }
 

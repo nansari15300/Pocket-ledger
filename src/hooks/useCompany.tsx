@@ -105,7 +105,7 @@ import {
   purgeGhostOnlineCompanyDeltas,
   resolveMirrorUserEmail,
 } from "@/lib/mirrorOnlineCompaniesFromFirestore";
-import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
+import { clearSelectedCompanyId, pinBootSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { shouldSuppressTransientCompanyClear, shouldDeferMissingCompanyRedirectNative } from "@/lib/apkLedgerRouteShield";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
 import { ensureCompanyInterCompanyAcNo } from "@/lib/interCompany/ensureCompanyInterCompanyAcNo";
@@ -1133,8 +1133,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       if (storedCompanyId && storedCompanyId.trim()) {
         const pinned = storedCompanyId.trim();
         bootPinnedCompanyIdRef.current = pinned;
-        // EXE/BrowserView reload: session tab key kabhi late — global + tab dono dubara pin.
-        writeSelectedCompanyId(pinned);
+        // Refresh boot: sirf is tab pin — global `companyId` mat likho (doosri tab ka selection overwrite na ho).
+        pinBootSelectedCompanyId(pinned);
         setCompanyIdState(pinned);
       } else {
         setLoading(false);

@@ -29,6 +29,7 @@ import {
 import { getNextInterCompanyVoucherNumber } from "@/lib/interCompany/nextInterCompanyVoucherNumber";
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+const IC_PATCH_SQLITE_FIRST = { forceSqliteFirst: true as const };
 import {
   purgeInterCompanyCounterpartyPartyIfUnused,
   reconcileUnusedInterCompanyCounterpartyParties,
@@ -285,12 +286,19 @@ function buildVoucherPayload(args: {
 async function readCompanyDoc(companyId: string): Promise<Record<string, unknown> | null> {
   const cid = String(companyId || "").trim();
   if (!cid) return null;
-  if (await isPureLocalInterCompanyCompany(cid)) {
+  try {
     const local = await getLocalCompanyById(cid, { includeDeleted: true });
-    return local ? (local as unknown as Record<string, unknown>) : null;
+    if (local) return local as unknown as Record<string, unknown>;
+  } catch {
+    /* fall through */
   }
-  const snap = await getDoc(doc(firestore, "companies", cid));
-  return snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+  if (await isPureLocalInterCompanyCompany(cid)) return null;
+  try {
+    const snap = await getDoc(doc(firestore, "companies", cid));
+    return snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }
 
 async function readInterCompanyVoucherRow(
@@ -506,42 +514,42 @@ export async function saveInterCompanyVoucherPair(
   }
   const sourceEntityId = lockedSourceEntityId;
 
-  // Optional entity (party/staff/tax/expense) — jab select ho to peer company me mirror
-  // (naam "IC {code} {full name}"), taaki peer bhi apne ledger me isi entity ko track kar sake.
-  try {
-    const [sourceCode, targetCode] = await Promise.all([
-      readCompanyInterCompanyCode(sourceCompanyDoc as { interCompanyCompanyCode?: string } | null) ||
-        ensureCompanyInterCompanyCode(input.sourceCompanyId, input.sourceCompanyName),
-      readCompanyInterCompanyCode(targetCompanyDoc as { interCompanyCompanyCode?: string } | null) ||
-        ensureCompanyInterCompanyCode(input.targetCompanyId, input.targetCompanyName),
-    ]);
-    await Promise.all([
-      isInterCompanyMirroredEntityKindSupported(lockedSourceEntityKind) && sourceEntityId
-        ? ensureInterCompanyMirroredEntity({
-            peerCompanyId: input.targetCompanyId,
-            originCompanyId: input.sourceCompanyId,
-            originCompanyCode: sourceCode,
-            originEntityId: sourceEntityId,
-            entityKind: lockedSourceEntityKind,
-            entityFullName: lockedSourceEntityLabel || "",
-            ownerId,
-          })
-        : Promise.resolve(null),
-      isInterCompanyMirroredEntityKindSupported(input.targetEntityKind) && targetEntityId
-        ? ensureInterCompanyMirroredEntity({
-            peerCompanyId: input.sourceCompanyId,
-            originCompanyId: input.targetCompanyId,
-            originCompanyCode: targetCode,
-            originEntityId: targetEntityId,
-            entityKind: input.targetEntityKind,
-            entityFullName: input.targetEntityLabel || "",
-            ownerId,
-          })
-        : Promise.resolve(null),
-    ]);
-  } catch (err) {
-    console.warn("[IC] optional entity mirror sync:", err);
-  }
+  // Optional entity mirror — peer masters; save block na kare (background).
+  void Promise.all([
+    readCompanyInterCompanyCode(sourceCompanyDoc as { interCompanyCompanyCode?: string } | null) ||
+      ensureCompanyInterCompanyCode(input.sourceCompanyId, input.sourceCompanyName),
+    readCompanyInterCompanyCode(targetCompanyDoc as { interCompanyCompanyCode?: string } | null) ||
+      ensureCompanyInterCompanyCode(input.targetCompanyId, input.targetCompanyName),
+  ])
+    .then(async ([sourceCode, targetCode]) => {
+      await Promise.all([
+        isInterCompanyMirroredEntityKindSupported(lockedSourceEntityKind) && sourceEntityId
+          ? ensureInterCompanyMirroredEntity({
+              peerCompanyId: input.targetCompanyId,
+              originCompanyId: input.sourceCompanyId,
+              originCompanyCode: sourceCode,
+              originEntityId: sourceEntityId,
+              entityKind: lockedSourceEntityKind,
+              entityFullName: lockedSourceEntityLabel || "",
+              ownerId,
+            })
+          : Promise.resolve(null),
+        isInterCompanyMirroredEntityKindSupported(input.targetEntityKind) && targetEntityId
+          ? ensureInterCompanyMirroredEntity({
+              peerCompanyId: input.sourceCompanyId,
+              originCompanyId: input.targetCompanyId,
+              originCompanyCode: targetCode,
+              originEntityId: targetEntityId,
+              entityKind: input.targetEntityKind,
+              entityFullName: input.targetEntityLabel || "",
+              ownerId,
+            })
+          : Promise.resolve(null),
+      ]);
+    })
+    .catch((err) => {
+      console.warn("[IC] optional entity mirror sync:", err);
+    });
 
   const targetPostModeBase = normalizeInterCompanyTargetPostMode(input.targetPostMode);
   let workTargetEntityKind = input.targetEntityKind;
@@ -945,7 +953,7 @@ export async function saveInterCompanyVoucherPair(
             }
           : null,
       };
-      await patchVoucherFields(input.targetCompanyId, targetSavedId, targetPendingPatch);
+      await patchVoucherFields(input.targetCompanyId, targetSavedId, targetPendingPatch, IC_PATCH_SQLITE_FIRST);
       notifyInterCompanyPeerDocLive(input.targetCompanyId, targetSavedId, targetPendingPatch);
       // Notification only — amount / legs / isApproved peer pe mat chhedo
     }
@@ -1035,7 +1043,7 @@ export async function saveInterCompanyVoucherPair(
             }
           : null,
       };
-      await patchVoucherFields(input.sourceCompanyId, sourceSavedId, sourcePendingPatch);
+      await patchVoucherFields(input.sourceCompanyId, sourceSavedId, sourcePendingPatch, IC_PATCH_SQLITE_FIRST);
       notifyInterCompanyPeerDocLive(input.sourceCompanyId, sourceSavedId, sourcePendingPatch);
     }
   }
@@ -1064,7 +1072,7 @@ export async function saveInterCompanyVoucherPair(
           ...(approvedTargetLegs.length > 0 ? { interCompanyLegs: approvedTargetLegs } : {}),
           interCompanyPeerPending: null,
         };
-        await patchVoucherFields(input.targetCompanyId, targetSavedId, afterApplyPatch);
+        await patchVoucherFields(input.targetCompanyId, targetSavedId, afterApplyPatch, IC_PATCH_SQLITE_FIRST);
         notifyInterCompanyPeerDocLive(input.targetCompanyId, targetSavedId, afterApplyPatch);
       } catch (err) {
         console.warn("[IC] restore target approval after peer apply:", err);
@@ -1097,7 +1105,7 @@ export async function saveInterCompanyVoucherPair(
           ...(approvedSourceLegs.length > 0 ? { interCompanyLegs: approvedSourceLegs } : {}),
           interCompanyPeerPending: null,
         };
-        await patchVoucherFields(input.sourceCompanyId, sourceSavedId, afterApplySourcePatch);
+        await patchVoucherFields(input.sourceCompanyId, sourceSavedId, afterApplySourcePatch, IC_PATCH_SQLITE_FIRST);
         notifyInterCompanyPeerDocLive(input.sourceCompanyId, sourceSavedId, afterApplySourcePatch);
       } catch (err) {
         console.warn("[IC] restore source approval after peer apply:", err);
@@ -1112,27 +1120,6 @@ export async function saveInterCompanyVoucherPair(
     }
   }
 
-  let attachmentReplicationWarning: string | undefined;
-  try {
-    const shareResult = await reconcileAndPatchInterCompanyAttachmentSharing({
-      sourceCompanyId: input.sourceCompanyId,
-      sourceVoucherId: sourceSavedId,
-      sourceOwnFileUrls,
-      shareSourceToTarget: shareSourceAttachmentsWithPeer,
-      targetCompanyId: input.targetCompanyId,
-      targetVoucherId: targetSavedId,
-      targetOwnFileUrls,
-      shareTargetToSource: shareTargetAttachmentsWithSource,
-      sourceAttachmentBlobByRef: input.sourceAttachmentBlobByRef,
-      targetAttachmentBlobByRef: input.targetAttachmentBlobByRef,
-    });
-    attachmentReplicationWarning = shareResult.attachmentReplicationWarning;
-  } catch (err) {
-    attachmentReplicationWarning =
-      err instanceof Error ? err.message : "Could not sync Inter Company attachments.";
-    console.warn("[IC] attachment share reconcile:", err);
-  }
-
   if (!freezePeerOnEdit || editingSide === "source") {
     const sourceLinkPatch: Record<string, unknown> = {
       interCompanyLink: { ...sourceLink, peerVoucherId: targetSavedId },
@@ -1140,7 +1127,7 @@ export async function saveInterCompanyVoucherPair(
         ? { interCompanyPeerPending: null }
         : {}),
     };
-    await patchVoucherFields(input.sourceCompanyId, sourceSavedId, sourceLinkPatch);
+    await patchVoucherFields(input.sourceCompanyId, sourceSavedId, sourceLinkPatch, IC_PATCH_SQLITE_FIRST);
     if (appliedPeerPendingKeys.length > 0 && editingSide === "source") {
       notifyInterCompanyPeerDocLive(input.sourceCompanyId, sourceSavedId, sourceLinkPatch);
     }
@@ -1166,10 +1153,15 @@ export async function saveInterCompanyVoucherPair(
         targetPostMode,
       });
       if (approvedTargetLegs.length > 0) {
-        await patchVoucherFields(input.targetCompanyId, targetSavedId, {
-          interCompanyLegs: approvedTargetLegs,
-          ...(targetKeepsSourceApprovedFlag ? { interCompanySourceApproved: true } : {}),
-        });
+        await patchVoucherFields(
+          input.targetCompanyId,
+          targetSavedId,
+          {
+            interCompanyLegs: approvedTargetLegs,
+            ...(targetKeepsSourceApprovedFlag ? { interCompanySourceApproved: true } : {}),
+          },
+          IC_PATCH_SQLITE_FIRST
+        );
       }
     } else {
       await approveVoucherWithHistory(
@@ -1187,9 +1179,12 @@ export async function saveInterCompanyVoucherPair(
         useIcConduit,
       });
       if (approvedLegs.length > 0) {
-        await patchVoucherFields(input.sourceCompanyId, sourceSavedId, {
-          interCompanyLegs: approvedLegs,
-        });
+        await patchVoucherFields(
+          input.sourceCompanyId,
+          sourceSavedId,
+          { interCompanyLegs: approvedLegs },
+          IC_PATCH_SQLITE_FIRST
+        );
       }
     }
   }
@@ -1197,9 +1192,12 @@ export async function saveInterCompanyVoucherPair(
   // Source already approved (or just approved) — target ledger must show the pair copy.
   if (sourceApprovedForTargetVisibility) {
     try {
-      await patchVoucherFields(input.targetCompanyId, targetSavedId, {
-        interCompanySourceApproved: true,
-      });
+      await patchVoucherFields(
+        input.targetCompanyId,
+        targetSavedId,
+        { interCompanySourceApproved: true },
+        IC_PATCH_SQLITE_FIRST
+      );
     } catch (err) {
       console.warn("[IC] target interCompanySourceApproved sync:", err);
       throw new Error(
@@ -1208,24 +1206,53 @@ export async function saveInterCompanyVoucherPair(
     }
   }
 
-  try {
-    await reconcileUnusedInterCompanyCounterpartyParties({
-      companyId: input.sourceCompanyId,
-      deletedByUid: input.userId,
-    });
-    await reconcileUnusedInterCompanyCounterpartyParties({
-      companyId: input.targetCompanyId,
-      deletedByUid: input.userId,
-    });
-  } catch (err) {
-    console.warn("[IC] post-save counterparty party reconcile:", err);
-  }
+  // Background: peer attachment copy + counterparty cleanup — UI turant return (SQLite/outbox pehle ho chuka).
+  void (async () => {
+    try {
+      const shareResult = await reconcileAndPatchInterCompanyAttachmentSharing({
+        sourceCompanyId: input.sourceCompanyId,
+        sourceVoucherId: sourceSavedId,
+        sourceOwnFileUrls,
+        shareSourceToTarget: shareSourceAttachmentsWithPeer,
+        targetCompanyId: input.targetCompanyId,
+        targetVoucherId: targetSavedId,
+        targetOwnFileUrls,
+        shareTargetToSource: shareTargetAttachmentsWithSource,
+        sourceAttachmentBlobByRef: input.sourceAttachmentBlobByRef,
+        targetAttachmentBlobByRef: input.targetAttachmentBlobByRef,
+      });
+      if (shareResult.attachmentReplicationWarning) {
+        const { toast } = await import("sonner");
+        toast.warning("Attachment copy incomplete", {
+          description: shareResult.attachmentReplicationWarning,
+        });
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Could not sync Inter Company attachments.";
+      console.warn("[IC] attachment share reconcile:", err);
+      const { toast } = await import("sonner");
+      toast.warning("Attachment sync pending", { description: message });
+    }
+
+    try {
+      await reconcileUnusedInterCompanyCounterpartyParties({
+        companyId: input.sourceCompanyId,
+        deletedByUid: input.userId,
+      });
+      await reconcileUnusedInterCompanyCounterpartyParties({
+        companyId: input.targetCompanyId,
+        deletedByUid: input.userId,
+      });
+    } catch (err) {
+      console.warn("[IC] post-save counterparty party reconcile:", err);
+    }
+  })();
 
   return {
     sourceId: sourceSavedId,
     targetId: targetSavedId,
     linkId,
-    ...(attachmentReplicationWarning ? { attachmentReplicationWarning } : {}),
   };
 }
 
@@ -1268,22 +1295,28 @@ export async function deleteInterCompanyVoucherLocalCopyOnly(args: {
   }
   dispatchVoucherLivePatch(cid, vid, payload);
 
-  // Firebase sirf jab ledger data sync ON ho — warna sirf SQLite tombstone.
-  if (isFirebaseLedgerDataSyncEnabled() && isFirebaseLedgerCompanyDataSyncEnabled(cid) && (await canSyncCompanyToServer(cid))) {
-    await enqueueVoucherOutbox(cid, "update", vid, payload);
-    void flushVoucherOutbox().catch((err) => {
-      console.warn("[IC] local delete outbox flush:", err);
-    });
-  }
-
   const partyId = String(row.interCompanyCounterpartyPartyId || "").trim();
-  if (partyId) {
-    try {
-      await purgeInterCompanyCounterpartyPartyIfUnused({ companyId: cid, partyId });
-    } catch (err) {
-      console.warn("[IC] counterparty party cleanup (local delete):", err);
+
+  // Cloud sync + counterparty cleanup background — SQLite tombstone turant return.
+  void (async () => {
+    if (
+      isFirebaseLedgerDataSyncEnabled() &&
+      isFirebaseLedgerCompanyDataSyncEnabled(cid) &&
+      (await canSyncCompanyToServer(cid))
+    ) {
+      await enqueueVoucherOutbox(cid, "update", vid, payload);
+      void flushVoucherOutbox().catch((err) => {
+        console.warn("[IC] local delete outbox flush:", err);
+      });
     }
-  }
+    if (partyId) {
+      try {
+        await purgeInterCompanyCounterpartyPartyIfUnused({ companyId: cid, partyId });
+      } catch (err) {
+        console.warn("[IC] counterparty party cleanup (local delete):", err);
+      }
+    }
+  })();
 }
 
 /** Source + linked target dono recycle bin. */

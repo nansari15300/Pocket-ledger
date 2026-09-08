@@ -2218,7 +2218,7 @@ export function TransactionsTable({
       const showStatusInCard = isBillWiseCardContext;
       const statusLabel = showStatusInCard ? getStatusLabel(t, context) : "";
       const statusDetailVouchers = showStatusInCard ? getStatusDetailVouchers(t, { billWiseOnly: statusBillWiseOnly }) : [];
-      const showStatusDetailInCard = showNarration && statusDetailVouchers.length > 0;
+      const showStatusDetailInCard = statusDetailVouchers.length > 0;
       // Mobile parity with desktop: show overdue age below "Overdue" badge.
       const overdueDaysInCard = (() => {
         if (!(statusLabel === "Overdue" || (t as any).isOverdue || (t as any).paymentStatus === "overdue")) return 0;

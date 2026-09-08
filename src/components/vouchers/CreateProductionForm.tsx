@@ -13,6 +13,7 @@ import { ScrollArea } from "../ui/scroll-area";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "../ui/alert-dialog";
 import { PlusCircle, Trash2, Loader2, CheckCircle, History, Printer } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
 import { format, startOfDay } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { toast as sonnerToast } from "sonner";
@@ -734,7 +735,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </Button>
                             </FormControl>
                           </PopoverTrigger>
-                          <PopoverContent className="w-auto p-0" align="start">
+                          <PopoverContent className="w-auto p-0 z-[102]" align="start">
                             <Calendar
                               mode="single"
                               selected={field.value}
@@ -1265,7 +1266,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     Delete
                   </Button>
                 </AlertDialogTrigger>
-                <AlertDialogContent>
+                <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                   <AlertDialogHeader>
                     <AlertDialogTitle>Delete Production Order</AlertDialogTitle>
                     <AlertDialogDescription>Are you sure? This action cannot be undone.</AlertDialogDescription>
@@ -1311,7 +1312,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       <Trash2 className="mr-2 h-4 w-4" /> Delete
                     </Button>
                   </AlertDialogTrigger>
-                  <AlertDialogContent>
+                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                     <AlertDialogHeader>
                       <AlertDialogTitle>Delete Production Order</AlertDialogTitle>
                       <AlertDialogDescription>Are you sure? This action cannot be undone.</AlertDialogDescription>

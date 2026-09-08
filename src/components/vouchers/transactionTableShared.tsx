@@ -1024,6 +1024,13 @@ export const getStatusDetail = (t: any, opts?: { billWiseOnly?: boolean }) => {
     billWiseOnly ? (t.linkedToVoucherNosBillWise as string[] | undefined) : (t.linkedToVoucherNos as string[] | undefined)
   ) || [];
   const all = Array.from(new Set([...fromRaw, ...toRaw])).filter(Boolean);
+  if (billWiseOnly && all.length === 0) {
+    const fromMixed = (t.linkedFromVoucherNos as string[] | undefined) || [];
+    const toMixed = (t.linkedToVoucherNos as string[] | undefined) || [];
+    const mixed = Array.from(new Set([...fromMixed, ...toMixed])).filter(Boolean);
+    if (mixed.length === 0) return "";
+    return mixed.join(", ");
+  }
   if (all.length === 0) return "";
   return all.join(", ");
 };
@@ -1050,7 +1057,13 @@ export const getStatusDetailVouchers = (t: any, opts?: { billWiseOnly?: boolean 
   const toRaw = (
     billWiseOnly ? (t.linkedToVoucherNosBillWise as string[] | undefined) : (t.linkedToVoucherNos as string[] | undefined)
   ) || [];
-  return Array.from(new Set([...fromRaw, ...toRaw])).filter(Boolean);
+  const merged = Array.from(new Set([...fromRaw, ...toRaw])).filter(Boolean);
+  if (billWiseOnly && merged.length === 0) {
+    const fromMixed = (t.linkedFromVoucherNos as string[] | undefined) || [];
+    const toMixed = (t.linkedToVoucherNos as string[] | undefined) || [];
+    return Array.from(new Set([...fromMixed, ...toMixed])).filter(Boolean);
+  }
+  return merged;
 };
 
 /** Cyclical 3 colors for multi-voucher display: 1st Blue, 2nd Gray, 3rd Green, then repeat. */
@@ -1698,10 +1711,11 @@ export const TransactionRow = React.memo(
               transaction.subType === "add_salary";
             const statusLabel = isDashboardAddSalary ? "Salary" : getStatusLabel(transaction, context);
             const statusDetailText = getStatusDetail(transaction, { billWiseOnly: statusBillWiseOnly });
+            const statusDetailVouchersForRow = getStatusDetailVouchers(transaction, { billWiseOnly: statusBillWiseOnly });
             // Keep status voucher-link text tied to the shared "Show Narration" toggle.
             const showStatusDetailText = showNarration && !!statusDetailText;
-            // Keep status pill vertically stable by moving voucher-link detail to narration row.
-            const showStatusDetailUnderBadge = false;
+            // Bill-wise: linked voucher nos directly under status pill (Adjustment / Journal / Paid etc.).
+            const showStatusDetailUnderBadge = isBillWise && statusDetailVouchersForRow.length > 0;
             const isOverdueRow = statusLabel === "Overdue" || (transaction as any).isOverdue || (transaction as any).paymentStatus === "overdue";
             const overdueDays = isOverdueRow ? getOverdueDays(transaction) : 0;
             // Keep status badge vertically centered like amount cells in every view.
@@ -1720,8 +1734,12 @@ export const TransactionRow = React.memo(
                     {hlForColumn("status")(statusLabel || "-")}
                   </Badge>
                   {showStatusDetailUnderBadge && (
-                    // Keep status voucher-detail text pure black as requested.
-                    <span className="text-[10px] text-black">{statusDetailText}</span>
+                    <LinkedVouchersColored
+                      vouchers={statusDetailVouchersForRow}
+                      align="center"
+                      billWisePink={isBillWise}
+                      className="text-[10px] leading-tight"
+                    />
                   )}
                   {/* When narration is hidden, keep overdue hint under status badge. */}
                   {!showNarration && !isBillWise && isOverdueRow && overdueDays > 0 && (
@@ -1886,9 +1904,10 @@ export const TransactionRow = React.memo(
           (showCol("dr") ? 1 : 0) +
           (showCol("cr") ? 1 : 0);
     const statusDetailText = getStatusDetail(transaction, { billWiseOnly: statusBillWiseOnly });
+    const statusDetailVouchers = getStatusDetailVouchers(transaction, { billWiseOnly: statusBillWiseOnly });
     const showNarrationRow =
-      showNarration &&
-      (narrationText || (showCol("status") && !hideStatusColumn && statusDetailText));
+      (showNarration && narrationText) ||
+      (!isBillWise && showCol("status") && !hideStatusColumn && statusDetailVouchers.length > 0);
     const spendWiseBorderLast = useRowSpendBorders && effSpendBottom && !showNarrationRow && cn(
       "[&>td]:border-b-2 [&>td]:border-solid [&>td]:pb-1",
       !effSpendTop && "[&>td]:border-t-0",
@@ -2053,7 +2072,6 @@ export const TransactionRow = React.memo(
     })();
     const overdueDaysForSubRow = isOverdueForSubRow ? getOverdueDays(transaction) : 0;
     // Keep voucher-link + overdue helper beside narration in same row.
-    const statusDetailVouchers = getStatusDetailVouchers(transaction, { billWiseOnly: statusBillWiseOnly });
     const overdueSubText = showNarration && overdueDaysForSubRow > 0 ? `${overdueDaysForSubRow} day${overdueDaysForSubRow === 1 ? "" : "s"}` : "";
     const NarrationRow = showNarrationRow ? (
       <motion.tr
@@ -2145,7 +2163,7 @@ export const TransactionRow = React.memo(
         {/* Bill-wise: linked vouchers Status se Balance tak wrap (print jaisa); spend-wise: sirf Status column. */}
         {isBillWise ? (
           <BillWiseLinkedDetailCells
-            vouchers={statusDetailVouchers}
+            vouchers={[]}
             overdueText={overdueSubText ? hl(overdueSubText) : undefined}
             billWisePink
             showStatus={showCol("status")}

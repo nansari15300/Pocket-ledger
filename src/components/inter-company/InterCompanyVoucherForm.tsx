@@ -41,6 +41,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import {
+  NESTED_VOUCHER_ALERT_CONTENT_CN,
+  NESTED_VOUCHER_ALERT_OVERLAY_CN,
+} from "@/lib/dialogShellChrome";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useDate } from "@/hooks/useDate";
@@ -125,6 +129,13 @@ import {
 } from "@/lib/interCompany/interCompanyVoucherChrome";
 import { InterCompanyVoucherAttachments } from "@/components/inter-company/InterCompanyVoucherAttachments";
 import { InterCompanyAmountDualFields } from "@/components/inter-company/InterCompanyAmountDualFields";
+import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
+import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
+import { CreateExpenseAccountDialog } from "@/components/expenses/CreateExpenseAccountDialog";
+import {
+  dispatchOtherChargeAddNewPrefill,
+  resolveOtherChargeAddNewType,
+} from "@/lib/otherChargeComboboxAddNew";
 import { uploadVoucherAttachmentFileToFirebase } from "@/lib/voucherFormAttachmentSave";
 import { storage } from "@/lib/firebase";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
@@ -543,6 +554,15 @@ export function InterCompanyVoucherForm({
     const row = (voucher || defaultVoucherData) as Record<string, unknown> | null | undefined;
     return Boolean(row?.otherChargeAccountId || Number(row?.otherChargeAmount || 0) > 0);
   });
+  const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
+  const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
+  const [isCreateExpenseAccountOpen, setIsCreateExpenseAccountOpen] = useState(false);
+  const creatingOtherChargeAccountRef = useRef(false);
+  const pendingOtherChargeCreateNameRef = useRef("");
+  const [pendingOtherChargeOption, setPendingOtherChargeOption] = useState<{
+    value: string;
+    label: string;
+  } | null>(null);
   const [changeDetectDialogOpen, setChangeDetectDialogOpen] = useState(false);
   const [accountDiffRows, setAccountDiffRows] = useState<IcAccountDiffRow[]>([]);
   const [selectedApplyKeys, setSelectedApplyKeys] = useState<
@@ -1069,7 +1089,7 @@ export function InterCompanyVoucherForm({
       ""
   ).trim();
 
-  const { entities: sourceEntitiesRaw, loading: sourceEntitiesLoading } =
+  const { entities: sourceEntitiesRaw, loading: sourceEntitiesLoading, reload: reloadSourceEntities } =
     useInterCompanyEntities(sourceEntitiesCompanyId);
   const { entities: targetEntitiesRaw, loading: targetEntitiesLoading } =
     useInterCompanyEntities(targetEntitiesCompanyId);
@@ -1440,8 +1460,15 @@ export function InterCompanyVoucherForm({
         label: `${e.kind === "party" ? "Party" : e.kind === "staff" ? "Staff" : "Expense"}: ${e.label}`,
       }));
     const selected = sourceEntities.find((e) => e.id === otherChargeAccountId);
-    return withSelectedComboboxOption(rows, otherChargeAccountId, selected?.label);
-  }, [sourceEntities, otherChargeAccountId]);
+    const pendingLabel =
+      pendingOtherChargeOption?.value === otherChargeAccountId
+        ? pendingOtherChargeOption.label
+        : undefined;
+    const selectedLabel = selected
+      ? `${selected.kind === "party" ? "Party" : selected.kind === "staff" ? "Staff" : "Expense"}: ${selected.label}`
+      : pendingLabel;
+    return withSelectedComboboxOption(rows, otherChargeAccountId, selectedLabel);
+  }, [sourceEntities, otherChargeAccountId, pendingOtherChargeOption]);
   const otherChargeBalance = useMemo(() => {
     if (!otherChargeAccountId) return null;
     const ent = sourceEntities.find((e) => e.id === otherChargeAccountId);
@@ -1463,6 +1490,34 @@ export function InterCompanyVoucherForm({
       toast.error("Default save failed.");
     }
   }, [form, otherChargeDefaultStorageKey]);
+  const handleOtherChargeAccountChange = useCallback((val: string, newName?: string) => {
+    const createType = resolveOtherChargeAddNewType(val);
+    if (!createType) return;
+    creatingOtherChargeAccountRef.current = true;
+    pendingOtherChargeCreateNameRef.current = String(newName || "").trim();
+    if (createType === "party") setIsCreatePartyOpen(true);
+    if (createType === "staff") setIsCreateStaffOpen(true);
+    if (createType === "expense") setIsCreateExpenseAccountOpen(true);
+    dispatchOtherChargeAddNewPrefill(createType, newName);
+  }, []);
+  const applyOtherChargeAccountCreated = useCallback(
+    (kind: "party" | "staff" | "expense", id: string) => {
+      const name = pendingOtherChargeCreateNameRef.current;
+      pendingOtherChargeCreateNameRef.current = "";
+      const prefix = kind === "party" ? "Party" : kind === "staff" ? "Staff" : "Expense";
+      const label = `${prefix}: ${name || id}`;
+      setPendingOtherChargeOption({ value: id, label });
+      form.setValue("otherChargeAccountId", id, { shouldDirty: true, shouldValidate: true });
+      reloadSourceEntities();
+    },
+    [form, reloadSourceEntities]
+  );
+  useEffect(() => {
+    if (!pendingOtherChargeOption) return;
+    if (sourceEntities.some((e) => e.id === pendingOtherChargeOption.value)) {
+      setPendingOtherChargeOption(null);
+    }
+  }, [sourceEntities, pendingOtherChargeOption]);
   const showOtherChargeCard =
     showIcOtherCharge &&
     (otherChargeEnabled || Boolean(otherChargeAccountId) || otherChargeAmountValue > 0);
@@ -1688,8 +1743,14 @@ export function InterCompanyVoucherForm({
 
       if (isEdit && savedSourceId) {
         const fetchVoucher = async (cid: string, vid: string) => {
-          const snap = await getDoc(doc(firestore, `companies/${cid}/vouchers`, vid));
-          return snap.exists() ? snap.data() : null;
+          const local = await getCompanyDocFromBrowserDb(cid, "vouchers", vid);
+          if (local) return local;
+          try {
+            const snap = await getDoc(doc(firestore, `companies/${cid}/vouchers`, vid));
+            return snap.exists() ? snap.data() : null;
+          } catch {
+            return null;
+          }
         };
         const isOwn = await determineVoucherOwnership(
           voucher,
@@ -1957,11 +2018,8 @@ export function InterCompanyVoucherForm({
       }
 
       toast.success(isEdit ? "Inter Company updated" : "Inter Company saved", { id: toastId });
-      if (result.attachmentReplicationWarning) {
-        toast.warning("Attachment copy incomplete", {
-          description: result.attachmentReplicationWarning,
-        });
-      }
+
+      onVoucherAction?.("saved", opts?.saveAndNew, result.sourceId);
 
       if (opts?.saveAndPrint && company) {
         const dateStr = formatDate(voucherDate);
@@ -2033,8 +2091,6 @@ export function InterCompanyVoucherForm({
         lastHydratedVoucherIdRef.current = null;
         await fetchVoucherNumber();
       }
-
-      onVoucherAction?.("saved", opts?.saveAndNew, result.sourceId);
     } catch (err) {
       if (err instanceof PermissionDeniedError) {
         toast.error("Permission denied", { id: toastId, description: err.message });
@@ -2302,7 +2358,11 @@ export function InterCompanyVoucherForm({
 
   /** Save pe ask: Account→Account (Payment In) vs Company→Company (Journal). */
   const requestSave = (opts?: IcSaveOpts) => {
-    if (ownSideSaveBlocked || isLoading) return;
+    if (isLoading) return;
+    if (ownSideSaveBlocked) {
+      toast.error("This side is read-only — unlock fields or switch to the editable company side.");
+      return;
+    }
     if (!user?.uid || !companyId) {
       toast.error("Sign in and select a company");
       return;
@@ -2481,7 +2541,6 @@ export function InterCompanyVoucherForm({
       return;
     }
     const toastId = toast.loading("Deleting…");
-    setIsLoading(true);
     try {
       await deleteInterCompanyVoucherLocalCopyOnly({
         companyId,
@@ -2493,8 +2552,6 @@ export function InterCompanyVoucherForm({
     } catch (err) {
       const message = err instanceof Error ? err.message : "Delete failed";
       toast.error("Delete failed", { id: toastId, description: message });
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -2793,6 +2850,7 @@ export function InterCompanyVoucherForm({
         otherChargeBalance={otherChargeBalance}
         onOtherChargeDefault={setOtherChargeDefault}
         otherChargeAccountId={String(otherChargeAccountId || "")}
+        onOtherChargeAccountChange={handleOtherChargeAccountChange}
       />
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3 md:items-stretch">
@@ -3016,7 +3074,10 @@ export function InterCompanyVoucherForm({
         }
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent
+        overlayClassName={NESTED_VOUCHER_ALERT_OVERLAY_CN}
+        className={NESTED_VOUCHER_ALERT_CONTENT_CN}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>How are you paying?</AlertDialogTitle>
           <AlertDialogDescription>
@@ -3111,7 +3172,10 @@ export function InterCompanyVoucherForm({
         }
       }}
     >
-      <AlertDialogContent className="max-w-2xl gap-0 overflow-hidden p-0 sm:max-w-3xl">
+      <AlertDialogContent
+        overlayClassName={NESTED_VOUCHER_ALERT_OVERLAY_CN}
+        className={cn(NESTED_VOUCHER_ALERT_CONTENT_CN, "max-w-2xl gap-0 overflow-hidden p-0 sm:max-w-3xl")}
+      >
         <div className="border-b-[1.5px] border-foreground/80 bg-muted px-4 py-3">
           <AlertDialogHeader className="space-y-1 text-left">
             <AlertDialogTitle>Change Detected</AlertDialogTitle>
@@ -3191,12 +3255,56 @@ export function InterCompanyVoucherForm({
     </AlertDialog>
   );
 
+  const otherChargeCreateDialogs = (
+    <>
+      <CreatePartyDialog
+        isOpen={isCreatePartyOpen}
+        onOpenChange={setIsCreatePartyOpen}
+        onPartyCreated={(id) => {
+          setIsCreatePartyOpen(false);
+          if (creatingOtherChargeAccountRef.current) {
+            creatingOtherChargeAccountRef.current = false;
+            applyOtherChargeAccountCreated("party", id);
+          }
+        }}
+      />
+      <CreateStaffDialog
+        isOpen={isCreateStaffOpen}
+        onOpenChange={setIsCreateStaffOpen}
+        onStaffCreated={(id) => {
+          setIsCreateStaffOpen(false);
+          if (creatingOtherChargeAccountRef.current) {
+            creatingOtherChargeAccountRef.current = false;
+            applyOtherChargeAccountCreated("staff", id);
+          }
+        }}
+        groups={[]}
+      >
+        <div />
+      </CreateStaffDialog>
+      <CreateExpenseAccountDialog
+        isOpen={isCreateExpenseAccountOpen}
+        onOpenChange={setIsCreateExpenseAccountOpen}
+        onExpenseAccountCreated={(id) => {
+          setIsCreateExpenseAccountOpen(false);
+          if (creatingOtherChargeAccountRef.current) {
+            creatingOtherChargeAccountRef.current = false;
+            applyOtherChargeAccountCreated("expense", id);
+          }
+        }}
+      >
+        <div />
+      </CreateExpenseAccountDialog>
+    </>
+  );
+
   if (inDialog) {
     return (
       <>
         <div className="flex min-h-0 flex-col gap-3 px-1 pb-2 md:px-0">{ribbonLayout}</div>
         {payModeDialog}
         {accountApplyDialogs}
+        {otherChargeCreateDialogs}
       </>
     );
   }
@@ -3215,6 +3323,7 @@ export function InterCompanyVoucherForm({
       <div className="min-h-0 flex-1 px-4 py-3">{ribbonLayout}</div>
       {payModeDialog}
       {accountApplyDialogs}
+      {otherChargeCreateDialogs}
     </div>
   );
 }

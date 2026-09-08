@@ -28,6 +28,7 @@ import {
   BTN_SAVE_CLASS,
   BTN_APPROVE_CLASS,
 } from "@/components/vouchers/voucherButtonStyles";
+import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
 
 export type InterCompanyVoucherFooterProps = {
   inDialog?: boolean;
@@ -105,6 +106,8 @@ export function InterCompanyVoucherFooter({
   const saveDisabled = isEditViewOnly || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty);
   const printDisabled = isEditViewOnly || isLoading || editingDisabled;
 
+  const deleteDialogContentProps = inDialog ? NESTED_VOUCHER_ALERT_SHELL : {};
+
   const deleteButton = onDelete ? (
     <AlertDialog>
       <AlertDialogTrigger asChild>
@@ -118,7 +121,7 @@ export function InterCompanyVoucherFooter({
           Delete
         </Button>
       </AlertDialogTrigger>
-      <AlertDialogContent>
+      <AlertDialogContent {...deleteDialogContentProps}>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this company&apos;s copy?</AlertDialogTitle>
           <AlertDialogDescription>
@@ -185,7 +188,7 @@ export function InterCompanyVoucherFooter({
                   Delete
                 </Button>
               </AlertDialogTrigger>
-              <AlertDialogContent>
+              <AlertDialogContent {...deleteDialogContentProps}>
                 <AlertDialogHeader>
                   <AlertDialogTitle>Delete this company&apos;s copy?</AlertDialogTitle>
                   <AlertDialogDescription>

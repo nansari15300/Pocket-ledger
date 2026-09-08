@@ -16,6 +16,7 @@ import {
   masterEntityDialogFormWrapperClassName,
   masterEntityDialogHeaderClassName,
 } from "@/lib/masterEntityDialogClasses";
+import { NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN } from "@/lib/dialogShellChrome";
 import { CreatePartyForm } from "./CreatePartyForm";
 
 export function CreatePartyDialog({
@@ -56,6 +57,7 @@ export function CreatePartyDialog({
       )}
       {/* MOBILE: max-h 85vh; PC (sm+): max-h 90vh taaki lamba form scroll ho — inner div overflow-y-auto. */}
       <DialogContent
+    overlayClassName={NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN}
     className={cnMasterEntityDialogContent(isMobile)}
     onOpenAutoFocus={(e) => e.preventDefault()}
     onCloseAutoFocus={(e) => e.preventDefault()}

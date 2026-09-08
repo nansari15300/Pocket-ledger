@@ -51,6 +51,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  NESTED_VOUCHER_HISTORY_ALERT_CONTENT_CN,
+  NESTED_VOUCHER_HISTORY_ALERT_OVERLAY_CN,
+  NESTED_VOUCHER_HISTORY_CONTENT_CN,
+  NESTED_VOUCHER_HISTORY_OVERLAY_CN,
+} from "@/lib/dialogShellChrome";
 
 /** Capitalize first letter of a label for display in Field column */
 function capitalizeFirst(s: string): string {
@@ -691,6 +697,7 @@ export function HistoryDialog({
   highlightTimestamp,
   highlightUid,
   onMarkAsReadFromAlert,
+  nestedInVoucherEdit = false,
 }: {
   voucher: any;
   isOpen: boolean;
@@ -700,6 +707,8 @@ export function HistoryDialog({
   highlightUid?: string;
   /** Alerts "View changes" flow: history ke niche mark-as-read action. */
   onMarkAsReadFromAlert?: () => Promise<void> | void;
+  /** Edit Trxn dialog ke andar — stack above voucher shell z-[81]. */
+  nestedInVoucherEdit?: boolean;
 }) {
   const [historyUserNames, setHistoryUserNames] = useState<Record<string, string>>({});
   /** Inter Company create rows: creator email / phone (users collection). */
@@ -1116,7 +1125,13 @@ export function HistoryDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="rounded-lg sm:rounded-xl left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[calc(100vw-4px)] sm:w-[calc(100vw-30px)] max-w-[calc(100vw-4px)] sm:max-w-[12in] py-6 pl-[2px] pr-[2px] sm:pl-[15px] sm:pr-[15px] h-[90vh] flex flex-col min-w-0">
+      <DialogContent
+        overlayClassName={nestedInVoucherEdit ? NESTED_VOUCHER_HISTORY_OVERLAY_CN : undefined}
+        className={cn(
+          "rounded-lg sm:rounded-xl left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[calc(100vw-4px)] sm:w-[calc(100vw-30px)] max-w-[calc(100vw-4px)] sm:max-w-[12in] py-6 pl-[2px] pr-[2px] sm:pl-[15px] sm:pr-[15px] h-[90vh] flex flex-col min-w-0",
+          nestedInVoucherEdit && NESTED_VOUCHER_HISTORY_CONTENT_CN
+        )}
+      >
         <DialogHeader>
           <DialogTitle>Voucher History #{voucher?.voucherNumber || ""}</DialogTitle>
           <DialogDescription>
@@ -1459,7 +1474,12 @@ export function HistoryDialog({
         )}
 
         <AlertDialog open={showResetConfirm} onOpenChange={setShowResetConfirm}>
-          <AlertDialogContent>
+          <AlertDialogContent
+            overlayClassName={
+              nestedInVoucherEdit ? NESTED_VOUCHER_HISTORY_ALERT_OVERLAY_CN : undefined
+            }
+            className={nestedInVoucherEdit ? NESTED_VOUCHER_HISTORY_ALERT_CONTENT_CN : undefined}
+          >
             <AlertDialogHeader>
               <AlertDialogTitle>Delete voucher history?</AlertDialogTitle>
               <AlertDialogDescription>

@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
+import { NESTED_VOUCHER_MASTER_CREATE_CONTENT_CN } from "@/lib/dialogShellChrome";
 
 /**
  * Add/Edit master flows (party, bank, staff, tax, expense, item):
@@ -10,7 +11,7 @@ export const masterEntityFormChromeClassName =
   "pl-master-entity-form-chrome pl-dashboard-ribbon-emerald border-black";
 
 const MASTER_ENTITY_BASE =
-  "z-50 max-h-[85vh] w-[98vw] max-w-[98vw] flex min-h-0 flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:w-full sm:px-6";
+  `${NESTED_VOUCHER_MASTER_CREATE_CONTENT_CN} max-h-[85vh] w-[98vw] max-w-[98vw] flex min-h-0 flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:w-full sm:px-6`;
 
 export const masterEntityDialogHeaderClassName = "shrink-0";
 export const masterEntityDialogFormWrapperClassName =

@@ -16,6 +16,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon, Loader2, Trash2, PlusCircle, Upload, FileText, Crown, History, CheckCircle, Printer, Link2, Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { NESTED_VOUCHER_ALERT_SHELL, nestedVoucherAlertShell } from "@/lib/dialogShellChrome";
 import { withMasterAccountFreezeComboboxOption } from "@/lib/masterAccountFreeze/comboboxOptions";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -29,6 +30,9 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { Account } from "@/components/bank-cash/types";
 import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccountDialog";
+import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
+import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
+import { CreateExpenseAccountDialog } from "@/components/expenses/CreateExpenseAccountDialog";
 import { useDate } from "@/hooks/useDate";
 import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
@@ -52,6 +56,11 @@ import {
 } from "@/lib/voucherSaveUi";
 import BsDatePicker from "../ui/BsDatePicker";
 import { Combobox } from "@/components/ui/combobox";
+import {
+  dispatchOtherChargeAddNewPrefill,
+  OTHER_CHARGE_ADD_NEW_LABELS,
+  resolveOtherChargeAddNewType,
+} from "@/lib/otherChargeComboboxAddNew";
 import { FilePreview } from "../vouchers/FilePreview";
 import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
@@ -232,6 +241,10 @@ export function CreateContraForm({
   const [isLoading, setIsLoading] = useState(false);
   const isAttachmentProcessing = useVoucherAttachmentProcessing();
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
+  const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
+  const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
+  const [isCreateExpenseAccountOpen, setIsCreateExpenseAccountOpen] = useState(false);
+  const creatingOtherChargeAccountRef = useRef(false);
   const [targetFieldForNewAccount, setTargetFieldForNewAccount] = useState<'fromAccountId' | 'toAccountId' | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachFileInputId = useId();
@@ -479,6 +492,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
     } catch {}
   }, [showOtherChargeCard, otherChargeAccountId, otherChargeDefaultStorageKey, otherChargeAccountOptions, form]);
+
+  const handleOtherChargeAccountChange = useCallback(
+    (fieldOnChange: (val: string) => void, val: string, newName?: string) => {
+      const createType = resolveOtherChargeAddNewType(val);
+      if (createType) {
+        creatingOtherChargeAccountRef.current = true;
+        if (createType === "party") setIsCreatePartyOpen(true);
+        if (createType === "staff") setIsCreateStaffOpen(true);
+        if (createType === "expense") setIsCreateExpenseAccountOpen(true);
+        dispatchOtherChargeAddNewPrefill(createType, newName);
+        return;
+      }
+      fieldOnChange(val);
+    },
+    []
+  );
 
   const showSpendWiseSection = showLinkPayMode;
   const isInVoucherForAccountContra = (x: any, accId: string) =>
@@ -1822,8 +1851,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   triggerClassName="w-full min-w-0"
                                   options={otherChargeAccountOptions}
                                   value={field.value}
-                                  onChange={(val) => field.onChange(val)}
+                                  onChange={(val, newName) =>
+                                    handleOtherChargeAccountChange(field.onChange, val, newName)
+                                  }
                                   placeholder="Select account"
+                                  addNewLabels={OTHER_CHARGE_ADD_NEW_LABELS}
                                   disabled={deleteDisabledWhenLinked}
                                 />
                               </div>
@@ -2141,8 +2173,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <Combobox
                                   options={otherChargeAccountOptions}
                                   value={field.value}
-                                  onChange={(val) => field.onChange(val)}
+                                  onChange={(val, newName) =>
+                                    handleOtherChargeAccountChange(field.onChange, val, newName)
+                                  }
                                   placeholder="Select account"
+                                  addNewLabels={OTHER_CHARGE_ADD_NEW_LABELS}
                                   disabled={deleteDisabledWhenLinked}
                                 />
                               </div>
@@ -2442,7 +2477,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       Delete
                     </Button>
                   </AlertDialogTrigger>
-                  <AlertDialogContent>
+                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                     <AlertDialogHeader>
                       <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                       <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
@@ -2492,7 +2527,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
                     </AlertDialogTrigger>
-                    <AlertDialogContent>
+                    <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                       <AlertDialogHeader>
                         <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                         <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
@@ -2540,6 +2575,44 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         </form>
       </Form>
       <CreateBankAccountDialog onAccountCreated={handleAccountCreated} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen} />
+      <CreatePartyDialog
+        isOpen={isCreatePartyOpen}
+        onOpenChange={setIsCreatePartyOpen}
+        onPartyCreated={(id) => {
+          setIsCreatePartyOpen(false);
+          if (creatingOtherChargeAccountRef.current) {
+            creatingOtherChargeAccountRef.current = false;
+            form.setValue("otherChargeAccountId", id);
+          }
+        }}
+      />
+      <CreateStaffDialog
+        isOpen={isCreateStaffOpen}
+        onOpenChange={setIsCreateStaffOpen}
+        onStaffCreated={(id) => {
+          setIsCreateStaffOpen(false);
+          if (creatingOtherChargeAccountRef.current) {
+            creatingOtherChargeAccountRef.current = false;
+            form.setValue("otherChargeAccountId", id);
+          }
+        }}
+        groups={[]}
+      >
+        <div />
+      </CreateStaffDialog>
+      <CreateExpenseAccountDialog
+        isOpen={isCreateExpenseAccountOpen}
+        onOpenChange={setIsCreateExpenseAccountOpen}
+        onExpenseAccountCreated={(id) => {
+          setIsCreateExpenseAccountOpen(false);
+          if (creatingOtherChargeAccountRef.current) {
+            creatingOtherChargeAccountRef.current = false;
+            form.setValue("otherChargeAccountId", id);
+          }
+        }}
+      >
+        <div />
+      </CreateExpenseAccountDialog>
       {/* Link Pay In dialog uses same pay-from account so only relevant in-vouchers are listed. */}
       {/* Open in-voucher picker only for Contra Out leg; Contra In uses outflow picker (payment_in-like behavior). */}
       {isLinkPaymentInDialogOpen && selectedContraLeg === 'out' && spendWiseInAccountId && (
@@ -2595,7 +2668,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       )}
       <LinkSectionInfoDialog open={linkSectionInfoOpen} onOpenChange={setLinkSectionInfoOpen} />
       <Dialog open={isAmountMoreThanAccountOpen} onOpenChange={setIsAmountMoreThanAccountOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent {...nestedVoucherAlertShell("max-w-md")}>
           <DialogHeader>
             <DialogTitle>Cannot save voucher</DialogTitle>
           </DialogHeader>

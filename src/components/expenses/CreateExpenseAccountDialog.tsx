@@ -45,6 +45,7 @@ import {
   masterEntityDialogHeaderClassName,
   masterEntityDialogFormWrapperClassName,
 } from "@/lib/masterEntityDialogClasses";
+import { NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN } from "@/lib/dialogShellChrome";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { toast as sonnerToast } from "sonner";
@@ -706,6 +707,7 @@ export function CreateExpenseAccountDialog({
     <Dialog open={open} onOpenChange={setOpen} modal={true}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogContent 
+        overlayClassName={NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN}
         className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-2xl")}
         onOpenAutoFocus={(e) => e.preventDefault()}
         onCloseAutoFocus={(e) => e.preventDefault()}

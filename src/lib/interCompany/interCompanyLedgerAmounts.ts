@@ -266,8 +266,8 @@ export function interCompanyTouchesPartyId(
 }
 
 /**
- * Target par IC row hide — source approve se pehle (bank + entity); source approve ke baad
- * target unapproved par entity hide, bank `getInterCompanyLegAmounts` se.
+ * Target par IC entity row hide — sirf jab tak source approve na ho.
+ * Source approve ke baad unapproved bhi dikhe (Dr/Cr 0 jab tak target approve na ho).
  */
 export function hideUnapprovedTargetInterCompanyEntityLedger(
   transaction: Record<string, unknown> | null | undefined,
@@ -281,23 +281,21 @@ export function hideUnapprovedTargetInterCompanyEntityLedger(
     return !isInterCompanyVisibleOnTargetBank(transaction);
   }
   if (!isInterCompanyVisibleOnTargetBank(transaction)) return true;
-  if (transaction.isApproved === true) return false;
-  if (interCompanyVoucherViewerSide(transaction) !== "target") return false;
-  if (context === "account") return false;
-  if (!id) return false;
-  const kind = interCompanyKindForContext(context);
-  if (!kind) return false;
-  return interCompanyVoucherTouchesEntity(transaction, id, kind);
+  void context;
+  void id;
+  return false;
 }
 
-/** @deprecated Bank ab unapproved par amount dikhata hai — placeholder zaroorat nahi */
+/** Unapproved IC — row dikhao, Dr/Cr 0 (balance loop bhi skip kare). */
 export function keepUnapprovedInterCompanyLedgerPlaceholderRow(
   transaction: Record<string, unknown> | null | undefined,
   context: Context,
   entityId: string
 ): boolean {
-  void transaction;
-  void context;
-  void entityId;
-  return false;
+  if (!transaction || String(transaction.type || "") !== "inter_company") return false;
+  if (transaction.isApproved === true) return false;
+  if (!isInterCompanyVisibleOnTargetBank(transaction)) return false;
+  const kind = interCompanyKindForContext(context);
+  if (!kind) return false;
+  return interCompanyVoucherTouchesEntity(transaction, entityId, kind);
 }

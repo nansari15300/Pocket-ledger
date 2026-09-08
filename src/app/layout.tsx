@@ -65,6 +65,12 @@ export default function RootLayout({
             __html: `(function(){try{var KEY="pl_chunk_reload_v1";function chunkMsg(m){m=String(m||"");return/ChunkLoadError|Loading chunk \\d+ failed/i.test(m);}async function recover(){if(sessionStorage.getItem(KEY)==="1")return;sessionStorage.setItem(KEY,"1");try{if("serviceWorker"in navigator){var regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(function(r){return r.unregister();}));}if("caches"in window){var names=await caches.keys();await Promise.all(names.map(function(n){return caches.delete(n);}));}}catch(e){}location.reload();}window.addEventListener("error",function(e){var t=e.target;if(t&&t.tagName==="SCRIPT"&&t.src&&/_next\\/static\\/chunks\\//.test(t.src)){recover();return;}if(chunkMsg(e.message))recover();},true);window.addEventListener("unhandledrejection",function(e){var r=e.reason;var m=r&&(r.message||r);if(chunkMsg(m))recover();});}catch(e){}})();`,
           }}
         />
+        {/* Hosted web: React hydrate na ho to bhi protected route se login par — party jaisi heavy chunks */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var REDIR_KEY="pl_web_auth_gate_redirect_v1";var p=location.pathname||"/";var base=(p==="/app"||p.indexOf("/app/")===0)?"/app":"";var inner=base?p.slice(base.length)||"/":p;var seg=(inner.replace(/^\\/+|\\/+$/g,"").split("/")[0]||"").toLowerCase();if(!seg||seg==="billing"||inner==="/")return;var routes=["dashboard","party","staff","bank-cash","items","tax","incomes","gate","settings","reports","payment-in","payment-out","sale","purchase","journal","contra","notes","gallery","messages","admin","backup","recycle-bin","reconciliation","import-export","production","quotations","add-salary","inter-company","sale-note","purchase-note","company","loans","not-authorized","embed"];if(routes.indexOf(seg)<0)return;setTimeout(function(){try{if(sessionStorage.getItem(REDIR_KEY)==="1")return;var txt=(document.body&&document.body.innerText)||"";var gate=document.querySelector("[data-pl-web-auth-gate]");var stuck=gate||/Loading session|Opening sign in|Redirecting to sign in/i.test(txt);if(!stuck)return;sessionStorage.setItem(REDIR_KEY,"1");location.assign(base+"/");}catch(e){}},9000);}catch(e){}})();`,
+          }}
+        />
         <PocketSerwistProvider>
           <Providers>
             {children}

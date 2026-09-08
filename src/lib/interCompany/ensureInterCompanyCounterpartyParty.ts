@@ -257,11 +257,13 @@ export async function ensureInterCompanyCounterpartyParty(
   const partyRef = doc(firestore, `companies/${companyId}/parties`, canonicalId);
   const localCanonical = await getCompanyDocFromBrowserDb(companyId, "parties", canonicalId);
   let firestoreCanonical: Record<string, unknown> | null = null;
-  try {
-    const snap = await getDoc(partyRef);
-    if (snap.exists()) firestoreCanonical = snap.data() as Record<string, unknown>;
-  } catch {
-    /* local-only / offline */
+  if (!localCanonical) {
+    try {
+      const snap = await getDoc(partyRef);
+      if (snap.exists()) firestoreCanonical = snap.data() as Record<string, unknown>;
+    } catch {
+      /* local-only / offline */
+    }
   }
 
   const canonicalData = (localCanonical || firestoreCanonical) as Record<string, unknown> | null;

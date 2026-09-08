@@ -57,6 +57,7 @@ import {
   masterEntityDialogHeaderClassName,
   masterEntityDialogFormWrapperClassName,
 } from "@/lib/masterEntityDialogClasses";
+import { NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN } from "@/lib/dialogShellChrome";
 import { format } from "date-fns";
 import { toast as sonnerToast } from "sonner";
 
@@ -926,6 +927,7 @@ const capitalizeFirstLetter = (str: string) => {
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {/* Mobile: 85vh height, 98vw width. PC: 90% screen height & width (90vh / 90vw) so dialog uses most of viewport. */}
         <DialogContent
+            overlayClassName={NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN}
             className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-5xl")}
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}

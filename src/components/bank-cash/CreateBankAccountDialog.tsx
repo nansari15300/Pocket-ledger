@@ -79,6 +79,7 @@ import {
   masterEntityDialogHeaderClassName,
   masterEntityDialogFormWrapperClassName,
 } from "@/lib/masterEntityDialogClasses";
+import { NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN } from "@/lib/dialogShellChrome";
 import { MasterFormTwoColGrid } from "@/components/inter-company/MasterFormLayout";
 import { BankAccountToggleFlagsRow } from "@/components/bank-cash/BankAccountToggleFlagsRow";
 import {
@@ -745,6 +746,7 @@ export function CreateBankAccountDialog({
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Must match CreatePartyDialog height/size. */}
         <DialogContent 
+            overlayClassName={NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN}
             className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-2xl")}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}

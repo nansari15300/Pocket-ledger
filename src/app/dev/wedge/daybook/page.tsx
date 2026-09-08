@@ -20,38 +20,11 @@ function isDayIsoInSnapshot(snapshot: DaybookWedgeSnapshot | null, iso: string):
 export default function DevDaybookWedgePreviewPage() {
   const [selectedDayIso, setSelectedDayIso] = useState<string | null>(null);
   const [previewDateSystem, setPreviewDateSystem] = useState<"AD" | "BS" | "Both">("Both");
-  const { company, companyId, setCompanyId } = useCompany();
+  const { company, companyId } = useCompany();
   const { formatDate, formatDateBS, setDateSystem } = useDate();
 
   const snapshot = useDaybookWedgeSnapshot({ dateSystemOverride: previewDateSystem });
   const activeDayIso = selectedDayIso || snapshot?.defaultDayIso || null;
-
-  /** Other browser tab me company change → is tab ka preview bhi sync (localStorage + focus). */
-  useEffect(() => {
-    const syncCompany = (nextId: string) => {
-      const id = nextId.trim();
-      if (id && id !== companyId) setCompanyId(id);
-    };
-
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === "companyId" && e.newValue) syncCompany(e.newValue);
-    };
-
-    const onVisible = () => {
-      if (document.visibilityState !== "visible") return;
-      try {
-        const global = localStorage.getItem("companyId")?.trim();
-        if (global) syncCompany(global);
-      } catch (_) {}
-    };
-
-    window.addEventListener("storage", onStorage);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [companyId, setCompanyId]);
 
   const persistSelectedDay = (iso: string) => {
     setSelectedDayIso(iso);

@@ -595,7 +595,14 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
   };
 
   const handleSave = async () => {
-    if (!canWriteIc || !companyId || !user?.uid) return;
+    if (!companyId || !user?.uid) {
+      toast.error("Sign in and select a company to save join settings.");
+      return;
+    }
+    if (!canWriteIc) {
+      toast.error("You need Manage Inter Company joins permission to save.");
+      return;
+    }
     setSaving(true);
     const settingsToSave = draft;
     const groupsChanged = JSON.stringify(groups) !== savedGroupsJson;

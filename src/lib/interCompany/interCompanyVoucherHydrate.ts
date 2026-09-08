@@ -252,8 +252,7 @@ export function isInterCompanyVisibleOnTargetBank(
 export const isInterCompanyVisibleOnTargetCompany = isInterCompanyVisibleOnTargetBank;
 
 /**
- * Target: entity ledger (party/staff/tax/expense) — source approve + target copy approve dono.
- * Peer Change Detected: applied destination posting mat hide karo (notification only).
+ * Target entity ledger — source approve ke baad row dikhe; Dr/Cr sirf jab target copy approve ho.
  */
 export function isInterCompanyVisibleOnTargetEntity(
   voucher: Record<string, unknown> | null | undefined
@@ -261,8 +260,7 @@ export function isInterCompanyVisibleOnTargetEntity(
   if (!voucher || String(voucher.type || "") !== "inter_company") return true;
   if (interCompanyVoucherViewerSide(voucher) !== "target") return true;
   if (!isInterCompanySourceApprovedForTarget(voucher)) return false;
-  if (isInterCompanyPeerPendingChange(voucher)) return true;
-  return voucher.isApproved === true;
+  return true;
 }
 
 /** Recent / Daybook — target IC sirf source approve ke baad */

@@ -17,5 +17,35 @@ export const VOUCHER_EDIT_DIALOG_CONTENT_CN = "z-[81]";
 export const NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN = "z-[90] bg-black/45 backdrop-blur-sm";
 export const NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN = "z-[91]";
 
+/** Date/calendar popovers inside voucher add/edit dialog — above content z-[81] and nested link z-[91]. */
+export const VOUCHER_DIALOG_CALENDAR_POPOVER_CN = "z-[102]";
+
+/** Add New master (party/staff/expense/item) opened from voucher add/edit — above z-[81] shell. */
+export const NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN = "z-[92] bg-black/45 backdrop-blur-sm";
+export const NESTED_VOUCHER_MASTER_CREATE_CONTENT_CN = "!z-[93]";
+
+/** AlertDialogs inside voucher add/edit (IC pay mode, change detected, delete confirm) — above master create z-[93]. */
+export const NESTED_VOUCHER_ALERT_OVERLAY_CN = "z-[94] bg-black/45 backdrop-blur-sm";
+export const NESTED_VOUCHER_ALERT_CONTENT_CN = "!z-[95]";
+
+/** Spread onto AlertDialogContent (or small DialogContent) nested inside voucher add/edit. */
+export const NESTED_VOUCHER_ALERT_SHELL = {
+  overlayClassName: NESTED_VOUCHER_ALERT_OVERLAY_CN,
+  className: NESTED_VOUCHER_ALERT_CONTENT_CN,
+} as const;
+
+export const nestedVoucherAlertShell = (...extraContentClass: (string | undefined)[]) => ({
+  overlayClassName: NESTED_VOUCHER_ALERT_OVERLAY_CN,
+  className: cn(NESTED_VOUCHER_ALERT_CONTENT_CN, ...extraContentClass),
+});
+
+/** Voucher History opened from Edit Trxn — above nested alerts z-[95]. */
+export const NESTED_VOUCHER_HISTORY_OVERLAY_CN = "z-[96] bg-black/45 backdrop-blur-sm";
+export const NESTED_VOUCHER_HISTORY_CONTENT_CN = "z-[97]";
+
+/** AlertDialogs inside voucher history (delete all history) — above history shell z-[97]. */
+export const NESTED_VOUCHER_HISTORY_ALERT_OVERLAY_CN = "z-[98] bg-black/45 backdrop-blur-sm";
+export const NESTED_VOUCHER_HISTORY_ALERT_CONTENT_CN = "!z-[99]";
+
 /** Inner boxes / category panels — same dim green tone. */
 export const DIALOG_DIM_GREEN_BORDER = DIALOG_SHELL_BORDER_CN;

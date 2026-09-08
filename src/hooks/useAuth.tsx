@@ -192,8 +192,8 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
     ) {
       return;
     }
-    // Online cold open: IndexedDB me Firebase session ho to observer se pehle turant paint (offline jaisa).
-    if (isEmbeddedFastAuthShell() && auth.currentUser) {
+    // IndexedDB Firebase session: observer se pehle turant paint — hosted `/app/party` cold open par gate "Opening sign in" par na atake.
+    if (auth.currentUser) {
       applyEmbeddedFastAuthSession(auth.currentUser, setUser, setCustomUser, setLoading);
     }
   }, []);
@@ -595,12 +595,16 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
     };
 
     const NULL_AUTH_DEBOUNCE_MS = 500;
-    /** Hosted web: kabhi `onAuthStateChanged` late — infinite spinner + gate redirect na ho. */
+    /** Hosted web: kabhi `onAuthStateChanged` late — signed-out ko unblock; signed-in ko currentUser se paint. */
     const authBootTimeout = window.setTimeout(() => {
       if (fastLocalAuthRef.current) return;
-      if (auth.currentUser) return;
+      const cu = auth.currentUser;
+      if (cu) {
+        applyEmbeddedFastAuthSession(cu, setUser, setCustomUser, setLoading);
+        return;
+      }
       setLoading(false);
-    }, 6000);
+    }, 4000);
     void auth.authStateReady().then(() => {
       if (fastLocalAuthRef.current) return;
       if (auth.currentUser) return;

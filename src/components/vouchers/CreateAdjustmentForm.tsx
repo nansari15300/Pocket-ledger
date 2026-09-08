@@ -48,6 +48,7 @@ import { saveVoucher, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherAct
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { cn } from "@/lib/utils";
+import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
 import {
   BTN_APPROVE_CLASS,
   BTN_CANCEL_CLASS,
@@ -1082,7 +1083,7 @@ export function CreateAdjustmentForm({
                         {field.value ? formatDate(field.value) : "Pick AD date"}
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0">
+                    <PopoverContent className="w-auto p-0 z-[102]">
                       <Calendar mode="single" selected={field.value} onSelect={(d) => d && field.onChange(d)} initialFocus />
                     </PopoverContent>
                   </Popover>
@@ -1328,7 +1329,7 @@ export function CreateAdjustmentForm({
                     Delete
                   </Button>
                 </AlertDialogTrigger>
-                <AlertDialogContent>
+                <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                   <AlertDialogHeader>
                     <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                     <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
@@ -1425,7 +1426,7 @@ export function CreateAdjustmentForm({
                       Delete
                     </Button>
                   </AlertDialogTrigger>
-                  <AlertDialogContent>
+                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
                     <AlertDialogHeader>
                       <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                       <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
