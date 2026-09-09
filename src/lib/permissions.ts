@@ -177,7 +177,7 @@ export const PermissionGroups: PermissionGroup[] = [
         permissions: [
             { key: "inter_company_read", label: "View Inter Company join settings & groups" },
             { key: "inter_company_write", label: "Manage Inter Company joins & groups" },
-            { key: "create_inter_company_voucher", label: "Allow IC voucher" },
+            { key: "create_inter_company_voucher", label: "Add IC voucher" },
             { key: "edit_inter_company_voucher", label: "Edit IC voucher" },
         ],
     },
