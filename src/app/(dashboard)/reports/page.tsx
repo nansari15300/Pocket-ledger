@@ -1,7 +1,7 @@
 
 "use client";
 
-import React, { Suspense, useState, useMemo, useEffect, useCallback, startTransition } from "react";
+import React, { Suspense, useState, useMemo, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { ReportList } from "@/components/reports/ReportList";
 import { reports, type Report } from "@/components/reports/report-data";
@@ -14,7 +14,6 @@ import { useReportList } from "@/contexts/ReportListContext";
 import { ReportPageProvider } from "@/contexts/ReportPageContext";
 import { PermissionRouteGuard } from "@/components/permission/PermissionRouteGuard";
 import { usePathname, useSearchParams, useRouter } from "next/navigation";
-import { useSidebar } from "@/components/ui/sidebar";
 import { useCompany } from "@/hooks/useCompany";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -80,15 +79,7 @@ function ReportsPageContent() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { setIsOpen } = useSidebar();
   const { company } = useCompany();
-
-  // Auto-collapse app sidebar whenever user is on reports page.
-  useEffect(() => {
-    if (pathname?.startsWith("/reports")) {
-      startTransition(() => setIsOpen(false));
-    }
-  }, [pathname, setIsOpen]);
 
   const reportsForCompany = useMemo(() => {
     if (company?.country !== undefined) {

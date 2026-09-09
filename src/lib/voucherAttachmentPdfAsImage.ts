@@ -52,12 +52,11 @@ export async function convertPdfAttachmentsToJpegIfEnabled(
 ): Promise<(File | string)[]> {
   if (!enabled) return items;
   const { shouldSkipPdfToJpegConversion } = await import("@/lib/attachmentPdfOptions");
-  const { resolveAttachmentImageMaxBytes, IMAGE_SOFT_MIN_KB } = await import(
-    "@/lib/attachmentCompressionUi"
-  );
-  const maxB = await resolveAttachmentImageMaxBytes(opts?.companyId);
-  const maxKB = Math.max(24, Math.floor(maxB / 1024));
-  const minKB = Math.min(IMAGE_SOFT_MIN_KB, Math.floor(maxKB * 0.5));
+  const { resolveAttachmentImageKbBand } = await import("@/lib/attachmentCompressionUi");
+  const band = await resolveAttachmentImageKbBand(opts?.companyId);
+  const maxKB = Math.max(24, band.maxKb);
+  const minKB = Math.max(1, Math.min(band.minKb, maxKB));
+  const maxB = maxKB * 1024;
   const out: (File | string)[] = [];
 
   for (const item of items) {

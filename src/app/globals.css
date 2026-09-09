@@ -2194,14 +2194,14 @@ button.day_selected.is-today.has-transactions {
   }
 
   /*
-   * `AdminRouteChrome` mounts par `html.pl-admin-route` — borders/inputs pure black, tables patli line;
-   * `!important` taaki `body.theme-*` wale `--border` admin par override na kar dein.
+   * `AdminRouteChrome` mounts par `html.pl-admin-route` — soft tone borders (background se thoda alag);
+   * `!important` taaki `body.theme-*` wale harsh black admin par override na kar dein.
    */
   html.pl-admin-route {
-    --border: 0 0% 0% !important;
-    --input: 0 0% 0% !important;
-    --sidebar-border: 0 0% 0% !important;
-    --ring: 0 0% 0% !important;
+    --border: 152 28% 84% !important;
+    --input: 152 24% 80% !important;
+    --sidebar-border: 214 22% 88% !important;
+    --ring: 152 32% 62% !important;
   }
   html.pl-admin-route .border-2 {
     border-width: 1px;
@@ -2209,7 +2209,7 @@ button.day_selected.is-today.has-transactions {
   html.pl-admin-route table thead tr,
   html.pl-admin-route table tbody tr {
     border-bottom-width: 1px !important;
-    border-bottom-color: #000000 !important;
+    border-bottom-color: hsl(152 22% 84% / 0.85) !important;
   }
   /* Spend-wise: cards ke beech gap / inner sep par admin global border mat lagao */
   html.pl-admin-route [data-theme-table="transactions"] tbody tr.spend-wise-gap-row,
@@ -2227,7 +2227,7 @@ button.day_selected.is-today.has-transactions {
   }
   html.pl-admin-route [data-pl-spend-group-card] tbody tr.spend-wise-inner-txn-sep > td {
     border-bottom-width: 0 !important;
-    border-top: 1px solid #000 !important;
+    border-top: 1px solid hsl(152 22% 84% / 0.85) !important;
   }
   html.pl-admin-route .scrollbar-slim-dim {
     scrollbar-color: rgba(0, 0, 0, 0.35) transparent;
@@ -4969,8 +4969,8 @@ body[class*="theme-"] main .rounded-lg.border:not([data-pl-list-row]):not(.pl-da
 body[class*="theme-"] main .rounded-md.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]),
 body[class*="theme-"] main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
 body[class*="theme-"] main .rounded-lg.border.bg-card.shadow-sm:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
-body[class*="theme-"] [data-pl-main-sidebar] .rounded-md.border,
-body[class*="theme-"] [data-pl-main-sidebar] .rounded-lg.border,
+body[class*="theme-"] [data-pl-main-sidebar] .rounded-md.border:not([data-pl-sidebar-brand-icon]):not(.pl-chrome-btn-drop),
+body[class*="theme-"] [data-pl-main-sidebar] .rounded-lg.border:not([data-pl-sidebar-brand-icon]):not(.pl-chrome-btn-drop),
 body[class*="theme-"] header .rounded-lg.border:not([data-pl-header-preview-switch]),
 body[class*="theme-"] header .rounded-full.border:not([data-pl-header-preview-switch]),
 body[class*="theme-"] .pl-chrome-card:not(.pl-recon-share-list-card):not([class*="pl-chrome-tone-"]),
@@ -4980,6 +4980,103 @@ body[class*="theme-"] [data-pl-main-sidebar] .border-2:not([class*="pl-chrome-to
 body[class*="theme-"] header .border-2:not([class*="pl-chrome-tone-"]):not([data-pl-header-preview-switch]) {
   border-width: 1px !important;
   border-color: #000 !important;
+}
+
+/*
+ * Admin panel — theme-pro black border override ko soft tone se replace (box bg ke saath match, thoda alag).
+ */
+html.pl-admin-route body[class*="theme-"] main .rounded-lg.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]),
+html.pl-admin-route body[class*="theme-"] main .rounded-md.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]),
+html.pl-admin-route body[class*="theme-"] main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
+html.pl-admin-route body[class*="theme-"] main .rounded-lg.border.bg-card.shadow-sm:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
+html.pl-admin-route body[class*="theme-"] main .border-2:not(.pl-dashboard-tone-card):not(.pl-dashboard-footer-tab):not([data-pl-mobile-transaction-card]),
+html.pl-admin-route body[class*="theme-"] .pl-chrome-card:not(.pl-recon-share-list-card):not([class*="pl-chrome-tone-"]),
+html.pl-admin-route body[class*="theme-"] .pl-settings-list-shell {
+  border-color: hsl(152 28% 84%) !important;
+}
+html.pl-admin-route body[class*="theme-"] main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
+html.pl-admin-route body[class*="theme-"] main .rounded-lg.border.bg-card.shadow-sm:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]) {
+  border-color: rgb(167 243 208 / 0.72) !important;
+}
+html.pl-admin-route body[class*="theme-"] main [class*="bg-muted"].border,
+html.pl-admin-route body[class*="theme-"] main [class*="bg-muted/"].border {
+  border-color: rgb(203 213 225 / 0.88) !important;
+}
+html.pl-admin-route body[class*="theme-"] main [class*="bg-card/"].border {
+  border-color: rgb(167 243 208 / 0.62) !important;
+}
+html.pl-admin-route body[class*="theme-"] main .border.bg-background {
+  border-color: rgb(226 232 240 / 0.92) !important;
+}
+html.pl-admin-route .pl-chrome-tone-sky {
+  border-color: rgb(148 163 184 / 0.72) !important;
+}
+html.pl-admin-route .pl-chrome-tone-emerald {
+  border-color: rgb(110 231 183 / 0.62) !important;
+}
+html.pl-admin-route .pl-chrome-tone-blue {
+  border-color: rgb(147 197 253 / 0.78) !important;
+}
+html.pl-admin-route .pl-chrome-tone-amber {
+  border-color: rgb(252 211 77 / 0.65) !important;
+}
+html.pl-admin-route .pl-chrome-tone-violet {
+  border-color: rgb(196 181 253 / 0.68) !important;
+}
+html.pl-admin-route .pl-chrome-tone-pink {
+  border-color: rgb(251 207 232 / 0.72) !important;
+}
+html.pl-admin-route .pl-chrome-tone-orange {
+  border-color: rgb(253 186 116 / 0.62) !important;
+}
+html.pl-admin-route .pl-chrome-tone-rose,
+html.pl-admin-route .pl-chrome-tone-cream {
+  border-color: rgb(226 232 240 / 0.9) !important;
+}
+/* Explicit colored admin boxes — apna border color rakho */
+html.pl-admin-route body[class*="theme-"] main [class*="border-sky-"] {
+  border-color: rgb(186 230 253) !important;
+}
+html.pl-admin-route body[class*="theme-"] main [class*="border-emerald-"] {
+  border-color: rgb(110 231 183 / 0.75) !important;
+}
+html.pl-admin-route body[class*="theme-"] main [class*="border-blue-"] {
+  border-color: rgb(191 219 254) !important;
+}
+html.pl-admin-route body[class*="theme-"] main [class*="border-amber-"] {
+  border-color: rgb(251 191 36 / 0.55) !important;
+}
+html.pl-admin-route body[class*="theme-"] main [class*="border-violet-"] {
+  border-color: rgb(196 181 253 / 0.75) !important;
+}
+html.pl-admin-route body[class*="theme-"] main [class*="border-slate-"] {
+  border-color: rgb(203 213 225 / 0.88) !important;
+}
+html.pl-admin-route body[class*="theme-"] main .border-primary,
+html.pl-admin-route body[class*="theme-"] main [class*="border-primary"] {
+  border-color: hsl(var(--primary)) !important;
+}
+html.pl-admin-route body[class*="theme-"] main [class*="border-dashed"][class*="border-emerald-"] {
+  border-color: rgb(52 211 153 / 0.55) !important;
+}
+html.pl-admin-route body[class*="theme-"] main [class*="border-dashed"][class*="border-sky-"] {
+  border-color: rgb(56 189 248 / 0.55) !important;
+}
+
+/* Sidebar Pocket Ledger brand icon — quick-action pill blue (theme black .rounded-lg.border override se upar) */
+body[class*="theme-"] [data-pl-main-sidebar] [data-pl-sidebar-brand-icon],
+body.theme-pro [data-pl-main-sidebar] [data-pl-sidebar-brand-icon] {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: rgb(219 234 254 / 0.8) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body[class*="theme-"] [data-pl-main-sidebar] [data-pl-sidebar-brand-icon]:hover,
+body.theme-pro [data-pl-main-sidebar] [data-pl-sidebar-brand-icon]:hover {
+  border-color: rgb(96 165 250) !important;
+  background-color: rgb(191 219 254 / 0.8) !important;
 }
 
 /* Header file-preview switch — black header .rounded-full.border override ke upar blue */

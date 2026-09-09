@@ -6,7 +6,10 @@ import { compressVoucherAttachment } from "@/lib/compression";
 import {
   attachmentMaxBytes,
   attachmentStillTooLargeToastFields,
-  resolveAttachmentImageMaxBytes,
+  resolveAttachmentImageKbBand,
+  setAttachmentCompressionProgress,
+  finishAttachmentCompressionProgress,
+  reportAttachmentCompressionProgress,
 } from "@/lib/attachmentCompressionUi";
 
 export type VoucherAttachmentToastFn = (opts: {
@@ -98,9 +101,13 @@ export async function appendCompressedVoucherAttachmentsToState(opts: {
 
     const filesToProcess = incomingFiles.slice(0, remainingSlots);
     const pdfMaxBytes = attachmentMaxBytes();
-    const imageMaxBytes = await resolveAttachmentImageMaxBytes(companyId);
+    const imageBand = await resolveAttachmentImageKbBand(companyId);
+    const imageMaxBytes = imageBand.maxKb * 1024;
 
     const processedFiles: File[] = [];
+    setAttachmentCompressionProgress(1);
+    let fileIndex = 0;
+    const fileCount = filesToProcess.length;
     for (const file of filesToProcess) {
       const isImage = file.type.startsWith("image/");
       const isPDF = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
@@ -132,7 +139,21 @@ export async function appendCompressedVoucherAttachmentsToState(opts: {
 
       try {
         const maxBytes = isImage ? imageMaxBytes : pdfMaxBytes;
-        const processedFile = await compressVoucherAttachment(file, maxBytes);
+        reportAttachmentCompressionProgress(fileIndex, fileCount, 0);
+        const processedFile = await compressVoucherAttachment(
+          file,
+          maxBytes,
+          isImage
+            ? {
+                minKB: imageBand.minKb,
+                onProgress: (pct) => reportAttachmentCompressionProgress(fileIndex, fileCount, pct),
+              }
+            : {
+                onProgress: (pct) => reportAttachmentCompressionProgress(fileIndex, fileCount, pct),
+              }
+        );
+        fileIndex += 1;
+        reportAttachmentCompressionProgress(fileIndex, fileCount, 100);
         // Images: never reject for size — always attach best compression.
         // PDFs keep soft 0.5MB reject (raster quality).
         if (!isImage && processedFile.size > maxBytes) {
@@ -161,6 +182,8 @@ export async function appendCompressedVoucherAttachmentsToState(opts: {
       });
     }
   } finally {
+    setAttachmentCompressionProgress(100);
+    finishAttachmentCompressionProgress();
     endProcessing();
   }
 }

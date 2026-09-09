@@ -81,7 +81,8 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 import { planSyncFailureUserMessage } from "@/lib/companyPlanServerSync";
 import { cn } from "@/lib/utils";
 import { chromeProPillCn } from "@/lib/chromePillButton";
-import { planAllowsInterCompanyVoucher } from "@/lib/planSyncEntitlements";
+import { isInterCompanyVoucherFeatureDisabled } from "@/lib/interCompany/interCompanyVoucherAccess";
+import usePermissions from "@/hooks/usePermissions";
 import { DriveCloudSyncHeaderIndicator } from "@/components/layout/DriveCloudSyncHeaderIndicator";
 import { usePendingInterCompanySystemJoinCount } from "@/lib/interCompany/usePendingInterCompanySystemJoinCount";
 import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderIdSnapshot";
@@ -446,10 +447,13 @@ function HeaderActions() {
     customUser?.email ?? user?.email
   );
   const companyPlanLive = getPlanFromPlans(livePlans, companyPlanId);
-  // Inter Company vouchers: online company + plan tick (admin Plans → Inter-company voucher).
-  const interCompanyDisabled =
-    Boolean(company && (isDeviceLocalCompany(company) || isServerGateCompany(company))) ||
-    !planAllowsInterCompanyVoucher(companyPlanId, companyPlanLive);
+  const { can } = usePermissions();
+  const interCompanyDisabled = isInterCompanyVoucherFeatureDisabled({
+    company,
+    planId: companyPlanId,
+    livePlan: companyPlanLive,
+    can,
+  });
   const pendingSystemJoinCount = usePendingInterCompanySystemJoinCount({
     ownerUserId: user?.uid,
     companyId: company?.id,

@@ -57,6 +57,10 @@ export type Permission =
   | "inter_company_read"
   /** Inter Company Join tab — save joins, groups, accept invites (shared user inherits admin joins) */
   | "inter_company_write"
+  /** Shared user — Inter Company voucher create (header + tab). */
+  | "create_inter_company_voucher"
+  /** Shared user — saved Inter Company voucher edit. */
+  | "edit_inter_company_voucher"
   /** Header Share for Reconciliation — naya share bhejna */
   | "share_for_reconciliation"
   /** Shared list se apna account link karna (receiver) */
@@ -173,6 +177,8 @@ export const PermissionGroups: PermissionGroup[] = [
         permissions: [
             { key: "inter_company_read", label: "View Inter Company join settings & groups" },
             { key: "inter_company_write", label: "Manage Inter Company joins & groups" },
+            { key: "create_inter_company_voucher", label: "Allow IC voucher" },
+            { key: "edit_inter_company_voucher", label: "Edit IC voucher" },
         ],
     },
     {

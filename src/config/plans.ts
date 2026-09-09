@@ -63,10 +63,16 @@ export type EntitlementKey =
   | "maxCompanies"
   | "maxAttachmentsGB"
   | "maxStorageGB"
+  /** Image post-compress ceiling (KB) for online companies. 0 = platform default (100 KB). */
+  | "maxCompressImageKb"
+  /** Image post-compress floor (KB) for online — compress output stays in [min, max]. 0 = platform default (50 KB). */
+  | "minCompressImageKb"
   /** Same numeric caps as above, applied when `storageOption` is device-local (SQLite-first). Falls back to online key if unset. */
   | "maxUsersLocal"
   | "maxCompaniesLocal"
   | "maxAttachmentsGBLocal"
+  | "maxCompressImageKbLocal"
+  | "minCompressImageKbLocal"
   | "maxStorageGBLocal"
   | "dailyVoucherLimitLocal"
   | "monthlyVoucherLimitLocal"
@@ -257,10 +263,14 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxCompanies: 1,
       maxAttachmentsGB: 1,
       maxStorageGB: 1,
+      maxCompressImageKb: 100,
+      minCompressImageKb: 50,
       maxUsersLocal: 1,
       maxCompaniesLocal: 1,
       maxAttachmentsGBLocal: 1,
       maxStorageGBLocal: 1,
+      maxCompressImageKbLocal: 150,
+      minCompressImageKbLocal: 50,
       dailyVoucherLimit: 25,
       monthlyVoucherLimit: 500,
       dailyVoucherLimitLocal: 25,
@@ -317,10 +327,14 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxCompanies: 3,
       maxAttachmentsGB: 10,
       maxStorageGB: 10,
+      maxCompressImageKb: 100,
+      minCompressImageKb: 50,
       maxUsersLocal: 5,
       maxCompaniesLocal: 3,
       maxAttachmentsGBLocal: 10,
       maxStorageGBLocal: 10,
+      maxCompressImageKbLocal: 150,
+      minCompressImageKbLocal: 50,
       dailyVoucherLimit: 100,
       monthlyVoucherLimit: 2500,
       dailyVoucherLimitLocal: 100,
@@ -380,10 +394,14 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxCompanies: 25,
       maxAttachmentsGB: 200,
       maxStorageGB: 200,
+      maxCompressImageKb: 100,
+      minCompressImageKb: 50,
       maxUsersLocal: 50,
       maxCompaniesLocal: 25,
       maxAttachmentsGBLocal: 200,
       maxStorageGBLocal: 200,
+      maxCompressImageKbLocal: 150,
+      minCompressImageKbLocal: 50,
       dailyVoucherLimit: -1, // unlimited
       monthlyVoucherLimit: -1, // unlimited
       dailyVoucherLimitLocal: -1,
@@ -441,10 +459,14 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxCompanies: 100,
       maxAttachmentsGB: 500,
       maxStorageGB: 500,
+      maxCompressImageKb: 100,
+      minCompressImageKb: 50,
       maxUsersLocal: 100,
       maxCompaniesLocal: 100,
       maxAttachmentsGBLocal: 500,
       maxStorageGBLocal: 500,
+      maxCompressImageKbLocal: 150,
+      minCompressImageKbLocal: 50,
       dailyVoucherLimit: -1, // unlimited
       monthlyVoucherLimit: -1, // unlimited
       dailyVoucherLimitLocal: -1,

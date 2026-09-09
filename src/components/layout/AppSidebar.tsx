@@ -98,6 +98,7 @@ import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { disarmDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { AppSidebarZoomControls } from "@/components/layout/AppSidebarZoomControls";
+import { chromeProPillCn } from "@/lib/chromePillButton";
 
 
 type MenuItem = {
@@ -721,27 +722,35 @@ export function AppSidebar() {
   const sidebarBrandAppIconUrl = publicAssetUrl("/app-icon.png");
   const staffNavIconPreviewUrl = publicAssetUrl(LOAN_LIABILITY_ENTITY_ICON_PATH);
   const sidebarBrandIconEl = (
-    <AttachmentHoverPortal
-      clickOpensPreview
-      triggerClassName="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/30"
-      preview={<PublicStaticImagePreviewBody url={sidebarBrandAppIconUrl} />}
+    <div
+      data-pl-sidebar-brand-icon
+      className={cn(
+        "flex h-11 w-11 shrink-0 overflow-hidden rounded-lg",
+        chromeProPillCn
+      )}
     >
-      <img
-        src={sidebarBrandPreviewUrl}
-        alt=""
-        className="pointer-events-none h-full w-full object-contain"
-        loading="eager"
-        decoding="async"
-        onError={(e) => {
-          e.currentTarget.style.display = "none";
-          const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
-          if (fallback) fallback.style.display = "flex";
-        }}
-      />
-      <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
-        <Flame />
-      </span>
-    </AttachmentHoverPortal>
+      <AttachmentHoverPortal
+        clickOpensPreview
+        triggerClassName="flex h-full w-full cursor-pointer items-center justify-center overflow-hidden border-0 bg-transparent p-0 shadow-none hover:bg-transparent"
+        preview={<PublicStaticImagePreviewBody url={sidebarBrandAppIconUrl} />}
+      >
+        <img
+          src={sidebarBrandPreviewUrl}
+          alt=""
+          className="pointer-events-none h-full w-full object-contain"
+          loading="eager"
+          decoding="async"
+          onError={(e) => {
+            e.currentTarget.style.display = "none";
+            const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+            if (fallback) fallback.style.display = "flex";
+          }}
+        />
+        <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
+          <Flame />
+        </span>
+      </AttachmentHoverPortal>
+    </div>
   );
 
   return (

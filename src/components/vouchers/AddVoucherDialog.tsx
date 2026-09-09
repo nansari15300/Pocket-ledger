@@ -104,7 +104,7 @@ import {
   isDeviceLocalCompany,
   isServerGateCompany,
 } from "@/lib/companyStorageKind";
-import { planAllowsInterCompanyVoucher } from "@/lib/planSyncEntitlements";
+import { isInterCompanyVoucherFeatureDisabled } from "@/lib/interCompany/interCompanyVoucherAccess";
 import { resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
@@ -1164,11 +1164,13 @@ function VoucherDialogContent({
     authCustomUser?.email ?? authUser?.email
   );
   const voucherCompanyPlanLive = getPlanFromPlans(livePlans, voucherCompanyPlanId);
-  // Local / PL Server companies, or plan tick OFF — no Inter Company voucher create.
-  const interCompanyDisabled =
-    Boolean(
-      voucherCompany && (isDeviceLocalCompany(voucherCompany) || isServerGateCompany(voucherCompany))
-    ) || !planAllowsInterCompanyVoucher(voucherCompanyPlanId, voucherCompanyPlanLive);
+  const { can: voucherCan } = usePermissions();
+  const interCompanyDisabled = isInterCompanyVoucherFeatureDisabled({
+    company: voucherCompany,
+    planId: voucherCompanyPlanId,
+    livePlan: voucherCompanyPlanLive,
+    can: voucherCan,
+  });
   const isEditing = !!voucher?.id;
   const isMobile = useIsMobile();
   // Parent se `allowedTabs={[...]}` inline aaye to har render naya reference milta hai; effect reset-loop rokne ke liye stable key use karo.

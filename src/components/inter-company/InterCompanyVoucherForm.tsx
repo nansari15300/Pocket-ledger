@@ -1760,6 +1760,7 @@ export function InterCompanyVoucherForm({
           companyId,
           fetchVoucher
         );
+        if (company?.isOwned === false) assertCan(can, "edit_inter_company_voucher");
         assertCanEdit(canEditRecord, isOwn);
         let originalDate = voucherDate;
         if (voucher?.date) {
@@ -1769,6 +1770,7 @@ export function InterCompanyVoucherForm({
         assertCanPerformBackdated(canPerformBackdatedAction, "edit", originalDate);
       } else {
         assertCan(can, "create_records");
+        if (company?.isOwned === false) assertCan(can, "create_inter_company_voucher");
         assertCanPerformBackdated(canPerformBackdatedAction, "create", voucherDate);
       }
 

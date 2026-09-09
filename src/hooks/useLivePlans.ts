@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { doc, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { DEFAULT_PLANS, type Plan, type PlanId } from "@/config/plans";
@@ -32,22 +32,28 @@ async function loadStaticPlansSeedOnce(): Promise<Record<string, unknown> | null
  */
 export function useLivePlans(): Record<PlanId, Plan> {
   const [plans, setPlans] = useState<Record<PlanId, Plan>>(() => readCachedPlansRecord() ?? defaultPlansRecordFallback());
+  /** Static build seed stale ho sakta hai — Firestore / cached online snapshot ko overwrite mat karo. */
+  const firestorePlansAppliedRef = useRef(false);
 
-  // STATIC_BUILD bundle: build script ne origin se plans JSON copy kiya — turant localStorage + state (Firestore niche sync)
+  // STATIC_BUILD bundle: offline bootstrap only — online par `app_settings/plans` source of truth.
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_STATIC_BUILD !== "1") return;
     let cancelled = false;
     void (async () => {
       try {
         const raw = await loadStaticPlansSeedOnce();
-        if (!raw || cancelled) return;
-        if (!raw || typeof raw !== "object" || cancelled) return;
+        if (!raw || cancelled || typeof raw !== "object") return;
+        if (firestorePlansAppliedRef.current) return;
+        const existing = readCachedPlansRecord();
+        if (existing) {
+          setPlans(existing);
+          return;
+        }
         const hasAnyTier = ["basic", "advance", "pro", "pro-plus"].some(
           (k) => raw[k] != null && typeof raw[k] === "object"
         );
-        const existing = readCachedPlansRecord();
         if (!hasAnyTier) {
-          if (!existing && !cancelled) {
+          if (!cancelled) {
             const list = mergeAppSettingsPlansDoc(raw);
             const merged = {} as Record<PlanId, Plan>;
             for (const p of list) merged[p.id as PlanId] = p;
@@ -59,7 +65,7 @@ export function useLivePlans(): Record<PlanId, Plan> {
         const list = mergeAppSettingsPlansDoc(raw);
         const merged = {} as Record<PlanId, Plan>;
         for (const p of list) merged[p.id as PlanId] = p;
-        if (cancelled) return;
+        if (cancelled || firestorePlansAppliedRef.current) return;
         setPlans(merged);
         writeCachedPlansRecord(merged);
       } catch {
@@ -81,6 +87,7 @@ export function useLivePlans(): Record<PlanId, Plan> {
           // Purana online data overwrite mat karo — DEFAULT ko cache me mat likho.
           return;
         }
+        firestorePlansAppliedRef.current = true;
         const data = docSnap.data() as Record<string, unknown>;
         const list = mergeAppSettingsPlansDoc(data);
         const merged = {} as Record<PlanId, Plan>;

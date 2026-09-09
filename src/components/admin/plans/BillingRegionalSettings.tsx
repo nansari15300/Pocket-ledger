@@ -180,7 +180,7 @@ export function BillingRegionalSettings() {
   }
 
   return (
-    <Card className="border border-black">
+    <Card className="pl-chrome-card pl-chrome-tone-emerald">
       <CardHeader className="pb-3">
         <CardTitle className="text-lg">Regional billing &amp; live FX</CardTitle>
       </CardHeader>
@@ -210,7 +210,7 @@ export function BillingRegionalSettings() {
           </div>
         </div>
 
-        <div className="rounded-md border border-black bg-muted/40 p-3 text-sm space-y-3">
+        <div className="rounded-md border border-emerald-200/70 bg-emerald-50/35 p-3 text-sm space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">
               Today&apos;s FX (1 {baseSymbol} = …)
@@ -230,7 +230,7 @@ export function BillingRegionalSettings() {
           {fx ? (
             <ul className="flex flex-col md:flex-row md:flex-nowrap gap-2 w-full min-w-0">
               {/* Nepal — fixed NPR; dropdown nahi */}
-              <li className="md:flex-1 md:min-w-0 md:basis-0 rounded border border-black/30 bg-background px-3 py-2 space-y-1.5">
+              <li className="md:flex-1 md:min-w-0 md:basis-0 rounded border border-emerald-200/60 bg-background px-3 py-2 space-y-1.5">
                 <span className="font-medium block text-sm">{BILLING_REGIONS.nepal.label}</span>
                 <span className="text-sm font-semibold tabular-nums block truncate">
                   {formatFxLine(
@@ -244,7 +244,7 @@ export function BillingRegionalSettings() {
               </li>
 
               {/* SAARC — dropdown + rate ek hi row */}
-              <li className="md:flex-1 md:min-w-0 md:basis-0 rounded border border-black/30 bg-background px-3 py-2 space-y-1.5">
+              <li className="md:flex-1 md:min-w-0 md:basis-0 rounded border border-emerald-200/60 bg-background px-3 py-2 space-y-1.5">
                 <span className="font-medium block text-sm">{BILLING_REGIONS.saarc.label}</span>
                 <div className="flex flex-row items-center gap-2 min-w-0">
                   <div className="flex-1 min-w-0">
@@ -268,7 +268,7 @@ export function BillingRegionalSettings() {
               </li>
 
               {/* International — dropdown + rate ek hi row */}
-              <li className="md:flex-1 md:min-w-0 md:basis-0 rounded border border-black/30 bg-background px-3 py-2 space-y-1.5">
+              <li className="md:flex-1 md:min-w-0 md:basis-0 rounded border border-emerald-200/60 bg-background px-3 py-2 space-y-1.5">
                 <span className="font-medium block text-sm">{BILLING_REGIONS.international.label}</span>
                 <div className="flex flex-row items-center gap-2 min-w-0">
                   <div className="flex-1 min-w-0">

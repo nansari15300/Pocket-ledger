@@ -13,6 +13,10 @@ const Toaster = ({ ...props }: ToasterProps) => {
     <Sonner
       theme={theme as ToasterProps["theme"]}
       className="toaster group"
+      position="bottom-right"
+      expand
+      gap={14}
+      visibleToasts={4}
       toastOptions={{
         /** Short success/update feedback; loading toasts skip auto-dismiss in Sonner. */
         duration: 1000,

@@ -303,8 +303,11 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
     const pairedNumericEntitlements: {
       online: EntitlementKey;
       local: EntitlementKey;
+      onlineMin?: EntitlementKey;
+      localMin?: EntitlementKey;
       label: string;
       tip: string;
+      uiVariant?: "compressKb";
     }[] = [
       {
         online: "maxUsers",
@@ -323,6 +326,15 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
         local: "maxAttachmentsGBLocal",
         label: "Max attachments (GB)",
         tip: "0 = no attachment storage; -1 = unlimited GB for Online or Local.",
+      },
+      {
+        online: "maxCompressImageKb",
+        local: "maxCompressImageKbLocal",
+        onlineMin: "minCompressImageKb",
+        localMin: "minCompressImageKbLocal",
+        label: "File Compress size range (KB)",
+        tip: "From–To: compressed image stays in this KB band. 0 = platform default (Online 50–100, Local 50–150). Example: From 30 To 35 → output ~30–35 KB.",
+        uiVariant: "compressKb",
       },
       {
         online: "maxStorageGB",
@@ -365,7 +377,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
         : undefined;
 
     return (
-        <Card className="h-full min-h-0 overflow-hidden relative flex flex-col">
+        <Card className="h-full min-h-0 overflow-hidden relative flex flex-col pl-chrome-card pl-chrome-tone-emerald">
              {isUpdating && (
                 <div className="absolute inset-0 bg-background/50 flex items-center justify-center z-10">
                     <Loader2 className="h-8 w-8 animate-spin" />
@@ -469,7 +481,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                         </div>
                     </div>
 
-                    <div className="space-y-3 rounded-lg border border-black p-4 bg-muted/30">
+                    <div className="space-y-3 rounded-lg border border-slate-200/80 p-4 bg-muted/30">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                             <h3 className="font-semibold text-sm flex items-center gap-1.5">
                                 <span>
@@ -488,7 +500,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                 const isMarkupRegion =
                                     regionId === "saarc" || regionId === "international";
                                 return (
-                                    <div key={regionId} className="space-y-2 rounded-md border border-black/40 bg-background p-3">
+                                    <div key={regionId} className="space-y-2 rounded-md border border-slate-200/70 bg-background p-3">
                                         <div className="flex items-center gap-1.5">
                                             <Label className="font-semibold">{meta.label}</Label>
                                             {regionId === "nepal" ? (
@@ -583,50 +595,160 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                         </Label>
                         <PlanRuleInfo tip="ON keeps Online caps editable. OFF sets every Online cap to 0 (users, companies, storage, vouchers, devices, online slots, local→cloud MB) so you need not clear each field." />
                     </div>
-                    {pairedNumericEntitlements.map(({ online, local, label, tip }) => {
+                    {pairedNumericEntitlements.map(({ online, local, onlineMin, localMin, label, tip, uiVariant }) => {
                         const onlineVal = editablePlan.entitlements[online];
                         const localVal = editablePlan.entitlements[local];
                         const onlineNum = typeof onlineVal === "number" ? onlineVal : Number(onlineVal ?? 0);
                         const localNum = typeof localVal === "number" ? localVal : Number(localVal ?? 0);
+                        const onlineMinVal = onlineMin ? editablePlan.entitlements[onlineMin] : 0;
+                        const localMinVal = localMin ? editablePlan.entitlements[localMin] : 0;
+                        const onlineMinNum = typeof onlineMinVal === "number" ? onlineMinVal : Number(onlineMinVal ?? 0);
+                        const localMinNum = typeof localMinVal === "number" ? localMinVal : Number(localMinVal ?? 0);
                         const isMaxDevicesPair = online === "maxDevices" && local === "maxDevicesLocal";
                         const pairDisabled = isMaxDevicesPair && !editablePlan.entitlements.hasMultiDeviceSync;
                         const onlineDisabled = !allowOnline || pairDisabled;
+                        const parseCompressKb = (raw: string) => {
+                            if (raw === "") return 0;
+                            const n = parseInt(raw, 10);
+                            if (!Number.isFinite(n) || n < 0) return 0;
+                            return n;
+                        };
+                        const handleCompressRangeChange = (
+                            minKey: EntitlementKey,
+                            maxKey: EntitlementKey,
+                            side: "min" | "max",
+                            raw: string
+                        ) => {
+                            const value = parseCompressKb(raw);
+                            setEditablePlan((prev) => {
+                                const nextEnt = { ...prev.entitlements, [side === "min" ? minKey : maxKey]: value };
+                                const a = Number(nextEnt[minKey] ?? 0);
+                                const b = Number(nextEnt[maxKey] ?? 0);
+                                if (a > 0 && b > 0 && a > b) {
+                                    nextEnt[minKey] = b;
+                                    nextEnt[maxKey] = a;
+                                }
+                                return { ...prev, entitlements: nextEnt };
+                            });
+                        };
+                        const compressInputCn =
+                            "h-7 min-h-7 max-h-7 w-10 min-w-[2.25rem] flex-1 max-w-[3.25rem] px-1.5 py-0 text-xs text-center shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:outline-none";
+                        const compressChipCn =
+                            "flex h-7 shrink-0 items-center justify-center rounded-md border px-2 text-[11px] font-medium leading-none";
                         return (
-                            <div key={`${online}-${local}`} className="rounded-lg border bg-card/50 p-3 space-y-2 md:col-span-1">
+                            <div
+                                key={`${online}-${local}`}
+                                className="rounded-lg border bg-card/50 p-2.5 space-y-2 md:col-span-1 min-w-0"
+                            >
                                 <div className="flex items-center gap-1.5 text-sm font-medium">
                                     <span>{label}</span>
                                     <PlanRuleInfo tip={tip} />
                                 </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <div className="space-y-1">
-                                        <Label className="text-xs text-muted-foreground" htmlFor={`${plan.id}-${online}`}>Online</Label>
-                                        <Input
-                                            id={`${plan.id}-${online}`}
-                                            type="number"
-                                            value={String(Number.isFinite(onlineNum) ? onlineNum : 0)}
-                                            onChange={(e) => {
-                                                const raw = e.target.value;
-                                                handleEntitlementChange(online, raw === "" ? 0 : Number(raw));
-                                            }}
-                                            placeholder="-1 = unlimited"
-                                            disabled={onlineDisabled}
-                                        />
+                                {uiVariant === "compressKb" && onlineMin && localMin ? (
+                                    <div className="space-y-1.5">
+                                        <div className="flex w-full min-w-0 items-center gap-1">
+                                            <Input
+                                                id={`${plan.id}-${onlineMin}`}
+                                                type="number"
+                                                min={0}
+                                                value={String(Number.isFinite(onlineMinNum) ? onlineMinNum : 0)}
+                                                onChange={(e) =>
+                                                    handleCompressRangeChange(onlineMin, online, "min", e.target.value)
+                                                }
+                                                placeholder="50"
+                                                disabled={onlineDisabled}
+                                                aria-label="Compress from KB online"
+                                                className={compressInputCn}
+                                            />
+                                            <span className="shrink-0 text-[10px] text-muted-foreground">–</span>
+                                            <Input
+                                                id={`${plan.id}-${online}`}
+                                                type="number"
+                                                min={0}
+                                                value={String(Number.isFinite(onlineNum) ? onlineNum : 0)}
+                                                onChange={(e) =>
+                                                    handleCompressRangeChange(onlineMin, online, "max", e.target.value)
+                                                }
+                                                placeholder="100"
+                                                disabled={onlineDisabled}
+                                                aria-label="Compress to KB online"
+                                                className={compressInputCn}
+                                            />
+                                            <span className={cn(compressChipCn, "w-8 bg-muted/60 text-muted-foreground")}>
+                                                KB
+                                            </span>
+                                            <span className={cn(compressChipCn, "w-[3.75rem] border-blue-200 bg-blue-50/80 text-blue-900")}>
+                                                Online
+                                            </span>
+                                        </div>
+                                        <div className="flex w-full min-w-0 items-center gap-1">
+                                            <Input
+                                                id={`${plan.id}-${localMin}`}
+                                                type="number"
+                                                min={0}
+                                                value={String(Number.isFinite(localMinNum) ? localMinNum : 0)}
+                                                onChange={(e) =>
+                                                    handleCompressRangeChange(localMin, local, "min", e.target.value)
+                                                }
+                                                placeholder="50"
+                                                disabled={pairDisabled}
+                                                aria-label="Compress from KB offline"
+                                                className={compressInputCn}
+                                            />
+                                            <span className="shrink-0 text-[10px] text-muted-foreground">–</span>
+                                            <Input
+                                                id={`${plan.id}-${local}`}
+                                                type="number"
+                                                min={0}
+                                                value={String(Number.isFinite(localNum) ? localNum : 0)}
+                                                onChange={(e) =>
+                                                    handleCompressRangeChange(localMin, local, "max", e.target.value)
+                                                }
+                                                placeholder="150"
+                                                disabled={pairDisabled}
+                                                aria-label="Compress to KB offline"
+                                                className={compressInputCn}
+                                            />
+                                            <span className={cn(compressChipCn, "w-8 bg-muted/60 text-muted-foreground")}>
+                                                KB
+                                            </span>
+                                            <span className={cn(compressChipCn, "w-[3.75rem] border-blue-200 bg-blue-50/80 text-blue-900")}>
+                                                Offline
+                                            </span>
+                                        </div>
                                     </div>
-                                    <div className="space-y-1">
-                                        <Label className="text-xs text-muted-foreground" htmlFor={`${plan.id}-${local}`}>Local</Label>
-                                        <Input
-                                            id={`${plan.id}-${local}`}
-                                            type="number"
-                                            value={String(Number.isFinite(localNum) ? localNum : 0)}
-                                            onChange={(e) => {
-                                                const raw = e.target.value;
-                                                handleEntitlementChange(local, raw === "" ? 0 : Number(raw));
-                                            }}
-                                            placeholder="-1 = unlimited"
-                                            disabled={pairDisabled}
-                                        />
+                                ) : (
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div className="space-y-1">
+                                            <Label className="text-xs text-muted-foreground" htmlFor={`${plan.id}-${online}`}>Online</Label>
+                                            <Input
+                                                id={`${plan.id}-${online}`}
+                                                type="number"
+                                                value={String(Number.isFinite(onlineNum) ? onlineNum : 0)}
+                                                onChange={(e) => {
+                                                    const raw = e.target.value;
+                                                    handleEntitlementChange(online, raw === "" ? 0 : Number(raw));
+                                                }}
+                                                placeholder="-1 = unlimited"
+                                                disabled={onlineDisabled}
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <Label className="text-xs text-muted-foreground" htmlFor={`${plan.id}-${local}`}>Local</Label>
+                                            <Input
+                                                id={`${plan.id}-${local}`}
+                                                type="number"
+                                                value={String(Number.isFinite(localNum) ? localNum : 0)}
+                                                onChange={(e) => {
+                                                    const raw = e.target.value;
+                                                    handleEntitlementChange(local, raw === "" ? 0 : Number(raw));
+                                                }}
+                                                placeholder="-1 = unlimited"
+                                                disabled={pairDisabled}
+                                            />
+                                        </div>
                                     </div>
-                                </div>
+                                )}
                             </div>
                         );
                     })}

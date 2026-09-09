@@ -160,8 +160,9 @@ export async function ensureSharedHttpsAttachmentCompressed(params: {
     const isShared = usage >= 1 || sessionHint >= 2 || registryCount >= 2;
     if (!isShared) return fromUrl;
 
-    const { resolveAttachmentImageMaxBytes } = await import("@/lib/attachmentCompressionUi");
-    const maxBytes = await resolveAttachmentImageMaxBytes(cid);
+    const { resolveAttachmentImageKbBand } = await import("@/lib/attachmentCompressionUi");
+    const band = await resolveAttachmentImageKbBand(cid);
+    const maxBytes = band.maxKb * 1024;
 
     let compressed = params.compressed ?? null;
     if (!compressed) {
@@ -173,7 +174,7 @@ export async function ensureSharedHttpsAttachmentCompressed(params: {
         ? blob.type || "image/jpeg"
         : "image/jpeg";
       const srcFile = new File([blob], fileNameForCompressedImage(fromUrl, type), { type });
-      const next = await compressVoucherAttachment(srcFile, maxBytes);
+      const next = await compressVoucherAttachment(srcFile, maxBytes, { minKB: band.minKb });
       if (next.size >= blob.size) return fromUrl;
       compressed = next;
     }
@@ -237,9 +238,7 @@ export async function ensureSharedHttpsAttachmentCompressed(params: {
 
     if (!params.silent) {
       if (result.deletedOld) {
-        sonnerToast.success(
-          `Shared file compressed (${result.rewrittenPlaces || Math.max(usage, sessionHint, registryCount)} places); old removed`
-        );
+        sonnerToast.success("File compressed");
       } else if (result.rewrittenPlaces > 0) {
         sonnerToast.success(`Shared file updated in ${result.rewrittenPlaces} places`);
       }
@@ -300,19 +299,31 @@ export async function recompressOversizedImageAttachmentsOnSave(
   opts?: { companyId?: string | null; silent?: boolean }
 ): Promise<(File | string)[]> {
   if (!items.length) return items;
-  const { resolveAttachmentImageMaxBytes } = await import("@/lib/attachmentCompressionUi");
-  const maxBytes = await resolveAttachmentImageMaxBytes(opts?.companyId);
+  const { resolveAttachmentImageKbBand } = await import("@/lib/attachmentCompressionUi");
+  const band = await resolveAttachmentImageKbBand(opts?.companyId);
+  const maxBytes = band.maxKb * 1024;
 
-  const needsWork = items.some((item) => {
-    if (item instanceof File) return isImageFile(item) && item.size > maxBytes;
-    return typeof item === "string" && looksLikeImageAttachmentUrl(item);
+  const compressibleIndexes: number[] = [];
+  items.forEach((item, index) => {
+    if (item instanceof File && isImageFile(item) && item.size > maxBytes) {
+      compressibleIndexes.push(index);
+      return;
+    }
+    if (typeof item === "string" && looksLikeImageAttachmentUrl(item)) {
+      compressibleIndexes.push(index);
+    }
   });
-  if (!needsWork) return items;
+  if (compressibleIndexes.length === 0) return items;
 
-  let toastId: string | number | undefined;
-  if (!opts?.silent) {
-    toastId = sonnerToast.loading("Compressing large images…");
-  }
+  const {
+    setAttachmentCompressionProgress,
+    finishAttachmentCompressionProgress,
+    reportAttachmentCompressionProgress,
+  } = await import("@/lib/attachmentCompressionUi");
+  if (!opts?.silent) setAttachmentCompressionProgress(1);
+
+  let compressDone = 0;
+  const fileCount = compressibleIndexes.length;
 
   try {
     const out: (File | string)[] = [];
@@ -323,7 +334,16 @@ export async function recompressOversizedImageAttachmentsOnSave(
           continue;
         }
         try {
-          const compressed = await compressVoucherAttachment(item, maxBytes);
+          const fileIdx = compressDone;
+          if (!opts?.silent) reportAttachmentCompressionProgress(fileIdx, fileCount, 0);
+          const compressed = await compressVoucherAttachment(item, maxBytes, {
+            minKB: band.minKb,
+            onProgress: opts?.silent
+              ? undefined
+              : (pct) => reportAttachmentCompressionProgress(fileIdx, fileCount, pct),
+          });
+          compressDone += 1;
+          if (!opts?.silent) reportAttachmentCompressionProgress(compressDone, fileCount, 100);
           out.push(compressed.size < item.size ? compressed : item);
         } catch (e) {
           console.error(e);
@@ -353,7 +373,16 @@ export async function recompressOversizedImageAttachmentsOnSave(
           ? blob.type || "image/jpeg"
           : "image/jpeg";
         const srcFile = new File([blob], fileNameForCompressedImage(url, type), { type });
-        const compressed = await compressVoucherAttachment(srcFile, maxBytes);
+        const fileIdx = compressDone;
+        if (!opts?.silent) reportAttachmentCompressionProgress(fileIdx, fileCount, 0);
+        const compressed = await compressVoucherAttachment(srcFile, maxBytes, {
+          minKB: band.minKb,
+          onProgress: opts?.silent
+            ? undefined
+            : (pct) => reportAttachmentCompressionProgress(fileIdx, fileCount, pct),
+        });
+        compressDone += 1;
+        if (!opts?.silent) reportAttachmentCompressionProgress(compressDone, fileCount, 100);
         if (compressed.size < blob.size) {
           out.push(
             await propagateReusedHttpsRecompressOrReturnFile({
@@ -373,7 +402,10 @@ export async function recompressOversizedImageAttachmentsOnSave(
     }
     return out;
   } finally {
-    if (toastId != null) sonnerToast.dismiss(toastId);
+    if (!opts?.silent) {
+      setAttachmentCompressionProgress(100);
+      finishAttachmentCompressionProgress();
+    }
   }
 }
 

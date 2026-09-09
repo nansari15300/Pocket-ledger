@@ -10,6 +10,15 @@ export const VOUCHER_SONNER_SUCCESS_MS = 1000;
 
 const VOUCHER_BACKGROUND_TOAST_POSITION = "bottom-center" as const;
 
+/** Save + compress loading toasts — bottom-right, stacked vertically (2 rows). */
+export const VOUCHER_SONNER_TOAST_POSITION = "bottom-right" as const;
+
+/** Voucher save / compress loading popups — same chhota size, full label visible. */
+export const VOUCHER_SONNER_TOAST_CN =
+  "text-sm py-2 px-3 min-h-0 w-auto max-w-[min(92vw,20rem)] whitespace-nowrap";
+
+export const VOUCHER_SAVE_LOADING_TOAST_ID = "pl-voucher-save-loading";
+
 /** Save & Close ke baad spend-wise / bill-wise sync — chhota bottom loading popup. */
 export function showVoucherBackgroundProgress(message = "Saving links…"): string | number {
   return sonnerToast.loading(message, {
@@ -62,7 +71,12 @@ export async function beginVoucherSaveLoadingOrBlock(
       return null;
     }
   }
-  return sonnerToast.loading(loadingMessage);
+  return sonnerToast.loading(loadingMessage, {
+    id: VOUCHER_SAVE_LOADING_TOAST_ID,
+    position: VOUCHER_SONNER_TOAST_POSITION,
+    duration: Infinity,
+    classNames: { toast: VOUCHER_SONNER_TOAST_CN },
+  });
 }
 
 /** Authoritative / staff write errors — generic "Failed to save" ki jagah seedha message. */

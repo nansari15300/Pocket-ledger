@@ -666,6 +666,17 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
       if (permissionKey === 'inter_company_read' && !checked && icWriteIdx !== -1) {
         newConfig.roles[selectedRoleForPermissions][icWriteIdx] = false;
       }
+      const icCreateIdx = flattenedPermissions.indexOf('create_inter_company_voucher');
+      const icEditIdx = flattenedPermissions.indexOf('edit_inter_company_voucher');
+      if (permissionKey === 'create_inter_company_voucher' && checked && icReadIdx !== -1) {
+        newConfig.roles[selectedRoleForPermissions][icReadIdx] = true;
+      }
+      if (permissionKey === 'edit_inter_company_voucher' && checked && icCreateIdx !== -1) {
+        newConfig.roles[selectedRoleForPermissions][icCreateIdx] = true;
+      }
+      if (permissionKey === 'create_inter_company_voucher' && !checked && icEditIdx !== -1) {
+        newConfig.roles[selectedRoleForPermissions][icEditIdx] = false;
+      }
       return newConfig;
     });
   };
