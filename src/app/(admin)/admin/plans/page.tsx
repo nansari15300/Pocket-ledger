@@ -39,10 +39,10 @@ import {
 import { PlanList } from "@/components/admin/plans/PlanList";
 import { PlanDetails } from "@/components/admin/plans/PlanDetails";
 import { BillingRegionalSettings } from "@/components/admin/plans/BillingRegionalSettings";
-import { withWebAppBasePath } from "@/lib/webAppBasePath";
+import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 
-/** Dev gateway: Next API lives under `/app/api`, not marketing root `/api`. */
-const ADMIN_PLANS_API = withWebAppBasePath("/api/admin/app-settings/plans");
+/** Hosted + dev: same origin as billing/admin APIs (`/app/api/...` on pocket-ledger.com). */
+const ADMIN_PLANS_API = getBillingApiUrl("/api/admin/app-settings/plans");
 
 export default function PlansPage() {
     useAdminAccess(['SuperAdmin']);
@@ -207,14 +207,6 @@ export default function PlansPage() {
     const handleUpdateAndSave = async (updatedPlan: Plan) => {
         setPlans(prev => prev.map(p => p.id === updatedPlan.id ? updatedPlan : p));
 
-        const pushCatalogToLocal = () => {
-            setPlans((prev) => {
-                const next = prev.map((p) => (p.id === updatedPlan.id ? updatedPlan : p));
-                writeCachedPlansList(next);
-                return next;
-            });
-        };
-
         if (!user) {
             toast({ variant: "destructive", title: "Not signed in", description: "Login required to save plans." });
             return false;
@@ -244,8 +236,18 @@ export default function PlansPage() {
             });
             const j = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
 
+            const refreshPlansFromServer = async () => {
+                const snap = await getDocFromServer(doc(db, "app_settings", "plans"));
+                if (!snap.exists()) return;
+                const data = snap.data() as Record<string, unknown>;
+                const merged = mergeAppSettingsPlansDoc(data);
+                setPlans(merged);
+                writeCachedPlansList(merged);
+                serverHydratedRef.current = true;
+            };
+
             if (res.ok) {
-                pushCatalogToLocal();
+                await refreshPlansFromServer();
                 return true;
             }
 
@@ -256,7 +258,7 @@ export default function PlansPage() {
 
             try {
                 await writeClientOnly();
-                pushCatalogToLocal();
+                await refreshPlansFromServer();
                 return true;
             } catch (clientErr: unknown) {
                 const msg = clientErr instanceof Error ? clientErr.message : String(clientErr);
@@ -266,7 +268,13 @@ export default function PlansPage() {
         } catch (error: unknown) {
             try {
                 await writeClientOnly();
-                pushCatalogToLocal();
+                const snap = await getDocFromServer(doc(db, "app_settings", "plans"));
+                if (snap.exists()) {
+                    const merged = mergeAppSettingsPlansDoc(snap.data() as Record<string, unknown>);
+                    setPlans(merged);
+                    writeCachedPlansList(merged);
+                    serverHydratedRef.current = true;
+                }
                 return true;
             } catch (clientErr: unknown) {
                 const msg = clientErr instanceof Error ? clientErr.message : String(clientErr);

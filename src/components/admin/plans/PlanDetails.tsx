@@ -333,7 +333,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
         onlineMin: "minCompressImageKb",
         localMin: "minCompressImageKbLocal",
         label: "File Compress size range (KB)",
-        tip: "From–To: compressed image stays in this KB band. 0 = platform default (Online 50–100, Local 50–150). Example: From 30 To 35 → output ~30–35 KB.",
+        tip: "From–To: compressed image stays in this KB band. 0 = platform default (Online 50–100, Local 50–150). Example: From 30 To 35 → output ~30–35 KB. Editable even when Allow online is OFF.",
         uiVariant: "compressKb",
       },
       {
@@ -606,7 +606,9 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                         const localMinNum = typeof localMinVal === "number" ? localMinVal : Number(localMinVal ?? 0);
                         const isMaxDevicesPair = online === "maxDevices" && local === "maxDevicesLocal";
                         const pairDisabled = isMaxDevicesPair && !editablePlan.entitlements.hasMultiDeviceSync;
-                        const onlineDisabled = !allowOnline || pairDisabled;
+                        // Compress KB band is independent of Allow online (not an online company cap).
+                        const onlineDisabled =
+                            uiVariant === "compressKb" ? pairDisabled : !allowOnline || pairDisabled;
                         const parseCompressKb = (raw: string) => {
                             if (raw === "") return 0;
                             const n = parseInt(raw, 10);
