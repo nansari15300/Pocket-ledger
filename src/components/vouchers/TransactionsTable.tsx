@@ -1076,20 +1076,21 @@ export function TransactionsTable({
   );
 
 
-  // Header filter: `modal` true — input pe pehla click dismiss na ho (non-modal me DismissableLayer kabhi filter box ko "outside" maan leta hai)
+  // Header filter popover — modal: filter input pe click se popover band na ho (Recent/daybook + party).
   const renderHeaderWithFilter = (key: string, label: string, isNumeric: boolean = false, minWidthPx?: number) => {
     const isFiltered = !!(filters && filters[key]) || (key === 'type' && voucherTypes && !voucherTypes.includes('all'));
     const thClass = cn('p-0', isNumeric && 'text-right');
     const innerPadding = ensureMinGaps ? "px-[10px]" : "px-2";
     const filterValue = filters ? filters[key] || "" : "";
+    const filterOpen = effectiveActiveFilter === key;
     const renderTextFilterInput = () => {
       if (!setFilters) return null;
       return (
-        <div className="relative">
+        <div className="relative" data-pl-txn-filter-popover="">
           <Input
             ref={(el) => {
               filterInputRefs.current[key] = el;
-              if (el && activeFilter === key) focusFilterInputSoon(key);
+              if (el && filterOpen) focusFilterInputSoon(key);
             }}
             className={cn(
               "border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0",
@@ -1101,10 +1102,11 @@ export function TransactionsTable({
               const newValue = e.target.value;
               setFilters((prev: Record<string, string>) => ({ ...prev, [key]: newValue }));
             }}
+            onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
+            onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
             onKeyDown={(e: React.KeyboardEvent) => {
-              if (e.key === "Enter" && setActiveFilter) setActiveFilter(null);
+              if (e.key === "Enter") patchActiveFilter(null);
             }}
-            autoFocus
           />
           {filterValue ? (
             <Button
@@ -1126,60 +1128,45 @@ export function TransactionsTable({
         </div>
       );
     };
+    const renderFilterPopover = (btnClass: string) => (
+      <Popover modal open={filterOpen} onOpenChange={(open) => patchActiveFilter(open ? key : null)}>
+        <PopoverTrigger asChild>
+          <Button variant="ghost" size="icon" data-pl-txn-icon-btn="" className={btnClass}>
+            <Filter className={cn("h-4 w-4", isFiltered && "text-red-600")} />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          side="top"
+          align="center"
+          sideOffset={6}
+          collisionPadding={context === "daybook" ? { top: 56, bottom: 8, left: 8, right: 8 } : 8}
+          className="z-[120] w-48 p-0 overflow-hidden"
+          onOpenAutoFocus={(e: Event) => {
+            e.preventDefault();
+            focusFilterInputSoon(key);
+          }}
+          onCloseAutoFocus={(e: Event) => e.preventDefault()}
+          onPointerDownOutside={(e) => {
+            const target = e.target as HTMLElement | null;
+            if (target?.closest("[data-pl-txn-filter-popover]")) e.preventDefault();
+          }}
+        >
+          {key === "type" && onVoucherTypeChange ? (
+            <VoucherTypeFilter selectedTypes={voucherTypes || ["all"]} onSelectionChange={onVoucherTypeChange} />
+          ) : (
+            renderTextFilterInput()
+          )}
+        </PopoverContent>
+      </Popover>
+    );
 
     return (
       <TableHead className={thClass} style={ensureMinGaps && minWidthPx != null ? { minWidth: `${minWidthPx}px` } : undefined}>
         <div className={cn("flex items-center gap-1 font-bold py-3 text-black whitespace-nowrap", innerPadding, isFiltered ? 'text-red-600' : 'text-black', isNumeric ? "justify-end" : "justify-start")}>
           <div className={cn('flex items-center', isNumeric ? 'flex-row' : 'flex-row')}>
             <span>{label}</span>
-            {isNumeric && (setFilters || (key === 'type' && onVoucherTypeChange)) && (
-              <Popover modal open={activeFilter === key} onOpenChange={(open) => setActiveFilter && setActiveFilter(open ? key : null)}>
-                <PopoverTrigger asChild>
-                  <Button variant="ghost" size="icon" data-pl-txn-icon-btn="" className={cn(txnTableIconBtnCn, "h-6 w-6 ml-1")}>
-                    <Filter className={cn("h-4 w-4", isFiltered && "text-red-600")} />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  side="top"
-                  align="center"
-                  sideOffset={6}
-                  className="w-48 p-0 overflow-hidden"
-                  onOpenAutoFocus={(e: Event) => {
-                    e.preventDefault();
-                    focusFilterInputSoon(key);
-                  }}
-                  onCloseAutoFocus={(e: Event) => e.preventDefault()}
-                >
-                    {key === 'type' && onVoucherTypeChange ? (
-                        <VoucherTypeFilter selectedTypes={voucherTypes || ['all']} onSelectionChange={onVoucherTypeChange} />
-                    ) : renderTextFilterInput()}
-                  </PopoverContent>
-              </Popover>
-            )}
-            {!isNumeric && (setFilters || (key === 'type' && onVoucherTypeChange)) && (
-              <Popover modal open={activeFilter === key} onOpenChange={(open) => setActiveFilter && setActiveFilter(open ? key : null)}>
-                <PopoverTrigger asChild>
-                  <Button variant="ghost" size="icon" data-pl-txn-icon-btn="" className={cn(txnTableIconBtnCn, "h-6 w-6 ml-0")}>
-                    <Filter className={cn("h-4 w-4", isFiltered && "text-red-600")} />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  side="top"
-                  align="center"
-                  sideOffset={6}
-                  className="w-48 p-0 overflow-hidden"
-                  onOpenAutoFocus={(e: Event) => {
-                    e.preventDefault();
-                    focusFilterInputSoon(key);
-                  }}
-                  onCloseAutoFocus={(e: Event) => e.preventDefault()}
-                >
-                    {key === 'type' && onVoucherTypeChange ? (
-                        <VoucherTypeFilter selectedTypes={voucherTypes || ['all']} onSelectionChange={onVoucherTypeChange} />
-                    ) : renderTextFilterInput()}
-                  </PopoverContent>
-              </Popover>
-            )}
+            {isNumeric && (setFilters || (key === 'type' && onVoucherTypeChange)) && renderFilterPopover(cn(txnTableIconBtnCn, "h-6 w-6 ml-1"))}
+            {!isNumeric && (setFilters || (key === 'type' && onVoucherTypeChange)) && renderFilterPopover(cn(txnTableIconBtnCn, "h-6 w-6 ml-0"))}
           </div>
         </div>
       </TableHead>

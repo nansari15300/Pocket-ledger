@@ -1626,7 +1626,7 @@ export const VoucherProvider = ({
       // Tier-1: masters only — `vouchers` SQLite read (JSON parse) hazaar+ rows par EXE me 30–90s lagata; spinner tab tak band na ho.
       // Vouchers secondary chunk me: parties list pehle paint, totals snapshot/listeners ke baad refresh.
       const CRITICAL_SQLITE_PATHS = new Set(["parties", "groups", "bank_accounts", "expense_accounts"]);
-      const loadSqliteChunk = (items: typeof collectionsToPrefetch) =>
+      const loadSqliteChunk = (items: typeof collectionsToPrefetch): Promise<void> =>
         Promise.all(
           items.map(({ path, setter, orderByField }) =>
             (skipWarmSqlitePath(path)
@@ -1639,7 +1639,7 @@ export const VoucherProvider = ({
                   })
                   .catch(() => {}))
           )
-        );
+        ).then(() => undefined);
       const critical = collectionsToPrefetch.filter((c) => CRITICAL_SQLITE_PATHS.has(c.path));
       const secondary = collectionsToPrefetch.filter((c) => !CRITICAL_SQLITE_PATHS.has(c.path));
       runSqlitePrefetchSplit(loadSqliteChunk, critical, secondary);
@@ -1661,7 +1661,7 @@ export const VoucherProvider = ({
         "taxes",
         "expense_accounts",
       ]);
-      const loadSqliteChunk = (items: typeof collectionsToPrefetch) =>
+      const loadSqliteChunk = (items: typeof collectionsToPrefetch): Promise<void> =>
         Promise.all(
           items.map(({ path, setter, orderByField }) =>
             (skipWarmSqlitePath(path)
@@ -1674,7 +1674,7 @@ export const VoucherProvider = ({
                   })
                   .catch(() => {}))
           )
-        );
+        ).then(() => undefined);
       const critical = collectionsToPrefetch.filter((c) => CRITICAL_SQLITE_PATHS.has(c.path));
       const secondary = collectionsToPrefetch.filter((c) => !CRITICAL_SQLITE_PATHS.has(c.path));
       runSqlitePrefetchSplit(loadSqliteChunk, critical, secondary);
@@ -1708,7 +1708,7 @@ export const VoucherProvider = ({
           "taxes",
           "expense_accounts",
         ]);
-        const loadSqliteChunk = (items: typeof collectionsToPrefetch) =>
+        const loadSqliteChunk = (items: typeof collectionsToPrefetch): Promise<void> =>
           Promise.all(
             items.map(({ path, setter, orderByField }) =>
               skipWarmSqlitePath(path)
@@ -1722,7 +1722,7 @@ export const VoucherProvider = ({
                       })
                       .catch(() => {})
             )
-          );
+          ).then(() => undefined);
         const critical = collectionsToPrefetch.filter((c) => CRITICAL_SQLITE_PATHS.has(c.path));
         const secondary = collectionsToPrefetch.filter((c) => !CRITICAL_SQLITE_PATHS.has(c.path));
         runSqlitePrefetchSplit(loadSqliteChunk, critical, secondary);

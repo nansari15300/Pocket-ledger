@@ -21,6 +21,10 @@ import { YearSelectShowMore } from "./year-select-show-more";
 import { CalendarMonthWheel } from "./calendar-month-wheel";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useDate } from "@/hooks/useDate";
+import {
+  CalendarPanelTopToolbar,
+  useCalendarPanelTopToolbarVisible,
+} from "@/components/ui/CalendarPanelTopToolbar";
 
 /** Optional: company ke pehle/last voucher date hint (fiscal / import flows) */
 export type EntryDateRangeAD = { first: Date; last: Date };
@@ -35,6 +39,7 @@ type NepaliCalendarProps = {
   entryDateRangeAD?: EntryDateRangeAD | null;
   /** BsDatePicker: 7 days / Month / … shortcuts — `calendarPanelClassName` (neela border) ke andar, months ke upar */
   rangePresetSlot?: React.ReactNode;
+  showDateConverterButton?: boolean;
 };
 
 function isInitialAdInBsRange(date?: Date | null): boolean {
@@ -51,8 +56,10 @@ export default function NepaliCalendar({
   disabled = false,
   entryDateRangeAD = null,
   rangePresetSlot = null,
+  showDateConverterButton = true,
 }: NepaliCalendarProps) {
   const { dateSystem, formatDate, formatDateBS } = useDate();
+  const hasTopToolbar = useCalendarPanelTopToolbarVisible(rangePresetSlot, showDateConverterButton);
   const todayAD = new Date();
   const todayBS = adToBs(todayAD);
   const isRange =
@@ -264,21 +271,13 @@ export default function NepaliCalendar({
       className={cn(
         calendarPanelClassName,
         // Mobile: tall panel + inner scroll so presets stay reachable; sticky row keeps shortcuts visible while scrolling months
-        rangePresetSlot && "max-h-[min(90dvh,720px)] overflow-y-auto overscroll-contain"
+        hasTopToolbar && "max-h-[min(90dvh,720px)] overflow-y-auto overscroll-contain"
       )}
     >
-      {rangePresetSlot ? (
-        <div
-          className={cn(
-            "w-full border-b border-border pb-2 mb-2 -mt-0.5 shrink-0",
-            "sticky top-0 z-10 -mx-1 px-1 bg-white dark:bg-card shadow-[0_4px_6px_-4px_rgba(0,0,0,0.12)]"
-          )}
-        >
-          <div className="flex flex-wrap gap-1 sm:gap-1.5 justify-center sm:justify-start">
-            {rangePresetSlot}
-          </div>
-        </div>
-      ) : null}
+      <CalendarPanelTopToolbar
+        rangePresetSlot={rangePresetSlot}
+        showDateConverterButton={showDateConverterButton}
+      />
       {entryDateRangeAD ? (
         <div className="text-xs text-muted-foreground border-b border-border -mx-1 px-1 pb-2 mb-2 space-y-1">
           <div>

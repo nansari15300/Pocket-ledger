@@ -629,6 +629,8 @@ export function InterCompanyVoucherForm({
     []
   );
   const [icExtrasBaseline, setIcExtrasBaseline] = useState("");
+  /** Edit hydrate + extras baseline ready — bina change Save/Approve band (exp jaisa). */
+  const [icEditHydrated, setIcEditHydrated] = useState(() => !displayVoucher?.id);
 
   const form = useForm<InterCompanyFormValues>({
     resolver: zodResolver(interCompanySchema) as import("react-hook-form").Resolver<InterCompanyFormValues>,
@@ -768,10 +770,12 @@ export function InterCompanyVoucherForm({
         setHydratedSourceBankExtra(null);
         setHydratedTargetBankExtra(null);
       }
+      setIcEditHydrated(true);
       return;
     }
     const vid = String(displayVoucher.id);
     if (lastHydratedVoucherIdRef.current === vid) return;
+    setIcEditHydrated(false);
     lastHydratedVoucherIdRef.current = vid;
     const row = displayVoucher as Record<string, unknown>;
     const dateVal = row.date as { toDate?: () => Date } | Date | string | undefined;
@@ -783,16 +787,19 @@ export function InterCompanyVoucherForm({
           : new Date();
     // Edit: target field id role ke hisaab se (target-copy par current company combobox me dikhe)
     const editIds = resolveInterCompanyEditCompanyIds(row, companyId || "");
-    form.reset({
-      voucherNumber: String(row.voucherNumber || ""),
-      date: parsedDate,
-      targetCompanyId:
-        editIds.targetCompanyFieldId || String(row.targetCompanyId || "").trim(),
-      amount: Number(row.amount || 0),
-      narration: String(row.narration || ""),
-      otherChargeAccountId: String(row.otherChargeAccountId || ""),
-      otherChargeAmount: Number(row.otherChargeAmount || 0),
-    });
+    form.reset(
+      {
+        voucherNumber: String(row.voucherNumber || ""),
+        date: parsedDate,
+        targetCompanyId:
+          editIds.targetCompanyFieldId || String(row.targetCompanyId || "").trim(),
+        amount: Number(row.amount || 0),
+        narration: String(row.narration || ""),
+        otherChargeAccountId: String(row.otherChargeAccountId || ""),
+        otherChargeAmount: Number(row.otherChargeAmount || 0),
+      },
+      { keepDirty: false, keepDirtyValues: false }
+    );
     setOtherChargeEnabled(
       Boolean(row.otherChargeAccountId || Number(row.otherChargeAmount || 0) > 0)
     );
@@ -931,6 +938,7 @@ export function InterCompanyVoucherForm({
             targetFiles: targetFilesNext,
           })
         );
+        setIcEditHydrated(true);
         accountBaselineRef.current = {
           sourcePayeeKind: (sourceEntity?.kind || "party") as InterCompanyEntityKind,
           sourcePayeeId: sourceEntity?.id || "",
@@ -1619,13 +1627,16 @@ export function InterCompanyVoucherForm({
       targetFiles,
     }) !== icExtrasBaseline;
 
-  const icFooterDirty =
+  const icHasUserEdits =
     isFormDirty ||
-    !savedSourceId ||
     icExtrasDirty ||
     shareSourceAttachmentsWithPeer !== savedShareSourceAttachmentsWithPeer ||
     shareTargetAttachmentsWithSource !== savedShareTargetAttachmentsWithSource ||
     postTargetAsJournal !== savedPostTargetAsJournal;
+
+  const icFooterDirty = displayVoucher?.id
+    ? icEditHydrated && icHasUserEdits
+    : icHasUserEdits || !savedSourceId;
 
   /**
    * Bill-wise linked: core fields RO, lekin apni side attachment Save allow.
@@ -2014,6 +2025,7 @@ export function InterCompanyVoucherForm({
           targetFiles: targetFileUrls,
         })
       );
+      setIcEditHydrated(true);
       if (!isEdit) {
         lastHydratedVoucherIdRef.current = result.sourceId;
         ++voucherNumberFetchGenRef.current;

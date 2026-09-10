@@ -5184,6 +5184,17 @@ body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row + 
   border-right-width: 0 !important;
   border-bottom-width: 0 !important;
 }
+/* PC recent / ledger: main row ke neeche narration par koi blue/outline gap line na dikhe */
+@media (min-width: 768px) {
+  [data-theme-table="transactions"] tbody tr.transaction-main-row:has(+ .narration-row) > td:last-child::after {
+    content: none !important;
+    display: none !important;
+  }
+  [data-theme-table="transactions"] tbody tr.transaction-main-row:has(+ .narration-row)[data-pl-pending-approval],
+  [data-theme-table="transactions"] tbody tr.transaction-main-row:has(+ .narration-row)[data-pl-peer-pending] {
+    outline: none !important;
+  }
+}
 /* Spend-wise group card: main + narration beech koi line nahi */
 body[class*="theme-"] [data-pl-spend-group-card] .transaction-main-row:has(+ .narration-row[data-pl-spend-in-group-card]) > td {
   border-bottom-width: 0 !important;
@@ -7512,26 +7523,28 @@ html body.dark [data-pl-mobile-transaction-card][data-pl-mobile-card-color="viol
  * See AGENTS.md "Freeze: Mobile Default txn card UI". Do not edit unless human asks in same message.
  * Gap blue: saved light #dbeafe; active #bfdbfe. Cards stay #ffffff.
  */
-html body [data-pl-mobile-card-page-color="violet"] {
-  background-color: #bfdbfe !important;
-  min-height: 100%;
-}
-/* Default (violet): mobile scroll column — no white strip below Closing Balance / overscroll. */
-html[data-pl-mobile-card-color="violet"] body main .scroll-touch {
-  background-color: #bfdbfe !important;
-}
-html[data-pl-mobile-card-color="violet"] body main .scroll-touch > div {
-  min-height: 100%;
-  background-color: #bfdbfe !important;
-}
-html[data-pl-mobile-card-color="violet"] body [data-pl-freeze-shell-content] {
-  min-height: 100%;
-  background-color: #bfdbfe !important;
-}
-html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-txn-host],
-html[data-pl-mobile-card-color="violet"] body .pl-ledger-detail-empty-fill,
-html[data-pl-mobile-card-color="violet"] body .pl-ledger-detail-table-shell {
-  background-color: #bfdbfe !important;
+@media (max-width: 767px) {
+  html body [data-pl-mobile-card-page-color="violet"] {
+    background-color: #bfdbfe !important;
+    min-height: 100%;
+  }
+  /* Default (violet): mobile scroll column — no white strip below Closing Balance / overscroll. */
+  html[data-pl-mobile-card-color="violet"] body main .scroll-touch {
+    background-color: #bfdbfe !important;
+  }
+  html[data-pl-mobile-card-color="violet"] body main .scroll-touch > div {
+    min-height: 100%;
+    background-color: #bfdbfe !important;
+  }
+  html[data-pl-mobile-card-color="violet"] body [data-pl-freeze-shell-content] {
+    min-height: 100%;
+    background-color: #bfdbfe !important;
+  }
+  html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-txn-host],
+  html[data-pl-mobile-card-color="violet"] body .pl-ledger-detail-empty-fill,
+  html[data-pl-mobile-card-color="violet"] body .pl-ledger-detail-table-shell {
+    background-color: #bfdbfe !important;
+  }
 }
 html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"] {
   border-color: transparent !important;
@@ -7631,8 +7644,10 @@ html[data-pl-mobile-card-color="amber"] body [data-pl-mobile-transaction-card="g
 }
 
 /* Root preference fallback: keeps the saved picker choice authoritative after page changes. */
-html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-page-color="violet"] {
-  background-color: #bfdbfe !important;
+@media (max-width: 767px) {
+  html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-page-color="violet"] {
+    background-color: #bfdbfe !important;
+  }
 }
 html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-transaction-card] {
   border-width: 0 !important;

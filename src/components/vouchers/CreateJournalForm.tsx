@@ -466,6 +466,8 @@ export function CreateJournalForm({
   const initialJournalAllocationsRef = useRef<{ debit: Allocation[]; credit: Allocation[] }>({ debit: [], credit: [] });
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
   const lastResetVoucherIdRef = useRef<string | null>(null);
+  /** Edit hydrate complete — isDirty/file/allocation refs settle hone se pehle Save mat enable (exp jaisa). */
+  const [editBaselineHydrated, setEditBaselineHydrated] = useState(() => !voucher?.id);
   const processAndSaveRef = useRef<((data: JournalFormValues, saveAndNew: boolean, approveAfterSave?: boolean) => Promise<void>) | null>(null);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -540,7 +542,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const norm = (a: Allocation[]) => JSON.stringify((a || []).map((x) => ({ v: x.voucherId, a: x.amount, l: x.linkedAccountId })).sort((p, q) => String(p.v).localeCompare(String(q.v))));
     return norm(journalAllocationsBySide.debit || []) !== norm(init.debit || []) || norm(journalAllocationsBySide.credit || []) !== norm(init.credit || []);
   })();
-  const isFormDirty = _isFormFieldsDirty || _isFileDirty || _isAllocationsDirty || recurringVoucherAuxiliaryDirty;
+  const isFormDirtyRaw =
+    _isFormFieldsDirty || _isFileDirty || _isAllocationsDirty || recurringVoucherAuxiliaryDirty;
+  const isFormDirty = editBaselineHydrated && isFormDirtyRaw;
   
   const isAutoVoucherEnabled = company?.autoVoucherNumbering?.journal ?? true;
   const isVoucherEditingAllowed = company?.allowVoucherNumberEditing?.journal ?? false;
@@ -591,12 +595,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const isSameVoucher = lastResetVoucherIdRef.current === vid;
         // Edit: har snapshot par reset se date/entries wipe — sirf `id` change par hydrate
         if (vid && isSameVoucher) return;
+        setEditBaselineHydrated(false);
         if (vid) lastResetVoucherIdRef.current = vid;
         const initialValues = getInitialFormValues(voucher);
         if (isEditingAndConverting) {
             initialValues.voucherNumber = "";
         }
-        form.reset(initialValues);
+        form.reset(initialValues, { keepDirty: false, keepDirtyValues: false });
         // Derive entityType from accountId for each line (so Entity box shows correct value when account is pre-selected)
         const lines = initialValues.lines || [];
         lines.forEach((line: any, idx: number) => {
@@ -632,6 +637,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         });
         setJournalAllocationsBySide({ debit, credit });
         initialJournalAllocationsRef.current = { debit: [...debit], credit: [...credit] };
+        setEditBaselineHydrated(true);
     } else if (voucher) {
         // Naya journal + Gallery `initialVoucherData`: pehle yahan files kabhi set nahi hoti thi; aur `isFormDirty` har baar allocations clear kar deta tha
         if (lastResetVoucherIdRef.current === NEW_JOURNAL && isFormDirty) return;

@@ -30,6 +30,7 @@ import {
   Users,
   Table,
   Cloud,
+  CalendarDays,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -98,6 +99,7 @@ import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { disarmDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { AppSidebarZoomControls } from "@/components/layout/AppSidebarZoomControls";
+import { DateConverterDialog } from "@/components/layout/DateConverterDialog";
 import { chromeProPillCn } from "@/lib/chromePillButton";
 
 
@@ -108,6 +110,8 @@ type MenuItem = {
   icon: React.ComponentType<{ className?: string }>;
   permission?: Permission;
   permissionAny?: Permission[];
+  /** Sidebar button opens a dialog instead of navigating. */
+  sidebarAction?: "date-converter";
 };
 
 /** Sidebar primary nav — menu items yahan; EXE tab titles: `getDashboardDocumentTitle` */
@@ -122,6 +126,7 @@ const allMenuItems: MenuItem[] = [
   { id: 'reports', href: "/reports", label: "Reports", icon: FilePieChart, permission: "export_data" },
   { id: 'gallery', href: "/gallery", label: "Gallery", icon: ImageIcon },
   { id: 'gate', href: "/gate", label: "Gate", icon: DoorOpen },
+  { id: 'date-converter', href: "#date-converter", label: "Date Converter", icon: CalendarDays, sidebarAction: "date-converter" },
   { id: 'production', href: "/production", label: "Production", icon: Factory },
   { id: 'sale-note', href: "/sale-note", label: "Sale Note", icon: FileText },
   { id: 'purchase-note', href: "/purchase-note", label: "Purchase Note", icon: FileText },
@@ -195,6 +200,9 @@ export function AppSidebar() {
     processedItems,
   } = useVouchers();
   const { isOpen, isMobile, setIsOpen } = useSidebar();
+  const [dateConverterOpen, setDateConverterOpen] = useState(false);
+  /** Date Converter — BS calendar; sirf Nepal company (header date menu jaisa). */
+  const isNepalCompany = !company?.country || company.country === "Nepal";
   /**
    * EXE / APK / iOS / static export: plain <Link> soft-nav kabhi fail / redirect-guard se undo.
    * Client `router.push|replace` + pehle guard disarm — DashboardStatCardTxnLink jaisa.
@@ -559,10 +567,18 @@ export function AppSidebar() {
   );
 
   const visibleMenuItems = React.useMemo(() => {
-    if (!featureConfig) return allMenuItems;
-    const byFeature = allMenuItems.filter((item) => item.id === "import-export" || featureConfig[item.id] !== false);
-    return filterByPermission(byFeature, can);
-  }, [featureConfig, can]);
+    const byFeature = !featureConfig
+      ? allMenuItems
+      : allMenuItems.filter((item) => item.id === "import-export" || featureConfig[item.id] !== false);
+    const byCountry = isNepalCompany
+      ? byFeature
+      : byFeature.filter((item) => item.id !== "date-converter");
+    return filterByPermission(byCountry, can);
+  }, [featureConfig, can, isNepalCompany]);
+
+  React.useEffect(() => {
+    if (!isNepalCompany && dateConverterOpen) setDateConverterOpen(false);
+  }, [isNepalCompany, dateConverterOpen]);
 
   // CORE_NAV_IDS pehle wale 'Main' block order; baaki items uske peeche — ab dono ek hi emerald card me
   const combinedDashboardNavItems = React.useMemo(() => {
@@ -589,8 +605,39 @@ export function AppSidebar() {
     return byFeature.filter((item) => item.id === "billing" || filterByPermission([item], can).length > 0);
   }, [featureConfig, customUser, can]);
 
+  const openDateConverter = useCallback(() => {
+    setDateConverterOpen(true);
+    if (isMobile) setIsOpen(false);
+  }, [isMobile, setIsOpen]);
+
   /** Ek nav row — merged primary list + pehle jaisa pending badge / Reports pill */
   function renderMainNavRow(item: MenuItem) {
+    if (item.sidebarAction === "date-converter") {
+      const button = (
+        <SidebarMenuButton
+          isActive={dateConverterOpen}
+          tooltip={item.label}
+          data-theme-nav={item.id}
+        >
+          <span className="relative flex shrink-0 items-center justify-center overflow-visible [&_svg]:size-5 [&_img]:size-5">
+            <item.icon />
+          </span>
+          {isOpen && <span className="flex min-w-0 flex-1 truncate">{item.label}</span>}
+        </SidebarMenuButton>
+      );
+      return (
+        <SidebarMenuItem key={item.id}>
+          <button
+            type="button"
+            className="w-full text-left appearance-none bg-transparent p-0 border-0 cursor-pointer"
+            onClick={openDateConverter}
+          >
+            {button}
+          </button>
+        </SidebarMenuItem>
+      );
+    }
+
     const pendingCount = ENTITY_IDS.includes(item.id as (typeof ENTITY_IDS)[number])
       ? (pendingCountByEntity[item.id] ?? 0)
       : 0;
@@ -755,6 +802,7 @@ export function AppSidebar() {
 
   return (
     <Sidebar>
+      <DateConverterDialog open={dateConverterOpen} onOpenChange={setDateConverterOpen} />
       <SidebarHeader className="shrink-0">
         {/* Brand icon → portal preview; blue Company → /company only */}
         {useEmbeddedClientNav ? (

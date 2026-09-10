@@ -27,6 +27,10 @@ type BsDatePickerBaseProps = {
   skipDateRangeThemeDetail?: boolean;
   /** Nested ledger edit dialog ke upar calendar popover (z-index). */
   popoverContentClassName?: string;
+  /** Optional popover placement (e.g. Date Converter mobile). */
+  popoverSide?: React.ComponentProps<typeof PopoverContent>["side"];
+  popoverAlign?: React.ComponentProps<typeof PopoverContent>["align"];
+  showDateConverterButton?: boolean;
 };
 
 type BsDatePickerConditionalProps =
@@ -69,6 +73,9 @@ export default function BsDatePicker({
   rangeEmptyLabel,
   skipDateRangeThemeDetail = false,
   popoverContentClassName,
+  popoverSide,
+  popoverAlign,
+  showDateConverterButton = true,
 }: BsDatePickerProps) {
   const [open, setOpen] = React.useState(false);
   const { formatDateBS } = useDate();
@@ -161,7 +168,8 @@ export default function BsDatePicker({
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        align="start"
+        side={popoverSide}
+        align={popoverAlign ?? "start"}
         collisionPadding={16}
         className={cn(
           "w-auto p-0",
@@ -190,6 +198,7 @@ export default function BsDatePicker({
                 />
               ) : undefined
             }
+            showDateConverterButton={showDateConverterButton}
         />
       </PopoverContent>
     </Popover>

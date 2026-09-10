@@ -7,19 +7,33 @@ import { DayPicker } from "react-day-picker";
 import { cn } from "@/lib/utils";
 import { calendarPanelClassName } from "@/lib/calendarChrome";
 import { buttonVariants } from "@/components/ui/button";
+import {
+  CalendarPanelTopToolbar,
+  useCalendarPanelTopToolbarVisible,
+} from "@/components/ui/CalendarPanelTopToolbar";
 
-export type CalendarProps = React.ComponentProps<typeof DayPicker>;
+export type CalendarProps = React.ComponentProps<typeof DayPicker> & {
+  showDateConverterButton?: boolean;
+};
 
 function Calendar({
   className,
   classNames,
   showOutsideDays = true,
+  showDateConverterButton = true,
   ...props
 }: CalendarProps) {
+  const hasTopToolbar = useCalendarPanelTopToolbarVisible(undefined, showDateConverterButton);
+
   return (
     <div
-      className={cn(calendarPanelClassName, className)}
+      className={cn(
+        calendarPanelClassName,
+        hasTopToolbar && "max-h-[min(90dvh,720px)] overflow-y-auto overscroll-contain",
+        className
+      )}
     >
+      <CalendarPanelTopToolbar showDateConverterButton={showDateConverterButton} />
       <DayPicker
         showOutsideDays={showOutsideDays}
         captionLayout="dropdown"

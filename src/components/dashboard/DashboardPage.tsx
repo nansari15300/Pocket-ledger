@@ -605,7 +605,6 @@ export default function DashboardPage() {
   }, [company, company?.id, setVisibleCard, visibleCard]);
   const [greeting, setGreeting] = useState('');
   
-  const [recentVoucherTypes, setRecentVoucherTypes] = useState<string[]>(['all']);
   const [recentDateRange, setRecentDateRange] = React.useState<DateRange | undefined>();
   const [recentFilters, setRecentFilters] = useState<Record<string, string>>({});
   /** Recent card quick chip: click -> all-time unapproved only (date/type/column filters ignore). */
@@ -1077,7 +1076,6 @@ export default function DashboardPage() {
   // Unapproved quick filter: force all-time + all types + clear table column filters.
   const effectiveRecentDateRange = recentUnapprovedOnly ? undefined : recentDateRange;
   const effectiveRecentFilters = recentUnapprovedOnly ? {} : recentFilters;
-  const effectiveRecentVoucherTypes = recentUnapprovedOnly ? ['all'] : recentVoucherTypes;
   const { daybookTransactions: allRecentTransactions } = useTransactions(
     { id: 'daybook', items: [] },
     'daybook',
@@ -1087,7 +1085,7 @@ export default function DashboardPage() {
     vouchers,
     undefined,
     effectiveRecentFilters,
-    effectiveRecentVoucherTypes,
+    undefined,
     journalAccountNames,
     userNames
   );
@@ -1388,14 +1386,12 @@ export default function DashboardPage() {
   const isRecentFilterActive = useMemo(
     () =>
       recentDateRange !== undefined ||
-      (recentVoucherTypes.length > 0 && !recentVoucherTypes.includes('all')) ||
       Object.values(recentFilters).some(v => v) ||
       recentUnapprovedOnly,
-    [recentDateRange, recentVoucherTypes, recentFilters, recentUnapprovedOnly]
+    [recentDateRange, recentFilters, recentUnapprovedOnly]
   );
   const clearRecentFilters = () => {
     setRecentDateRange(undefined);
-    setRecentVoucherTypes(['all']);
     setRecentFilters({});
     setRecentUnapprovedOnly(false);
   };
@@ -1403,7 +1399,6 @@ export default function DashboardPage() {
     // User request: button click = all-time unapproved vouchers only.
     setRecentUnapprovedOnly(true);
     setRecentDateRange(undefined);
-    setRecentVoucherTypes(['all']);
     setRecentFilters({});
     setActiveRecentFilter(null);
     setRecentRowsPerPage('0');
@@ -2061,8 +2056,6 @@ export default function DashboardPage() {
           setFilters={setRecentFilters}
           activeFilter={activeRecentFilter}
           setActiveFilter={setActiveRecentFilter}
-          voucherTypes={recentVoucherTypes}
-          onVoucherTypeChange={setRecentVoucherTypes}
           hideFooter={true}
           showNarration={showRecentNarration}
         />

@@ -14,7 +14,7 @@ import { useDate } from "./useDate";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { type Context } from "@/components/vouchers/TransactionsTable";
 import {
-  getDisplayType,
+  typeColumnFilterHaystackFields,
   getDisplayVoucherNumber,
   getParticularsText,
   transactionRowHasFileAttachment,
@@ -1113,7 +1113,6 @@ export function useTransactions(
                           : debit - credit;
                 const balanceAbsStr = formatCurrency(Math.abs(balanceValue), { noSuffix: true, noAnimation: true })?.toString() ?? "";
                 const balanceSide = balanceValue >= 0 ? "Dr" : "Cr";
-                const displayType = getDisplayType(t);
                 const displayVoucherNo = getDisplayVoucherNumber(t);
                 const dateBs = d ? formatDateBS(d) : "";
                 const dateAd = d ? formatDate(d) : "";
@@ -1125,7 +1124,7 @@ export function useTransactions(
                     date: [dateBs, dateAd, entryClock].filter(Boolean),
                     date_bs: [dateBs, entryClock].filter(Boolean),
                     date_ad: [dateAd, entryClock].filter(Boolean),
-                    type: [displayType],
+                    type: typeColumnFilterHaystackFields(t),
                     voucherNumber: [displayVoucherNo],
                     user: [userName],
                     debit: [debit, debitStr],

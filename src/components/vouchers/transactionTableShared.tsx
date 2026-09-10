@@ -404,6 +404,17 @@ export const getDisplayType = (t: any) => {
   return t.type.replace(/_/g, " ");
 };
 
+/** Type column header filter haystack — display label + raw type + common shortcuts (e.g. ic → Inter Company). */
+export function typeColumnFilterHaystackFields(t: any): unknown[] {
+  const displayType = getDisplayType(t);
+  const rawType = String(t?.type || "").trim();
+  const fields: unknown[] = [displayType, rawType, rawType.replace(/_/g, " ")];
+  if (rawType === "inter_company") {
+    fields.push("ic", "intercompany", "inter co");
+  }
+  return fields;
+}
+
 /** Journal + Adjustment — multi-leg vouchers (`entries[]` ya `lines[]`). */
 function isJournalOrAdjustmentEntries(t: any): boolean {
   if (t?.type !== "journal" && t?.type !== "adjustment") return false;
@@ -2037,12 +2048,18 @@ export const TransactionRow = React.memo(
           isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
           /* Statement / non–spend-wise: full pink band — bank, item, tax, reports, etc. */
           showPendingApprovalPink && !isSelected && !inSpendWiseGroup &&
-            "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
+            cn(
+              "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50",
+              !showNarrationRow && "outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0"
+            ),
           /* Spend-wise group: green/gray pe bhi unapproved dikhe — tint override + ring */
           showPendingApprovalPink && !isSelected && inSpendWiseGroup &&
             "[&>td]:!bg-pink-100/90 dark:[&>td]:!bg-pink-950/45 [&>td]:hover:!bg-pink-200/95 dark:hover:[&>td]:!bg-pink-950/55 ring-2 ring-inset ring-pink-500/45 dark:ring-pink-400/35",
           isPeerPendingChange && !isSelected && !inSpendWiseGroup &&
-            "bg-blue-100 dark:bg-blue-950/40 [&>td]:bg-blue-100 [&>td]:dark:bg-blue-950/40 hover:bg-blue-200 dark:hover:bg-blue-950/50 [&>td]:hover:bg-blue-200 [&>td]:dark:hover:bg-blue-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
+            cn(
+              "bg-blue-100 dark:bg-blue-950/40 [&>td]:bg-blue-100 [&>td]:dark:bg-blue-950/40 hover:bg-blue-200 dark:hover:bg-blue-950/50 [&>td]:hover:bg-blue-200 [&>td]:dark:hover:bg-blue-950/50",
+              !showNarrationRow && "outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0"
+            ),
           isPeerPendingChange && !isSelected && inSpendWiseGroup &&
             "[&>td]:!bg-blue-100/90 dark:[&>td]:!bg-blue-950/45 [&>td]:hover:!bg-blue-200/95 dark:hover:[&>td]:!bg-blue-950/55 ring-2 ring-inset ring-blue-500/45 dark:ring-blue-400/35",
           txnRowSelectedChrome && txnSelectedMainRowCn(showNarrationRow),
