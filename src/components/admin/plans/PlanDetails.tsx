@@ -606,9 +606,9 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                         const localMinNum = typeof localMinVal === "number" ? localMinVal : Number(localMinVal ?? 0);
                         const isMaxDevicesPair = online === "maxDevices" && local === "maxDevicesLocal";
                         const pairDisabled = isMaxDevicesPair && !editablePlan.entitlements.hasMultiDeviceSync;
+                        const isCompressKb = uiVariant === "compressKb";
                         // Compress KB band is independent of Allow online (not an online company cap).
-                        const onlineDisabled =
-                            uiVariant === "compressKb" ? pairDisabled : !allowOnline || pairDisabled;
+                        const onlineDisabled = isCompressKb ? false : !allowOnline || pairDisabled;
                         const parseCompressKb = (raw: string) => {
                             if (raw === "") return 0;
                             const n = parseInt(raw, 10);
@@ -658,7 +658,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                                     handleCompressRangeChange(onlineMin, online, "min", e.target.value)
                                                 }
                                                 placeholder="50"
-                                                disabled={onlineDisabled}
+                                                data-pl-compress-online-min=""
                                                 aria-label="Compress from KB online"
                                                 className={compressInputCn}
                                             />
@@ -672,7 +672,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                                     handleCompressRangeChange(onlineMin, online, "max", e.target.value)
                                                 }
                                                 placeholder="100"
-                                                disabled={onlineDisabled}
+                                                data-pl-compress-online-max=""
                                                 aria-label="Compress to KB online"
                                                 className={compressInputCn}
                                             />
