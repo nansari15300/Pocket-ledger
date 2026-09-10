@@ -43,7 +43,6 @@ import {
   formatQuantity,
   getOppositeAccountLabel,
   getParticularsText,
-  getDisplayType,
   getStatusLabel,
   getStatusBadgeOutlineClassName,
   getStatusDetail,
@@ -261,6 +260,8 @@ interface TransactionsTableProps {
   ledgerDateFilterActive?: boolean;
   /** Recent tab footer search: mobile card lines me is query ka pink highlight (sirf in cards). */
   transactionCardSearchHighlight?: string;
+  /** Dashboard Recent: mobile cards = party/ledger list layout (gap/inset/3D). Desktop daybook columns unchanged. */
+  mobileCardLayoutLikeParty?: boolean;
   /** Page-1: upar stacked Book row (jab master OB nonzero + OB date range me); page>1 sirf dated carry. */
   ledgerShowBookOpeningRow?: boolean;
   /** Staff tax-details view: hide Book/Dated opening rows entirely. */
@@ -356,6 +357,7 @@ export function TransactionsTable({
   hideLedgerOpeningRows = false,
   openingBalancePeriodStartDate,
   transactionCardSearchHighlight,
+  mobileCardLayoutLikeParty = false,
   statementCheckModeActive = false,
   statementCheckFocusId = null,
   statementCheckMarkedIds,
@@ -1012,6 +1014,7 @@ export function TransactionsTable({
     formatCurrency,
     dateSystem,
   } = useDate();
+  /* FREEZE: Mobile txn card title — no voucher type in header. See AGENTS.md. */
   const mobileCardPreviews = useMemo<MobileTransactionCardPreview[]>(() =>
     tableTransactions
       .filter((row: any) => row?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE && !row?._spendWiseSpacer)
@@ -1023,7 +1026,7 @@ export function TransactionsTable({
         return {
           id: String(row?.id ?? `preview-${index}`),
           tone: highlightPendingApproval && row?.isApproved !== true ? "pink" : "green",
-          title: `${row?.voucherNumber || row?.type || "Transaction"} · ${getDisplayType(row)}`,
+          title: String(row?.voucherNumber || row?.type || "Transaction"),
           narration: String(row?.narration || "—"),
           date: String(row?.date || "—"),
           user: String(row?.userName || "—"),
@@ -2067,6 +2070,8 @@ export function TransactionsTable({
   );
 
   if (useMobileCardView) {
+    /** Daybook mobile strip (-mx / no side inset) — off when Recent uses party parity layout. */
+    const mobileListUsesDaybookStrip = context === "daybook" && !mobileCardLayoutLikeParty;
     const globalHlQ = (rowTextSearchHighlight ?? "").trim();
     const hlForColumn = (columnKey: string) => {
       const colQ = String((filters && filters[columnKey]) || "").trim();
@@ -2193,14 +2198,16 @@ export function TransactionsTable({
         return typeof rendered === "string" || typeof rendered === "number" ? hl(String(rendered)) : rendered;
       };
       const oppositeLabel = getOppositeAccountLabel(t, names, context, contextId, groupEntityType);
-      const displayType = getDisplayType(t);
       const oppositeClean = (() => {
         const text = String(oppositeLabel || "").trim();
         if (!text || text === "—" || text === "N/A" || text === "-") return "";
         return text;
       })();
-      // APK/mobile: voucher type + opposite name (Payment In / party / bank) always show on entity ledgers.
-      const titleLabel = [t.voucherNumber || t.type || "", displayType, oppositeClean]
+      /*
+       * FREEZE: Mobile txn card title — voucher no + opposite account only; no getDisplayType().
+       * See AGENTS.md "Freeze: Mobile txn card title — no voucher type".
+       */
+      const titleLabel = [t.voucherNumber || t.type || "", oppositeClean]
         .map((p) => String(p || "").trim())
         .filter(Boolean)
         .join(" · ") || "Transaction";
@@ -2258,7 +2265,7 @@ export function TransactionsTable({
           style={mobileCardPaletteStyle(mobileCardTone)}
           className={cn(
             "relative p-2.5 min-w-0 w-full overflow-hidden border-2 shadow-sm cursor-pointer transition-colors",
-            context === "daybook" && "rounded-lg",
+            mobileListUsesDaybookStrip && "rounded-lg",
             swBorder,
             "hover:opacity-90",
             mobileCardPaletteClass(mobileCardTone)
@@ -2474,10 +2481,26 @@ export function TransactionsTable({
       return cn("rounded-xl overflow-hidden", border, bg, outerLayer);
     };
 
-    // Daybook/Recent: horizontal gap comes from parent (DaybookReport/dashboard); other contexts use px-0.5
-    // Mobile transaction list: 4px vertical gap between cards for cleaner scanability.
+    /*
+     * FREEZE: Mobile Default card theme (violet) — party-parity list layout.
+     * See AGENTS.md "Freeze: Mobile Default txn card UI". Do not edit unless human asks in same message.
+     * Default: 8px side inset + 8px card gap + blue gap strip + 3D white cards (globals.css).
+     */
+    const isDefaultMobileTxnCardTheme = mobileCardColor === "violet";
+    const mobileTxnListGapClass = isDefaultMobileTxnCardTheme
+      ? "flex flex-col gap-[8px] pt-[8px]"
+      : "space-y-1 pt-1";
+    const mobileTxnListSideClass = isDefaultMobileTxnCardTheme
+      ? cn("px-[8px]", mobileListUsesDaybookStrip && "-mx-[2px]")
+      : cn(mobileListUsesDaybookStrip ? "" : "px-0.5");
+    const mobileTxnGroupGapClass = isDefaultMobileTxnCardTheme ? "flex flex-col gap-[8px]" : "space-y-1";
     return (
-      <div key={mobileCardColor} data-pl-mobile-card-page-color={mobileCardColor} className={cn("w-full min-w-0 space-y-1 pb-4 overflow-hidden", context === "daybook" ? "" : "px-0.5")}>
+      <div
+        key={mobileCardColor}
+        data-pl-mobile-card-page-color={mobileCardColor}
+        data-pl-mobile-txn-list=""
+        className={cn("w-full min-w-0 pb-4 overflow-hidden", mobileTxnListGapClass, mobileTxnListSideClass)}
+      >
         <MobileTransactionCardColorPicker
           open={mobileCardColorPickerOpen}
           value={mobileCardColor}
@@ -2485,23 +2508,6 @@ export function TransactionsTable({
           onOpenChange={setMobileCardColorPickerOpen}
           onChange={setMobileCardColor}
         />
-        {can("approve_transactions") &&
-        effectiveNotificationSettings?.approve?.on !== false &&
-        effectiveNotificationSettings?.approve?.onTransaction !== false &&
-        showApproveAllOnPage ? (
-          <div className="flex justify-end px-0.5">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-8 gap-1.5 text-xs"
-              onClick={() => void handleApproveAllVisible()}
-            >
-              <CheckCheck className="h-3.5 w-3.5" />
-              Approve All
-            </Button>
-          </div>
-        ) : null}
         {showLedgerOpeningRows && (
           <>
             {/* Date filter + master OB: pehla card (stacked); search slot sirf neeche wale card par */}
@@ -2698,7 +2704,7 @@ export function TransactionsTable({
                     layout="position"
                     initial={false}
                     transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
-                    className={cn("space-y-1", groupContainerClass(block.colorIndex))}
+                    className={cn(mobileTxnGroupGapClass, groupContainerClass(block.colorIndex))}
                   >
                     {block.items.map((t: any, itemIdx: number) => (
                       <motion.div
@@ -2747,7 +2753,7 @@ export function TransactionsTable({
                 }
                 if (block.type === "group") {
                   return (
-                    <div className={cn("space-y-1 pr-1", groupContainerClass(block.colorIndex))}>
+                    <div className={cn(mobileTxnGroupGapClass, "pr-1", groupContainerClass(block.colorIndex))}>
                       {block.items.map((t: any, itemIdx: number) => (
                         <div key={`${index}-${itemIdx}-${t.id ?? (t as any)._rowKey ?? ""}`}>
                           {renderMobileCard(t, t.id, true)}

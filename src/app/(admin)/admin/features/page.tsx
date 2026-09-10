@@ -16,14 +16,14 @@ import { Loader2, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { FeatureList } from '@/components/admin/FeatureList';
 import { FeatureDetails } from '@/components/admin/FeatureDetails';
-import { useIsMobile } from '@/hooks/use-mobile';
+import { useAdminPanelIsMobile } from '@/hooks/use-mobile';
 import { ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 export default function FeaturesPage() {
     useAdminAccess(['SuperAdmin']);
     const { toast } = useToast();
-    const isMobile = useIsMobile();
+    const isMobile = useAdminPanelIsMobile();
     const [featureConfig, setFeatureConfig] = useState<Record<string, boolean>>({});
     const [loading, setLoading] = useState(true);
     const [isUpdating, setIsUpdating] = useState(false);

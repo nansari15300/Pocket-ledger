@@ -53,7 +53,6 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { proDashboardRibbonClass } from '@/lib/proTheme';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
 import {
   Table,
@@ -634,7 +633,10 @@ export function DashboardPageContent() {
   const calendarMonths = useCalendarMonths();
   
   const [loading, setLoading] = React.useState(true);
-  // First successful voucher hydration ke baad background revalidation par full-page skeleton mat dikhao (startup flicker cut).
+  /*
+   * FREEZE: Dashboard boot — no full-page skeleton; background voucher merge must not re-block UI.
+   * See AGENTS.md "Freeze: Dashboard boot — SQLite-first, no UI freeze".
+   */
   const [initialVoucherBootSettled, setInitialVoucherBootSettled] = React.useState(false);
   
   const [userNames, setUserNames] = React.useState<Record<string, string>>({});
@@ -896,12 +898,16 @@ export function DashboardPageContent() {
       setLoading(false);
       return;
     }
-    setLoading(vouchersLoading);
-  }, [companyId, vouchersLoading]);
+    // FREEZE: pehli SQLite paint ke baad background merge par loading mat chalao (AGENTS.md).
+    if (!initialVoucherBootSettled) {
+      setLoading(vouchersLoading);
+    } else if (!vouchersLoading) {
+      setLoading(false);
+    }
+  }, [companyId, vouchersLoading, initialVoucherBootSettled]);
 
   React.useEffect(() => {
     if (!vouchersLoading) {
-      // Voucher list ek baar stable milte hi future loading toggles ko inline revalidate samjho.
       setInitialVoucherBootSettled(true);
     }
   }, [vouchersLoading]);
@@ -1988,12 +1994,16 @@ export function DashboardPageContent() {
           )}
         </div>
       </CardHeader>
-      <CardContent className="px-0 pb-2">
-        {/* Mobile: 2px horizontal gap so Recent transaction cards match Daybook spacing */}
-        <div className={cn("w-full overflow-x-auto", recentTransactionsCompact && "px-[2px]")}>
+      <CardContent
+        className="px-0 pb-2"
+        {...(recentTransactionsCompact ? { "data-pl-mobile-txn-host": "" } : {})}
+      >
+        {/* Mobile Recent: party-parity txn cards (all card themes); list inset handled in TransactionsTable */}
+        <div className={cn("w-full overflow-x-auto", recentTransactionsCompact && "px-0")}>
         <TransactionsTable
           transactions={recentTransactions}
           context="daybook"
+          mobileCardLayoutLikeParty
           onRowClick={(v) => {
             setSelectedVoucher(v);
             setIsVoucherDialogOpen(true);
@@ -2059,7 +2069,7 @@ export function DashboardPageContent() {
       {/* Dashboard cards (Daybook, Bank, Recent) are gated by role permissions. If shared user doesn't see a card, check Settings → role permissions (e.g. View Daybook). */}
       {can('view_daybook') && keep.has("daybook") && (
         <div className={cn("px-0.5", !showDaybook && "hidden")} inert={!showDaybook || undefined}>
-          <DaybookReport />
+          <DaybookReport isPanelVisible={showDaybook} />
         </div>
       )}
       {can('view_recent_transactions') && keep.has("recent-transactions") && (
@@ -2101,15 +2111,6 @@ export function DashboardPageContent() {
   );
   }
   
-  if (vouchersLoading && !initialVoucherBootSettled) {
-    return (
-      <div className="p-4 space-y-4">
-        <Skeleton className="w-full h-32" />
-        <Skeleton className="w-full h-64" />
-      </div>
-    );
-  }
-
   const dashboardCards = [
     { id: 'all', title: 'All' },
     { id: 'financial-summaries', title: 'Summary' },

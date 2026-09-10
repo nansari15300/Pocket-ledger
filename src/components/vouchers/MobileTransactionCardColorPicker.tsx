@@ -118,8 +118,11 @@ export function MobileTransactionCardColorPicker({
     if (draftValue === "amber" && tone === "pink") {
       return "!border-[#FFA500] !bg-[#FFA500] !text-black";
     }
-    if (draftValue !== "default") {
-      return cn(selectedOption.cardClass, "text-black");
+    if (draftValue === "default" && tone === "pink") {
+      return "border-pink-700 bg-pink-100 !text-black";
+    }
+    if (draftValue !== "violet") {
+      return cn(selectedOption.cardClass, "!text-black");
     }
     if (tone === "pink") {
       return "border-pink-700 bg-pink-100 text-black";
@@ -169,7 +172,10 @@ export function MobileTransactionCardColorPicker({
         onOpenChange(nextOpen);
       }}
     >
-      <DialogContent className="left-1/2 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto_auto] h-[80vh] max-h-[80vh] w-[calc(100vw-4px)] max-w-none -translate-x-1/2 overflow-hidden rounded-xl border-blue-300 bg-blue-50 p-2 sm:max-w-none sm:p-3">
+      <DialogContent
+        data-pl-mobile-card-color-picker=""
+        className="left-1/2 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto_auto] h-[80vh] max-h-[80vh] w-[calc(100vw-4px)] max-w-none -translate-x-1/2 overflow-hidden rounded-xl border-blue-300 bg-blue-50 p-2 sm:max-w-none sm:p-3"
+      >
         <DialogHeader className="min-h-8 justify-center space-y-0">
           <DialogTitle>Choose Card Color</DialogTitle>
         </DialogHeader>
@@ -207,10 +213,20 @@ export function MobileTransactionCardColorPicker({
                   >
                     <div className="flex min-w-0 items-start justify-between gap-2">
                       <div className="min-w-0 flex-1 overflow-hidden pr-1">
-                        <p className="truncate text-xs font-bold">
+                        <p
+                          className={cn(
+                            "truncate text-xs font-bold",
+                            draftValue !== "violet" && "!text-black"
+                          )}
+                        >
                           {sample.title}
                         </p>
-                        <p className="mt-0.5 truncate text-[10px] opacity-70">
+                        <p
+                          className={cn(
+                            "mt-0.5 truncate text-[10px] opacity-70",
+                            draftValue !== "violet" && "!text-black"
+                          )}
+                        >
                           Narration: {sample.narration}
                         </p>
                       </div>
@@ -243,7 +259,12 @@ export function MobileTransactionCardColorPicker({
                       </div>
                     </div>
                     <div className="mt-1 flex items-end justify-between gap-2 text-[10px]">
-                      <div className="min-w-0 opacity-75">
+                      <div
+                        className={cn(
+                          "min-w-0 opacity-75",
+                          draftValue !== "violet" && "!text-black"
+                        )}
+                      >
                         <p>{sample.date}</p>
                         <p className="truncate">User: {sample.user}</p>
                       </div>
@@ -252,6 +273,7 @@ export function MobileTransactionCardColorPicker({
                         data-pl-mobile-card-inner-pill=""
                         className={cn(
                           "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                          draftValue !== "violet" && "!text-black",
                           innerPillClass(sample)
                         )}
                         style={innerPillStyle(sample)}

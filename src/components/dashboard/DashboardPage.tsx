@@ -2041,11 +2041,15 @@ export default function DashboardPage() {
           <span className="text-sm font-medium text-muted-foreground">Showing {recentTransactions ? recentTransactions.length : 0} Vouchers Of All {allRecentTransactions ? allRecentTransactions.length : 0} Vouchers</span>
         </div>
       </CardHeader>
-      <CardContent className={cn(isMobile && "px-0")}>
-        <div className={cn("pt-0", isMobile ? "px-0.5" : "p-4 sm:p-6 md:p-8")}>
+      <CardContent
+        className={cn(isMobile && "px-0")}
+        {...(isMobile ? { "data-pl-mobile-txn-host": "" } : {})}
+      >
+        <div className={cn("pt-0", isMobile ? "px-0" : "p-4 sm:p-6 md:p-8")}>
         <TransactionsTable
           transactions={recentTransactions}
           context="daybook"
+          mobileCardLayoutLikeParty={isMobile}
           onRowClick={(v) => {
             setSelectedVoucher(v);
             setIsVoucherDialogOpen(true);

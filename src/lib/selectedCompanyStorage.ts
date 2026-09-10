@@ -1,5 +1,6 @@
 "use client";
 
+import { getEmbeddedLockShellKind } from "@/lib/embeddedDeviceLock";
 import { isPlNavRedirectDebugEnabled, plNavDbg, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
 
 /** Legacy global — sirf nayi tab / pehli visit fallback; running tab is key se kabhi switch na ho. */
@@ -15,8 +16,34 @@ function cleanCompanyId(value: string | null | undefined): string {
   return String(value || "").trim();
 }
 
+function isExeMultiTabShell(): boolean {
+  return getEmbeddedLockShellKind() === "exe";
+}
+
+/** EXE BrowserView: main process assigns id — sessionStorage is shared across tabs. */
+function readElectronMainTabInstanceId(): string {
+  if (!isExeMultiTabShell()) return "";
+  try {
+    const w = window as Window & { plElectronApp?: { tabInstanceId?: string } };
+    return cleanCompanyId(w.plElectronApp?.tabInstanceId);
+  } catch {
+    return "";
+  }
+}
+
 function getTabInstanceId(): string {
   if (typeof window === "undefined") return "ssr";
+
+  const exeTabId = readElectronMainTabInstanceId();
+  if (exeTabId) {
+    try {
+      window.name = exeTabId;
+    } catch {
+      /* ignore */
+    }
+    return exeTabId;
+  }
+
   try {
     let id = cleanCompanyId(window.sessionStorage.getItem(TAB_INSTANCE_SESSION_KEY));
     if (id) return id;
@@ -77,6 +104,8 @@ function readTabCompanyFromMap(): string {
 
 function writeTabSessionCompanyId(companyId: string): void {
   if (typeof window === "undefined") return;
+  // EXE: sessionStorage shared — per-tab company sirf localStorage map me.
+  if (isExeMultiTabShell()) return;
   const clean = cleanCompanyId(companyId);
   try {
     if (clean) window.sessionStorage.setItem(TAB_COMPANY_ID_KEY, clean);
@@ -97,11 +126,13 @@ export type WriteSelectedCompanyOptions = {
  */
 export function readSelectedCompanyId(): string {
   if (typeof window === "undefined") return "";
-  try {
-    const tabCompanyId = cleanCompanyId(window.sessionStorage.getItem(TAB_COMPANY_ID_KEY));
-    if (tabCompanyId) return tabCompanyId;
-  } catch {
-    /* sessionStorage blocked */
+  if (!isExeMultiTabShell()) {
+    try {
+      const tabCompanyId = cleanCompanyId(window.sessionStorage.getItem(TAB_COMPANY_ID_KEY));
+      if (tabCompanyId) return tabCompanyId;
+    } catch {
+      /* sessionStorage blocked */
+    }
   }
   const fromMap = readTabCompanyFromMap();
   if (fromMap) return fromMap;

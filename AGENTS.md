@@ -283,6 +283,85 @@ When the human asks for PL Server fixes (including “make PL like online”):
 - Keep the diff minimal and scoped to that request.
 - Preserve: instant local persist + dialog close + background sync on all platforms.
 
+## Freeze: Mobile Default txn card UI (hard)
+
+**Sep 2026:** Mobile **Default** card theme (picker label “Default”, code `violet`) on party ledger + Dashboard **Recent** uses stabilized list layout: white cards, blue gap strip, 3D shadow, 8px side inset + 8px card gap. **Do not edit unless the human explicitly asks to change mobile Default txn card UI in that same message.**
+
+### Frozen paths (do not touch casually)
+
+- `src/components/vouchers/TransactionsTable.tsx` — `isDefaultMobileTxnCardTheme`, `mobileTxnListGapClass`, `mobileTxnListSideClass`, `mobileCardLayoutLikeParty` / party-parity mobile list block
+- `src/app/globals.css` — `[data-pl-mobile-card-page-color="violet"]` gap strip (`#bfdbfe`) and Default 3D card shadow block (search `FREEZE: Default (violet) 3D`)
+
+### Stabilized behavior to preserve
+
+- **Default theme only:** gap strip blue `#bfdbfe`; cards white; layered blue 3D shadow; 8px horizontal inset + 8px between cards.
+- **Green / Blue / Pink / Amber themes:** unchanged palette and spacing (2px side / 4px gap legacy).
+- **Dashboard Recent (mobile):** `mobileCardLayoutLikeParty` — same mobile card list layout as party page for every card theme; desktop daybook table columns unchanged.
+
+### Do not
+
+- Revert Recent to daybook-only mobile strip (`px-[2px]`, `-mx-[2px]`) without explicit request.
+- Change Default gap color, 3D shadow, or 8px spacing while doing unrelated ledger/dashboard work.
+- Apply Default-only blue gap / 3D styling to other card themes without explicit request.
+
+### If the human explicitly asks to change mobile Default txn card UI
+
+- Keep the diff minimal and scoped to that request.
+- Preserve: white cards, other themes unchanged unless they ask for those too.
+
+## Freeze: Mobile txn card title — no voucher type (hard)
+
+**Sep 2026:** Mobile transaction card header (party, staff, bank, item/group reports, Dashboard Recent, daybook mobile cards — all `TransactionsTable` mobile view) shows **voucher number + opposite account only**. Raw voucher type label (`sale`, `journal`, `payment out`, …) is **hidden** because the voucher no prefix already encodes type (`PUR-095`, `JRNL-0245`, `Sale Inv-053`). **Do not edit unless the human explicitly asks to change mobile txn card title / voucher type display in that same message.**
+
+### Frozen paths (do not touch casually)
+
+- `src/components/vouchers/TransactionsTable.tsx` — mobile `titleLabel` in `renderMobileCard`; `mobileCardPreviews` title (card theme picker samples)
+
+### Stabilized behavior to preserve
+
+- Title format: `{voucherNumber || type fallback} · {opposite account}` — **never** insert `getDisplayType(t)` or equivalent type string between voucher no and party name.
+- Example: `JRNL - 0245 · Dinesh Shah Kaanu` — **not** `JRNL - 0245 · journal · Dinesh Shah Kaanu`.
+- Desktop/table **Type** column unchanged; freeze applies to **mobile card view only**.
+
+### Do not
+
+- Re-add `displayType` / `getDisplayType` to mobile card titles while fixing unrelated ledger, search, or theme work.
+- Show voucher type in mobile card header “for clarity” or parity with desktop without explicit human request.
+
+### If the human explicitly asks to show voucher type on mobile again
+
+- Keep the diff minimal and scoped to that request.
+- Confirm whether they want type on all mobile ledgers or only a specific screen.
+
+## Freeze: Dashboard boot — SQLite-first, no UI freeze (hard)
+
+**Sep 2026:** App start, company switch, and navigate to `/dashboard` (web, EXE, APK): show dashboard **immediately** from SQLite; full voucher merge and sync run **in background** without blocking clicks or full-page skeleton. **Do not edit unless the human explicitly asks to change dashboard boot / voucher load UX in that same message.**
+
+### Frozen paths (do not touch casually)
+
+- `src/hooks/useVouchers.tsx` — `loadVouchersFromSqliteFastFirst`, `scheduleIdleWork`, `isDashboardVouchersOnlyPrefetch`, `runSqlitePrefetchSplit` / dashboard lite `markSqliteBootReady`, `makeVouchersSqliteLoader`, `commitVouchersSetter` (`startTransition`)
+- `src/components/dashboard/DashboardPageClient.tsx` — no full-page voucher skeleton; `initialVoucherBootSettled` loading gate (background merge must not re-block dashboard)
+
+### Stabilized behavior to preserve
+
+- **SQLite first:** `listVoucherSummaryProjectionFromBrowserDb` → paint lite rows → `setLoading(false)` on dashboard when lite applies (not empty critical-path shortcut).
+- **Full merge deferred:** `listCompanyDocsFromBrowserDb("vouchers")` via `requestIdleCallback` + `startTransition` — main thread stays interactive.
+- **Dashboard UI:** Footer tabs + shell always clickable after first paint; no blocking skeleton while vouchers hydrate.
+- **Background sync:** Firestore/delta voucher updates via `commitVouchersSetter` in `startTransition` — data updates without freezing UI.
+- **Other routes:** Same fast-first voucher SQLite loader; non-dashboard routes keep critical/secondary master prefetch split.
+
+### Do not
+
+- Revert to blocking full-page dashboard skeleton while `vouchersLoading`.
+- Await full voucher JSON parse before clearing `loading` on `/dashboard`.
+- Run heavy voucher merge synchronously on main thread during boot/tab switch.
+- Remove `startTransition` from `commitVouchersSetter` for “simplicity” while doing unrelated voucher work.
+
+### If the human explicitly asks to change dashboard boot UX
+
+- Keep the diff minimal and scoped to that request.
+- Preserve: instant SQLite paint, background full merge, clickable dashboard during update.
+
 ## Admin Panel Company (hard — every AI)
 
 **Any agent working on Admin Panel Company / Admin “Company” menu / admin subscription ledger / future PL Server Gold admin accounting must read this section (and `docs/ADMIN_PANEL_COMPANY_AGENT_RULES.md`, plus `.cursor/rules/admin-panel-company.mdc` when present) before editing.**

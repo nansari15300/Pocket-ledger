@@ -73,7 +73,14 @@ const MobileViewContext = React.createContext<{
 } | null>(null);
 
 // Provider component
-export function MobileViewProvider({ children }: { children: React.ReactNode }) {
+export function MobileViewProvider({
+  children,
+  /** Super Admin: PC viewport par ledger `forcedViewMode` ignore — sirf width < 768 = mobile. */
+  lockDesktopLayout = false,
+}: {
+  children: React.ReactNode
+  lockDesktopLayout?: boolean
+}) {
   const [isMobile, setIsMobile] = React.useState(false)
   const [isPortrait, setIsPortrait] = React.useState(false)
   const [forcedViewMode, setForcedViewModeState] = React.useState<'mobile' | 'pc' | null>(null)
@@ -108,18 +115,22 @@ export function MobileViewProvider({ children }: { children: React.ReactNode }) 
 
   // Mount: saved PC/Mobile restore — web + APK dono (header icon PC Chrome jaisa 768 + toggle).
   React.useEffect(() => {
-    if (!isClient) return;
+    if (!isClient || lockDesktopLayout) return;
     const savedMode = localStorage.getItem("forcedViewMode") as "mobile" | "pc" | null;
     if (savedMode === "mobile" || savedMode === "pc") {
       setForcedViewModeState(savedMode);
     }
-  }, [isClient]);
+  }, [isClient, lockDesktopLayout]);
 
   React.useEffect(() => {
     if (!isClient) return;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     const checkIsMobile = () => {
+      if (lockDesktopLayout) {
+        setIsMobile(window.innerWidth < 768);
+        return;
+      }
       const portrait = getIsPortrait();
       const realMobile = isRealMobileDevice();
 
@@ -191,9 +202,13 @@ export function MobileViewProvider({ children }: { children: React.ReactNode }) 
       window.removeEventListener("resize", scheduleCheck);
       window.removeEventListener("orientationchange", scheduleCheck);
     };
-  }, [isClient, forcedViewMode, isPortrait])
+  }, [isClient, forcedViewMode, isPortrait, lockDesktopLayout])
 
   const setForcedMode = React.useCallback((mode: "mobile" | "pc" | null) => {
+    if (lockDesktopLayout) {
+      setIsMobile(typeof window !== "undefined" ? window.innerWidth < 768 : false);
+      return;
+    }
     setForcedViewModeState(mode);
     if (mode) {
       localStorage.setItem("forcedViewMode", mode);
@@ -223,7 +238,7 @@ export function MobileViewProvider({ children }: { children: React.ReactNode }) 
     } else {
       setIsMobile(window.innerWidth < 768);
     }
-  }, []);
+  }, [lockDesktopLayout]);
 
   const value = React.useMemo(() => ({
     isMobile,
@@ -320,6 +335,32 @@ export function useIsMobile(): boolean {
   React.useEffect(() => {
     setMounted(true);
   }, []);
+  if (!mounted) return false;
+  return isMobile;
+}
+
+/** Super Admin: viewport width only — touch laptop / ledger forced mobile apply mat karo. */
+function resolveAdminPanelIsMobile(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.innerWidth < 768;
+}
+
+export function useAdminPanelIsMobile(): boolean {
+  const [mounted, setMounted] = React.useState(false);
+  const [isMobile, setIsMobile] = React.useState(false);
+
+  React.useEffect(() => {
+    setMounted(true);
+    const check = () => setIsMobile(resolveAdminPanelIsMobile());
+    check();
+    window.addEventListener("resize", check);
+    window.addEventListener("orientationchange", check);
+    return () => {
+      window.removeEventListener("resize", check);
+      window.removeEventListener("orientationchange", check);
+    };
+  }, []);
+
   if (!mounted) return false;
   return isMobile;
 }

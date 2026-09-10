@@ -6,7 +6,7 @@ import { Slot } from "@radix-ui/react-slot"
 import { cva, type VariantProps } from "class-variance-authority"
 import { PanelLeft } from "lucide-react"
 
-import { useIsMobile, useMobileView } from "@/hooks/use-mobile"
+import { useAdminPanelIsMobile, useIsMobile, useMobileView } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 import { Button, type ButtonProps } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
@@ -35,9 +35,18 @@ export function useSidebar() {
   return context
 }
 
-export function SidebarProvider({ children }: { children: React.ReactNode }) {
-  const isMobile = useIsMobile()
-  const { isRealMobile, forcedViewMode } = useMobileView()
+export function SidebarProvider({
+  children,
+  /** Admin panel: PC browser par ledger forced-mobile ignore — desktop sidebar + layout. */
+  desktopSidebarOnPc = false,
+}: {
+  children: React.ReactNode
+  desktopSidebarOnPc?: boolean
+}) {
+  const globalIsMobile = useIsMobile()
+  const adminIsMobile = useAdminPanelIsMobile()
+  const isMobile = desktopSidebarOnPc ? adminIsMobile : globalIsMobile
+  const { forcedViewMode } = useMobileView()
   const [isOpen, setIsOpen] = React.useState(true)
   const [isClient, setIsClient] = React.useState(false);
 
@@ -46,35 +55,38 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Check if sidebar should be hidden (mobile view - real or forced)
-  const shouldHideSidebar = isMobile || forcedViewMode === 'mobile';
+  const shouldHideSidebar = desktopSidebarOnPc
+    ? adminIsMobile
+    : globalIsMobile || forcedViewMode === "mobile";
 
   React.useEffect(() => {
-    if (isClient) {
-      if (shouldHideSidebar) {
-        // Always hide sidebar in mobile view (real or forced)
-        setIsOpen(false);
-      } else {
-        // PC view: restore saved state or default to open
-        const path = typeof window !== "undefined" ? window.location.pathname : "";
-        // Reconciliation — wide ledger view: refresh par sidebar expand na ho (localStorage override)
-        if (path.startsWith("/reconciliation")) {
-          setIsOpen(false);
-          try {
-            localStorage.setItem("sidebar-isOpen", JSON.stringify(false));
-          } catch {
-            /* ignore */
-          }
-          return;
-        }
-        const storedState = localStorage.getItem("sidebar-isOpen");
-        if (storedState !== null) {
-          setIsOpen(JSON.parse(storedState));
-        } else {
-          setIsOpen(true);
-        }
-      }
+    if (!isClient) return;
+    if (shouldHideSidebar) {
+      setIsOpen(false);
+      return;
     }
-  }, [isClient, shouldHideSidebar]);
+    // Admin PC: main app ka collapsed sidebar inherit mat karo — hamesha expanded.
+    if (desktopSidebarOnPc) {
+      setIsOpen(true);
+      return;
+    }
+    const path = typeof window !== "undefined" ? window.location.pathname : "";
+    if (path.startsWith("/reconciliation")) {
+      setIsOpen(false);
+      try {
+        localStorage.setItem("sidebar-isOpen", JSON.stringify(false));
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    const storedState = localStorage.getItem("sidebar-isOpen");
+    if (storedState !== null) {
+      setIsOpen(JSON.parse(storedState));
+    } else {
+      setIsOpen(true);
+    }
+  }, [isClient, shouldHideSidebar, desktopSidebarOnPc]);
 
   const toggleSidebar = React.useCallback(() => {
     setIsOpen((prev) => {

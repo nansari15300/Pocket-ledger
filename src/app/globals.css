@@ -4045,114 +4045,114 @@ body.theme-pro main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-d
   background-color: #ecfdf5 !important;
   background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
 }
-body.theme-pro main .rounded-lg.bg-card .rounded-lg.bg-card,
-body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card {
+body.theme-pro main .rounded-lg.bg-card .rounded-lg.bg-card:not([data-pl-mobile-transaction-card]),
+body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]) {
   background-color: #f0f9ff !important;
   background-image: linear-gradient(90deg, rgba(224, 242, 254, 0.98) 0%, #ffffff 50%, rgba(207, 250, 254, 0.92) 100%) !important;
 }
-body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card {
+body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]) {
   background-color: #f5f3ff !important;
   background-image: linear-gradient(90deg, rgba(245, 243, 255, 0.98) 0%, #ffffff 50%, rgba(250, 232, 255, 0.92) 100%) !important;
 }
-body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card {
+body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]) {
   background-color: #fffbeb !important;
   background-image: linear-gradient(90deg, rgba(254, 252, 232, 0.98) 0%, #ffffff 50%, rgba(254, 243, 199, 0.92) 100%) !important;
 }
-body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card {
+body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]) {
   background-color: #fff1f2 !important;
   background-image: linear-gradient(90deg, rgba(255, 241, 242, 0.98) 0%, #ffffff 50%, rgba(252, 231, 243, 0.92) 100%) !important;
 }
-body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card {
+body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]) {
   background-color: #f0fdfa !important;
   background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.96) 0%, #ffffff 50%, rgba(204, 251, 241, 0.9) 100%) !important;
 }
-body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card {
+body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]) {
   background-color: #eef2ff !important;
   background-image: linear-gradient(90deg, rgba(238, 242, 255, 0.98) 0%, #ffffff 50%, rgba(219, 234, 254, 0.92) 100%) !important;
 }
 /* Pro: grid ke sibling Cards/panels — Voucher Prefix (gap-8) + Number settings (gap-4) */
-body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 1),
-body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 1),
-body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 1) {
+body.theme-pro main .grid > .rounded-lg.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 1),
+body.theme-pro main .grid.gap-8 > .rounded-lg:not([data-pl-mobile-transaction-card]):nth-child(7n + 1),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 1) {
   background-color: #ecfdf5 !important;
   background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
 }
-body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 2),
-body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 2),
-body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 2) {
+body.theme-pro main .grid > .rounded-lg.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 2),
+body.theme-pro main .grid.gap-8 > .rounded-lg:not([data-pl-mobile-transaction-card]):nth-child(7n + 2),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 2) {
   background-color: #f0f9ff !important;
   background-image: linear-gradient(90deg, rgba(224, 242, 254, 0.98) 0%, #ffffff 50%, rgba(207, 250, 254, 0.92) 100%) !important;
 }
-body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 3),
-body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 3),
-body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 3) {
+body.theme-pro main .grid > .rounded-lg.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 3),
+body.theme-pro main .grid.gap-8 > .rounded-lg:not([data-pl-mobile-transaction-card]):nth-child(7n + 3),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 3) {
   background-color: #f5f3ff !important;
   background-image: linear-gradient(90deg, rgba(245, 243, 255, 0.98) 0%, #ffffff 50%, rgba(250, 232, 255, 0.92) 100%) !important;
 }
-body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 4),
-body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 4),
-body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 4) {
+body.theme-pro main .grid > .rounded-lg.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 4),
+body.theme-pro main .grid.gap-8 > .rounded-lg:not([data-pl-mobile-transaction-card]):nth-child(7n + 4),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 4) {
   background-color: #fffbeb !important;
   background-image: linear-gradient(90deg, rgba(254, 252, 232, 0.98) 0%, #ffffff 50%, rgba(254, 243, 199, 0.92) 100%) !important;
 }
-body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 5),
-body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 5),
-body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 5) {
+body.theme-pro main .grid > .rounded-lg.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 5),
+body.theme-pro main .grid.gap-8 > .rounded-lg:not([data-pl-mobile-transaction-card]):nth-child(7n + 5),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 5) {
   background-color: #fff1f2 !important;
   background-image: linear-gradient(90deg, rgba(255, 241, 242, 0.98) 0%, #ffffff 50%, rgba(252, 231, 243, 0.92) 100%) !important;
 }
-body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 6),
-body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 6),
-body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 6) {
+body.theme-pro main .grid > .rounded-lg.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 6),
+body.theme-pro main .grid.gap-8 > .rounded-lg:not([data-pl-mobile-transaction-card]):nth-child(7n + 6),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 6) {
   background-color: #f0fdfa !important;
   background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.96) 0%, #ffffff 50%, rgba(204, 251, 241, 0.9) 100%) !important;
 }
-body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 7),
-body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 7),
-body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 7) {
+body.theme-pro main .grid > .rounded-lg.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 7),
+body.theme-pro main .grid.gap-8 > .rounded-lg:not([data-pl-mobile-transaction-card]):nth-child(7n + 7),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 7) {
   background-color: #eef2ff !important;
   background-image: linear-gradient(90deg, rgba(238, 242, 255, 0.98) 0%, #ffffff 50%, rgba(219, 234, 254, 0.92) 100%) !important;
 }
 /* Pro: space-y stacks — direct Card children bhi rotate (lists/reports) */
-body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 1),
-body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 1),
-body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 1) {
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 1),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 1),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 1) {
   background-color: #ecfdf5 !important;
   background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
 }
-body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 2),
-body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 2),
-body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 2) {
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 2),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 2),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 2) {
   background-color: #f0f9ff !important;
   background-image: linear-gradient(90deg, rgba(224, 242, 254, 0.98) 0%, #ffffff 50%, rgba(207, 250, 254, 0.92) 100%) !important;
 }
-body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 3),
-body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 3),
-body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 3) {
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 3),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 3),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 3) {
   background-color: #f5f3ff !important;
   background-image: linear-gradient(90deg, rgba(245, 243, 255, 0.98) 0%, #ffffff 50%, rgba(250, 232, 255, 0.92) 100%) !important;
 }
-body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 4),
-body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 4),
-body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 4) {
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 4),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 4),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 4) {
   background-color: #fffbeb !important;
   background-image: linear-gradient(90deg, rgba(254, 252, 232, 0.98) 0%, #ffffff 50%, rgba(254, 243, 199, 0.92) 100%) !important;
 }
-body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 5),
-body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 5),
-body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 5) {
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 5),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 5),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 5) {
   background-color: #fff1f2 !important;
   background-image: linear-gradient(90deg, rgba(255, 241, 242, 0.98) 0%, #ffffff 50%, rgba(252, 231, 243, 0.92) 100%) !important;
 }
-body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 6),
-body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 6),
-body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 6) {
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 6),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 6),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 6) {
   background-color: #f0fdfa !important;
   background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.96) 0%, #ffffff 50%, rgba(204, 251, 241, 0.9) 100%) !important;
 }
-body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 7),
-body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 7),
-body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 7) {
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 7),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 7),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]):nth-child(7n + 7) {
   background-color: #eef2ff !important;
   background-image: linear-gradient(90deg, rgba(238, 242, 255, 0.98) 0%, #ffffff 50%, rgba(219, 234, 254, 0.92) 100%) !important;
 }
@@ -5333,8 +5333,8 @@ body:not(.theme-pro):not(.theme-pure-white) main .pl-chrome-card.app-chrome-top-
   background-color: hsl(var(--background)) !important;
   background-image: none !important;
 }
-body:not(.theme-pro):not(.theme-pure-white) main .rounded-lg.border.bg-card,
-body:not(.theme-pro):not(.theme-pure-white) main .rounded-lg.border.bg-card.shadow-sm,
+body:not(.theme-pro):not(.theme-pure-white) main .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]),
+body:not(.theme-pro):not(.theme-pure-white) main .rounded-lg.border.bg-card.shadow-sm:not([data-pl-mobile-transaction-card]),
 body:not(.theme-pro):not(.theme-pure-white) main .rounded-md.border,
 body:not(.theme-pro):not(.theme-pure-white) main [class*="pl-dashboard-ribbon-"],
 body:not(.theme-pro):not(.theme-pure-white) main [class*="pl-chrome-tone-"],
@@ -7507,8 +7507,31 @@ html body.dark [data-pl-mobile-transaction-card][data-pl-mobile-card-color="viol
 }
 
 /* Mobile card color picker is the source of truth for the mobile ledger. */
+/*
+ * FREEZE: Mobile Default (violet) txn card UI — gap strip + 3D lift on white cards.
+ * See AGENTS.md "Freeze: Mobile Default txn card UI". Do not edit unless human asks in same message.
+ * Gap blue: saved light #dbeafe; active #bfdbfe. Cards stay #ffffff.
+ */
 html body [data-pl-mobile-card-page-color="violet"] {
-  background-color: #f3f4f6 !important;
+  background-color: #bfdbfe !important;
+  min-height: 100%;
+}
+/* Default (violet): mobile scroll column — no white strip below Closing Balance / overscroll. */
+html[data-pl-mobile-card-color="violet"] body main .scroll-touch {
+  background-color: #bfdbfe !important;
+}
+html[data-pl-mobile-card-color="violet"] body main .scroll-touch > div {
+  min-height: 100%;
+  background-color: #bfdbfe !important;
+}
+html[data-pl-mobile-card-color="violet"] body [data-pl-freeze-shell-content] {
+  min-height: 100%;
+  background-color: #bfdbfe !important;
+}
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-txn-host],
+html[data-pl-mobile-card-color="violet"] body .pl-ledger-detail-empty-fill,
+html[data-pl-mobile-card-color="violet"] body .pl-ledger-detail-table-shell {
+  background-color: #bfdbfe !important;
 }
 html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"] {
   border-color: transparent !important;
@@ -7608,8 +7631,8 @@ html[data-pl-mobile-card-color="amber"] body [data-pl-mobile-transaction-card="g
 }
 
 /* Root preference fallback: keeps the saved picker choice authoritative after page changes. */
-html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-page-color] {
-  background-color: #f3f4f6 !important;
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-page-color="violet"] {
+  background-color: #bfdbfe !important;
 }
 html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-transaction-card] {
   border-width: 0 !important;
@@ -7863,4 +7886,105 @@ html body[class*="theme-"] main [data-pl-mobile-transaction-card="pink"][data-pl
   border-width: 1px !important;
   border-style: solid !important;
   border-color: #ffa500 !important;
+}
+
+/* FREEZE: Default (violet) 3D card lift — see AGENTS.md. Other card themes unchanged. */
+html body [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="violet"],
+html body [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="violet"],
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-card="green"],
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-card="blue"],
+html body[class*="theme-"] main [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="violet"],
+html body[class*="theme-"] main [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="violet"] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgba(255, 255, 255, 0.96) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(29, 78, 216, 0.14),
+    0 4px 10px rgba(37, 99, 235, 0.18),
+    0 10px 22px rgba(37, 99, 235, 0.14) !important;
+}
+html body [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="violet"],
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-card="pink"],
+html body[class*="theme-"] main [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="violet"] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgba(80, 80, 80, 0.22) !important;
+  box-shadow:
+    0 2px 5px rgba(15, 23, 42, 0.14),
+    0 6px 16px rgba(15, 23, 42, 0.12) !important;
+}
+
+/*
+ * Dashboard Recent mobile: nested inside pl-dashboard-tone-card / theme-pro ribbon.
+ * Theme nested `.rounded-lg.border.bg-card` rules must not repaint txn cards — party parity.
+ */
+body[class*="theme-"] main .pl-dashboard-tone-card [data-pl-mobile-txn-host] {
+  background: transparent !important;
+  background-image: none !important;
+}
+body[class*="theme-"] main [data-pl-mobile-txn-host] [data-pl-mobile-txn-list][data-pl-mobile-card-page-color="violet"] {
+  background-color: #bfdbfe !important;
+}
+body[class*="theme-"] main [data-pl-mobile-txn-host] [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"]:not([data-pl-mobile-transaction-card="pink"]) {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  color: #000000 !important;
+  border-color: transparent !important;
+}
+body[class*="theme-"] main [data-pl-mobile-txn-host] [data-pl-mobile-transaction-card][data-pl-mobile-card-color="default"]:not([data-pl-mobile-transaction-card="pink"]) {
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
+  color: #000000 !important;
+  border-color: rgb(134 239 172) !important;
+}
+body[class*="theme-"] main [data-pl-mobile-txn-host] [data-pl-mobile-transaction-card][data-pl-mobile-card-color="blue"]:not([data-pl-mobile-transaction-card="pink"]) {
+  background-color: #dbeafe !important;
+  background-image: none !important;
+  color: #000000 !important;
+  border-color: rgb(147 197 253) !important;
+}
+body[class*="theme-"] main [data-pl-mobile-txn-host] [data-pl-mobile-transaction-card][data-pl-mobile-card-color="pink"]:not([data-pl-mobile-transaction-card="pink"]) {
+  background-color: #fce7f3 !important;
+  background-image: none !important;
+  color: #000000 !important;
+  border-color: rgb(249 168 212) !important;
+}
+body[class*="theme-"] main [data-pl-mobile-txn-host] [data-pl-mobile-transaction-card][data-pl-mobile-card-color="amber"]:not([data-pl-mobile-transaction-card="pink"]) {
+  background-color: #fef3c7 !important;
+  background-image: none !important;
+  color: #000000 !important;
+  border-color: rgb(252 211 77) !important;
+}
+body[class*="theme-"] main [data-pl-mobile-txn-host] [data-pl-mobile-transaction-card]:not([data-pl-mobile-transaction-card="pink"]) .text-muted-foreground,
+body[class*="theme-"] main [data-pl-mobile-txn-host] [data-pl-mobile-transaction-card]:not([data-pl-mobile-transaction-card="pink"]) .text-card-foreground {
+  color: hsl(215.4 16.3% 46.9%) !important;
+}
+body[class*="theme-"] main [data-pl-mobile-txn-host] [data-pl-mobile-transaction-card]:not([data-pl-mobile-transaction-card="pink"]) p.font-bold,
+body[class*="theme-"] main [data-pl-mobile-txn-host] [data-pl-mobile-transaction-card]:not([data-pl-mobile-transaction-card="pink"]) .font-bold.text-sm {
+  color: #000000 !important;
+}
+body.theme-pro main .pl-dashboard-tone-card .rounded-lg.border.bg-card [data-pl-mobile-transaction-card] {
+  background-image: none !important;
+}
+
+/* Choose Card Color picker: non-Default tab previews use black text (saved Default root must not force white on pink). */
+html body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card][data-pl-mobile-card-color="default"],
+html body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card][data-pl-mobile-card-color="blue"],
+html body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card][data-pl-mobile-card-color="pink"],
+html body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card][data-pl-mobile-card-color="amber"],
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="default"],
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="blue"],
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="pink"],
+html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="amber"] {
+  color: #000000 !important;
+}
+html body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"][data-pl-mobile-transaction-card="pink"] {
+  color: #ffffff !important;
+}
+html body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card] [class*="text-red-600"] {
+  color: rgb(220 38 38) !important;
+}
+html body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card] [class*="text-green-600"] {
+  color: rgb(22 163 74) !important;
 }

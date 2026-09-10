@@ -102,10 +102,12 @@ function getTransactionAmounts(transaction: any) {
 
 interface DaybookReportProps {
   onFullScreenToggle?: () => void;
+  /** Dashboard keep-alive: intro/swipe jab panel visible ho tab hi (default: always visible). */
+  isPanelVisible?: boolean;
 }
 
 
-export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
+export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: DaybookReportProps) {
     const {
       vouchers,
       processedAccounts: accounts,
@@ -152,6 +154,8 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
     } | null>(null);
     const isMobile = useIsMobile();
     const calendarMonths = useCalendarMonths();
+    const [showSwipeDateIntro, setShowSwipeDateIntro] = useState(false);
+    const daybookSwipeStart = React.useRef<{ x: number; y: number } | null>(null);
 
     const handleEditVoucher = (voucher: any) => {
         setSelectedVoucher(voucher);
@@ -297,10 +301,45 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
         sessionStorage.setItem("showNarration", String(checked));
     };
 
-    // PC: ek din shift — arrow buttons + keyboard (- / =); mobile par nahi
+    // PC: toolbar arrows + side chevrons + keyboard (- / =); mobile: swipe left/right.
     const shiftDaybookDateBy = useCallback((deltaDays: number) => {
         setDaybookDate((prev) => startOfDay(addDays(prev ?? new Date(), deltaDays)));
     }, []);
+
+    useEffect(() => {
+        if (!isMobile || !isPanelVisible) {
+            setShowSwipeDateIntro(false);
+            return;
+        }
+        setShowSwipeDateIntro(true);
+        const timer = window.setTimeout(() => setShowSwipeDateIntro(false), 1500);
+        return () => window.clearTimeout(timer);
+    }, [isMobile, isPanelVisible]);
+
+    const handleDaybookTouchStart = useCallback(
+        (event: React.TouchEvent) => {
+            if (!isMobile) return;
+            const touch = event.touches[0];
+            if (!touch) return;
+            daybookSwipeStart.current = { x: touch.clientX, y: touch.clientY };
+        },
+        [isMobile]
+    );
+
+    const handleDaybookTouchEnd = useCallback(
+        (event: React.TouchEvent) => {
+            if (!isMobile) return;
+            const start = daybookSwipeStart.current;
+            daybookSwipeStart.current = null;
+            const touch = event.changedTouches[0];
+            if (!start || !touch) return;
+            const dx = touch.clientX - start.x;
+            const dy = touch.clientY - start.y;
+            if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+            shiftDaybookDateBy(dx < 0 ? 1 : -1);
+        },
+        [isMobile, shiftDaybookDateBy]
+    );
 
     useEffect(() => {
         if (isMobile) return;
@@ -450,12 +489,16 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
 
     return (
       <div id="daybook-area" className={cn("printable-area flex flex-col min-h-0 h-full")}>
-        <Card className={cn(
-            "flex-1 flex flex-col min-h-0 overflow-hidden border-2 border-foreground transition-all duration-300",
+        <Card
+            className={cn(
+            "relative flex-1 flex flex-col min-h-0 overflow-hidden border-2 border-foreground transition-all duration-300",
             isFullScreen && "h-full",
             isMobile && "px-0",
             isMobile && daybookRotated && "max-w-[90vh] w-[90vh] h-[100vw] fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rotate-90 z-50"
-        )}>
+        )}
+            onTouchStart={handleDaybookTouchStart}
+            onTouchEnd={handleDaybookTouchEnd}
+        >
             <CardHeader className={cn("print:hidden flex-shrink-0", isMobile && "px-0.5")}>
                 <div className="flex flex-wrap items-center justify-between gap-4">
                     <div>
@@ -833,7 +876,7 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                     </div>
                 </div>
               ) : (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none overflow-hidden rounded-b-lg min-h-[420px]">
+                <div className="relative flex-1 min-h-0 flex items-center justify-center pointer-events-none overflow-hidden rounded-b-lg">
                     <div className="absolute top-6 left-6 text-5xl md:text-6xl font-bold text-muted-foreground/15 transform -rotate-12 select-none">
                         Daybook
                     </div>
@@ -845,8 +888,40 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                     </div>
                 </div>
               )}
+            {/* Blue txn list ke niche card-green strip — arrows yahan, cards par overlap nahi. */}
+            <div className="relative shrink-0 flex h-10 items-center print:hidden">
+                <button
+                    type="button"
+                    aria-label="Previous day"
+                    className={cn(
+                        "absolute left-0 flex h-9 w-9 items-center justify-center rounded-r-md text-muted-foreground/35 hover:text-muted-foreground/70 hover:bg-muted/25 transition-colors",
+                        isMobile && "w-8"
+                    )}
+                    onClick={() => shiftDaybookDateBy(-1)}
+                >
+                    <ChevronLeft className={cn(isMobile ? "h-7 w-7" : "h-8 w-8")} strokeWidth={1.5} />
+                </button>
+                <button
+                    type="button"
+                    aria-label="Next day"
+                    className={cn(
+                        "absolute right-0 flex h-9 w-9 items-center justify-center rounded-l-md text-muted-foreground/35 hover:text-muted-foreground/70 hover:bg-muted/25 transition-colors",
+                        isMobile && "w-8"
+                    )}
+                    onClick={() => shiftDaybookDateBy(1)}
+                >
+                    <ChevronRight className={cn(isMobile ? "h-7 w-7" : "h-8 w-8")} strokeWidth={1.5} />
+                </button>
+            </div>
             </CardContent>
         </Card>
+        {isMobile && showSwipeDateIntro && isPanelVisible ? (
+            <div className="pointer-events-none fixed left-1/2 top-[42%] z-[120] w-[min(92vw,20rem)] -translate-x-1/2 print:hidden">
+                <div className="rounded-lg bg-black/80 px-3 py-2 text-center text-xs font-medium text-white shadow-lg">
+                    Swipe left/right to change date
+                </div>
+            </div>
+        ) : null}
         <AddVoucherDialog isOpen={isVoucherDialogOpen} onOpenChange={setIsVoucherDialogOpen} voucher={selectedVoucher} onVoucherCreated={() => setSelectedVoucher(null)} />
         <HistoryDialog voucher={historyVoucher} isOpen={!!historyVoucher} onOpenChange={(open) => !open && setHistoryVoucher(null)} onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)} />
         <DaybookAccountDayPeekDialog

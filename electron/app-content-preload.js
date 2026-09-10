@@ -17,6 +17,19 @@ function readAppBootSessionId() {
   }
 }
 
+function readTabInstanceIdFromArgv() {
+  try {
+    for (const arg of process.argv) {
+      if (typeof arg === "string" && arg.startsWith("--pl-tab-instance-id=")) {
+        return arg.slice("--pl-tab-instance-id=".length);
+      }
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return "";
+}
+
 /**
  * Next tab BrowserView — tab strip se “background sync” ke baad strip ko green ✓ dikhane ke liye IPC.
  * `main.js` `pl-tab-strip-sync-done-ack` strip ko forward karta hai.
@@ -40,6 +53,8 @@ contextBridge.exposeInMainWorld("plElectronTabBridge", {
 /** Multi-device / Firestore label: renderer `os.hostname` nahi padh sakta — main IPC se string. */
 contextBridge.exposeInMainWorld("plElectronApp", {
   bootSessionId: readAppBootSessionId(),
+  /** Stable per BrowserView tab — EXE multi-tab company map key (sessionStorage is shared). */
+  tabInstanceId: readTabInstanceIdFromArgv(),
 });
 
 /** Multi-device / Firestore label: renderer `os.hostname` nahi padh sakta — main IPC se string. */

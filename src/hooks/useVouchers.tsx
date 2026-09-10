@@ -480,17 +480,20 @@ function commitEntityListSetter<T>(setter: StateSetter<T>, next: T[]): void {
   });
 }
 
+/** FREEZE: low-priority voucher list updates — dashboard boot freeze; see AGENTS.md. */
 function commitVouchersSetter(setter: StateSetter<any>, next: any[]): void {
-  setter((prev) => {
-    const held = applyLocalApprovalHoldToVoucherList(prev as any[], next as any[]);
-    const preserved = preserveClearedAttachmentsInList(
-      prev as any[],
-      held as any[],
-      commitEntityListCompanyId
-    );
-    return entityListUiFingerprint(prev as any[]) === entityListUiFingerprint(preserved as any[])
-      ? prev
-      : preserved;
+  startTransition(() => {
+    setter((prev) => {
+      const held = applyLocalApprovalHoldToVoucherList(prev as any[], next as any[]);
+      const preserved = preserveClearedAttachmentsInList(
+        prev as any[],
+        held as any[],
+        commitEntityListCompanyId
+      );
+      return entityListUiFingerprint(prev as any[]) === entityListUiFingerprint(preserved as any[])
+        ? prev
+        : preserved;
+    });
   });
 }
 
@@ -729,6 +732,79 @@ function activeMasterCollectionPathsForRoute(
   if (route.startsWith("/dashboard")) return new Set(["vouchers"]);
   // Voucher forms / reconciliation jaise shared pages par full master dataset chahiye.
   return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
+}
+
+/*
+ * FREEZE: Dashboard boot — SQLite-first voucher load, idle full merge, no UI freeze.
+ * See AGENTS.md "Freeze: Dashboard boot — SQLite-first, no UI freeze".
+ */
+type SqliteApplyRowsFn = <T,>(
+  setter: StateSetter<T>,
+  cached: T[],
+  orderByField?: string,
+  collectionPath?: string
+) => void;
+
+function scheduleIdleWork(work: () => void): void {
+  if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(work, { timeout: 2500 });
+    return;
+  }
+  setTimeout(work, 16);
+}
+
+function isDashboardVouchersOnlyPrefetch(
+  pathname: string,
+  collections: ReadonlyArray<{ path: string }>
+): boolean {
+  const route = String(pathname || "").trim().toLowerCase();
+  if (!route.startsWith("/dashboard")) return false;
+  return collections.length > 0 && collections.every((c) => c.path === "vouchers");
+}
+
+/** FREEZE: projection first, full JSON merge idle — see AGENTS.md dashboard boot freeze. */
+function loadVouchersFromSqliteFastFirst(args: {
+  companyId: string;
+  setter: StateSetter<any>;
+  orderByField?: string;
+  applySqliteRows: SqliteApplyRowsFn;
+  isStale: () => boolean;
+  onLiteApplied?: () => void;
+}): Promise<void> {
+  const { companyId, setter, orderByField, applySqliteRows, isStale, onLiteApplied } = args;
+  return listVoucherSummaryProjectionFromBrowserDb(companyId, { forBackupMerge: true })
+    .then((lite) => {
+      if (isStale() || !lite.length) return;
+      startTransition(() => {
+        if (isStale()) return;
+        applySqliteRows(
+          setter,
+          lite.map((r) => ({
+            id: r.id,
+            type: r.type || "sale",
+            date: r.date || null,
+            amount: Number(r.amount || 0),
+          })),
+          orderByField
+        );
+      });
+      onLiteApplied?.();
+    })
+    .catch(() => {})
+    .then(() => {
+      scheduleIdleWork(() => {
+        if (isStale()) return;
+        void listCompanyDocsFromBrowserDb(companyId, "vouchers", { forBackupMerge: true })
+          .then((cached) => {
+            if (isStale()) return;
+            startTransition(() => {
+              if (isStale()) return;
+              applySqliteRows(setter, cached, orderByField, "vouchers");
+            });
+          })
+          .catch(() => {});
+      });
+    });
 }
 
 export const VoucherProvider = ({
@@ -1502,6 +1578,49 @@ export const VoucherProvider = ({
       }
     };
 
+    /* FREEZE: dashboard lite SQLite paint before full voucher parse — AGENTS.md dashboard boot freeze. */
+    const dashboardVouchersOnly = isDashboardVouchersOnlyPrefetch(
+      routePathForBootstrap,
+      collectionsToPrefetch
+    );
+    let sqliteBootReadyMarked = false;
+    const markSqliteBootReady = () => {
+      if (sqliteBootReadyMarked || cancelled || loadEpoch !== companyDataLoadEpochRef.current) return;
+      sqliteBootReadyMarked = true;
+      hasWarmLedgerDataRef.current = true;
+      setLoadingIfChanged(false);
+    };
+    const markDashboardLitePainted = () => {
+      if (!dashboardVouchersOnly) return;
+      markSqliteBootReady();
+    };
+    const isSqliteStale = () => cancelled || loadEpoch !== companyDataLoadEpochRef.current;
+    const makeVouchersSqliteLoader = (setter: StateSetter<any>, orderByField?: string) =>
+      loadVouchersFromSqliteFastFirst({
+        companyId,
+        setter,
+        orderByField,
+        applySqliteRows,
+        isStale: isSqliteStale,
+        onLiteApplied: markDashboardLitePainted,
+      });
+    const runSqlitePrefetchSplit = (
+      loadSqliteChunk: (items: typeof collectionsToPrefetch) => Promise<void>,
+      critical: typeof collectionsToPrefetch,
+      secondary: typeof collectionsToPrefetch
+    ) => {
+      if (dashboardVouchersOnly) {
+        void loadSqliteChunk(collectionsToPrefetch).finally(() => {
+          markSqliteBootReady();
+        });
+        return;
+      }
+      void loadSqliteChunk(critical).finally(() => {
+        markSqliteBootReady();
+      });
+      void loadSqliteChunk(secondary);
+    };
+
     if (isExplicitLocalRegistryRow) {
     if (!keepWarmUi) setLoadingIfChanged(true);
       // Tier-1: masters only — `vouchers` SQLite read (JSON parse) hazaar+ rows par EXE me 30–90s lagata; spinner tab tak band na ho.
@@ -1513,29 +1632,7 @@ export const VoucherProvider = ({
             (skipWarmSqlitePath(path)
               ? Promise.resolve()
               : path === "vouchers"
-              ? // Fast-first vouchers: projection table se lite rows pehle; full JSON parse background me.
-                listVoucherSummaryProjectionFromBrowserDb(companyId, { forBackupMerge: true })
-                  .then((lite) => {
-                    if (cancelled || loadEpoch !== companyDataLoadEpochRef.current || !lite.length) return;
-                    applySqliteRows(
-                      setter,
-                      lite.map((r) => ({
-                        id: r.id,
-                        type: r.type || "sale",
-                        date: r.date || null,
-                        amount: Number(r.amount || 0),
-                      })),
-                      orderByField
-                    );
-                  })
-                  .catch(() => {})
-                  .then(() =>
-                    listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
-                      .then((cached) => {
-                        applySqliteRows(setter, cached, orderByField, path);
-                      })
-                      .catch(() => {})
-                  )
+              ? makeVouchersSqliteLoader(setter, orderByField)
               : listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
                   .then((cached) => {
                     applySqliteRows(setter, cached, orderByField, path);
@@ -1545,13 +1642,7 @@ export const VoucherProvider = ({
         );
       const critical = collectionsToPrefetch.filter((c) => CRITICAL_SQLITE_PATHS.has(c.path));
       const secondary = collectionsToPrefetch.filter((c) => !CRITICAL_SQLITE_PATHS.has(c.path));
-      void loadSqliteChunk(critical).finally(() => {
-        if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
-          hasWarmLedgerDataRef.current = true;
-          setLoadingIfChanged(false);
-        }
-      });
-      void loadSqliteChunk(secondary);
+      runSqlitePrefetchSplit(loadSqliteChunk, critical, secondary);
       return () => {
         cancelled = true;
       };
@@ -1576,29 +1667,7 @@ export const VoucherProvider = ({
             (skipWarmSqlitePath(path)
               ? Promise.resolve()
               : path === "vouchers"
-              ? // Local/APK cold load: projection rows se pehle paint; heavy voucher JSON parse baad me merge.
-                listVoucherSummaryProjectionFromBrowserDb(companyId, { forBackupMerge: true })
-                  .then((lite) => {
-                    if (cancelled || loadEpoch !== companyDataLoadEpochRef.current || !lite.length) return;
-                    applySqliteRows(
-                      setter,
-                      lite.map((r) => ({
-                        id: r.id,
-                        type: r.type || "sale",
-                        date: r.date || null,
-                        amount: Number(r.amount || 0),
-                      })),
-                      orderByField
-                    );
-                  })
-                  .catch(() => {})
-                  .then(() =>
-                    listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
-                      .then((cached) => {
-                        applySqliteRows(setter, cached, orderByField, path);
-                      })
-                      .catch(() => {})
-                  )
+              ? makeVouchersSqliteLoader(setter, orderByField)
               : listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
                   .then((cached) => {
                     applySqliteRows(setter, cached, orderByField, path);
@@ -1608,14 +1677,7 @@ export const VoucherProvider = ({
         );
       const critical = collectionsToPrefetch.filter((c) => CRITICAL_SQLITE_PATHS.has(c.path));
       const secondary = collectionsToPrefetch.filter((c) => !CRITICAL_SQLITE_PATHS.has(c.path));
-      void loadSqliteChunk(critical).finally(() => {
-        // Stale-first: show local SQLite immediately; Firestore listeners refresh in background.
-        if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
-          hasWarmLedgerDataRef.current = true;
-          setLoadingIfChanged(false);
-        }
-      });
-      void loadSqliteChunk(secondary);
+      runSqlitePrefetchSplit(loadSqliteChunk, critical, secondary);
     }
 
     if (shouldReadLedgerFromSqliteOnly(companyRef.current as Parameters<typeof shouldReadLedgerFromSqliteOnly>[0])) {
@@ -1649,25 +1711,21 @@ export const VoucherProvider = ({
         const loadSqliteChunk = (items: typeof collectionsToPrefetch) =>
           Promise.all(
             items.map(({ path, setter, orderByField }) =>
-              (skipWarmSqlitePath(path)
+              skipWarmSqlitePath(path)
                 ? Promise.resolve()
-                : listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true }))
-                .then((cached) => {
-                  if (!cached) return;
-                  applySqliteRows(setter, cached, orderByField, path);
-                })
-                .catch(() => {})
+                : path === "vouchers"
+                  ? makeVouchersSqliteLoader(setter, orderByField)
+                  : listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+                      .then((cached) => {
+                        if (!cached) return;
+                        applySqliteRows(setter, cached, orderByField, path);
+                      })
+                      .catch(() => {})
             )
           );
         const critical = collectionsToPrefetch.filter((c) => CRITICAL_SQLITE_PATHS.has(c.path));
         const secondary = collectionsToPrefetch.filter((c) => !CRITICAL_SQLITE_PATHS.has(c.path));
-        void loadSqliteChunk(critical).finally(() => {
-          if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
-            hasWarmLedgerDataRef.current = true;
-            setLoadingIfChanged(false);
-          }
-        });
-        void loadSqliteChunk(secondary);
+        runSqlitePrefetchSplit(loadSqliteChunk, critical, secondary);
       } else if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
         hasWarmLedgerDataRef.current = true;
         setLoadingIfChanged(false);

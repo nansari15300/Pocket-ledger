@@ -2214,16 +2214,28 @@ async function reloadAllAppBrowserViewsPreservePath(port) {
   }
 }
 
+function createElectronTabInstanceId() {
+  try {
+    return `pl_tab_${require("crypto").randomUUID()}`;
+  } catch (_) {
+    return `pl_tab_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
 async function openNewTab(win, loadUrl) {
   const entryUrl = loadUrl || (await getAppEntryUrl());
+  const tabInstanceId = createElectronTabInstanceId();
   const view = new BrowserView({
     webPreferences: {
       preload: path.join(__dirname, "app-content-preload.js"),
+      /** Per-tab id — EXE BrowserViews share sessionStorage; renderer reads via preload. */
+      additionalArguments: [`--pl-tab-instance-id=${tabInstanceId}`],
       nodeIntegration: false,
       contextIsolation: true,
       backgroundThrottling: false,
     },
   });
+  view.plTabInstanceId = tabInstanceId;
   installPlServerRequestHeaders(view.webContents.session);
   attachAppContentContextMenu(view.webContents);
 
