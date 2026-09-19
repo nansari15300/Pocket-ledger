@@ -1,5 +1,10 @@
 import { adToBs, bsToAd, getBSMonthDays } from "@/lib/bs-date";
-import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
+import {
+  type CompanyFiscalYearDates,
+  fiscalTemplateFromCompanyDates,
+  getFiscalRangeForCompany,
+  getFiscalRangeForCountry,
+} from "@/lib/fiscalRange";
 import type { Party } from "@/components/party/types";
 import { getTransactionAmounts } from "@/hooks/use-transactions";
 
@@ -48,8 +53,12 @@ function parseVoucherDate(value: unknown): Date | null {
 }
 
 /** Running FY key — Nepal BS years e.g. `2081-2082`. */
-export function getAnusuchi13FyKey(country?: string, baseDate: Date = new Date()): string {
-  const { start, end } = getFiscalRangeForCountry(country, baseDate);
+export function getAnusuchi13FyKey(
+  country?: string,
+  baseDate: Date = new Date(),
+  companyDates?: CompanyFiscalYearDates | null
+): string {
+  const { start, end } = getFiscalRangeForCompany(country, baseDate, companyDates);
   const normalized = (country || "").trim().toLowerCase();
   if (normalized === "nepal") {
     const startBs = adToBs(start);
@@ -76,14 +85,29 @@ function getFiscalTemplateForCountry(country?: string) {
 /** FY dropdown selection → AD date range for that fiscal year. */
 export function getFiscalRangeForFyKey(
   country: string | undefined,
-  fyKey: string
+  fyKey: string,
+  companyDates?: CompanyFiscalYearDates | null
 ): { start: Date; end: Date } {
   const parts = fyKey.split("-").map((s) => Number(s.trim()));
   if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) {
-    return getFiscalRangeForCountry(country, new Date());
+    return getFiscalRangeForCompany(country, new Date(), companyDates);
   }
   const [startY, endY] = parts;
   const normalized = (country || "").trim().toLowerCase();
+  const companyTemplate = fiscalTemplateFromCompanyDates(
+    companyDates?.fiscalYearStart,
+    companyDates?.fiscalYearEnd
+  );
+  if (companyTemplate) {
+    const isCrossYear =
+      companyTemplate.endMonth < companyTemplate.startMonth ||
+      (companyTemplate.endMonth === companyTemplate.startMonth &&
+        companyTemplate.endDay < companyTemplate.startDay);
+    return {
+      start: new Date(startY, companyTemplate.startMonth, companyTemplate.startDay),
+      end: new Date(isCrossYear ? endY : startY, companyTemplate.endMonth, companyTemplate.endDay),
+    };
+  }
   if (normalized === "nepal") {
     const asarDays = getBSMonthDays(endY)[2] || 32;
     return {

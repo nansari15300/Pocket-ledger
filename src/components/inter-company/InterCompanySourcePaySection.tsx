@@ -9,7 +9,11 @@ import { Input } from "@/components/ui/input";
 import { Combobox } from "@/components/ui/combobox";
 import { Label } from "@/components/ui/label";
 import { InterCompanyAccountLookupSection } from "@/components/inter-company/InterCompanyAccountLookupSection";
-import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
+import {
+  INTER_COMPANY_ENTITY_LABELS,
+  type InterCompanyEntityKind,
+  type InterCompanyEntityKindFilter,
+} from "@/components/inter-company/InterCompanyEntitySide";
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
 import { readCompanyInterCompanyAcNo } from "@/lib/interCompany/interCompanyAccountNo";
 import { normalizeInterCompanyPhone } from "@/lib/interCompany/interCompanyPhone";
@@ -19,6 +23,9 @@ import {
   interCompanyCompanyFieldsRowClass,
   interCompanyCompanyFieldsRowSimpleClass,
   interCompanyDropdownContentClass,
+  interCompanyAccountFieldsRowClass,
+  interCompanyAccountFieldsRowSimpleClass,
+  interCompanyAccountNameFieldColClass,
   interCompanyFieldColClass,
   interCompanyIcReadonlyFieldClass,
   interCompanyInputClass,
@@ -44,8 +51,8 @@ type Props = {
   companySelectDisabled?: boolean;
   entities: InterCompanyEntityDetail[];
   entitiesLoading?: boolean;
-  payeeKind: InterCompanyEntityKind;
-  onPayeeKindChange: (k: InterCompanyEntityKind) => void;
+  payeeKind: InterCompanyEntityKindFilter;
+  onPayeeKindChange: (k: InterCompanyEntityKindFilter) => void;
   payeeId: string;
   onPayeeIdChange: (id: string) => void;
   /** Edit view — account pickers read-only */
@@ -63,6 +70,14 @@ type Props = {
   /** Simple view + other charge — transfer + other charge bank out total */
   simpleViewBankOutTotal?: number | null;
   formatCurrencyForPrint?: (amount: number, options?: { noSuffix?: boolean }) => string;
+  /** Connect user — master list hidden; type suggested account name */
+  sourceAccountListRestricted?: boolean;
+  /** Connect user — kuch masters allowed; type dropdown + filtered list */
+  connectPartialMasters?: boolean;
+  allowedSourceEntityKinds?: InterCompanyEntityKind[];
+  accountNameHint?: string;
+  suggestedSourceAccountLabel?: string;
+  onSuggestedSourceAccountLabelChange?: (label: string) => void;
 };
 
 export function InterCompanySourcePaySection({
@@ -86,6 +101,12 @@ export function InterCompanySourcePaySection({
   simpleView = false,
   simpleViewBankOutTotal = null,
   formatCurrencyForPrint,
+  sourceAccountListRestricted = false,
+  connectPartialMasters = false,
+  allowedSourceEntityKinds = [],
+  accountNameHint,
+  suggestedSourceAccountLabel = "",
+  onSuggestedSourceAccountLabelChange,
 }: Props) {
   const companyAc = readCompanyInterCompanyAcNo(company);
   const companyCode = useStickyInterCompanyCompanyCode(company);
@@ -217,31 +238,111 @@ export function InterCompanySourcePaySection({
       </div>
 
       <div className={interCompanyVoucherRowAccountClass}>
-        <InterCompanyAccountLookupSection
-          sectionTitle="Source account"
-          entities={optionalSourceEntities}
-          entitiesLoading={entitiesLoading}
-          activeCompanyId={company?.id ?? selectedCompanyId}
-          autoEnsureInterCoAcNo
-          showClosingBalance
-          entityKind={payeeKind}
-          onEntityKindChange={onPayeeKindChange}
-          entityId={payeeId}
-          onEntityIdChange={onPayeeIdChange}
-          companyAcNo={companyAc}
-          companyMobile={companyMob}
-          disabled={fieldsDisabled}
-          allowLookupWithoutCompany={showReadOnlyAccounts}
-          disabledHint={
-            entitiesLoading
-              ? "Loading source accounts…"
-              : "Saved voucher — accounts are read-only"
-          }
-          simpleView={simpleView}
-          showDetails={!simpleView}
-          simpleViewBankOutTotal={simpleViewBankOutTotal}
-          formatCurrencyForPrint={formatCurrencyForPrint}
-        />
+        {sourceAccountListRestricted && !fieldsDisabled ? (
+          <div className="space-y-2">
+            <InterCompanySectionTitle
+              title="Source account"
+              infoHint="Master list hidden — type suggested account name; target company will map the real account."
+              trailingAction={null}
+            />
+            <div
+              className={cn(
+                simpleView ? interCompanyAccountFieldsRowSimpleClass : interCompanyAccountFieldsRowClass
+              )}
+            >
+              <div className={interCompanyFieldColClass}>
+                <Label className="text-xs text-muted-foreground">Type</Label>
+                <Input
+                  readOnly
+                  value={INTER_COMPANY_ENTITY_LABELS[payeeKind] || "Party"}
+                  className={cn(interCompanyInputClass, interCompanyIcReadonlyFieldClass, "text-muted-foreground")}
+                />
+              </div>
+              <div className={cn(interCompanyAccountNameFieldColClass, "min-w-0 flex-1")}>
+                <Label className="text-xs text-muted-foreground">Account name</Label>
+                {accountNameHint ? (
+                  <p className="text-[11px] leading-snug text-amber-800 dark:text-amber-200">{accountNameHint}</p>
+                ) : null}
+                <Input
+                  value={suggestedSourceAccountLabel}
+                  onChange={(e) => onSuggestedSourceAccountLabelChange?.(e.target.value)}
+                  placeholder="Type suggested account name…"
+                  className={interCompanyInputClass}
+                  disabled={fieldsDisabled}
+                />
+              </div>
+            </div>
+          </div>
+        ) : sourceAccountListRestricted && fieldsDisabled ? (
+          <div className="space-y-2">
+            <Label className="text-xs font-medium">Source account</Label>
+            <Input
+              readOnly
+              value={
+                payeeId
+                  ? optionalSourceEntities.find((e) => e.id === payeeId)?.label ||
+                    suggestedSourceAccountLabel ||
+                    "—"
+                  : suggestedSourceAccountLabel || "Suggested — pending mapping"
+              }
+              className={cn(interCompanyInputClass, interCompanyReadOnlyCopyInputClass)}
+            />
+          </div>
+        ) : connectPartialMasters && !fieldsDisabled ? (
+          <InterCompanyAccountLookupSection
+            sectionTitle="Source account"
+            entities={optionalSourceEntities}
+            entitiesLoading={entitiesLoading}
+            activeCompanyId={company?.id ?? selectedCompanyId}
+            autoEnsureInterCoAcNo
+            showClosingBalance
+            entityKind={payeeKind}
+            onEntityKindChange={onPayeeKindChange}
+            entityId={payeeId}
+            onEntityIdChange={onPayeeIdChange}
+            companyAcNo={companyAc}
+            companyMobile={companyMob}
+            disabled={fieldsDisabled}
+            allowLookupWithoutCompany={showReadOnlyAccounts}
+            allowedEntityKinds={allowedSourceEntityKinds}
+            accountNameHint={accountNameHint}
+            disabledHint={
+              entitiesLoading
+                ? "Loading source accounts…"
+                : "Saved voucher — accounts are read-only"
+            }
+            simpleView={simpleView}
+            showDetails={!simpleView}
+            simpleViewBankOutTotal={simpleViewBankOutTotal}
+            formatCurrencyForPrint={formatCurrencyForPrint}
+          />
+        ) : (
+          <InterCompanyAccountLookupSection
+            sectionTitle="Source account"
+            entities={optionalSourceEntities}
+            entitiesLoading={entitiesLoading}
+            activeCompanyId={company?.id ?? selectedCompanyId}
+            autoEnsureInterCoAcNo
+            showClosingBalance
+            entityKind={payeeKind}
+            onEntityKindChange={onPayeeKindChange}
+            entityId={payeeId}
+            onEntityIdChange={onPayeeIdChange}
+            companyAcNo={companyAc}
+            companyMobile={companyMob}
+            disabled={fieldsDisabled}
+            allowLookupWithoutCompany={showReadOnlyAccounts}
+            disabledHint={
+              entitiesLoading
+                ? "Loading source accounts…"
+                : "Saved voucher — accounts are read-only"
+            }
+            simpleView={simpleView}
+            showDetails={!simpleView}
+            simpleViewBankOutTotal={simpleViewBankOutTotal}
+            formatCurrencyForPrint={formatCurrencyForPrint}
+          />
+        )}
       </div>
     </div>
   );

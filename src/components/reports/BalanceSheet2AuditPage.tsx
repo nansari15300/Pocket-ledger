@@ -14,7 +14,7 @@ import {
   Scale,
   XCircle,
 } from "lucide-react";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useCompany } from "@/hooks/useCompany";
 import { useDate } from "@/hooks/useDate";
 import { MonthYearFilter } from "@/components/dashboard/MonthYearFilter";
@@ -191,7 +191,7 @@ export function BalanceSheet2AuditPage() {
     processedAccountGroups,
     processedTaxGroups,
     processedStaffGroups,
-  } = useVouchers();
+  } = useFyScopedVouchers();
 
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [report, setReport] = useState<BalanceSheet2AuditReport | null>(null);

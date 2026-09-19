@@ -9,6 +9,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 import { useMobileDetailSummaryCollapsed } from "@/contexts/MobileDetailSummaryCollapseContext";
 import { MobileDetailSummaryFloatingToggle } from "@/components/layout/MobileDetailSummaryFloatingToggle";
+import { ROWS_PER_PAGE_OPTIONS_MOBILE } from "@/lib/rowsPerPageSelect";
 
 type Props = {
   currentPage: number;
@@ -25,7 +26,7 @@ type Props = {
   trimSummary?: boolean;
 };
 
-const PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100] as const;
+const PAGE_SIZE_OPTIONS = ROWS_PER_PAGE_OPTIONS_MOBILE;
 
 export function MobileTransactionsPager({
   currentPage,

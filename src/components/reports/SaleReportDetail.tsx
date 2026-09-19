@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { PartyDetails } from "@/components/party/PartyDetails";
 import { PartyList } from "@/components/party/PartyList";
 import type { Party } from "@/components/party/types";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useCompany } from "@/hooks/useCompany";
 import { useDate } from "@/hooks/useDate";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
@@ -20,6 +20,8 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { Button } from "@/components/ui/button";
 import { useSearchParams } from "next/navigation";
 import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
+import { ReportRegisterDesktopSplit } from "@/components/reports/ReportRegisterDesktopSplit";
+import { ReportRegisterListHeading } from "@/components/reports/ReportRegisterListHeading";
 import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 
 export function SaleReportDetail() {
@@ -27,7 +29,7 @@ export function SaleReportDetail() {
   const searchParams = useSearchParams();
   const { companyId } = useCompany();
   const { formatCurrency, formatCurrencyForPrint } = useDate();
-  const { vouchers: allVouchers, loading: vouchersLoading, processedParties } = useVouchers();
+  const { vouchers: allVouchers, loading: vouchersLoading, processedParties } = useFyScopedVouchers();
   const [selectedParty, setSelectedParty] = useState<Party | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -211,49 +213,44 @@ export function SaleReportDetail() {
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-[minmax(280px,max-content)_minmax(0,1fr)] min-h-0 overflow-hidden">
-        <div className="flex flex-col min-h-0 border-r overflow-hidden bg-muted/30">
-          <div className="p-4 border-b space-y-3 flex-shrink-0">
-            <h2 className="text-lg font-bold font-headline">Sales</h2>
-            <AddVoucherDialog onVoucherCreated={() => {}} defaultTab="sale">
-              <PermissionButton permission="create_records" className="w-full">
-                <PlusCircle className="mr-2 h-4 w-4" />
-                Create Sale Invoice
-              </PermissionButton>
-            </AddVoucherDialog>
-            <Card className="p-3 text-center">
-              <p className="text-xs text-muted-foreground">Total Sales</p>
-              <p className="text-xl font-bold text-green-600">
-                {formatCurrency(totalSales, { noSuffix: true })}
-              </p>
-            </Card>
-          </div>
-          <div className="p-3 border-b flex-shrink-0">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search accounts..."
-                className="pl-9"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+      <ReportRegisterDesktopSplit
+        listPanel={
+          <>
+            <div className="p-4 border-b space-y-3 flex-shrink-0">
+              <ReportRegisterListHeading>Sales</ReportRegisterListHeading>
+              <Card className="p-3 text-center">
+                <p className="text-xs text-muted-foreground">Total Sales</p>
+                <p className="text-xl font-bold text-green-600">
+                  {formatCurrency(totalSales, { noSuffix: true })}
+                </p>
+              </Card>
+            </div>
+            <div className="p-3 border-b flex-shrink-0">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search accounts..."
+                  className="pl-9"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
+              <h3 className="text-sm font-semibold">Sale accounts ({filteredParties.length})</h3>
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <PartyList
+                parties={filteredParties}
+                onSelectParty={handleSelectParty}
+                selectedParty={selectedParty}
+                searchTerm={searchTerm}
               />
             </div>
-          </div>
-          <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
-            <h3 className="text-sm font-semibold">Sale accounts ({filteredParties.length})</h3>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <PartyList
-              parties={filteredParties}
-              onSelectParty={handleSelectParty}
-              selectedParty={selectedParty}
-              searchTerm={searchTerm}
-            />
-          </div>
-        </div>
-
-        <div className="flex flex-col min-h-0 overflow-hidden">
-          {currentParty ? (
+          </>
+        }
+        detailPanel={
+          currentParty ? (
             <PartyDetails
               party={currentParty}
               transactions={currentTransactions}
@@ -284,9 +281,9 @@ export function SaleReportDetail() {
                 </CardContent>
               </Card>
             </div>
-          )}
-        </div>
-      </div>
+          )
+        }
+      />
     </div>
   );
 }

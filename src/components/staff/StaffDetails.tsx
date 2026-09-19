@@ -2,7 +2,7 @@
 "use client";
 
 import * as React from "react";
-import { openPrintDirect, getPdfBlob } from "@/lib/printDirect";
+import { openPrintDirect, getPdfBlob, companyFiscalFieldsForPrint } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { ReconciliationAccountButton } from "@/components/reconciliation/ReconciliationAccountButton";
@@ -49,6 +49,7 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { nestedLedgerChildDialogShell } from "@/lib/nestedLedgerMasterEditPresentation";
 import * as XLSX from "xlsx";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 import { RunningBalanceFullChart } from "@/components/reports/RunningBalanceFullChart";
@@ -98,6 +99,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
+import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { useAuth } from "@/hooks/useAuth";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
@@ -159,7 +161,9 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
-import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { MasterLedgerDateRangePresetRow } from "@/components/ui/MasterLedgerDateRangePresetRow";
+import { useEnsureEntityMinTxnsInScope } from "@/hooks/useEnsureEntityMinTxnsInScope";
+import { ledgerMasterDateRangeLabel } from "@/lib/ledgerMasterDefaultView";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { toast } from "sonner";
@@ -197,6 +201,7 @@ export function StaffDetails({
   /** Reports / dashboard txn-count: Print·Excel·Bill wise·Date·Chart footer (staff page Pay/Add hide). */
   mobileFooterVariant = "ledger",
   mobileReportStickyTitle,
+  ledgerPresentationMode = "default",
 }: {
   staff: Staff;
   allGroups?: StaffGroup[];
@@ -214,7 +219,12 @@ export function StaffDetails({
   transactions?: any[];
   mobileFooterVariant?: "ledger" | "report";
   mobileReportStickyTitle?: string;
+  ledgerPresentationMode?: import("@/lib/nestedLedgerMasterEditPresentation").MasterEditPresentationMode;
 }) {
+  const nestedLedgerNoteDialogShell =
+    ledgerPresentationMode === "nested-ledger"
+      ? nestedLedgerChildDialogShell("h-[95vh] w-full max-w-3xl flex flex-col")
+      : { overlayClassName: undefined, className: "h-[95vh] w-full max-w-3xl flex flex-col" };
   const { company, companyId } = useCompany();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatRunning } =
     useDate();
@@ -246,7 +256,8 @@ export function StaffDetails({
       return parentDateRange;
     });
   }, [parentFromMs, parentToMs, parentDateRange]);
-    
+  useFyLoadOnDateRangeChange(dateRange);
+
   const staff = useMemo(() => {
     if (!processedStaff) return initialStaff;
     return processedStaff.find(s => s.id === initialStaff.id) || initialStaff;
@@ -646,6 +657,14 @@ export function StaffDetails({
     [ledgerSourceTransactions, filterByUnapprovedOnly, taxDetailsOpeningForRunning, company]
   );
 
+  useEnsureEntityMinTxnsInScope({
+    dateRange,
+    entityId: staff?.id,
+    entityKind: "staff",
+    entityTxnCount: sortedTransactions.length,
+    enabled: Boolean(staff?.id),
+  });
+
   /** Top header = table last running balance (Book Opening included). */
   const headerClosingBalance = useMemo(() => {
     const list = sortedTransactions as any[];
@@ -724,6 +743,7 @@ export function StaffDetails({
             showDrCr: company.showDrCr,
             showCurrencySymbol: company.showCurrencySymbol,
             logoUrl: company.logoUrl,
+            ...companyFiscalFieldsForPrint(company as Record<string, unknown>),
           },
           title: `Staff Statement: ${staff.name}`,
           context: "staff",
@@ -773,6 +793,7 @@ export function StaffDetails({
           showDrCr: company.showDrCr,
           showCurrencySymbol: company.showCurrencySymbol,
           logoUrl: company.logoUrl,
+          ...companyFiscalFieldsForPrint(company as Record<string, unknown>),
         },
         title: `Staff Statement: ${staff.name}`,
         context: "staff",
@@ -841,6 +862,7 @@ export function StaffDetails({
             showDrCr: company.showDrCr,
             showCurrencySymbol: company.showCurrencySymbol,
             logoUrl: company.logoUrl,
+            ...companyFiscalFieldsForPrint(company as Record<string, unknown>),
           },
           title: `Bill Wise Staff Statement: ${staff.name}`,
           context: "staff",
@@ -1000,12 +1022,10 @@ export function StaffDetails({
     });
   }, [dateRangeFromMs, dateRangeToMs, filteredMobileTransactions.length, rowsPerPage]);
 
-  const dateRangeLabel = useMemo(() => {
-    if (!dateRange || (dateRange.from == null && dateRange.to == null)) {
-      return rowsPerPage > 0 ? `Last ${rowsPerPage} Txns` : "All Txns";
-    }
-    return buildDateRangeText();
-  }, [dateRange, rowsPerPage]);
+  const dateRangeLabel = useMemo(
+    () => ledgerMasterDateRangeLabel(dateRange, buildDateRangeText()),
+    [dateRange, dateSystem, formatDateBS, formatDate]
+  );
 
   // Report sticky header title — dashboard Add Salary / all-vouchers drill-down.
   const reportStickyTitle = useMemo(() => {
@@ -1396,12 +1416,14 @@ export function StaffDetails({
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <NepaliCalendar
                   rangePresetSlot={
-                    <DateRangePresetRow
+                    <MasterLedgerDateRangePresetRow
                       country={company?.country}
+                      onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                       onApply={(r) => {
                         handleDateRangeChange(r);
                         setIsCalendarOpen(false);
                       }}
+                      onAfterDefault={() => setIsCalendarOpen(false)}
                     />
                   }
                   onSelect={handleNepaliSelect}
@@ -1414,12 +1436,14 @@ export function StaffDetails({
                 <div className="flex-1 w-full min-w-0">
                   <AdCalendar
                     rangePresetSlot={
-                      <DateRangePresetRow
+                      <MasterLedgerDateRangePresetRow
                         country={company?.country}
+                        onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
                           handleDateRangeChange(r);
                           setIsCalendarOpen(false);
                         }}
+                        onAfterDefault={() => setIsCalendarOpen(false)}
                       />
                     }
                     valueAD={dateRange}
@@ -1538,12 +1562,14 @@ export function StaffDetails({
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <NepaliCalendar
                   rangePresetSlot={
-                    <DateRangePresetRow
+                    <MasterLedgerDateRangePresetRow
                       country={company?.country}
+                      onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                       onApply={(r) => {
                         handleDateRangeChange(r);
                         setIsCalendarOpen(false);
                       }}
+                      onAfterDefault={() => setIsCalendarOpen(false)}
                     />
                   }
                   onSelect={handleNepaliSelect}
@@ -1556,12 +1582,14 @@ export function StaffDetails({
                 <div className="flex-1 w-full min-w-0">
                   <AdCalendar
                     rangePresetSlot={
-                      <DateRangePresetRow
+                      <MasterLedgerDateRangePresetRow
                         country={company?.country}
+                        onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
                           handleDateRangeChange(r);
                           setIsCalendarOpen(false);
                         }}
+                        onAfterDefault={() => setIsCalendarOpen(false)}
                       />
                     }
                     valueAD={dateRange}
@@ -1650,6 +1678,7 @@ export function StaffDetails({
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
               <BsDatePicker
                 isRange
+                masterLedgerDatePresets
                 valueAD={dateRange}
                 onChangeAD={handleBsDateRangeChange}
                 transactionDates={transactionDates}
@@ -1683,11 +1712,16 @@ export function StaffDetails({
                 <PopoverContent className="w-auto p-0" align="start">
                   <AdCalendar
                     rangePresetSlot={
-                      <DateRangePresetRow
+                      <MasterLedgerDateRangePresetRow
                         country={company?.country}
+                        onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
                           setTempDateRange(r);
                           handleDateRangeChange(r);
+                          setIsDesktopCalendarOpen(false);
+                        }}
+                        onAfterDefault={() => {
+                          setTempDateRange(undefined);
                           setIsDesktopCalendarOpen(false);
                         }}
                       />
@@ -1783,7 +1817,7 @@ export function StaffDetails({
         </div>
       </div>
       {/* TABLE AREA - flex layout so table footer (Total / Closing Balance) stays visible */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-x-auto">
+      <div className="flex-1 flex flex-col min-h-0 overflow-x-auto pl-ledger-txn-scroll-native">
         <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
                 <MasterAccountFreezeTxnShell
                   overlay={staffFreezeOverlay}
@@ -1863,7 +1897,7 @@ export function StaffDetails({
                 onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
-            <LedgerFooterColumnsMenu>
+            <LedgerFooterColumnsMenu ledgerPresentationMode={ledgerPresentationMode}>
                 <DropdownMenuContent align="start" className="w-52 p-2">
                 {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
                   .filter((key) => key !== "status" || effectiveBalanceMode === "bill_wise")
@@ -1935,6 +1969,7 @@ export function StaffDetails({
         beforeCount={desktopPaginationMeta.beforeCount}
         afterCount={desktopPaginationMeta.afterCount}
         totalCount={sortedTransactions.length}
+        ledgerPresentationMode={ledgerPresentationMode}
       />
     </div>
   );
@@ -1956,7 +1991,10 @@ export function StaffDetails({
         {isMobile ? renderMobileView() : renderDesktopView()}
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>
-        <DialogContent className="h-[95vh] w-full max-w-3xl flex flex-col">
+        <DialogContent
+          overlayClassName={nestedLedgerNoteDialogShell.overlayClassName}
+          className={nestedLedgerNoteDialogShell.className}
+        >
           <DialogHeader>
             <DialogTitle>Add a New Note for {staff.name}</DialogTitle>
             <DialogDescription>

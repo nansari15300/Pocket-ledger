@@ -1,27 +1,18 @@
 "use client";
 
-import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from "react";
 import { usePathname } from "next/navigation";
+import { useCompany } from "@/hooks/useCompany";
+import {
+  defaultLedgerBalanceViewMode,
+  readLedgerBalanceViewMode,
+  resolveLedgerBalanceSection,
+  writeLedgerBalanceViewMode,
+  type LedgerBalanceViewMode,
+} from "@/lib/ledgerViewModeStorage";
 
 /** Statement = running balance. Bill wise = per-row outstanding. */
-export type BalanceMode = "statement" | "bill_wise";
-
-const STORAGE_KEY_PREFIX = "balanceMode_";
-
-/** Party/staff: one key per section so preference persists across list, details, group and after refresh. */
-function getStorageKey(pathname: string | null): string {
-  if (!pathname) return STORAGE_KEY_PREFIX + "default";
-  if (pathname.startsWith("/party")) return STORAGE_KEY_PREFIX + "party";
-  if (pathname.startsWith("/staff")) return STORAGE_KEY_PREFIX + "staff";
-  return STORAGE_KEY_PREFIX + pathname;
-}
-
-function getStored(key: string, defaultMode: BalanceMode): BalanceMode {
-  if (typeof window === "undefined") return defaultMode;
-  const v = localStorage.getItem(key);
-  if (v === "bill_wise" || v === "statement") return v;
-  return defaultMode;
-}
+export type BalanceMode = LedgerBalanceViewMode;
 
 type BalanceModeContextType = {
   balanceMode: BalanceMode;
@@ -31,34 +22,36 @@ type BalanceModeContextType = {
 
 const BalanceModeContext = createContext<BalanceModeContextType | null>(null);
 
-const BILL_WISE_DEFAULT_PATHS = ["/party", "/staff", "/bank-cash"];
-
-function getDefaultModeForPath(pathname: string | null): BalanceMode {
-  if (!pathname) return "statement";
-  const base = pathname.split("/").slice(0, 2).join("/");
-  return BILL_WISE_DEFAULT_PATHS.some((p) => base === p || pathname.startsWith(p + "/")) ? "bill_wise" : "statement";
-}
-
 export function BalanceModeProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const defaultMode = getDefaultModeForPath(pathname);
-  const storageKey = getStorageKey(pathname);
+  const { companyId } = useCompany();
+  const section = useMemo(() => resolveLedgerBalanceSection(pathname), [pathname]);
 
-  // Initial state fixed to avoid hydration mismatch (server has no localStorage / pathname can be null)
-  const [balanceMode, setBalanceModeState] = useState<BalanceMode>("statement");
+  const readModeForScope = useCallback((): BalanceMode => {
+    if (section) return readLedgerBalanceViewMode(companyId, section);
+    return "statement";
+  }, [section, companyId]);
 
-  // Client-only: sync from localStorage using actual URL so we get correct key even if pathname was null
+  const [balanceMode, setBalanceModeState] = useState<BalanceMode>(() => {
+    if (typeof window === "undefined") return "statement";
+    const sec = resolveLedgerBalanceSection(window.location.pathname);
+    if (!sec) return "statement";
+    return readLedgerBalanceViewMode(null, sec);
+  });
+
   useEffect(() => {
-    const path = typeof window !== "undefined" ? window.location.pathname : null;
-    const key = getStorageKey(path);
-    const defaultForPath = getDefaultModeForPath(path);
-    setBalanceModeState(getStored(key, defaultForPath));
-  }, [pathname]);
+    setBalanceModeState(readModeForScope());
+  }, [readModeForScope]);
 
-  const setBalanceMode = useCallback((mode: BalanceMode) => {
-    setBalanceModeState(mode);
-    localStorage.setItem(storageKey, mode);
-  }, [storageKey]);
+  const setBalanceMode = useCallback(
+    (mode: BalanceMode) => {
+      setBalanceModeState(mode);
+      if (section) {
+        writeLedgerBalanceViewMode(companyId, section, mode);
+      }
+    },
+    [section, companyId]
+  );
 
   const value: BalanceModeContextType = {
     balanceMode,
@@ -83,4 +76,9 @@ export function useBalanceMode(): BalanceModeContextType {
     };
   }
   return ctx;
+}
+
+/** @internal tests / migration */
+export function __defaultLedgerBalanceViewMode(section: "party" | "staff"): BalanceMode {
+  return defaultLedgerBalanceViewMode(section);
 }

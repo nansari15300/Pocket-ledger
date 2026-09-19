@@ -11,6 +11,8 @@ import {
 
 type DateRangePresetRowProps = {
   onApply: (range: { from: Date; to: Date }) => void;
+  /** "Last 10" — default master ledger window (clear explicit date filter). */
+  onApplyDefault?: () => void;
   country?: string | null;
   disabled?: boolean;
   className?: string;
@@ -18,18 +20,23 @@ type DateRangePresetRowProps = {
 
 export function DateRangePresetRow({
   onApply,
+  onApplyDefault,
   country,
   disabled = false,
   className,
 }: DateRangePresetRowProps) {
   const apply = React.useCallback(
     (key: BsDateRangePresetKey) => {
+      if (key === "last10") {
+        onApplyDefault?.();
+        return;
+      }
       const range = dateRangeFromPreset(key, { country });
       if (range?.from && range?.to) {
         onApply({ from: range.from, to: range.to });
       }
     },
-    [country, onApply]
+    [country, onApply, onApplyDefault]
   );
 
   return (

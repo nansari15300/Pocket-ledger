@@ -29,9 +29,14 @@ import {
 } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { BalanceSheetLedgerDetailMirror } from "@/components/reports/BalanceSheetLedgerDetailMirror";
+import {
+  NESTED_LEDGER_POPUP_ATTR,
+  NESTED_LEDGER_POPUP_CONTENT_CN,
+  NESTED_LEDGER_POPUP_OVERLAY_CN,
+} from "@/lib/nestedLedgerMasterEditPresentation";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
@@ -780,7 +785,7 @@ export function BalanceSheetPage() {
     processedStaffGroups,
     userNames,
     journalAccountNames: voucherJournalAccountNames,
-  } = useVouchers();
+  } = useFyScopedVouchers();
   const { companyId, company } = useCompany();
   const ledgerLiveRevision = useBalanceSheetLedgerLiveRevision(companyId);
   const { dateSystem, formatDate, formatDateBS, formatCurrencyForPrint } = useDate();
@@ -3631,10 +3636,12 @@ export function BalanceSheetPage() {
       >
         <DialogContent
           hideCloseButton
-          overlayClassName="bg-black/45 backdrop-blur-none"
+          {...{ [NESTED_LEDGER_POPUP_ATTR]: "" }}
+          overlayClassName={NESTED_LEDGER_POPUP_OVERLAY_CN}
           style={{ height: "85vh", maxHeight: "85vh", width: "90vw", maxWidth: "90vw" }}
           className={cn(
             "balance-sheet-ledger-popup",
+            NESTED_LEDGER_POPUP_CONTENT_CN,
             /* Avoid 50%+translate — subpixel blur on txn text (esp. few rows + empty fill). */
             "!left-0 !right-0 !top-0 !bottom-0 !translate-x-0 !translate-y-0 mx-auto my-auto",
             "!flex h-[85vh] max-h-[85vh] w-[90vw] max-w-[90vw] flex-col gap-0 overflow-hidden p-0 rounded-lg bg-background",

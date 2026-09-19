@@ -5,13 +5,18 @@ import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { BalanceSheetLedgerDetailMirror } from "@/components/reports/BalanceSheetLedgerDetailMirror";
 import type { DateRange } from "@/components/ui/ad-calendar";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import type { RpDialogRow } from "@/lib/receivablesPayablesDialogUi";
 import {
   rpDialogRowCanOpenLedger,
   rpDialogRowSelectionKey,
   rpDialogRowToBalanceSheetLedgerRow,
 } from "@/lib/receivablesPayablesDialogUi";
+import {
+  NESTED_LEDGER_POPUP_ATTR,
+  NESTED_LEDGER_POPUP_CONTENT_CN,
+  NESTED_LEDGER_POPUP_OVERLAY_CN,
+} from "@/lib/nestedLedgerMasterEditPresentation";
 
 /** Outstanding dialog — same ledger popup as Balance Sheet account click. */
 export function useReceivablesPayablesLedgerPopup() {
@@ -61,7 +66,7 @@ function ReceivablesPayablesLedgerPopup({
     processedTaxes,
     userNames,
     journalAccountNames,
-  } = useVouchers();
+  } = useFyScopedVouchers();
   /** Balance Sheet click jaisa — All Time. Outstanding month filter ledger ko khali nahi kare. */
   const [detailDateRange, setDetailDateRange] = useState<DateRange | undefined>(undefined);
   const ledgerRow = openRow ? rpDialogRowToBalanceSheetLedgerRow(openRow) : null;
@@ -78,10 +83,12 @@ function ReceivablesPayablesLedgerPopup({
     >
       <DialogContent
         hideCloseButton
-        overlayClassName="z-[70] bg-black/45 backdrop-blur-none"
+        {...{ [NESTED_LEDGER_POPUP_ATTR]: "" }}
+        overlayClassName={NESTED_LEDGER_POPUP_OVERLAY_CN}
         style={{ height: "85vh", maxHeight: "85vh", width: "90vw", maxWidth: "90vw" }}
         className={cn(
-          "balance-sheet-ledger-popup z-[71]",
+          "balance-sheet-ledger-popup",
+          NESTED_LEDGER_POPUP_CONTENT_CN,
           /* Outstanding list overlay stays open behind this — avoid 50%+translate (subpixel blur on txn rows). */
           "!left-0 !right-0 !top-0 !bottom-0 !translate-x-0 !translate-y-0 mx-auto my-auto",
           "!flex h-[85vh] max-h-[85vh] w-[90vw] max-w-[90vw] flex-col !gap-0 overflow-hidden !p-0 rounded-lg bg-background",

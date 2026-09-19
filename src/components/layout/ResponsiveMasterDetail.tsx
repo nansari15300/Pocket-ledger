@@ -33,8 +33,12 @@ export function ResponsiveMasterDetail({
   mobileDetailHeaderEnd,
   listChromeRouteKey,
   mobileTabsDocked,
+  /** Optional override for list tabs wrapper row (report statement stacked bands). */
+  tabsRowClassName,
   /** Changes when user picks list row — closes mobile list sheet */
   mobileListSelectionKey,
+  /** Desktop list header: leading slot (e.g. reports hub show-list icon). */
+  listHeaderLeading,
 }: {
   title: string | React.ReactNode;
   balance: string | React.ReactNode;
@@ -51,7 +55,9 @@ export function ResponsiveMasterDetail({
   mobileDetailHeaderEnd?: React.ReactNode;
   listChromeRouteKey?: MasterDetailListRouteKey;
   mobileTabsDocked?: boolean;
+  tabsRowClassName?: string;
   mobileListSelectionKey?: string | null;
+  listHeaderLeading?: React.ReactNode;
 }) {
   const listChromeRouteData = listChromeRouteKey
     ? ({ "data-pl-master-list-route": listChromeRouteKey } as const)
@@ -248,10 +254,17 @@ export function ResponsiveMasterDetail({
         {...listChromeRouteData}
       >
         <div className={cn(mlc.pageHeader, "flex justify-between items-center gap-2 min-w-0")}>
-          <h1 className={cn(mlc.pageTitle, "truncate")}>{title}</h1>
-          <span className={cn(mlc.pageBalance, "whitespace-nowrap", isNegative ? "text-red-600" : "text-green-600")}>{balance}</span>
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            {listHeaderLeading}
+            <h1 className={cn(mlc.pageTitle, "truncate")}>{title}</h1>
+          </div>
+          {balance != null && balance !== "" ? (
+            <span className={cn(mlc.pageBalance, "whitespace-nowrap", isNegative ? "text-red-600" : "text-green-600")}>
+              {balance}
+            </span>
+          ) : null}
         </div>
-        {tabs && <div className={mlc.tabsRow}>{tabs}</div>}
+        {tabs && <div className={cn(mlc.tabsRow, tabsRowClassName)}>{tabs}</div>}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{listView}</div>
         <ResizeWidthHandle onPointerDown={beginDesktopListResize} title="Resize list panel" />
       </div>

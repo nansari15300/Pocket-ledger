@@ -37,6 +37,7 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { format, startOfDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { nestedLedgerChildDialogShell } from "@/lib/nestedLedgerMasterEditPresentation";
 import { mdc, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
 import * as XLSX from "xlsx";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
@@ -79,7 +80,9 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
+import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { Checkbox } from "../ui/checkbox";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
@@ -170,7 +173,9 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import NepaliCalendar from "../ui/nepali-calendar";
-import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { MasterLedgerDateRangePresetRow } from "@/components/ui/MasterLedgerDateRangePresetRow";
+import { useEnsureEntityMinTxnsInScope } from "@/hooks/useEnsureEntityMinTxnsInScope";
+import { ledgerMasterDateRangeLabel } from "@/lib/ledgerMasterDefaultView";
 import type { BSDate } from "@/lib/bs-date";
 
 interface TaxDetailsProps {
@@ -189,6 +194,7 @@ interface TaxDetailsProps {
   context?: string;
   mobileFooterVariant?: "ledger" | "report";
   mobileReportStickyTitle?: string;
+  ledgerPresentationMode?: import("@/lib/nestedLedgerMasterEditPresentation").MasterEditPresentationMode;
 }
 
 export function TaxDetails({
@@ -207,7 +213,13 @@ export function TaxDetails({
   context,
   mobileFooterVariant = "ledger",
   mobileReportStickyTitle,
+  ledgerPresentationMode = "default",
 }: TaxDetailsProps) {
+  const nestedLedgerNoteDialogShell =
+    ledgerPresentationMode === "nested-ledger"
+      ? nestedLedgerChildDialogShell("h-[95vh] w-full max-w-3xl flex flex-col")
+      : { overlayClassName: undefined, className: "h-[95vh] w-full max-w-3xl flex flex-col" };
+  useFyLoadOnDateRangeChange(dateRange);
   const { company, companyId } = useCompany();
   const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
   const {
@@ -548,6 +560,14 @@ export function TaxDetails({
     [oppositeAccountFilteredTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
   );
 
+  useEnsureEntityMinTxnsInScope({
+    dateRange,
+    entityId: tax?.id,
+    entityKind: "tax",
+    entityTxnCount: sortedTransactions.length,
+    enabled: Boolean(tax?.id),
+  });
+
   const searchFilteredTransactions = useMemo(() => {
     if (!mobileSearchTerm.trim()) return sortedTransactions;
     const q = mobileSearchTerm.toLowerCase().trim();
@@ -651,6 +671,11 @@ export function TaxDetails({
     }
     return dateRangeText;
   };
+
+  const dateRangeLabel = useMemo(
+    () => ledgerMasterDateRangeLabel(dateRange, buildDateRangeText()),
+    [dateRange, dateSystem, formatDateBS, formatDate]
+  );
 
   const handlePrintStatement = (billWise: boolean = false) => {
     if (!company || !tax) return Promise.resolve();
@@ -777,7 +802,6 @@ export function TaxDetails({
     return null;
   }
 
-  const dateRangeLabel = buildDateRangeText() || "All Time";
   const balanceLabel = closingBalance >= 0 ? "To Receive" : "To Pay";
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
   const masterTaxOpening = Number((tax as any).openingBalance) || 0;
@@ -876,11 +900,7 @@ export function TaxDetails({
           <MobileDetailSummaryCollapsible>
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
             <span className="text-xs font-medium text-muted-foreground">
-              {!dateRange || (dateRange.from == null && dateRange.to == null)
-                ? rowsPerPage > 0
-                  ? `Last ${rowsPerPage} Txns`
-                  : "All Txns"
-                : dateRangeLabel}
+              {dateRangeLabel}
             </span>
             {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
               <button
@@ -1091,12 +1111,14 @@ export function TaxDetails({
                 {(dateSystem === "BS" || dateSystem === "Both") && (
                   <NepaliCalendar
                     rangePresetSlot={
-                      <DateRangePresetRow
+                      <MasterLedgerDateRangePresetRow
                         country={company?.country}
+                        onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
                           onDateRangeChange(r);
                           setIsCalendarOpen(false);
                         }}
+                        onAfterDefault={() => setIsCalendarOpen(false)}
                       />
                     }
                     onSelect={handleNepaliSelect}
@@ -1109,12 +1131,14 @@ export function TaxDetails({
                   <div className="flex-1 w-full min-w-0">
                     <AdCalendar
                       rangePresetSlot={
-                        <DateRangePresetRow
+                        <MasterLedgerDateRangePresetRow
                           country={company?.country}
+                          onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
                             onDateRangeChange(r);
                             setIsCalendarOpen(false);
                           }}
+                          onAfterDefault={() => setIsCalendarOpen(false)}
                         />
                       }
                       valueAD={dateRange}
@@ -1167,12 +1191,14 @@ export function TaxDetails({
                 {(dateSystem === "BS" || dateSystem === "Both") && (
                   <NepaliCalendar
                     rangePresetSlot={
-                      <DateRangePresetRow
+                      <MasterLedgerDateRangePresetRow
                         country={company?.country}
+                        onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
                           onDateRangeChange(r);
                           setIsCalendarOpen(false);
                         }}
+                        onAfterDefault={() => setIsCalendarOpen(false)}
                       />
                     }
                     onSelect={handleNepaliSelect}
@@ -1185,12 +1211,14 @@ export function TaxDetails({
                   <div className="flex-1 w-full min-w-0">
                     <AdCalendar
                       rangePresetSlot={
-                        <DateRangePresetRow
+                        <MasterLedgerDateRangePresetRow
                           country={company?.country}
+                          onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
                             onDateRangeChange(r);
                             setIsCalendarOpen(false);
                           }}
+                          onAfterDefault={() => setIsCalendarOpen(false)}
                         />
                       }
                       valueAD={dateRange}
@@ -1228,7 +1256,10 @@ export function TaxDetails({
             if (!open) closeModalInUrl();
           }}
         >
-          <DialogContent className="h-[95vh] w-full max-w-3xl flex flex-col">
+          <DialogContent
+            overlayClassName={nestedLedgerNoteDialogShell.overlayClassName}
+            className={nestedLedgerNoteDialogShell.className}
+          >
             <DialogHeader>
               <DialogTitle>Add a New Note for {tax.name}</DialogTitle>
               <DialogDescription>Record a new note associated with this tax.</DialogDescription>
@@ -1328,6 +1359,7 @@ export function TaxDetails({
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
                   isRange
+                  masterLedgerDatePresets
                   valueAD={dateRange}
                   onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                   transactionDates={transactionDates}
@@ -1360,11 +1392,16 @@ export function TaxDetails({
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
                       rangePresetSlot={
-                        <DateRangePresetRow
+                        <MasterLedgerDateRangePresetRow
                           country={company?.country}
+                          onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
                             setTempDateRange(r);
                             onDateRangeChangeWithUnapprovedReset(r);
+                            setIsDesktopCalendarOpen(false);
+                          }}
+                          onAfterDefault={() => {
+                            setTempDateRange(undefined);
                             setIsDesktopCalendarOpen(false);
                           }}
                         />
@@ -1479,7 +1516,7 @@ export function TaxDetails({
                 onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
-              <LedgerFooterColumnsMenu>
+              <LedgerFooterColumnsMenu ledgerPresentationMode={ledgerPresentationMode}>
                 <DropdownMenuContent align="start" className="w-52 p-2">
                   {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
                     .filter((key) => key !== "status" || balanceMode === "bill_wise")
@@ -1538,15 +1575,19 @@ export function TaxDetails({
             setRowsPerPage(Number(value) || 0);
             setCurrentPage(1);
           }}
-          rowsPerPageOptions={[10, 20, 30, 50]}
+          rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS_DEFAULT}
           beforeCount={desktopPaginationMeta.beforeCount}
           afterCount={desktopPaginationMeta.afterCount}
           totalCount={searchFilteredTransactions.length}
+          ledgerPresentationMode={ledgerPresentationMode}
         />
       </div>
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>
-        <DialogContent className="h-[95vh] w-full max-w-3xl flex flex-col">
+        <DialogContent
+          overlayClassName={nestedLedgerNoteDialogShell.overlayClassName}
+          className={nestedLedgerNoteDialogShell.className}
+        >
           <DialogHeader>
             <DialogTitle>Add a New Note for {tax.name}</DialogTitle>
             <DialogDescription>

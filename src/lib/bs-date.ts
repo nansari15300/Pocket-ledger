@@ -94,6 +94,8 @@ export function getBSMonthDays(bsYear: number): number[] {
 }
 
 export const NEPALI_MONTHS = ["Baisakh","Jestha","Asar","Shrawan","Bhadra","Aswin","Kartik","Mangsir","Poush","Magh","Falgun","Chaitra"];
+/** Same 3-letter tokens as nepali-date-converter (Bai, Jes, Asa, Shr, Bhd, …). */
+export const NEPALI_MONTHS_SHORT = ["Bai","Jes","Asa","Shr","Bhd","Asw","Kar","Man","Pou","Mag","Fal","Cha"];
 export const NEPALI_WEEKDAYS_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
 /** 2-digit pad — matches NepaliDate-style numeric BS segments. */
@@ -104,7 +106,7 @@ function padBsPart(n: number) {
 /** BS display for one calendar day — keys match BS_DATE_FORMATS / NepaliDate.format. */
 function formatBsYmdWithKey(y: number, m: number, d: number, fmt: BSFormatKey): string {
   const monthFull = NEPALI_MONTHS[m - 1] ?? "";
-  const monthShort = monthFull.slice(0, 3);
+  const monthShort = NEPALI_MONTHS_SHORT[m - 1] ?? monthFull.slice(0, 3);
   switch (fmt) {
     case "MM-DD-YYYY":
       return `${padBsPart(m)}-${padBsPart(d)}-${y}`;
@@ -115,9 +117,9 @@ function formatBsYmdWithKey(y: number, m: number, d: number, fmt: BSFormatKey): 
     case "DD/MM/YYYY":
       return `${padBsPart(d)}/${padBsPart(m)}/${y}`;
     case "MMMM DD, YYYY":
-      return `${monthFull} ${d}, ${y}`;
+      return `${monthFull}-${padBsPart(d)}-${y}`;
     case "MMM DD, YYYY":
-      return `${monthShort} ${d}, ${y}`;
+      return `${monthShort}-${padBsPart(d)}-${y}`;
     default: {
       const _exhaustive: never = fmt;
       return `${y}-${padBsPart(m)}-${padBsPart(d)}`;
@@ -132,7 +134,9 @@ function formatBsYmdWithKey(y: number, m: number, d: number, fmt: BSFormatKey): 
 export function formatBsFromAD(date: Date, fmt: BSFormatKey): string {
   if (!(date instanceof Date) || isNaN(date.getTime())) return "";
   try {
-    return new NepaliDate(date).format(fmt);
+    const nd = new NepaliDate(date);
+    const bs = nd.getBS();
+    return formatBsYmdWithKey(bs.year, bs.month + 1, bs.date, fmt);
   } catch {
     try {
       const bsStr = ADToBS(date);

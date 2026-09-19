@@ -1,5 +1,6 @@
 "use client";
 
+import { throwIfAttachmentCompressionAborted } from "@/lib/attachmentCompressionUi";
 import { importPdfJsDist } from "@/lib/importPdfJsDist";
 import {
   ensurePdfJsWorker,
@@ -112,6 +113,9 @@ async function encodeJpegInBandAtSize(
   return bestInBand;
 }
 
+/** Oversized voucher photo (e.g. 100KB → 45KB): quality + few scales — upscale scan mat karo. */
+const SHRINK_ONLY_SCALES = [1, 0.92, 0.84, 0.76, 0.68, 0.6, 0.52];
+
 /** From–To KB band: scale + quality se output ko [min, max] ke andar lao (30–35 na ki 16). */
 async function fitJpegToTargetBand(
   canvas: HTMLCanvasElement,
@@ -121,24 +125,35 @@ async function fitJpegToTargetBand(
   baseH: number,
   minBytes: number,
   maxBytes: number,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number) => void,
+  signal?: AbortSignal,
+  shrinkOnly = false
 ): Promise<Blob | null> {
   let bestInBand: Blob | null = null;
   let bestUnderCap: Blob | null = null;
+  const qualitySearchSteps = shrinkOnly ? 8 : 14;
 
-  const tryScale = async (scale: number): Promise<void> => {
+  const pickBest = (inBand: Blob | null, under: Blob | null): boolean => {
+    if (inBand && (!bestInBand || inBand.size > bestInBand.size)) bestInBand = inBand;
+    if (under && (!bestUnderCap || under.size > bestUnderCap.size)) bestUnderCap = under;
+    if (bestInBand) return true;
+    if (bestUnderCap && bestUnderCap.size >= minBytes) {
+      bestInBand = bestUnderCap;
+      return true;
+    }
+    return false;
+  };
+
+  const tryScale = async (scale: number): Promise<boolean> => {
+    throwIfAttachmentCompressionAborted(signal);
     const w = Math.max(1, Math.round(baseW * scale));
     const h = Math.max(1, Math.round(baseH * scale));
     const inBand = await encodeJpegInBandAtSize(canvas, ctx, source, w, h, minBytes, maxBytes);
-    if (inBand) {
-      if (!bestInBand || inBand.size > bestInBand.size) bestInBand = inBand;
-      return;
-    }
-    // Band me na aaya — kam se kam cap ke andar sabse bada
+    if (inBand) return pickBest(inBand, null);
     let lo = QUALITY_FLOOR;
     let hi = 0.98;
     let under: Blob | null = null;
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < qualitySearchSteps; i++) {
       const q = (lo + hi) / 2;
       const blob = await encodeJpegAt(canvas, ctx, source, w, h, q);
       if (blob.size <= maxBytes) {
@@ -148,8 +163,24 @@ async function fitJpegToTargetBand(
         hi = q;
       }
     }
-    if (under && (!bestUnderCap || under.size > bestUnderCap.size)) bestUnderCap = under;
+    return pickBest(null, under);
   };
+
+  if (shrinkOnly) {
+    let step = 0;
+    const total = SHRINK_ONLY_SCALES.length;
+    for (const scale of SHRINK_ONLY_SCALES) {
+      throwIfAttachmentCompressionAborted(signal);
+      step += 1;
+      onProgress?.(Math.min(95, Math.round((step / total) * 100)));
+      if (await tryScale(scale)) {
+        onProgress?.(100);
+        return bestInBand;
+      }
+    }
+    onProgress?.(100);
+    return bestInBand ?? bestUnderCap;
+  }
 
   const scaleUpSteps = 17;
   let step = 0;
@@ -160,21 +191,21 @@ async function fitJpegToTargetBand(
 
   // Pehle scale up (chhoti photo ko 30KB+ lane ke liye), phir full, phir thoda down.
   for (let scale = 0.85; scale <= 1.65; scale += 0.05) {
-    await tryScale(scale);
-    bump();
-    if (bestInBand) {
+    throwIfAttachmentCompressionAborted(signal);
+    if (await tryScale(scale)) {
       onProgress?.(100);
       return bestInBand;
     }
+    bump();
   }
   for (let si = 1; si <= 20; si++) {
+    throwIfAttachmentCompressionAborted(signal);
     const scale = Math.max(MIN_SCALE, 1 - (si / 20) * (1 - MIN_SCALE));
-    await tryScale(scale);
-    bump();
-    if (bestInBand) {
+    if (await tryScale(scale)) {
       onProgress?.(100);
       return bestInBand;
     }
+    bump();
   }
 
   onProgress?.(100);
@@ -183,8 +214,15 @@ async function fitJpegToTargetBand(
 
 export async function compressFile(
   file: File,
-  options?: { maxKB?: number; minKB?: number; maxPdfBytesAfter?: number; onProgress?: (pct: number) => void }
+  options?: {
+    maxKB?: number;
+    minKB?: number;
+    maxPdfBytesAfter?: number;
+    onProgress?: (pct: number) => void;
+    signal?: AbortSignal;
+  }
 ): Promise<File> {
+  throwIfAttachmentCompressionAborted(options?.signal);
   const report = (pct: number) => options?.onProgress?.(Math.min(100, Math.max(0, Math.round(pct))));
   const MAX_KB = options?.maxKB ?? MAX_KB_DEFAULT;
   const minKbOpt = options?.minKB ?? imageSoftMinKbForMax(MAX_KB);
@@ -208,6 +246,7 @@ export async function compressFile(
   let imageBitmapToClose: ImageBitmap | null = null;
 
   try {
+    throwIfAttachmentCompressionAborted(options?.signal);
     const { source, width: srcW, height: srcH } = await decodeImageForCanvas(file);
     if (source instanceof ImageBitmap) {
       imageBitmapToClose = source;
@@ -249,6 +288,7 @@ export async function compressFile(
 
     if (useTargetBand || file.size < minBytes) {
       report(5);
+      const shrinkOnly = file.size > maxBytes;
       const fitted = await fitJpegToTargetBand(
         canvas,
         ctx,
@@ -257,7 +297,9 @@ export async function compressFile(
         baseH,
         minBytes,
         maxBytes,
-        report
+        report,
+        options?.signal,
+        shrinkOnly
       );
       if (fitted && fitted.size <= maxBytes) {
         if (fitted.size >= minBytes || file.size > maxBytes) {
@@ -272,6 +314,7 @@ export async function compressFile(
     let bestBlob: Blob | null = null;
 
     for (let pass = 0; pass < MAX_IMAGE_PASSES; pass++) {
+      throwIfAttachmentCompressionAborted(options?.signal);
       report(Math.min(90, Math.round((pass / MAX_IMAGE_PASSES) * 90)));
       const width = Math.max(1, Math.round(baseW * scale));
       const height = Math.max(1, Math.round(baseH * scale));
@@ -297,6 +340,7 @@ export async function compressFile(
 
     let emergency = 0;
     while (bestBlob && bestBlob.size > maxBytes && scale > 0.012 && emergency < 24) {
+      throwIfAttachmentCompressionAborted(options?.signal);
       emergency += 1;
       scale *= 0.62;
       quality = Math.max(0.2, quality * 0.88);
@@ -311,6 +355,7 @@ export async function compressFile(
     }
 
     if (bestBlob && bestBlob.size < minBytes) {
+      throwIfAttachmentCompressionAborted(options?.signal);
       const lifted = await fitJpegToTargetBand(
         canvas,
         ctx,
@@ -319,7 +364,9 @@ export async function compressFile(
         baseH,
         minBytes,
         maxBytes,
-        report
+        report,
+        options?.signal,
+        false
       );
       if (lifted && lifted.size > bestBlob.size) bestBlob = lifted;
     }
@@ -632,7 +679,7 @@ export async function compressAttachmentBlobForDriveUpload(
 export async function compressVoucherAttachment(
   file: File,
   maxBytes: number,
-  options?: { minKB?: number; onProgress?: (pct: number) => void }
+  options?: { minKB?: number; onProgress?: (pct: number) => void; signal?: AbortSignal }
 ): Promise<File> {
   const t = (file.type || "").toLowerCase();
   if (t.startsWith("image/")) {
@@ -646,13 +693,16 @@ export async function compressVoucherAttachment(
       minKB,
       maxPdfBytesAfter: maxBytes,
       onProgress: options?.onProgress,
+      signal: options?.signal,
     });
     // Never leave an oversize image — second pass with a tighter ceiling.
     if (out.size > maxBytes) {
+      throwIfAttachmentCompressionAborted(options?.signal);
       out = await compressFile(out.size < file.size ? out : file, {
         maxKB: Math.max(18, maxKB - 12),
         minKB: 12,
         maxPdfBytesAfter: maxBytes,
+        signal: options?.signal,
       });
     }
     return out;

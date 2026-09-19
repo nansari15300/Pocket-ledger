@@ -39,8 +39,11 @@ import {
 } from "./transactionTableShared";
 import { Badge } from "@/components/ui/badge";
 import { useCompany } from "@/hooks/useCompany";
-import { insertFiscalPartitionRows, getFiscalMergePartitionDateFromCompany, FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
-import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
+import {
+  buildFiscalMergePartitionEntriesFromCompany,
+  insertFiscalPartitionRowsMulti,
+  FISCAL_YEAR_PARTITION_ROW_TYPE,
+} from "@/lib/fiscalPartitionRows";
 
 export type BillwiseTransactionTableProps = {
   transactions: Transaction[];
@@ -136,26 +139,16 @@ export function BillwiseTransactionTable({
   const showCol = (key: string) => visibleColumns == null || visibleColumns[key] !== false;
   const { company } = useCompany();
   // FY merge divider — company par local fiscal already merged (`useCompany`).
-  const fiscalPartitionOpts = useMemo(() => {
-    if (company?.fiscalSplitMode !== "merge") return { at: null as Date | null, label: undefined as string | undefined };
-    return {
-      at: getFiscalMergePartitionDateFromCompany(company),
-      label: company.fiscalPartitionLabel,
-    };
-  }, [company?.fiscalSplitMode, company?.fiscalMergePartitionAt, company?.fiscalPartitionLabel]);
-  const fiscalMergeBannerLabel = useMemo(
-    () =>
-      fiscalPartitionOpts.at
-        ? buildFiscalMergePartitionBannerLabel(company, fiscalPartitionOpts.at, fiscalPartitionOpts.label)
-        : undefined,
-    [company, fiscalPartitionOpts.at, fiscalPartitionOpts.label]
+  const fiscalMergePartitions = useMemo(
+    () => buildFiscalMergePartitionEntriesFromCompany(company),
+    [company?.fiscalSplitMode, company?.fiscalMergePartitionAt, company?.fiscalMergePartitionAtIsos, company?.fiscalPartitionLabel, company?.country, company?.fiscalYearStart]
   );
   const displayTransactions = useMemo(
     () =>
-      fiscalPartitionOpts.at
-        ? insertFiscalPartitionRows(transactions as any[], fiscalPartitionOpts.at, fiscalMergeBannerLabel)
+      fiscalMergePartitions.length
+        ? insertFiscalPartitionRowsMulti(transactions as any[], fiscalMergePartitions)
         : transactions,
-    [transactions, fiscalPartitionOpts.at, fiscalMergeBannerLabel]
+    [transactions, fiscalMergePartitions]
   );
   const { formatDate, formatDateBS, formatCurrency, dateSystem } = useDate();
   const { settings: animationSettings } = useAnimationSettings();

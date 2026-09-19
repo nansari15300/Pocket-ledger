@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, usePathname } from "next/navigation";
 import { useLocationSearchParams } from "@/hooks/useLocationSearchParams";
@@ -9,8 +9,15 @@ import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
-import { ArrowLeft, Calendar as CalendarIcon, File as FileIcon, Printer, Share2, BarChart2, X } from "lucide-react";
+import { ArrowLeft, Calendar as CalendarIcon, File as FileIcon, Printer, Share2, BarChart2, Package, Layers, X } from "lucide-react";
 import type { Item, ItemGroup } from "@/components/items/types";
+import { ItemList } from "@/components/items/ItemList";
+import { ItemGroupList } from "@/components/items/ItemGroupList";
+import ItemDetails from "@/components/items/ItemDetails";
+import { ItemGroupDetails } from "@/components/items/ItemGroupDetails";
+import { ReportStatementDesktopShell } from "@/components/reports/ReportStatementDesktopShell";
+import { mlc } from "@/lib/mobileListChrome";
+import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
@@ -18,6 +25,7 @@ import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatemen
 import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
+import { buildItemGroupReportEntity } from "@/lib/reportStatementGroupEntity";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -81,7 +89,7 @@ const ReportSummaryCard = React.memo(function ReportSummaryCard({
 }, (prev, next) => prev.title === next.title && prev.amount === next.amount && prev.color === next.color && prev.customFormatted === next.customFormatted);
 
 export default function DesktopItemStatementPage() {
-  const { processedItems, processedItemGroups, vouchers, loading, journalAccountNames } = useVouchers();
+  const { processedItems, processedItemGroups, vouchers, loading, journalAccountNames } = useFyScopedVouchers();
   const { company } = useCompany();
   const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
   const router = useRouter();
@@ -95,6 +103,14 @@ export default function DesktopItemStatementPage() {
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [transactionSearch, setTransactionSearch] = useState("");
   const [view, setView] = useState<"list" | "chart">("list");
+  const [listTab, setListTab] = useState<"items" | "groups">(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("groupId")
+      ? "groups"
+      : "items"
+  );
+  const [listSearchTerm, setListSearchTerm] = useState("");
+  const [itemListQuickFilter, setItemListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
 
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<ItemGroup | null>(null);
@@ -127,41 +143,34 @@ export default function DesktopItemStatementPage() {
     });
   }, [vouchers, fetchUserName]);
 
-  const itemId = searchParams.get("itemId");
-  const groupId = searchParams.get("groupId");
+  useEffect(() => {
+    const itemId = searchParams.get("itemId");
+    const groupId = searchParams.get("groupId");
+
+    if (itemId && processedItems.length > 0) {
+      const item = processedItems.find((p) => p.id === itemId);
+      setSelectedItem((prev) => (prev?.id === item?.id ? prev : item || null));
+      setSelectedGroup((prev) => (prev !== null ? null : prev));
+    } else if (groupId && processedItemGroups.length > 0) {
+      const group = processedItemGroups.find((g) => g.id === groupId);
+      setSelectedGroup((prev) => (prev?.id === group?.id ? prev : group || null));
+      setSelectedItem((prev) => (prev !== null ? null : prev));
+    } else if (processedItems.length > 0) {
+      const first = processedItems[0];
+      setSelectedItem((prev) => {
+        if (!first) return null;
+        if (prev?.id === first.id) return prev;
+        if (prev && processedItems.some((p) => p.id === prev.id)) return prev;
+        return first;
+      });
+      setSelectedGroup((prev) => (prev !== null ? null : prev));
+    }
+  }, [searchParams, processedItems, processedItemGroups]);
 
   useEffect(() => {
-    if (!processedItems.length && !processedItemGroups.length) return;
-    if (itemId) {
-      const item = processedItems.find((p) => p.id === itemId);
-      if (item) {
-        setSelectedItem(item);
-        setSelectedGroup(null);
-        return;
-      }
-    }
-    if (groupId) {
-      const group = processedItemGroups.find((g) => g.id === groupId);
-      if (group) {
-        setSelectedGroup(group);
-        setSelectedItem(null);
-        return;
-      }
-    }
-    if (!selectedItem && !selectedGroup) {
-      const first = processedItems[0];
-      if (first) {
-        setSelectedItem(first);
-        setSelectedGroup(null);
-      } else {
-        const firstGroup = processedItemGroups[0];
-        if (firstGroup) {
-          setSelectedGroup(firstGroup);
-          setSelectedItem(null);
-        }
-      }
-    }
-  }, [itemId, groupId, processedItems, processedItemGroups]);
+    if (searchParams.get("groupId")) setListTab("groups");
+    else if (searchParams.get("itemId")) setListTab("items");
+  }, [searchParams]);
 
   const openModalInUrl = useCallback(() => {
     if (!isMobile || !pathname) return;
@@ -261,7 +270,12 @@ export default function DesktopItemStatementPage() {
     }
   }, [selectedItem, unitOptions.length, smallestUnit]);
 
-  const activeEntity = selectedItem || (selectedGroup ? { ...selectedGroup, items: processedItems.filter((p) => p.groupId === selectedGroup.id) } : null);
+  const groupReportEntity = useMemo(() => {
+    if (!selectedGroup) return null;
+    return buildItemGroupReportEntity(selectedGroup, processedItems, processedItemGroups);
+  }, [selectedGroup, processedItems, processedItemGroups]);
+
+  const activeEntity = selectedItem || groupReportEntity;
   const activeContext = selectedItem ? "item" : "group";
 
   const reportStockViewForTx = selectedItem ? reportStockView : "amount";
@@ -331,6 +345,41 @@ export default function DesktopItemStatementPage() {
       { title: "Purchases", amount: purchasesAmount, qty: purchasesQty, color: "text-red-600" },
     ];
   }, [closingBalance, processedTransactions]);
+
+  const desktopSummaryCards = useMemo(
+    () => summaryCards.map(({ title, amount, color }) => ({ title, amount, color })),
+    [summaryCards]
+  );
+
+  const itemDisplayUnits = useMemo(() => {
+    if (!selectedItem?.id || !effectiveDisplayUnit) return {};
+    return { [selectedItem.id]: effectiveDisplayUnit };
+  }, [selectedItem?.id, effectiveDisplayUnit]);
+
+  const setItemDisplayUnit = useCallback((itemId: string, unit: string) => {
+    setReportDisplayUnit(unit);
+    setReportStockView("qty");
+  }, []);
+
+  const handleSelectItemFromList = useCallback((item: Item) => {
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set("itemId", item.id);
+    newUrl.searchParams.delete("groupId");
+    window.history.pushState({}, "", newUrl);
+    setSelectedItem(item);
+    setSelectedGroup(null);
+    setListTab("items");
+  }, []);
+
+  const handleSelectGroupFromList = useCallback((group: ItemGroup) => {
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set("groupId", group.id);
+    newUrl.searchParams.delete("itemId");
+    window.history.pushState({}, "", newUrl);
+    setSelectedGroup(group);
+    setSelectedItem(null);
+    setListTab("groups");
+  }, []);
 
   const dateRangeLabel = useMemo(() => {
     // Entity report header row-2 — Party statement jaisa "All Time"; last-10 desktop slice alag logic.
@@ -467,6 +516,116 @@ export default function DesktopItemStatementPage() {
 
   if (loading && !activeEntity) {
     return <LoadingSpinner />;
+  }
+
+  const addVoucherDialog = (
+    <AddVoucherDialog
+      isOpen={isVoucherDialogOpen}
+      onOpenChange={(open: boolean) => {
+        if (!open) {
+          setIsVoucherDialogOpen(false);
+          setSelectedVoucher(null);
+          closeModalInUrl();
+        }
+      }}
+      voucher={selectedVoucher}
+      onVoucherAction={() => setSelectedVoucher(null)}
+    />
+  );
+
+  if (!isMobile) {
+    return (
+      <ReportStatementDesktopShell
+        listChromeRouteKey="items"
+        pageTitle={pageTitle}
+        listTab={listTab}
+        entityTabValue="items"
+        groupTabValue="groups"
+        entityTabLabel="Items"
+        onListTabChange={(tab) => setListTab(tab === "groups" ? "groups" : "items")}
+        listSearchTerm={listSearchTerm}
+        onListSearchChange={setListSearchTerm}
+        entitySearchPlaceholder="Search items..."
+        groupSearchPlaceholder="Search groups/item"
+        entitySectionLabel={
+          <div className={mlc.sectionLabelRow}>
+            <Package className={mlc.sectionIcon} />
+            <span>Item ({processedItems.length})</span>
+          </div>
+        }
+        groupSectionLabel={
+          <div className={mlc.sectionLabelRow}>
+            <Layers className={mlc.sectionIcon} />
+            <span>Item group ({processedItemGroups.length})</span>
+          </div>
+        }
+        entityQuickFilter={itemListQuickFilter}
+        groupQuickFilter={groupListQuickFilter}
+        onEntityQuickFilterChange={setItemListQuickFilter}
+        onGroupQuickFilterChange={setGroupListQuickFilter}
+        summaryCards={desktopSummaryCards}
+        showSummary={!!activeEntity}
+        entityList={
+          <ItemList
+            items={processedItems}
+            onSelectItem={handleSelectItemFromList}
+            selectedItem={selectedItem}
+            searchTerm={listSearchTerm}
+            stockView={reportStockView}
+            itemDisplayUnits={itemDisplayUnits}
+            quickFilter={itemListQuickFilter}
+            onQuickFilterChange={setItemListQuickFilter}
+            hideQuickFilterBar
+          />
+        }
+        groupList={
+          <ItemGroupList
+            groups={processedItemGroups}
+            onSelectGroup={handleSelectGroupFromList}
+            selectedGroup={selectedGroup}
+            searchTerm={listSearchTerm}
+            quickFilter={groupListQuickFilter}
+            onQuickFilterChange={setGroupListQuickFilter}
+            hideQuickFilterBar
+          />
+        }
+        detailView={
+          selectedItem ? (
+            <ItemDetails
+              item={selectedItem}
+              onItemUpdated={() => {}}
+              onItemDeleted={() => setSelectedItem(null)}
+              transactions={processedTransactions}
+              stockView={reportStockView}
+              setStockView={setReportStockView}
+              itemDisplayUnits={itemDisplayUnits}
+              setItemDisplayUnit={setItemDisplayUnit}
+              userNames={userNames}
+            />
+          ) : selectedGroup ? (
+            <ItemGroupDetails
+              group={selectedGroup}
+              allGroups={processedItemGroups}
+              items={groupReportEntity?.items ?? []}
+              allItems={processedItems}
+              stockView="amount"
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+              transactions={processedTransactions}
+              userNames={userNames}
+              onGroupUpdated={() => {}}
+              onGroupDeleted={() => setSelectedGroup(null)}
+              onItemUpdated={() => {}}
+            />
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center bg-muted/20">
+              <p className="text-sm text-muted-foreground">Select an item or group</p>
+            </div>
+          )
+        }
+        footer={addVoucherDialog}
+      />
+    );
   }
 
   return (
@@ -800,18 +959,7 @@ export default function DesktopItemStatementPage() {
         </Button>
       </footer>
 
-      <AddVoucherDialog
-        isOpen={isVoucherDialogOpen}
-        onOpenChange={(open: boolean) => {
-          if (!open) {
-            setIsVoucherDialogOpen(false);
-            setSelectedVoucher(null);
-            closeModalInUrl();
-          }
-        }}
-        voucher={selectedVoucher}
-        onVoucherAction={() => setSelectedVoucher(null)}
-      />
+      {addVoucherDialog}
     </div>
   );
 }

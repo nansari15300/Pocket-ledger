@@ -1,5 +1,5 @@
 /**
- * Fiscal split (merge / separate / off) — sirf device par localStorage.
+ * Fiscal split (merge / off) — sirf device par localStorage.
  * Firestore company doc me ye fields nahi bhejte; `useCompany` inhe merge karke UI ko deta hai.
  */
 
@@ -7,13 +7,23 @@ export const LOCAL_FISCAL_SPLIT_CHANGED_EVENT = "pl_local_fiscal_split_changed";
 
 const STORAGE_PREFIX = "pl_fiscal_split_v1_";
 
-export type FiscalSplitMode = "off" | "merge" | "separate";
+export type FiscalSplitMode = "off" | "merge";
 
 export type LocalFiscalSplitPayload = {
   fiscalSplitMode: FiscalSplitMode;
-  /** Merge mode: partition din AD start-of-day (ISO string). */
+  /** Merge mode: legacy single partition (first of `fiscalMergePartitionAtIsos`). */
   fiscalMergePartitionAtIso: string | null;
+  /** Merge mode: multiple partition starts (AD start-of-day ISO), oldest → newest. */
+  fiscalMergePartitionAtIsos: string[] | null;
+  /** Merge mode: ticked FY keys — UI round-trip (`2081-2082` Nepal BS style). */
+  fiscalMergeTickedFyKeys: string[] | null;
   fiscalPartitionLabel: string | null;
+  /** Splite Fiscal Year → auto splite (default on; UI always shows ticked). */
+  fiscalAutoSplitEnabled: boolean;
+  /** User saved Fiscal year & split settings manually — auto splite must not override. */
+  fiscalSplitConfiguredByUser: boolean;
+  /** Local calendar day (YYYY-MM-DD) when daily auto splite check last ran for this company. */
+  fiscalAutoSplitLastCheckDay: string | null;
 };
 
 function storageKey(companyId: string): string {
@@ -24,25 +34,58 @@ function defaultPayload(): LocalFiscalSplitPayload {
   return {
     fiscalSplitMode: "off",
     fiscalMergePartitionAtIso: null,
+    fiscalMergePartitionAtIsos: null,
+    fiscalMergeTickedFyKeys: null,
     fiscalPartitionLabel: null,
+    fiscalAutoSplitEnabled: true,
+    fiscalSplitConfiguredByUser: false,
+    fiscalAutoSplitLastCheckDay: null,
   };
+}
+
+function normalizePartitionIsoList(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out = raw
+    .filter((v): v is string => typeof v === "string" && Boolean(v.trim()))
+    .map((v) => v.trim());
+  return out.length ? out : null;
+}
+
+function normalizeFyKeyList(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out = raw
+    .filter((v): v is string => typeof v === "string" && Boolean(v.trim()))
+    .map((v) => v.trim());
+  return out.length ? out : null;
 }
 
 function normalizePayload(raw: unknown): LocalFiscalSplitPayload | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
   const m = o.fiscalSplitMode;
-  const mode: FiscalSplitMode =
-    m === "merge" || m === "separate" ? m : "off";
+  const mode: FiscalSplitMode = m === "merge" ? "merge" : "off";
   const iso =
     typeof o.fiscalMergePartitionAtIso === "string" && o.fiscalMergePartitionAtIso
       ? o.fiscalMergePartitionAtIso
       : null;
+  const isos = normalizePartitionIsoList(o.fiscalMergePartitionAtIsos) ?? (iso ? [iso] : null);
+  const tickedFyKeys = normalizeFyKeyList(o.fiscalMergeTickedFyKeys);
   const label = typeof o.fiscalPartitionLabel === "string" ? o.fiscalPartitionLabel : null;
+  const autoSplitEnabled = o.fiscalAutoSplitEnabled === false ? false : true;
+  const configuredByUser = o.fiscalSplitConfiguredByUser === true;
+  const lastCheckDay =
+    typeof o.fiscalAutoSplitLastCheckDay === "string" && o.fiscalAutoSplitLastCheckDay.trim()
+      ? o.fiscalAutoSplitLastCheckDay.trim()
+      : null;
   return {
     fiscalSplitMode: mode,
-    fiscalMergePartitionAtIso: iso,
+    fiscalMergePartitionAtIso: isos?.[0] ?? iso,
+    fiscalMergePartitionAtIsos: isos,
+    fiscalMergeTickedFyKeys: tickedFyKeys,
     fiscalPartitionLabel: label,
+    fiscalAutoSplitEnabled: autoSplitEnabled,
+    fiscalSplitConfiguredByUser: configuredByUser,
+    fiscalAutoSplitLastCheckDay: lastCheckDay,
   };
 }
 
@@ -63,15 +106,28 @@ export function readLocalFiscalSplit(companyId: string | null | undefined): Loca
 export function writeLocalFiscalSplit(companyId: string | null | undefined, next: LocalFiscalSplitPayload): void {
   if (!companyId || typeof window === "undefined") return;
   try {
+    const mergeIsos =
+      next.fiscalSplitMode === "merge"
+        ? normalizePartitionIsoList(next.fiscalMergePartitionAtIsos) ??
+          (next.fiscalMergePartitionAtIso ? [next.fiscalMergePartitionAtIso] : null)
+        : null;
     const normalized: LocalFiscalSplitPayload = {
       fiscalSplitMode: next.fiscalSplitMode,
-      fiscalMergePartitionAtIso:
-        next.fiscalSplitMode === "merge" && next.fiscalMergePartitionAtIso
-          ? next.fiscalMergePartitionAtIso
+      fiscalMergePartitionAtIso: mergeIsos?.[0] ?? null,
+      fiscalMergePartitionAtIsos: mergeIsos,
+      fiscalMergeTickedFyKeys:
+        next.fiscalSplitMode === "merge"
+          ? normalizeFyKeyList(next.fiscalMergeTickedFyKeys)
           : null,
       fiscalPartitionLabel:
         next.fiscalSplitMode === "merge" && next.fiscalPartitionLabel?.trim()
           ? next.fiscalPartitionLabel.trim()
+          : null,
+      fiscalAutoSplitEnabled: next.fiscalAutoSplitEnabled !== false,
+      fiscalSplitConfiguredByUser: next.fiscalSplitConfiguredByUser === true,
+      fiscalAutoSplitLastCheckDay:
+        typeof next.fiscalAutoSplitLastCheckDay === "string" && next.fiscalAutoSplitLastCheckDay.trim()
+          ? next.fiscalAutoSplitLastCheckDay.trim()
           : null,
     };
     localStorage.setItem(storageKey(companyId), JSON.stringify(normalized));

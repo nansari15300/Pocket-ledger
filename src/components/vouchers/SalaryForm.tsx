@@ -33,10 +33,11 @@ import { Textarea } from "../ui/textarea";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Checkbox } from "../ui/checkbox";
+import { VoucherDeleteConfirmAlertDialog } from "@/components/vouchers/VoucherDeleteConfirmAlertDialog";
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
-} from "../ui/alert-dialog";
+  assertCanPermanentDeleteFromForm,
+  permanentDeleteVoucherFromForm,
+} from "@/lib/permanentDeleteFromForm";
 import {
   Dialog,
   DialogContent,
@@ -47,7 +48,6 @@ import {
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, UserPlus, Link2, Zap, X, RotateCcw, HelpCircle, History, CheckCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  NESTED_VOUCHER_ALERT_SHELL,
   NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
   NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN,
 } from "@/lib/dialogShellChrome";
@@ -408,7 +408,7 @@ export function SalaryForm({
     [processedStaff]
   );
   const { company, companyId } = useCompany();
-  const { can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
+  const { can, role, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const fileAttachLockedByDialog = !!voucher?.id && deleteDisabledWhenLinked;
   const isMobile = useIsMobile();
   const [loading, setLoading] = useState(true);
@@ -1927,6 +1927,69 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
         setIsLoading(false);
     }
   };
+
+  const handlePermanentDelete = async () => {
+    const voucherIdToDelete = savedVoucherIdRef || voucher?.id || null;
+    if (!voucherIdToDelete || !companyId) return;
+
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+      const { voucherData, exists: voucherDocExists } = await loadVoucherDataForDeletePreCheck({
+        companyId,
+        voucherId: voucherIdToDelete,
+        company,
+        fallbackVoucher: (voucher as Record<string, unknown> | null) ?? null,
+        vouchers: allVouchers as Array<{ id?: string } & Record<string, unknown>> | null,
+      });
+      if (!canDeleteVoucher(voucherData)) {
+        throw new PermissionDeniedError(
+          (voucherData as any)?.isApproved
+            ? "You do not have permission to delete approved vouchers."
+            : "You do not have permission to delete records."
+        );
+      }
+      if (voucherData && hasPaymentLinks(voucherData)) {
+        toast({ variant: "destructive", title: "Cannot Delete", description: "First unlink linked transactions." });
+        return;
+      }
+      if (voucherDocExists && voucherData) {
+        const voucherDate = resolveVoucherDeleteBackdateDate(voucherData, {
+          form: "salary",
+          companyId,
+          voucherId: voucherIdToDelete,
+        });
+        assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
+      }
+    } catch (error) {
+      if (error instanceof PermissionDeniedError) {
+        toast({
+          variant: "destructive",
+          title: "Permission Denied",
+          description: error.message,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to check permissions.",
+        });
+      }
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      await permanentDeleteVoucherFromForm(companyId, voucherIdToDelete);
+      toast({ title: "Salary voucher deleted permanently." });
+      setIsDeleteDialogOpen(false);
+      onVoucherAction?.("cancelled");
+    } catch (error) {
+      console.error("Error permanently deleting voucher:", error);
+      toast({ variant: "destructive", title: "Error", description: "Failed to permanently delete voucher." });
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!allowAttachments) return;
@@ -2906,25 +2969,9 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
             {isMobile ? (
               <div className={cn("grid grid-cols-3 gap-2 w-full", VOUCHER_BUTTONS_CLASS)}>
                 {/* Row 0: Delete (left) | History (middle) | Save & Print (right) */}
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button type="button" variant="destructive" className="w-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                <Button type="button" variant="destructive" className="w-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))} onClick={() => setIsDeleteDialogOpen(true)}>
                       Delete
                     </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                      <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                        Delete
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
                 <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
                   History
                 </Button>
@@ -2948,25 +2995,9 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                   <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
                     <History className="mr-2 h-4 w-4" /> History
                   </Button>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                  <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))} onClick={() => setIsDeleteDialogOpen(true)}>
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                        <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                          Move to Bin
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
                 </div>
                 <div className={cn("flex gap-2 justify-end flex-wrap md:gap-4", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
@@ -3185,6 +3216,15 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
       />
       <CreateTaxDialog onTaxCreated={handleTaxCreated} isOpen={isCreateTaxOpen} onOpenChange={setIsCreateTaxOpen} />
       <CreateExpenseAccountDialog onExpenseAccountCreated={handleExpenseAccountCreated} isOpen={isCreateExpenseOpen} onOpenChange={setIsCreateExpenseOpen} />
+      <VoucherDeleteConfirmAlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        entityKind="salary"
+        entityName={voucher?.voucherNumber || "this salary voucher"}
+        onMoveToBin={handleDelete}
+        onDeletePermanently={handlePermanentDelete}
+        busy={isLoading}
+      />
     </>
   );
 }

@@ -15,7 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Printer } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { useCompany } from "@/hooks/useCompany";
 import { openPrintDirect } from "@/lib/printDirect";
@@ -32,12 +32,23 @@ type StockItem = {
     type: 'item' | 'service' | 'finished_good';
 };
 
+/** Stock Summary body rows — 1px separators. */
+const STOCK_TABLE_BODY_CN =
+    "[&_tr]:!border-b-[1px] [&_tr]:!border-border/80";
+
+/** Footer: body ki last line hi separator; niche extra line mat banao. */
+const STOCK_TABLE_FOOTER_CN =
+    "[&_tfoot]:!border-t-0 [&_tr]:!border-b-0";
+
 const StockTable = ({ items, totalValue, formatCurrency }: { items: StockItem[], totalValue: number, formatCurrency: any }) => (
-    <div className="border rounded-lg">
-        <ScrollArea className="h-[calc(100vh-24rem)]">
-            <Table>
-                <TableHeader className="sticky top-0 bg-background">
-                    <TableRow>
+    <div
+        className="flex flex-col overflow-hidden rounded-lg border border-emerald-200/70 pl-dashboard-ribbon-emerald"
+        data-pl-stock-summary-table=""
+    >
+        <ScrollArea className="stock-summary-scroll h-[calc(100vh-24rem)]">
+            <Table scrollContainer={false} className={STOCK_TABLE_BODY_CN}>
+                <TableHeader className="sticky top-0 z-10 bg-[inherit]">
+                    <TableRow className="hover:bg-emerald-100/30">
                         <TableHead>Item Name</TableHead>
                         <TableHead className="text-right">Quantity</TableHead>
                         <TableHead className="text-right">Rate</TableHead>
@@ -56,9 +67,9 @@ const StockTable = ({ items, totalValue, formatCurrency }: { items: StockItem[],
                 </TableBody>
             </Table>
         </ScrollArea>
-        <Table>
-             <TableFooter>
-                <TableRow>
+        <Table scrollContainer={false} className={STOCK_TABLE_FOOTER_CN}>
+             <TableFooter className="border-t-0 bg-transparent">
+                <TableRow className="hover:bg-emerald-100/30">
                     <TableCell colSpan={3} className="text-right font-bold text-lg">Total Stock Value</TableCell>
                     <TableCell className="text-right font-bold text-lg">{formatCurrency(totalValue, { noSuffix: true })}</TableCell>
                 </TableRow>
@@ -69,7 +80,7 @@ const StockTable = ({ items, totalValue, formatCurrency }: { items: StockItem[],
 
 
 export default function StockSummary() {
-    const { processedItems, loading } = useVouchers();
+    const { processedItems, loading } = useFyScopedVouchers();
     const { company } = useCompany();
     const { formatCurrency, dateSystem, formatDate, formatDateBS } = useDate();
     const [activeTab, setActiveTab] = useState<'item' | 'service'>('item');
@@ -159,7 +170,7 @@ export default function StockSummary() {
 
     return (
         <div className="p-4 sm:p-6 md:p-8 space-y-4">
-            <Card>
+            <Card className="pl-dashboard-tone-card pl-dashboard-ribbon-emerald">
                 <CardHeader className="flex-row items-center justify-between">
                     <div>
                         <CardTitle>Stock Summary</CardTitle>

@@ -26,6 +26,10 @@ import { OnlineResumeRouteShield } from "@/components/OnlineResumeRouteShield";
 import { OfflineWarmSyncManager } from "@/components/OfflineWarmSyncManager";
 import { CompanyAttachmentOfflineBackfillManager } from "@/components/CompanyAttachmentOfflineBackfillManager";
 import { LocalCompanySqliteWarmBootstrap } from "@/components/LocalCompanySqliteWarmBootstrap";
+import { FiscalAutoSplitBootstrap } from "@/components/settings/FiscalAutoSplitBootstrap";
+import { FyVoucherScopeBootstrap } from "@/components/fyPagination/FyVoucherScopeBootstrap";
+import { FySnapshotSaveBootstrap } from "@/components/fyPagination/FySnapshotSaveBootstrap";
+import { FyMasterOpeningSaveBootstrap } from "@/components/fyPagination/FyMasterOpeningSaveBootstrap";
 import { PlServerAttachmentPreloadManager } from "@/components/PlServerAttachmentPreloadManager";
 import { LiveMirrorFolderMissingDialog } from "@/components/LiveMirrorFolderMissingDialog";
 import { AppAlertDialog } from "@/components/AppAlertDialog";
@@ -170,6 +174,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
                     <BalanceModeProvider>
                         <DialogBackHandlerProvider>
                             <VoucherProvider>
+                                <FyVoucherScopeBootstrap>
+                                <FiscalAutoSplitBootstrap />
+                                <FySnapshotSaveBootstrap />
+                                <FyMasterOpeningSaveBootstrap />
                                 <VoucherOutboxFlushManager />
                                 <DaybookWedgeSyncManager />
                                 <LocalCompanyCloudSyncManager />
@@ -181,6 +189,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                                       {children}
                                     </MobileDetailSummaryCollapseProvider>
                                 </TooltipProvider>
+                                </FyVoucherScopeBootstrap>
                             </VoucherProvider>
                         </DialogBackHandlerProvider>
                     </BalanceModeProvider>

@@ -8,6 +8,8 @@ import { collectionGroup, query, where, onSnapshot, collection, getDoc, getDocs,
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "./useCompany";
 import { useAuth } from "./useAuth";
+import { useFyVoucherScope } from "@/contexts/FyVoucherScopeContext";
+import { filterVouchersToFyScope, mergeVouchersById } from "@/lib/fyPagination/scopeFilter";
 import usePermissions from "./usePermissions";
 import type { Party, Group } from "@/components/party/types";
 import type { Staff, StaffGroup } from "@/components/staff/types";
@@ -37,6 +39,7 @@ import {
   mirrorCollectionDocsToBrowserDbSilent,
   notifyBrowserDbCollectionUpdated,
   upsertCompanyDocInBrowserDb,
+  mirrorDocEditTimeMs,
   type BrowserDbCollectionBumpDetail,
 } from "@/lib/localCompanyDocMirror";
 import { getLocalAuthToken, getLocalAuthUser, LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
@@ -69,6 +72,7 @@ import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { getBillWiseAllocatedToTarget, getPaymentStatus as getPaymentStatusResult, isSaleOrPurchaseBillVoucherType } from "@/lib/payment-allocation-utils";
 import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
+import { isCurrentUserSharedOnCompanyRow } from "@/lib/companyOnlineIntegrity";
 import {
   PL_SERVER_CLIENT_DELTA_EVENT,
   type PlServerClientDeltaEventDetail,
@@ -330,6 +334,17 @@ function rowMissingVoucherAttachmentFields(prevRow: any, mergedRow: any): boolea
   return voucherAttachmentUiFingerprint(prevRow) !== voucherAttachmentUiFingerprint(mergedRow);
 }
 
+/** Master rows: newer `editTimeMs` wins — FY hydrate re-read stale SQLite se book OB na wipe ho. */
+function mergeMasterEntityRowKeepingNewer(existing: any, incoming: any): any {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  const existingMs = mirrorDocEditTimeMs(existing as Record<string, unknown>);
+  const incomingMs = mirrorDocEditTimeMs(incoming as Record<string, unknown>);
+  if (existingMs > incomingMs) return { ...incoming, ...existing, id: existing.id };
+  if (incomingMs > existingMs) return { ...existing, ...incoming, id: incoming.id };
+  return { ...existing, ...incoming, id: incoming.id };
+}
+
 /** Parties/items/… — local cache merge; optional date sort sirf vouchers ke liye. */
 function mergeEntityListsById(prev: any[], cached: any[], orderByField?: string): any[] {
   if (!cached.length) return prev.filter(isAliveDoc);
@@ -337,7 +352,12 @@ function mergeEntityListsById(prev: any[], cached: any[], orderByField?: string)
   for (const v of cached) {
     if (!isAliveDoc(v)) continue;
     const existing = map.get(v.id);
-    map.set(v.id, mergeVoucherRowKeepingLocalApproval(existing, v));
+    map.set(
+      v.id,
+      orderByField
+        ? mergeVoucherRowKeepingLocalApproval(existing, v)
+        : mergeMasterEntityRowKeepingNewer(existing, v)
+    );
   }
   const merged = [...map.values()].filter(isAliveDoc);
   const sorted = orderByField ? sortDocsByDateField(merged, orderByField) : merged;
@@ -1466,6 +1486,10 @@ export const VoucherProvider = ({
       : [];
     const sharedEmailOk =
       !!userEmailNorm && sharedWithEmails.some((e) => emailNorm(String(e)) === userEmailNorm);
+    const sharedOnCompanyRow = isCurrentUserSharedOnCompanyRow(
+      company as Parameters<typeof isCurrentUserSharedOnCompanyRow>[0],
+      { uid: user?.uid ?? "", email: user?.email ?? null }
+    );
     const hasLocalUnlockedSession =
       shouldUseLocalCompanyData && !!companyId && !!getLocalAuthToken(companyId);
     const isServerGateLedgerRow =
@@ -1475,6 +1499,7 @@ export const VoucherProvider = ({
       company?.ownerId === user?.uid ||
       !!company?.ownerEmail ||
       sharedEmailOk ||
+      sharedOnCompanyRow ||
       hasLocalUnlockedSession ||
       isServerGateLedgerRow ||
       isServerGateCompanyContext ||
@@ -1484,7 +1509,12 @@ export const VoucherProvider = ({
       // ledger pe warm same-company mat mitao (pichhla broad keepWarm /gate pe bhi rok deta tha).
       if (!companyId || !keepWarmUi) {
         resetAllStates();
-        setLoadingIfChanged(false);
+        // Refresh boot: companyId hai par shared row abhi hydrate ho rahi — khali list mat dikhao.
+        if (companyId && user && !isCompanyReady) {
+          setLoadingIfChanged(true);
+        } else {
+          setLoadingIfChanged(false);
+        }
       } else {
         void import("@/lib/plServerLiveChangeTrace")
           .then(({ plServerVoucherForensicTrace }) =>
@@ -2183,7 +2213,7 @@ export const VoucherProvider = ({
       unsubRef.current.forEach(u => u());
       unsubRef.current = [];
     };
-  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, ledgerSyncModeEpoch, onlineSyncPrefsEpoch, ledgerBootstrapActive, voucherFormMasterScope, sqliteLedgerRouteHint.usesSqlite, sqliteLedgerRouteHint.ownerMatchesUser, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId, setLoadingIfChanged]);
+  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, ledgerSyncModeEpoch, onlineSyncPrefsEpoch, ledgerBootstrapActive, voucherFormMasterScope, sqliteLedgerRouteHint.usesSqlite, sqliteLedgerRouteHint.ownerMatchesUser, company?.id, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId, company?.ownerEmail, company?.sharedWithEmails, setLoadingIfChanged]);
 
   // Sidebar/route change: pehle se warm company pe missing masters hi SQLite se — full teardown/spinner mat.
   useEffect(() => {
@@ -3580,7 +3610,51 @@ export const useVouchers = () => {
   if (context === undefined) {
     throw new Error("useVouchers must be used within a VoucherProvider");
   }
-  return context;
+  // FY/month scope: har page jo `useVouchers` use kare (party, staff, bank, forms…) same filtered list dekhe.
+  const fy = useFyVoucherScope();
+  const scopedVouchers = useMemo(() => {
+    if (!fy.enabled || !fy.activeScope) return context.vouchers;
+    const merged = mergeVouchersById(context.vouchers || [], fy.hydratedVouchers || []);
+    return filterVouchersToFyScope(
+      merged,
+      fy.activeScope,
+      fy.loadedRanges,
+      fy.scopedVoucherIds
+    );
+  }, [
+    context.vouchers,
+    fy.enabled,
+    fy.activeScope,
+    fy.loadedRanges,
+    fy.hydratedVouchers,
+    fy.scopedVoucherIds,
+  ]);
+
+  const scopedVouchersAll = useMemo(() => {
+    if (!fy.enabled || !fy.activeScope) return context.vouchersAll;
+    const mergedAll = mergeVouchersById(context.vouchersAll || [], fy.hydratedVouchers || []);
+    return filterVouchersToFyScope(
+      mergedAll,
+      fy.activeScope,
+      fy.loadedRanges,
+      fy.scopedVoucherIds
+    );
+  }, [
+    context.vouchersAll,
+    fy.enabled,
+    fy.activeScope,
+    fy.loadedRanges,
+    fy.hydratedVouchers,
+    fy.scopedVoucherIds,
+  ]);
+
+  return useMemo(() => {
+    if (!fy.enabled || !fy.activeScope) return context;
+    if (scopedVouchers === context.vouchers && scopedVouchersAll === context.vouchersAll) {
+      return context;
+    }
+    return { ...context, vouchers: scopedVouchers, vouchersAll: scopedVouchersAll };
+  }, [context, fy.enabled, fy.activeScope, scopedVouchers, scopedVouchersAll]);
 };
 
 /** Shell route par voucher forms ke liye saare masters (party/staff/tax/bank/expense/…) loaded hon. */

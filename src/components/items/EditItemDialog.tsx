@@ -42,11 +42,6 @@ import { Textarea } from "../ui/textarea";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Checkbox } from "../ui/checkbox";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from "../ui/alert-dialog";
-
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -117,7 +112,12 @@ import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
-import { softDeleteCompanySubdocToRecycleBin } from "@/lib/recycleBinEntityLifecycle";
+import {
+  permanentDeleteCompanySubdocFromRecycleBin,
+  softDeleteCompanySubdocToRecycleBin,
+} from "@/lib/recycleBinEntityLifecycle";
+import { MasterDeleteConfirmAlertDialog } from "@/components/common/MasterDeleteConfirmAlertDialog";
+import { assertCanPermanentDeleteFromForm } from "@/lib/permanentDeleteFromForm";
 import {
   isProfileDocumentFile,
   stageItemAvatarAndAttachments,
@@ -330,7 +330,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
     [company, navigatorOnline]
   );
   const { user } = useAuth();
-  const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const { canAddAvatar, canAddFileImagePdf, can, role } = usePermissions();
   /** Naye file attachments — offline par local staging; online par `uploadItemAvatarAndAttachmentsRemote` */
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const attachmentsDirty =
@@ -720,7 +720,52 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         setIsLoading(false);
     }
   }
-  
+
+  const handlePermanentDelete = async () => {
+    if (!companyId) {
+      toast({ variant: "destructive", title: "Error", description: "No company selected." });
+      return;
+    }
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+    } catch (err) {
+      sonnerToast.error("Permission Denied", {
+        description: err instanceof Error ? err.message : "No permission",
+      });
+      return;
+    }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    if (hasTransactions) {
+      sonnerToast.error("Cannot Delete", { description: "This item has transactions and cannot be deleted." });
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await permanentDeleteCompanySubdocFromRecycleBin(companyId, "items", item.id);
+      toast({
+        title: "Item deleted permanently",
+        description: `"${item.name}" was permanently deleted.`,
+      });
+      onItemDeleted();
+      setIsOpen(false);
+      setIsDeleteDialogOpen(false);
+    } catch (error) {
+      console.error("Error permanently deleting item: ", error);
+      toast({
+        variant: "destructive",
+        title: "Delete Failed",
+        description: "Could not permanently delete the item.",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
     if (!canAttachDocuments) {
@@ -1364,26 +1409,17 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         </DialogContent>
       </Dialog>
       
-      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-        <AlertDialogContent>
-            <AlertDialogHeader>
-                <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                <AlertDialogDescription>
-                    This action will move the item <span className="font-semibold text-foreground">{item.name}</span> to the recycle bin.
-                </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-                <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS}>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  disabled={apkOfflineViewOnly}
-                  onClick={handleDelete}
-                  className="bg-destructive hover:bg-destructive/90"
-                >
-                    Move to Bin
-                </AlertDialogAction>
-            </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <MasterDeleteConfirmAlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        entityKind="item"
+        entityName={item.name}
+        onMoveToBin={handleDelete}
+        onDeletePermanently={handlePermanentDelete}
+        busy={isLoading}
+        moveToBinDisabled={apkOfflineViewOnly}
+        permanentDeleteDisabled={apkOfflineViewOnly}
+      />
       <CreateItemGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} />
       <CreateTaxDialog onTaxCreated={handleTaxCreated} isOpen={isCreateTaxOpen} onOpenChange={(open) => { if (!open) { setPrefillTaxName(""); setTaxFieldToApply(null); } setIsCreateTaxOpen(open); }} prefillTaxName={prefillTaxName} />
     </>

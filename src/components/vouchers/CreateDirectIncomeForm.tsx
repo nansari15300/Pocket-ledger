@@ -15,7 +15,6 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon, Loader2, Trash2, Upload, FileText, PlusCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
 import {
   mapPartiesForVoucherCombobox,
   mapStaffForVoucherCombobox,
@@ -31,7 +30,11 @@ import { collection, addDoc, serverTimestamp, doc, getDoc, updateDoc, deleteDoc,
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { format, startOfDay } from "date-fns";
 import { ScrollArea } from "../ui/scroll-area";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { VoucherDeleteConfirmAlertDialog } from "@/components/vouchers/VoucherDeleteConfirmAlertDialog";
+import {
+  assertCanPermanentDeleteFromForm,
+  permanentDeleteVoucherFromForm,
+} from "@/lib/permanentDeleteFromForm";
 import type { Party } from "@/components/party/types";
 import type { Account } from "@/components/bank-cash/types";
 import type { Tax } from "@/components/tax/types";
@@ -40,7 +43,7 @@ import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccoun
 import { useDate } from "@/hooks/useDate";
 import usePermissions from "@/hooks/usePermissions";
 import { toast as sonnerToast } from "sonner";
-import { beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
+import { beginVoucherSaveLoadingOrBlock, cancelVoucherInFlightWork, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
 import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
@@ -186,7 +189,7 @@ export function CreatePaymentInForm({
   const { formatCurrency, formatDate, dateSystem } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedParties, processedPartiesForSelection, processedStaff, processedTaxes, processedStaffGroups, processedAccounts, expenseAccounts } = useVouchers();
   const { company, companyId } = useCompany();
-  const { canPerformBackdatedAction, allowAttachments, fileAttachmentLimits, can, canDeleteVoucher } = usePermissions();
+  const { canPerformBackdatedAction, allowAttachments, fileAttachmentLimits, can, role, canDeleteVoucher } = usePermissions();
   const isMobile = useIsMobile();
   const [loading, setLoading] = useState(true);
   const [selectedEntity, setSelectedEntity] = useState<any | null>(null);
@@ -622,6 +625,55 @@ export function CreatePaymentInForm({
       setIsLoading(false);
     }
   };
+
+  const handlePermanentDelete = async () => {
+    const voucherIdToDelete = savedVoucherId || voucher?.id || null;
+    if (!voucherIdToDelete || !companyId) return;
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+      const { voucherData, exists: voucherDocExists } = await loadVoucherDataForDeletePreCheck({
+        companyId,
+        voucherId: voucherIdToDelete,
+        company,
+        fallbackVoucher: (voucher as Record<string, unknown> | null) ?? null,
+        vouchers: null,
+      });
+      if (!canDeleteVoucher(voucherData)) {
+        throw new PermissionDeniedError("You do not have permission to delete records.");
+      }
+      if (voucherData && hasPaymentLinks(voucherData)) {
+        toast({ variant: "destructive", title: "Cannot Delete", description: "First unlink linked transactions." });
+        return;
+      }
+      if (voucherDocExists && voucherData) {
+        const voucherDate = resolveVoucherDeleteBackdateDate(voucherData, {
+          form: "direct_income",
+          companyId,
+          voucherId: voucherIdToDelete,
+        });
+        assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
+      }
+    } catch (error) {
+      if (error instanceof PermissionDeniedError) {
+        toast({ variant: "destructive", title: "Permission Denied", description: error.message });
+      } else {
+        toast({ variant: "destructive", title: "Error", description: "Failed to check permissions." });
+      }
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await permanentDeleteVoucherFromForm(companyId, voucherIdToDelete);
+      toast({ title: "Direct income deleted permanently." });
+      setIsDeleteDialogOpen(false);
+      onVoucherUpdated?.();
+    } catch (error) {
+      console.error("Error permanently deleting voucher:", error);
+      toast({ variant: "destructive", title: "Error", description: "Failed to permanently delete voucher." });
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!allowAttachments) return;
@@ -1007,32 +1059,23 @@ export function CreatePaymentInForm({
           <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4 pt-4 border-t">
             <div className="flex justify-center md:justify-start">
               {voucher && (
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button type="button" variant="destructive" className="w-full md:w-auto">
+                <Button type="button" variant="destructive" className="w-full md:w-auto" onClick={() => setIsDeleteDialogOpen(true)}>
                       <Trash2 className="mr-2 h-4 w-4" /> Delete
                     </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                      <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                        Move to Bin
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
               )}
             </div>
             <div className={cn(
               "grid gap-2",
               voucher ? "grid-cols-2 md:flex md:gap-4" : "grid-cols-3 md:flex md:gap-4"
             )}>
-              <Button type="button" onClick={() => voucher ? onVoucherUpdated?.() : onVoucherCreated?.()} className={cn("w-full", BTN_CANCEL_CLASS)}>
+              <Button
+                type="button"
+                onClick={() => {
+                  cancelVoucherInFlightWork();
+                  voucher ? onVoucherUpdated?.() : onVoucherCreated?.();
+                }}
+                className={cn("w-full", BTN_CANCEL_CLASS)}
+              >
                 Cancel
               </Button>
                {!voucher && (
@@ -1077,6 +1120,15 @@ export function CreatePaymentInForm({
         }} 
         isOpen={isCreateTaxOpen} 
         onOpenChange={setIsCreateTaxOpen}
+      />
+      <VoucherDeleteConfirmAlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        entityKind="voucher"
+        entityName={voucher?.voucherNumber || "this voucher"}
+        onMoveToBin={handleDelete}
+        onDeletePermanently={handlePermanentDelete}
+        busy={isLoading}
       />
     </>
   );

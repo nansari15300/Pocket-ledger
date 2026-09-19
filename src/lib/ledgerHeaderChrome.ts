@@ -6,11 +6,16 @@ import { chromeProPillCn } from "@/lib/chromePillButton";
 import { cn } from "@/lib/utils";
 
 export const LEDGER_HEADER_PILL_CN = "h-[27px] min-h-[27px] flex-shrink-0 px-2.5 text-xs";
+/** Date-range trigger — bold blue + glow via globals `.pl-ledger-header-pill-row button[data-theme-detail="date-range"]`. */
+export const LEDGER_DATE_RANGE_PILL_CN = cn(
+  LEDGER_HEADER_PILL_CN,
+  "font-semibold text-blue-900"
+);
 export const LEDGER_HEADER_PILL_ICON_CN = "h-[27px] w-[27px] min-h-[27px] flex-shrink-0";
 /** Pill ke andar icon — height ke saath proportion */
 export const LEDGER_HEADER_PILL_ICON_SIZE_CN = "h-3.5 w-3.5";
 /**
- * Right 50% of ribbon — pills (andar H-scroll).
+ * Right 50% of ribbon — pills wrap; 3 rows ke baad V-scroll (global CSS).
  */
 export const LEDGER_HEADER_PILL_ROW_CN =
   "pl-ledger-header-card pl-ledger-header-pill-row justify-start gap-[3px]";

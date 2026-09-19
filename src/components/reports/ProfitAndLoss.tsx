@@ -23,7 +23,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { TransactionsTable } from "../vouchers/TransactionsTable";
 import { useCompany } from "@/hooks/useCompany";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
@@ -269,7 +269,7 @@ export function ProfitAndLossPage({
     processedParties,
     processedItems,
     userNames,
-  } = useVouchers();
+  } = useFyScopedVouchers();
   const { companyId, company } = useCompany();
 
   const [query, setQuery] = useState("");

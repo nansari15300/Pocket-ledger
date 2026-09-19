@@ -67,7 +67,7 @@ export function LoanAccountList({
   const loanTypeByAccountId = useMemo(() => {
     const out = new Map<string, string>();
     for (const account of accounts) {
-      const loan = findLoanForAccount(loans, account.id);
+      const loan = findLoanForAccount(loans, account.id, account);
       const label = String(loan?.loanType || "").trim();
       if (label) out.set(account.id, label);
     }
@@ -76,12 +76,12 @@ export function LoanAccountList({
 
   const loanByAccountId = useMemo(() => {
     const out = new Map<string, Loan>();
-    for (const loan of loans) {
-      const id = String(loan.loanAccountId || "").trim();
-      if (id) out.set(id, loan);
+    for (const account of accounts) {
+      const loan = findLoanForAccount(loans, account.id, account);
+      if (loan) out.set(account.id, loan);
     }
     return out;
-  }, [loans]);
+  }, [accounts, loans]);
 
   const staffById = useMemo(() => {
     const out = new Map<string, Staff>();

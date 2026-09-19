@@ -72,12 +72,13 @@ import {
   LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { useCompany } from "@/hooks/useCompany";
+import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { EditStaffGroupDialog } from "@/components/staff/EditStaffGroupDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { Checkbox } from "../ui/checkbox";
 import { toast } from "sonner";
-import { openPrintDirect } from "@/lib/printDirect";
+import { openPrintDirect, companyFiscalFieldsForPrint } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import { resolveGroupBooksOpeningBalance } from "@/lib/ledgerOpeningBalanceDisplay";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -158,6 +159,7 @@ export function StaffGroupDetails({
   onBack?: () => void;
   groupMemberFilterId?: string | null;
 }) {
+  useFyLoadOnDateRangeChange(dateRange);
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company, companyId } = useCompany();
   const { processedStaff, processedParties, processedAccounts, processedTaxes, processedExpenseAccounts, journalAccountNames, vouchers } = useVouchers();
@@ -591,6 +593,7 @@ export function StaffGroupDetails({
               showDrCr: company.showDrCr,
               showCurrencySymbol: company.showCurrencySymbol,
               logoUrl: company.logoUrl,
+              ...companyFiscalFieldsForPrint(company as Record<string, unknown>),
             },
             title: `Staff Group Statement: ${group.name}`,
             context: "group",
@@ -1041,6 +1044,7 @@ export function StaffGroupDetails({
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
                   isRange
+                  masterLedgerDatePresets
                   valueAD={dateRange}
                   onChangeAD={handleBsDateRangeChange}
                   transactionDates={transactionDates}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState, useCallback } from "react";
+import { toast } from "sonner";
 import { CalendarIcon, FilePlus, Pencil, Printer } from "lucide-react";
 import { LoanLiabilityEntityIcon } from "@/components/entity/LoanLiabilityEntityIcon";
 import { format } from "date-fns";
@@ -36,6 +37,7 @@ import {
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { useDate } from "@/hooks/useDate";
+import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { resolveLoanAccountAvatarUrl } from "../utils/resolveLoanAccountAvatarUrl";
 import { LoanTableDateCell, LoanTableDateHead } from "./LoanSystemDateField";
@@ -53,6 +55,8 @@ import { LoanPrepaymentDialog } from "./LoanPrepaymentDialog";
 import { LoanRateChangeDialog } from "./LoanRateChangeDialog";
 import { LoanChargeDialog } from "./LoanChargeDialog";
 import { LoanCloseDialog } from "./LoanCloseDialog";
+import { recordLoanDisbursementFromJournal } from "../services/loanDisbursementService";
+import { buildLoanDisbursementJournalDraft } from "../utils/buildLoanDisbursementJournalDraft";
 import { LoanForm, loanToDraftInput } from "./LoanForm";
 import { LoanStatusBadge } from "./LoanStatusBadge";
 import { BTN_SAVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
@@ -63,6 +67,7 @@ import { newLoanDocId, nowIso } from "../db/loanIds";
 import { Input } from "@/components/ui/input";
 import { isEmiPayableNow } from "../utils/staffPayEmiState";
 import { payEmiButtonClassName, payEmiButtonVariant } from "../utils/payEmiButtonStyle";
+import { remainingUndisbursedAmount } from "../utils/loanUndisbursed";
 
 export function LoanDetails({
   loan,
@@ -110,7 +115,8 @@ export function LoanDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const accountingRef = useRef<LoanAccountingHandle>(null);
   const { formatCurrency, dateSystem } = useDate();
-  const { company } = useCompany();
+  const { user } = useAuth();
+  const { company, companyId } = useCompany();
   const { processedStaff, processedAccounts, userNames } = useVouchers();
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [unapprovedOnly, setUnapprovedOnly] = useState(false);
@@ -118,9 +124,12 @@ export function LoanDetails({
   const [selectedVoucher, setSelectedVoucher] = useState<Record<string, unknown> | null>(null);
   const [historyVoucher, setHistoryVoucher] = useState<Record<string, unknown> | null>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
+  const [voucherDialogMode, setVoucherDialogMode] = useState<"edit" | "disbursement" | null>(null);
+  const disbursementJournalDraft = useMemo(() => buildLoanDisbursementJournalDraft(loan), [loan]);
   const resolveUserName = (uid?: string, saved?: string) =>
     String(saved || "").trim() || (uid ? userNames?.[uid] : "") || uid || "—";
   const postingAllowed = loan.status !== "closed" && loan.status !== "cancelled" && loan.status !== "draft" && !!loan.disbursementJournalId;
+  const remainingUndisbursed = remainingUndisbursedAmount(loan);
   const nextPayEmiRow = useMemo(
     () => schedule.find((row) => row.status !== "paid" && !row.isHistorical) || null,
     [schedule]
@@ -153,8 +162,42 @@ export function LoanDetails({
 
   const handleEditVoucher = useCallback((voucher: Record<string, unknown>) => {
     setSelectedVoucher(voucher);
+    setVoucherDialogMode("edit");
     setIsVoucherDialogOpen(true);
   }, []);
+
+  const openDisbursementJournal = useCallback(() => {
+    setSelectedVoucher(null);
+    setVoucherDialogMode("disbursement");
+    setIsVoucherDialogOpen(true);
+  }, []);
+
+  const handleVoucherDialogAction = useCallback(
+    async (status: "saved" | "cancelled", _isSaveAndNew?: boolean, newId?: string) => {
+      if (status === "saved" && voucherDialogMode === "disbursement" && newId && companyId) {
+        try {
+          await recordLoanDisbursementFromJournal({
+            companyId,
+            userId: user?.uid || "user",
+            userName: user?.displayName || user?.email || user?.uid || "user",
+            loanId: loan.id,
+            journalId: newId,
+          });
+          toast.success("Disbursement posted.");
+          await onLoanUpdated?.();
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Disbursement sync failed.");
+        }
+      } else if (status === "saved") {
+        await onLoanUpdated?.();
+      }
+      if (status === "cancelled" || status === "saved") {
+        setSelectedVoucher(null);
+        setVoucherDialogMode(null);
+      }
+    },
+    [voucherDialogMode, companyId, user, loan.id, onLoanUpdated]
+  );
 
   const handleHistoryVoucher = useCallback((voucher: Record<string, unknown>) => {
     setHistoryVoucher(voucher);
@@ -321,6 +364,11 @@ export function LoanDetails({
               onClick: () => setRateOpen(true),
             })}
             {pillBtn({ label: "Add Charge", disabled: !postingAllowed, onClick: () => setChargeOpen(true) })}
+            {pillBtn({
+              label: "Add Disbursement",
+              disabled: !postingAllowed || remainingUndisbursed <= 0,
+              onClick: openDisbursementJournal,
+            })}
             {postingAllowed && latestEmi && onReversePayment
               ? pillBtn({ label: "Reverse last EMI", onClick: () => void onReversePayment(latestEmi.id) })
               : null}
@@ -358,7 +406,7 @@ export function LoanDetails({
           <LoanForm
             key={loan.id}
             mode="edit"
-            lockPostedFields={Boolean(loan.disbursementJournalId)}
+            lockPostedFields={false}
             initial={loanToDraftInput(loan)}
             saving={savingEdit}
             onCancel={() => setEditing(false)}
@@ -556,10 +604,16 @@ export function LoanDetails({
         isOpen={isVoucherDialogOpen}
         onOpenChange={(open) => {
           setIsVoucherDialogOpen(open);
-          if (!open) setSelectedVoucher(null);
+          if (!open) {
+            setSelectedVoucher(null);
+            setVoucherDialogMode(null);
+          }
         }}
-        voucher={selectedVoucher}
-        onVoucherCreated={() => setSelectedVoucher(null)}
+        voucher={voucherDialogMode === "edit" ? selectedVoucher : undefined}
+        defaultVoucherData={voucherDialogMode === "disbursement" ? disbursementJournalDraft : undefined}
+        defaultTab={voucherDialogMode === "disbursement" ? "journal" : undefined}
+        allowedTabs={voucherDialogMode === "disbursement" ? ["journal"] : undefined}
+        onVoucherAction={handleVoucherDialogAction}
         ledgerEntityId={loan.loanAccountId}
       />
       <HistoryDialog

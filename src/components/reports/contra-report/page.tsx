@@ -3,7 +3,7 @@
 
 import * as React from "react";
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardTitle } from "@/components/ui/card";
@@ -42,7 +42,7 @@ import type { Account } from "@/components/bank-cash/types";
 import { useCalendarMonths } from "@/hooks/use-mobile";
 
 export default function ContraReportPage() {
-    const { vouchers, loading, processedAccounts } = useVouchers();
+    const { vouchers, loading, processedAccounts } = useFyScopedVouchers();
     const { company, companyId } = useCompany();
     const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
     const calendarMonths = useCalendarMonths();

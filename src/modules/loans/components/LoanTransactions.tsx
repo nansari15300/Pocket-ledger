@@ -1,7 +1,21 @@
 "use client";
 
-import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 import { CheckCircle, CheckSquare, Filter, History, MoreVertical, Pencil, X } from "lucide-react";
+import {
+  statementCheckedMessageColumn,
+} from "@/lib/statementCheckRowMessage";
+import { StatementCheckedRowMessageLabel } from "@/components/vouchers/StatementCheckedRowMessageLabel";
 import { toast } from "sonner";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
@@ -26,12 +40,28 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { chromePillActive, chromeProPillCn } from "@/lib/chromePillButton";
+import {
+  LEDGER_CLOSING_BALANCE_ACTIONS_CN,
+  LEDGER_CLOSING_BALANCE_CARD_ROW_CN,
+  LEDGER_CLOSING_BALANCE_TOTAL_CN,
+  LEDGER_HEADER_PILL_CN,
+} from "@/lib/ledgerHeaderChrome";
+import {
+  LEDGER_TXN_TABLE_TONE_CHANGED_EVENT,
+  type LedgerTxnTableTone,
+  readLedgerTxnTableTone,
+  writeLedgerTxnTableTone,
+} from "@/lib/ledgerTxnTableTone";
 import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
+import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
+import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillLabel";
 import { DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
 import { useStatementCheckMode } from "@/hooks/useStatementCheckMode";
+import { useLedgerStatementChecked } from "@/hooks/useLedgerStatementChecked";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
@@ -45,7 +75,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
 import usePermissions from "@/hooks/usePermissions";
 import { parseIsoDate, tryParseIsoDate, todayIso } from "../utils/loanDateUtils";
-import { mergeLoanAccountingTransactions } from "../utils/loanAccountingRows";
+import { liveJournalIdSetFromVouchers, loanTxnHasLiveJournal, mergeLoanAccountingTransactions } from "../utils/loanAccountingRows";
 import { roundMoney } from "../utils/loanRounding";
 import { compareLoanTxnChronological, loanLiabilityDrCr } from "../utils/loanLedgerMovement";
 import { getVoucherAttachmentUrlsForUi, normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
@@ -53,6 +83,8 @@ import { loanTxnPaymentDateInRange } from "../utils/loanAccountingDateFilter";
 
 const LOAN_COL_STORAGE = "loanAccountingVisibleColumns";
 const LOAN_OPENING_BALANCE_ROW_ID = "__loan_opening_balance__";
+/** Type pill: default h-6 (24px) se ~10% chhota — loan accounting table only. */
+const LOAN_TYPE_PILL_CN = "!h-[1.35rem] !min-h-0 !px-2 text-[11px] leading-none";
 
 export type LoanAccountingHandle = {
   print: () => Promise<void>;
@@ -144,7 +176,7 @@ export const LoanTransactions = forwardRef(function LoanTransactions(
 ) {
   const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
   const { company } = useCompany();
-  const { vouchers } = useVouchers();
+  const { vouchers, loading: vouchersLoading } = useVouchers();
   const { user, customUser } = useAuth();
   const { can, canAddFileImagePdf } = usePermissions();
   const showFileColumn = ledger && canAddFileImagePdf === true;
@@ -157,24 +189,96 @@ export const LoanTransactions = forwardRef(function LoanTransactions(
   const [fileShowAll, setFileShowAll] = useState(() => readSavedFileColumnViewPrefs().showAll);
   const filterInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [showNarration, setShowNarration] = useState(true);
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
+  const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
+  const [txnTableTone, setTxnTableTone] = useState<LedgerTxnTableTone>("default");
+
+  useEffect(() => {
+    if (!ledger) return;
+    setTxnTableTone(readLedgerTxnTableTone());
+    const onTone = () => setTxnTableTone(readLedgerTxnTableTone());
+    window.addEventListener(LEDGER_TXN_TABLE_TONE_CHANGED_EVENT, onTone);
+    return () => window.removeEventListener(LEDGER_TXN_TABLE_TONE_CHANGED_EVENT, onTone);
+  }, [ledger]);
+
+  const applyTxnTableTone = useCallback((next: LedgerTxnTableTone) => {
+    setTxnTableTone(next);
+    writeLedgerTxnTableTone(next);
+  }, []);
+
+  const loanClosingBalanceActions = useMemo(() => {
+    if (!ledger || !loanAccountId) return null;
+    return (
+      <AddVoucherDialog
+        defaultTab="adjustment"
+        allowedTabs={["adjustment"]}
+        defaultVoucherData={{
+          defaultTab: "adjustment",
+          adjustmentTarget: { id: loanAccountId, entityType: "staff", name: loanName || "Loan" },
+        }}
+      >
+        <Button
+          variant="outline"
+          size="sm"
+          className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")}
+          title="Adjust Balance"
+        >
+          <AdjustBalancePillLabel />
+        </Button>
+      </AddVoucherDialog>
+    );
+  }, [ledger, loanAccountId, loanName]);
+
+  useEffect(() => {
+    if (!selectedRowId) return;
+    const onDocClick = (e: Event) => {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      if (t.closest("[data-loan-txn-row]")) return;
+      if (
+        t.closest('[role="dialog"]') ||
+        t.closest('[role="alertdialog"]') ||
+        t.closest("[data-radix-dropdown-menu-content]") ||
+        t.closest("[data-radix-select-content]") ||
+        t.closest("[data-radix-popover-content]") ||
+        t.closest("[data-radix-sheet-content]")
+      ) {
+        return;
+      }
+      setSelectedRowId(null);
+    };
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, [selectedRowId]);
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const both = dateSystem === "Both";
   const money = (n: number) =>
     formatCurrency(n, { noAnimation: true, noSuffix: true, showDrCr: false, context: "transaction" });
   const moneyDash = (n: number) => (Math.abs(n) < 1e-6 ? "—" : money(n));
 
+  const liveJournalIds = useMemo(
+    () =>
+      liveJournalIdSetFromVouchers((vouchers || []) as Record<string, unknown>[], {
+        skipWhenEmptyLoading: vouchersLoading,
+      }),
+    [vouchers, vouchersLoading]
+  );
+
   const mergedRows = useMemo(() => {
-    if (!ledger || !loanAccountId) return rows.filter((r) => !!r.journalEntryId);
+    if (!ledger || !loanAccountId) {
+      return rows.filter((r) => loanTxnHasLiveJournal(r, liveJournalIds));
+    }
     const companyId = rows[0]?.companyId || company?.id || "";
     const lid = loanId || rows[0]?.loanId || "";
     return mergeLoanAccountingTransactions(
-      rows.filter((r) => !!r.journalEntryId),
+      rows,
       (vouchers || []) as Record<string, unknown>[],
       loanAccountId,
       lid,
-      companyId
+      companyId,
+      liveJournalIds
     );
-  }, [rows, ledger, loanAccountId, loanId, vouchers, company?.id]);
+  }, [rows, ledger, loanAccountId, loanId, vouchers, company?.id, liveJournalIds]);
 
   const openingAttachmentUrls = useMemo(
     () => normalizeFileUrlsField(openingBalanceAttachmentUrls),
@@ -254,6 +358,15 @@ export const LoanTransactions = forwardRef(function LoanTransactions(
       return voucherById.get(id) ?? null;
     },
     [voucherById]
+  );
+
+  const openRowVoucher = useCallback(
+    (row: LoanTransaction) => {
+      if (row.id === LOAN_OPENING_BALANCE_ROW_ID) return;
+      const voucher = voucherForRow(row);
+      if (voucher && onEditVoucher) onEditVoucher(voucher);
+    },
+    [voucherForRow, onEditVoucher]
   );
 
   const rowIsUnapproved = useCallback(
@@ -386,6 +499,11 @@ export const LoanTransactions = forwardRef(function LoanTransactions(
     contextId: resolvedLoanId,
     viewMode: "statement",
     orderedTransactions: columnFiltered.map((r) => r.row),
+  });
+  const ledgerStatementChecked = useLedgerStatementChecked({
+    companyId,
+    context: "loan",
+    contextId: resolvedLoanId,
   });
 
   const afterCheck = useMemo(() => {
@@ -522,21 +640,40 @@ export const LoanTransactions = forwardRef(function LoanTransactions(
     (showFileColumn && showCol("file") ? 1 : 0) +
     (showCol("type") ? 1 : 0);
 
-  const renderRowActions = (row: LoanTransaction) => {
+  const renderRowActions = (row: LoanTransaction, centeredInBand = false) => {
     const voucher = voucherForRow(row);
     if (!voucher || row.id === LOAN_OPENING_BALANCE_ROW_ID) {
-      return <TableCell className="w-11 min-w-[44px] p-1" />;
+      return <TableCell className={cn("w-11 min-w-[44px]", centeredInBand ? "!p-0 align-middle" : "p-1")} />;
     }
     const unapproved = rowIsUnapproved(row);
     return (
-      <TableCell className="w-11 min-w-[44px] p-1 text-center align-middle" onClick={(e) => e.stopPropagation()}>
+      <TableCell
+        className={cn("w-11 min-w-[44px] text-center align-middle", centeredInBand ? "!p-0" : "p-1")}
+        onClick={(e) => e.stopPropagation()}
+      >
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" data-pl-txn-icon-btn="" className={cn(txnTableIconBtnCn, "h-8 w-8 shrink-0")}>
-              <MoreVertical className="h-4 w-4 text-muted-foreground" />
+            <Button
+              variant="ghost"
+              size="icon"
+              data-pl-txn-icon-btn=""
+              className={cn(txnTableIconBtnCn, "shrink-0", centeredInBand ? "h-[1.35rem] w-[1.35rem]" : "h-8 w-8")}
+            >
+              <MoreVertical className={cn("text-muted-foreground", centeredInBand ? "h-3.5 w-3.5" : "h-4 w-4")} />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
+                    {ledger && row.id !== LOAN_OPENING_BALANCE_ROW_ID ? (
+                      <DropdownMenuItem
+                        onClick={() => ledgerStatementChecked.toggleChecked({ id: row.id })}
+                        className="flex items-center gap-2"
+                      >
+                        <CheckSquare className="h-3.5 w-3.5" />
+                        {ledgerStatementChecked.isChecked({ id: row.id })
+                          ? "Unmark as checked"
+                          : "Mark as checked"}
+                      </DropdownMenuItem>
+                    ) : null}
             {can("approve_transactions") && unapproved ? (
               <DropdownMenuItem onClick={() => void handleApproveVoucher(row)} className="flex items-center gap-2">
                 <CheckCircle className="h-3.5 w-3.5" />
@@ -798,56 +935,84 @@ export const LoanTransactions = forwardRef(function LoanTransactions(
           </TableRow>
         ) : (
           displayRows.map(({ row, debit, credit, signed }, i) => {
+            const txnStripe = i % 2;
             const dates = dateParts(row.paymentDate);
             const focused = ledger && statementCheck.tableProps.statementCheckModeActive && statementCheck.focusId === row.id;
-            const marked = ledger && statementCheck.markedIds?.has(row.id);
+            const checkModeMarked =
+              ledger && statementCheck.checkModeActive && statementCheck.markedIds?.has(row.id);
+            const statementChecked = ledger && ledgerStatementChecked.isChecked({ id: row.id });
             const notes = String(row.notes || "").trim();
             const isOpeningRow = row.id === LOAN_OPENING_BALANCE_ROW_ID;
             const showNotesRow = ledger && showNarration && !!notes && !isOpeningRow;
+            const mainCellCn = cn("px-[5px]", showNotesRow ? "align-middle !py-0 leading-none" : "align-top");
             const rowFiles = fileUrlsForRow(row);
             const pendingApproval = ledger && rowIsUnapproved(row);
+            const checkMode = ledger && statementCheck.tableProps.statementCheckModeActive;
+            const isSelected = checkMode ? focused : selectedRowId === row.id;
+            const isHovered = hoveredRowId === row.id;
+            const selectRow = () => {
+              if (checkMode) {
+                statementCheck.tableProps.onStatementCheckRowFocus?.({ id: row.id });
+                return;
+              }
+              setSelectedRowId(row.id);
+            };
+            const hoverEnter = () => setHoveredRowId(row.id);
+            const hoverLeave = (e: MouseEvent<HTMLTableRowElement>) => {
+              const rel = e.relatedTarget;
+              if (rel instanceof Element && rel.closest(`[data-loan-txn-row="${row.id}"]`)) return;
+              setHoveredRowId((id) => (id === row.id ? null : id));
+            };
             return (
               <Fragment key={row.id}>
                 <TableRow
-                  data-txn-stripe={i % 2}
-                  data-pl-txn-selected={focused ? "" : undefined}
-                  data-pl-check-marked={marked ? "" : undefined}
+                  data-loan-txn-row={row.id}
+                  data-txn-stripe={txnStripe}
+                  data-pl-txn-selected={isSelected ? "" : undefined}
+                  data-pl-txn-hovered={isHovered ? "" : undefined}
+                  data-pl-check-marked={checkModeMarked ? "" : undefined}
+                  data-pl-statement-checked={statementChecked ? "" : undefined}
                   data-pl-pending-approval={pendingApproval ? "" : undefined}
                   data-check-focus={focused ? "true" : undefined}
                   className={cn(
-                    "transaction-main-row",
+                    "transaction-main-row cursor-pointer",
                     row.isReversed && "opacity-60",
                     row.kind === "note" && !isOpeningRow && "opacity-90",
-                    focused && txnSelectedMainRowCn(showNotesRow)
+                    isSelected && !statementChecked && txnSelectedMainRowCn(showNotesRow),
+                    showNotesRow && "[&>td]:align-middle [&>td]:!py-0 [&>td]:leading-none"
                   )}
-                  onClick={() => statementCheck.tableProps.onStatementCheckRowFocus?.({ id: row.id })}
+                  data-pl-has-narration={showNotesRow ? "" : undefined}
+                  onClick={selectRow}
+                  onDoubleClick={() => openRowVoucher(row)}
+                  onMouseEnter={hoverEnter}
+                  onMouseLeave={hoverLeave}
                 >
                   {showCol("date") &&
                     (both ? (
                       <>
-                        <TableCell className="align-top px-[5px]">{dates.bs}</TableCell>
-                        <TableCell className="align-top px-[5px]">{dates.ad}</TableCell>
+                        <TableCell className={mainCellCn}>{dates.bs}</TableCell>
+                        <TableCell className={mainCellCn}>{dates.ad}</TableCell>
                       </>
                     ) : (
-                      <TableCell className="align-top px-[5px]">{dates.single}</TableCell>
+                      <TableCell className={mainCellCn}>{dates.single}</TableCell>
                     ))}
-                  {showCol("kind") && <TableCell className="px-[5px]">{rowKindLabel(row)}</TableCell>}
+                  {showCol("kind") && <TableCell className={mainCellCn}>{rowKindLabel(row)}</TableCell>}
                   {showCol("principal") && (
-                    <TableCell className="px-[5px] text-right tabular-nums">{isOpeningRow ? "—" : money(row.principalAmount)}</TableCell>
+                    <TableCell className={cn(mainCellCn, "text-right tabular-nums")}>{isOpeningRow ? "—" : money(row.principalAmount)}</TableCell>
                   )}
                   {showCol("interest") && (
-                    <TableCell className="px-[5px] text-right tabular-nums">{isOpeningRow ? "—" : money(row.interestAmount)}</TableCell>
+                    <TableCell className={cn(mainCellCn, "text-right tabular-nums")}>{isOpeningRow ? "—" : money(row.interestAmount)}</TableCell>
                   )}
                   {showCol("charges") && (
-                    <TableCell className="px-[5px] text-right tabular-nums">
+                    <TableCell className={cn(mainCellCn, "text-right tabular-nums")}>
                       {isOpeningRow ? "—" : money(row.chargeAmount + row.lateFeeAmount)}
                     </TableCell>
                   )}
                   {showCol("total") && (
-                    <TableCell className="px-[5px] text-right tabular-nums">{isOpeningRow ? "—" : money(row.amount)}</TableCell>
+                    <TableCell className={cn(mainCellCn, "text-right tabular-nums")}>{isOpeningRow ? "—" : money(row.amount)}</TableCell>
                   )}
                   {showFileColumn && showCol("file") ? (
-                    <TableCell className="px-[5px] align-top text-center" onClick={(e) => e.stopPropagation()}>
+                    <TableCell className={cn(mainCellCn, "text-center")} onClick={(e) => e.stopPropagation()}>
                       <OpeningBalanceFileCellContent
                         fileUrls={rowFiles}
                         displayMode={fileDisplayMode}
@@ -856,11 +1021,21 @@ export const LoanTransactions = forwardRef(function LoanTransactions(
                     </TableCell>
                   ) : null}
                   {showCol("type") && (
-                    <TableCell className="px-[5px] align-middle">
+                    <TableCell className={mainCellCn}>
                       <Badge
                         variant="outline"
-                        className={voucherTypePillClassName(
-                          rowVoucherType(row) === "note" ? null : resolveTxnDrCrSide(debit, credit, signed)
+                        className={cn(
+                          LOAN_TYPE_PILL_CN,
+                          !isOpeningRow && rowVoucherType(row) === "journal" && "-translate-y-px",
+                          voucherTypePillClassName(
+                            isOpeningRow
+                              ? signed >= 0
+                                ? "dr"
+                                : "cr"
+                              : rowVoucherType(row) === "note"
+                                ? "dr"
+                                : resolveTxnDrCrSide(debit, credit, signed)
+                          )
                         )}
                       >
                         {rowTypeLabel(row)}
@@ -868,27 +1043,43 @@ export const LoanTransactions = forwardRef(function LoanTransactions(
                     </TableCell>
                   )}
                   {ledger && showCol("debit") ? (
-                    <TableCell className="min-w-[100px] px-[5px] text-right align-top font-semibold text-green-700 tabular-nums">
-                      {moneyDash(debit)}
+                    <TableCell className={cn(mainCellCn, "min-w-[100px] text-right font-semibold text-green-700 tabular-nums")}>
+                      {statementChecked && statementCheckedMessageColumn(debit, credit) === "debit" ? (
+                        <StatementCheckedRowMessageLabel className="w-full" align="end" />
+                      ) : (
+                        moneyDash(debit)
+                      )}
                     </TableCell>
                   ) : null}
                   {ledger && showCol("credit") ? (
-                    <TableCell className="min-w-[100px] px-[5px] text-right align-top font-semibold text-red-700 tabular-nums">
-                      {moneyDash(credit)}
+                    <TableCell className={cn(mainCellCn, "min-w-[100px] text-right font-semibold text-red-700 tabular-nums")}>
+                      {statementChecked && statementCheckedMessageColumn(debit, credit) === "credit" ? (
+                        <StatementCheckedRowMessageLabel className="w-full" align="end" />
+                      ) : (
+                        moneyDash(credit)
+                      )}
                     </TableCell>
                   ) : null}
                   {ledger && showCol("balance") ? (
-                    <TableCell className="min-w-[115px] px-[5px] text-right align-top tabular-nums">{formatBalance(signed)}</TableCell>
+                    <TableCell className={cn(mainCellCn, "min-w-[115px] text-right tabular-nums")}>{formatBalance(signed)}</TableCell>
                   ) : null}
-                  {ledger ? renderRowActions(row) : null}
+                  {ledger ? renderRowActions(row, showNotesRow) : null}
                 </TableRow>
                 {showNotesRow ? (
                   <TableRow
-                    className={cn("narration-row", focused && txnSelectedNarrationRowCn())}
-                    data-pl-txn-selected={focused ? "" : undefined}
-                    data-pl-check-marked={marked ? "" : undefined}
+                    className={cn("narration-row cursor-pointer [&>td]:!py-0", isSelected && !statementChecked && txnSelectedNarrationRowCn())}
+                    data-txn-stripe={txnStripe}
+                    data-loan-txn-row={row.id}
+                    data-pl-txn-selected={isSelected ? "" : undefined}
+                    data-pl-txn-hovered={isHovered ? "" : undefined}
+                    data-pl-check-marked={checkModeMarked ? "" : undefined}
+                    data-pl-statement-checked={statementChecked ? "" : undefined}
+                    onClick={selectRow}
+                    onDoubleClick={() => openRowVoucher(row)}
+                    onMouseEnter={hoverEnter}
+                    onMouseLeave={hoverLeave}
                   >
-                    <TableCell colSpan={Math.max(1, colSpanAll)} className="px-[10px] py-1 text-xs italic text-muted-foreground">
+                    <TableCell colSpan={Math.max(1, colSpanAll)} className="!py-0 px-[10px] text-[11px] italic leading-none text-muted-foreground">
                       {notes}
                     </TableCell>
                   </TableRow>
@@ -916,11 +1107,60 @@ export const LoanTransactions = forwardRef(function LoanTransactions(
           <TableRow className="border-b-2 border-t-2 border-black bg-muted/30 text-base font-bold">
             <TableCell
               colSpan={Math.max(1, colSpanBeforeDr + (showCol("debit") ? 1 : 0) + (showCol("credit") ? 1 : 0))}
-              className="text-right"
+              className="align-middle"
             >
-              Closing Balance
+              <div
+                data-pl-closing-balance-card=""
+                className={cn(LEDGER_CLOSING_BALANCE_CARD_ROW_CN, "flex-nowrap items-center")}
+              >
+                <div
+                  className="flex shrink-0 flex-nowrap items-center gap-1"
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                >
+                  {(
+                    [
+                      { id: "default", label: "Default" },
+                      { id: "green", label: "Green" },
+                      { id: "blue", label: "Blue" },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      className={cn(
+                        chromeProPillCn,
+                        "h-7 rounded-full px-2.5 text-[11px] font-semibold",
+                        txnTableTone === opt.id && chromePillActive
+                      )}
+                      aria-pressed={txnTableTone === opt.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        applyTxnTableTone(opt.id);
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <div className={cn(LEDGER_CLOSING_BALANCE_TOTAL_CN, "ml-auto shrink-0 flex-nowrap")}>
+                  {loanClosingBalanceActions ? (
+                    <div
+                      data-pl-closing-balance-actions=""
+                      className={cn(LEDGER_CLOSING_BALANCE_ACTIONS_CN, "mr-[40px] flex-none flex-nowrap")}
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    >
+                      {loanClosingBalanceActions}
+                    </div>
+                  ) : null}
+                  <span className="shrink-0 whitespace-nowrap text-right">Closing Balance</span>
+                </div>
+              </div>
             </TableCell>
-            {showCol("balance") ? <TableCell className="px-[5px] text-right">{formatBalance(closingSigned)}</TableCell> : null}
+            {showCol("balance") ? (
+              <TableCell className="px-[5px] text-right">{formatBalance(closingSigned)}</TableCell>
+            ) : null}
             {ledger ? <TableCell className="w-11 p-1" /> : null}
           </TableRow>
         </TableFooter>
@@ -940,6 +1180,8 @@ export const LoanTransactions = forwardRef(function LoanTransactions(
     <div className="pl-ledger-detail-table-shell flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div
         data-theme-table="transactions"
+        data-pl-loan-accounting-table=""
+        data-pl-txn-table-tone={txnTableTone}
         className="min-h-0 w-full min-w-full flex-1 overflow-x-auto border-b-2 border-border scrollbar-slim-dim"
       >
         {table}

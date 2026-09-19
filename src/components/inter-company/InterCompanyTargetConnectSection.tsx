@@ -14,6 +14,7 @@ import { InterCompanyMultiPickDialog } from "@/components/inter-company/InterCom
 import {
   INTER_COMPANY_ENTITY_LABELS,
   type InterCompanyEntityKind,
+  type InterCompanyEntityKindFilter,
 } from "@/components/inter-company/InterCompanyEntitySide";
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
 import { filterInterCompanyClearingBankEntities } from "@/lib/interCompany/interCompanyEntityLookup";
@@ -86,8 +87,8 @@ type Props = {
   showAvatarsInPicker?: boolean;
   entities: InterCompanyEntityDetail[];
   entitiesLoading: boolean;
-  payeeKind: InterCompanyEntityKind;
-  onPayeeKindChange: (k: InterCompanyEntityKind) => void;
+  payeeKind: InterCompanyEntityKindFilter;
+  onPayeeKindChange: (k: InterCompanyEntityKindFilter) => void;
   payeeId: string;
   onPayeeIdChange: (id: string) => void;
   /** Target company Join settings — search + view privacy */
@@ -108,6 +109,8 @@ type Props = {
   onCompanyBankAccountIdChange?: (id: string) => void;
   /** Simple view — company row: naam only; account rows: type + naam */
   simpleView?: boolean;
+  /** Connect user create — target account baad me host approve par */
+  targetAccountDeferred?: boolean;
 };
 
 export function InterCompanyTargetConnectSection({
@@ -142,6 +145,7 @@ export function InterCompanyTargetConnectSection({
   companyBankAccountId = "",
   onCompanyBankAccountIdChange,
   simpleView = false,
+  targetAccountDeferred = false,
 }: Props) {
   const [companyCodeInput, setCompanyCodeInput] = useState("");
   const [companyAcInput, setCompanyAcInput] = useState("");
@@ -760,70 +764,100 @@ export function InterCompanyTargetConnectSection({
       </div>
 
       <div className={interCompanyVoucherRowBankClass}>
-        <InterCompanyAccountLookupSection
-          sectionTitle="Clearing account"
-          entities={bankEntities}
-          entitiesLoading={!!targetCompanyId && entitiesLoading}
-          lockEntityKind="bank"
-          entityKind="bank"
-          onEntityKindChange={() => {}}
-          entityId={companyBankAccountId}
-          onEntityIdChange={onCompanyBankAccountIdChange ?? (() => {})}
-          activeCompanyId={targetCompanyId}
-          autoEnsureInterCoAcNo
-          companyAcNo={companyAcForEntity}
-          companyMobile={companyMobDisplay}
-          companyPan={companyPanDisplay}
-          voucherCreateLookup={!accountsDisabled}
-          disabled={accountsDisabled || !onCompanyBankAccountIdChange}
-          allowLookupWithoutCompany={showReadOnlyAccounts}
-          showDetails={false}
-          disabledHint={
-            entitiesLoading
-              ? "Loading bank accounts…"
-              : "Saved voucher — bank account is read-only"
-          }
-          simpleView={simpleView}
-        />
+        {targetAccountDeferred ? (
+          <div className="space-y-2">
+            <InterCompanySectionTitle
+              title="Clearing account"
+              infoHint="Target company admin will choose this on approve."
+              trailingAction={null}
+            />
+            <Input
+              readOnly
+              value="Pending — set by target company on approve"
+              className={cn(interCompanyInputClass, interCompanyReadOnlyCopyInputClass, "text-muted-foreground")}
+            />
+          </div>
+        ) : (
+          <InterCompanyAccountLookupSection
+            sectionTitle="Clearing account"
+            entities={bankEntities}
+            entitiesLoading={!!targetCompanyId && entitiesLoading}
+            lockEntityKind="bank"
+            entityKind="bank"
+            onEntityKindChange={() => {}}
+            entityId={companyBankAccountId}
+            onEntityIdChange={onCompanyBankAccountIdChange ?? (() => {})}
+            activeCompanyId={targetCompanyId}
+            autoEnsureInterCoAcNo
+            companyAcNo={companyAcForEntity}
+            companyMobile={companyMobDisplay}
+            companyPan={companyPanDisplay}
+            voucherCreateLookup={!accountsDisabled}
+            disabled={accountsDisabled || !onCompanyBankAccountIdChange}
+            allowLookupWithoutCompany={showReadOnlyAccounts}
+            showDetails={false}
+            disabledHint={
+              entitiesLoading
+                ? "Loading bank accounts…"
+                : "Saved voucher — bank account is read-only"
+            }
+            simpleView={simpleView}
+          />
+        )}
       </div>
 
       <div className={interCompanyVoucherRowAccountClass}>
-        <InterCompanyAccountLookupSection
-          sectionTitle="Target account"
-          entities={optionalTargetEntities}
-          entitiesLoading={!!targetCompanyId && entitiesLoading}
-          enableCrossCompanyLookup={lookupPartners.length > 0}
-          partners={lookupPartners}
-          activeCompanyId={targetCompanyId}
-          onResolveCompany={applyCompany}
-          autoEnsureInterCoAcNo
-          showAvatarsInPicker={showAvatarsInPicker}
-          partnerSearchBy={targetPartnerPrivacy?.searchBy}
-          voucherCreateLookup={!accountsDisabled}
-          partnerViewPrivacy={targetPartnerPrivacy}
-          entityKind={payeeKind}
-          onEntityKindChange={onPayeeKindChange}
-          entityId={payeeId}
-          onEntityIdChange={onPayeeIdChange}
-          companyAcNo={companyAcForEntity}
-          companyMobile={companyMobDisplay}
-          companyPan={companyPanDisplay}
-          onTrackCompanyByAcNo={trackCompanyByAcNo}
-          onTrackCompanyByMobile={trackCompanyByMobile}
-          onTrackCompanyByPan={trackCompanyByPan}
-          disabled={accountsDisabled}
-          allowLookupWithoutCompany={showReadOnlyAccounts}
-          seedEntityHit={seedEntityHit}
-          onSeedEntityHitHandled={() => setSeedEntityHit(null)}
-          companySearchTick={companySearchTick}
-          disabledHint={
-            entitiesLoading
-              ? "Loading target accounts…"
-              : "Saved voucher — accounts are read-only"
-          }
-          simpleView={simpleView}
-          showDetails={!simpleView}
-        />
+        {targetAccountDeferred ? (
+          <div className="space-y-2">
+            <InterCompanySectionTitle
+              title="Target account"
+              infoHint="Target company admin will choose this account when approving."
+              trailingAction={null}
+            />
+            <Input
+              readOnly
+              value="Pending — set by target company on approve"
+              className={cn(interCompanyInputClass, interCompanyReadOnlyCopyInputClass, "text-muted-foreground")}
+            />
+          </div>
+        ) : (
+          <InterCompanyAccountLookupSection
+            sectionTitle="Target account"
+            entities={optionalTargetEntities}
+            entitiesLoading={!!targetCompanyId && entitiesLoading}
+            enableCrossCompanyLookup={lookupPartners.length > 0}
+            partners={lookupPartners}
+            activeCompanyId={targetCompanyId}
+            onResolveCompany={applyCompany}
+            autoEnsureInterCoAcNo
+            showAvatarsInPicker={showAvatarsInPicker}
+            partnerSearchBy={targetPartnerPrivacy?.searchBy}
+            voucherCreateLookup={!accountsDisabled}
+            partnerViewPrivacy={targetPartnerPrivacy}
+            entityKind={payeeKind}
+            onEntityKindChange={onPayeeKindChange}
+            entityId={payeeId}
+            onEntityIdChange={onPayeeIdChange}
+            companyAcNo={companyAcForEntity}
+            companyMobile={companyMobDisplay}
+            companyPan={companyPanDisplay}
+            onTrackCompanyByAcNo={trackCompanyByAcNo}
+            onTrackCompanyByMobile={trackCompanyByMobile}
+            onTrackCompanyByPan={trackCompanyByPan}
+            disabled={accountsDisabled}
+            allowLookupWithoutCompany={showReadOnlyAccounts}
+            seedEntityHit={seedEntityHit}
+            onSeedEntityHitHandled={() => setSeedEntityHit(null)}
+            companySearchTick={companySearchTick}
+            disabledHint={
+              entitiesLoading
+                ? "Loading target accounts…"
+                : "Saved voucher — accounts are read-only"
+            }
+            simpleView={simpleView}
+            showDetails={!simpleView}
+          />
+        )}
       </div>
 
       <InterCompanyMultiPickDialog

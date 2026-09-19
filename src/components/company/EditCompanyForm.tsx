@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, CalendarIcon, Eye, EyeOff, Pencil, Trash2, Upload, UserPlus } from "lucide-react";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import {
@@ -97,6 +97,16 @@ import {
   updateLocalCompanyUserClient,
   upsertUserInList,
 } from "@/lib/localCompanyUsers";
+import { CompanyFyVoucherSuggestionCard } from "@/components/company/CompanyFyVoucherSuggestionCard";
+import {
+  buildCompanyFyVoucherSuggestion,
+  getFiscalYearConventionLabel,
+  isCompanyFiscalYearUnset,
+  resolveAllFySplitComplete,
+  resolveSavedFiscalMergePeriodCount,
+} from "@/lib/companyFyVoucherSuggestion";
+import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
+import { Checkbox } from "@/components/ui/checkbox";
 
 type LocalCompanyUserDraft = { name: string; username: string; role: string; password: string };
 type ExistingLocalCompanyUser = { id?: string; username?: string; displayName?: string; role?: string };
@@ -192,6 +202,7 @@ export function EditCompanyForm({
   const [removeLocalUserLoading, setRemoveLocalUserLoading] = useState(false);
   /** User ne currency alag se chuna ho to country change par auto-sync mat karo. */
   const currencyPickedManuallyRef = useRef(false);
+  const prevCountryForFyRef = useRef<string | undefined>(undefined);
 
   // When plan does not allow avatar, clear any queued file
   useEffect(() => {
@@ -325,6 +336,12 @@ export function EditCompanyForm({
           initialPasswordEnabled || !!(company.password && String(company.password).trim())
         );
         currencyPickedManuallyRef.current = false;
+        prevCountryForFyRef.current = company.country || "Nepal";
+        if (isCompanyFiscalYearUnset(safeGetDate(company.fiscalYearStart), safeGetDate(company.fiscalYearEnd))) {
+          const { start, end } = getFiscalRangeForCountry(company.country || "Nepal");
+          form.setValue("fiscalYearStart", start, { shouldDirty: false });
+          form.setValue("fiscalYearEnd", end, { shouldDirty: false });
+        }
         // Edit open par add-user section default बंद रखो to avoid accidental duplicate user create.
         setAddCompanyUserEnabled(false);
         setQueuedCompanyUsers([]);
@@ -364,7 +381,58 @@ export function EditCompanyForm({
         case 'Both': return `${formatDate(date)} / ${formatDateBS(date)}`;
         default: return formatDate(date);
     }
-  }
+  };
+
+  const fiscalYearStartWatch = form.watch("fiscalYearStart");
+  const fiscalYearEndWatch = form.watch("fiscalYearEnd");
+  const selectedCountryWatch = form.watch("country");
+
+  useEffect(() => {
+    if (!selectedCountryWatch) return;
+    if (prevCountryForFyRef.current === undefined) {
+      prevCountryForFyRef.current = selectedCountryWatch;
+      return;
+    }
+    if (prevCountryForFyRef.current === selectedCountryWatch) return;
+    prevCountryForFyRef.current = selectedCountryWatch;
+    const { start, end } = getFiscalRangeForCountry(selectedCountryWatch);
+    form.setValue("fiscalYearStart", start, { shouldDirty: true });
+    form.setValue("fiscalYearEnd", end, { shouldDirty: true });
+  }, [selectedCountryWatch, form]);
+
+  const watchedCompanyFyDates = useMemo(() => {
+    if (
+      !(fiscalYearStartWatch instanceof Date) ||
+      Number.isNaN(fiscalYearStartWatch.getTime()) ||
+      !(fiscalYearEndWatch instanceof Date) ||
+      Number.isNaN(fiscalYearEndWatch.getTime())
+    ) {
+      return undefined;
+    }
+    return { fiscalYearStart: fiscalYearStartWatch, fiscalYearEnd: fiscalYearEndWatch };
+  }, [fiscalYearStartWatch, fiscalYearEndWatch]);
+  const savedMergePeriodCount = useMemo(
+    () => resolveSavedFiscalMergePeriodCount(companyId, vouchers, selectedCountryWatch, watchedCompanyFyDates),
+    [companyId, vouchers, selectedCountryWatch, watchedCompanyFyDates]
+  );
+
+  const allFySplitted = useMemo(
+    () => resolveAllFySplitComplete(companyId, vouchers, selectedCountryWatch, watchedCompanyFyDates),
+    [companyId, vouchers, selectedCountryWatch, watchedCompanyFyDates]
+  );
+
+  const fyVoucherSuggestion = useMemo(
+    () =>
+      buildCompanyFyVoucherSuggestion({
+        country: selectedCountryWatch,
+        fiscalYearStart: fiscalYearStartWatch,
+        fiscalYearEnd: fiscalYearEndWatch,
+        vouchers,
+        mergedPeriodCount: savedMergePeriodCount,
+        allFySplitted,
+      }),
+    [selectedCountryWatch, fiscalYearStartWatch, fiscalYearEndWatch, vouchers, savedMergePeriodCount, allFySplitted]
+  );
 
   const proceedWithSave = async (values: z.infer<typeof formSchema>, updatedSharedUsers?: any[]) => {
     if (!companyId || !company) return;
@@ -1553,40 +1621,64 @@ export function EditCompanyForm({
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="fiscalYearStart"
-                render={({ field }: any) => (
-                  <FormItem className="flex flex-col">
-                    <FormLabel>Fiscal Year Start</FormLabel>
-                    <BsDatePicker
-                      valueAD={field.value}
-                      onChangeAD={(d) => field.onChange(d as Date)}
-                      numberOfMonths={1}
-                      isRange={false}
-                    />
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+              <div className="grid grid-cols-2 gap-4 lg:flex-1 lg:min-w-0">
+                <FormField
+                  control={form.control}
+                  name="fiscalYearStart"
+                  render={({ field }: any) => (
+                    <FormItem className="flex flex-col">
+                      <FormLabel>Fiscal Year Start</FormLabel>
+                      <BsDatePicker
+                        valueAD={field.value}
+                        onChangeAD={(d) => field.onChange(d as Date)}
+                        numberOfMonths={1}
+                        isRange={false}
+                      />
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-              <FormField
-                control={form.control}
-                name="fiscalYearEnd"
-                render={({ field }: any) => (
-                  <FormItem className="flex flex-col">
-                    <FormLabel>Fiscal Year End</FormLabel>
-                    <BsDatePicker
-                      valueAD={field.value}
-                      onChangeAD={(d) => field.onChange(d as Date)}
-                      numberOfMonths={1}
-                      isRange={false}
-                    />
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+                <FormField
+                  control={form.control}
+                  name="fiscalYearEnd"
+                  render={({ field }: any) => (
+                    <FormItem className="flex flex-col">
+                      <FormLabel>Fiscal Year End</FormLabel>
+                      <BsDatePicker
+                        valueAD={field.value}
+                        onChangeAD={(d) => field.onChange(d as Date)}
+                        numberOfMonths={1}
+                        isRange={false}
+                      />
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <p className="col-span-2 text-xs text-muted-foreground">
+                  Suggested from country ({getFiscalYearConventionLabel(selectedCountryWatch)}). Change dates to set
+                  how fiscal years divide in this company.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-3 lg:w-[min(100%,18rem)] lg:shrink-0">
+                <div className="flex items-start gap-2 rounded-md border border-border/80 bg-muted/30 p-3">
+                  <Checkbox id="fy-auto-split-company-profile" checked disabled className="mt-0.5 shrink-0" />
+                  <Label
+                    htmlFor="fy-auto-split-company-profile"
+                    className="cursor-default text-sm font-normal leading-snug text-muted-foreground"
+                  >
+                    auto split by selected date for upcoming fy
+                  </Label>
+                </div>
+                {fyVoucherSuggestion ? (
+                  <CompanyFyVoucherSuggestionCard
+                    suggestion={fyVoucherSuggestion}
+                    className="w-full"
+                  />
+                ) : null}
+              </div>
             </div>
 
             {hasProtectPassword && (

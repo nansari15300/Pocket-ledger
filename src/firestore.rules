@@ -127,12 +127,18 @@ service cloud.firestore {
         ('sharedWithEmails' in data &&
           isEmailInSharedWithEmails(data.get('sharedWithEmails', [])));
     }
+    /** IC Connect User tab — Manage Sharing ke bina IC voucher target access. */
+    function hasIcConnectInviteAccess(data) {
+      return authEmailLower() != '' &&
+        authEmailLower() in data.get('icConnectInvitedEmailsLower', []);
+    }
     function isCompanyUser(companyId) {
       let c = get(/databases/$(database)/documents/companies/$(companyId));
       return isSignedIn() && c != null && c.data != null && (
         c.data.get('ownerId', '') == request.auth.uid ||
         (authEmailLower() != '' && c.data.get('ownerEmail', '').lower() == authEmailLower()) ||
         hasSharedCompanyAccess(c.data) ||
+        hasIcConnectInviteAccess(c.data) ||
         (authEmailLower() != '' && c.data.get('handoverTo', '').lower() == authEmailLower())
       );
     }
@@ -142,6 +148,7 @@ service cloud.firestore {
         (authEmailLower() != '' &&
           data.get('ownerEmail', '').lower() == authEmailLower()) ||
         hasSharedCompanyAccess(data) ||
+        hasIcConnectInviteAccess(data) ||
         (authEmailLower() != '' &&
           data.get('handoverTo', '').lower() == authEmailLower());
     }
@@ -325,8 +332,15 @@ service cloud.firestore {
         && authEmailLower() in resource.data.get('sharedWithEmailsLower', []);
       allow list: if isSignedIn() && authEmailLower() != ''
         && resource.data.get('handoverTo', '').lower() == authEmailLower();
+      allow list: if isSignedIn() && authEmailLower() != ''
+        && authEmailLower() in resource.data.get('icConnectInvitedEmailsLower', []);
 
       allow update: if isCompanyOwner(companyId) || isAdmin() || isSuperAdmin();
+      // IC Connect User save — admin member icConnectInvitedEmailsLower backfill (owner rule upar)
+      allow update: if isSignedIn()
+        && isCompanyUser(companyId)
+        && !isCompanyOwner(companyId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['icConnectInvitedEmailsLower', 'updatedAt']);
       // Recycle bin soft-delete / restore / admin-hide — root fields only (permission-denied fix)
       allow update: if canManageCompanyRecycle(companyId) && companyRecycleFieldsOnly();
       // Shared / handover member — Edit Company profile save (name, address, …)
@@ -400,12 +414,31 @@ service cloud.firestore {
       }
 
       /**
+       * Ledger statement checked marks — per user + ledger scope (SQLite mirror + outbox).
+       * @path /companies/{companyId}/ledger_statement_checks/{docId}
+       */
+      match /ledger_statement_checks/{docId} {
+        allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
+        allow write: if isCompanyUser(companyId) || isSuperAdmin();
+      }
+
+      /**
        * Inter Company join settings — shared users same company par auto-sync.
        * @path /companies/{companyId}/inter_company_config/{docId}
        */
       match /inter_company_config/{docId} {
         allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
         allow write: if isCompanyUser(companyId) || isSuperAdmin();
+      }
+
+      /**
+       * IC Connect User reverse index — invited email ko host company target list me dikhane ke liye.
+       * @path /companies/{companyId}/ic_connect_invites/{emailDocId}
+       */
+      match /ic_connect_invites/{emailDocId} {
+        allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId) ||
+          (authEmailLower() != '' && resource.data.get('email', '').lower() == authEmailLower());
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
 
       /**
@@ -590,6 +623,21 @@ service cloud.firestore {
         allow create: if isCompanyUser(companyId) || isSuperAdmin();
         allow update: if false;
         allow delete: if isCompanyOwner(companyId) || isAdmin() || isSuperAdmin();
+      }
+
+      /**
+       * FY/month balance snapshots + fiscal-split FY key index (1 doc read — billing friendly).
+       * @path /companies/{companyId}/meta/fyVoucherIndex
+       * @path /companies/{companyId}/fySnapshots/{snapshotId}
+       */
+      match /meta/{metaDocId} {
+        allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
+        allow write: if isCompanyUser(companyId) || isSuperAdmin();
+      }
+
+      match /fySnapshots/{snapshotId} {
+        allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
+        allow write: if isCompanyUser(companyId) || isSuperAdmin();
       }
     }
     

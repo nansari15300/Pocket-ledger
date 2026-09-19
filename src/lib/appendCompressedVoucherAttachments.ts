@@ -9,7 +9,13 @@ import {
   resolveAttachmentImageKbBand,
   setAttachmentCompressionProgress,
   finishAttachmentCompressionProgress,
-  reportAttachmentCompressionProgress,
+  createParallelAttachmentCompressionReporter,
+  beginAttachmentCompressionAbortScope,
+  endAttachmentCompressionAbortScope,
+  throwIfAttachmentCompressionAborted,
+  isAttachmentCompressionCancelledError,
+  showAttachmentCompressionCancelledToast,
+  dismissAttachmentCompressionProgressToast,
 } from "@/lib/attachmentCompressionUi";
 
 export type VoucherAttachmentToastFn = (opts: {
@@ -46,6 +52,11 @@ export function isVoucherAttachmentProcessing(): boolean {
   return attachmentProcessingCount > 0;
 }
 
+export function resetVoucherAttachmentProcessing(): void {
+  attachmentProcessingCount = 0;
+  emitAttachmentProcessingChange();
+}
+
 export function useVoucherAttachmentProcessing(): boolean {
   return useSyncExternalStore(
     subscribeAttachmentProcessing,
@@ -69,6 +80,7 @@ export async function appendCompressedVoucherAttachmentsToState(opts: {
   companyId?: string | null;
 }): Promise<void> {
   const endProcessing = beginAttachmentProcessing();
+  let compressionCancelled = false;
   try {
     const {
       incomingFiles,
@@ -104,10 +116,8 @@ export async function appendCompressedVoucherAttachmentsToState(opts: {
     const imageBand = await resolveAttachmentImageKbBand(companyId);
     const imageMaxBytes = imageBand.maxKb * 1024;
 
-    const processedFiles: File[] = [];
-    setAttachmentCompressionProgress(1);
-    let fileIndex = 0;
-    const fileCount = filesToProcess.length;
+    type IncomingJob = { file: File; isImage: boolean; isPDF: boolean };
+    const validJobs: IncomingJob[] = [];
     for (const file of filesToProcess) {
       const isImage = file.type.startsWith("image/");
       const isPDF = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
@@ -136,40 +146,64 @@ export async function appendCompressedVoucherAttachmentsToState(opts: {
         });
         continue;
       }
+      validJobs.push({ file, isImage, isPDF });
+    }
 
-      try {
-        const maxBytes = isImage ? imageMaxBytes : pdfMaxBytes;
-        reportAttachmentCompressionProgress(fileIndex, fileCount, 0);
-        const processedFile = await compressVoucherAttachment(
-          file,
-          maxBytes,
-          isImage
-            ? {
-                minKB: imageBand.minKb,
-                onProgress: (pct) => reportAttachmentCompressionProgress(fileIndex, fileCount, pct),
-              }
-            : {
-                onProgress: (pct) => reportAttachmentCompressionProgress(fileIndex, fileCount, pct),
-              }
-        );
-        fileIndex += 1;
-        reportAttachmentCompressionProgress(fileIndex, fileCount, 100);
-        // Images: never reject for size — always attach best compression.
-        // PDFs keep soft 0.5MB reject (raster quality).
-        if (!isImage && processedFile.size > maxBytes) {
-          toast({
-            variant: "destructive",
-            ...attachmentStillTooLargeToastFields(),
-          });
-          continue;
+    const processedFiles: File[] = [];
+    const signal = beginAttachmentCompressionAbortScope();
+    setAttachmentCompressionProgress(1);
+    const reportJob = createParallelAttachmentCompressionReporter(validJobs.length);
+    const compressedResults = await Promise.all(
+      validJobs.map(async (job, jobIdx) => {
+        try {
+          throwIfAttachmentCompressionAborted(signal);
+          const maxBytes = job.isImage ? imageMaxBytes : pdfMaxBytes;
+          reportJob(jobIdx, 0);
+          const processedFile = await compressVoucherAttachment(
+            job.file,
+            maxBytes,
+            job.isImage
+              ? {
+                  minKB: imageBand.minKb,
+                  onProgress: (pct) => reportJob(jobIdx, pct),
+                  signal,
+                }
+              : {
+                  onProgress: (pct) => reportJob(jobIdx, pct),
+                  signal,
+                }
+          );
+          reportJob(jobIdx, 100);
+          if (!job.isImage && processedFile.size > maxBytes) {
+            return { ok: false as const, kind: "too_large" as const };
+          }
+          return { ok: true as const, file: processedFile };
+        } catch (error) {
+          if (isAttachmentCompressionCancelledError(error)) throw error;
+          console.error("Compression error:", error);
+          return {
+            ok: false as const,
+            kind: "error" as const,
+            title: "Could not process file",
+            description:
+              error instanceof Error ? error.message : "Compression or PDF read failed.",
+          };
         }
-        processedFiles.push(processedFile);
-      } catch (error) {
-        console.error("Compression error:", error);
+      })
+    );
+
+    for (const result of compressedResults) {
+      if (result.ok) {
+        processedFiles.push(result.file);
+        continue;
+      }
+      if (result.kind === "too_large") {
+        toast({ variant: "destructive", ...attachmentStillTooLargeToastFields() });
+      } else {
         toast({
           variant: "destructive",
-          title: "Could not process file",
-          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
+          title: result.title,
+          description: result.description,
         });
       }
     }
@@ -181,9 +215,22 @@ export async function appendCompressedVoucherAttachmentsToState(opts: {
         return [...prev, ...processedFiles.slice(0, slots)];
       });
     }
+  } catch (error) {
+    if (isAttachmentCompressionCancelledError(error)) {
+      compressionCancelled = true;
+      dismissAttachmentCompressionProgressToast();
+      showAttachmentCompressionCancelledToast();
+      return;
+    }
+    throw error;
   } finally {
-    setAttachmentCompressionProgress(100);
-    finishAttachmentCompressionProgress();
+    endAttachmentCompressionAbortScope();
+    if (compressionCancelled) {
+      dismissAttachmentCompressionProgressToast();
+    } else {
+      setAttachmentCompressionProgress(100);
+      finishAttachmentCompressionProgress();
+    }
     endProcessing();
   }
 }

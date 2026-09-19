@@ -9,9 +9,10 @@ import { PartyDetails } from "@/components/party/PartyDetails";
 import { StaffDetails } from "@/components/staff/StaffDetails";
 import { TaxDetails } from "@/components/tax/TaxDetails";
 import { ExpenseAccountDetails } from "@/components/expenses/ExpenseAccountDetails";
-import { PayeeList } from "@/components/payee/PayeeList";
+import { PayeeList, filterPayeeListRows } from "@/components/payee/PayeeList";
 import type { UnifiedPayee } from "@/components/payee/PayeeList";
-import { useVouchers } from "@/hooks/useVouchers";
+import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { PermissionButton } from "@/components/permission";
@@ -21,6 +22,8 @@ import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSearchParams } from "next/navigation";
 import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
+import { ReportRegisterDesktopSplit } from "@/components/reports/ReportRegisterDesktopSplit";
+import { ReportRegisterListHeading } from "@/components/reports/ReportRegisterListHeading";
 import {
   voucherCountsAsDashboardPaySalary,
   voucherCountsAsDashboardPaymentOutExcludingPaySalary,
@@ -37,11 +40,12 @@ export function PaymentOutReportDetail() {
     processedStaff,
     processedTaxes,
     expenseAccounts: unprocessedExpenseAccounts,
-  } = useVouchers();
+  } = useFyScopedVouchers();
   const [selectedPayee, setSelectedPayee] = useState<UnifiedPayee | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [searchTerm, setSearchTerm] = useState("");
+  const [listQuickFilter, setListQuickFilter] = useState<EntityListQuickFilter>("default");
   const [showAllCompanyVouchers, setShowAllCompanyVouchers] = useState(false);
   const [isVoucherOpen, setIsVoucherOpen] = useState(false);
   const [defaultTab, setDefaultTab] = useState<"payment_out" | "direct_expense">("payment_out");
@@ -179,8 +183,8 @@ export function PaymentOutReportDetail() {
   const currentTransactions = showAllCompanyVouchers ? paymentOutVouchers : payeeTransactions;
 
   const filteredPayees = useMemo(
-    () => payeesWithPayments.filter((p) => p.name.toLowerCase().includes(searchTerm.toLowerCase())),
-    [payeesWithPayments, searchTerm]
+    () => filterPayeeListRows(payeesWithPayments, searchTerm, listQuickFilter),
+    [payeesWithPayments, searchTerm, listQuickFilter]
   );
 
   const REPORT_MEMORY_KEY = "reportPaymentOutState";
@@ -414,7 +418,14 @@ export function PaymentOutReportDetail() {
           onSearchChange={setSearchTerm}
           listSectionTitle={`Paid to (${filteredPayees.length})`}
         >
-          <PayeeList payees={filteredPayees} selectedPayee={selectedPayee} onSelectPayee={handleSelectPayee} searchTerm={searchTerm} />
+          <PayeeList
+            payees={payeesWithPayments}
+            selectedPayee={selectedPayee}
+            onSelectPayee={handleSelectPayee}
+            searchTerm={searchTerm}
+            quickFilter={listQuickFilter}
+            onQuickFilterChange={setListQuickFilter}
+          />
         </ReportRegisterMobileListChrome>
         <AddVoucherDialog isOpen={isVoucherOpen} onOpenChange={setIsVoucherOpen} onVoucherCreated={() => {}} defaultTab={defaultTab} />
       </>
@@ -424,50 +435,47 @@ export function PaymentOutReportDetail() {
   return (
     <>
       <div className="flex flex-col h-full min-h-0 overflow-hidden">
-        <div className="flex-1 grid grid-cols-1 md:grid-cols-[minmax(280px,max-content)_minmax(0,1fr)] min-h-0 overflow-hidden">
-          <div className="flex flex-col min-h-0 border-r overflow-hidden bg-muted/30">
-            <div className="p-4 border-b space-y-3 flex-shrink-0">
-              <h2 className="text-lg font-bold font-headline">Payment Out</h2>
-              <div className="grid grid-cols-2 gap-2">
-                <PermissionButton permission="create_records" className="w-full" onClick={() => openVoucherDialog("payment_out")}>
-                  <PlusCircle className="mr-2 h-4 w-4" /> Payment Out
-                </PermissionButton>
-                <PermissionButton permission="create_records" className="w-full" variant="outline" onClick={() => openVoucherDialog("direct_expense")}>
-                  <PlusCircle className="mr-2 h-4 w-4" /> Direct Expense
-                </PermissionButton>
+        <ReportRegisterDesktopSplit
+          resizeTitle="Resize payee list"
+          listPanel={
+            <>
+              <div className="p-4 border-b space-y-3 flex-shrink-0">
+                <ReportRegisterListHeading>Payment Out</ReportRegisterListHeading>
+                <Card className="p-3 text-center">
+                  <p className="text-xs text-muted-foreground">Total Paid</p>
+                  <p className="text-xl font-bold text-red-600">
+                    {formatCurrency(totalPayments, { noSuffix: true })}
+                  </p>
+                </Card>
               </div>
-              <Card className="p-3 text-center">
-                <p className="text-xs text-muted-foreground">Total Paid</p>
-                <p className="text-xl font-bold text-red-600">
-                  {formatCurrency(totalPayments, { noSuffix: true })}
-                </p>
-              </Card>
-            </div>
-            <div className="p-3 border-b flex-shrink-0">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search payees..."
-                  className="pl-9"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+              <div className="p-3 border-b flex-shrink-0">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search payees..."
+                    className="pl-9"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
+                <h3 className="text-sm font-semibold">Paid to ({filteredPayees.length})</h3>
+              </div>
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <PayeeList
+                  payees={payeesWithPayments}
+                  selectedPayee={selectedPayee}
+                  onSelectPayee={handleSelectPayee}
+                  searchTerm={searchTerm}
+                  quickFilter={listQuickFilter}
+                  onQuickFilterChange={setListQuickFilter}
                 />
               </div>
-            </div>
-            <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
-              <h3 className="text-sm font-semibold">Paid to ({filteredPayees.length})</h3>
-            </div>
-            <div className="flex-1 min-h-0 overflow-hidden">
-              <PayeeList
-                payees={filteredPayees}
-                selectedPayee={selectedPayee}
-                onSelectPayee={handleSelectPayee}
-                searchTerm={searchTerm}
-              />
-            </div>
-          </div>
-          <div className="flex flex-col min-h-0 overflow-hidden">{renderDetailsView()}</div>
-        </div>
+            </>
+          }
+          detailPanel={renderDetailsView()}
+        />
       </div>
       <AddVoucherDialog
         isOpen={isVoucherOpen}

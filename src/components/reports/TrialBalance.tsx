@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdCalendar from "@/components/ui/ad-calendar";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { TransactionsTable } from "../vouchers/TransactionsTable";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
@@ -192,7 +192,7 @@ export function TrialBalancePage() {
     processedTaxGroups,
     processedExpenseGroups,
     userNames,
-  } = useVouchers();
+  } = useFyScopedVouchers();
   
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } = useDate();
   const { company, companyId } = useCompany();

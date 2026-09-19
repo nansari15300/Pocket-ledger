@@ -6,6 +6,7 @@ import { Providers } from './providers';
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { PocketSerwistProvider } from "@/components/serwist/PocketSerwistProvider";
 import { Phase1bRuntimeVerifyShim } from "@/components/Phase1bRuntimeVerifyShim";
+import { StatementCheckedBlinkPrefsBootstrap } from "@/components/vouchers/StatementCheckedBlinkPrefsBootstrap";
 
 export const metadata: Metadata = {
   applicationName: 'Pocket Ledger',
@@ -73,6 +74,7 @@ export default function RootLayout({
         />
         <PocketSerwistProvider>
           <Providers>
+            <StatementCheckedBlinkPrefsBootstrap />
             {children}
           </Providers>
         </PocketSerwistProvider>

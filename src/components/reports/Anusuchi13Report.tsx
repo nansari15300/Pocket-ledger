@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { useCompany } from "@/hooks/useCompany";
 import type { Party } from "@/components/party/types";
@@ -36,8 +37,10 @@ import {
   readAnusuchi13ReportMemory,
   writeAnusuchi13ReportMemory,
 } from "@/lib/reports/anusuchi13ReportMemory";
+import { ReportRegisterListHeading } from "@/components/reports/ReportRegisterListHeading";
 import { LEDGER_HEADER_RIBBON_WRAP_CN } from "@/lib/ledgerHeaderChrome";
 import { ResizeWidthHandle, useResizablePixelWidth } from "@/components/layout/ResizablePaneWidth";
+import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 
 export function Anusuchi13Report() {
   const isMobile = useIsMobile();
@@ -50,7 +53,7 @@ export function Anusuchi13Report() {
     processedParties,
     journalAccountNames,
     userNames: vouchersUserNames,
-  } = useVouchers();
+  } = useFyScopedVouchers();
 
   const initialMemory = useMemo(() => readAnusuchi13ReportMemory(), []);
   const runningFyKey = useMemo(
@@ -223,34 +226,50 @@ export function Anusuchi13Report() {
     setSelectedParty((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev));
   }, []);
 
+  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } =
+    useMasterListRowMotion();
+
+  const listOrderKey = useMemo(
+    () => masterListOrderKey(filteredParties.map((p) => p.id)),
+    [filteredParties]
+  );
+
+  const { displayRows: displayParties, displayOrderKey } = useMasterListDisplayRows(
+    filteredParties,
+    listOrderKey,
+    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
+  );
+
   const partyList = (
     <ul className="pl-master-list-ul">
-      {filteredParties.map((party) => {
-        const total = computePartyFyTransactionTotal(party, fyVouchers);
-        const isSelected = selectedParty?.id === party.id;
-        return (
-          <li key={party.id}>
-            <MasterListRow
-              selected={isSelected}
-              className={masterListRowUnselectedCn(isSelected)}
-              onClick={() => handleSelectParty(party)}
-            >
-              <div className="pl-master-list-row grid-cols-1">
-                <div className="pl-master-list-row-leading items-start">
-                  <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
-                    <span className="block min-w-0 truncate text-left text-sm font-medium">
-                      {party.name}
-                    </span>
-                    <span className="pl-master-list-row-amount ml-2 shrink-0 text-xs tabular-nums text-muted-foreground">
-                      {formatCurrency(total)}
-                    </span>
+      <AnimatePresence mode={animatePresenceMode}>
+        {displayParties.map((party) => {
+          const total = computePartyFyTransactionTotal(party, fyVouchers);
+          const isSelected = selectedParty?.id === party.id;
+          return (
+            <motion.li key={party.id} layoutDependency={displayOrderKey} {...rowMotionProps}>
+              <MasterListRow
+                selected={isSelected}
+                className={masterListRowUnselectedCn(isSelected)}
+                onClick={() => handleSelectParty(party)}
+              >
+                <div className="pl-master-list-row grid-cols-1">
+                  <div className="pl-master-list-row-leading items-start">
+                    <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
+                      <span className="block min-w-0 truncate text-left text-sm font-medium">
+                        {party.name}
+                      </span>
+                      <span className="pl-master-list-row-amount ml-2 shrink-0 text-xs tabular-nums text-muted-foreground">
+                        {formatCurrency(total)}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </MasterListRow>
-          </li>
-        );
-      })}
+              </MasterListRow>
+            </motion.li>
+          );
+        })}
+      </AnimatePresence>
     </ul>
   );
 
@@ -265,7 +284,9 @@ export function Anusuchi13Report() {
           <div className={cn(LEDGER_HEADER_RIBBON_WRAP_CN, "-mx-0 rounded-none border-x-0 px-2 py-1")}>
             {ribbonElement}
           </div>
-        ) : null}
+        ) : (
+          <ReportRegisterListHeading>Anusuchi 13</ReportRegisterListHeading>
+        )}
         <Card className="p-3 text-center">
           <p className="text-xs text-muted-foreground">Parties with FY transaction ≥ 1 Lac</p>
           <p className="text-xl font-bold">{partiesWithOneLacOrAbove.length}</p>
@@ -341,6 +362,8 @@ export function Anusuchi13Report() {
           className="flex-1 min-h-0"
           data-pl-master-list-chrome
           data-theme-list="account-list"
+          onViewportScroll={markListScrolling}
+          onViewportTouchMove={markListScrolling}
         >
           {partyList}
         </ScrollArea>
@@ -364,7 +387,12 @@ export function Anusuchi13Report() {
         >
           <ResizeWidthHandle onPointerDown={beginAccountListResize} title="Resize confirmation account list" />
           {listHeader}
-          <ScrollArea listChrome className="flex-1 min-h-0">
+          <ScrollArea
+            listChrome
+            className="flex-1 min-h-0"
+            onViewportScroll={markListScrolling}
+            onViewportTouchMove={markListScrolling}
+          >
             {partyList}
           </ScrollArea>
         </div>

@@ -59,7 +59,11 @@ import { interCompanyVoucherViewerSide, readInterCompanyLink } from "@/lib/inter
 import { reconcileRecurringTemplateAfterAutoVoucherRecycle } from "@/lib/writeGateway/recurringVouchers";
 import { startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
 import type { Allocation } from "@/lib/payment-allocation-utils";
-import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import {
+  getAllocationTotal,
+  OPENING_BALANCE_VOUCHER_ID,
+  clampBillWiseAllocationToTarget,
+} from "@/lib/payment-allocation-utils";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { generateLocalVoucherIdForCreate } from "@/lib/localEntityIds";
 import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
@@ -2179,6 +2183,161 @@ export async function syncBillWiseAllocationsToTargetVouchers(
     else allocations.push(entry);
     await updateDoc(ref, { allocations });
     await mirrorVoucherDocToBrowserDb(companyId, a.voucherId);
+  }
+}
+
+/**
+ * Remove bill-wise allocations on source vouchers that point at `targetVoucherId`.
+ * Used when a journal unlink clears incoming-only links (PYMT/JRNL Dr → Journal Cr) that
+ * were never stored on the journal's own `allocations` array.
+ */
+export async function clearBillWiseAllocationsFromSourcesToTarget(
+  companyId: string,
+  targetVoucherId: string,
+  sourceVoucherIds: string[]
+): Promise<void> {
+  if (!companyId || !targetVoucherId) return;
+  const unique = [...new Set(sourceVoucherIds.map((id) => String(id || "").trim()).filter(Boolean))].filter(
+    (id) => id !== targetVoucherId
+  );
+  if (!unique.length) return;
+  beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
+  if (await shouldUseLocalVoucherPipeline(companyId)) {
+    for (const sourceId of unique) {
+      const data = await getCompanyDocFromBrowserDb(companyId, "vouchers", sourceId);
+      if (!data) continue;
+      const allocations: Allocation[] = Array.isArray((data as any)?.allocations)
+        ? [...((data as any).allocations as Allocation[])]
+        : [];
+      const filtered = allocations.filter((a) => String(a?.voucherId ?? "") !== targetVoucherId);
+      if (filtered.length === allocations.length) continue;
+      const payload = removeUndefined({ ...(data as any), id: sourceId, allocations: filtered }) as Record<
+        string,
+        unknown
+      >;
+      coerceVoucherDocumentDate(payload);
+      await upsertCompanyDocInBrowserDb(companyId, "vouchers", sourceId, payload);
+      await enqueueVoucherOutbox(companyId, "update", sourceId, payload);
+      dispatchVoucherLivePatch(companyId, sourceId, { allocations: filtered });
+    }
+    return;
+  }
+  const voucherPath = `companies/${companyId}/vouchers`;
+  for (const sourceId of unique) {
+    const ref = doc(firestore, voucherPath, sourceId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) continue;
+    const data = snap.data();
+    const allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
+    const filtered = allocations.filter((a) => String(a?.voucherId ?? "") !== targetVoucherId);
+    if (filtered.length === allocations.length) continue;
+    await updateDoc(ref, { allocations: filtered });
+    await mirrorVoucherDocToBrowserDb(companyId, sourceId);
+    dispatchVoucherLivePatch(companyId, sourceId, { allocations: filtered });
+  }
+}
+
+async function listBillWiseSourceIdsAllocatingToTarget(
+  companyId: string,
+  targetVoucherId: string
+): Promise<string[]> {
+  const rows = await listCompanyDocsFromBrowserDb(companyId, "vouchers").catch(() => []);
+  const ids: string[] = [];
+  for (const v of rows as Array<{ id?: string; allocations?: Allocation[] }>) {
+    const vid = String(v?.id ?? "").trim();
+    if (!vid || vid === targetVoucherId) continue;
+    const allocs = Array.isArray(v.allocations) ? v.allocations : [];
+    if (
+      allocs.some(
+        (a) => String(a?.voucherId ?? "") === targetVoucherId && getAllocationTotal(a) > 0
+      )
+    ) {
+      ids.push(vid);
+    }
+  }
+  return ids;
+}
+
+async function clampJournalBillWiseAllocationsForSave(
+  companyId: string,
+  allocations: Allocation[]
+): Promise<Allocation[]> {
+  const out: Allocation[] = [];
+  for (const raw of allocations) {
+    if (!raw?.voucherId || raw.voucherId === OPENING_BALANCE_VOUCHER_ID) {
+      out.push(raw);
+      continue;
+    }
+    const target = await getCompanyDocFromBrowserDb(companyId, "vouchers", String(raw.voucherId)).catch(
+      () => null
+    );
+    out.push(clampBillWiseAllocationToTarget(raw, target));
+  }
+  return out.filter((a) => getAllocationTotal(a) > 0);
+}
+
+/**
+ * Journal bill-wise link save — patch journal allocations, bilateral sync, and clear incoming-only
+ * source links (PYMT/JRNL Dr → Journal Cr) removed in the dialog.
+ */
+export async function applyJournalBillWiseLinkAllocations(
+  companyId: string,
+  journalVoucherId: string,
+  newAllocations: Allocation[],
+  previousAllocations: Allocation[] = [],
+  removedDialogSourceIds: string[] = []
+): Promise<void> {
+  if (!companyId || !journalVoucherId) throw new Error("Missing companyId or journal voucher id");
+  const dbJournal = await getCompanyDocFromBrowserDb(companyId, "vouchers", journalVoucherId).catch(() => null);
+  const dbPrevious: Allocation[] = Array.isArray((dbJournal as { allocations?: Allocation[] } | null)?.allocations)
+    ? [...((dbJournal as { allocations: Allocation[] }).allocations ?? [])]
+    : [...previousAllocations];
+  const sanitizedNew = await clampJournalBillWiseAllocationsForSave(companyId, newAllocations);
+  await patchVoucherFields(companyId, journalVoucherId, { allocations: sanitizedNew });
+  await syncBillWiseAllocationsToTargetVouchers(
+    companyId,
+    journalVoucherId,
+    sanitizedNew,
+    dbPrevious
+  );
+
+  const keepTargetIds = new Set(
+    sanitizedNew
+      .filter((a) => getAllocationTotal(a) > 0)
+      .map((a) => String(a.voucherId ?? ""))
+      .filter(Boolean)
+  );
+  const incomingFromDb = await listBillWiseSourceIdsAllocatingToTarget(companyId, journalVoucherId);
+  const removedIds = [
+    ...new Set(
+      [
+        ...removedDialogSourceIds,
+        ...incomingFromDb.filter((id) => !keepTargetIds.has(id)),
+        ...dbPrevious
+          .map((a) => String(a.voucherId ?? ""))
+          .filter((id) => id && !keepTargetIds.has(id)),
+      ]
+        .map((id) => String(id || "").trim())
+        .filter((id) => id && id !== journalVoucherId && id !== OPENING_BALANCE_VOUCHER_ID)
+    ),
+  ];
+  if (removedIds.length) {
+    await clearBillWiseAllocationsFromSourcesToTarget(companyId, journalVoucherId, removedIds);
+  }
+
+  dispatchVoucherLivePatch(companyId, journalVoucherId, { allocations: sanitizedNew });
+
+  const affectedTargetIds = new Set<string>(removedIds);
+  for (const a of [...dbPrevious, ...sanitizedNew]) {
+    if (a.voucherId && a.voucherId !== OPENING_BALANCE_VOUCHER_ID) affectedTargetIds.add(a.voucherId);
+  }
+  for (const targetId of affectedTargetIds) {
+    const data = await getCompanyDocFromBrowserDb(companyId, "vouchers", targetId).catch(() => null);
+    if (!data) continue;
+    const allocations = Array.isArray((data as { allocations?: Allocation[] }).allocations)
+      ? (data as { allocations: Allocation[] }).allocations
+      : [];
+    dispatchVoucherLivePatch(companyId, targetId, { allocations });
   }
 }
 

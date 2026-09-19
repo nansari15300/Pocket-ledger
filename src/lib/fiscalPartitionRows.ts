@@ -1,9 +1,19 @@
 import { startOfDay } from "date-fns";
+import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
 
 /** Sirf fiscal fields — `useCompany` import avoid (heavy / circular risk). */
 type FiscalCompanyLike = {
+  country?: string;
+  fiscalYearStart?: unknown;
   fiscalSplitMode?: string;
   fiscalMergePartitionAt?: { toDate?: () => Date } | unknown;
+  fiscalMergePartitionAtIsos?: string[] | null;
+  fiscalPartitionLabel?: string | null;
+};
+
+export type FiscalMergePartitionEntry = {
+  at: Date;
+  label?: string;
 };
 
 /** Synthetic row type: ledger + print isi se divider dikhate hain (merge mode). */
@@ -61,6 +71,22 @@ export function insertFiscalPartitionRows(
   return out;
 }
 
+/** Multiple merge dividers — oldest partition pehle insert. */
+export function insertFiscalPartitionRowsMulti(
+  rowsInDisplayOrder: any[],
+  partitions: FiscalMergePartitionEntry[]
+): any[] {
+  if (!partitions.length || !rowsInDisplayOrder?.length) return rowsInDisplayOrder;
+  const sorted = [...partitions].sort(
+    (a, b) => startOfDay(a.at).getTime() - startOfDay(b.at).getTime()
+  );
+  let out = rowsInDisplayOrder;
+  for (const part of sorted) {
+    out = insertFiscalPartitionRows(out, part.at, part.label);
+  }
+  return out;
+}
+
 /** Timestamp / local `{ toDate }` / ISO string (localStorage merge) se Date. */
 function coercePartitionDate(raw: unknown): Date | null {
   if (raw == null) return null;
@@ -76,9 +102,32 @@ function coercePartitionDate(raw: unknown): Date | null {
   return null;
 }
 
+/** Company doc (+ locally merged) se merge partition dates (AD start-of-day), oldest → newest. */
+export function getFiscalMergePartitionsFromCompany(
+  company: FiscalCompanyLike | null | undefined
+): Date[] {
+  if (!company || company.fiscalSplitMode !== "merge") return [];
+  const fromList = (company.fiscalMergePartitionAtIsos ?? [])
+    .map((iso) => coercePartitionDate(iso))
+    .filter((d): d is Date => Boolean(d));
+  if (fromList.length) return fromList;
+  const single = coercePartitionDate(company.fiscalMergePartitionAt);
+  return single ? [single] : [];
+}
+
 /** Company doc (+ locally merged) se merge partition date (AD start-of-day). */
 export function getFiscalMergePartitionDateFromCompany(company: FiscalCompanyLike | null | undefined): Date | null {
-  if (!company || company.fiscalSplitMode !== "merge") return null;
-  const d = coercePartitionDate(company.fiscalMergePartitionAt);
-  return d;
+  const parts = getFiscalMergePartitionsFromCompany(company);
+  return parts[0] ?? null;
+}
+
+/** Ledger / print: partition rows + auto banner labels. */
+export function buildFiscalMergePartitionEntriesFromCompany(
+  company: FiscalCompanyLike | null | undefined
+): FiscalMergePartitionEntry[] {
+  if (!company || company.fiscalSplitMode !== "merge") return [];
+  return getFiscalMergePartitionsFromCompany(company).map((at) => ({
+    at,
+    label: buildFiscalMergePartitionBannerLabel(company, at, company.fiscalPartitionLabel ?? null),
+  }));
 }

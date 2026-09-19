@@ -13,7 +13,6 @@ import { LoanOverviewMasterDetail } from "../components/LoanOverviewMasterDetail
 import { LoanWorkspaceDetails } from "../components/LoanWorkspaceDetails";
 import { createLoan } from "../services/loanService";
 import type { LoanDraftInput } from "../types/loanTypes";
-import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 
 const LOAN_CREATE_PREFILL_KEY = "pl-loan-create-prefill";
 
@@ -38,7 +37,7 @@ export function LoansPage() {
   const activeView = searchParams.get("tab") === "groups" ? "groups" : "accounts";
   const { company, companyId } = useCompany();
   const { user } = useAuth();
-  const { allLoans, schedulesByLoan, loading, reload } = useLoans(companyId);
+  const { allLoans, schedulesByLoan, reload, hydrated } = useLoans(companyId);
   const [saving, setSaving] = useState(false);
   const [createPrefill, setCreatePrefill] = useState<Partial<LoanDraftInput> | undefined>(undefined);
   const [prefillView, setPrefillView] = useState(view);
@@ -63,7 +62,6 @@ export function LoansPage() {
   if (!companyId) {
     return <p className="p-4 text-sm text-muted-foreground">Select a company to manage loans.</p>;
   }
-  if (loading && view === "overview") return <LoadingSpinner />;
 
   if (view === "create") {
     return (
@@ -152,6 +150,7 @@ export function LoansPage() {
           setView("create");
         }}
         onReloadList={reload}
+        loansHydrated={hydrated}
       />
     </div>
   );

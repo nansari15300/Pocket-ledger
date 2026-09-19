@@ -2,6 +2,9 @@
 
 import type { DateRange } from "@/components/ui/ad-calendar";
 import type { BalanceSheetRow } from "@/lib/reports/balanceSheetAccounting";
+import type { MasterEditPresentationMode } from "@/lib/nestedLedgerMasterEditPresentation";
+
+const NESTED_LEDGER_MODE: MasterEditPresentationMode = "nested-ledger";
 import { AccountDetails } from "@/components/bank-cash/AccountDetails";
 import { PartyDetails } from "@/components/party/PartyDetails";
 import { StaffDetails } from "@/components/staff/StaffDetails";
@@ -55,6 +58,7 @@ export function BalanceSheetLedgerDetailMirror({
           onDateRangeChange={onDateRangeChange}
           onBack={onClose}
           userNames={userNames}
+          ledgerPresentationMode={NESTED_LEDGER_MODE}
         />
       );
     }
@@ -77,6 +81,7 @@ export function BalanceSheetLedgerDetailMirror({
           onBack={onClose}
           userNames={userNames}
           journalAccountNames={journalAccountNames}
+          ledgerPresentationMode={NESTED_LEDGER_MODE}
         />
       );
     }
@@ -98,6 +103,7 @@ export function BalanceSheetLedgerDetailMirror({
           onDateRangeChange={onDateRangeChange}
           onBack={onClose}
           userNames={userNames}
+          ledgerPresentationMode={NESTED_LEDGER_MODE}
         />
       );
     }
@@ -118,6 +124,7 @@ export function BalanceSheetLedgerDetailMirror({
           onDateRangeChange={onDateRangeChange}
           onBack={onClose}
           userNames={userNames}
+          ledgerPresentationMode={NESTED_LEDGER_MODE}
           journalAccountNames={journalAccountNames}
         />
       );

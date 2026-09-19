@@ -10,7 +10,7 @@ import { firestore } from "@/lib/firebase";
 import { collectionGroup, query, where, onSnapshot, collection } from "firebase/firestore";
 import React, { useState } from "react";
 import type { Account } from "@/components/bank-cash/types";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import FinancialSummary from "@/components/reports/FinancialSummary";
 import { TrialBalancePage } from "./TrialBalance";
 import { BalanceSheetPage } from "./BalanceSheet";
@@ -34,6 +34,7 @@ import { AddSalaryReportDetail } from "./AddSalaryReportDetail";
 import { ContraReportDetail } from "./ContraReportDetail";
 import { JournalReportDetail } from "./JournalReportDetail";
 import { NotesReportDetail } from "./NotesReportDetail";
+import { LoanOverviewReportDetail } from "./LoanOverviewReportDetail";
 import { Anusuchi13Report } from "./Anusuchi13Report";
 import { GSTR1Report } from "./GSTR1";
 import { GSTR2Report } from "./GSTR2";
@@ -41,7 +42,7 @@ import { GSTR3BReport } from "./GSTR3B";
 
 export function ReportDetails({ report }: { report: Report }) {
     const { companyId } = useCompany();
-    const { vouchers, loading } = useVouchers();
+    const { vouchers, loading } = useFyScopedVouchers();
     const [accounts, setAccounts] = useState<Account[]>([]);
     const { setShowBillWiseToggle } = useReportPartyView();
 
@@ -195,6 +196,10 @@ export function ReportDetails({ report }: { report: Report }) {
 
   if (report.id === 'notes') {
     return <NotesReportDetail />;
+  }
+
+  if (report.id === "loan-overview") {
+    return <LoanOverviewReportDetail />;
   }
 
   if (report.id === 'anusuchi-13') {

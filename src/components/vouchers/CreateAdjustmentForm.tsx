@@ -9,17 +9,11 @@ import { toast } from "sonner";
 import { ArrowDown, ArrowUp, CheckCircle, FileText, History, Link2, Loader2, PlusCircle, Printer, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { VoucherDeleteConfirmAlertDialog } from "@/components/vouchers/VoucherDeleteConfirmAlertDialog";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+  assertCanPermanentDeleteFromForm,
+  permanentDeleteVoucherFromForm,
+} from "@/lib/permanentDeleteFromForm";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -48,7 +42,6 @@ import { saveVoucher, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherAct
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { cn } from "@/lib/utils";
-import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
 import {
   BTN_APPROVE_CLASS,
   BTN_CANCEL_CLASS,
@@ -207,7 +200,7 @@ export function CreateAdjustmentForm({
   const { toast: uiToast } = useToast();
   const { companyId, company } = useCompany();
   const { dateSystem, formatDate, formatCurrencyForPrint } = useDate();
-  const { can, canPerformBackdatedAction, canDeleteVoucher, allowAttachments, fileAttachmentLimits } = usePermissions();
+  const { can, role, canPerformBackdatedAction, canDeleteVoucher, allowAttachments, fileAttachmentLimits } = usePermissions();
   const {
     processedPartiesForSelection,
     processedStaff,
@@ -993,6 +986,42 @@ export function CreateAdjustmentForm({
     }
   };
 
+  const handlePermanentDelete = async () => {
+    const voucherIdToDelete = savedVoucherId || voucher?.id || null;
+    if (!voucherIdToDelete || !companyId || !user?.uid) return;
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+      if (!canDeleteVoucher(voucher)) {
+        toast.error("You do not have permission to delete this voucher.");
+        return;
+      }
+      const voucherDate = voucher?.date?.toDate
+        ? voucher.date.toDate()
+        : voucher?.date
+          ? new Date(voucher.date)
+          : new Date();
+      assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
+    } catch (error) {
+      if (error instanceof PermissionDeniedError) {
+        toast.error(error.message);
+      } else {
+        toast.error("Failed to check permissions.");
+      }
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await permanentDeleteVoucherFromForm(companyId, voucherIdToDelete);
+      toast.success("Adjustment deleted permanently.");
+      setIsDeleteDialogOpen(false);
+      onVoucherAction?.("cancelled", false, savedVoucherId || undefined);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to permanently delete adjustment.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const canSaveAdjustment = can(voucher?.id ? "edit_adjustment_voucher" : "add_adjustment_voucher");
   const canAddMoreFiles = allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount;
   const showPdfAsImageToggle =
@@ -1013,6 +1042,7 @@ export function CreateAdjustmentForm({
   };
 
   return (
+    <>
     <Form {...form}>
       <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col gap-4">
         <div className="grid gap-3 md:grid-cols-2">
@@ -1318,30 +1348,15 @@ export function CreateAdjustmentForm({
         )}>
           {isMobile ? (
             <div className={cn("grid grid-cols-3 gap-2 w-full", VOUCHER_BUTTONS_CLASS)}>
-              <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                <AlertDialogTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    className="w-full"
-                    disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}
-                  >
-                    Delete
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                    <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                      Delete
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+              <Button
+                type="button"
+                variant="destructive"
+                className="w-full"
+                disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}
+                onClick={() => setIsDeleteDialogOpen(true)}
+              >
+                Delete
+              </Button>
               <Button
                 type="button"
                 onClick={onOpenHistory ?? (() => {})}
@@ -1414,31 +1429,16 @@ export function CreateAdjustmentForm({
                   <History className="mr-2 h-4 w-4" />
                   History
                 </Button>
-                <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                  <AlertDialogTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      className="w-full md:w-auto shrink-0 rounded-full"
-                      disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Delete
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                      <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                        Move to Bin
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="w-full md:w-auto shrink-0 rounded-full"
+                  disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}
+                  onClick={() => setIsDeleteDialogOpen(true)}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete
+                </Button>
               </div>
               <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
                 <Button type="button" onClick={() => onVoucherAction?.("cancelled")} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
@@ -1588,5 +1588,15 @@ export function CreateAdjustmentForm({
         }}
       />
     </Form>
+    <VoucherDeleteConfirmAlertDialog
+      open={isDeleteDialogOpen}
+      onOpenChange={setIsDeleteDialogOpen}
+      entityKind="adjustment"
+      entityName={voucher?.voucherNumber || form.watch("voucherNumber") || "this adjustment"}
+      onMoveToBin={handleDelete}
+      onDeletePermanently={handlePermanentDelete}
+      busy={isLoading}
+    />
+    </>
   );
 }

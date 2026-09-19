@@ -2,17 +2,10 @@
 "use client";
 
 import { useState } from "react";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { MasterDeleteConfirmAlertDialogContent } from "@/components/common/MasterDeleteConfirmAlertDialog";
+import { AlertDialogContent } from "@/components/ui/alert-dialog";
+import { permanentDeleteCompanySubdocFromRecycleBin } from "@/lib/recycleBinEntityLifecycle";
 import { Button } from "../ui/button";
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -35,6 +28,32 @@ export function DeletePartyDialog({
   const { toast } = useToast();
   const { user } = useAuth();
   const { companyId } = useCompany();
+
+  const handlePermanentDelete = async () => {
+    if (!companyId) {
+      toast({ variant: "destructive", title: "Error", description: "No company selected." });
+      return;
+    }
+    setIsDeleting(true);
+    try {
+      await permanentDeleteCompanySubdocFromRecycleBin(companyId, "parties", party.id);
+      toast({
+        title: "Party deleted permanently",
+        description: `"${party.name}" was permanently deleted.`,
+      });
+      onPartyDeleted();
+      setIsOpen(false);
+    } catch (error) {
+      console.error("Error permanently deleting party: ", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to permanently delete party.",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const handleDelete = async () => {
     if(!companyId) {
@@ -68,24 +87,13 @@ export function DeletePartyDialog({
     <AlertDialog open={isOpen} onOpenChange={setIsOpen}>
       <AlertDialogTrigger asChild>{children}</AlertDialogTrigger>
       <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-          <AlertDialogDescription>
-            This action will move the party{" "}
-            <span className="font-semibold text-foreground">{party.name}</span> to the recycle bin. You can restore it later.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={handleDelete}
-            disabled={isDeleting}
-            className="bg-destructive hover:bg-destructive/90"
-          >
-            {isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Move to Bin
-          </AlertDialogAction>
-        </AlertDialogFooter>
+        <MasterDeleteConfirmAlertDialogContent
+          entityKind="party"
+          entityName={party.name}
+          onMoveToBin={handleDelete}
+          onDeletePermanently={handlePermanentDelete}
+          busy={isDeleting}
+        />
       </AlertDialogContent>
     </AlertDialog>
   );

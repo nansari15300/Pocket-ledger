@@ -35,7 +35,11 @@ import {
   voucherAttachmentLockSaveOpts,
 } from "@/lib/voucherFormAttachmentSave";
 import { cn } from "@/lib/utils";
-import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
+import { VoucherDeleteConfirmAlertDialog } from "@/components/vouchers/VoucherDeleteConfirmAlertDialog";
+import {
+  assertCanPermanentDeleteFromForm,
+  permanentDeleteVoucherFromForm,
+} from "@/lib/permanentDeleteFromForm";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Combobox } from "../ui/combobox";
@@ -45,7 +49,6 @@ import type { Staff } from "@/components/staff/types";
 import type { Tax } from "@/components/tax/types";
 import type { Item } from "@/components/items/types";
 import type { ExpenseAccount } from "@/components/expenses/types";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useDate } from "@/hooks/useDate";
 import { openPrintDirect } from "@/lib/printDirect";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -174,7 +177,7 @@ export function CreateNoteForm({
   const { toast } = useToast();
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const { vouchers } = useVouchers();
-  const { can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
+  const { can, role, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const isMobile = useIsMobile();
   const [isLoading, setIsLoading] = useState(false);
   const isAttachmentProcessing = useVoucherAttachmentProcessing();
@@ -791,6 +794,38 @@ export function CreateNoteForm({
     }
   };
 
+  const handlePermanentDelete = async () => {
+    if (!voucher?.id || !companyId || !user) return;
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+      if (!canDeleteVoucher(voucher)) {
+        sonnerToast.error("Permission Denied", { description: "You cannot delete this voucher." });
+        return;
+      }
+      const voucherDate = voucher?.date?.toDate ? voucher.date.toDate() : (voucher?.date ? new Date(voucher.date) : new Date());
+      assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
+    } catch (err) {
+      if (err instanceof PermissionDeniedError) {
+        sonnerToast.error("Permission Denied", { description: err.message });
+      } else {
+        sonnerToast.error("Error", { description: "Failed to check permissions." });
+      }
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await permanentDeleteVoucherFromForm(companyId, voucher.id);
+      sonnerToast.success("Note deleted permanently.");
+      setIsDeleteDialogOpen(false);
+      onVoucherAction?.("cancelled");
+    } catch (err) {
+      console.error("Error permanently deleting note:", err);
+      sonnerToast.error("Error", { description: "Failed to permanently delete note." });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <>
     <Form {...form}>
@@ -1126,21 +1161,15 @@ export function CreateNoteForm({
               <div className={cn("grid grid-cols-3 gap-2 w-full min-w-0", VOUCHER_BUTTONS_CLASS)}>
                 {!useCompactFooter && (
                   <>
-                    <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                      <AlertDialogTrigger asChild>
-                        <Button type="button" variant="destructive" className="w-full" disabled={!voucher?.id || editingDisabled || (!!voucher && !canDeleteVoucher(voucher))}>Delete</Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                          <AlertDialogDescription>This will move the note to the recycle bin.</AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      className="w-full"
+                      disabled={!voucher?.id || editingDisabled || (!!voucher && !canDeleteVoucher(voucher))}
+                      onClick={() => setIsDeleteDialogOpen(true)}
+                    >
+                      Delete
+                    </Button>
                     <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS, (!voucher || !showHistoryButton || !onOpenHistory) && "opacity-60")}>History</Button>
                     <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("w-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>
                     <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("w-full", BTN_PRINT_CLASS)}>Save & Print</Button>
@@ -1161,23 +1190,15 @@ export function CreateNoteForm({
               <>
                 {!useCompactFooter && (
                   <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
-                    <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                      <AlertDialogTrigger asChild>
-                        <Button type="button" variant="destructive" className="shrink-0 rounded-full" disabled={!voucher?.id || editingDisabled || (!!voucher && !canDeleteVoucher(voucher))}>
-                          <Trash2 className="mr-2 h-4 w-4" /> Delete
-                        </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                          <AlertDialogDescription>This will move the note to the recycle bin.</AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">Move to Bin</AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      className="shrink-0 rounded-full"
+                      disabled={!voucher?.id || editingDisabled || (!!voucher && !canDeleteVoucher(voucher))}
+                      onClick={() => setIsDeleteDialogOpen(true)}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" /> Delete
+                    </Button>
                     <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS, (!voucher || !showHistoryButton || !onOpenHistory) && "opacity-60")}>
                       <History className="mr-2 h-4 w-4" /> History
                     </Button>
@@ -1286,6 +1307,15 @@ export function CreateNoteForm({
     >
       <span className="hidden" />
     </CreateExpenseAccountDialog>
+    <VoucherDeleteConfirmAlertDialog
+      open={isDeleteDialogOpen}
+      onOpenChange={setIsDeleteDialogOpen}
+      entityKind="note"
+      entityName={voucher?.voucherNumber || "this note"}
+      onMoveToBin={handleDelete}
+      onDeletePermanently={handlePermanentDelete}
+      busy={isLoading}
+    />
     </>
   );
 }

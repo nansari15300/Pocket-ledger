@@ -15,8 +15,8 @@ export const AD_DATE_FORMATS = [
 export const BS_DATE_FORMATS = [
   { value: "MM-DD-YYYY", label: "Month - Date - Year", example: "09-01-2082" },
   { value: "DD-MM-YYYY", label: "Date - Month - Year", example: "01-09-2082" },
-  { value: "MMMM DD, YYYY", label: "Month name - Date - Year", example: "Poush 17, 2082" },
-  { value: "MMM DD, YYYY", label: "Short month - Date - Year", example: "Pou 17, 2082" },
+  { value: "MMMM DD, YYYY", label: "Month name - Date - Year", example: "Poush-17-2082" },
+  { value: "MMM DD, YYYY", label: "Short month - Date - Year", example: "Shr-01-2083" },
   { value: "YYYY-MM-DD", label: "Year - Month - Date", example: "2082-09-01" },
   { value: "DD/MM/YYYY", label: "Date / Month / Year", example: "01/09/2082" },
 ] as const;

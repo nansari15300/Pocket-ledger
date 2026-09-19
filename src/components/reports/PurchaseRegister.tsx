@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { TransactionsTable } from "../vouchers/TransactionsTable";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../ui/card";
@@ -19,7 +19,7 @@ import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 
 export function PurchaseRegister() {
-  const { vouchers, loading } = useVouchers();
+  const { vouchers, loading } = useFyScopedVouchers();
   const [dateRange, setDateRange] = useState<DateRange | undefined>();
   const { dateSystem } = useDate();
   const calendarMonths = useCalendarMonths();

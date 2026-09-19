@@ -25,7 +25,9 @@ export function LoanSummary({ loan, schedule }: { loan: Loan; schedule: LoanSche
   const nextDueLabel =
     repaymentType === "emi" ? "Next EMI" : repaymentType === "bullet" ? "Next Due" : "Next Interest";
   const items: Array<[string, string]> = [
-    ["Original Principal", money(loan.principalAmount)],
+    ["Sanctioned Amount", money(loan.principalAmount)],
+    ["Disbursed Amount", money(loan.disbursedAmount)],
+    ["Remaining to Disburse", money(Math.max(0, loan.principalAmount - loan.disbursedAmount))],
     ["Outstanding Principal", money(loan.outstandingPrincipal)],
     ["Paid Principal", money(loan.paidPrincipal)],
     ["Interest Paid", money(loan.paidInterest)],

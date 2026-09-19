@@ -105,6 +105,21 @@ export function FirebaseLedgerOnlineCompanySyncList({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when id set changes
   }, [companyIdsKey]);
 
+  const myCompanies = useMemo(() => companies.filter((c) => c.isOwned === true), [companies]);
+  const sharedCompanies = useMemo(
+    () => companies.filter((c) => c.isOwned !== true && isSharedOnlineCompany(c)),
+    [companies]
+  );
+  const otherCompanies = useMemo(() => {
+    const seen = new Set(
+      [...myCompanies, ...sharedCompanies].map((c) => String(c.id || "").trim()).filter(Boolean)
+    );
+    return companies.filter((c) => {
+      const id = String(c.id || "").trim();
+      return id && !seen.has(id);
+    });
+  }, [companies, myCompanies, sharedCompanies]);
+
   if (!syncEnabled && companies.length === 0) {
     return (
       <p className="rounded-md border border-dashed bg-muted/20 px-2 py-3 text-xs text-muted-foreground">
@@ -198,21 +213,6 @@ export function FirebaseLedgerOnlineCompanySyncList({
   const headerCols = compact
     ? "grid-cols-[minmax(11rem,1fr)_2.75rem_2.75rem]"
     : "grid-cols-[minmax(14rem,1fr)_3.25rem_3.25rem]";
-
-  const myCompanies = useMemo(() => companies.filter((c) => c.isOwned === true), [companies]);
-  const sharedCompanies = useMemo(
-    () => companies.filter((c) => c.isOwned !== true && isSharedOnlineCompany(c)),
-    [companies]
-  );
-  const otherCompanies = useMemo(() => {
-    const seen = new Set(
-      [...myCompanies, ...sharedCompanies].map((c) => String(c.id || "").trim()).filter(Boolean)
-    );
-    return companies.filter((c) => {
-      const id = String(c.id || "").trim();
-      return id && !seen.has(id);
-    });
-  }, [companies, myCompanies, sharedCompanies]);
 
   const renderCompanyRow = (company: Company) => {
     const id = String(company.id || "").trim();

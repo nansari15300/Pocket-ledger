@@ -4,9 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useStatementCheckMode } from "@/hooks/useStatementCheckMode";
 import {
   DEFAULT_TRANSACTION_SORT_ORDER,
-  recomputeRunningBalanceTopToBottom,
   sortAndRebalancePageTransactions,
 } from "@/lib/transactionSort";
+import {
+  applyStatementCheckModeHiddenToLedgerList,
+  ledgerClosingFromStatementList,
+} from "@/lib/statementCheckModeLedger";
 import { statementCheckTxnId } from "@/lib/statementCheckModeStorage";
 import type { StatementCheckViewMode } from "@/hooks/useStatementCheckMode";
 import type {
@@ -59,14 +62,28 @@ export function useStatementLedgerCheckModePaging({
     keyboardNavTransactions: keyboardNavList,
   });
 
-  const ledgerListForPaging = useMemo(() => {
-    const filtered = statementCheck.filterTransactions([...searchFilteredTransactions]);
-    if (!statementCheck.checkModeActive) return filtered;
-    return recomputeRunningBalanceTopToBottom(filtered, ledgerOpeningForRunning);
+  const ledgerListForPaging = useMemo(
+    () =>
+      applyStatementCheckModeHiddenToLedgerList(searchFilteredTransactions, {
+        checkModeActive: statementCheck.checkModeActive,
+        hiddenIds: statementCheck.hiddenIds,
+        openingBalance: ledgerOpeningForRunning,
+      }),
+    [
+      searchFilteredTransactions,
+      statementCheck.checkModeActive,
+      statementCheck.hiddenIds,
+      ledgerOpeningForRunning,
+    ]
+  );
+
+  const ledgerClosingAfterHidden = useMemo(() => {
+    if (!statementCheck.checkModeActive || statementCheck.hiddenCount === 0) return null;
+    return ledgerClosingFromStatementList(ledgerListForPaging, ledgerOpeningForRunning);
   }, [
-    searchFilteredTransactions,
-    statementCheck.filterTransactions,
+    ledgerListForPaging,
     statementCheck.checkModeActive,
+    statementCheck.hiddenCount,
     ledgerOpeningForRunning,
   ]);
 
@@ -172,6 +189,7 @@ export function useStatementLedgerCheckModePaging({
   return {
     statementCheck,
     ledgerListForPaging,
+    ledgerClosingAfterHidden,
     desktopPaginationMeta,
     paginatedTransactions: desktopPaginationMeta.pageTransactions,
     totalPages,

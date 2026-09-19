@@ -3,6 +3,7 @@
 
 import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { resolveCompanyVoucherPrefixList } from "@/lib/nextVoucherNumber";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -69,9 +70,9 @@ type VoucherPrefixValues = z.infer<typeof voucherPrefixSchema>;
 
 const defaultPrefixes: VoucherPrefixValues = {
   sale: ["Sale Inv"],
-  sale_service: ["SS-"],
+  sale_service: ["SER-"],
   purchase: ["PUR-"],
-  purchase_service: ["PS-"],
+  purchase_service: ["SER-"],
   payment_in: ["RCPT-"],
   payment_out: ["PYMT-"],
   contra: ["CNTR-"],
@@ -278,9 +279,14 @@ export function VoucherSettings() {
       const validPrefixes: Partial<VoucherPrefixValues> = {};
         for (const key in defaultPrefixes) {
             if (Array.isArray(prefixes[key]) && prefixes[key].length > 0) {
-                validPrefixes[key as keyof VoucherPrefixValues] = prefixes[key];
-            } else if (typeof prefixes[key] === 'string') { // Backwards compatibility
-                validPrefixes[key as keyof VoucherPrefixValues] = [prefixes[key]];
+                validPrefixes[key as keyof VoucherPrefixValues] = resolveCompanyVoucherPrefixList(
+                  key,
+                  prefixes[key]
+                );
+            } else if (typeof prefixes[key] === "string") {
+                validPrefixes[key as keyof VoucherPrefixValues] = resolveCompanyVoucherPrefixList(key, [
+                  prefixes[key],
+                ]);
             }
         }
 

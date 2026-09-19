@@ -16,7 +16,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon, Loader2, Trash2, Upload, FileText, PlusCircle, Crown, Printer, Link2, History, CheckCircle, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { NESTED_VOUCHER_ALERT_SHELL, nestedVoucherAlertShell } from "@/lib/dialogShellChrome";
+import { nestedVoucherAlertShell } from "@/lib/dialogShellChrome";
 import {
   mapPartiesForVoucherCombobox,
   mapStaffForVoucherCombobox,
@@ -32,7 +32,11 @@ import { collection, addDoc, serverTimestamp, doc, getDoc, updateDoc, deleteDoc,
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { format, startOfDay } from "date-fns";
 import { ScrollArea } from "../ui/scroll-area";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { VoucherDeleteConfirmAlertDialog } from "@/components/vouchers/VoucherDeleteConfirmAlertDialog";
+import {
+  assertCanPermanentDeleteFromForm,
+  permanentDeleteVoucherFromForm,
+} from "@/lib/permanentDeleteFromForm";
 import type { Party } from "@/components/party/types";
 import type { Account } from "@/components/bank-cash/types";
 import type { Tax } from "@/components/tax/types";
@@ -1935,6 +1939,66 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         setIsLoading(false);
     }
   };
+
+  const handlePermanentDelete = async () => {
+    if (!savedVoucherId || !companyId) return;
+
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+      const { voucherData, exists: voucherDocExists } = await loadVoucherDataForDeletePreCheck({
+        companyId,
+        voucherId: savedVoucherId,
+        company,
+        fallbackVoucher: (voucher as Record<string, unknown> | null) ?? null,
+        vouchers: allVouchers as Array<{ id?: string } & Record<string, unknown>> | null,
+      });
+      if (!canDeleteVoucher(voucherData)) {
+        throw new PermissionDeniedError(
+          (voucherData as any)?.isApproved ? "You do not have permission to delete approved vouchers." : "You do not have permission to delete records."
+        );
+      }
+      if (voucherData && hasPaymentLinks(voucherData)) {
+        toast({ variant: "destructive", title: "Cannot Delete", description: "First unlink linked transactions." });
+        return;
+      }
+      if (voucherDocExists && voucherData) {
+        const voucherDate = resolveVoucherDeleteBackdateDate(voucherData, {
+          form: "payment_in",
+          companyId,
+          voucherId: savedVoucherId,
+        });
+        assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
+      }
+    } catch (error) {
+      if (error instanceof PermissionDeniedError) {
+        toast({
+          variant: "destructive",
+          title: "Permission Denied",
+          description: error.message,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to check permissions.",
+        });
+      }
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      await permanentDeleteVoucherFromForm(companyId, savedVoucherId);
+      toast({ title: "Payment in deleted permanently." });
+      setIsDeleteDialogOpen(false);
+      onVoucherAction?.("cancelled", false, savedVoucherId);
+    } catch (error) {
+      console.error("Error permanently deleting voucher:", error);
+      toast({ variant: "destructive", title: "Error", description: "Failed to permanently delete voucher." });
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     tracePaymentInAttach("handleFileChange", { picked: e.target.files?.length ?? 0, allowAttachments });
@@ -3129,25 +3193,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             {isMobile ? (
               <div className={cn("grid grid-cols-3 gap-2 w-full min-w-0", VOUCHER_BUTTONS_CLASS)}>
                 {/* Row 0: Delete (left) | History (middle) | Save & Print (right) */}
-                <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                  <AlertDialogTrigger asChild>
-                    <Button type="button" variant="destructive" className="w-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                <Button type="button" variant="destructive" className="w-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))} onClick={() => setIsDeleteDialogOpen(true)}>
                       Delete
                     </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                      <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                        Delete
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
                 <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
                   History
                 </Button>
@@ -3180,25 +3228,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !onOpenHistory} className={cn("shrink-0", BTN_HISTORY_CLASS)}>
                     <History className="mr-2 h-4 w-4" /> History
                   </Button>
-                  <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                    <AlertDialogTrigger asChild>
-                      <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                  <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))} onClick={() => setIsDeleteDialogOpen(true)}>
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                        <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                          Move to Bin
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
                 </div>
                 <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={() => { setAllocations(initialAllocationsRef.current.map((a) => ({ voucherId: a.voucherId, amount: a.amount }))); setPendingLinkedPaymentOut(null); onVoucherAction?.('cancelled'); }} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
@@ -3352,6 +3384,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         />
       )}
       <LinkSectionInfoDialog open={linkSectionInfoOpen} onOpenChange={setLinkSectionInfoOpen} />
+      <VoucherDeleteConfirmAlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        entityKind="payment in"
+        entityName={voucher?.voucherNumber || "this payment in"}
+        onMoveToBin={handleDelete}
+        onDeletePermanently={handlePermanentDelete}
+        busy={isLoading}
+      />
     </>
   );
 }

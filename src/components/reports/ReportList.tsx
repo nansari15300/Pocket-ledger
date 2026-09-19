@@ -8,6 +8,8 @@ import { reportCategoryDisplayName } from "@/lib/staffEntityDisplayName";
 import { FileText, Users, ReceiptText, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { MasterListRow } from "@/components/ui/master-list-row";
+import { masterListSelectedCn, masterListUnselectedCn } from "@/lib/listSelectionChrome";
+import { MASTER_LIST_GROUP_ICON_CN, masterListShellCn } from "@/lib/masterListChrome";
 
 interface ReportListProps {
   reports: Report[];
@@ -45,9 +47,13 @@ export function ReportList({
     items: reports.filter((report) => report.category === category),
   })).filter((group) => group.items.length > 0);
 
+  const reportRowClassName = (isSelected: boolean) =>
+    cn(masterListUnselectedCn, isSelected && masterListSelectedCn);
+
   return (
+    <div className={cn(masterListShellCn, "flex-1 min-h-0")} data-pl-master-list-chrome="">
      <ScrollArea listChrome className="flex-1 min-h-0">
-        <ul className="p-2 space-y-2">
+        <ul className="pl-master-list-ul" data-pl-reports-list="">
             {groupedReports.map((group) => (
               <li key={group.category} className="space-y-1">
                 <p className="px-1 pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -57,25 +63,34 @@ export function ReportList({
                 const isSelected = selectedReport?.id === report.id;
                 const ReportIcon = getReportIcon(report.id);
                 const cardContent = (
-                  <div className="flex items-center gap-2">
-                    {/* Keep fallback icon behavior while enabling requested custom report icons. */}
-                    <ReportIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <p className="text-sm font-medium truncate">{report.name}</p>
+                  <div className="pl-master-list-row grid-cols-1">
+                    <div className="pl-master-list-row-leading">
+                      <div className={MASTER_LIST_GROUP_ICON_CN}>
+                        <ReportIcon className="h-4 w-4 shrink-0" />
+                      </div>
+                      <p
+                        className={cn(
+                          "pl-master-list-row-name truncate",
+                          isSelected ? "font-bold" : "font-medium"
+                        )}
+                      >
+                        {report.name}
+                      </p>
+                    </div>
                   </div>
                 );
                 return (
                     <div key={report.id}>
                         {report.href ? (
-                          <Link href={report.href}>
-                            <MasterListRow className="hover:border-orange-300/80 hover:bg-orange-50/30">
+                          <Link href={report.href} className="block">
+                            <MasterListRow selected={isSelected} className={reportRowClassName(isSelected)}>
                               {cardContent}
                             </MasterListRow>
                           </Link>
                         ) : (
                           <MasterListRow
-                            className={cn(
-                              !isSelected && "hover:border-orange-300/80 hover:bg-orange-50/30"
-                            )}
+                            selected={isSelected}
+                            className={reportRowClassName(isSelected)}
                             onClick={() => onSelectReport(report)}
                           >
                             {cardContent}
@@ -93,5 +108,6 @@ export function ReportList({
             )}
         </ul>
       </ScrollArea>
+    </div>
   );
 }

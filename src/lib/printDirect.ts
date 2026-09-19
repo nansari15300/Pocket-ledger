@@ -13,8 +13,16 @@ import type { Item } from "@/components/items/types";
 import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import { shouldUseInAppPdfPreviewOverlay } from "@/lib/shouldUseInAppPdfPreview";
 import { showInAppPdfPreview } from "@/lib/inAppPdfPreview";
-import { FISCAL_YEAR_PARTITION_ROW_TYPE, insertFiscalPartitionRows } from "@/lib/fiscalPartitionRows";
-import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
+import {
+  FISCAL_YEAR_PARTITION_ROW_TYPE,
+  getFiscalMergePartitionsFromCompany,
+  insertFiscalPartitionRowsMulti,
+  type FiscalMergePartitionEntry,
+} from "@/lib/fiscalPartitionRows";
+import {
+  buildFiscalMergePartitionBannerLabelForDateSystem,
+  buildFyOpeningPillSplit,
+} from "@/lib/fiscalYearLabel";
 import { getPrintColorPalette, type PrintColorMode } from "@/lib/printColorPalette";
 import { getInterCompanyLedgerAmounts } from "@/lib/interCompany/interCompanyLedgerAmounts";
 import { sumJournalAmountsForAccount } from "@/lib/journalLedgerAmounts";
@@ -25,9 +33,134 @@ import {
   resolveLedgerOpeningPrintRows,
   type LedgerOpeningPrintRow,
 } from "@/lib/ledgerOpeningBalanceDisplay";
+import { FY_OPENING_ROW_TYPE } from "@/lib/fyPagination/fyOpeningRows";
+
+function resolvePrintFiscalMergePartitions(
+  payload: {
+    company?: {
+      country?: string;
+      fiscalYearStart?: unknown;
+      fiscalYearEnd?: unknown;
+      fiscalSplitMode?: string;
+      fiscalMergePartitionAt?: unknown;
+      fiscalMergePartitionAtIsos?: string[] | null;
+      fiscalPartitionLabel?: string | null;
+    };
+    fiscalMergePartitions?: FiscalMergePartitionEntry[];
+    fiscalMergePartitionAt?: Date | null;
+    fiscalPartitionLabel?: string | null;
+  },
+  dateSystem: PrintPayload["dateSystem"],
+  formatDate?: (d: Date) => string
+): FiscalMergePartitionEntry[] {
+  const optionalNote = payload.fiscalPartitionLabel ?? payload.company?.fiscalPartitionLabel ?? null;
+  const relabel = (at: Date): string =>
+    buildFiscalMergePartitionBannerLabelForDateSystem(
+      payload.company,
+      at,
+      dateSystem,
+      formatDate,
+      optionalNote
+    );
+
+  if (payload.fiscalMergePartitions?.length) {
+    return payload.fiscalMergePartitions.map((part) => ({
+      at: part.at,
+      label: relabel(part.at),
+    }));
+  }
+  if (payload.company) {
+    const fromCompany = getFiscalMergePartitionsFromCompany(payload.company);
+    if (fromCompany.length) {
+      return fromCompany.map((at) => ({ at, label: relabel(at) }));
+    }
+  }
+  const partAt =
+    payload.fiscalMergePartitionAt instanceof Date
+      ? payload.fiscalMergePartitionAt
+      : payload.fiscalMergePartitionAt
+        ? new Date(payload.fiscalMergePartitionAt as unknown as string)
+        : null;
+  if (partAt && !isNaN(partAt.getTime())) {
+    return [{ at: partAt, label: relabel(partAt) }];
+  }
+  return [];
+}
+
+/** Party/staff print: FY merge divider ke liye company fiscal fields payload me bhejo. */
+export function companyFiscalFieldsForPrint(
+  company: Record<string, unknown> | null | undefined
+): {
+  country?: string;
+  fiscalYearStart?: unknown;
+  fiscalYearEnd?: unknown;
+  fiscalSplitMode?: string;
+  fiscalMergePartitionAt?: unknown;
+  fiscalMergePartitionAtIsos?: string[] | null;
+  fiscalPartitionLabel?: string | null;
+} {
+  if (!company) return {};
+  return {
+    country: typeof company.country === "string" ? company.country : undefined,
+    fiscalYearStart: company.fiscalYearStart,
+    fiscalYearEnd: company.fiscalYearEnd,
+    fiscalSplitMode: typeof company.fiscalSplitMode === "string" ? company.fiscalSplitMode : undefined,
+    fiscalMergePartitionAt: company.fiscalMergePartitionAt,
+    fiscalMergePartitionAtIsos: Array.isArray(company.fiscalMergePartitionAtIsos)
+      ? (company.fiscalMergePartitionAtIsos as string[])
+      : undefined,
+    fiscalPartitionLabel:
+      typeof company.fiscalPartitionLabel === "string" ? company.fiscalPartitionLabel : null,
+  };
+}
+
+function parsePrintPartitionBoundaryMs(row: any): number | null {
+  const id = String(row?.id || "");
+  const match = /^__fiscal_partition_(\d+)_/.exec(id);
+  if (!match) return null;
+  const ms = Number(match[1]);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function printLedgerTypeLabel(row: any): string {
+  const pill = String(row?._ledgerOpeningPillLabel || "").trim();
+  if (pill) return pill;
+  const type = String(row?.type || "");
+  if (type === FY_OPENING_ROW_TYPE) return "fy opening";
+  return type.replace(/_/g, " ");
+}
+
+function pushFyOpeningPrintRowAfterPartition(
+  out: any[],
+  partitionRow: any,
+  runningBalance: number,
+  company?: PrintPayload["company"],
+  dateSystem: PrintPayload["dateSystem"] = "AD"
+): void {
+  const boundaryMs = parsePrintPartitionBoundaryMs(partitionRow);
+  if (boundaryMs == null) return;
+  const partitionDate = new Date(boundaryMs);
+  const pillSplit = buildFyOpeningPillSplit(company ?? null, partitionDate, dateSystem);
+  const signed = Number.isFinite(runningBalance) ? runningBalance : 0;
+  const abs = Math.abs(signed);
+  out.push({
+    id: `__fy_opening_${boundaryMs}`,
+    type: FY_OPENING_ROW_TYPE,
+    _ledgerOpeningPillLabel: pillSplit.typePill,
+    _fyOpeningVoucherPillLabel: pillSplit.voucherPill,
+    _fyOpeningSynthetic: true,
+    date: partitionDate,
+    voucherNumber: pillSplit.voucherPill ?? "-",
+    debit: signed > 0 ? abs : 0,
+    credit: signed < 0 ? abs : 0,
+    balance: signed,
+    runningBalance: signed,
+    narration: "",
+  });
+}
 
 const DEFAULT_AD_FORMAT: ADFormatKey = "yyyy-MM-dd";
-const DEFAULT_BS_FORMAT: BSFormatKey = "YYYY-MM-DD";
+const DEFAULT_BS_FORMAT: BSFormatKey = "MMM DD, YYYY";
 
 function getStoredDateFormatAD(): ADFormatKey {
   if (typeof window === "undefined") return DEFAULT_AD_FORMAT;
@@ -104,6 +237,11 @@ export type PrintPayload = {
     logoUrl?: string | null;
     country?: string;
     fiscalYearStart?: unknown;
+    fiscalYearEnd?: unknown;
+    fiscalSplitMode?: string;
+    fiscalMergePartitionAt?: unknown;
+    fiscalMergePartitionAtIsos?: string[] | null;
+    fiscalPartitionLabel?: string | null;
   };
   title: string;
   context: Context;
@@ -161,6 +299,8 @@ export type PrintPayload = {
   vouchers?: any[];
   /** Merge fiscal: nayi FY ki pehli din (AD) — table jaisa PDF me divider. */
   fiscalMergePartitionAt?: Date | null;
+  /** Merge fiscal: multiple partition starts (preferred over single `fiscalMergePartitionAt`). */
+  fiscalMergePartitions?: FiscalMergePartitionEntry[];
   /** Optional custom divider line (same as company settings). */
   fiscalPartitionLabel?: string | null;
   /** openPrintDirect: dialog mat dikhao (chhota receipt / programmatic). */
@@ -563,6 +703,11 @@ const isColVisible = (
 const isBillWiseContext = (p: PrintPayload) =>
   Boolean(p.billWise && (p.context === "party" || p.context === "group" || p.context === "staff" || p.context === "account"));
 
+const LEDGER_PRINT_BODY_FONT = 9;
+
+const isWideLedgerPrintContext = (p: PrintPayload) =>
+  ["party", "staff", "tax", "account", "group", "expense"].includes(p.context);
+
 // --- UPDATED: Dynamic Font Size Calculator ---
 // यो फङ्सनले अब धेरै लामो टेक्स्ट नभएसम्म फन्ट साइज घटाउँदैन।
 const getAutoFontSize = (text: string | number, baseSize: number): number => {
@@ -767,7 +912,9 @@ function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
   const rows = embeddedRows;
   const { periodDr, periodCr, closing } = computed;
   const { formatDate, formatDateBS, formatCurrencyForPrint, formatRunning, numToWords } = getFormatters(p);
-  const voucherRowCount = rows.filter((r: any) => r?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE).length;
+  const voucherRowCount = rows.filter(
+    (r: any) => r?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE && r?.type !== FY_OPENING_ROW_TYPE
+  ).length;
   const palette = getPrintColorPalette(p.printColorMode);
 
   const includeLogo = p.printIncludeLogo !== false;
@@ -780,6 +927,10 @@ function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
   const POCKET_LEDGER_SITE_URL = "https://pocket-ledger.com";
 
   // Company lines print toggle: off par sirf period (date range) text — table neeche waisa hi
+  const periodLine =
+    (p.dateRangeText || "").trim().length > 0
+      ? [{ text: p.dateRangeText, style: "body", alignment: "center", margin: [0, 5, 0, 0] }]
+      : [];
   const companyInfoStack: Content = {
     stack: includeCompanyDetails
       ? [
@@ -792,9 +943,11 @@ function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
             style: "sub",
             alignment: "center",
           },
-          { text: p.dateRangeText, style: "body", alignment: "center", margin: [0, 5, 0, 0] },
+          ...periodLine,
         ]
-      : [{ text: p.dateRangeText, style: "body", alignment: "center", margin: [0, 5, 0, 0] }],
+      : periodLine.length
+        ? periodLine
+        : [{ text: "", margin: [0, 0, 0, 0] }],
     margin: [0, LOGO_TOP_INSET, 0, 0],
   };
 
@@ -855,7 +1008,9 @@ const reportTitleContent: Content = {
     columns: [
         // Keep report labels compact as requested (about 50% smaller).
         { text: p.title, style: 'subheader', fontSize: 8, alignment: 'left', width: '*' },
-        { text: `Total Vouchers: ${voucherRowCount}`, style: 'subheader', fontSize: 8, alignment: 'right', width: 'auto' }
+        voucherRowCount > 0
+          ? { text: `Total Vouchers: ${voucherRowCount}`, style: 'subheader', fontSize: 8, alignment: 'right', width: 'auto' }
+          : { text: "", width: 'auto' },
     ],
     margin: [0, 0, 0, 5],
   };
@@ -988,6 +1143,7 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
   }
   
   const tableHeader = buildTableHeader(p);
+  const useLandscapePrint = shouldUseLandscapeLedgerPrint(tableHeader);
   const tableFooter = buildTableFooter(p, periodDr, periodCr, closing, formatCurrencyForPrint, formatRunning, tableHeader, numToWords);
   const openingBalanceRow = skipStandaloneOpeningRow
     ? null
@@ -1044,8 +1200,8 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
           if(i === 1 || (i === node.table.body.length - 1 && tableFooter.length > 0)) return 'black';
           return '#aaa'
       },
-      paddingLeft: (i: number) => 4,
-      paddingRight: (i: number) => 4,
+      paddingLeft: () => (isWideLedgerPrintContext(p) ? 6 : 4),
+      paddingRight: () => (isWideLedgerPrintContext(p) ? 6 : 4),
       paddingTop: (i: number, node: any) => {
           if (i > 0) {
               const row = node.table.body[i];
@@ -1078,6 +1234,7 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
   
   const docDef: TDocumentDefinitions = {
     pageSize: "A4",
+    ...(useLandscapePrint ? { pageOrientation: "landscape" as const } : {}),
     pageMargins: [30, 100, 30, 40],
     header: header,
     footer: footer,
@@ -1132,31 +1289,24 @@ function computeRows(payload: PrintPayload) {
             (b.date?.toDate ? b.date.toDate() : new Date(b.date)).getTime()
         );
 
-    const partAtSpend =
-      payload.fiscalMergePartitionAt instanceof Date
-        ? payload.fiscalMergePartitionAt
-        : payload.fiscalMergePartitionAt
-          ? new Date(payload.fiscalMergePartitionAt as unknown as string)
-          : null;
-    const mergeLblSpend =
-      partAtSpend && !isNaN(partAtSpend.getTime())
-        ? buildFiscalMergePartitionBannerLabel(
-            { country: payload.company.country, fiscalYearStart: payload.company.fiscalYearStart },
-            partAtSpend,
-            payload.fiscalPartitionLabel ?? null
-          )
-        : undefined;
+    const mergePartitionsSpend = resolvePrintFiscalMergePartitions(payload, payload.dateSystem);
     const preparedWithPart =
-      partAtSpend && !isNaN(partAtSpend.getTime())
-        ? insertFiscalPartitionRows(prepared, partAtSpend, mergeLblSpend)
+      mergePartitionsSpend.length
+        ? insertFiscalPartitionRowsMulti(prepared, mergePartitionsSpend)
         : prepared;
 
     let lastSpendWiseBal: number | null = null;
-    const rows = preparedWithPart.map((t: any) => {
+    const rows: any[] = [];
+    for (const t of preparedWithPart) {
       if (t.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
         const bal = lastSpendWiseBal ?? (Number(payload.openingBalance) || 0);
-        return { ...t, debit: 0, credit: 0, runningBalance: bal };
+        rows.push({ ...t, debit: 0, credit: 0, runningBalance: bal });
+        if (mergePartitionsSpend.length) {
+          pushFyOpeningPrintRowAfterPartition(rows, t, bal, payload.company, payload.dateSystem);
+        }
+        continue;
       }
+      if (t.type === FY_OPENING_ROW_TYPE) continue;
       let debit = Number(t.debit) || 0;
       let credit = Number(t.credit) || 0;
       const linkedAmt = Number((t as any)._spendWiseLinkedAmount) || 0;
@@ -1177,8 +1327,8 @@ function computeRows(payload: PrintPayload) {
             ? Number((t as any)._spendWiseRunningBalance)
             : Number(t.balance ?? t.runningBalance) || 0;
       lastSpendWiseBal = spendWiseBalance;
-      return { ...t, debit, credit, runningBalance: spendWiseBalance };
-    });
+      rows.push({ ...t, debit, credit, runningBalance: spendWiseBalance });
+    }
 
     const periodDr = rows.reduce((sum, row) => sum + (Number(row.debit) || 0), 0);
     const periodCr = rows.reduce((sum, row) => sum + (Number(row.credit) || 0), 0);
@@ -1198,36 +1348,33 @@ function computeRows(payload: PrintPayload) {
           (b.date?.toDate ? b.date.toDate() : new Date(b.date)).getTime()
       );
 
-  const partAt =
-    payload.fiscalMergePartitionAt instanceof Date
-      ? payload.fiscalMergePartitionAt
-      : payload.fiscalMergePartitionAt
-        ? new Date(payload.fiscalMergePartitionAt as unknown as string)
-        : null;
-  const mergeLbl =
-    partAt && !isNaN(partAt.getTime())
-      ? buildFiscalMergePartitionBannerLabel(
-          { country: payload.company.country, fiscalYearStart: payload.company.fiscalYearStart },
-          partAt,
-          payload.fiscalPartitionLabel ?? null
-        )
-      : undefined;
+  const mergePartitions = resolvePrintFiscalMergePartitions(payload, payload.dateSystem);
   const sortedWithPart =
-    partAt && !isNaN(partAt.getTime()) ? insertFiscalPartitionRows(sorted, partAt, mergeLbl) : sorted;
+    mergePartitions.length ? insertFiscalPartitionRowsMulti(sorted, mergePartitions) : sorted;
 
   const openingBalNum = typeof payload.openingBalance === 'number' ? payload.openingBalance : 0;
   let runningBalance = openingBalNum;
   
   const itemForContext = payload.context === 'item' ? findItem(payload.itemsData, payload.contextId) : undefined;
 
-  const rowsAsc = sortedWithPart.map((t) => {
+  const rowsAsc: any[] = [];
+  for (const t of sortedWithPart) {
     if ((t as any).type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
-      return { ...(t as any), debit: 0, credit: 0, runningBalance };
+      rowsAsc.push({ ...(t as any), debit: 0, credit: 0, runningBalance });
+      if (mergePartitions.length) {
+        pushFyOpeningPrintRowAfterPartition(rowsAsc, t, runningBalance, payload.company, payload.dateSystem);
+      }
+      continue;
     }
-    const { debit, credit } = getTransactionAmounts(t, payload.context, itemForContext || payload.contextId, payload.stockView, payload.itemsData);
-    // Preserve dueDate / due_date and status so party/account print shows "xx days" like UI
+    if ((t as any).type === FY_OPENING_ROW_TYPE) continue;
+    const { debit, credit } = getTransactionAmounts(
+      t,
+      payload.context,
+      itemForContext || payload.contextId,
+      payload.stockView,
+      payload.itemsData
+    );
     const dueDate = t.dueDate ?? t.due_date;
-    // Preserve link arrays so bill-wise status detail (voucher no / Multi link) can print in sub-row.
     const row = {
       ...t,
       debit,
@@ -1242,13 +1389,14 @@ function computeRows(payload: PrintPayload) {
       linkedFromVoucherNosBillWise: t.linkedFromVoucherNosBillWise,
       linkedToVoucherNosBillWise: t.linkedToVoucherNosBillWise,
     };
-    if (t.type === 'opening_balance' && typeof t.runningBalance === 'number') {
+    if (t.type === "opening_balance" && typeof t.runningBalance === "number") {
       runningBalance = t.runningBalance;
-      return { ...row, runningBalance };
+      rowsAsc.push({ ...row, runningBalance });
+      continue;
     }
-    runningBalance += (debit - credit);
-    return { ...row, runningBalance };
-  });
+    runningBalance += debit - credit;
+    rowsAsc.push({ ...row, runningBalance });
+  }
 
   const periodDr =
     typeof payload.ledgerPagePeriodDr === "number"
@@ -1656,6 +1804,7 @@ const buildOpeningBalanceRow = (
     openingBalancePeriodStartDate: p.openingBalancePeriodStartDate,
     masterOpeningBalanceDate: p.openingBalanceDate,
     dateRange: p.ledgerDateRange,
+    country: p.company?.country,
   });
 
   const isBillWise = isBillWiseContext(p);
@@ -1771,7 +1920,12 @@ const buildOpeningBalanceRow = (
     const row: TableCell[] = [...dateCells];
 
     if (showType) {
-      row.push({ text: spec.pillLabel, bold: true, fontSize: 9, noWrap: true });
+      row.push({
+        text: spec.pillLabel,
+        bold: true,
+        fontSize: LEDGER_PRINT_BODY_FONT,
+        noWrap: true,
+      });
     } else if (labelColSpan > 0) {
       row.push({
         text: spec.pillLabel,
@@ -1896,8 +2050,15 @@ const buildOpeningBalanceRow = (
   return result.length > 0 ? result : null;
 };
 
+/** Ledger print: 7 se zyada visible columns → landscape (Both date = 9 cols, etc.). */
+const PRINT_LANDSCAPE_COLUMN_THRESHOLD = 7;
+
+function shouldUseLandscapeLedgerPrint(tableHeader: TableCell[]): boolean {
+  return tableHeader.length > PRINT_LANDSCAPE_COLUMN_THRESHOLD;
+}
+
 const buildTableHeader = (p: PrintPayload): TableCell[] => {
-  const boldHeader = (text: string): TableCell => ({ text, bold: true, fontSize: 9, noWrap: true }); 
+  const boldHeader = (text: string): TableCell => ({ text, bold: true, fontSize: LEDGER_PRINT_BODY_FONT, noWrap: true });
   
   if (p.context === 'sale' && p.transactions.length === 1) {
       return [boldHeader('S.N.'), boldHeader('Particulars'), boldHeader('Qty'), boldHeader('Rate'), {text: 'Amount', bold: true, fontSize: 9, alignment: 'right'}];
@@ -2216,19 +2377,117 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
     const palette = getPrintColorPalette(p.printColorMode);
     if (row.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
       const n = Math.max(1, ledgerColCount);
-      const label = row._partitionLabel || "── Closing fiscal period · New fiscal period ──";
+      const boundaryMs = parsePrintPartitionBoundaryMs(row);
+      const partitionDate = boundaryMs != null ? new Date(boundaryMs) : null;
+      const label =
+        partitionDate && !Number.isNaN(partitionDate.getTime())
+          ? buildFiscalMergePartitionBannerLabelForDateSystem(
+              p.company,
+              partitionDate,
+              p.dateSystem,
+              formatDate as (d: Date) => string,
+              p.fiscalPartitionLabel ?? p.company?.fiscalPartitionLabel ?? null
+            )
+          : row._partitionLabel || "── Closing fiscal period · New fiscal period ──";
       const cell: TableCell = {
         text: label,
         colSpan: n,
         alignment: "center",
         bold: true,
-        fontSize: 8,
+        fontSize: LEDGER_PRINT_BODY_FONT,
         color: "#1e3a8a",
         fillColor: "#dbeafe",
         margin: [0, 4, 0, 4],
+        noWrap: true,
       };
       const mainRow: TableCell[] = [cell];
       for (let i = 1; i < n; i++) mainRow.push({});
+      return [mainRow];
+    }
+
+    if (row.type === FY_OPENING_ROW_TYPE || row._fyOpeningSynthetic === true) {
+      const rawDate = row.date instanceof Date ? row.date : row.date ? new Date(row.date) : null;
+      const validDate = rawDate instanceof Date && !isNaN(rawDate.getTime()) ? rawDate : null;
+      const debit = Number(row.debit) || 0;
+      const credit = Number(row.credit) || 0;
+      const signed = Number(row.runningBalance ?? row.balance) || 0;
+
+      const dateCells: TableCell[] = [];
+      if (isColVisible(p, "date")) {
+        if (p.dateSystem === "Both") {
+          dateCells.push({ text: validDate ? formatDateBS(validDate) : "", fontSize: LEDGER_PRINT_BODY_FONT, noWrap: true });
+          dateCells.push({ text: validDate ? formatDate(validDate) : "", fontSize: LEDGER_PRINT_BODY_FONT, noWrap: true });
+        } else {
+          dateCells.push({
+            text: validDate ? (p.dateSystem === "AD" ? formatDate(validDate) : formatDateBS(validDate)) : "",
+            fontSize: LEDGER_PRINT_BODY_FONT,
+            noWrap: true,
+          });
+        }
+      }
+
+      const pillSplit = validDate ? buildFyOpeningPillSplit(p.company, validDate, p.dateSystem) : null;
+      const typeText = pillSplit?.typePill ?? printLedgerTypeLabel(row);
+      const voucherPillText = pillSplit?.voucherPill ?? null;
+      const mainRow: TableCell[] = [...dateCells];
+      if (isColVisible(p, "type")) {
+        mainRow.push({
+          text: typeText,
+          bold: true,
+          fontSize: LEDGER_PRINT_BODY_FONT,
+          noWrap: true,
+        });
+      }
+      if (isColVisible(p, "voucherNo")) {
+        mainRow.push({
+          text: voucherPillText ?? "-",
+          bold: Boolean(voucherPillText),
+          fontSize: LEDGER_PRINT_BODY_FONT,
+          noWrap: true,
+        });
+      }
+      if (isColVisible(p, "user")) mainRow.push({ text: "", fontSize: LEDGER_PRINT_BODY_FONT });
+      if (isColVisible(p, "file")) mainRow.push({ text: "-", fontSize: LEDGER_PRINT_BODY_FONT, alignment: "center" });
+
+      const balanceValue = isBillWiseContext(p)
+        ? signed
+        : signed;
+      const balanceText = formatRunning(balanceValue);
+
+      if (isColVisible(p, "dr")) {
+        mainRow.push({
+          text: debit > 0 ? formatCurrencyForPrint(debit, { noSuffix: true }) : "-",
+          alignment: "right",
+          color: palette.debit,
+          fontSize: 9,
+          bold: true,
+          noWrap: true,
+        });
+      }
+      if (isColVisible(p, "cr")) {
+        mainRow.push({
+          text: credit > 0 ? formatCurrencyForPrint(credit, { noSuffix: true }) : "-",
+          alignment: "right",
+          color: palette.credit,
+          fontSize: 9,
+          bold: true,
+          noWrap: true,
+        });
+      }
+      if (isBillWiseContext(p) && isColVisible(p, "status")) {
+        mainRow.push({ text: "-", fontSize: 8, alignment: "left" });
+      }
+      if (isColVisible(p, "runningBalance")) {
+        mainRow.push({
+          text: balanceText,
+          alignment: "right",
+          bold: true,
+          color: palette.balanceSigned(balanceValue),
+          fontSize: getAutoFontSize(typeof balanceText === "string" ? balanceText : "", 9),
+          noWrap: true,
+        });
+      }
+      ensureRowLength(mainRow, ledgerColCount);
       return [mainRow];
     }
 
@@ -2376,18 +2635,39 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
         ]);
     }
     
+    const wideLedgerPrint = isWideLedgerPrintContext(p);
     const dateCells: TableCell[] = [];
     if (isColVisible(p, "date")) {
+      const dateTextOpts: Partial<TableCell> = {
+        fontSize: LEDGER_PRINT_BODY_FONT,
+        noWrap: true,
+        margin: wideLedgerPrint ? [0, 0, 4, 0] : undefined,
+      };
       if (p.dateSystem === 'Both') {
-          dateCells.push({ text: formatDateBS(d), fontSize: 9, noWrap: true }); 
-          dateCells.push({ text: formatDate(d), fontSize: 9, noWrap: true }); 
+          dateCells.push({ text: formatDateBS(d), ...dateTextOpts }); 
+          dateCells.push({ text: formatDate(d), ...dateTextOpts }); 
       } else {
-          dateCells.push({ text: p.dateSystem === 'AD' ? formatDate(d) : formatDateBS(d), fontSize: 9, noWrap: true }); 
+          dateCells.push({
+            text: p.dateSystem === 'AD' ? formatDate(d) : formatDateBS(d),
+            ...dateTextOpts,
+          }); 
       }
     }
     
-    const voucherType = { text: row.type.replace(/_/g, ' '), fontSize: 9, noWrap: true };
-    const voucherNo = { text: row.voucherNumber || row.invoiceNumber || '', fontSize: 9, noWrap: true };
+    const typeLabel = printLedgerTypeLabel(row);
+    const voucherType = {
+      text: typeLabel,
+      fontSize: LEDGER_PRINT_BODY_FONT,
+      noWrap: true,
+      margin: wideLedgerPrint ? [0, 0, 4, 0] : undefined,
+    };
+    const voucherNoText = String(row.voucherNumber || row.invoiceNumber || "");
+    const voucherNo = {
+      text: voucherNoText,
+      fontSize: LEDGER_PRINT_BODY_FONT,
+      noWrap: true,
+      margin: wideLedgerPrint ? [0, 0, 4, 0] : undefined,
+    };
     
     const { debit, credit } = row;
     
@@ -2595,6 +2875,7 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
           alignment: 'left',
           margin: [p.spendWise ? 10 : 0, 0, 0, 0],
           style: 'narrationRow',
+          noWrap: false,
         });
         for (let i = 1; i < narrationSpan; i++) subRow.push({});
         const voucherDetailColSpan = hasBalanceCol ? 2 : 1;
@@ -2607,6 +2888,7 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
           // Keep narration/details slightly indented from the left in spend-wise print.
           margin: [p.spendWise ? 10 : 0, 0, 0, 0],
           style: 'narrationRow',
+          noWrap: false,
         });
         for (let i = 1; i < mainRow.length; i++) subRow.push({});
       }
@@ -2735,6 +3017,58 @@ const buildTableFooter = (p: PrintPayload, periodDr: number, periodCr: number, c
     return [footerRow];
 }
 
+type LedgerPrintWidthKey =
+  | "date"
+  | "dateBs"
+  | "dateAd"
+  | "type"
+  | "voucherNo"
+  | "daybook"
+  | "user"
+  | "file"
+  | "dr"
+  | "cr"
+  | "status"
+  | "balance";
+
+const LEDGER_PRINT_COL_WEIGHT: Record<LedgerPrintWidthKey, number> = {
+  date: 17,
+  dateBs: 14,
+  dateAd: 14,
+  type: 18,
+  voucherNo: 20,
+  daybook: 18,
+  user: 10,
+  file: 6,
+  dr: 12,
+  cr: 12,
+  status: 10,
+  balance: 15,
+};
+
+/** Party/staff ledger print: % widths so label columns use full page (no left cluster + center gap). */
+function buildWideLedgerPrintColumnWidths(p: PrintPayload): (string | number)[] {
+  const keys: LedgerPrintWidthKey[] = [];
+  if (isColVisible(p, "date")) {
+    if (p.dateSystem === "Both") keys.push("dateBs", "dateAd");
+    else keys.push("date");
+  }
+  if (isColVisible(p, "type")) keys.push("type");
+  if (isColVisible(p, "voucherNo")) keys.push("voucherNo");
+  if (p.context === "daybook") keys.push("daybook");
+  if (isColVisible(p, "user")) keys.push("user");
+  if (isColVisible(p, "file")) keys.push("file");
+  if (isColVisible(p, "dr")) keys.push("dr");
+  if (isColVisible(p, "cr")) keys.push("cr");
+  if (isBillWiseContext(p) && isColVisible(p, "status")) keys.push("status");
+  if (isColVisible(p, "runningBalance")) keys.push("balance");
+
+  const total = keys.reduce((sum, key) => sum + LEDGER_PRINT_COL_WEIGHT[key], 0);
+  if (total <= 0) return ["*"];
+
+  return keys.map((key) => `${((LEDGER_PRINT_COL_WEIGHT[key] / total) * 100).toFixed(2)}%`);
+}
+
 const getColumnWidths = (p: PrintPayload): (string | number)[] => {
   if (p.context === 'sale' && p.transactions.length === 1) {
     return ['auto', '*', 'auto', 'auto', 'auto'];
@@ -2749,6 +3083,9 @@ const getColumnWidths = (p: PrintPayload): (string | number)[] => {
   }
 
   const wideLedger = ["party", "staff", "tax", "account", "group", "expense"].includes(p.context);
+  if (wideLedger) {
+    return buildWideLedgerPrintColumnWidths(p);
+  }
   
   const widths: (string | number)[] = [];
   let flexAssigned = false;
@@ -2757,33 +3094,33 @@ const getColumnWidths = (p: PrintPayload): (string | number)[] => {
       widths.push("*");
       flexAssigned = true;
     } else {
-      widths.push(wideLedger ? 40 : "auto");
+      widths.push("auto");
     }
   };
   
   if (isColVisible(p, "date")) {
     if (p.dateSystem === 'Both') {
-      widths.push(wideLedger ? 46 : 'auto', wideLedger ? 46 : 'auto');
+      widths.push('auto', 'auto');
     } else {
-      widths.push(wideLedger ? 48 : 'auto');
+      widths.push('auto');
     }
   }
   
-  if (isColVisible(p, "type")) widths.push(wideLedger ? 40 : 'auto');
+  if (isColVisible(p, "type")) widths.push('auto');
   if (isColVisible(p, "voucherNo")) pushFlex();
   
   if (p.context === 'daybook') {
       pushFlex();
   }
-  if (isColVisible(p, "user")) widths.push(wideLedger ? 38 : 'auto');
-  if (isColVisible(p, "file")) widths.push(wideLedger ? 22 : 'auto');
+  if (isColVisible(p, "user")) widths.push('auto');
+  if (isColVisible(p, "file")) widths.push('auto');
 
-  if (isColVisible(p, "dr")) widths.push(wideLedger ? 50 : 'auto');
-  if (isColVisible(p, "cr")) widths.push(wideLedger ? 50 : 'auto');
+  if (isColVisible(p, "dr")) widths.push('auto');
+  if (isColVisible(p, "cr")) widths.push('auto');
   if (isBillWiseContext(p) && isColVisible(p, "status")) {
-    widths.push(wideLedger ? 44 : 'auto');
+    widths.push('auto');
   }
-  if (isColVisible(p, "runningBalance")) widths.push(wideLedger ? 76 : 'auto');
+  if (isColVisible(p, "runningBalance")) widths.push('auto');
 
   return widths;
 };

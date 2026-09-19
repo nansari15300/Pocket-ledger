@@ -21,6 +21,10 @@ import {
 import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import {
+  finalizeMasterOpeningBalanceSideEffects,
+  masterOpeningPatchFromPersisted,
+} from "@/lib/fyPagination/masterOpeningSaveHooks";
 import { useAuth } from "@/hooks/useAuth";
 import {
   EntityProfilePhotoBlock,
@@ -30,7 +34,9 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { MasterDeleteConfirmAlertDialog } from "@/components/common/MasterDeleteConfirmAlertDialog";
+import { permanentDeleteCompanySubdocFromRecycleBin } from "@/lib/recycleBinEntityLifecycle";
+import { assertCanPermanentDeleteFromForm } from "@/lib/permanentDeleteFromForm";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import { Input } from "@/components/ui/input";
@@ -172,7 +178,7 @@ export function EditStaffDialog({
   processedStaffGroupsRef.current = processedStaffGroups;
   const { user } = useAuth();
   const isMobile = useIsMobile();
-  const { canAddAvatar, canAddFileImagePdf, can } = usePermissions();
+  const { canAddAvatar, canAddFileImagePdf, can, role } = usePermissions();
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { dateSystem } = useDate();
   const [groups, setGroups] = useState<StaffGroup[]>(allGroups);
@@ -432,15 +438,29 @@ export function EditStaffDialog({
             }),
           };
           await upsertCompanyDocInBrowserDb(companyId, "staff", staffRefSnap.id, payload);
-          await enqueueCompanyDocOutbox(companyId, "staff", "update", staffRefSnap.id, payload);
+          const persisted =
+            (await getCompanyDocFromBrowserDb(companyId, "staff", staffRefSnap.id)) ?? payload;
+          await enqueueCompanyDocOutbox(companyId, "staff", "update", staffRefSnap.id, persisted);
           await syncEntityAttachmentsAfterSave(companyId);
+
+          await finalizeMasterOpeningBalanceSideEffects({
+            company,
+            companyId,
+            collection: "staff",
+            entityId: staffRefSnap.id,
+            oldOpeningBalance,
+            newOpeningBalance,
+            oldOpeningBalanceDate: (staffRefSnap as any).openingBalanceDate,
+            newOpeningBalanceDate: values.openingBalanceDate,
+          });
+
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onStaffUpdated({
             id: staffRefSnap.id,
             ...values,
+            ...masterOpeningPatchFromPersisted(persisted),
             fileUrl: fileUrl || "",
             documentFileUrls,
-            openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
           });
           initialFileRef.current = fileUrl || null;
           initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
@@ -490,17 +510,25 @@ export function EditStaffDialog({
         });
         await syncEntityAttachmentsAfterSave(companyId);
 
-        if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
-          const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
-          await balanceOpeningBalanceWithCapital(companyId, "staff", staffRefSnap.id, oldOpeningBalance, newOpeningBalance);
-        }
+        await finalizeMasterOpeningBalanceSideEffects({
+          company,
+          companyId,
+          collection: "staff",
+          entityId: staffRefSnap.id,
+          oldOpeningBalance,
+          newOpeningBalance,
+          oldOpeningBalanceDate: (staffRefSnap as any).openingBalanceDate,
+          newOpeningBalanceDate: values.openingBalanceDate,
+        });
 
         onStaffUpdated({
           id: staffRefSnap.id,
           ...values,
+          openingBalance: newOpeningBalance,
+          openingBalanceDate: values.openingBalanceDate,
+          openingBalanceNarration: narrationClean ?? "",
           fileUrl: fileUrl || "",
           documentFileUrls,
-          openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
         });
         initialFileRef.current = fileUrl || null;
         initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
@@ -582,6 +610,51 @@ export function EditStaffDialog({
         setIsLoading(false);
     }
   }
+
+  const handlePermanentDelete = async () => {
+    if (!companyId) {
+      toast({ variant: "destructive", title: "Error", description: "No company selected." });
+      return;
+    }
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+    } catch (err) {
+      sonnerToast.error("Permission Denied", {
+        description: err instanceof Error ? err.message : "No permission",
+      });
+      return;
+    }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    if (hasTransactions) {
+      sonnerToast.error("Cannot Delete", { description: "This staff member has transactions and cannot be deleted." });
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await permanentDeleteCompanySubdocFromRecycleBin(companyId, "staff", staff.id);
+      toast({
+        title: "Staff deleted permanently",
+        description: `"${staff.name}" was permanently deleted.`,
+      });
+      onStaffDeleted();
+      setDialogOpen(false);
+      setIsDeleteDialogOpen(false);
+    } catch (error) {
+      console.error("Error permanently deleting staff: ", error);
+      toast({
+        variant: "destructive",
+        title: "Delete Failed",
+        description: "Could not permanently delete the staff member.",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
   const handleGroupCreated = (newGroupId: string) => {
     form.setValue('groupId', newGroupId);
@@ -999,22 +1072,17 @@ export function EditStaffDialog({
           </div>
         </DialogContent>
       </Dialog>
-      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This action will move the staff member <span className="font-semibold text-foreground">{staff.name}</span> to the recycle bin.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS}>Cancel</AlertDialogCancel>
-            <AlertDialogAction disabled={apkOfflineViewOnly} onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-              Move to Bin
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <MasterDeleteConfirmAlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        entityKind="staff member"
+        entityName={staff.name}
+        onMoveToBin={handleDelete}
+        onDeletePermanently={handlePermanentDelete}
+        busy={isLoading}
+        moveToBinDisabled={apkOfflineViewOnly}
+        permanentDeleteDisabled={apkOfflineViewOnly}
+      />
       <CreateStaffGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} initialSystemBranch={accountType} />
     </>
   );

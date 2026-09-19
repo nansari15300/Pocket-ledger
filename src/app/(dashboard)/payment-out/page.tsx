@@ -9,8 +9,9 @@ import { useCompany } from "@/hooks/useCompany";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
-import { PayeeList } from "@/components/payee/PayeeList";
+import { PayeeList, filterPayeeListRows } from "@/components/payee/PayeeList";
 import type { UnifiedPayee } from "@/components/payee/PayeeList";
+import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
@@ -39,6 +40,7 @@ export default function PaymentOutPage() {
     const [loading, setLoading] = useState(true);
     const [selectedPayee, setSelectedPayee] = useState<UnifiedPayee | null>(null);
     const [searchTerm, setSearchTerm] = useState("");
+    const [listQuickFilter, setListQuickFilter] = useState<EntityListQuickFilter>("default");
     const [showAllCompanyVouchers, setShowAllCompanyVouchers] = useState(false);
     const [isVoucherOpen, setIsVoucherOpen] = useState(false);
     const [defaultTab, setDefaultTab] = useState<'payment_out' | 'direct_expense'>('payment_out');
@@ -144,10 +146,8 @@ export default function PaymentOutPage() {
     // ==================================
 
     const filteredPayees = useMemo(() => {
-        return payeesWithPayments.filter(p => 
-            p.name.toLowerCase().includes(searchTerm.toLowerCase())
-        );
-    }, [payeesWithPayments, searchTerm]);
+        return filterPayeeListRows(payeesWithPayments, searchTerm, listQuickFilter);
+    }, [payeesWithPayments, searchTerm, listQuickFilter]);
     
     const payeeTransactions = useMemo(() => {
         if (!selectedPayee) return [];
@@ -340,10 +340,19 @@ export default function PaymentOutPage() {
                         <Input placeholder="Search payee..." className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
                     </div>
                 </div>
-                <div className="px-4 pt-2 pb-1 border-b">
+                <div className="px-4 pt-2 pb-1 border-b flex-shrink-0">
                     <h3 className="text-sm font-semibold">Paid To ({filteredPayees.length})</h3>
                 </div>
-                <PayeeList payees={filteredPayees} onSelectPayee={handleSelectPayee} selectedPayee={selectedPayee} searchTerm={searchTerm}/>
+                <div className="flex-1 min-h-0 overflow-hidden">
+                <PayeeList
+                  payees={payeesWithPayments}
+                  onSelectPayee={handleSelectPayee}
+                  selectedPayee={selectedPayee}
+                  searchTerm={searchTerm}
+                  quickFilter={listQuickFilter}
+                  onQuickFilterChange={setListQuickFilter}
+                />
+                </div>
             </div>
 
             <div className="flex flex-col min-h-0 w-full overflow-x-auto">

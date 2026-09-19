@@ -1,14 +1,14 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { PermissionButton } from "@/components/permission";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
-import { ArrowLeft, Calendar as CalendarIcon, File, Printer, BarChart2, X, PanelRight } from "lucide-react";
+import { ArrowLeft, Calendar as CalendarIcon, File, Printer, BarChart2, X, PanelRight, Search, Landmark, Wallet } from "lucide-react";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
@@ -33,6 +33,7 @@ import { resolveLedgerRowToVoucherId } from "@/lib/resolveLedgerVoucherId";
 import { getFiscalMergePartitionDateFromCompany } from "@/lib/fiscalPartitionRows";
 import { buildBankAccountSpendWiseRows } from "@/lib/buildBankAccountSpendWiseRows";
 import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
+import { useBankSpendWiseView } from "@/hooks/useBankSpendWiseView";
 import {
   applyBankDrCrPerspectiveToTxnRows,
   bankLedgerDepositWithdrawColumnLabels,
@@ -66,6 +67,14 @@ import { Card } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import usePermissions from "@/hooks/usePermissions";
 import { useReportList } from "@/contexts/ReportListContext";
+import { buildBankGroupReportEntity } from "@/lib/reportStatementGroupEntity";
+import { ReportStatementDesktopShell } from "@/components/reports/ReportStatementDesktopShell";
+import { AccountList } from "@/components/bank-cash/AccountList";
+import { AccountGroupList } from "@/components/bank-cash/AccountGroupList";
+import { AccountDetails } from "@/components/bank-cash/AccountDetails";
+import { AccountGroupDetails } from "@/components/bank-cash/AccountGroupDetails";
+import { mlc } from "@/lib/mobileListChrome";
+import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 
 const ReportSummaryCard = React.memo(function ReportSummaryCard({
   title,
@@ -92,7 +101,7 @@ const ReportSummaryCard = React.memo(function ReportSummaryCard({
 }, (prev, next) => prev.title === next.title && prev.amount === next.amount && prev.color === next.color);
 
 export default function DesktopBankStatementPage() {
-  const { processedAccounts, processedAccountGroups, vouchers, loading, journalAccountNames } = useVouchers();
+  const { processedAccounts, processedAccountGroups, vouchers, loading, journalAccountNames } = useFyScopedVouchers();
   const { company } = useCompany();
   const { can } = usePermissions();
   const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
@@ -111,30 +120,18 @@ export default function DesktopBankStatementPage() {
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [transactionSearch, setTransactionSearch] = useState("");
   const [view, setView] = useState<"list" | "chart">("list");
-  // Account details jaisa: localStorage se spend-wise preference (sirf single account + company flag)
-  const BANK_SPEND_WISE_VIEW_KEY = "bank-cash-spendWiseView";
-  const [spendWiseView, setSpendWiseViewState] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return localStorage.getItem(BANK_SPEND_WISE_VIEW_KEY) === "true";
-    } catch {
-      return false;
-    }
-  });
-  const setSpendWiseView = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
-    setSpendWiseViewState((prev) => {
-      const next = typeof value === "function" ? value(prev) : value;
-      try {
-        localStorage.setItem(BANK_SPEND_WISE_VIEW_KEY, next ? "true" : "false");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  }, []);
+  const { spendWiseView, setSpendWiseView } = useBankSpendWiseView();
   const { spendWiseBlinkMode } = useSpendWiseBlinkMode();
   const { perspective: bankDrCrPerspective } = useBankLedgerDrCrPerspective();
 
+  const [listTab, setListTab] = useState<"accounts" | "groups">(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("groupId")
+      ? "groups"
+      : "accounts"
+  );
+  const [listSearchTerm, setListSearchTerm] = useState("");
+  const [accountListQuickFilter, setAccountListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<AccountGroup | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
@@ -249,6 +246,11 @@ export default function DesktopBankStatementPage() {
     }
   }, [searchParams, processedAccounts, processedAccountGroups]);
 
+  useEffect(() => {
+    if (searchParams.get("groupId")) setListTab("groups");
+    else if (searchParams.get("accountId")) setListTab("accounts");
+  }, [searchParams]);
+
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     const range = dateRange;
     if (!range?.from || (range.from && range.to)) {
@@ -262,11 +264,12 @@ export default function DesktopBankStatementPage() {
     }
   };
 
-  const activeEntity =
-    selectedAccount ||
-    (selectedGroup
-      ? { ...selectedGroup, items: processedAccounts.filter((a) => a.groupId === selectedGroup.id) }
-      : null);
+  const groupReportEntity = useMemo(() => {
+    if (!selectedGroup) return null;
+    return buildBankGroupReportEntity(selectedGroup, processedAccounts, processedAccountGroups);
+  }, [selectedGroup, processedAccounts, processedAccountGroups]);
+
+  const activeEntity = selectedAccount || groupReportEntity;
   const activeContext = selectedAccount ? "account" : "group";
 
   const {
@@ -562,8 +565,149 @@ export default function DesktopBankStatementPage() {
       .map((g) => ({ value: g.id, label: g.name }));
   }, [processedAccountGroups, selectedGroup?.id]);
 
+  const accountsForReportList = useMemo(() => {
+    const currentId = selectedAccount?.id;
+    return processedAccounts.filter((a) => {
+      if (a.id === currentId) return true;
+      if (a.isSpecial && !canViewSpecial) return false;
+      return true;
+    });
+  }, [processedAccounts, selectedAccount?.id, canViewSpecial]);
+
+  const groupsForReportList = useMemo(() => {
+    const exclude = ["assets", "equity", "expenses", "income", "liabilities", "liability"];
+    const currentId = selectedGroup?.id;
+    return processedAccountGroups.filter(
+      (g) => g.id === currentId || !exclude.includes((g.name || "").trim().toLowerCase())
+    );
+  }, [processedAccountGroups, selectedGroup?.id]);
+
+  const handleSelectAccountFromList = useCallback((account: Account) => {
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set("accountId", account.id);
+    newUrl.searchParams.delete("groupId");
+    window.history.pushState({}, "", newUrl);
+    setSelectedAccount(account);
+    setSelectedGroup(null);
+    setListTab("accounts");
+  }, []);
+
+  const handleSelectGroupFromList = useCallback((group: AccountGroup) => {
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set("groupId", group.id);
+    newUrl.searchParams.delete("accountId");
+    window.history.pushState({}, "", newUrl);
+    setSelectedGroup(group);
+    setSelectedAccount(null);
+    setListTab("groups");
+  }, []);
+
+  const addVoucherDialog = (
+    <AddVoucherDialog
+      isOpen={isVoucherDialogOpen}
+      onOpenChange={(open: boolean) => {
+        if (!open) {
+          setIsVoucherDialogOpen(false);
+          setSelectedVoucher(null);
+          closeModalInUrl();
+        }
+      }}
+      voucher={selectedVoucher}
+      onVoucherAction={() => setSelectedVoucher(null)}
+    />
+  );
+
   if (loading && !activeEntity) {
     return <LoadingSpinner />;
+  }
+
+  if (!isMobile) {
+    const reportDetailView = selectedAccount ? (
+      <AccountDetails
+        account={selectedAccount}
+        allAccounts={processedAccounts}
+        transactions={processedTransactions}
+        onAccountUpdated={() => {}}
+        onAccountDeleted={() => setSelectedAccount(null)}
+        dateRange={dateRange}
+        onDateRangeChange={setDateRange}
+        userNames={userNames}
+      />
+    ) : selectedGroup ? (
+      <AccountGroupDetails
+        group={selectedGroup}
+        allGroups={processedAccountGroups}
+        accounts={groupReportEntity?.items ?? []}
+        onGroupUpdated={() => {}}
+        onGroupDeleted={() => setSelectedGroup(null)}
+        onAccountUpdated={() => {}}
+        dateRange={dateRange}
+        onDateRangeChange={setDateRange}
+        userNames={userNames}
+      />
+    ) : (
+      <div className="flex h-full flex-col items-center justify-center bg-muted/20">
+        <p className="text-sm text-muted-foreground">Select an account or group</p>
+      </div>
+    );
+
+    return (
+      <ReportStatementDesktopShell
+        listChromeRouteKey="bank-cash"
+        pageTitle={pageTitle}
+        listTab={listTab}
+        entityTabValue="accounts"
+        groupTabValue="groups"
+        entityTabLabel="Accounts"
+        onListTabChange={(tab) => setListTab(tab === "groups" ? "groups" : "accounts")}
+        listSearchTerm={listSearchTerm}
+        onListSearchChange={setListSearchTerm}
+        entitySearchPlaceholder="Search accounts..."
+        groupSearchPlaceholder="Search groups..."
+        entitySectionLabel={
+          <div className={mlc.sectionLabelRow}>
+            <Landmark className={mlc.sectionIcon} />
+            <span>Account ({accountsForReportList.length})</span>
+          </div>
+        }
+        groupSectionLabel={
+          <div className={mlc.sectionLabelRow}>
+            <Wallet className={mlc.sectionIcon} />
+            <span>Account group ({groupsForReportList.length})</span>
+          </div>
+        }
+        entityQuickFilter={accountListQuickFilter}
+        groupQuickFilter={groupListQuickFilter}
+        onEntityQuickFilterChange={setAccountListQuickFilter}
+        onGroupQuickFilterChange={setGroupListQuickFilter}
+        summaryCards={summaryCards}
+        showSummary={!!activeEntity}
+        entityList={
+          <AccountList
+            accounts={accountsForReportList}
+            onSelectAccount={handleSelectAccountFromList}
+            selectedAccount={selectedAccount}
+            searchTerm={listSearchTerm}
+            quickFilter={accountListQuickFilter}
+            onQuickFilterChange={setAccountListQuickFilter}
+            hideQuickFilterBar
+          />
+        }
+        groupList={
+          <AccountGroupList
+            groups={groupsForReportList}
+            onSelectGroup={handleSelectGroupFromList}
+            selectedGroup={selectedGroup}
+            searchTerm={listSearchTerm}
+            quickFilter={groupListQuickFilter}
+            onQuickFilterChange={setGroupListQuickFilter}
+            hideQuickFilterBar
+          />
+        }
+        detailView={reportDetailView}
+        footer={addVoucherDialog}
+      />
+    );
   }
 
   return (
@@ -906,18 +1050,7 @@ export default function DesktopBankStatementPage() {
           <BarChart2 className="w-4 h-4 mb-0" /> <span className="text-[10px] leading-tight">Chart</span>
         </Button>
       </footer>
-      <AddVoucherDialog
-        isOpen={isVoucherDialogOpen}
-        onOpenChange={(open: boolean) => {
-          if (!open) {
-            setIsVoucherDialogOpen(false);
-            setSelectedVoucher(null);
-            closeModalInUrl();
-          }
-        }}
-        voucher={selectedVoucher}
-        onVoucherAction={() => setSelectedVoucher(null)}
-      />
+      {addVoucherDialog}
     </div>
   );
 }

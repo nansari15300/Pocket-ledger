@@ -8,7 +8,9 @@ import { Input } from "@/components/ui/input";
 import { AccountDetails } from "@/components/account/AccountDetails";
 import { AccountList } from "@/components/bank-cash/AccountList";
 import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
-import { useVouchers } from "@/hooks/useVouchers";
+import { ReportRegisterDesktopSplit } from "@/components/reports/ReportRegisterDesktopSplit";
+import { ReportRegisterListHeading } from "@/components/reports/ReportRegisterListHeading";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { PermissionButton } from "@/components/permission";
@@ -40,7 +42,7 @@ export function JournalReportDetail() {
     processedStaff,
     processedTaxes,
     expenseAccounts: unprocessedExpenseAccounts,
-  } = useVouchers();
+  } = useFyScopedVouchers();
   const [selectedAccount, setSelectedAccount] = useState<JournalAccount | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -241,47 +243,44 @@ export function JournalReportDetail() {
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-[minmax(280px,max-content)_minmax(0,1fr)] min-h-0 overflow-hidden">
-        <div className="flex flex-col min-h-0 border-r overflow-hidden bg-muted/30">
-          <div className="p-4 border-b space-y-3 flex-shrink-0">
-            <h2 className="text-lg font-bold font-headline">Journals</h2>
-            <AddVoucherDialog onVoucherCreated={() => {}} defaultTab="journal">
-              <PermissionButton permission="create_records" className="w-full">
-                <PlusCircle className="mr-2 h-4 w-4" /> Create Journal Voucher
-              </PermissionButton>
-            </AddVoucherDialog>
-            <Card className="p-3 text-center">
-              <p className="text-xs text-muted-foreground">Total Journal Amount</p>
-              <p className="text-xl font-bold text-blue-600">
-                {formatCurrency(totalJournalAmount, { noSuffix: true })}
-              </p>
-            </Card>
-          </div>
-          <div className="p-3 border-b flex-shrink-0">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search accounts..."
-                className="pl-9"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+      <ReportRegisterDesktopSplit
+        listPanel={
+          <>
+            <div className="p-4 border-b space-y-3 flex-shrink-0">
+              <ReportRegisterListHeading>Journals</ReportRegisterListHeading>
+              <Card className="p-3 text-center">
+                <p className="text-xs text-muted-foreground">Total Journal Amount</p>
+                <p className="text-xl font-bold text-blue-600">
+                  {formatCurrency(totalJournalAmount, { noSuffix: true })}
+                </p>
+              </Card>
+            </div>
+            <div className="p-3 border-b flex-shrink-0">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search accounts..."
+                  className="pl-9"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
+              <h3 className="text-sm font-semibold">Accounts involved ({filteredAccounts.length})</h3>
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <AccountList
+                accounts={filteredAccounts as any}
+                onSelectAccount={handleSelectAccount as any}
+                selectedAccount={selectedAccount as any}
+                searchTerm={searchTerm}
               />
             </div>
-          </div>
-          <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
-            <h3 className="text-sm font-semibold">Accounts involved ({filteredAccounts.length})</h3>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <AccountList
-              accounts={filteredAccounts as any}
-              onSelectAccount={handleSelectAccount as any}
-              selectedAccount={selectedAccount as any}
-              searchTerm={searchTerm}
-            />
-          </div>
-        </div>
-        <div className="flex flex-col min-h-0 overflow-hidden">
-          {currentAccount ? (
+          </>
+        }
+        detailPanel={
+          currentAccount ? (
             <AccountDetails
               account={currentAccount as any}
               allAccounts={allAccounts as any}
@@ -313,9 +312,9 @@ export function JournalReportDetail() {
                 </CardContent>
               </Card>
             </div>
-          )}
-        </div>
-      </div>
+          )
+        }
+      />
     </div>
   );
 }

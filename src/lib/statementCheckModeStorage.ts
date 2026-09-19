@@ -97,7 +97,6 @@ export function clearStatementCheckModeLedgerState(scope: StatementCheckLedgerSc
   if (typeof window === "undefined") return;
   try {
     localStorage.removeItem(scopeKey(scope, "hidden"));
-    localStorage.removeItem(scopeKey(scope, "marked"));
     localStorage.removeItem(scopeKey(scope, "focus"));
   } catch {
     /* ignore */

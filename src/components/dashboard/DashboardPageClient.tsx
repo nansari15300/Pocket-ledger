@@ -90,7 +90,7 @@ import { openPrintDirect } from "@/lib/printDirect";
 import usePermissions from '@/hooks/usePermissions';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DaybookReport } from '@/components/reports/DaybookReport';
-import { useVouchers } from '@/hooks/useVouchers';
+import { useFyScopedVouchers } from '@/hooks/useFyScopedVouchers';
 import { getOnlineCompanySyncStatusRibbon } from '@/lib/onlineCompanySelectorSyncPolicy';
 import { FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT } from '@/lib/firebaseLedgerCompanySyncPrefs';
 import Link from 'next/link';
@@ -418,7 +418,7 @@ const [mode, setMode] = useState<'all' | 'custom'>('all');
 // ------------------------------------
 
 const BankCashSummary = () => {
-    const { processedAccounts, vouchers } = useVouchers();
+    const { processedAccounts, vouchers } = useFyScopedVouchers();
     const { dateSystem, formatCurrency } = useDate();
     const [bankCashDateRange, setBankCashDateRange] = React.useState<DateRange | undefined>(() =>
       getCurrentMonthDateRange(dateSystem)
@@ -620,7 +620,7 @@ export function DashboardPageContent() {
   const { user } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { vouchers, loading: vouchersLoading, processedItems, processedParties, processedStaff, processedTaxes, processedAccounts, expenseAccounts, journalAccountNames: voucherJournalAccountNames } = useVouchers();
+  const { vouchers, loading: vouchersLoading, processedItems, processedParties, processedStaff, processedTaxes, processedAccounts, expenseAccounts, journalAccountNames: voucherJournalAccountNames } = useFyScopedVouchers();
   const pendingEditVoucherRef = useRef<{ companyId: string; voucherId: string } | null>(null);
   const [showFab, setShowFab] = useState(true);
   const lastScrollY = useRef(0);

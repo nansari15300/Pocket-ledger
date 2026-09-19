@@ -15,6 +15,7 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { cn } from "@/lib/utils";
+import { ReportRegisterListHeading } from "@/components/reports/ReportRegisterListHeading";
 
 export default function PartyLedgerPage() {
   const { formatCurrency } = useDate();
@@ -133,7 +134,7 @@ export default function PartyLedgerPage() {
       <div className="flex-1 grid grid-cols-1 md:grid-cols-[minmax(280px,max-content)_minmax(0,1fr)] min-h-0 overflow-hidden">
         <div className="flex flex-col min-h-0 border-r overflow-hidden bg-muted/30">
           <div className="p-4 border-b space-y-3 flex-shrink-0">
-            <h2 className="text-lg font-bold font-headline">Party Ledger</h2>
+            <ReportRegisterListHeading>Party Ledger</ReportRegisterListHeading>
             <Card className="p-3 text-center">
               <p className="text-xs text-muted-foreground">Total Balance</p>
               <p className={cn(

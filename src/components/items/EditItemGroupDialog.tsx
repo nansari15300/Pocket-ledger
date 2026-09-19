@@ -16,15 +16,7 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { MasterDeleteConfirmAlertDialog } from "@/components/common/MasterDeleteConfirmAlertDialog";
 import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
 import type { ItemGroup } from "@/components/items/types";
@@ -364,46 +356,25 @@ export function EditItemGroupDialog({
           </div>
         </DialogContent>
       </Dialog>
-      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete group?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Choose how to remove{" "}
-              <span className="font-semibold text-foreground">{group.name}</span>. This group has no
-              items.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="flex flex-row flex-nowrap items-center gap-2 sm:flex-row sm:justify-stretch sm:space-x-0">
-            <AlertDialogCancel
-              className={cn(MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS, "min-w-0 flex-1")}
-              disabled={isLoading}
-            >
-              Cancel
-            </AlertDialogCancel>
-            <Button
-              type="button"
-              variant="outline"
-              className="min-w-0 flex-1"
-              onClick={() => void handleMoveToBin()}
-              disabled={isLoading || apkOfflineViewOnly}
-            >
-              {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Move to Bin
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              className="min-w-0 flex-1 px-2 text-xs sm:px-3 sm:text-sm"
-              onClick={() => void handlePermanentDelete()}
-              disabled={isLoading || apkOfflineViewOnly}
-            >
-              {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Delete permanently
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <MasterDeleteConfirmAlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        title="Delete group?"
+        entityKind="group"
+        entityName={group.name}
+        description={
+          <>
+            Choose how to remove{" "}
+            <span className="font-semibold text-foreground">{group.name}</span>. This group has no
+            items.
+          </>
+        }
+        onMoveToBin={handleMoveToBin}
+        onDeletePermanently={handlePermanentDelete}
+        busy={isLoading}
+        moveToBinDisabled={apkOfflineViewOnly}
+        permanentDeleteDisabled={apkOfflineViewOnly}
+      />
     </>
   );
 }

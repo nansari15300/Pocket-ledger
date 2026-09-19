@@ -11,6 +11,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { MasterLedgerDateRangePresetRow } from "@/components/ui/MasterLedgerDateRangePresetRow";
 import { VOUCHER_DIALOG_CALENDAR_POPOVER_CN } from "@/lib/dialogShellChrome";
 
 type BsDatePickerBaseProps = {
@@ -31,6 +32,8 @@ type BsDatePickerBaseProps = {
   popoverSide?: React.ComponentProps<typeof PopoverContent>["side"];
   popoverAlign?: React.ComponentProps<typeof PopoverContent>["align"];
   showDateConverterButton?: boolean;
+  /** Master ledger: "Last 10" clears filter + reloads default FY voucher scope. */
+  masterLedgerDatePresets?: boolean;
 };
 
 type BsDatePickerConditionalProps =
@@ -76,6 +79,7 @@ export default function BsDatePicker({
   popoverSide,
   popoverAlign,
   showDateConverterButton = true,
+  masterLedgerDatePresets = false,
 }: BsDatePickerProps) {
   const [open, setOpen] = React.useState(false);
   const { formatDateBS } = useDate();
@@ -154,9 +158,11 @@ export default function BsDatePicker({
         <Button 
           variant="outline" 
           className={cn(
-            "w-auto justify-start text-left font-normal h-[27px] min-h-[27px] px-2 gap-1 min-w-0",
+            "w-auto justify-start text-left h-[27px] min-h-[27px] px-2 gap-1 min-w-0",
             hideTriggerIcon && "gap-0",
-            !valueAD && "text-muted-foreground",
+            masterLedgerDatePresets
+              ? "font-semibold text-blue-900"
+              : cn("font-normal", !valueAD && "text-muted-foreground"),
             className
           )}
           disabled={disabled}
@@ -187,16 +193,37 @@ export default function BsDatePicker({
             transactionDates={transactionDates}
             disabled={disabled}
             rangePresetSlot={
-              isRange ? (
-                <DateRangePresetRow
-                  disabled={disabled}
-                  country={company?.country}
-                  onApply={(r) => {
-                    (onChangeAD as (date?: DateRange | undefined) => void)(r);
-                    setOpen(false);
-                  }}
-                />
-              ) : undefined
+              isRange
+                ? masterLedgerDatePresets
+                  ? (
+                      <MasterLedgerDateRangePresetRow
+                        disabled={disabled}
+                        country={company?.country}
+                        onDateRangeChange={(range) => {
+                          (onChangeAD as (date?: DateRange | undefined) => void)(range);
+                        }}
+                        onApply={(r) => {
+                          (onChangeAD as (date?: DateRange | undefined) => void)(r);
+                          setOpen(false);
+                        }}
+                        onAfterDefault={() => setOpen(false)}
+                      />
+                    )
+                  : (
+                      <DateRangePresetRow
+                        disabled={disabled}
+                        country={company?.country}
+                        onApply={(r) => {
+                          (onChangeAD as (date?: DateRange | undefined) => void)(r);
+                          setOpen(false);
+                        }}
+                        onApplyDefault={() => {
+                          (onChangeAD as (date?: DateRange | undefined) => void)(undefined);
+                          setOpen(false);
+                        }}
+                      />
+                    )
+                : undefined
             }
             showDateConverterButton={showDateConverterButton}
         />

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { PermissionButton } from "@/components/permission";
 import AdCalendar from "@/components/ui/ad-calendar";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
-import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2, X } from "lucide-react";
+import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2, X, Search, Receipt, Users } from "lucide-react";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
@@ -19,6 +19,7 @@ import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatemen
 import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
+import { buildTaxGroupReportEntity } from "@/lib/reportStatementGroupEntity";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -51,6 +52,13 @@ import { RunningBalanceFullChart } from "@/components/reports/RunningBalanceFull
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
+import { ReportStatementDesktopShell } from "@/components/reports/ReportStatementDesktopShell";
+import { TaxList } from "@/components/tax/TaxList";
+import { TaxGroupList } from "@/components/tax/TaxGroupList";
+import { TaxDetails } from "@/components/tax/TaxDetails";
+import { TaxGroupDetails } from "@/components/tax/TaxGroupDetails";
+import { mlc } from "@/lib/mobileListChrome";
+import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 
 const ReportSummaryCard = React.memo(function ReportSummaryCard({
   title,
@@ -77,7 +85,7 @@ const ReportSummaryCard = React.memo(function ReportSummaryCard({
 }, (prev, next) => prev.title === next.title && prev.amount === next.amount && prev.color === next.color);
 
 export default function DesktopTaxStatementPage() {
-  const { processedTaxes, processedTaxGroups, vouchers, loading, journalAccountNames } = useVouchers();
+  const { processedTaxes, processedTaxGroups, vouchers, loading, journalAccountNames } = useFyScopedVouchers();
   const { company } = useCompany();
   const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
   const router = useRouter();
@@ -91,6 +99,14 @@ export default function DesktopTaxStatementPage() {
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [transactionSearch, setTransactionSearch] = useState("");
   const [view, setView] = useState<"list" | "chart">("list");
+  const [listTab, setListTab] = useState<"taxes" | "groups">(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("groupId")
+      ? "groups"
+      : "taxes"
+  );
+  const [listSearchTerm, setListSearchTerm] = useState("");
+  const [taxListQuickFilter, setTaxListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
 
   const [selectedTax, setSelectedTax] = useState<Tax | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<TaxGroup | null>(null);
@@ -202,6 +218,11 @@ export default function DesktopTaxStatementPage() {
     }
   }, [searchParams, processedTaxes, processedTaxGroups]);
 
+  useEffect(() => {
+    if (searchParams.get("groupId")) setListTab("groups");
+    else if (searchParams.get("taxId")) setListTab("taxes");
+  }, [searchParams]);
+
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     const range = dateRange;
     if (!range?.from || (range.from && range.to)) {
@@ -215,9 +236,12 @@ export default function DesktopTaxStatementPage() {
     }
   };
 
-  const activeEntity =
-    selectedTax ||
-    (selectedGroup ? { ...selectedGroup, items: processedTaxes.filter((p) => p.groupId === selectedGroup.id) } : null);
+  const groupReportEntity = useMemo(() => {
+    if (!selectedGroup) return null;
+    return buildTaxGroupReportEntity(selectedGroup, processedTaxes, processedTaxGroups);
+  }, [selectedGroup, processedTaxes, processedTaxGroups]);
+
+  const activeEntity = selectedTax || groupReportEntity;
   const activeContext = selectedTax ? "tax" : "group";
 
   const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance } = useTransactions(
@@ -452,8 +476,152 @@ export default function DesktopTaxStatementPage() {
       .map((g) => ({ value: g.id, label: g.name }));
   }, [processedTaxGroups, selectedGroup?.id]);
 
+  const taxesForReportList = useMemo(() => {
+    const list = [...processedTaxes];
+    if (selectedTax?.id && !list.some((t) => t.id === selectedTax.id)) {
+      list.push(selectedTax);
+    }
+    return list;
+  }, [processedTaxes, selectedTax]);
+
+  const groupsForReportList = useMemo(() => {
+    const isReportOnly = (g: TaxGroup) => (g as any).isReportOnly === true;
+    const currentId = selectedGroup?.id;
+    return processedTaxGroups.filter((g) => g.id === currentId || !isReportOnly(g));
+  }, [processedTaxGroups, selectedGroup?.id]);
+
+  const handleSelectTaxFromList = useCallback((tax: Tax) => {
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set("taxId", tax.id);
+    newUrl.searchParams.delete("groupId");
+    window.history.pushState({}, "", newUrl);
+    setSelectedTax(tax);
+    setSelectedGroup(null);
+    setListTab("taxes");
+  }, []);
+
+  const handleSelectGroupFromList = useCallback((group: TaxGroup) => {
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set("groupId", group.id);
+    newUrl.searchParams.delete("taxId");
+    window.history.pushState({}, "", newUrl);
+    setSelectedGroup(group);
+    setSelectedTax(null);
+    setListTab("groups");
+  }, []);
+
+  const addVoucherDialog = (
+    <AddVoucherDialog
+      isOpen={isVoucherDialogOpen}
+      onOpenChange={(open: boolean) => {
+        if (!open) {
+          setIsVoucherDialogOpen(false);
+          setSelectedVoucher(null);
+          closeModalInUrl();
+        }
+      }}
+      voucher={selectedVoucher}
+      onVoucherAction={() => setSelectedVoucher(null)}
+    />
+  );
+
   if (loading && !activeEntity) {
     return <LoadingSpinner />;
+  }
+
+  if (!isMobile) {
+    const reportDetailView = selectedTax ? (
+      <TaxDetails
+        tax={selectedTax}
+        allTaxes={processedTaxes}
+        transactions={processedTransactions}
+        onTaxUpdated={() => {}}
+        onTaxDeleted={() => setSelectedTax(null)}
+        dateRange={dateRange}
+        onDateRangeChange={setDateRange}
+        userNames={userNames}
+        journalAccountNames={journalAccountNames}
+        context="report"
+        mobileFooterVariant="report"
+      />
+    ) : selectedGroup ? (
+      <TaxGroupDetails
+        group={selectedGroup}
+        allGroups={processedTaxGroups}
+        taxes={groupReportEntity?.items ?? []}
+        onGroupUpdated={() => {}}
+        onGroupDeleted={() => setSelectedGroup(null)}
+        onTaxUpdated={() => {}}
+        dateRange={dateRange}
+        onDateRangeChange={setDateRange}
+        userNames={userNames}
+        journalAccountNames={journalAccountNames}
+      />
+    ) : (
+      <div className="flex h-full flex-col items-center justify-center bg-muted/20">
+        <p className="text-sm text-muted-foreground">Select a tax or group</p>
+      </div>
+    );
+
+    return (
+      <>
+        <ReportStatementDesktopShell
+          listChromeRouteKey="tax"
+          pageTitle={pageTitle}
+          listTab={listTab}
+          entityTabValue="taxes"
+          groupTabValue="groups"
+          entityTabLabel="Taxes"
+          onListTabChange={(tab) => setListTab(tab === "groups" ? "groups" : "taxes")}
+          listSearchTerm={listSearchTerm}
+          onListSearchChange={setListSearchTerm}
+          entitySearchPlaceholder="Search taxes..."
+          groupSearchPlaceholder="Search groups/tax"
+          entitySectionLabel={
+            <div className={mlc.sectionLabelRow}>
+              <Receipt className={mlc.sectionIcon} />
+              <span>Tax ({taxesForReportList.length})</span>
+            </div>
+          }
+          groupSectionLabel={
+            <div className={mlc.sectionLabelRow}>
+              <Users className={mlc.sectionIcon} />
+              <span>Tax group ({groupsForReportList.length})</span>
+            </div>
+          }
+          entityQuickFilter={taxListQuickFilter}
+          groupQuickFilter={groupListQuickFilter}
+          onEntityQuickFilterChange={setTaxListQuickFilter}
+          onGroupQuickFilterChange={setGroupListQuickFilter}
+          summaryCards={summaryCards}
+          showSummary={!!activeEntity}
+          entityList={
+            <TaxList
+              taxes={taxesForReportList}
+              onSelectTax={handleSelectTaxFromList}
+              selectedTax={selectedTax}
+              searchTerm={listSearchTerm}
+              quickFilter={taxListQuickFilter}
+              onQuickFilterChange={setTaxListQuickFilter}
+              hideQuickFilterBar
+            />
+          }
+          groupList={
+            <TaxGroupList
+              groups={groupsForReportList}
+              onSelectGroup={handleSelectGroupFromList}
+              selectedGroup={selectedGroup}
+              searchTerm={listSearchTerm}
+              quickFilter={groupListQuickFilter}
+              onQuickFilterChange={setGroupListQuickFilter}
+              hideQuickFilterBar
+            />
+          }
+          detailView={reportDetailView}
+        />
+        {addVoucherDialog}
+      </>
+    );
   }
 
   return (
@@ -751,18 +919,7 @@ export default function DesktopTaxStatementPage() {
           <BarChart2 className="w-4 h-4 mb-0" /> <span className="text-[10px] leading-tight">Chart</span>
         </Button>
       </footer>
-      <AddVoucherDialog
-        isOpen={isVoucherDialogOpen}
-        onOpenChange={(open: boolean) => {
-          if (!open) {
-            setIsVoucherDialogOpen(false);
-            setSelectedVoucher(null);
-            closeModalInUrl();
-          }
-        }}
-        voucher={selectedVoucher}
-        onVoucherAction={() => setSelectedVoucher(null)}
-      />
+      {addVoucherDialog}
     </div>
   );
 }

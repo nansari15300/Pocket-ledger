@@ -32,9 +32,9 @@ const FIT_ZOOM_MIN = 0.02;
  * zoom up/down vibrate. Viewport-max se thoda chhota scale = scrollbar trigger nahi.
  */
 const FIT_WINDOW_SAFETY = 0.96;
-/** Portal photo fit window: auto-zoom 40%–75% (beech me calculated fit) */
+/** Portal photo fit window: auto-zoom 40%–100% (beech me calculated fit) */
 const PORTAL_PHOTO_MIN_FIT_ZOOM = 0.4;
-const PORTAL_PHOTO_MAX_FIT_ZOOM = 0.75;
+const PORTAL_PHOTO_MAX_FIT_ZOOM = 1;
 const ZOOM_EQ_EPS = 0.008;
 
 function nearlyEqualZoom(a: number, b: number): boolean {
@@ -112,7 +112,7 @@ function computeFitWindowZoomFromNatural(
   return Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, z));
 }
 
-/** Photo: auto fit clamped 40–75%; tall + overflow ho to width-fit + scroll */
+/** Photo: auto fit clamped 40–100%; tall + overflow ho to width-fit + scroll */
 function computePortalPhotoFitWindow(
   natural: { width: number; height: number },
   maxContentW: number,

@@ -102,6 +102,7 @@ import {
 } from "@/lib/ledgerHeaderChrome";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
+import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
@@ -191,6 +192,7 @@ export function ItemGroupDetails({
   transactions: any[];
   groupMemberFilterId?: string | null;
 }) {
+  useFyLoadOnDateRangeChange(dateRange);
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company, companyId } = useCompany();
   const { processedItems, processedAccounts, processedParties, journalAccountNames, vouchers } = useVouchers();
@@ -1081,6 +1083,7 @@ export function ItemGroupDetails({
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
                   isRange
+                  masterLedgerDatePresets
                   valueAD={dateRange}
                   onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                   transactionDates={transactionDates}
@@ -1172,7 +1175,7 @@ export function ItemGroupDetails({
             </div>
           </div>
         </div>
-        <ScrollArea className="flex-1">
+        <ScrollArea txnChrome className="flex-1">
           <div className="py-4">
             <TransactionsTable
               transactions={paginatedTransactions}

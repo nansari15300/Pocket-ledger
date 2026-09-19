@@ -1097,7 +1097,7 @@ export async function upsertCompanyDocInBrowserDb(
  * `cloudBackedOfflineCache`: PWA/web Firebase companies may use SQLite as a shadow cache when the default mirror guard is off.
  */
 /** P2P pull: local row agar server snapshot se nayi ho to overwrite mat karo. */
-function mirrorDocEditTimeMs(row: Record<string, unknown>): number {
+export function mirrorDocEditTimeMs(row: Record<string, unknown>): number {
   for (const key of ["lastEditedAt", "updatedAt", "createdAt"] as const) {
     const raw = row[key];
     if (raw == null) continue;

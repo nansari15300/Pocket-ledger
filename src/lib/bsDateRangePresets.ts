@@ -3,7 +3,7 @@ import { bsToAd, BS_CALENDAR_MIN_YEAR } from "@/lib/bs-date";
 import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
 import type { DateRange } from "@/components/ui/ad-calendar";
 
-export type BsDateRangePresetKey = "7d" | "month" | "3m" | "6m" | "fy" | "all";
+export type BsDateRangePresetKey = "7d" | "month" | "3m" | "6m" | "fy" | "last10";
 
 /** AD date at local noon — matches BsDatePicker / Nepali flows (timezone-safe day boundary). */
 export function atNoonAd(d: Date): Date {
@@ -16,7 +16,7 @@ export const BS_DATE_RANGE_PRESETS = [
   { key: "3m" as const, label: "3 months" },
   { key: "6m" as const, label: "6 months" },
   { key: "fy" as const, label: "F Y" },
-  { key: "all" as const, label: "All" },
+  { key: "last10" as const, label: "Last 10" },
 ] as const;
 
 export function dateRangeFromPreset(
@@ -49,10 +49,8 @@ export function dateRangeFromPreset(
       to = atNoonAd(end);
       break;
     }
-    case "all":
-      from = atNoonAd(bsToAd({ y: BS_CALENDAR_MIN_YEAR, m: 1, d: 1 }));
-      to = atNoonAd(today);
-      break;
+    case "last10":
+      return undefined;
     default:
       return undefined;
   }

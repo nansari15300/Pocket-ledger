@@ -1,4 +1,4 @@
-import { saveVoucher } from "@/lib/voucherActionsClient";
+import { patchVoucherFields, saveVoucher } from "@/lib/voucherActionsClient";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { finalizeVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
 import { roundMoney } from "../utils/loanRounding";
@@ -120,6 +120,36 @@ export async function postReversalJournal(params: {
     lines: reversed,
     loanTransactionKind: "reversal",
     narration: `${params.narration} (reverses ${params.originalVoucherNumber || params.originalVoucherId})`,
+  });
+}
+
+export async function updateLoanJournal(params: {
+  companyId: string;
+  voucherId: string;
+  dateIso: string;
+  narration: string;
+  lines: JournalLine[];
+}): Promise<void> {
+  const voucherId = String(params.voucherId || "").trim();
+  if (!voucherId) throw new Error("Disbursement journal is missing.");
+  const lines = params.lines
+    .map((l) => ({
+      accountId: l.accountId,
+      debit: roundMoney(l.debit),
+      credit: roundMoney(l.credit),
+    }))
+    .filter((l) => l.accountId && (l.debit > 0 || l.credit > 0));
+  const debit = roundMoney(lines.reduce((s, l) => s + l.debit, 0));
+  const credit = roundMoney(lines.reduce((s, l) => s + l.credit, 0));
+  if (debit <= 0 || credit <= 0) throw new Error("Journal amount must be greater than 0.");
+  if (debit !== credit) throw new Error("Journal is not balanced.");
+  await patchVoucherFields(params.companyId, voucherId, {
+    date: parseIsoDate(params.dateIso),
+    narration: params.narration,
+    total: debit,
+    entries: lines,
+    loanTransactionKind: "disbursement",
+    isLoanModuleVoucher: true,
   });
 }
 

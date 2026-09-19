@@ -587,6 +587,8 @@ export const COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS = [
   "loan_audit_logs",
   "loan_settings",
   "loan_documents",
+  /** Per-ledger statement checked marks (per user + context). */
+  "ledger_statement_checks",
 ] as const;
 
 export type CompanyLocalMirrorSubcollection = (typeof COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS)[number];

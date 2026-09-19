@@ -17,6 +17,7 @@ import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
 import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
+import { useBankSpendWiseView } from "@/hooks/useBankSpendWiseView";
 import {
   ledgerDetailSessionStorageKey,
   writeLedgerDetailSessionSnapshot,
@@ -68,6 +69,7 @@ import {
   LEDGER_HEADER_PILL_ROW_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { useCompany } from "@/hooks/useCompany";
+import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { EditAccountGroupDialog } from "@/components/bank-cash/EditAccountGroupDialog";
 import { EditAccountDialog } from "@/components/bank-cash/EditAccountDialog";
 import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
@@ -123,6 +125,7 @@ import usePermissions from "@/hooks/usePermissions";
 import { useAuth } from "@/hooks/useAuth";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
@@ -176,31 +179,14 @@ export function AccountGroupDetails({
   onBack?: () => void;
   groupMemberFilterId?: string | null;
 }) {
+  useFyLoadOnDateRangeChange(dateRange);
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company, companyId } = useCompany();
   const { vouchers, processedAccounts, processedParties, processedStaff, processedTaxes, processedExpenseAccounts, journalAccountNames } = useVouchers();
   const { can } = usePermissions();
   const { user } = useAuth();
   const spendWiseEnabled = (company as { spendWiseEnabled?: boolean } | null)?.spendWiseEnabled === true;
-  const BANK_GROUP_SPEND_WISE_VIEW_KEY = "bank-group-spendWiseView";
-  const [spendWiseView, setSpendWiseViewState] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      const stored = localStorage.getItem(BANK_GROUP_SPEND_WISE_VIEW_KEY);
-      return stored === "true";
-    } catch {
-      return false;
-    }
-  });
-  const setSpendWiseView = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
-    setSpendWiseViewState((prev) => {
-      const next = typeof value === "function" ? value(prev) : value;
-      try {
-        localStorage.setItem(BANK_GROUP_SPEND_WISE_VIEW_KEY, next ? "true" : "false");
-      } catch {}
-      return next;
-    });
-  }, []);
+  const { spendWiseView, setSpendWiseView } = useBankSpendWiseView();
 
   // When toggling Spend wise / Statement, disable layout animation for that transition so list doesn't animate.
   const [disableTableLayoutAnimation, setDisableTableLayoutAnimation] = useState(false);
@@ -300,10 +286,9 @@ export function AccountGroupDetails({
   const openingModalRef = useRef(false);
 
   // Radix Select: value list me na ho to ref/setState loop — sirf maujood option strings pass karo.
-  const ROWS_PER_PAGE_SELECT_OPTIONS = [10, 20, 30, 50] as const;
   const rowsPerPageSelectValue = useMemo(() => {
     if (rowsPerPage === 0) return "0";
-    if ((ROWS_PER_PAGE_SELECT_OPTIONS as readonly number[]).includes(rowsPerPage)) return `${rowsPerPage}`;
+    if ((ROWS_PER_PAGE_OPTIONS_DEFAULT as readonly number[]).includes(rowsPerPage)) return `${rowsPerPage}`;
     return "10";
   }, [rowsPerPage]);
   const handleRowsPerPageChange = useCallback(
@@ -1780,6 +1765,7 @@ export function AccountGroupDetails({
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
                   isRange
+                  masterLedgerDatePresets
                   valueAD={dateRange}
                   onChangeAD={handleBsDateRangeChange}
                   transactionDates={transactionDates}
@@ -1868,7 +1854,7 @@ export function AccountGroupDetails({
           </div>
         </div>
         {/* scroll-touch for APK/WebView touch scroll */}
-        <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-auto scrollbar-slim-dim scroll-touch">
+        <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-auto pl-ledger-txn-scroll-native scroll-touch">
           <div className={cn("py-4 min-w-0", spendWiseView && "p-[2px]")}>
             {/* Bank/Cash group pages use their own Statement/Spend-wise toggle, so shared bill-wise preference must stay off here. */}
             <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>

@@ -3,7 +3,7 @@
 
 import * as React from "react";
 import { toast } from "sonner";
-import { openPrintDirect } from "@/lib/printDirect";
+import { openPrintDirect, companyFiscalFieldsForPrint } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import { resolveGroupBooksOpeningBalance } from "@/lib/ledgerOpeningBalanceDisplay";
 import type { Party, Group } from "@/components/party/types";
@@ -44,12 +44,12 @@ import {
   Search,
   Pencil,
 } from "lucide-react";
-import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 
-import { useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { COLUMN_LABELS, useShowNotes, useTransactionVisibleColumns } from "../vouchers/transactionColumnVisibility";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
@@ -107,6 +107,7 @@ import {
 } from "@/lib/ledgerHeaderChrome";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
+import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { useAuth } from "@/hooks/useAuth";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useSyncTempDateRangeFromProp } from "@/hooks/useLedgerDetailDateRange";
@@ -144,7 +145,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
-import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { MasterLedgerDateRangePresetRow } from "@/components/ui/MasterLedgerDateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { TableCell, TableRow } from "@/components/ui/table";
@@ -189,32 +190,6 @@ const getInitials = (name: string) => {
     .map((n) => n[0])
     .slice(0, 2)
     .join("");
-};
-
-const COLUMN_VISIBILITY_KEY = "transactionVisibleColumns";
-const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
-  syncStatus: false,
-  date: true,
-  type: true,
-  voucherNo: true,
-  user: true,
-  file: true,
-  dr: true,
-  cr: true,
-  status: true,
-  runningBalance: true,
-};
-const COLUMN_LABELS: Record<TransactionColumnKey, string> = {
-  syncStatus: "Sync",
-  date: "Date",
-  type: "Type",
-  voucherNo: "Voucher No.",
-  user: "User",
-  file: "File",
-  dr: "Dr",
-  cr: "Cr",
-  status: "Status",
-  runningBalance: "Running Balance",
 };
 
 const DEFAULT_STATUS_FILTER = { paid: true, unpaid: true, partial: true, overdue: true };
@@ -274,6 +249,7 @@ export function GroupDetails({
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const { company, companyId } = useCompany();
+  useFyLoadOnDateRangeChange(dateRange);
   const { vouchers, processedParties, processedAccounts, processedExpenseAccounts, processedAccountGroups, processedExpenseGroups, processedTaxGroups, processedStaffGroups, processedTaxes, processedStaff, processedItems, processedItemGroups, journalAccountNames } = useVouchers();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -297,17 +273,7 @@ export function GroupDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
-  const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
-    if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
-    try {
-      const saved = sessionStorage.getItem(COLUMN_VISIBILITY_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as VisibleColumns;
-        return { ...DEFAULT_VISIBLE_COLUMNS, ...parsed };
-      }
-    } catch (_) {}
-    return DEFAULT_VISIBLE_COLUMNS;
-  });
+  const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
     if (typeof window === "undefined") return { ...DEFAULT_STATUS_FILTER };
     try {
@@ -934,12 +900,6 @@ export function GroupDetails({
     sessionStorage.setItem("showNarration", String(checked));
   };
 
-  const handleColumnVisibilityChange = (key: TransactionColumnKey, checked: boolean) => {
-    const next = { ...visibleColumns, [key]: checked };
-    setVisibleColumns(next);
-    sessionStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(next));
-  };
-
   const handleStatusFilterChange = (key: keyof StatusFilter, checked: boolean) => {
     const next = { ...statusFilter, [key]: checked };
     setStatusFilter(next);
@@ -973,6 +933,7 @@ export function GroupDetails({
   // Statement check mode + desktop tail paging (PartyDetails jaisa)
   const {
     statementCheck,
+    ledgerListForPaging,
     desktopPaginationMeta,
     paginatedTransactions,
     totalPages,
@@ -1078,6 +1039,7 @@ export function GroupDetails({
             showDrCr: company.showDrCr,
             showCurrencySymbol: company.showCurrencySymbol,
             logoUrl: company.logoUrl,
+            ...companyFiscalFieldsForPrint(company as Record<string, unknown>),
           },
           title: getPrintTitle(variant),
           context: "group",
@@ -1524,12 +1486,14 @@ export function GroupDetails({
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <NepaliCalendar
                   rangePresetSlot={
-                    <DateRangePresetRow
+                    <MasterLedgerDateRangePresetRow
                       country={company?.country}
+                      onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                       onApply={(r) => {
                         onDateRangeChange(r);
                         setIsCalendarOpen(false);
                       }}
+                      onAfterDefault={() => setIsCalendarOpen(false)}
                     />
                   }
                   onSelect={handleNepaliSelect}
@@ -1542,12 +1506,14 @@ export function GroupDetails({
                 <div className="flex-1 w-full min-w-0">
                   <AdCalendar
                     rangePresetSlot={
-                      <DateRangePresetRow
+                      <MasterLedgerDateRangePresetRow
                         country={company?.country}
+                        onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
                           onDateRangeChange(r);
                           setIsCalendarOpen(false);
                         }}
+                        onAfterDefault={() => setIsCalendarOpen(false)}
                       />
                     }
                     valueAD={dateRange}
@@ -1677,6 +1643,7 @@ export function GroupDetails({
               <div className="flex items-center gap-1 flex-shrink-0">
                 <BsDatePicker
                   isRange
+                  masterLedgerDatePresets
                   valueAD={dateRange}
                   onChangeAD={(range) =>
                     onDateRangeChange(range as DateRange | undefined)
@@ -1721,11 +1688,16 @@ export function GroupDetails({
                 <PopoverContent className="w-auto p-0" align="start">
                   <AdCalendar
                     rangePresetSlot={
-                      <DateRangePresetRow
+                      <MasterLedgerDateRangePresetRow
                         country={company?.country}
+                        onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
                           setTempDateRange(r);
                           onDateRangeChange(r);
+                          setIsDesktopCalendarOpen(false);
+                        }}
+                        onAfterDefault={() => {
+                          setTempDateRange(undefined);
                           setIsDesktopCalendarOpen(false);
                         }}
                       />
@@ -1791,11 +1763,13 @@ export function GroupDetails({
           </div>
         </div>
       </div>
-      <div className={cn("flex-1 flex flex-col min-h-0", balanceMode === "bill_wise" ? "min-w-0" : "overflow-x-auto scrollbar-slim-dim")}>
+      <div className={cn("flex-1 flex flex-col min-h-0", balanceMode === "bill_wise" ? "min-w-0" : "overflow-x-auto pl-ledger-txn-scroll-native")}>
         <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
           <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
           <TransactionsTable
             transactions={paginatedTransactions}
+            ledgerTransactionsForFyOpening={ledgerListForPaging}
+            fyLedgerScopeOpeningBalance={openingBalanceForPeriod}
             context="group"
             // Mark this as party-group context so bill-wise table keeps running-balance behavior.
             groupEntityType="party"

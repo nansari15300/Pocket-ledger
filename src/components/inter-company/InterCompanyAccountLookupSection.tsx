@@ -36,8 +36,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  INTER_COMPANY_ENTITY_KIND_ALL,
+  INTER_COMPANY_ENTITY_KIND_FILTER_LABELS,
   INTER_COMPANY_ENTITY_LABELS,
   type InterCompanyEntityKind,
+  type InterCompanyEntityKindFilter,
 } from "@/components/inter-company/InterCompanyEntitySide";
 import { InterCompanyMultiPickDialog } from "@/components/inter-company/InterCompanyMultiPickDialog";
 import { InterCompanyEntityDetailsCard } from "@/components/inter-company/InterCompanyEntityDetailsCard";
@@ -47,6 +50,7 @@ import {
   filterInterCompanyEntitiesByBankAcNo,
   filterInterCompanyEntitiesByInterCoAcNo,
   filterInterCompanyEntitiesByKind,
+  findInterCompanyEntityById,
   filterInterCompanyEntitiesByName,
   filterInterCompanyEntitiesByPan,
   filterInterCompanyEntitiesByPhone,
@@ -86,8 +90,8 @@ type Props = {
   entitiesLoading?: boolean;
   disabled?: boolean;
   allowLookupWithoutCompany?: boolean;
-  entityKind: InterCompanyEntityKind;
-  onEntityKindChange: (k: InterCompanyEntityKind) => void;
+  entityKind: InterCompanyEntityKindFilter;
+  onEntityKindChange: (k: InterCompanyEntityKindFilter) => void;
   entityId: string;
   onEntityIdChange: (id: string) => void;
   companyAcNo?: string;
@@ -119,6 +123,10 @@ type Props = {
   partnerViewPrivacy?: InterCompanyPartnerPrivacy | null;
   /** Simple view — sirf Type + Account name (extra lookup fields hide) */
   simpleView?: boolean;
+  /** Connect user — sirf allowed master types dropdown me */
+  allowedEntityKinds?: InterCompanyEntityKind[];
+  /** Connect user — account name ke upar hint */
+  accountNameHint?: string;
   /** Company bank row — Type lock (e.g. sirf Bank) */
   lockEntityKind?: InterCompanyEntityKind;
   /** Company row search — entity hit parent se seed (company + account ek saath) */
@@ -181,6 +189,8 @@ export function InterCompanyAccountLookupSection({
   companySearchTick = 0,
   simpleViewBankOutTotal = null,
   formatCurrencyForPrint,
+  allowedEntityKinds,
+  accountNameHint,
 }: Props) {
   const [accountAcInput, setAccountAcInput] = useState("");
   const [accountPanInput, setAccountPanInput] = useState("");
@@ -212,11 +222,21 @@ export function InterCompanyAccountLookupSection({
 
   /** Type row — lock (bank) ya user select; account search isi kind tak */
   const activeEntityKind = lockEntityKind || entityKind;
+  const showAllTypeOption = !lockEntityKind;
 
-  const entitiesForActiveKind = useMemo(
-    () => filterInterCompanyEntitiesByKind(entities, activeEntityKind),
-    [entities, activeEntityKind]
-  );
+  const selectableEntityKinds = useMemo(() => {
+    const all = Object.keys(INTER_COMPANY_ENTITY_LABELS) as InterCompanyEntityKind[];
+    if (!allowedEntityKinds?.length) return all;
+    return all.filter((k) => allowedEntityKinds.includes(k));
+  }, [allowedEntityKinds]);
+
+  const entitiesForActiveKind = useMemo(() => {
+    if (activeEntityKind === INTER_COMPANY_ENTITY_KIND_ALL) {
+      if (!allowedEntityKinds?.length) return entities;
+      return entities.filter((e) => allowedEntityKinds.includes(e.kind));
+    }
+    return filterInterCompanyEntitiesByKind(entities, activeEntityKind);
+  }, [entities, activeEntityKind, allowedEntityKinds]);
 
   /** Join settings — kaunse search fields allowed; new voucher par sab ON */
   const searchBy = useMemo(
@@ -242,29 +262,54 @@ export function InterCompanyAccountLookupSection({
   // Target privacy — dropdown/trigger labels bhi mask (sirf poora naam mat dikhao)
   const comboboxOptions = useMemo(() => {
     if (!searchBy.accountName) return [];
-    const opts = interCompanyEntityComboboxOptions(entitiesForActiveKind);
+    const includeKindInList =
+      activeEntityKind === INTER_COMPANY_ENTITY_KIND_ALL && !lockEntityKind;
+    let opts = interCompanyEntityComboboxOptions(entitiesForActiveKind);
     // Naya voucher: pick list me hamesha poora naam — target privacy sirf detail card / partner view
-    if (voucherCreateLookup) return opts;
-    if (!partnerViewPrivacy) return opts;
-    return opts.map((o) => {
-      const raw = String(o.label ?? "").trim();
-      if (!partnerViewPrivacy.viewFields.accountName) {
-        return { ...o, label: raw || "—", triggerLabel: raw || "—" };
-      }
-      const display = partnerFieldDisplay(partnerViewPrivacy, "accountName", raw);
-      return {
-        ...o,
-        label: display || raw || "—",
-        triggerLabel: display || raw || "—",
-      };
-    });
-  }, [entitiesForActiveKind, searchBy.accountName, partnerViewPrivacy, voucherCreateLookup]);
+    if (!voucherCreateLookup && partnerViewPrivacy) {
+      opts = opts.map((o) => {
+        const raw = String(o.label ?? "").trim();
+        if (!partnerViewPrivacy.viewFields.accountName) {
+          return { ...o, label: raw || "—", triggerLabel: raw || "—" };
+        }
+        const display = partnerFieldDisplay(partnerViewPrivacy, "accountName", raw);
+        return {
+          ...o,
+          label: display || raw || "—",
+          triggerLabel: display || raw || "—",
+        };
+      });
+    }
+    if (includeKindInList) {
+      opts = opts.map((o) => {
+        const parsed = parseInterCompanyEntityValue(o.value);
+        const kind = parsed?.kind as InterCompanyEntityKind | undefined;
+        const kindLabel = kind ? INTER_COMPANY_ENTITY_LABELS[kind] : "";
+        const row = o as { value: string; label: string; triggerLabel?: string };
+        const accountLabel = String(row.triggerLabel ?? row.label ?? "").trim();
+        return {
+          ...o,
+          label: kindLabel ? `${accountLabel} · ${kindLabel}` : accountLabel,
+          triggerLabel: accountLabel,
+          searchText: kindLabel ? `${accountLabel} ${kindLabel}` : accountLabel,
+        };
+      });
+    }
+    return opts;
+  }, [
+    entitiesForActiveKind,
+    searchBy.accountName,
+    partnerViewPrivacy,
+    voucherCreateLookup,
+    activeEntityKind,
+    lockEntityKind,
+  ]);
 
   const selectedEntity = useMemo(() => {
     if (!entityId) return null;
-    const row = entities.find((e) => e.kind === entityKind && e.id === entityId) ?? null;
+    const row = findInterCompanyEntityById(entities, entityId, entityKind) ?? null;
     if (!row) return null;
-    const patched = ensuredIcAcByKey[`${entityKind}:${entityId}`];
+    const patched = ensuredIcAcByKey[`${row.kind}:${entityId}`];
     return patched ? { ...row, interCompanyAccountNo: patched } : row;
   }, [entities, entityKind, entityId, ensuredIcAcByKey]);
 
@@ -299,7 +344,10 @@ export function InterCompanyAccountLookupSection({
     return Math.max(8, Math.min(len, 48));
   }, [selectedAccountLabel]);
 
-  const typeLabel = INTER_COMPANY_ENTITY_LABELS[lockEntityKind || entityKind];
+  const typeLabel =
+    INTER_COMPANY_ENTITY_KIND_FILTER_LABELS[
+      (lockEntityKind || entityKind) as InterCompanyEntityKindFilter
+    ];
   const typeTriggerMinCh = Math.max(6, typeLabel.length);
 
   /** Voucher par select — entity par prefixed Inter Co. A/c missing ho to generate */
@@ -355,10 +403,14 @@ export function InterCompanyAccountLookupSection({
       setAccountMobileInput("");
       return;
     }
-    const row = entities.find((e) => e.kind === entityKind && e.id === entityId);
-    if (!row) return;
+    const row = findInterCompanyEntityById(entities, entityId, entityKind);
+    if (!row) {
+      const kind = lockEntityKind || (entityKind === INTER_COMPANY_ENTITY_KIND_ALL ? null : entityKind);
+      if (kind) setComboValue(`${kind}:${entityId}`);
+      return;
+    }
 
-    const rowKey = `${entityKind}:${entityId}`;
+    const rowKey = `${row.kind}:${entityId}`;
     setComboValue(interCompanyEntityValue(row));
     setAccountPanInput(normalizeInterCompanyPan(row.pan));
     setAccountMobileInput(readEntityMobile(row));
@@ -382,7 +434,12 @@ export function InterCompanyAccountLookupSection({
   const applyEntity = (row: InterCompanyEntityDetail, ownerCompanyId?: string) => {
     pendingEntityHitRef.current = null;
     pendingEntityLookupRef.current = null;
-    onEntityKindChange(row.kind);
+    if (
+      !lockEntityKind &&
+      (entityKind === INTER_COMPANY_ENTITY_KIND_ALL || entityKind !== row.kind)
+    ) {
+      onEntityKindChange(row.kind);
+    }
     onEntityIdChange(row.id);
     setComboValue(interCompanyEntityValue(row));
     setAccountPanInput(normalizeInterCompanyPan(row.pan));
@@ -800,9 +857,10 @@ export function InterCompanyAccountLookupSection({
     ) {
       return;
     }
-    const stillValid = entities.some(
-      (e) => e.kind === activeEntityKind && e.id === entityId
-    );
+    const stillValid =
+      activeEntityKind === INTER_COMPANY_ENTITY_KIND_ALL
+        ? entities.some((e) => e.id === entityId)
+        : entities.some((e) => e.kind === activeEntityKind && e.id === entityId);
     if (!stillValid) {
       onEntityIdChange("");
       if (pendingEntityLookupRef.current) return;
@@ -869,7 +927,7 @@ export function InterCompanyAccountLookupSection({
                   disabled={disabled || crossSearching || ensuringAcNo || !!lockEntityKind}
                   onValueChange={(v) => {
                     if (disabled || lockEntityKind) return;
-                    onEntityKindChange(v as InterCompanyEntityKind);
+                    onEntityKindChange(v as InterCompanyEntityKindFilter);
                     onEntityIdChange("");
                     setComboValue("");
                     setAccountAcInput("");
@@ -884,7 +942,12 @@ export function InterCompanyAccountLookupSection({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className={interCompanyDropdownContentClass}>
-                    {(Object.keys(INTER_COMPANY_ENTITY_LABELS) as InterCompanyEntityKind[]).map((k) => (
+                    {showAllTypeOption ? (
+                      <SelectItem value={INTER_COMPANY_ENTITY_KIND_ALL}>
+                        {INTER_COMPANY_ENTITY_KIND_FILTER_LABELS.all}
+                      </SelectItem>
+                    ) : null}
+                    {selectableEntityKinds.map((k) => (
                       <SelectItem key={k} value={k}>
                         {INTER_COMPANY_ENTITY_LABELS[k]}
                       </SelectItem>
@@ -895,6 +958,11 @@ export function InterCompanyAccountLookupSection({
             </div>
             <div className={interCompanyAccountNameFieldColClass}>
               <Label className="block w-full text-xs text-muted-foreground">Account name</Label>
+              {accountNameHint ? (
+                <p className="mb-1 text-[11px] leading-snug text-amber-800 dark:text-amber-200">
+                  {accountNameHint}
+                </p>
+              ) : null}
               <div className="block w-full min-w-0">
                 {viewOnlyCopyMode ? (
                   <Input

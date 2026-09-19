@@ -79,6 +79,8 @@ export const reports: Report[] = [
     name: "Party Statement",
     description: "View party-wise statement details.",
     category: "Party",
+    /** PartyDetails supplies its own desktop ribbon — hide reports shell title bar. */
+    ledgerDetailTopRibbon: true,
   },
   {
     id: "staff-statement",
@@ -92,12 +94,7 @@ export const reports: Report[] = [
     description: "View bank/cash account statement details.",
     category: "Bank/Cash",
   },
-  {
-    id: "income-statement",
-    name: "Income Statement",
-    description: "View income-ledger transaction details.",
-    category: "Accounting",
-  },
+  /* Income Statement list se hata — Income & Expense Report (expense-statement) same flow cover karta hai. */
   {
     id: "group-statement",
     name: "Group Summary",
@@ -173,7 +170,6 @@ export const reports: Report[] = [
     name: "Loan Overview",
     description: "Loan dashboard, schedule, EMI, and accounting reports.",
     category: "Accounting",
-    href: "/loans",
   },
   {
     id: "loan-outstanding",

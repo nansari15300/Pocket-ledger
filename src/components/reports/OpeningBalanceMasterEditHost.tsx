@@ -11,7 +11,7 @@ import { EditTaxDialog } from "@/components/tax/EditTaxDialog";
 import type { Tax } from "@/components/tax/types";
 import { EditExpenseAccountDialog } from "@/components/expenses/EditExpenseAccountDialog";
 import type { ExpenseAccount } from "@/components/expenses/types";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import type { OpeningBalanceLedgerAccountRow } from "@/lib/reports/openingBalanceLedgerAccounts";
 
 type Props = {
@@ -35,7 +35,7 @@ export function OpeningBalanceMasterEditHost({
     processedTaxes,
     processedExpenseAccounts,
     processedStaffGroups,
-  } = useVouchers();
+  } = useFyScopedVouchers();
 
   const onUpdated = useMemo(
     () => () => {

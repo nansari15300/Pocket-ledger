@@ -78,6 +78,7 @@ import {
 } from "@/lib/ledgerHeaderChrome";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
+import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { EditTaxGroupDialog } from "./EditTaxGroupDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
@@ -162,6 +163,7 @@ export function TaxGroupDetails({
   onBack?: () => void;
   groupMemberFilterId?: string | null;
 }) {
+  useFyLoadOnDateRangeChange(dateRange);
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company, companyId } = useCompany();
   const { processedTaxes, vouchers, journalAccountNames: journalAccountNamesFromHook } = useVouchers();
@@ -976,6 +978,7 @@ export function TaxGroupDetails({
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
                   isRange
+                  masterLedgerDatePresets
                   valueAD={dateRange}
                   onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                   transactionDates={transactionDates}
@@ -1043,7 +1046,7 @@ export function TaxGroupDetails({
             </div>
           </div>
         </div>
-        <ScrollArea className="flex-1">
+        <ScrollArea txnChrome className="flex-1">
           <div className="py-4">
             <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable

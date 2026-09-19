@@ -14,6 +14,28 @@ export const NESTED_LEDGER_MASTER_EDIT_CONTENT_CN = "!z-[101]";
 /** Dialog `!z-[101]` se upar — date/group popovers (calendar Pick a date). */
 export const NESTED_LEDGER_MASTER_EDIT_POPOVER_CN = "!z-[110]";
 
+/** Balance Sheet / R&P ledger mirror shell — above normal dialogs (z-50). */
+export const NESTED_LEDGER_POPUP_OVERLAY_CN = "z-[70] bg-black/45 backdrop-blur-none";
+export const NESTED_LEDGER_POPUP_CONTENT_CN = "z-[71]";
+/** `DialogContent` marker — globals.css footer dropdown/select/popover z-index lift. */
+export const NESTED_LEDGER_POPUP_ATTR = "data-pl-nested-ledger-popup";
+/** Footer Columns / By Date / rows-per-page — above z-[71] shell. */
+export const NESTED_LEDGER_FOOTER_DROPDOWN_CONTENT_CN = "!z-[110]";
+
+/** Note / voucher / history opened inside ledger mirror popup — above z-[71] shell. */
+export const NESTED_LEDGER_CHILD_DIALOG_OVERLAY_CN =
+  "!z-[100] bg-black/45 backdrop-blur-sm";
+export const NESTED_LEDGER_CHILD_DIALOG_CONTENT_CN = "!z-[101]";
+
+export function nestedLedgerChildDialogShell(
+  ...extraContentClass: (string | undefined | false | null)[]
+) {
+  return {
+    overlayClassName: NESTED_LEDGER_CHILD_DIALOG_OVERLAY_CN,
+    className: cn(NESTED_LEDGER_CHILD_DIALOG_CONTENT_CN, ...extraContentClass),
+  };
+}
+
 export function masterEditBackdropClassName(
   mode?: MasterEditPresentationMode
 ): string {

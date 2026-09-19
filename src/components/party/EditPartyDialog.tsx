@@ -22,7 +22,6 @@ import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageCl
 import type { Party, Group } from "@/components/party/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import { Input } from "@/components/ui/input";
@@ -57,14 +56,22 @@ import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEve
 import { compressFile } from "@/lib/compression";
 import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
-import { balanceOpeningBalanceWithCapital } from "@/lib/voucherActionsClient";
 import { useVouchers } from "@/hooks/useVouchers";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import {
+  finalizeMasterOpeningBalanceSideEffects,
+  masterOpeningPatchFromPersisted,
+} from "@/lib/fyPagination/masterOpeningSaveHooks";
 import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
-import { softDeleteCompanySubdocToRecycleBin } from "@/lib/recycleBinEntityLifecycle";
+import {
+  permanentDeleteCompanySubdocFromRecycleBin,
+  softDeleteCompanySubdocToRecycleBin,
+} from "@/lib/recycleBinEntityLifecycle";
+import { MasterDeleteConfirmAlertDialog } from "@/components/common/MasterDeleteConfirmAlertDialog";
+import { assertCanPermanentDeleteFromForm } from "@/lib/permanentDeleteFromForm";
 import { countActiveInterCompanyVouchersForCounterpartyParty, purgeInterCompanyCounterpartyPartyIfUnused } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
 import { isInterCompanyCounterpartyPartyName } from "@/lib/interCompany/interCompanyCounterpartyPartyName";
 function isInterCompanyAutoParty(party: Party): boolean {
@@ -157,7 +164,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
   /** Dialog effect me Firestore fail hone par bhi latest list — deps me poora array na dalein (balance churn). */
   const processedGroupsRef = React.useRef(processedGroups);
   processedGroupsRef.current = processedGroups;
-  const { canAddAvatar, canAddFileImagePdf, can } = usePermissions();
+  const { canAddAvatar, canAddFileImagePdf, can, role } = usePermissions();
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { dateSystem } = useDate();
   const isMobile = useIsMobile();
@@ -324,34 +331,50 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     }
   }, [isOpen, party.id]);
 
+  // FY voucher scope re-render par poora `party` object badalta hai — sirf open / id par reset (mid-edit wipe na ho).
   useEffect(() => {
-    if (isOpen) {
-      const dateValue = (party as any).openingBalanceDate;
-      // `finalDate` — master OB; plain `{seconds}` / ISO dono (dialog dubara khulte hi sahi BS/AD)
-      const finalDate = parseOpeningBalanceDateToLocalNoon(dateValue) ?? undefined;
+    if (!isOpen) return;
+    const dateValue = (party as any).openingBalanceDate;
+    const finalDate = parseOpeningBalanceDateToLocalNoon(dateValue) ?? undefined;
 
-      form.reset({
-        accountType: (resolvePartyGroupBranchIdForGroup(
-          normalizePartyEditGroupId(party.groupId),
-          processedGroups
-        ) ?? PARTY_SYSTEM_CREDITORS_ID) as typeof PARTY_SYSTEM_DEBTORS_ID | typeof PARTY_SYSTEM_CREDITORS_ID,
-        name: party.name,
-        email: party.email || "",
-        phone: party.phone || "",
-        whatsapp: party.whatsapp === true,
-        pan: party.pan || "",
-        address: party.address || "",
-        groupId: normalizePartyEditGroupId(party.groupId),
-        openingBalance: party.openingBalance || 0,
-        openingBalanceDate: finalDate,
-        openingBalanceNarration: party.openingBalanceNarration ?? "",
-      });
-      setFile(party.fileUrl || null);
-      setDocSlots(party.documentFileUrls || []);
-      initialFileRef.current = party.fileUrl || null;
-      initialDocUrlsRef.current = party.documentFileUrls || [];
-    }
-  }, [isOpen, party, form]);
+    form.reset({
+      accountType: (resolvePartyGroupBranchIdForGroup(
+        normalizePartyEditGroupId(party.groupId),
+        processedGroups
+      ) ?? PARTY_SYSTEM_CREDITORS_ID) as typeof PARTY_SYSTEM_DEBTORS_ID | typeof PARTY_SYSTEM_CREDITORS_ID,
+      name: party.name,
+      email: party.email || "",
+      phone: party.phone || "",
+      whatsapp: party.whatsapp === true,
+      pan: party.pan || "",
+      address: party.address || "",
+      groupId: normalizePartyEditGroupId(party.groupId),
+      openingBalance: party.openingBalance || 0,
+      openingBalanceDate: finalDate,
+      openingBalanceNarration: party.openingBalanceNarration ?? "",
+    });
+    setFile(party.fileUrl || null);
+    setDocSlots(party.documentFileUrls || []);
+    initialFileRef.current = party.fileUrl || null;
+    initialDocUrlsRef.current = party.documentFileUrls || [];
+  }, [
+    isOpen,
+    party.id,
+    party.name,
+    party.email,
+    party.phone,
+    party.whatsapp,
+    party.pan,
+    party.address,
+    party.groupId,
+    party.openingBalance,
+    (party as any).openingBalanceDate,
+    party.openingBalanceNarration,
+    party.fileUrl,
+    party.documentFileUrls,
+    processedGroups,
+    form,
+  ]);
 
   async function onSubmit(values: z.infer<typeof formSchema>): Promise<void> {
     if (!companyId) {
@@ -471,15 +494,29 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           };
           const payload: Record<string, unknown> = { ...base, ...updatePayload, id: partyRefSnap.id, companyId };
           await upsertCompanyDocInBrowserDb(companyId, "parties", partyRefSnap.id, payload);
-          await enqueueCompanyDocOutbox(companyId, "parties", "update", partyRefSnap.id, payload);
+          const persisted =
+            (await getCompanyDocFromBrowserDb(companyId, "parties", partyRefSnap.id)) ?? payload;
+          await enqueueCompanyDocOutbox(companyId, "parties", "update", partyRefSnap.id, persisted);
           syncEntityAttachmentsAfterSave(companyId);
+
+          await finalizeMasterOpeningBalanceSideEffects({
+            company,
+            companyId,
+            collection: "parties",
+            entityId: partyRefSnap.id,
+            oldOpeningBalance,
+            newOpeningBalance,
+            oldOpeningBalanceDate: (partyRefSnap as any).openingBalanceDate,
+            newOpeningBalanceDate: values.openingBalanceDate,
+          });
+
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onPartyUpdated({
             id: partyRefSnap.id,
             ...values,
+            ...masterOpeningPatchFromPersisted(persisted),
             fileUrl: fileUrl || "",
             documentFileUrls,
-            openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
           });
           initialFileRef.current = fileUrl || null;
           initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
@@ -510,16 +547,25 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         await updateDoc(partyRef, updatePayload);
         await syncEntityAttachmentsAfterSave(companyId);
 
-        if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
-          await balanceOpeningBalanceWithCapital(companyId, "parties", partyRefSnap.id, oldOpeningBalance, newOpeningBalance);
-        }
+        await finalizeMasterOpeningBalanceSideEffects({
+          company,
+          companyId,
+          collection: "parties",
+          entityId: partyRefSnap.id,
+          oldOpeningBalance,
+          newOpeningBalance,
+          oldOpeningBalanceDate: (partyRefSnap as any).openingBalanceDate,
+          newOpeningBalanceDate: values.openingBalanceDate,
+        });
 
         onPartyUpdated({
           id: partyRefSnap.id,
           ...values,
+          openingBalance: newOpeningBalance,
+          openingBalanceDate: values.openingBalanceDate,
+          openingBalanceNarration: narrationClean ?? "",
           fileUrl: fileUrl || "",
           documentFileUrls,
-          openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
         });
         initialFileRef.current = fileUrl || null;
         initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
@@ -615,6 +661,61 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         setIsLoading(false);
     }
   }
+
+  const handlePermanentDelete = async () => {
+    if (!companyId) {
+      toast({ variant: "destructive", title: "Error", description: "No company selected." });
+      return;
+    }
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+    } catch (err) {
+      sonnerToast.error("Permission Denied", {
+        description: err instanceof Error ? err.message : "No permission",
+      });
+      return;
+    }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    if (hasTransactions && !isInterCompanyAutoParty(party)) {
+      sonnerToast.error("Cannot Delete", { description: "This party has transactions and cannot be deleted." });
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    if (hasTransactions && isInterCompanyAutoParty(party)) {
+      const activeIc = await countActiveInterCompanyVouchersForCounterpartyParty(companyId, party.id);
+      if (activeIc > 0) {
+        sonnerToast.error("Cannot Delete", {
+          description: "This Inter Company account is still linked to active vouchers.",
+        });
+        setIsDeleteDialogOpen(false);
+        return;
+      }
+    }
+    setIsLoading(true);
+    try {
+      await permanentDeleteCompanySubdocFromRecycleBin(companyId, "parties", party.id);
+      toast({
+        title: "Party deleted permanently",
+        description: `"${party.name}" was permanently deleted.`,
+      });
+      onPartyDeleted(party.id);
+      setIsOpen(false);
+      setIsDeleteDialogOpen(false);
+    } catch (error) {
+      console.error("Error permanently deleting party: ", error);
+      toast({
+        variant: "destructive",
+        title: "Delete Failed",
+        description: "Could not permanently delete the party.",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.[0]) return;
@@ -1069,29 +1170,17 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         </DialogContent>
       </Dialog>
       
-      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-        <AlertDialogContent>
-            <AlertDialogHeader>
-                <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                <AlertDialogDescription>
-                    This action will move the party <span className="font-semibold text-foreground">{party.name}</span> to the recycle bin.
-                </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-                {/* Gray pill Cancel — AlertDialog baked `outline` ke saath slate odd/even bhi constants me */}
-                <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS}>
-                  Cancel
-                </AlertDialogCancel>
-                <AlertDialogAction
-                  disabled={apkOfflineViewOnly}
-                  onClick={handleDelete}
-                  className="bg-destructive hover:bg-destructive/90"
-                >
-                    Move to Bin
-                </AlertDialogAction>
-            </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <MasterDeleteConfirmAlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        entityKind="party"
+        entityName={party.name}
+        onMoveToBin={handleDelete}
+        onDeletePermanently={handlePermanentDelete}
+        busy={isLoading}
+        moveToBinDisabled={apkOfflineViewOnly}
+        permanentDeleteDisabled={apkOfflineViewOnly}
+      />
       <CreateGroupDialog
         onGroupCreated={handleGroupCreated}
         isOpen={isCreateGroupOpen}

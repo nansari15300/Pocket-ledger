@@ -13,7 +13,7 @@ import { formatBsFromAD } from "@/lib/bs-date";
 export type DateSystem = "AD" | "BS" | "Both";
 
 const DEFAULT_AD_FORMAT: ADFormatKey = "MM-dd-yyyy";
-const DEFAULT_BS_FORMAT: BSFormatKey = "YYYY-MM-DD";
+const DEFAULT_BS_FORMAT: BSFormatKey = "MMM DD, YYYY";
 
 type CurrencyFormattingOptions = {
   noSuffix?: boolean;

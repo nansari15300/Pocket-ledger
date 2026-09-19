@@ -2,10 +2,10 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ReportStatementSummaryCardsGrid, ReportStatementSummaryCardsRow } from "@/components/reports/ReportStatementSummaryCards";
 import { Button } from "@/components/ui/button";
 import { PermissionButton } from "@/components/permission";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -13,7 +13,15 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import AdCalendar from "@/components/ui/ad-calendar";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
-import { ArrowLeft, Calendar as CalendarIcon, ChevronDown, File, Printer, BarChart2, X } from "lucide-react";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ArrowLeft, Calendar as CalendarIcon, ChevronDown, File, Printer, BarChart2, Search, User, Users, X } from "lucide-react";
+import { PartyList } from "@/components/party/PartyList";
+import { PartyGroupList } from "@/components/party/PartyGroupList";
+import { ReportShowListButton } from "@/components/reports/ReportShowListButton";
+import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
+import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
+import { mlc } from "@/lib/mobileListChrome";
+import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import type { Party, Group } from "@/components/party/types";
 import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -55,29 +63,30 @@ import { LineChart, Line, ResponsiveContainer } from "recharts";
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
+import { PartyDetails } from "@/components/party/PartyDetails";
+import { GroupDetails } from "@/components/party/GroupDetails";
 import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
-
-// Summary card outside page so it only re-renders when amount/title/color change (data change), not on parent re-renders (e.g. userNames)
-const ReportSummaryCard = React.memo(function ReportSummaryCard({ title, amount, color }: { title: string; amount: number; color: string }) {
-    const { formatCurrency, formatCurrencyForPrint } = useDate();
-    const formatted = formatCurrency(amount, { showDrCr: title === "Balance" });
-    const titleStr = formatCurrencyForPrint(amount, { showDrCr: title === "Balance" });
-    return (
-        <Card className="px-2 py-1.5 w-fit flex-shrink-0 border rounded-lg overflow-hidden">
-            <div className="flex flex-col">
-                <p className="text-xs text-muted-foreground whitespace-nowrap">{title}</p>
-                <p className={cn("text-sm sm:text-base font-bold whitespace-nowrap tabular-nums", color)} title={titleStr}>
-                    {formatted}
-                </p>
-            </div>
-        </Card>
-    );
-}, (prev, next) => prev.title === next.title && prev.amount === next.amount && prev.color === next.color);
+import { buildPartyGroupReportEntity } from "@/lib/reportStatementGroupEntity";
 
 export default function DesktopPartyStatementPage() {
-    const { processedParties, processedPartiesForSelection, processedGroups, vouchers, loading, journalAccountNames } = useVouchers();
+    const {
+        processedParties,
+        processedPartiesForSelection,
+        processedGroups,
+        processedAccounts,
+        processedExpenseAccounts,
+        processedAccountGroups,
+        processedExpenseGroups,
+        processedTaxGroups,
+        processedStaffGroups,
+        processedTaxes,
+        processedStaff,
+        vouchers,
+        loading,
+        journalAccountNames,
+    } = useFyScopedVouchers();
     const { company } = useCompany();
     const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
     const router = useRouter();
@@ -93,6 +102,14 @@ export default function DesktopPartyStatementPage() {
     const [mobileSearchTerm, setMobileSearchTerm] = useState("");
     const [isDateSearchMode, setIsDateSearchMode] = useState(false);
     const [view, setView] = useState<'list' | 'chart'>('list');
+    const [listTab, setListTab] = useState<"parties" | "groups">(() =>
+        typeof window !== "undefined" && new URLSearchParams(window.location.search).get("groupId")
+            ? "groups"
+            : "parties"
+    );
+    const [listSearchTerm, setListSearchTerm] = useState("");
+    const [partyListQuickFilter, setPartyListQuickFilter] = useState<EntityListQuickFilter>("default");
+    const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
     // Same preference as Party Details: Statement vs Bill wise (running balance vs per-voucher status).
     const { balanceMode, setBalanceMode } = useBalanceMode();
 
@@ -191,17 +208,22 @@ export default function DesktopPartyStatementPage() {
             const group = processedGroups.find(g => g.id === groupId);
             setSelectedGroup((prev) => (prev?.id === group?.id ? prev : group || null));
             setSelectedParty((prev) => (prev !== null ? null : prev));
-        } else if (processedParties.length > 0) {
-            const first = processedParties[0];
+        } else if (processedPartiesForSelection.length > 0) {
+            const first = processedPartiesForSelection[0];
             setSelectedParty((prev) => {
                 if (!first) return null;
                 if (prev?.id === first.id) return prev;
-                if (prev && processedParties.some((p) => p.id === prev.id)) return prev;
+                if (prev && processedPartiesForSelection.some((p) => p.id === prev.id)) return prev;
                 return first;
             });
             setSelectedGroup((prev) => (prev !== null ? null : prev));
         }
-    }, [searchParams, processedParties, processedGroups]);
+    }, [searchParams, processedParties, processedPartiesForSelection, processedGroups]);
+
+    useEffect(() => {
+        if (searchParams.get("groupId")) setListTab("groups");
+        else if (searchParams.get("partyId")) setListTab("parties");
+    }, [searchParams]);
     
       useEffect(() => {
         if (isMobile && dateRange?.from) {
@@ -225,7 +247,35 @@ export default function DesktopPartyStatementPage() {
         }
       };
       
-    const activeEntity = selectedParty || (selectedGroup ? { ...selectedGroup, items: processedParties.filter(p => p.groupId === selectedGroup.id) } : null);
+    const groupReportEntity = useMemo(() => {
+        if (!selectedGroup) return null;
+        return buildPartyGroupReportEntity(selectedGroup, {
+            allParties: processedParties,
+            allGroups: processedGroups,
+            processedAccounts,
+            processedExpenseAccounts,
+            processedAccountGroups,
+            processedExpenseGroups,
+            processedTaxGroups,
+            processedStaffGroups,
+            processedTaxes,
+            processedStaff,
+        });
+    }, [
+        selectedGroup,
+        processedParties,
+        processedGroups,
+        processedAccounts,
+        processedExpenseAccounts,
+        processedAccountGroups,
+        processedExpenseGroups,
+        processedTaxGroups,
+        processedStaffGroups,
+        processedTaxes,
+        processedStaff,
+    ]);
+
+    const activeEntity = selectedParty || groupReportEntity;
     const activeContext = selectedParty ? 'party' : 'group';
 
     const {
@@ -446,8 +496,236 @@ export default function DesktopPartyStatementPage() {
             .map((g) => ({ value: g.id, label: g.name }));
     }, [processedGroups, selectedGroup?.id]);
 
+    const partiesForReportList = useMemo(() => {
+        const list = [...processedPartiesForSelection];
+        if (selectedParty?.id && !list.some((p) => p.id === selectedParty.id)) {
+            list.push(selectedParty);
+        }
+        return list;
+    }, [processedPartiesForSelection, selectedParty]);
+
+    const groupsForReportList = useMemo(() => {
+        const exclude = ["assets", "equity", "expenses", "income", "liabilities", "liability"];
+        const currentId = selectedGroup?.id;
+        return processedGroups.filter(
+            (g) => g.id === currentId || !exclude.includes((g.name || "").trim().toLowerCase())
+        );
+    }, [processedGroups, selectedGroup?.id]);
+
+    const handleEmbeddedPartyChange = useCallback((partyId: string) => {
+        const party =
+            processedPartiesForSelection.find((p) => p.id === partyId) ||
+            processedParties.find((p) => p.id === partyId);
+        if (!party) return;
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.set("partyId", party.id);
+        newUrl.searchParams.delete("groupId");
+        window.history.pushState({}, "", newUrl);
+        setSelectedParty(party);
+        setSelectedGroup(null);
+        setListTab("parties");
+    }, [processedParties, processedPartiesForSelection]);
+
+    const handleSelectPartyFromList = useCallback(
+        (party: Party) => {
+            handleEmbeddedPartyChange(party.id);
+        },
+        [handleEmbeddedPartyChange]
+    );
+
+    const handleSelectGroupFromList = useCallback((group: Group) => {
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.set("groupId", group.id);
+        newUrl.searchParams.delete("partyId");
+        window.history.pushState({}, "", newUrl);
+        setSelectedGroup(group);
+        setSelectedParty(null);
+        setListTab("groups");
+    }, []);
+
+    const groupMemberParties = processedParties;
+
+    const addVoucherDialog = (
+        <AddVoucherDialog
+            isOpen={isVoucherDialogOpen}
+            onOpenChange={(open: boolean) => {
+                if (!open) {
+                    setIsVoucherDialogOpen(false);
+                    setSelectedVoucher(null);
+                    closeModalInUrl();
+                }
+            }}
+            voucher={selectedVoucher}
+            onVoucherAction={() => setSelectedVoucher(null)}
+        />
+    );
+
     if (loading && !activeEntity) {
         return <LoadingSpinner />;
+    }
+
+    /** PC: party page jaisa — Parties/Groups tabs + account list + ledger detail. */
+    if (!isMobile) {
+        const reportListTabs = (
+            <Tabs
+                value={listTab}
+                onValueChange={(value) => setListTab(value === "groups" ? "groups" : "parties")}
+                className="w-full"
+            >
+                <TabsList listChrome>
+                    <TabsTrigger listChrome value="parties" className="flex-1">
+                        Parties
+                    </TabsTrigger>
+                    <TabsTrigger listChrome value="groups" className="flex-1">
+                        Groups
+                    </TabsTrigger>
+                </TabsList>
+            </Tabs>
+        );
+
+        const reportSearchRow = (
+            <div className={mlc.searchRow}>
+                <div className={mlc.searchWrap}>
+                    <Search className={mlc.searchIcon} />
+                    <Input
+                        placeholder={listTab === "parties" ? "Search parties..." : "Search groups/party"}
+                        listChrome
+                        listChromeSearch
+                        value={listSearchTerm}
+                        onChange={(e) => setListSearchTerm(e.target.value)}
+                        autoComplete="off"
+                    />
+                </div>
+            </div>
+        );
+
+        const reportSectionLabel =
+            listTab === "parties" ? (
+                <div className={mlc.sectionLabelRow}>
+                    <User className={mlc.sectionIcon} />
+                    <span>Party ({partiesForReportList.length})</span>
+                </div>
+            ) : (
+                <div className={mlc.sectionLabelRow}>
+                    <Users className={mlc.sectionIcon} />
+                    <span>Party group ({groupsForReportList.length})</span>
+                </div>
+            );
+
+        /** Search row jaisa vertical inset — cards/tabs dono par same band chrome. */
+        const reportListBandChrome = cn(mlc.searchRow, "box-border !gap-0");
+        const reportSummaryBandChrome = cn(mlc.searchRow, "box-border !gap-0 !px-3");
+
+        const reportListTopSummary = activeEntity ? (
+            <div className={reportSummaryBandChrome}>
+                <ReportStatementSummaryCardsGrid cards={summaryCards} />
+            </div>
+        ) : null;
+
+        const reportListTabsRow = <div className={reportListBandChrome}>{reportListTabs}</div>;
+
+        const reportListView = (
+            <MasterListViewShell
+                isMobile={false}
+                searchRow={reportSearchRow}
+                sectionLabel={reportSectionLabel}
+                quickFilter={listTab === "groups" ? groupListQuickFilter : partyListQuickFilter}
+                onQuickFilterChange={listTab === "groups" ? setGroupListQuickFilter : setPartyListQuickFilter}
+            >
+                <div className="relative h-full min-h-0 w-full overflow-hidden">
+                    <div
+                        className={cn(
+                            "absolute inset-0 flex h-full min-h-0 flex-col overflow-hidden",
+                            listTab !== "parties" && "pointer-events-none hidden"
+                        )}
+                        aria-hidden={listTab !== "parties"}
+                    >
+                        <PartyList
+                            parties={partiesForReportList}
+                            onSelectParty={handleSelectPartyFromList}
+                            selectedParty={selectedParty}
+                            searchTerm={listSearchTerm}
+                            quickFilter={partyListQuickFilter}
+                            onQuickFilterChange={setPartyListQuickFilter}
+                            hideQuickFilterBar
+                        />
+                    </div>
+                    <div
+                        className={cn(
+                            "absolute inset-0 flex h-full min-h-0 flex-col overflow-hidden",
+                            listTab !== "groups" && "pointer-events-none hidden"
+                        )}
+                        aria-hidden={listTab !== "groups"}
+                    >
+                        <PartyGroupList
+                            groups={groupsForReportList}
+                            onSelectGroup={handleSelectGroupFromList}
+                            selectedGroup={selectedGroup}
+                            searchTerm={listSearchTerm}
+                            collapsible={false}
+                            quickFilter={groupListQuickFilter}
+                            onQuickFilterChange={setGroupListQuickFilter}
+                            hideQuickFilterBar
+                            hideCategoryHeaders
+                        />
+                    </div>
+                </div>
+            </MasterListViewShell>
+        );
+
+        const reportDetailView = selectedParty ? (
+            <PartyDetails
+                party={selectedParty}
+                allParties={processedParties}
+                transactions={processedTransactions}
+                onPartyUpdated={() => {}}
+                onPartyDeleted={() => setSelectedParty(null)}
+                dateRange={dateRange}
+                onDateRangeChange={setDateRange}
+                userNames={userNames}
+                journalAccountNames={journalAccountNames}
+                context="report"
+                onEmbeddedPartyChange={handleEmbeddedPartyChange}
+            />
+        ) : selectedGroup ? (
+            <GroupDetails
+                group={selectedGroup}
+                allGroups={processedGroups}
+                allParties={groupMemberParties}
+                onGroupUpdated={() => {}}
+                onGroupDeleted={() => setSelectedGroup(null)}
+                onPartyUpdated={() => {}}
+                dateRange={dateRange}
+                onDateRangeChange={setDateRange}
+                userNames={userNames}
+            />
+        ) : (
+            <div className="flex h-full flex-col items-center justify-center bg-muted/20">
+                <p className="text-sm text-muted-foreground">Select a party or group</p>
+            </div>
+        );
+
+        return (
+            <>
+                <ResponsiveMasterDetail
+                    listChromeRouteKey="party"
+                    title={pageTitle}
+                    balance={null}
+                    listHeaderLeading={<ReportShowListButton />}
+                    tabsRowClassName="!min-h-0 !border-b-0 !p-0"
+                    tabs={
+                        <div className="flex min-w-0 flex-col">
+                            {reportListTopSummary}
+                            {reportListTabsRow}
+                        </div>
+                    }
+                    listView={reportListView}
+                    detailView={reportDetailView}
+                    isMobile={false}
+                />
+                {addVoucherDialog}
+            </>
+        );
     }
 
     return (
@@ -620,11 +898,7 @@ export default function DesktopPartyStatementPage() {
                  ) : (
                     <>
                         <MobileDetailSummaryCollapsible>
-                        <div className="flex flex-nowrap gap-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-                            {summaryCards.map(card => (
-                                <ReportSummaryCard key={card.title} title={card.title} amount={card.amount} color={card.color} />
-                            ))}
-                        </div>
+                        <ReportStatementSummaryCardsRow cards={summaryCards} className="pt-0.5 pb-3 flex-shrink-0" />
                         </MobileDetailSummaryCollapsible>
 
                         <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
@@ -734,18 +1008,7 @@ export default function DesktopPartyStatementPage() {
                     <BarChart2 className="w-4 h-4 mb-0" /> <span className="text-[10px] leading-tight">Chart</span>
                 </Button>
             </footer>
-            <AddVoucherDialog
-                isOpen={isVoucherDialogOpen}
-                onOpenChange={(open: boolean) => {
-                    if (!open) {
-                        setIsVoucherDialogOpen(false);
-                        setSelectedVoucher(null);
-                        closeModalInUrl();
-                    }
-                }}
-                voucher={selectedVoucher}
-                onVoucherAction={() => setSelectedVoucher(null)}
-            />
+            {addVoucherDialog}
         </div>
     );
 }

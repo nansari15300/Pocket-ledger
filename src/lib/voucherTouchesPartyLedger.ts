@@ -48,6 +48,12 @@ export function voucherTouchesPartyLedger(v: any, partyId: string): boolean {
   // Journal multi-leg — `accountId` string ya ref dono (cross-company copy ke baad Compare Side B rows).
   if (Array.isArray(v.entries) && v.entries.some((e: any) => ledgerIdEq(e?.accountId, partyId))) return true;
   if (v.type === "note" && ledgerIdEq(v.entityId, partyId)) return true;
+  if (
+    v.type === "adjustment" &&
+    ledgerIdEq((v.adjustmentTarget as { id?: unknown } | undefined)?.id ?? v.adjustmentTarget, partyId)
+  ) {
+    return true;
+  }
   if (v.type === "contra" && (ledgerIdEq(v.fromAccountId, partyId) || ledgerIdEq(v.toAccountId, partyId))) return true;
   // Inter Company — source/target party + IC · Due from/to counterparty
   if (v.type === "inter_company") {

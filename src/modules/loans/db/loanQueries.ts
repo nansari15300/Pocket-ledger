@@ -5,13 +5,68 @@ import { addCalendarDays, compareIsoDates, todayIso } from "../utils/loanDateUti
 import { roundMoney } from "../utils/loanRounding";
 
 /** Loan payable Staff row → module loan (open first; otherwise latest match). */
-export function findLoanForAccount(loans: Loan[], accountId: string | null | undefined): Loan | undefined {
-  const id = String(accountId || "").trim();
-  if (!id) return undefined;
-  const matches = loans.filter((loan) => String(loan.loanAccountId || "").trim() === id);
+function normLoanMatchLabel(value: string | null | undefined): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function pickPreferredLoan(matches: Loan[]): Loan | undefined {
+  if (!matches.length) return undefined;
   return (
     matches.find((loan) => loan.status !== "closed" && loan.status !== "cancelled") || matches[0]
   );
+}
+
+export function findLoanForAccount(
+  loans: Loan[],
+  accountId: string | null | undefined,
+  account?: {
+    name?: string;
+    accountName?: string;
+    convertedFromBankAccountId?: string | null;
+  } | null
+): Loan | undefined {
+  const id = String(accountId || "").trim();
+  if (id) {
+    const byId = pickPreferredLoan(
+      loans.filter((loan) => String(loan.loanAccountId || "").trim() === id)
+    );
+    if (byId) return byId;
+  }
+
+  const bankId = String(account?.convertedFromBankAccountId || "").trim();
+  if (bankId) {
+    const byBank = pickPreferredLoan(
+      loans.filter(
+        (loan) =>
+          String(loan.bankAccountId || "").trim() === bankId ||
+          String(loan.convertedFromBankAccountId || "").trim() === bankId
+      )
+    );
+    if (byBank) return byBank;
+  }
+
+  const accountName = normLoanMatchLabel(account?.name || account?.accountName || "");
+  if (!accountName) return undefined;
+
+  const accountBase = accountName.replace(/\s+loan\s*$/i, "").trim();
+
+  const byName = pickPreferredLoan(
+    loans.filter((loan) => {
+      const loanName = normLoanMatchLabel(loan.loanName);
+      const lenderName = normLoanMatchLabel(loan.lenderName);
+      const lenderLoan = normLoanMatchLabel(`${loan.lenderName} Loan`);
+      return (
+        loanName === accountName ||
+        lenderLoan === accountName ||
+        lenderName === accountName ||
+        (accountBase && (loanName === accountBase || lenderName === accountBase))
+      );
+    })
+  );
+  return byName;
 }
 
 export function filterLoans(

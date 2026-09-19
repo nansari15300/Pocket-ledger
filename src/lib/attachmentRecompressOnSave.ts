@@ -36,8 +36,10 @@ export function looksLikeImageAttachmentUrl(url: string): boolean {
 
 async function loadAttachmentBlob(
   url: string,
-  opts?: { companyId?: string | null }
+  opts?: { companyId?: string | null; signal?: AbortSignal }
 ): Promise<Blob | null> {
+  const { throwIfAttachmentCompressionAborted } = await import("@/lib/attachmentCompressionUi");
+  throwIfAttachmentCompressionAborted(opts?.signal);
   const trimmed = String(url || "").trim();
   if (!trimmed) return null;
 
@@ -63,10 +65,14 @@ async function loadAttachmentBlob(
     });
     if (!blob || blob.size === 0) {
       try {
-        const res = await fetch(trimmed, { mode: "cors" });
+        const res = await fetch(trimmed, { mode: "cors", signal: opts?.signal });
         if (!res.ok) return null;
         blob = await res.blob();
-      } catch {
+      } catch (e) {
+        if ((e as Error)?.name === "AbortError") {
+          const { AttachmentCompressionCancelledError } = await import("@/lib/attachmentCompressionUi");
+          throw new AttachmentCompressionCancelledError();
+        }
         return null;
       }
     }
@@ -181,7 +187,13 @@ export async function ensureSharedHttpsAttachmentCompressed(params: {
     // Caller-provided File: over-cap path already made it smaller — upload + rewrite all places.
 
     if (!params.silent) {
-      sonnerToast.message("Compressing shared file — updating all reuse places…");
+      const { VOUCHER_SONNER_TOAST_CN, VOUCHER_SONNER_TOAST_POSITION } = await import(
+        "@/lib/voucherSaveUi"
+      );
+      sonnerToast.message("Compressing shared file — updating all reuse places…", {
+        position: VOUCHER_SONNER_TOAST_POSITION,
+        classNames: { toast: VOUCHER_SONNER_TOAST_CN },
+      });
     }
 
     const { uploadVoucherAttachmentFileToFirebase } = await import(
@@ -237,10 +249,11 @@ export async function ensureSharedHttpsAttachmentCompressed(params: {
     }
 
     if (!params.silent) {
+      const { showAttachmentCompressionDoneToast } = await import("@/lib/attachmentCompressionUi");
       if (result.deletedOld) {
-        sonnerToast.success("File compressed");
+        showAttachmentCompressionDoneToast("File compressed");
       } else if (result.rewrittenPlaces > 0) {
-        sonnerToast.success(`Shared file updated in ${result.rewrittenPlaces} places`);
+        showAttachmentCompressionDoneToast(`Shared file updated in ${result.rewrittenPlaces} places`);
       }
     }
     return toUrl;
@@ -280,19 +293,39 @@ async function propagateReusedHttpsRecompressOrReturnFile(params: {
   const isShared = usage >= 1 || sessionHint >= 2 || registryCount >= 2;
   if (!isShared) return params.compressed;
 
-  // Shared: always string URL. Fail/skip → original fromUrl (fork File nahi).
-  return ensureSharedHttpsAttachmentCompressed({
+  const rewritten = await ensureSharedHttpsAttachmentCompressed({
     companyId: cid,
     fromUrl,
     compressed: params.compressed,
     silent: params.silent,
   });
+  if (rewritten !== fromUrl) return rewritten;
+
+  // Shared rewrite fail/skip → per-voucher upload (dev: warna purani URL + size same dikhe).
+  try {
+    const { uploadVoucherAttachmentFileToFirebase } = await import(
+      "@/lib/voucherFormAttachmentSave"
+    );
+    return await uploadVoucherAttachmentFileToFirebase({
+      companyId: cid,
+      voucherType: "attachments",
+      file: params.compressed,
+    });
+  } catch (e) {
+    console.error("[recompress] shared fallback upload failed — return File", e);
+    return params.compressed;
+  }
 }
+
+type SaveCompressJob =
+  | { index: number; kind: "file"; file: File }
+  | { index: number; kind: "url"; url: string; blob: Blob; srcFile: File };
 
 /**
  * Images over company cap → compressed `File` (re-upload). Under-cap / non-image unchanged.
  * Online ≤100KB; Local / PL Server / Drive ≤150KB.
  * Reused HTTPS: upload + company-wide rewrite + delete old immediately.
+ * Multi-file: download + compress parallel (pehle sequential tha → 2nd file 10× slow).
  */
 export async function recompressOversizedImageAttachmentsOnSave(
   items: (File | string)[],
@@ -303,106 +336,133 @@ export async function recompressOversizedImageAttachmentsOnSave(
   const band = await resolveAttachmentImageKbBand(opts?.companyId);
   const maxBytes = band.maxKb * 1024;
 
-  const compressibleIndexes: number[] = [];
+  const passthrough = new Map<number, File | string>();
+  const jobs: SaveCompressJob[] = [];
+
   items.forEach((item, index) => {
-    if (item instanceof File && isImageFile(item) && item.size > maxBytes) {
-      compressibleIndexes.push(index);
+    if (item instanceof File) {
+      if (isImageFile(item) && item.size > maxBytes) {
+        jobs.push({ index, kind: "file", file: item });
+      } else {
+        passthrough.set(index, item);
+      }
       return;
     }
-    if (typeof item === "string" && looksLikeImageAttachmentUrl(item)) {
-      compressibleIndexes.push(index);
+    const url = String(item || "").trim();
+    if (!url || !looksLikeImageAttachmentUrl(url)) {
+      passthrough.set(index, item);
     }
   });
-  if (compressibleIndexes.length === 0) return items;
+
+  const urlIndexes = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item, index }) => {
+      if (passthrough.has(index)) return false;
+      return typeof item === "string" && looksLikeImageAttachmentUrl(String(item || "").trim());
+    });
 
   const {
     setAttachmentCompressionProgress,
     finishAttachmentCompressionProgress,
-    reportAttachmentCompressionProgress,
+    createParallelAttachmentCompressionReporter,
+    beginAttachmentCompressionAbortScope,
+    endAttachmentCompressionAbortScope,
+    throwIfAttachmentCompressionAborted,
+    isAttachmentCompressionCancelledError,
+    showAttachmentCompressionCancelledToast,
+    dismissAttachmentCompressionProgressToast,
   } = await import("@/lib/attachmentCompressionUi");
-  if (!opts?.silent) setAttachmentCompressionProgress(1);
-
-  let compressDone = 0;
-  const fileCount = compressibleIndexes.length;
+  const signal = beginAttachmentCompressionAbortScope();
+  let compressionCancelled = false;
 
   try {
-    const out: (File | string)[] = [];
-    for (const item of items) {
-      if (item instanceof File) {
-        if (!isImageFile(item) || item.size <= maxBytes) {
-          out.push(item);
-          continue;
-        }
+    await Promise.all(
+      urlIndexes.map(async ({ item, index }) => {
+        const url = String(item || "").trim();
         try {
-          const fileIdx = compressDone;
-          if (!opts?.silent) reportAttachmentCompressionProgress(fileIdx, fileCount, 0);
-          const compressed = await compressVoucherAttachment(item, maxBytes, {
-            minKB: band.minKb,
-            onProgress: opts?.silent
-              ? undefined
-              : (pct) => reportAttachmentCompressionProgress(fileIdx, fileCount, pct),
+          throwIfAttachmentCompressionAborted(signal);
+          const blob = await loadAttachmentBlob(url, { companyId: opts?.companyId, signal });
+          if (!blob || blob.size <= maxBytes) {
+            passthrough.set(index, url);
+            return;
+          }
+          const kind = await sniffBlobKindForPreview(blob);
+          if (kind !== "image") {
+            passthrough.set(index, url);
+            return;
+          }
+          const type = (blob.type || "image/jpeg").toLowerCase().startsWith("image/")
+            ? blob.type || "image/jpeg"
+            : "image/jpeg";
+          jobs.push({
+            index,
+            kind: "url",
+            url,
+            blob,
+            srcFile: new File([blob], fileNameForCompressedImage(url, type), { type }),
           });
-          compressDone += 1;
-          if (!opts?.silent) reportAttachmentCompressionProgress(compressDone, fileCount, 100);
-          out.push(compressed.size < item.size ? compressed : item);
         } catch (e) {
-          console.error(e);
-          out.push(item);
+          if (isAttachmentCompressionCancelledError(e)) throw e;
+          passthrough.set(index, url);
         }
-        continue;
-      }
+      })
+    );
 
-      const url = String(item || "").trim();
-      if (!url || !looksLikeImageAttachmentUrl(url)) {
-        out.push(item);
-        continue;
-      }
+    if (jobs.length === 0) return items;
 
-      try {
-        const blob = await loadAttachmentBlob(url, { companyId: opts?.companyId });
-        if (!blob || blob.size <= maxBytes) {
-          out.push(url);
-          continue;
-        }
-        const kind = await sniffBlobKindForPreview(blob);
-        if (kind !== "image") {
-          out.push(url);
-          continue;
-        }
-        const type = (blob.type || "image/jpeg").toLowerCase().startsWith("image/")
-          ? blob.type || "image/jpeg"
-          : "image/jpeg";
-        const srcFile = new File([blob], fileNameForCompressedImage(url, type), { type });
-        const fileIdx = compressDone;
-        if (!opts?.silent) reportAttachmentCompressionProgress(fileIdx, fileCount, 0);
+    const reportJob = createParallelAttachmentCompressionReporter(jobs.length, opts?.silent);
+    if (!opts?.silent) setAttachmentCompressionProgress(1);
+
+    const results = new Map<number, File | string>(passthrough);
+
+    await Promise.all(
+      jobs.map(async (job, jobIdx) => {
+        throwIfAttachmentCompressionAborted(signal);
+        reportJob(jobIdx, 0);
+        const srcFile = job.kind === "file" ? job.file : job.srcFile;
+        const beforeBytes = job.kind === "file" ? job.file.size : job.blob.size;
         const compressed = await compressVoucherAttachment(srcFile, maxBytes, {
           minKB: band.minKb,
-          onProgress: opts?.silent
-            ? undefined
-            : (pct) => reportAttachmentCompressionProgress(fileIdx, fileCount, pct),
+          onProgress: opts?.silent ? undefined : (pct) => reportJob(jobIdx, pct),
+          signal,
         });
-        compressDone += 1;
-        if (!opts?.silent) reportAttachmentCompressionProgress(compressDone, fileCount, 100);
-        if (compressed.size < blob.size) {
-          out.push(
+        reportJob(jobIdx, 100);
+
+        if (job.kind === "file") {
+          results.set(job.index, compressed.size < beforeBytes ? compressed : job.file);
+          return;
+        }
+
+        if (compressed.size < beforeBytes) {
+          throwIfAttachmentCompressionAborted(signal);
+          results.set(
+            job.index,
             await propagateReusedHttpsRecompressOrReturnFile({
               companyId: opts?.companyId,
-              fromUrl: url,
+              fromUrl: job.url,
               compressed,
               silent: opts?.silent,
             })
           );
         } else {
-          out.push(url);
+          results.set(job.index, job.url);
         }
-      } catch (e) {
-        console.error(e);
-        out.push(url);
-      }
+      })
+    );
+
+    return items.map((item, index) => results.get(index) ?? item);
+  } catch (e) {
+    if (isAttachmentCompressionCancelledError(e)) {
+      compressionCancelled = true;
+      dismissAttachmentCompressionProgressToast();
+      showAttachmentCompressionCancelledToast();
     }
-    return out;
+    throw e;
   } finally {
-    if (!opts?.silent) {
+    endAttachmentCompressionAbortScope();
+    if (compressionCancelled) {
+      dismissAttachmentCompressionProgressToast();
+    } else if (!opts?.silent) {
       setAttachmentCompressionProgress(100);
       finishAttachmentCompressionProgress();
     }

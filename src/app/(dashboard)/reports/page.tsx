@@ -70,6 +70,24 @@ function ReportsPageDetailRibbon() {
   return <div className="min-w-0 flex-1">{detailRibbonContent}</div>;
 }
 
+/** Desktop detail chrome: PC par sirf custom detail ribbon (Anusuchi13, etc.) — collapsed list toggle bar hide. */
+function ReportsDesktopDetailTopBar({
+  isDesktopReportListOpen,
+}: {
+  isDesktopReportListOpen: boolean;
+  onToggleDesktopReportList: () => void;
+}) {
+  const { detailRibbonContent } = useReportPage();
+
+  if (!isDesktopReportListOpen || !detailRibbonContent) return null;
+
+  return (
+    <div className={cn("flex shrink-0 gap-2", LEDGER_HEADER_RIBBON_WRAP_CN, "items-center py-1")}>
+      <ReportsPageDetailRibbon />
+    </div>
+  );
+}
+
 function ReportsPageContent() {
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -175,9 +193,9 @@ function ReportsPageContent() {
   }, [searchTerm, reportsForCompany]);
 
   const listView = (
-    <div className="flex flex-col h-full">
-      <div className="p-3 border-b">
-         <div className="relative">
+    <div className="flex flex-col h-full min-h-0" data-pl-master-list-chrome="">
+      <div className="pl-mlc-search-row border-b px-2 py-[4px]">
+         <div className="relative flex-1 min-w-0">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
                 placeholder="Search reports..."
@@ -225,7 +243,10 @@ function ReportsPageContent() {
           </div>
         ) : (
           // Details full page (no duplicate header - report component has its own header)
-          <ReportPageProvider onBackToReportList={() => setSelectedReportWithUrl(null)}>
+          <ReportPageProvider
+            onBackToReportList={() => setSelectedReportWithUrl(null)}
+            isDesktopReportListOpen
+          >
             <div
               className="h-full w-full overflow-hidden bg-background flex flex-col"
               onTouchStart={reportListEdgeSwipe.onTouchStart}
@@ -260,7 +281,11 @@ function ReportsPageContent() {
   }
 
   return (
-    <ReportPageProvider onBackToReportList={() => setSelectedReportWithUrl(null)}>
+    <ReportPageProvider
+      onBackToReportList={() => setSelectedReportWithUrl(null)}
+      isDesktopReportListOpen={isDesktopReportListOpen}
+      onShowDesktopReportList={() => setIsDesktopReportListOpen(true)}
+    >
       <div
         className="grid h-full overflow-hidden"
         style={{
@@ -277,51 +302,30 @@ function ReportsPageContent() {
           )}
           style={{ width: isDesktopReportListOpen ? reportListWidthPx : 0 }}
         >
-          <div className="relative h-full min-w-0">
+          <div className="relative flex h-full min-w-0 flex-col">
             <ResizeWidthHandle onPointerDown={beginReportListResize} title="Resize reports list" />
-            <div className="p-4 border-b flex items-center justify-between gap-2">
-              <h1 className="text-xl font-bold font-headline">Reports</h1>
-              {/* Dedicated hide control for report list panel. */}
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b px-2 py-1">
+              <h1 className="min-w-0 flex-1 text-base font-bold font-headline leading-tight">Reports</h1>
               <Button
-                variant="ghost"
+                type="button"
+                variant="outline"
                 size="icon"
-                className="h-8 w-8"
+                className="h-7 w-7 shrink-0 rounded-full border-blue-300/90 bg-blue-100 text-blue-900 shadow-sm hover:bg-blue-200 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-100 dark:hover:bg-blue-900/50"
                 onClick={() => setIsDesktopReportListOpen(false)}
                 title="Hide report list"
+                aria-label="Hide report list"
               >
-                <PanelRight className="h-4 w-4" />
+                <PanelRight className="h-3.5 w-3.5" />
               </Button>
             </div>
-            <div className="h-[calc(100%-65px)] min-w-0">{listView}</div>
+            <div className="min-h-0 flex-1 overflow-hidden">{listView}</div>
           </div>
         </div>
         <div className="min-w-0 flex flex-col overflow-hidden">
-          <div
-            className={cn(
-              "flex shrink-0 gap-2",
-              selectedReport?.ledgerDetailTopRibbon
-                ? cn(LEDGER_HEADER_RIBBON_WRAP_CN, "items-center py-1")
-                : "items-center border-b p-2"
-            )}
-          >
-            {/* Sidebar-like show control for report list panel. */}
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setIsDesktopReportListOpen((prev) => !prev)}
-              className="h-10 w-10 shrink-0 rounded-full"
-              title={isDesktopReportListOpen ? "Hide report list" : "Show report list"}
-              aria-label={isDesktopReportListOpen ? "Hide report list" : "Show report list"}
-            >
-              <PanelRight className="h-4 w-4" />
-            </Button>
-            <ReportsPageDetailRibbon />
-            {!selectedReport?.ledgerDetailTopRibbon ? (
-              <span className="truncate text-sm text-muted-foreground">
-                {selectedReport ? selectedReport.name : "Select a report"}
-              </span>
-            ) : null}
-          </div>
+          <ReportsDesktopDetailTopBar
+            isDesktopReportListOpen={isDesktopReportListOpen}
+            onToggleDesktopReportList={() => setIsDesktopReportListOpen((prev) => !prev)}
+          />
           <div className="flex-1 min-h-0 overflow-hidden">{detailView}</div>
         </div>
       </div>

@@ -1,10 +1,10 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { ArrowLeftRight, Users } from "lucide-react";
+import { ArrowLeftRight, UserCog, Users } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 
-export type InterCompanyRibbonTab = "voucher" | "join";
+export type InterCompanyRibbonTab = "voucher" | "join" | "connect";
 
 const ITEMS: {
   id: InterCompanyRibbonTab;
@@ -13,6 +13,7 @@ const ITEMS: {
 }[] = [
   { id: "voucher", title: "Voucher", icon: ArrowLeftRight },
   { id: "join", title: "Inter Com System", icon: Users },
+  { id: "connect", title: "Connect User", icon: UserCog },
 ];
 
 /** Last save popup pay-mode — next save pe default tick */

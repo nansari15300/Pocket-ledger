@@ -50,6 +50,7 @@ import { openPrintDirect } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import { useCalendarMonths } from "@/hooks/use-mobile";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 
 export function AccountGroupDetails({ 
   group,
@@ -356,7 +357,7 @@ export function AccountGroupDetails({
                       <SelectValue placeholder={`${rowsPerPage}`} />
                     </SelectTrigger>
                     <SelectContent side="top">
-                      {[10, 20, 30, 50].map((pageSize) => (
+                      {ROWS_PER_PAGE_OPTIONS_DEFAULT.map((pageSize) => (
                         <SelectItem key={pageSize} value={`${pageSize}`}>
                           {pageSize}
                         </SelectItem>
@@ -367,7 +368,7 @@ export function AccountGroupDetails({
               </div>
           </CardHeader>
           <CardContent className="flex-1 min-h-0 p-0">
-              <ScrollArea className="h-full">
+              <ScrollArea txnChrome className="h-full">
                   <div className="p-4 sm:p-6 md:p-8 pt-0">
                       <TransactionsTable transactions={paginatedTransactions} context="group" contextId={group.id} {...statementCheck.tableProps} showNarration={showNarration} visibleColumns={visibleColumns} openingBalance={group.openingBalance}/>
                       {paginatedTransactions.length === 0 && (

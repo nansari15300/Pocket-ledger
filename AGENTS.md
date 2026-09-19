@@ -118,6 +118,52 @@ Click-to-open preview was stabilized so party and voucher forms behave the same:
 
 Invoice/print-only PDF overlays (`printDirect`, billing statement PDF, sale invoice page) are **not** part of this freeze unless the human groups them with “attachment preview”. Backup/restore preview UI remains under the Backup freeze section above.
 
+## Freeze: File / attachment compression (hard)
+
+**Sep 2026:** Voucher + master image compression (admin From–To KB band, save recompress, add-file compress, parallel multi-file, cancel + toast stack) is stabilized on web, EXE, and APK. **Do not edit unless the human explicitly asks to change attachment / file compression in that same message.**
+
+### Permission (every AI)
+
+Before changing **any** file listed below (or compression cap / cancel / toast behavior):
+
+1. **Stop** — do not edit, refactor, or “small fix” compression code while doing unrelated voucher/ledger/master work.
+2. **Ask the human** in chat: which flow (add file / save recompress / master upload), what symptom, and confirm they want an edit now.
+3. Proceed **only** after explicit approval (e.g. “compression fix karo”, “compress band change”, “compression speed change”).
+
+Casual mentions (“file thoda chhota karo”, “compress faster”) without clear override **do not** lift this freeze.
+
+### Frozen paths (do not touch casually)
+
+- `src/lib/compression.ts` — JPEG/PDF compress, `fitJpegToTargetBand`, shrink-only fast path, `compressVoucherAttachment`
+- `src/lib/attachmentRecompressOnSave.ts` — `prepareVoucherAttachmentsForSave`, `recompressOversizedImageAttachmentsOnSave`, shared HTTPS recompress
+- `src/lib/attachmentCompressionUi.ts` — plan band resolve, progress/cancel toasts, `compressImageForCompany`, master compress helpers
+- `src/lib/appendCompressedVoucherAttachments.ts` — add-file / paste compress, parallel batch, processing flag
+- `src/lib/plansCatalogCache.ts` — `resolvePlansCatalogForEntitlements` (compression plan caps hydrate)
+- `src/lib/voucherSaveUi.ts` — **compression/cancel only:** `cancelVoucherInFlightWork`, `VOUCHER_SONNER_TOAST_CN`, `VOUCHER_SONNER_TOAST_POSITION`, compression branch in `voucherSaveErrorToast`
+- `src/components/ui/sonner.tsx` — Toaster stack layout used by compression/save toasts (`expand`, `gap`, `visibleToasts`)
+
+### Stabilized behavior to preserve
+
+- **Plan band:** online Firebase company → admin online band (e.g. 40–45 KB); local/PL/Drive → offline band; SQLite + Firestore plans hydrate when cache empty.
+- **Add file + save:** same `compressVoucherAttachment` path; multi-file **parallel** compress; oversized HTTPS on save → recompress + upload (shared rewrite with per-voucher fallback).
+- **Speed:** oversized photos use **shrink-only** band fit (no upscale scan for 100 KB → cap case).
+- **Cancel:** Cancel / dialog close → abort in-flight compress, dismiss loading toast, info toast “Attachment compression cancelled” (no console error).
+- **Toasts:** save + compress loading rows stacked (Sonner expanded list); compress done dismisses loading before success row.
+
+### Do not
+
+- Refactor, rename, or drive-by edit frozen paths while fixing unrelated UI / ledger / sync work.
+- Revert parallel multi-file compress to sequential.
+- Re-enable full upscale `fitJpegToTargetBand` scan for already-oversized voucher photos.
+- Change cancel semantics (toast stuck / compress continues after Cancel) without explicit request.
+- Change admin per-plan cap resolution back to cache-only `"basic"` / default 100 KB without explicit request.
+
+### If the human explicitly asks to change compression
+
+- Keep the diff minimal and scoped to that request.
+- Preserve: working compress on save + add file, cancel abort, toast stack, master + voucher parity.
+- Test at minimum: add 2× ~100 KB images, edit save recompress, Cancel mid-compress, one master photo upload.
+
 ## Freeze: Master account freeze (hard — Freez Account)
 
 **Aug 2026:** Master account freeze (owner toggle, diagonal overlay, list badge, voucher dropdown disabled) is stabilized for party, staff, bank/cash, tax, and expense. **Do not edit unless the human explicitly asks to change account freeze in that same message.**

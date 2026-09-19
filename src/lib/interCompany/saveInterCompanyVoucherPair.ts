@@ -135,6 +135,9 @@ export type SaveInterCompanyPairInput = {
   editingSide?: "source" | "target";
   /** Target/source Change Detected — selected pending fields is save par apply */
   applyPeerPendingFieldKeys?: InterCompanyPeerPendingFieldKey[];
+  /** Connect user typed source account (no master list permission) */
+  interCompanySuggestedSourceAccountLabel?: string;
+  interCompanySourceAccountRestricted?: boolean;
 };
 
 export type SaveInterCompanyPairResult = {
@@ -229,6 +232,11 @@ function buildVoucherPayload(args: {
   otherChargeAccountId?: string;
   otherChargeAmount?: number;
   otherChargeKind?: InterCompanyEntityKind | null;
+  interCompanySuggestedSourceAccountLabel?: string;
+  interCompanySourceAccountRestricted?: boolean;
+  interCompanyResolvedSourceEntityKind?: string;
+  interCompanyResolvedSourceEntityId?: string;
+  interCompanyResolvedSourceEntityLabel?: string;
 }): Record<string, unknown> {
   const otherAmt = round2(Number(args.otherChargeAmount) || 0);
   const otherAccountId = String(args.otherChargeAccountId || "").trim();
@@ -276,6 +284,19 @@ function buildVoucherPayload(args: {
           otherChargeAccountId: otherAccountId,
           otherChargeAmount: otherAmt,
           ...(otherChargeKind ? { otherChargeKind } : {}),
+        }
+      : {}),
+    ...(args.interCompanySuggestedSourceAccountLabel
+      ? { interCompanySuggestedSourceAccountLabel: args.interCompanySuggestedSourceAccountLabel }
+      : {}),
+    ...(args.interCompanySourceAccountRestricted
+      ? { interCompanySourceAccountRestricted: true }
+      : {}),
+    ...(args.interCompanyResolvedSourceEntityId
+      ? {
+          interCompanyResolvedSourceEntityKind: args.interCompanyResolvedSourceEntityKind || null,
+          interCompanyResolvedSourceEntityId: args.interCompanyResolvedSourceEntityId,
+          interCompanyResolvedSourceEntityLabel: args.interCompanyResolvedSourceEntityLabel || null,
         }
       : {}),
     ...entityPayeeFields(args.entityKind, args.entityId),
@@ -496,6 +517,11 @@ export async function saveInterCompanyVoucherPair(
   let lockedSourceBankId = String(input.sourceCompanyBankAccountId || "").trim();
   let lockedSourceEntityLabel = String(input.sourceEntityLabel || "").trim();
   let lockedSourceBankLabel = String(input.sourceCompanyBankLabel || "").trim();
+  const sourceAccountRestricted = input.interCompanySourceAccountRestricted === true;
+  const suggestedSourceAccountLabel = String(input.interCompanySuggestedSourceAccountLabel || "").trim();
+  if (sourceAccountRestricted && suggestedSourceAccountLabel && !lockedSourceEntityId) {
+    lockedSourceEntityLabel = suggestedSourceAccountLabel;
+  }
   if (existingSourceApproved && existingSourceRow) {
     const sk = String(existingSourceRow.sourceEntityKind || "").trim() as InterCompanyEntityKind;
     const sid = String(existingSourceRow.sourceEntityId || "").trim();
@@ -718,6 +744,7 @@ export async function saveInterCompanyVoucherPair(
     sourceEntityLabel: lockedSourceEntityLabel || input.sourceEntityLabel,
     targetCompanyName: input.targetCompanyName,
     targetEntityLabel: workTargetEntityLabel || input.targetEntityLabel,
+    voucherNumber: sourceVoucherNumber,
   });
   // Auto must + user typed text rakho; blank user → sirf auto
   const userExtra = extractInterCompanyUserNarration(workNarrationInput, autoNarration);
@@ -798,6 +825,8 @@ export async function saveInterCompanyVoucherPair(
     otherChargeAccountId: resolvedOtherChargeAccountId,
     otherChargeAmount: resolvedOtherChargeAmount,
     otherChargeKind: resolvedOtherChargeKind,
+    interCompanySuggestedSourceAccountLabel: suggestedSourceAccountLabel || undefined,
+    interCompanySourceAccountRestricted: sourceAccountRestricted || undefined,
   });
 
   const targetLink: InterCompanyLinkDoc = {
@@ -838,6 +867,8 @@ export async function saveInterCompanyVoucherPair(
     shareSourceAttachmentsWithPeer,
     shareTargetAttachmentsWithSource,
     targetPostMode,
+    interCompanySuggestedSourceAccountLabel: suggestedSourceAccountLabel || undefined,
+    interCompanySourceAccountRestricted: sourceAccountRestricted || undefined,
   });
 
   const targetKeepsSourceApprovedFlag =

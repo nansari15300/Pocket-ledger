@@ -3,7 +3,8 @@ import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOL
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Search } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Search, Info } from "lucide-react";
 import React, { Suspense, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
@@ -29,7 +30,32 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import {
   isPartyDirectOnSystemBranch,
   isPartySystemGroupId,
+  PARTY_SYSTEM_DEBTORS_ID,
+  PARTY_SYSTEM_GROUP_OPTIONS,
+  buildPartySystemBranchSelectionGroup,
+  resolvePartyListGroupBucketId,
 } from "@/lib/partySystemGroups";
+import { filterPartiesForPartyGroupScope } from "@/lib/partyGroupScope";
+import {
+  buildIcPeerCompanyGroupRows,
+  IC_COMPANY_PARTY_GROUP_ID,
+  icPeerCompanyGroupListTitleLines,
+  interCompanyClearingAccountDisplayName,
+} from "@/lib/interCompany/icPeerCompanyGroups";
+import { isInterCompanyPartyListAccount } from "@/lib/interCompany/interCompanyCounterpartyPartyName";
+import type { IcCompanyGroupTabSelectOptions } from "@/components/party/IcCompanyGroupTabListTree";
+import {
+  GroupSummaryTreeList,
+  type GroupSummaryTreeNode,
+} from "@/components/reports/GroupSummaryTreeList";
+import { ItemGroupDetails } from "@/components/items/ItemGroupDetails";
+import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
+import { ReportShowListButton } from "@/components/reports/ReportShowListButton";
+import { ReportRegisterListHeading } from "@/components/reports/ReportRegisterListHeading";
+import { masterListRowUnselectedCn } from "@/lib/masterListChrome";
+import { MasterListRow } from "@/components/ui/master-list-row";
+import { ResizeWidthHandle, useResizablePixelWidth } from "@/components/layout/ResizablePaneWidth";
+import { mlc, mlcListChromeRootData } from "@/lib/mobileListChrome";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { doc, getDoc, query, collection, getDocs, where } from "firebase/firestore";
@@ -91,7 +117,7 @@ type UnifiedGroup = {
   balance: number;
   debit: number;
   credit: number;
-  groupType: 'party' | 'staff' | 'tax' | 'expense' | 'bank';
+  groupType: 'party' | 'staff' | 'tax' | 'expense' | 'bank' | 'item';
   parentId?: string;
   isSystemGroup?: boolean;
   entity?: Group | AccountGroup | any;
@@ -157,6 +183,7 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const { company } = useCompany();
+  const companyId = company?.id || "";
   const { onBackToReportList } = useReportPage();
   const { 
     vouchers: allVouchers, 
@@ -171,6 +198,8 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
     processedStaffGroups,
     processedTaxGroups,
     processedExpenseGroups,
+    processedItemGroups,
+    processedItems,
     journalAccountNames,
     userNames: vouchersUserNames 
   } = useVouchers();
@@ -180,6 +209,10 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedGroupMemberFilterId, setSelectedGroupMemberFilterId] = useState<string | null>(null);
+  const [selectedIcPeerCompanyId, setSelectedIcPeerCompanyId] = useState<string | null>(null);
+  const [selectedIcMemberAccountId, setSelectedIcMemberAccountId] = useState<string | null>(null);
+  const [groupExpandOnly, setGroupExpandOnly] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [transactionSearch, setTransactionSearch] = useState("");
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -191,6 +224,14 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
   const { settings: animationSettings } = useAnimationSettings();
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
+  const summaryListWidthStorageKey =
+    mode === "group" ? "pl-group-summary-list-width-px" : "pl-account-summary-list-width-px";
+  const { widthPx: summaryListWidthPx, beginResize: beginSummaryListResize } = useResizablePixelWidth({
+    storageKey: summaryListWidthStorageKey,
+    defaultPx: 320,
+    minPx: Math.round(256 * 0.7),
+    maxPx: 450,
+  });
 
   const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
   const dateRangeLabel = useMemo(() => {
@@ -367,7 +408,8 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
         (groupType === "staff" && isSystemParentGroup("staff_groups", id)) ||
         (groupType === "tax" && isSystemParentGroup("tax_groups", id)) ||
         (groupType === "bank" && isSystemParentGroup("account_groups", id)) ||
-        (groupType === "expense" && isSystemParentGroup("expense_groups", id));
+        (groupType === "expense" && isSystemParentGroup("expense_groups", id)) ||
+        (groupType === "item" && isSystemParentGroup("item_groups", id));
       // Guard: treat child groups as user groups even if old data accidentally has reserved=true.
       if (hasParent) return isKnownSystemParent;
       // Root groups can still use legacy reserved flag when system-parent ids are not listed.
@@ -462,8 +504,25 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
       }
     });
     
+    // Item groups
+    processedItemGroups.forEach((ig) => {
+      if ((ig as any).isAutoUngrouped === true) return;
+      if ((ig as any).isReportOnly === true) return;
+      groups.push({
+        id: ig.id,
+        name: ig.name,
+        balance: ig.balance || 0,
+        debit: ig.debit || 0,
+        credit: ig.credit || 0,
+        groupType: "item",
+        parentId: (ig as any).parentId,
+        isSystemGroup: detectSystemGroup(ig, "item"),
+        entity: ig,
+      });
+    });
+    
     return groups;
-  }, [processedGroups, processedStaffGroups, processedTaxGroups, processedExpenseGroups, processedAccountGroups]);
+  }, [processedGroups, processedStaffGroups, processedTaxGroups, processedExpenseGroups, processedAccountGroups, processedItemGroups]);
 
   // Build tree structure: entity types as top-level, ONLY accounts (no groups) under each entity
   const accountTree = useMemo(() => {
@@ -595,6 +654,7 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
       { id: 'entity-staff', name: STAFF_ENTITY_LABEL, groupType: 'staff' },
       { id: 'entity-tax', name: 'Tax', groupType: 'tax' },
       { id: 'entity-expense', name: 'Income & Expense', groupType: 'expense' },
+      { id: 'entity-item', name: 'Item', groupType: 'item' },
     ];
     const tree: AccountTreeItem[] = entityTypes.map(e => ({
       id: e.id,
@@ -886,9 +946,327 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
     return filterTree(groupTree);
   }, [groupTree, searchTerm]);
 
+  const icParties = useMemo(
+    () => processedParties.filter((p) => isInterCompanyPartyListAccount(p)),
+    [processedParties]
+  );
+
+  const partyGroupsForList = useMemo(() => {
+    const userDefinedGroups = processedGroups.filter((g) => {
+      const anyG = g as any;
+      const isReportOnly = anyG.isReportOnly === true;
+      const isAutoUngrouped = anyG.isAutoUngrouped === true;
+      const isSystemParent =
+        anyG.isSystemReserved === true || isSystemParentGroup("groups", anyG.id);
+      return !isReportOnly && !isSystemParent && !isAutoUngrouped;
+    });
+
+    const syntheticGroups: Group[] = [];
+    for (const branch of PARTY_SYSTEM_GROUP_OPTIONS) {
+      syntheticGroups.push(
+        buildPartySystemBranchSelectionGroup(branch.id, companyId, 0) as Group
+      );
+    }
+    return [...userDefinedGroups, ...syntheticGroups];
+  }, [processedGroups, companyId]);
+
+  const icCompanyGroupForDetails = useMemo((): Group | null => {
+    if (icParties.length === 0) return null;
+    return {
+      id: IC_COMPANY_PARTY_GROUP_ID,
+      name: "IC Company",
+      balance: icParties.reduce((sum, p) => sum + (p.balance || 0), 0),
+      companyId,
+      debit: icParties.reduce((sum, p) => sum + (p.debit || 0), 0),
+      credit: icParties.reduce((sum, p) => sum + (p.credit || 0), 0),
+      parentId: PARTY_SYSTEM_DEBTORS_ID,
+    };
+  }, [icParties, companyId]);
+
+  const icPeerCompanyRowsForGroupTab = useMemo(
+    () => buildIcPeerCompanyGroupRows(icParties),
+    [icParties]
+  );
+
+  const mapAccountTreeToSummaryNodes = useCallback((items: AccountTreeItem[]): GroupSummaryTreeNode[] => {
+    return items.map((item) => {
+      const isEntityRow = item.id.startsWith("entity-");
+      const isVirtualExpenseParent = item.id.startsWith("expense-parent-");
+      return {
+        id: item.id,
+        name: item.name,
+        balance: item.balance || 0,
+        level: item.level,
+        isEntityRow,
+        isVirtualExpenseParent,
+        isSystemGroup: Boolean(item.group?.isSystemGroup),
+        groupId: isEntityRow || isVirtualExpenseParent ? undefined : item.group?.id || item.id,
+        groupType: (item.group as any)?.groupType,
+        children: item.children?.length ? mapAccountTreeToSummaryNodes(item.children) : undefined,
+      };
+    });
+  }, []);
+
+  const groupSummaryTree = useMemo((): GroupSummaryTreeNode[] => {
+    const toAccountNode = (
+      accountType: UnifiedAccount["accountType"],
+      id: string,
+      name: string,
+      balance: number
+    ): GroupSummaryTreeNode => ({
+      id: `gs-account-${accountType}-${id}`,
+      name,
+      balance: balance || 0,
+      level: 0,
+      isAccountRow: true,
+      accountId: id,
+      accountType,
+    });
+
+    const accountsForGroup = (groupId: string, groupType?: string): GroupSummaryTreeNode[] => {
+      if (!groupType) return [];
+      if (groupType === "party") {
+        if (isPartySystemGroupId(groupId)) {
+          return processedParties
+            .filter(
+              (p) =>
+                !isInterCompanyPartyListAccount(p) && isPartyDirectOnSystemBranch(p, groupId)
+            )
+            .map((p) => toAccountNode("party", p.id, p.name, p.balance || 0));
+        }
+        return processedParties
+          .filter(
+            (p) =>
+              !isInterCompanyPartyListAccount(p) &&
+              resolvePartyListGroupBucketId(p) === groupId
+          )
+          .map((p) => toAccountNode("party", p.id, p.name, p.balance || 0));
+      }
+      if (groupType === "bank") {
+        return processedAccounts
+          .filter((a) =>
+            groupId === "ungrouped-bank"
+              ? !a.groupId || a.groupId === "ungrouped_account"
+              : a.groupId === groupId
+          )
+          .map((a) => toAccountNode("bank", a.id, a.accountName, a.balance || 0));
+      }
+      if (groupType === "staff") {
+        return processedStaff
+          .filter((s: any) =>
+            groupId === "ungrouped-staff"
+              ? !s.groupId || s.groupId === "ungrouped_staff"
+              : s.groupId === groupId
+          )
+          .map((s) => toAccountNode("staff", s.id, s.name, s.balance || 0));
+      }
+      if (groupType === "tax") {
+        return processedTaxes
+          .filter((t: any) =>
+            groupId === "ungrouped-tax"
+              ? !t.groupId || t.groupId === "ungrouped_tax"
+              : t.groupId === groupId
+          )
+          .map((t) => toAccountNode("tax", t.id, t.name, t.balance || 0));
+      }
+      if (groupType === "expense") {
+        return processedExpenseAccounts
+          .filter((e: any) =>
+            groupId === "ungrouped-expense"
+              ? !e.groupId || e.groupId === "ungrouped_expense"
+              : e.groupId === groupId
+          )
+          .map((e) => toAccountNode("expense", e.id, e.name, e.balance || 0));
+      }
+      return [];
+    };
+
+    const appendAccountLeaves = (nodes: GroupSummaryTreeNode[]): GroupSummaryTreeNode[] =>
+      nodes.map((node) => {
+        const groupChildren = node.children ? appendAccountLeaves(node.children) : [];
+        const accountChildren =
+          node.groupId &&
+          node.groupType &&
+          !node.isEntityRow &&
+          !node.isVirtualExpenseParent &&
+          !node.isIcEntity &&
+          !node.isIcPeerRow &&
+          !node.isIcMemberRow &&
+          !node.isAccountRow
+            ? accountsForGroup(node.groupId, node.groupType)
+            : [];
+        const children = [...groupChildren, ...accountChildren];
+        return { ...node, children: children.length ? children : undefined };
+      });
+
+    let base = mapAccountTreeToSummaryNodes(filteredGroupTree);
+    if (!groupExpandOnly) {
+      base = appendAccountLeaves(base);
+    }
+
+    if (icParties.length === 0 || !icCompanyGroupForDetails) return base;
+
+    const icBalance = icCompanyGroupForDetails.balance || 0;
+    const peerRows = icPeerCompanyRowsForGroupTab;
+    const icEntity: GroupSummaryTreeNode = {
+      id: "entity-ic-company",
+      name: "IC Company",
+      balance: icBalance,
+      level: 0,
+      isIcEntity: true,
+      groupId: IC_COMPANY_PARTY_GROUP_ID,
+      children: peerRows.map((peer) => ({
+        id: peer.id,
+        name: icPeerCompanyGroupListTitleLines(peer).primary,
+        balance: peer.balance || 0,
+        level: 1,
+        isIcPeerRow: true,
+        icPeerCompanyId: peer.id,
+        groupId: IC_COMPANY_PARTY_GROUP_ID,
+        children: groupExpandOnly
+          ? undefined
+          : (peer.icMemberParties || []).map((member) => ({
+              id: member.id,
+              name: interCompanyClearingAccountDisplayName(member),
+              balance: member.balance || 0,
+              level: 2,
+              isIcMemberRow: true,
+              icPeerCompanyId: peer.id,
+              icMemberAccountId: member.id,
+              groupId: IC_COMPANY_PARTY_GROUP_ID,
+            })),
+      })),
+    };
+    return [...base, icEntity];
+  }, [
+    filteredGroupTree,
+    groupExpandOnly,
+    icParties.length,
+    icCompanyGroupForDetails,
+    icPeerCompanyRowsForGroupTab,
+    mapAccountTreeToSummaryNodes,
+    processedParties,
+    processedAccounts,
+    processedStaff,
+    processedTaxes,
+    processedExpenseAccounts,
+  ]);
+
+  const partiesForSelectedGroup = useMemo(() => {
+    if (!selectedGroup) return [];
+    if (selectedGroup.id === IC_COMPANY_PARTY_GROUP_ID) {
+      return buildIcPeerCompanyGroupRows(icParties);
+    }
+    if (selectedGroup.groupType === "party") {
+      return filterPartiesForPartyGroupScope(
+        selectedGroup.id,
+        processedParties,
+        partyGroupsForList
+      );
+    }
+    return [];
+  }, [selectedGroup, icParties, processedParties, partyGroupsForList]);
+
+  type GroupSummaryListRow = Group & {
+    groupType?: UnifiedGroup["groupType"] | "account";
+    isSystemGroup?: boolean;
+  };
+
+  const toUnifiedGroupFromListGroup = useCallback(
+    (group: GroupSummaryListRow): UnifiedGroup => {
+      const existing = allUnifiedGroups.find((g) => g.id === group.id);
+      if (existing) return existing;
+      const groupType = (
+        group.groupType === "account" ? "bank" : group.groupType || "party"
+      ) as UnifiedGroup["groupType"];
+      return {
+        id: group.id,
+        name: group.name,
+        balance: group.balance || 0,
+        debit: group.debit || 0,
+        credit: group.credit || 0,
+        groupType,
+        parentId: group.parentId,
+        isSystemGroup: Boolean(
+          group.isSystemGroup ||
+            (group as any).isSystemReserved ||
+            isPartySystemGroupId(group.id)
+        ),
+        entity: group,
+      };
+    },
+    [allUnifiedGroups]
+  );
+
+  const handleSelectIcCompanyGroup = useCallback(
+    (options?: IcCompanyGroupTabSelectOptions) => {
+      if (!icCompanyGroupForDetails) return;
+      setSelectedIcPeerCompanyId(options?.peerCompanyId ?? null);
+      setSelectedIcMemberAccountId(options?.memberAccountId ?? null);
+      setSelectedGroupMemberFilterId(null);
+      setSelectedAccount(null);
+      setSelectedGroup(
+        toUnifiedGroupFromListGroup({ ...icCompanyGroupForDetails, groupType: "party" })
+      );
+    },
+    [icCompanyGroupForDetails, toUnifiedGroupFromListGroup]
+  );
+
+  const handleSelectGroupFromTree = useCallback(
+    (groupId: string) => {
+      setSelectedIcPeerCompanyId(null);
+      setSelectedIcMemberAccountId(null);
+      setSelectedGroupMemberFilterId(null);
+      setSelectedAccount(null);
+      const unified = allUnifiedGroups.find((g) => g.id === groupId);
+      if (unified) {
+        setSelectedGroup(unified);
+        return;
+      }
+      const partyGroup = partyGroupsForList.find((g) => g.id === groupId);
+      if (partyGroup) {
+        setSelectedGroup(toUnifiedGroupFromListGroup({ ...partyGroup, groupType: "party" }));
+      }
+    },
+    [allUnifiedGroups, partyGroupsForList, toUnifiedGroupFromListGroup]
+  );
+
+  const handleSelectAccountFromTree = useCallback(
+    (accountId: string) => {
+      const acc = allUnifiedAccounts.find((a) => a.id === accountId);
+      if (!acc) return;
+      setSelectedAccount(acc);
+      setSelectedGroup(null);
+      setSelectedIcPeerCompanyId(null);
+      setSelectedIcMemberAccountId(null);
+      setSelectedGroupMemberFilterId(null);
+    },
+    [allUnifiedAccounts]
+  );
+
+  const toggleGroupSummaryExpand = useCallback((nodeId: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+        return next;
+      }
+      if (nodeId.startsWith("entity-")) {
+        for (const id of [...next]) {
+          if (id.startsWith("entity-")) next.delete(id);
+        }
+      }
+      next.add(nodeId);
+      return next;
+    });
+  }, []);
+
   const totalBalance = useMemo(
-    () => (mode === "group" ? flattenedGroupItems : flattenedItems).reduce((sum, item) => sum + (item.balance || 0), 0),
-    [mode, flattenedItems, flattenedGroupItems]
+    () =>
+      mode === "group"
+        ? groupSummaryTree.reduce((sum, item) => sum + (item.balance || 0), 0)
+        : flattenedItems.reduce((sum, item) => sum + (item.balance || 0), 0),
+    [mode, flattenedItems, groupSummaryTree]
   );
 
   // Mobile: entity dropdown options (Party, Staff, Bank, Tax, Income & Expense)
@@ -948,6 +1326,9 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
   // Mobile: group dropdown options (groups under selected entity) - for Group Summary mode
   const groupDropdownOptions = useMemo(() => {
     if (mode !== "group") return [];
+    if (selectedEntityType === "party") {
+      return partyGroupsForList.map((g) => ({ value: g.id, label: g.name }));
+    }
     const base = allUnifiedGroups
       .filter((g) => (g as any).groupType === selectedEntityType)
       .map((g) => ({ value: g.id, label: g.name }));
@@ -956,7 +1337,7 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
       base.unshift({ value: ungrouped.id, label: ungrouped.name });
     }
     return base;
-  }, [mode, selectedEntityType, allUnifiedGroups, buildUngroupedVirtualGroup]);
+  }, [mode, selectedEntityType, allUnifiedGroups, buildUngroupedVirtualGroup, partyGroupsForList]);
 
   // Resolve selected scope: collapsed system group => include all nested user groups.
   const selectedGroupScopeIds = useMemo(() => {
@@ -1110,7 +1491,7 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
     if (hasAutoSelected.current) return;
     if (mode === "group") {
       if (
-        allUnifiedGroups.length === 0 &&
+        groupSummaryTree.length === 0 &&
         !buildUngroupedVirtualGroup("party") &&
         !buildUngroupedVirtualGroup("bank") &&
         !buildUngroupedVirtualGroup("staff") &&
@@ -1126,39 +1507,26 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
           const savedIsUngrouped = savedGroupId.startsWith("ungrouped-");
           const found = savedIsUngrouped
             ? buildUngroupedVirtualGroup((savedGroupId.replace("ungrouped-", "") as UnifiedGroup["groupType"]))
-            : allUnifiedGroups.find((g) => g.id === savedGroupId);
+            : allUnifiedGroups.find((g) => g.id === savedGroupId) ||
+              (savedGroupId === IC_COMPANY_PARTY_GROUP_ID && icCompanyGroupForDetails
+                ? toUnifiedGroupFromListGroup({ ...icCompanyGroupForDetails, groupType: "party" })
+                : partyGroupsForList.find((g) => g.id === savedGroupId)
+                  ? toUnifiedGroupFromListGroup({
+                      ...partyGroupsForList.find((g) => g.id === savedGroupId)!,
+                      groupType: "party",
+                    })
+                  : null);
           if (found) {
             setSelectedGroup(found as UnifiedGroup);
             setSelectedAccount(null);
-            setExpandedGroups((prev) => {
-              const next = new Set(prev);
-              next.clear();
-              next.add(`entity-${(found as any)?.groupType || "party"}`);
-              return next;
-            });
+            if (savedGroupId === IC_COMPANY_PARTY_GROUP_ID) {
+              setSelectedIcPeerCompanyId(null);
+              setSelectedIcMemberAccountId(null);
+            }
             return;
           }
         }
       } catch (_) {}
-      const firstGroup =
-        allUnifiedGroups[0] ||
-        buildUngroupedVirtualGroup("party") ||
-        buildUngroupedVirtualGroup("bank") ||
-        buildUngroupedVirtualGroup("staff") ||
-        buildUngroupedVirtualGroup("tax") ||
-        buildUngroupedVirtualGroup("expense");
-      if (firstGroup) {
-        setExpandedGroups((prev) => {
-          const next = new Set(prev);
-          next.clear();
-          next.add(`entity-${(firstGroup as any).groupType || "party"}`);
-          return next;
-        });
-        setTimeout(() => {
-          setSelectedGroup(firstGroup as UnifiedGroup);
-          setSelectedAccount(null);
-        }, 50);
-      }
       return;
     }
     if (accountTree.length === 0) return;
@@ -1205,7 +1573,7 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
         }
       }
     }
-  }, [accountTree, allUnifiedGroups, mode, buildUngroupedVirtualGroup]);
+  }, [accountTree, allUnifiedGroups, groupSummaryTree, icCompanyGroupForDetails, partyGroupsForList, mode, buildUngroupedVirtualGroup, toUnifiedGroupFromListGroup]);
 
   useEffect(() => {
     if (mode === "group" && selectedGroup && typeof window !== "undefined") {
@@ -1598,6 +1966,9 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
       (isSelectableGroup && selectedGroup?.id === item.id)
     );
 
+    const isNonSelectableRow = item.id.startsWith("entity-") || isVirtualExpenseParent;
+    const rowSelected = isSelected && !isNonSelectableRow;
+
     return (
       <motion.div
         key={item.id}
@@ -1609,16 +1980,15 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
           ease: "easeInOut"
         }}
       >
-        <Card
+        <MasterListRow
+          selected={rowSelected}
           className={cn(
-            "p-1.5 border rounded-lg transition-colors duration-200",
-            item.id.startsWith('entity-') || isVirtualExpenseParent
-              ? "cursor-default bg-muted/50" 
-              : isSelected
-              ? "cursor-pointer border-primary bg-secondary shadow-sm"
-              : "cursor-pointer border-gray-300 dark:border-gray-600 hover:border-primary/40 bg-card hover:bg-muted/30"
+            "p-1.5",
+            isNonSelectableRow
+              ? "cursor-default bg-muted/50"
+              : "cursor-pointer",
+            !isNonSelectableRow && masterListRowUnselectedCn(rowSelected)
           )}
-          // Apply fixed visual tree indent: entity (0), system (+25px), user (+50px).
           style={{ marginLeft: `${level * 25}px` }}
           onClick={() => handleSelectItem(item)}
         >
@@ -1707,7 +2077,7 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
               </TooltipContent>
             </Tooltip>
           </div>
-        </Card>
+        </MasterListRow>
         {hasChildren && isExpanded && (
           <div className="mt-1 space-y-1">
             {item.children!.map(child => renderTreeItem(child, level + 1))}
@@ -1781,23 +2151,36 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
       // Render appropriate group details component based on group type
       switch (group.groupType) {
         case 'party': {
-          const scopedParties = isPartySystemGroupId(group.id)
-            ? processedParties.filter((p: any) => isPartyDirectOnSystemBranch(p, group.id))
-            : processedParties.filter((p) => inScope(p.groupId));
+          const scopedParties =
+            group.id === IC_COMPANY_PARTY_GROUP_ID
+              ? partiesForSelectedGroup
+              : isPartySystemGroupId(group.id)
+                ? processedParties.filter((p: any) => isPartyDirectOnSystemBranch(p, group.id))
+                : processedParties.filter((p) => inScope(p.groupId));
           const needsSyntheticGrouping = isCollapsedSystemSelection;
           const effectivePartyGroupId = needsSyntheticGrouping ? `${group.id}-aggregate` : group.id;
           // Rebind scoped parties to synthetic group id so GroupDetails can render scoped rows reliably.
-          const effectiveParties = needsSyntheticGrouping
-            ? scopedParties.map((p) => ({ ...p, groupId: effectivePartyGroupId }))
-            : scopedParties;
-          const effectiveGroupEntity = needsSyntheticGrouping
-            ? { ...(groupEntity as any), id: effectivePartyGroupId, groupType: "party", name: group.name }
-            : groupEntity;
+          const effectiveParties =
+            group.id === IC_COMPANY_PARTY_GROUP_ID
+              ? scopedParties
+              : needsSyntheticGrouping
+                ? scopedParties.map((p) => ({ ...p, groupId: effectivePartyGroupId }))
+                : scopedParties;
+          const effectiveGroupEntity =
+            group.id === IC_COMPANY_PARTY_GROUP_ID
+              ? (icCompanyGroupForDetails ?? groupEntity)
+              : needsSyntheticGrouping
+                ? { ...(groupEntity as any), id: effectivePartyGroupId, groupType: "party", name: group.name }
+                : groupEntity;
           return (
             <GroupDetails
+              key={`${group.id}:${selectedIcPeerCompanyId ?? "all"}:${selectedIcMemberAccountId ?? "all"}:${selectedGroupMemberFilterId ?? "all"}`}
               group={effectiveGroupEntity as Group}
-              allGroups={processedGroups}
+              allGroups={partyGroupsForList}
               allParties={effectiveParties}
+              icGroupPeerCompanyFilterId={selectedIcPeerCompanyId}
+              icGroupMemberFilterId={selectedIcMemberAccountId}
+              groupMemberFilterId={selectedGroupMemberFilterId}
               onGroupUpdated={() => {}}
               onGroupDeleted={() => setSelectedGroup(null)}
               onPartyUpdated={() => {}}
@@ -1869,6 +2252,23 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
               dateRange={dateRange}
               onDateRangeChange={setDateRange}
               userNames={mergedUserNames}
+            />
+          );
+        case 'item':
+          return (
+            <ItemGroupDetails
+              group={groupEntity as any}
+              allGroups={processedItemGroups as any}
+              items={processedItems.filter((i: any) => inScope(i.groupId)) as any}
+              allItems={processedItems as any}
+              onGroupUpdated={() => {}}
+              onGroupDeleted={() => setSelectedGroup(null)}
+              onItemUpdated={() => {}}
+              stockView={"amount"}
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+              userNames={mergedUserNames}
+              transactions={allVouchers}
             />
           );
         default:
@@ -1950,6 +2350,20 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
                 onChange={(value) => {
                   const entityItem = accountTree.find((e) => e.id.startsWith("entity-") && (e.group as any)?.groupType === value);
                   if (mode === "group") {
+                    if (value === "party") {
+                      const firstPartyGroup = partyGroupsForList[0];
+                      if (firstPartyGroup) {
+                        setSelectedGroup(toUnifiedGroupFromListGroup({ ...firstPartyGroup, groupType: "party" }));
+                        setSelectedAccount(null);
+                        setSelectedGroupMemberFilterId(null);
+                        setSelectedIcPeerCompanyId(null);
+                        setSelectedIcMemberAccountId(null);
+                      } else {
+                        setSelectedGroup(null);
+                        setSelectedAccount(null);
+                      }
+                      return;
+                    }
                     const firstGroup = allUnifiedGroups.find((g) => (g as any).groupType === value);
                     if (firstGroup) {
                       setSelectedGroup(firstGroup);
@@ -1984,12 +2398,29 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
                         setSelectedGroup(ungroupedGroup);
                       }
                       setSelectedAccount(null);
+                      setSelectedGroupMemberFilterId(null);
+                      setSelectedIcPeerCompanyId(null);
+                      setSelectedIcMemberAccountId(null);
+                      return;
+                    }
+                    if (selectedEntityType === "party") {
+                      const partyGroup = partyGroupsForList.find((g) => g.id === value);
+                      if (partyGroup) {
+                        setSelectedGroup(toUnifiedGroupFromListGroup({ ...partyGroup, groupType: "party" }));
+                        setSelectedAccount(null);
+                        setSelectedGroupMemberFilterId(null);
+                        setSelectedIcPeerCompanyId(null);
+                        setSelectedIcMemberAccountId(null);
+                      }
                       return;
                     }
                     const grp = allUnifiedGroups.find((g) => g.id === value);
                     if (grp) {
                       setSelectedGroup(grp);
                       setSelectedAccount(null);
+                      setSelectedGroupMemberFilterId(null);
+                      setSelectedIcPeerCompanyId(null);
+                      setSelectedIcMemberAccountId(null);
                     }
                   }}
                   placeholder="Group"
@@ -2211,15 +2642,132 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
     );
   }
 
+  if (!isMobile && mode === "group") {
+    const groupSearchRow = (
+      <div className={mlc.searchRow}>
+        <div className={mlc.searchWrap}>
+          <Search className={mlc.searchIcon} />
+          <Input
+            placeholder="Search groups..."
+            listChrome
+            listChromeSearch
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            autoComplete="off"
+          />
+        </div>
+      </div>
+    );
+
+    const groupSectionLabel = (
+      <div className={mlc.sectionLabelRow}>
+        <Users className={mlc.sectionIcon} />
+        <span>Groups ({groupSummaryTree.length})</span>
+      </div>
+    );
+
+    const groupListView = (
+      <MasterListViewShell
+        isMobile={false}
+        searchRow={groupSearchRow}
+        sectionLabel={groupSectionLabel}
+      >
+        <GroupSummaryTreeList
+          items={groupSummaryTree}
+          expandedIds={expandedGroups}
+          onToggleExpand={toggleGroupSummaryExpand}
+          onSelectGroup={handleSelectGroupFromTree}
+          onSelectAccount={handleSelectAccountFromTree}
+          onSelectIcCompany={handleSelectIcCompanyGroup}
+          selectedGroupId={selectedGroup?.id ?? null}
+          selectedAccountId={selectedAccount?.id ?? null}
+          selectedIcPeerCompanyId={selectedIcPeerCompanyId}
+          selectedIcMemberAccountId={selectedIcMemberAccountId}
+          searchTerm={searchTerm}
+        />
+      </MasterListViewShell>
+    );
+
+    return (
+      <div className="flex flex-col h-full min-h-0 overflow-hidden">
+        <div
+          className="flex-1 grid min-h-0 overflow-hidden"
+          style={{ gridTemplateColumns: `${summaryListWidthPx}px minmax(0, 1fr)` }}
+        >
+          <div
+            className="relative flex flex-col min-h-0 min-w-0 border-r overflow-hidden bg-muted/30"
+            {...mlcListChromeRootData}
+          >
+            <div className={cn(mlc.pageHeader, "flex flex-col items-stretch border-b")}>
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <ReportShowListButton />
+                  <h2 className={cn(mlc.pageTitle, "min-w-0 truncate")}>Group Summary</h2>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Checkbox
+                    id="group-summary-expand-only"
+                    checked={groupExpandOnly}
+                    onCheckedChange={(checked) => setGroupExpandOnly(checked === true)}
+                    className="h-3.5 w-3.5"
+                    aria-label="Group expand only"
+                  />
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
+                        aria-label="About group expand only"
+                      >
+                        <Info className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" align="end" className="max-w-[260px] text-xs">
+                      <p>Tick: expand shows sub-groups only — accounts stay hidden.</p>
+                      <p className="mt-1">Untick: accounts also appear when you expand a group.</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              </div>
+              <div className="mt-1 border-b border-blue-300/60" aria-hidden />
+              <Card className="mt-1 p-3 text-center">
+                <p className="text-xs text-muted-foreground">Total Balance</p>
+                <p
+                  className={cn(
+                    "text-xl font-bold",
+                    totalBalance >= 0 ? "text-green-600" : "text-red-600"
+                  )}
+                >
+                  {formatCurrency(totalBalance, { showDrCr: true, noSuffix: true })}
+                </p>
+              </Card>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{groupListView}</div>
+            <ResizeWidthHandle onPointerDown={beginSummaryListResize} title="Resize group list" />
+          </div>
+
+          <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+            {renderDetailsView()}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const sidebarTree = mode === "group" ? filteredGroupTree : filteredTree;
   const sidebarItemCount = mode === "group" ? flattenedGroupItems.length : flattenedItems.length;
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-[minmax(280px,max-content)_minmax(0,1fr)] min-h-0 overflow-hidden">
-        <div className="flex flex-col min-h-0 border-r overflow-hidden bg-muted/30">
+      <div
+        className="flex-1 grid min-h-0 overflow-hidden"
+        style={{ gridTemplateColumns: `${summaryListWidthPx}px minmax(0, 1fr)` }}
+      >
+        <div className="relative flex flex-col min-h-0 min-w-0 border-r overflow-hidden bg-muted/30">
           <div className="p-4 border-b space-y-3 flex-shrink-0">
-            <h2 className="text-lg font-bold font-headline">{mode === "group" ? "Group Summary" : "Account Summary"}</h2>
+            <ReportRegisterListHeading>
+              {mode === "group" ? "Group Summary" : "Account Summary"}
+            </ReportRegisterListHeading>
             <Card className="p-3 text-center">
               <p className="text-xs text-muted-foreground">Total Balance</p>
               <p className={cn(
@@ -2256,19 +2804,13 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
               )}
             </div>
           </ScrollArea>
+          <ResizeWidthHandle
+            onPointerDown={beginSummaryListResize}
+            title={mode === "group" ? "Resize group list" : "Resize account list"}
+          />
         </div>
 
-        <div className="flex flex-col min-h-0 overflow-hidden">
-          {(selectedAccount || selectedGroup) && (
-            <div className="flex-shrink-0 flex justify-center items-center gap-2 py-2 border-b bg-muted/30">
-              <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
-              {hasDateFilter && (
-                <Button variant="ghost" size="icon" className="h-6 w-6 flex-shrink-0" onClick={() => setDateRange(undefined)} title="Clear date filter">
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              )}
-            </div>
-          )}
+        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
           {renderDetailsView()}
         </div>
       </div>

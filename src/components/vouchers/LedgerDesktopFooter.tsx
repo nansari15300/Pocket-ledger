@@ -6,6 +6,7 @@ import {
   type LedgerFooterPaginationBarProps,
 } from "@/components/vouchers/LedgerFooterPaginationBar";
 import { ledgerFooterRowCn } from "@/components/vouchers/ledgerFooterChrome";
+import type { MasterEditPresentationMode } from "@/lib/nestedLedgerMasterEditPresentation";
 import { cn } from "@/lib/utils";
 
 export type LedgerDesktopFooterProps = LedgerFooterPaginationBarProps & {
@@ -13,6 +14,7 @@ export type LedgerDesktopFooterProps = LedgerFooterPaginationBarProps & {
   left: React.ReactNode;
   className?: string;
   shellClassName?: string;
+  ledgerPresentationMode?: MasterEditPresentationMode;
 };
 
 /**
@@ -28,7 +30,7 @@ export function LedgerDesktopFooter({
   return (
     <div
       className={cn(
-        "border-t border-blue-300/60 bg-blue-100/80 py-2 px-4 overflow-auto min-h-0 scrollbar-slim-dim flex-shrink-0 mt-auto",
+        "border-t border-blue-300/60 bg-blue-100/80 py-2 px-4 overflow-auto min-h-0 pl-ledger-footer-scroll flex-shrink-0 mt-auto",
         shellClassName
       )}
     >
@@ -42,7 +44,7 @@ export function LedgerDesktopFooter({
         <div
           className={cn(
             ledgerFooterRowCn,
-            "min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground"
+            "min-w-0 overflow-x-auto pl-ledger-footer-scroll text-sm text-muted-foreground"
           )}
         >
           {left}

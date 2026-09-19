@@ -17,12 +17,22 @@ import { cn } from "@/lib/utils";
 
 export type InterCompanyEntityKind = "party" | "bank" | "staff" | "tax" | "expense";
 
+/** IC account Type dropdown — All = sab master kinds ek list me */
+export type InterCompanyEntityKindFilter = InterCompanyEntityKind | "all";
+
+export const INTER_COMPANY_ENTITY_KIND_ALL = "all" as const;
+
 export const INTER_COMPANY_ENTITY_LABELS: Record<InterCompanyEntityKind, string> = {
   party: "Party",
   bank: "Bank / Cash",
   staff: STAFF_ENTITY_LABEL,
   tax: "Tax",
   expense: "Income / Expense ledger",
+};
+
+export const INTER_COMPANY_ENTITY_KIND_FILTER_LABELS: Record<InterCompanyEntityKindFilter, string> = {
+  all: "All",
+  ...INTER_COMPANY_ENTITY_LABELS,
 };
 
 type EntityRow = {

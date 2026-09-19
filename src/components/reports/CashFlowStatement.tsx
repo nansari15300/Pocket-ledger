@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useCompany } from "@/hooks/useCompany";
 import { useDate } from "@/hooks/useDate";
 import { openPrintDirect } from "@/lib/printDirect";
@@ -57,7 +57,7 @@ const toNepaliCurrency = (n: number) =>
 export function CashFlowStatementPage() {
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
-  const { vouchers, loading, journalAccountNames, userNames } = useVouchers();
+  const { vouchers, loading, journalAccountNames, userNames } = useFyScopedVouchers();
   const { company } = useCompany();
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const [query, setQuery] = useState("");

@@ -11,6 +11,14 @@ import type { Tax, TaxGroup } from "@/components/tax/types";
 import type { Item, ItemGroup, StockView } from "@/components/items/types";
 import { useVouchers } from "./useVouchers";
 import { useDate } from "./useDate";
+import { useFyVoucherScope } from "@/contexts/FyVoucherScopeContext";
+import {
+  extractEntityBalanceFromFySnapshot,
+  isLedgerDateFilterFromAtFyStart,
+} from "@/lib/fyPagination/ledgerOpeningMeta";
+import { hasFullLocalLedgerVoucherMirror } from "@/lib/fyPagination/fiscalMergeFullVoucherScope";
+import { useCompany } from "./useCompany";
+import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { type Context } from "@/components/vouchers/TransactionsTable";
 import {
@@ -38,6 +46,8 @@ import {
   getPaymentOutRemaining,
   getPaymentOutPartyLinkAmount,
   getOutflowBillWiseLinkAmount,
+  getJournalPartyBillWiseAmountFromEntries,
+  sumDedupedBillWiseAllocatedForVoucher,
   getAllocationTotal,
   getNetFromAllocation,
   getTaxFromAllocation,
@@ -841,11 +851,23 @@ export function useTransactions(
     daybookUserIdFilter?: string | null
 ) {
     const { vouchers, processedTaxes } = useVouchers();
+    const { company } = useCompany();
     const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
+    const fy = useFyVoucherScope();
 
     const result = useMemo(() => {
         if (!entity) {
-             return { processedTransactions: [], totalTransactions: 0, openingBalanceForPeriod: 0, periodDr: 0, periodCr: 0, closingBalance: 0, daybookSummary: null };
+             return {
+               processedTransactions: [],
+               totalTransactions: 0,
+               openingBalanceForPeriod: 0,
+               periodDr: 0,
+               periodCr: 0,
+               closingBalance: 0,
+               daybookSummary: null,
+               periodOpeningUnavailable: false,
+               periodOpeningLoading: false,
+             };
         }
         
         // Ledger math generally needs full vouchers, but report/dashboard "All Vouchers" uses
@@ -968,6 +990,19 @@ export function useTransactions(
               if (v?.type !== "inter_company") return true;
               return shouldShowInterCompanyInDaybookOrRecent(v as Record<string, unknown>);
             });
+            // Daybook shows one day only — filter before sort/bill-wise work on full voucher set.
+            if (dateRange?.from) {
+                const fromDate = startOfDay(dateRange.from);
+                const toDate = dateRange.to ? endOfDay(dateRange.to) : endOfDay(dateRange.from);
+                entityTransactions = entityTransactions.filter((v: any) => {
+                    const transactionDate = safeToDate(v.date);
+                    if (!transactionDate) return false;
+                    if (daybookUserIdFilter && String(v.userId || "") !== String(daybookUserIdFilter)) {
+                        return false;
+                    }
+                    return transactionDate >= fromDate && transactionDate <= toDate;
+                });
+            }
         } else if (context === 'other') {
              entityTransactions = transactionsToProcess.filter((v: any) => v.payeeName === entity.id);
         } else if (context === 'item') {
@@ -1276,37 +1311,59 @@ export function useTransactions(
         }
 
 
-        let openingBalanceForPeriod = initialOpeningBalance;
         const effectiveDateRange = dateRange;
+        const atFyStartFilter = effectiveDateRange?.from
+            ? isLedgerDateFilterFromAtFyStart(company?.country, effectiveDateRange)
+            : false;
+        const periodOpeningBase = atFyStartFilter ? 0 : initialOpeningBalance;
+        const fullLocalVoucherMirror = hasFullLocalLedgerVoucherMirror(
+          company,
+          fy.activeScope
+        );
+        const requiresAuthoritativeOpening =
+            !fullLocalVoucherMirror &&
+            company != null &&
+            isCloudLinkedCompanyStorage(company) &&
+            Boolean(effectiveDateRange?.from) &&
+            (fy.enabled || atFyStartFilter);
 
+        let openingBalanceForPeriod = periodOpeningBase;
+        let periodOpeningUnavailable = false;
+        let periodOpeningLoading = false;
         let transactionsToDisplay = sorted;
+        const isDefaultLedgerView = !effectiveDateRange?.from && !effectiveDateRange?.to;
+
+        const openingBalanceDateForEntity = safeToDate((entity as any)?.openingBalanceDate);
+        const isPrePeriodLedgerTxn = (t: any, beforeDate: Date) => {
+            const transactionDate = safeToDate(t.date);
+            if (!transactionDate) return false;
+            // FY-start filter: match All-view divider (book OB + all pre-FY vouchers).
+            if (!atFyStartFilter && openingBalanceDateForEntity && transactionDate < openingBalanceDateForEntity) {
+              return false;
+            }
+            if (
+              context === "daybook" &&
+              daybookUserIdFilter &&
+              String((t as any).userId || "") !== String(daybookUserIdFilter)
+            ) {
+              return false;
+            }
+            return transactionDate < beforeDate;
+        };
+        const reducePrePeriodOpening = (beforeDate: Date, base = periodOpeningBase) =>
+          sorted
+            .filter((t) => isPrePeriodLedgerTxn(t, beforeDate))
+            .reduce((balance, t) => {
+              const amounts = getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes);
+              return balance + amounts.debit - amounts.credit;
+            }, base);
 
         if (effectiveDateRange?.from) {
             const fromDate = startOfDay(effectiveDateRange.from);
-            
-            const prePeriodTransactions = sorted.filter(t => {
-                const transactionDate = safeToDate(t.date);
-                const openingBalanceDate = safeToDate((entity as any).openingBalanceDate);
 
-                if (!transactionDate) return false;
-
-                // If opening balance date is set, only consider txns after it for OB calculation
-                if (openingBalanceDate && transactionDate < openingBalanceDate) {
-                  return false;
-                }
-
-                // Daybook user filter: running balance opening sirf selected user ke pre-period txns se
-                if (context === "daybook" && daybookUserIdFilter && String((t as any).userId || "") !== String(daybookUserIdFilter)) {
-                  return false;
-                }
-                
-                return transactionDate < fromDate;
-            });
-
-            openingBalanceForPeriod = prePeriodTransactions.reduce((balance, t) => {
-                const amounts = getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes);
-                return balance + amounts.debit - amounts.credit;
-            }, initialOpeningBalance);
+            if (!requiresAuthoritativeOpening) {
+              openingBalanceForPeriod = reducePrePeriodOpening(fromDate);
+            }
 
             const toDate = effectiveDateRange.to ? endOfDay(effectiveDateRange.to) : endOfDay(effectiveDateRange.from);
             transactionsToDisplay = sorted.filter(t => {
@@ -1321,14 +1378,69 @@ export function useTransactions(
                 );
             }
 
+        } else if (isDefaultLedgerView && sorted.length > 0) {
+            // Last N / default master view: carry-forward from book OB through vouchers before the
+            // first visible row — do not anchor on FY scope snapshot (partial window ≠ books OB).
+            const firstInScopeTxn = sorted.find((t) => {
+              const transactionDate = safeToDate(t.date);
+              if (!transactionDate) return false;
+              if (
+                openingBalanceDateForEntity &&
+                transactionDate < openingBalanceDateForEntity
+              ) {
+                return false;
+              }
+              if (
+                context === "daybook" &&
+                daybookUserIdFilter &&
+                String((t as any).userId || "") !== String(daybookUserIdFilter)
+              ) {
+                return false;
+              }
+              return true;
+            });
+            const firstDate = firstInScopeTxn ? safeToDate(firstInScopeTxn.date) : null;
+            if (firstDate) {
+              openingBalanceForPeriod = reducePrePeriodOpening(startOfDay(firstDate));
+            }
+        }
+
+        if (
+            entity &&
+            "id" in entity &&
+            ["party", "account", "staff", "tax", "item", "expense"].includes(context) &&
+            (fy.enabled || atFyStartFilter || Boolean(effectiveDateRange?.from))
+        ) {
+            const entityId = String((entity as any).id);
+            const snapOb = extractEntityBalanceFromFySnapshot(fy.openingBalances, entityId);
+            if (requiresAuthoritativeOpening) {
+              if (snapOb != null && Number.isFinite(snapOb)) {
+                openingBalanceForPeriod = snapOb;
+              } else if (fy.openingBalancesLoadStatus === "unavailable") {
+                openingBalanceForPeriod = 0;
+                periodOpeningUnavailable = true;
+              } else if (fy.openingBalancesLoadStatus === "loading") {
+                openingBalanceForPeriod = 0;
+                periodOpeningLoading = true;
+              }
+            } else if (
+              !fullLocalVoucherMirror &&
+              Boolean(effectiveDateRange?.from) &&
+              snapOb != null &&
+              Number.isFinite(snapOb)
+            ) {
+              // Explicit date/month filter: scope snapshot may replace local pre-period walk.
+              openingBalanceForPeriod = snapOb;
+            }
         }
         
         let runningBalance = openingBalanceForPeriod;
         // For journal "all" view, calculate cumulative balance differently
         const isJournalAllView = context === 'group' && entity && entity.id === 'all' && (entity as any).accountType === 'journal_view';
 
-        // Bill-wise payment status for party/group/daybook; also staff (add_salary paid via payment_out); tax ledger (sale/purchase/payment status)
-        const isBillWiseContext = context === 'party' || context === 'group' || context === 'daybook';
+        const isDaybookContext = context === 'daybook';
+        // Bill-wise payment status for party/group; daybook table does not show status/links — skip heavy bill-wise pass.
+        const isBillWiseContext = context === 'party' || context === 'group';
         const isStaffContext = context === 'staff' || context === 'group';
         const firstItemForContext = context === 'group' && entity && 'items' in entity ? ((entity as EntityWithItems).items || [])[0] : null;
         const isTaxGroupContext = !!(firstItemForContext && 'rate' in firstItemForContext && !('accountType' in firstItemForContext));
@@ -1384,30 +1496,32 @@ export function useTransactions(
         };
 
         /** Har row par pura `vouchers` scan = O(rows×vouchers) — bill-wise linked status + sums par UI freeze fix; ek hi pass me indexes. */
-        const voucherById = new Map<string, any>((vouchers as any[]).map((v) => [String(v?.id ?? ""), v]));
+        const voucherById = new Map<string, any>();
         const allocEdgesByTargetId = new Map<string, Array<{ src: any; alloc: unknown }>>();
         const spendWisePayOutsByLinkedReceiptId = new Map<string, any[]>();
-        for (const v of vouchers as any[]) {
-          const vid = String(v?.id ?? "");
-          if (vid) voucherById.set(vid, v);
+        if (!isDaybookContext) {
+          for (const v of vouchers as any[]) {
+            const vid = String(v?.id ?? "");
+            if (vid) voucherById.set(vid, v);
 
-          const allocs = (v.allocations as { voucherId?: string }[] | undefined) ?? [];
-          for (const alloc of allocs) {
-            const tid = alloc?.voucherId;
-            if (tid === undefined || tid === null || String(tid).trim() === "") continue;
-            const tk = String(tid);
-            const edges = allocEdgesByTargetId.get(tk);
-            const edge = { src: v, alloc };
-            if (edges) edges.push(edge);
-            else allocEdgesByTargetId.set(tk, [edge]);
-          }
+            const allocs = (v.allocations as { voucherId?: string }[] | undefined) ?? [];
+            for (const alloc of allocs) {
+              const tid = alloc?.voucherId;
+              if (tid === undefined || tid === null || String(tid).trim() === "") continue;
+              const tk = String(tid);
+              const edges = allocEdgesByTargetId.get(tk);
+              const edge = { src: v, alloc };
+              if (edges) edges.push(edge);
+              else allocEdgesByTargetId.set(tk, [edge]);
+            }
 
-          const linkedInIds = (v.linkedPaymentInIds as string[] | undefined) ?? [];
-          for (const rid of linkedInIds) {
-            const rk = String(rid);
-            const arr = spendWisePayOutsByLinkedReceiptId.get(rk);
-            if (arr) arr.push(v);
-            else spendWisePayOutsByLinkedReceiptId.set(rk, [v]);
+            const linkedInIds = (v.linkedPaymentInIds as string[] | undefined) ?? [];
+            for (const rid of linkedInIds) {
+              const rk = String(rid);
+              const arr = spendWisePayOutsByLinkedReceiptId.get(rk);
+              if (arr) arr.push(v);
+              else spendWisePayOutsByLinkedReceiptId.set(rk, [v]);
+            }
           }
         }
 
@@ -1738,15 +1852,14 @@ export function useTransactions(
                         const adjAmountCr = Number(amounts.credit) || 0;
                         const adjBillAmount = Math.max(adjAmountDr, adjAmountCr);
                         if (adjBillAmount > 0) {
-                            const incomingAllocated = (allocEdgesByTargetId.get(String(t.id)) ?? []).reduce(
-                                (sum: number, { alloc }) => sum + getAllocationTotal(alloc as any),
-                                0
-                            );
-                            const outgoingAllocated = adjAllocs.reduce((s: number, a: any) => s + getAllocationTotal(a), 0);
-                            const remaining = Math.max(0, adjBillAmount - incomingAllocated - outgoingAllocated);
+                            const totalAllocated = sumDedupedBillWiseAllocatedForVoucher({
+                                selfVoucherId: String(t.id),
+                                incomingEdges: allocEdgesByTargetId.get(String(t.id)) ?? [],
+                                outgoingAllocations: adjAllocs,
+                            });
+                            const remaining = Math.max(0, adjBillAmount - totalAllocated);
                             const hasAnyLinks =
-                                incomingAllocated > 0 ||
-                                outgoingAllocated > 0 ||
+                                totalAllocated > 0 ||
                                 linkedToVoucherNos.length > 0 ||
                                 linkedFromVoucherNos.length > 0;
                             paymentStatus = remaining <= 0 ? 'paid' : hasAnyLinks ? 'partially_paid' : 'unpaid';
@@ -1800,27 +1913,33 @@ export function useTransactions(
                                 pushLinkedTargetNo(voucherById.get(String(a.voucherId)));
                             });
                         }
-                        // Bill-wise compute for normal journal: reduce by incoming (others→journal) and outgoing (journal→others) allocations.
-                        const incomingAllocated = (allocEdgesByTargetId.get(String(t.id)) ?? []).reduce((sum: number, { src: v, alloc }) => {
-                            if (v.id === t.id) return sum;
-                            if (!isVoucherForCurrentEntity(v)) return sum;
-                            return sum + getAllocationTotal(alloc as any);
-                        }, 0);
+                        // Bill-wise compute for normal journal: bilateral links count once per counter-voucher.
                         const ownAllocsForEntity = (t.allocations as { voucherId: string; amount: number; linkedAccountId?: string }[] | undefined) || [];
-                        const outgoingAllocated = (() => {
-                            if (!entityIdForLinks) return ownAllocsForEntity.reduce((s: number, a: any) => s + getAllocationTotal(a), 0);
-                            return ownAllocsForEntity
-                                .filter((a: any) => {
-                                    const lid = String(a?.linkedAccountId ?? "");
-                                    if (lid) return lid === String(entityIdForLinks);
-                                    return journalHasEntitySideAmount;
-                                })
-                                .reduce((s: number, a: any) => s + getAllocationTotal(a), 0);
-                        })();
-                        const journalBillAmount = Math.max(Number(amounts.debit) || 0, Number(amounts.credit) || 0);
+                        const outgoingForEntity = !entityIdForLinks
+                            ? ownAllocsForEntity
+                            : ownAllocsForEntity.filter((a: any) => {
+                                  const lid = String(a?.linkedAccountId ?? "");
+                                  if (lid) return lid === String(entityIdForLinks);
+                                  return journalHasEntitySideAmount;
+                              });
+                        const totalAllocated = sumDedupedBillWiseAllocatedForVoucher({
+                            selfVoucherId: String(t.id),
+                            incomingEdges: allocEdgesByTargetId.get(String(t.id)) ?? [],
+                            outgoingAllocations: outgoingForEntity,
+                            includeIncoming: (src) => isVoucherForCurrentEntity(src),
+                        });
+                        const entityJournalBill = entityIdForLinks
+                            ? getJournalPartyBillWiseAmountFromEntries(t, String(entityIdForLinks))
+                            : null;
+                        const journalBillAmount = entityJournalBill
+                            ? Math.max(entityJournalBill.debit, entityJournalBill.credit)
+                            : Math.max(Number(amounts.debit) || 0, Number(amounts.credit) || 0);
                         if (journalBillAmount > 0) {
-                            const remaining = Math.max(0, journalBillAmount - incomingAllocated - outgoingAllocated);
-                            const hasAnyLinks = incomingAllocated > 0 || outgoingAllocated > 0 || linkedToVoucherNos.length > 0 || linkedFromVoucherNos.length > 0;
+                            const remaining = Math.max(0, journalBillAmount - totalAllocated);
+                            const hasAnyLinks =
+                                totalAllocated > 0 ||
+                                linkedToVoucherNos.length > 0 ||
+                                linkedFromVoucherNos.length > 0;
                             // Keep journal status aligned with linked amount in bill-wise contexts (without affecting statement amount columns).
                             paymentStatus = remaining <= 0 ? 'paid' : hasAnyLinks ? 'partially_paid' : 'unpaid';
                             outstanding = remaining;
@@ -1855,24 +1974,22 @@ export function useTransactions(
                             const no = displayNoFor(target);
                             if (no && !linkedToVoucherNos.includes(no)) linkedToVoucherNos.push(no);
                         });
-                        const incomingAllocated = (allocEdgesByTargetId.get(String(t.id)) ?? []).reduce((sum: number, { src: v, alloc }) => {
-                            if (v.id === t.id) return sum;
-                            if (!isVoucherForCurrentEntity(v)) return sum;
-                            return sum + getAllocationTotal(alloc as any);
-                        }, 0);
-                        const outgoingAllocated = ownIcAllocs
-                            .filter((a: any) => {
-                                const lid = String(a?.linkedAccountId ?? "");
-                                if (entityIdForLinks && lid) return lid === String(entityIdForLinks);
-                                return true;
-                            })
-                            .reduce((s: number, a: any) => s + getAllocationTotal(a), 0);
+                        const outgoingIcForEntity = ownIcAllocs.filter((a: any) => {
+                            const lid = String(a?.linkedAccountId ?? "");
+                            if (entityIdForLinks && lid) return lid === String(entityIdForLinks);
+                            return true;
+                        });
+                        const icTotalAllocated = sumDedupedBillWiseAllocatedForVoucher({
+                            selfVoucherId: String(t.id),
+                            incomingEdges: allocEdgesByTargetId.get(String(t.id)) ?? [],
+                            outgoingAllocations: outgoingIcForEntity,
+                            includeIncoming: (src) => isVoucherForCurrentEntity(src),
+                        });
                         const icBillAmount = Math.max(Number(amounts.debit) || 0, Number(amounts.credit) || 0);
                         if (icBillAmount > 0) {
-                            const remaining = Math.max(0, icBillAmount - incomingAllocated - outgoingAllocated);
+                            const remaining = Math.max(0, icBillAmount - icTotalAllocated);
                             const hasAnyLinks =
-                                incomingAllocated > 0 ||
-                                outgoingAllocated > 0 ||
+                                icTotalAllocated > 0 ||
                                 linkedToVoucherNos.length > 0 ||
                                 linkedFromVoucherNos.length > 0;
                             paymentStatus = remaining <= 0 ? 'paid' : hasAnyLinks ? 'partially_paid' : 'unpaid';
@@ -2029,7 +2146,7 @@ export function useTransactions(
         const memberIds = context === 'group' && entity && 'items' in entity
             ? new Set(((entity as EntityWithItems).items || []).map((i: any) => String(i.id)))
             : null;
-        if (entityId && (context === 'staff' || context === 'party')) {
+        if (entityId && (context === 'staff' || context === 'party') && !atFyStartFilter) {
             const obAmount = Math.abs(entityOB);
             let totalAllocatedToOB = 0;
             if (context === 'staff') {
@@ -2187,9 +2304,11 @@ export function useTransactions(
             daybookSummary,
             openingBalanceOutstanding,
             openingBalanceLinkedVoucherNos,
+            periodOpeningUnavailable,
+            periodOpeningLoading,
         };
 
-  }, [entity, context, vouchers, dateRange, stockView, entityList, transactionContext, filters, voucherTypes, formatDate, formatDateBS, journalAccountNames, userNames, formatCurrency, daybookUserIdFilter]);
+  }, [entity, context, vouchers, dateRange, stockView, entityList, transactionContext, filters, voucherTypes, formatDate, formatDateBS, journalAccountNames, userNames, formatCurrency, daybookUserIdFilter, company, fy.enabled, fy.activeScope, fy.openingBalances, fy.openingBalancesLoadStatus]);
 
   return result;
 }

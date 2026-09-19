@@ -7,22 +7,37 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import {
   Edit,
   FilePlus,
-  ChevronsLeft,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsRight,
   Printer,
   ArrowLeft,
   Search,
 } from "lucide-react";
-import { TransactionsTable } from "../vouchers/TransactionsTable";
-import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import { LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import {
+  type TransactionSortBy,
+  type TransactionSortOrder,
+} from "@/components/vouchers/TransactionTableSortDropdown";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
+import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
+import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
+import {
+  COLUMN_LABELS,
+  useTransactionVisibleColumns,
+} from "@/components/vouchers/transactionColumnVisibility";
+import { DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { useStatementCheckMode } from "@/hooks/useStatementCheckMode";
+import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 
-import { sortTransactionsWithFiscalMergeForCompany, sortTransactions, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
+import {
+  sortTransactionsWithFiscalMergeForCompany,
+  sortTransactions,
+  DEFAULT_TRANSACTION_SORT_ORDER,
+} from "@/lib/transactionSort";
+import { applyStatementCheckModeHiddenToLedgerList } from "@/lib/statementCheckModeLedger";
 import { useDate } from "@/hooks/useDate";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -30,7 +45,6 @@ import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { ScrollArea } from "../ui/scroll-area";
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { Input } from "../ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Checkbox } from "../ui/checkbox";
 import { openPrintDirect } from "@/lib/printDirect";
 import { useCompany } from "@/hooks/useCompany";
@@ -39,6 +53,8 @@ import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { cn } from "@/lib/utils";
 import { mdc, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
 import * as XLSX from "xlsx";
+
+const NOTE_TABLE_COLUMN_KEYS: TransactionColumnKey[] = ["syncStatus", "date", "type", "voucherNo", "file"];
 
 export function NoteDetails({
   entity,
@@ -60,8 +76,9 @@ export function NoteDetails({
   mobileReportStickyTitle?: string;
 }) {
   const { formatDate, formatDateBS, dateSystem } = useDate();
-  const { company } = useCompany();
+  const { company, companyId } = useCompany();
   const isMobile = useIsMobile();
+  const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const [selectedVoucher, setSelectedVoucher] = React.useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
   const [isNoteDialogOpen, setIsNoteDialogOpen] = React.useState(false);
@@ -69,7 +86,7 @@ export function NoteDetails({
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
-  const [showTitle, setShowTitle] = useState(true);
+  const [showNarration, setShowNarration] = useState(true);
   const [mobileSearchTerm, setMobileSearchTerm] = useState("");
 
   // Account / "All Vouchers" switch par purana page index mat rakho — nahi to nayi list pe galat slice dikhti hai.
@@ -133,8 +150,14 @@ export function NoteDetails({
     return baseTransactions;
   }, [transactions, filters, isAllVouchersView, entity, formatDate, formatDateBS]);
 
-  const handleShowTitleChange = (checked: boolean) => {
-    setShowTitle(checked);
+  useEffect(() => {
+    const savedState = sessionStorage.getItem("showNarration");
+    setShowNarration(savedState !== "false");
+  }, []);
+
+  const handleShowNarrationChange = (checked: boolean) => {
+    setShowNarration(checked);
+    sessionStorage.setItem("showNarration", String(checked));
   };
 
   const handlePrint = () => {
@@ -162,7 +185,7 @@ export function NoteDetails({
         vouchersCount: currentTransactions.length,
         openingBalance: 0,
         transactions: currentTransactions,
-        showNarration: showTitle,
+        showNarration: showNarration,
         userNames: userNames,
       },
       true
@@ -197,11 +220,36 @@ export function NoteDetails({
     });
   }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
 
+  const [keyboardNavList, setKeyboardNavList] = useState<ReadonlyArray<{ id?: string; _rowKey?: string }>>([]);
+
+  const statementCheck = useStatementCheckMode({
+    companyId,
+    context: "note",
+    contextId: entity?.id,
+    viewMode: "statement",
+    orderedTransactions: searchFilteredTransactions,
+    keyboardNavTransactions: keyboardNavList,
+  });
+
+  const transactionsForPaging = useMemo(
+    () =>
+      applyStatementCheckModeHiddenToLedgerList(searchFilteredTransactions, {
+        checkModeActive: statementCheck.checkModeActive,
+        hiddenIds: statementCheck.hiddenIds,
+        openingBalance: 0,
+      }),
+    [
+      searchFilteredTransactions,
+      statementCheck.checkModeActive,
+      statementCheck.hiddenIds,
+    ]
+  );
+
   // All Notes: page 1 = latest batch (party tail jaisa); single account = page 1 = oldest (head).
   const useTailPaging = Boolean(isAllVouchersView);
 
   const notePagingWindow = useMemo(() => {
-    const list = searchFilteredTransactions;
+    const list = transactionsForPaging;
     const total = list.length;
     const totalPagesLocal = rowsPerPage > 0 ? Math.max(1, Math.ceil(total / rowsPerPage)) : 1;
     const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
@@ -228,13 +276,20 @@ export function NoteDetails({
       before: start,
       after: Math.max(0, total - end),
     };
-  }, [searchFilteredTransactions, currentPage, rowsPerPage, useTailPaging, sortBy, sortOrder]);
+  }, [transactionsForPaging, currentPage, rowsPerPage, useTailPaging, sortBy, sortOrder]);
 
-  const totalPages = notePagingWindow.totalPages;
   const paginatedTransactions = notePagingWindow.pageTransactions;
+  const totalPages = notePagingWindow.totalPages;
   const mobilePagerEdgeCounts = { before: notePagingWindow.before, after: notePagingWindow.after };
   const noteBeforeCount = notePagingWindow.before;
   const noteAfterCount = notePagingWindow.after;
+
+  useEffect(() => {
+    setKeyboardNavList(paginatedTransactions);
+  }, [paginatedTransactions]);
+
+  const { selectValue: rowsPerPageSelectValue, onSelectValueChange: handleRowsPerPageChange } =
+    useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_DEFAULT, "20");
 
   // List size / page-size change par page valid range me rakho (tail: 1 = latest).
   useEffect(() => {
@@ -320,11 +375,11 @@ export function NoteDetails({
               <div className="flex items-center gap-2">
                 <Checkbox
                   id="show-title-note-mobile"
-                  checked={showTitle}
-                  onCheckedChange={(checked) => handleShowTitleChange(Boolean(checked))}
+                  checked={showNarration}
+                  onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 />
                 <label htmlFor="show-title-note-mobile" className="text-xs font-medium leading-none">
-                  Show Title
+                  Show Narration
                 </label>
               </div>
             </div>
@@ -344,9 +399,11 @@ export function NoteDetails({
                   setFilters={setFilters}
                   activeFilter={activeFilter}
                   setActiveFilter={setActiveFilter}
-                  showNarration={showTitle}
+                  showNarration={showNarration}
                   scrollOnlyTransactions
                   transactionCardSearchHighlight={mobileSearchTerm}
+                  visibleColumns={visibleColumns}
+                  {...statementCheck.tableProps}
                 />
               ) : (
                 <div className="py-16 text-center text-sm text-muted-foreground">No notes found.</div>
@@ -470,7 +527,7 @@ export function NoteDetails({
           </div>
         </CardHeader>
         <CardContent className="flex-1 p-0 flex flex-col min-h-0">
-          <ScrollArea className="flex-1">
+          <ScrollArea txnChrome className="flex-1">
             <div className="p-4">
               <TransactionsTable
                 transactions={paginatedTransactions}
@@ -481,7 +538,9 @@ export function NoteDetails({
                 setFilters={setFilters}
                 activeFilter={activeFilter}
                 setActiveFilter={setActiveFilter}
-                showNarration={showTitle}
+                showNarration={showNarration}
+                visibleColumns={visibleColumns}
+                {...statementCheck.tableProps}
               />
               {transactions.length === 0 && (
                 <div className="text-center py-16 text-muted-foreground">No notes found for this entity.</div>
@@ -489,100 +548,60 @@ export function NoteDetails({
             </div>
           </ScrollArea>
         </CardContent>
-        <div className="flex items-center justify-end space-x-2 py-2 px-4 border-t">
-          <div className="flex-1 text-sm text-muted-foreground flex items-center gap-4">
-            <span>{currentTransactions.length} note(s).</span>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="show-title-note"
-                checked={showTitle}
-                onCheckedChange={(checked) => handleShowTitleChange(Boolean(checked))}
+        <LedgerDesktopFooter
+          left={
+            <>
+              <LedgerFooterCheckboxPill
+                id="show-narration-note"
+                checked={showNarration}
+                onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
+                label="Show Narration"
               />
-              <label htmlFor="show-title-note" className="text-sm font-medium leading-none">
-                Show Title
-              </label>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <TransactionTableSortDropdown
-              sortBy={sortBy}
-              sortOrder={sortOrder}
-              onSortChange={(by, order) => {
-                setSortBy(by);
-                setSortOrder(order);
-              }}
-              viewMode="statement"
-            />
-            <p className="text-sm font-medium tabular-nums">({noteBeforeCount})</p>
-            <div className="flex items-center space-x-1">
-              <Button
-                type="button"
-                variant="chromePill"
-                size="icon"
-                className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronsLeft className="h-4 w-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="chromePill"
-                size="icon"
-                className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(currentPage - 1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <LedgerFooterChromePill className="px-1">
-                <Select
-                  value={`${rowsPerPage}`}
-                  onValueChange={(value) => {
-                    setRowsPerPage(Number(value) || 0);
-                    setCurrentPage(1);
-                  }}
-                >
-                  <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
-                    <SelectValue placeholder={`${rowsPerPage}`} />
-                  </SelectTrigger>
-                  <SelectContent side="top">
-                    {[10, 20, 30, 50].map((pageSize) => (
-                      <SelectItem key={pageSize} value={`${pageSize}`}>
-                        {pageSize}
-                      </SelectItem>
-                    ))}
-                    <SelectItem value="0">All</SelectItem>
-                  </SelectContent>
-                </Select>
-              </LedgerFooterChromePill>
-              <Button
-                type="button"
-                variant="chromePill"
-                size="icon"
-                className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(currentPage + 1)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="chromePill"
-                size="icon"
-                className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronsRight className="h-4 w-4" />
-              </Button>
-            </div>
-            <p className="text-sm font-medium tabular-nums">({noteAfterCount})</p>
-            <p className="text-sm font-medium tabular-nums whitespace-nowrap">
-              Page {currentPage} of {totalPages} · Total Trxn {searchFilteredTransactions.length}
-            </p>
-          </div>
-        </div>
+              <LedgerFooterColumnsMenu>
+                <DropdownMenuContent align="start" className="w-52 p-2">
+                  {NOTE_TABLE_COLUMN_KEYS.map((key) => (
+                    <DropdownMenuItem
+                      key={key}
+                      onSelect={(e) => e.preventDefault()}
+                      className="flex cursor-pointer items-center gap-2"
+                    >
+                      <Checkbox
+                        id={`col-${key}-note-report`}
+                        checked={visibleColumns[key] !== false}
+                        onCheckedChange={(c) => handleColumnVisibilityChange(key, Boolean(c))}
+                      />
+                      <label htmlFor={`col-${key}-note-report`} className="flex-1 cursor-pointer text-sm font-medium">
+                        {COLUMN_LABELS[key]}
+                      </label>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </LedgerFooterColumnsMenu>
+              <StatementCheckModeFooterControls
+                idPrefix="note-report"
+                enabled={statementCheck.checkModeEnabled}
+                onEnabledChange={statementCheck.setCheckModeEnabled}
+                viewMode="statement"
+                hiddenCount={statementCheck.hiddenCount}
+              />
+            </>
+          }
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSortChange={(by, order) => {
+            setSortBy(by);
+            setSortOrder(order);
+          }}
+          viewMode="statement"
+          currentPage={currentPage}
+          totalPages={totalPages}
+          setCurrentPage={setCurrentPage}
+          rowsPerPageSelectValue={rowsPerPageSelectValue}
+          onRowsPerPageChange={handleRowsPerPageChange}
+          beforeCount={noteBeforeCount}
+          afterCount={noteAfterCount}
+          totalCount={transactionsForPaging.length}
+        />
       </Card>
       <AddVoucherDialog
         isOpen={isVoucherDialogOpen}

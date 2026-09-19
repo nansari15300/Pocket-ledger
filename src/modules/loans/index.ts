@@ -13,6 +13,8 @@ export { postEmiPayment, reverseEmiPayment } from "./services/loanPaymentService
 export { postPrepayment } from "./services/loanPrepaymentService";
 export { changeInterestRate } from "./services/loanRateChangeImpl";
 export { addLoanCharge } from "./services/loanChargePostingService";
+export { addLoanDisbursement, recordLoanDisbursementFromJournal } from "./services/loanDisbursementService";
+export { buildLoanDisbursementJournalDraft } from "./utils/buildLoanDisbursementJournalDraft";
 export { closeLoan, reopenLoan } from "./services/loanClosureService";
 export { LoansPage } from "./pages/LoansPage";
 export { LoanDetailsPage } from "./pages/LoanDetailsPage";

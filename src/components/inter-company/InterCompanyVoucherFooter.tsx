@@ -4,22 +4,13 @@
  * Inter Company voucher footer — create par save/approve; edit par Cancel | Delete | History.
  * Delete = is company ki copy only (role/permission); revert/delete-request hata diya.
  */
+import { useState } from "react";
 import { History, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import usePermissions from "@/hooks/usePermissions";
+import { VoucherDeleteConfirmAlertDialog } from "@/components/vouchers/VoucherDeleteConfirmAlertDialog";
 import {
   VOUCHER_BUTTONS_CLASS,
   BTN_HISTORY_CLASS,
@@ -28,7 +19,6 @@ import {
   BTN_SAVE_CLASS,
   BTN_APPROVE_CLASS,
 } from "@/components/vouchers/voucherButtonStyles";
-import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
 
 export type InterCompanyVoucherFooterProps = {
   inDialog?: boolean;
@@ -51,6 +41,8 @@ export type InterCompanyVoucherFooterProps = {
   onCancel: () => void;
   /** Is company ki IC copy recycle bin — peer untouched */
   onDelete?: () => void;
+  onPermanentDelete?: () => void;
+  deleteEntityName?: string;
   onPrint: () => void;
 };
 
@@ -73,10 +65,13 @@ export function InterCompanyVoucherFooter({
   isFormDirty = true,
   onCancel,
   onDelete,
+  onPermanentDelete,
+  deleteEntityName = "this Inter Company voucher",
   onPrint,
 }: InterCompanyVoucherFooterProps) {
   const isMobile = useIsMobile();
   const { canDeleteVoucher } = usePermissions();
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
   const deleteDisabled =
     !voucher?.id ||
@@ -106,162 +101,55 @@ export function InterCompanyVoucherFooter({
   const saveDisabled = isEditViewOnly || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty);
   const printDisabled = isEditViewOnly || isLoading || editingDisabled;
 
-  const deleteDialogContentProps = inDialog ? NESTED_VOUCHER_ALERT_SHELL : {};
-
   const deleteButton = onDelete ? (
-    <AlertDialog>
-      <AlertDialogTrigger asChild>
-        <Button
-          type="button"
-          variant="destructive"
-          className={cn("shrink-0 rounded-full", isMobile && !isEditViewOnly && "w-full")}
-          disabled={deleteDisabled || isLoading}
-        >
-          {!isMobile || isEditViewOnly ? <Trash2 className="mr-2 h-4 w-4" /> : null}
-          Delete
-        </Button>
-      </AlertDialogTrigger>
-      <AlertDialogContent {...deleteDialogContentProps}>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete this company&apos;s copy?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Only this company&apos;s Inter Company voucher goes to the recycle bin. The other company keeps
-            their copy.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={() => onDelete?.()} className="bg-destructive hover:bg-destructive/90">
-            Delete my copy
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <Button
+      type="button"
+      variant="destructive"
+      className={cn("shrink-0 rounded-full", isMobile && !isEditViewOnly && "w-full")}
+      disabled={deleteDisabled || isLoading}
+      onClick={() => setIsDeleteDialogOpen(true)}
+    >
+      {!isMobile || isEditViewOnly ? <Trash2 className="mr-2 h-4 w-4" /> : null}
+      Delete
+    </Button>
+  ) : null;
+
+  const deleteConfirmDialog = onDelete ? (
+    <VoucherDeleteConfirmAlertDialog
+      open={isDeleteDialogOpen}
+      onOpenChange={setIsDeleteDialogOpen}
+      title="Delete this company's copy?"
+      description={
+        <>
+          Only this company&apos;s Inter Company voucher goes to the recycle bin. The other company keeps
+          their copy.
+        </>
+      }
+      entityKind="Inter Company voucher"
+      entityName={deleteEntityName}
+      onMoveToBin={() => onDelete()}
+      onDeletePermanently={onPermanentDelete}
+      busy={isLoading}
+    />
   ) : null;
 
   void isCompanyAdmin;
+  void inDialog;
 
   if (isEditViewOnly) {
     return (
-      <div
-        className={cn(
-          "border-t min-w-0 max-w-full overflow-x-hidden pt-4 flex flex-wrap items-center justify-center gap-2 md:justify-start",
-          inDialog ? "mt-[3px] pb-[3px]" : "",
-          VOUCHER_BUTTONS_CLASS
-        )}
-      >
-        <Button type="button" onClick={onCancel} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
-          Cancel
-        </Button>
-        {deleteButton}
-        <Button
-          type="button"
-          onClick={onOpenHistory ?? (() => {})}
-          disabled={historyDisabled}
-          className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}
-        >
-          <History className="mr-2 h-4 w-4" /> History
-        </Button>
-      </div>
-    );
-  }
-
-  if (isMobile) {
-    return (
-      <div
-        className={cn(
-          "border-t min-w-0 max-w-full overflow-x-hidden",
-          inDialog ? "mt-[3px] pt-[3px] pb-[3px]" : "pt-4"
-        )}
-      >
-        <div className={cn("grid grid-cols-3 gap-2 w-full min-w-0", VOUCHER_BUTTONS_CLASS)}>
-          {/* Row 0: Delete | History | Save & Print — Sale / Journal mobile jaisa */}
-          {onDelete ? (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  className="w-full"
-                  disabled={deleteDisabled || isLoading}
-                >
-                  Delete
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent {...deleteDialogContentProps}>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Delete this company&apos;s copy?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Only this company&apos;s Inter Company voucher goes to the recycle bin. The other company keeps
-                    their copy.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={() => onDelete?.()} className="bg-destructive hover:bg-destructive/90">
-                    Delete my copy
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          ) : (
-            <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">
-              —
-            </Button>
+      <>
+        <div
+          className={cn(
+            "border-t min-w-0 max-w-full overflow-x-hidden pt-4 flex flex-wrap items-center justify-center gap-2 md:justify-start",
+            inDialog ? "mt-[3px] pb-[3px]" : "",
+            VOUCHER_BUTTONS_CLASS
           )}
-          <Button
-            type="button"
-            onClick={onOpenHistory ?? (() => {})}
-            disabled={historyDisabled}
-            className={cn("w-full", BTN_HISTORY_CLASS)}
-          >
-            History
-          </Button>
-          <Button
-            type="button"
-            disabled={printDisabled}
-            onClick={onPrint}
-            className={cn("w-full", BTN_PRINT_CLASS)}
-          >
-            Save & Print
-          </Button>
-          {/* Row 1: Cancel | Save | Approve */}
-          <Button type="button" onClick={onCancel} className={cn("w-full", BTN_CANCEL_CLASS)}>
+        >
+          <Button type="button" onClick={onCancel} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
             Cancel
           </Button>
-          <Button type="submit" disabled={saveDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
-            {isLoading ? "..." : "Save"}
-          </Button>
-          {onApprove ? (
-            <Button
-              type="button"
-              disabled={approveDisabled}
-              title={approveBlockedHint || undefined}
-              onClick={() => onApprove()}
-              className={cn("w-full", BTN_APPROVE_CLASS)}
-            >
-              {approveLabel}
-            </Button>
-          ) : (
-            <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">
-              —
-            </Button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className={cn(
-        "border-t min-w-0 max-w-full overflow-x-hidden pt-4 flex flex-wrap items-center justify-between gap-2",
-        inDialog ? "mt-[3px] pb-[3px]" : "",
-        VOUCHER_BUTTONS_CLASS
-      )}
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        {showHistoryButton ? (
+          {deleteButton}
           <Button
             type="button"
             onClick={onOpenHistory ?? (() => {})}
@@ -270,36 +158,134 @@ export function InterCompanyVoucherFooter({
           >
             <History className="mr-2 h-4 w-4" /> History
           </Button>
-        ) : null}
-        {deleteButton}
-        <Button type="button" onClick={onCancel} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
-          Cancel
-        </Button>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          disabled={printDisabled}
-          onClick={onPrint}
-          className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}
+        </div>
+        {deleteConfirmDialog}
+      </>
+    );
+  }
+
+  if (isMobile) {
+    return (
+      <>
+        <div
+          className={cn(
+            "border-t min-w-0 max-w-full overflow-x-hidden",
+            inDialog ? "mt-[3px] pt-[3px] pb-[3px]" : "pt-4"
+          )}
         >
-          Save & Print
-        </Button>
-        <Button type="submit" disabled={saveDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
-          {isLoading ? "..." : "Save"}
-        </Button>
-        {onApprove ? (
+          <div className={cn("grid grid-cols-3 gap-2 w-full min-w-0", VOUCHER_BUTTONS_CLASS)}>
+            {/* Row 0: Delete | History | Save & Print — Sale / Journal mobile jaisa */}
+            {onDelete ? (
+              <Button
+                type="button"
+                variant="destructive"
+                className="w-full"
+                disabled={deleteDisabled || isLoading}
+                onClick={() => setIsDeleteDialogOpen(true)}
+              >
+                Delete
+              </Button>
+            ) : (
+              <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">
+                —
+              </Button>
+            )}
+            <Button
+              type="button"
+              onClick={onOpenHistory ?? (() => {})}
+              disabled={historyDisabled}
+              className={cn("w-full", BTN_HISTORY_CLASS)}
+            >
+              History
+            </Button>
+            <Button
+              type="button"
+              disabled={printDisabled}
+              onClick={onPrint}
+              className={cn("w-full", BTN_PRINT_CLASS)}
+            >
+              Save & Print
+            </Button>
+            {/* Row 1: Cancel | Save | Approve */}
+            <Button type="button" onClick={onCancel} className={cn("w-full", BTN_CANCEL_CLASS)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saveDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
+              {isLoading ? "..." : "Save"}
+            </Button>
+            {onApprove ? (
+              <Button
+                type="button"
+                disabled={approveDisabled}
+                title={approveBlockedHint || undefined}
+                onClick={() => onApprove()}
+                className={cn("w-full", BTN_APPROVE_CLASS)}
+              >
+                {approveLabel}
+              </Button>
+            ) : (
+              <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">
+                —
+              </Button>
+            )}
+          </div>
+        </div>
+        {deleteConfirmDialog}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div
+        className={cn(
+          "border-t min-w-0 max-w-full overflow-x-hidden pt-4 flex flex-wrap items-center justify-between gap-2",
+          inDialog ? "mt-[3px] pb-[3px]" : "",
+          VOUCHER_BUTTONS_CLASS
+        )}
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          {showHistoryButton ? (
+            <Button
+              type="button"
+              onClick={onOpenHistory ?? (() => {})}
+              disabled={historyDisabled}
+              className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}
+            >
+              <History className="mr-2 h-4 w-4" /> History
+            </Button>
+          ) : null}
+          {deleteButton}
+          <Button type="button" onClick={onCancel} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
+            Cancel
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
-            disabled={approveDisabled}
-            title={approveBlockedHint || undefined}
-            onClick={() => onApprove()}
-            className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}
+            disabled={printDisabled}
+            onClick={onPrint}
+            className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}
           >
-            {approveLabel}
+            Save & Print
           </Button>
-        ) : null}
+          <Button type="submit" disabled={saveDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+            {isLoading ? "..." : "Save"}
+          </Button>
+          {onApprove ? (
+            <Button
+              type="button"
+              disabled={approveDisabled}
+              title={approveBlockedHint || undefined}
+              onClick={() => onApprove()}
+              className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}
+            >
+              {approveLabel}
+            </Button>
+          ) : null}
+        </div>
       </div>
-    </div>
+      {deleteConfirmDialog}
+    </>
   );
 }

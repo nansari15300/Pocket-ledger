@@ -150,20 +150,23 @@ export async function reconcileOnlineMirrorsWithServer(user: {
     }
 
     if (!isOwner) {
-      // Shared list: server par doc nahi / access nahi → local DB + UI se hatao (galat category me local mark hone par bhi)
+      // Shared list: doc missing OR user removed from sharedWith* → local ghost hatao (SQLite stale mat rakho).
       try {
         const snap = await getDoc(doc(firestore, "companies", id));
-        if (snap.exists()) continue;
+        if (snap.exists()) {
+          const data = snap.data() as CompanyShareRow;
+          if (isCurrentUserSharedOnCompanyRow(data, user)) continue;
+          await removeLocalCompanyById(id, { firebaseUid: user.uid });
+          removedIds.push(id);
+          changed = true;
+          continue;
+        }
         await removeLocalCompanyById(id, { firebaseUid: user.uid });
         removedIds.push(id);
         changed = true;
       } catch (e: unknown) {
         const code = (e as { code?: string })?.code;
         if (code === "permission-denied" || code === "PERMISSION_DENIED") {
-          // EXE cold start: auth token email abhi ready nahi — local shared row clearly valid ho to mat udao.
-          if (isCurrentUserSharedOnCompanyRow(row, user)) {
-            continue;
-          }
           await removeLocalCompanyById(id, { firebaseUid: user.uid });
           removedIds.push(id);
           changed = true;

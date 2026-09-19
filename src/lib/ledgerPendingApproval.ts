@@ -1,9 +1,12 @@
+import { FY_OPENING_ROW_TYPE } from "@/lib/fyPagination/fyOpeningRows";
+
 /** Ledger row / filter: voucher approve na hua (`isApproved` strictly true nahi). */
 export function isLedgerTransactionUnapproved(
   tx: { isApproved?: boolean; type?: string; id?: string } | null | undefined
 ): boolean {
   if (tx == null) return false;
   if (tx.type === "opening_balance" || String(tx.id || "").startsWith("opening_balance")) return false;
+  if (tx.type === FY_OPENING_ROW_TYPE) return false;
   return tx.isApproved !== true;
 }
 

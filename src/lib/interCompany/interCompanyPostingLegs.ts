@@ -44,20 +44,23 @@ export function isInterCompanyTargetJournalPostMode(
 }
 
 /**
- * Auto narration (Account→Account aur Company→Company dono):
- * "SourceCo, SourceAccount paid to TargetCo, TargetAccount"
+ * Auto narration (web / EXE / APK — same static line):
+ * From company "…" from account "…" paid to company "…" to account "…" Ref IC voucher No - IC - 001
  */
 export function buildInterCompanyAutoNarration(args: {
   sourceCompanyName?: string | null;
   sourceEntityLabel?: string | null;
   targetCompanyName?: string | null;
   targetEntityLabel?: string | null;
+  voucherNumber?: string | null;
 }): string {
   const srcCo = String(args.sourceCompanyName || "").trim() || "Source company";
   const srcAc = String(args.sourceEntityLabel || "").trim() || "account";
   const tgtCo = String(args.targetCompanyName || "").trim() || "Target company";
   const tgtAc = String(args.targetEntityLabel || "").trim() || "account";
-  return `${srcCo}, ${srcAc} paid to ${tgtCo}, ${tgtAc}`;
+  const vn = String(args.voucherNumber || "").trim();
+  const ref = vn ? ` Ref IC voucher No - ${vn}` : "";
+  return `From company "${srcCo}" from account "${srcAc}" paid to company "${tgtCo}" to account "${tgtAc}"${ref}`;
 }
 
 /** @deprecated use buildInterCompanyAutoNarration */
@@ -66,6 +69,7 @@ export function buildInterCompanyJournalNarration(args: {
   sourceEntityLabel?: string | null;
   targetCompanyName?: string | null;
   targetEntityLabel?: string | null;
+  voucherNumber?: string | null;
 }): string {
   return buildInterCompanyAutoNarration(args);
 }
@@ -89,7 +93,13 @@ export function extractInterCompanyUserNarration(
     const line = lines[i]!;
     if (auto && line === auto) continue;
     // Pehli auto-shaped line hatao (purani auto jab accounts badle)
-    if (i === 0 && /^(.+), (.+) paid to (.+), (.+)$/.test(line)) continue;
+    if (
+      i === 0 &&
+      (/^(.+), (.+) paid to (.+), (.+)$/.test(line) ||
+        /^From company "/.test(line) ||
+        /^From company .+ paid to company .+ Ref IC voucher No/i.test(line))
+    )
+      continue;
     rest.push(line);
   }
   return rest.join("\n").trim();

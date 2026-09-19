@@ -74,6 +74,7 @@ import {
 } from "@/lib/ledgerHeaderChrome";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
+import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
@@ -160,6 +161,7 @@ export function ExpenseGroupDetails({
   onBack?: () => void;
   groupMemberFilterId?: string | null;
 }) {
+  useFyLoadOnDateRangeChange(dateRange);
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company, companyId } = useCompany();
   const { processedExpenseAccounts, vouchers, journalAccountNames } = useVouchers();
@@ -973,6 +975,7 @@ export function ExpenseGroupDetails({
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
                   isRange
+                  masterLedgerDatePresets
                   valueAD={dateRange}
                   onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                   transactionDates={transactionDates}
@@ -1052,7 +1055,7 @@ export function ExpenseGroupDetails({
             </div>
           </div>
         </div>
-        <ScrollArea className="min-h-0 flex-1">
+        <ScrollArea txnChrome className="min-h-0 flex-1">
           <div className="py-4">
             <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable

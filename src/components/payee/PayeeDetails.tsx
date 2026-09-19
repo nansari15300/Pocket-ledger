@@ -113,7 +113,7 @@ import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 
 
-import { COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { COLUMN_LABELS, useShowNotes, useTransactionVisibleColumns } from "../vouchers/transactionColumnVisibility";
 import {
   sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
@@ -239,36 +239,8 @@ export function PayeeDetails({
   const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
   const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
   
-  const COLUMN_VISIBILITY_KEY = "transactionVisibleColumns";
-  const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
-    date: true,
-    type: true,
-    voucherNo: true,
-    user: true,
-    dr: true,
-    cr: true,
-    status: true,
-    runningBalance: true,
-  };
-  
-  const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
-    if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
-    try {
-      const saved = sessionStorage.getItem(COLUMN_VISIBILITY_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as VisibleColumns;
-        return { ...DEFAULT_VISIBLE_COLUMNS, ...parsed };
-      }
-    } catch (_) {}
-    return DEFAULT_VISIBLE_COLUMNS;
-  });
-  
-  const handleColumnVisibilityChange = (key: TransactionColumnKey, checked: boolean) => {
-    const next = { ...visibleColumns, [key]: checked };
-    setVisibleColumns(next);
-    sessionStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(next));
-  };
-  
+  const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+
   useEffect(() => {
     const savedState = sessionStorage.getItem("showNarration");
     setShowNarration(savedState !== "false");
@@ -577,12 +549,13 @@ export function PayeeDetails({
             </div>
           </div>
         </div>
-        <ScrollArea className="flex-1">
+        <ScrollArea txnChrome className="flex-1">
           <div className="py-4">
              <TransactionsTable
               transactions={paginatedTransactions}
               context={entityType}
               contextId={party.id}
+              {...statementCheck.tableProps}
               openingBalance={openingBalanceForPeriod}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}

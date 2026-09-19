@@ -66,6 +66,8 @@ import {
   extractInterCompanyUserNarration,
   normalizeInterCompanyTargetPostMode,
 } from "@/lib/interCompany/interCompanyPostingLegs";
+import { assertCanPermanentDeleteFromForm } from "@/lib/permanentDeleteFromForm";
+import { permanentDeleteCompanySubdocFromRecycleBin } from "@/lib/recycleBinEntityLifecycle";
 import {
   deleteInterCompanyVoucherLocalCopyOnly,
   saveInterCompanyVoucherPair,
@@ -90,13 +92,25 @@ import {
   resolveInterCompanyEditCompanyIds,
   interCompanyVoucherViewerSide,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
-import { pickDefaultInterCompanyClearingBankId } from "@/lib/interCompany/interCompanyEntityLookup";
+import {
+  hasInterCompanyClearingBank,
+  pickDefaultInterCompanyClearingBankId,
+} from "@/lib/interCompany/interCompanyEntityLookup";
+import { InterCompanyClearingAccountPrompt } from "@/components/inter-company/InterCompanyClearingAccountPrompt";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { fetchInterCompanyBankEntityDetail } from "@/lib/interCompany/fetchInterCompanyEntities";
 import { getNextInterCompanyVoucherNumber } from "@/lib/interCompany/nextInterCompanyVoucherNumber";
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
 import { openPrintDirect } from "@/lib/printDirect";
-import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
+import {
+  INTER_COMPANY_ENTITY_KIND_ALL,
+  type InterCompanyEntityKind,
+  type InterCompanyEntityKindFilter,
+} from "@/components/inter-company/InterCompanyEntitySide";
+import {
+  findInterCompanyEntityById,
+  resolveInterCompanyEntityKindForSave,
+} from "@/lib/interCompany/interCompanyEntityLookup";
 import { useInterCompanyEntities } from "@/components/inter-company/useInterCompanyEntities";
 import { readCompanyInterCompanyAcNo } from "@/lib/interCompany/interCompanyAccountNo";
 import {
@@ -161,6 +175,18 @@ import {
 } from "@/components/inter-company/InterCompanyRibbonNav";
 import { InterCompanyPayModeInfoButton } from "@/components/inter-company/InterCompanyPayModeInfoButton";
 import { InterCompanyJoinSettingsPanel } from "@/components/inter-company/InterCompanyJoinSettingsPanel";
+import { InterCompanyConnectUserPanel } from "@/components/inter-company/InterCompanyConnectUserPanel";
+import { InterCompanySourceAccountResolveSection } from "@/components/inter-company/InterCompanySourceAccountResolveSection";
+import {
+  filterInterCompanyEntitiesForConnectAccess,
+  allowedConnectMasterKinds,
+  connectAccessFromInviteGrant,
+  isConnectMasterFullyAllowed,
+  resolveInterCompanyConnectUserAccess,
+  subscribeInterCompanyConnectUsers,
+  type InterCompanyConnectUserEntry,
+} from "@/lib/interCompany/interCompanyConnectUsers";
+import { syncInterCompanyResolvedSourceAccountToPeer } from "@/lib/interCompany/interCompanyConnectUserSync";
 import { InterCompanyVoucherFooter } from "@/components/inter-company/InterCompanyVoucherFooter";
 import {
   IC_REVERSE_REQUESTS_CHANGED,
@@ -205,9 +231,9 @@ function withSelectedComboboxOption(
 }
 
 type IcAccountBaseline = {
-  sourcePayeeKind: InterCompanyEntityKind;
+  sourcePayeeKind: InterCompanyEntityKindFilter;
   sourcePayeeId: string;
-  targetPayeeKind: InterCompanyEntityKind;
+  targetPayeeKind: InterCompanyEntityKindFilter;
   targetPayeeId: string;
   sourceCompanyBankId: string;
   targetCompanyBankId: string;
@@ -257,6 +283,16 @@ function mergeHydratedEntity(
   return [...entities, { id, kind, label }];
 }
 
+const IC_BANK_PLACEHOLDER_LABELS = new Set(["Bank / Cash account", "Bank/cash account"]);
+
+function isInterCompanyHydratedBankLabelResolved(label: string | null | undefined, bankId?: string): boolean {
+  const t = String(label || "").trim();
+  const bid = String(bankId || "").trim();
+  if (!t) return false;
+  if (bid && t === bid) return false;
+  return !IC_BANK_PLACEHOLDER_LABELS.has(t);
+}
+
 /** Company bank combobox — id list me na ho to bhi naam/A/c fields bharen */
 function mergeHydratedBankEntity(
   entities: InterCompanyEntityDetail[],
@@ -267,8 +303,23 @@ function mergeHydratedBankEntity(
 ): InterCompanyEntityDetail[] {
   const id = String(bankId || "").trim();
   if (!id) return entities;
-  if (entities.some((e) => e.kind === "bank" && e.id === id)) return entities;
-  if (extra && extra.id === id) return [...entities, extra];
+
+  const existingIdx = entities.findIndex((e) => e.kind === "bank" && e.id === id);
+  if (extra && extra.id === id) {
+    if (existingIdx >= 0) {
+      const existing = entities[existingIdx]!;
+      if (!isInterCompanyHydratedBankLabelResolved(existing.label, id)) {
+        const next = [...entities];
+        next[existingIdx] = { ...existing, ...extra, label: extra.label || existing.label };
+        return next;
+      }
+    } else {
+      return [...entities, extra];
+    }
+  }
+
+  if (existingIdx >= 0) return entities;
+
   const label = readInterCompanyBankLabelSnapshot(voucher, side) || "Bank / Cash account";
   return [...entities, { id, kind: "bank", label }];
 }
@@ -510,13 +561,22 @@ export function InterCompanyVoucherForm({
     onRibbonTabChange?.(ribbonTab);
   }, [ribbonTab, onRibbonTabChange]);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  const [sourcePayeeKind, setSourcePayeeKind] = useState<InterCompanyEntityKind>("party");
+  const [sourcePayeeKind, setSourcePayeeKind] = useState<InterCompanyEntityKindFilter>(
+    INTER_COMPANY_ENTITY_KIND_ALL
+  );
   const [sourcePayeeId, setSourcePayeeId] = useState("");
-  const [targetPayeeKind, setTargetPayeeKind] = useState<InterCompanyEntityKind>("party");
+  const [targetPayeeKind, setTargetPayeeKind] = useState<InterCompanyEntityKindFilter>(
+    INTER_COMPANY_ENTITY_KIND_ALL
+  );
   const [targetPayeeId, setTargetPayeeId] = useState("");
   /** Source/target company bank � entity account se alag (compound IC legs). */
   const [sourceCompanyBankId, setSourceCompanyBankId] = useState("");
   const [targetCompanyBankId, setTargetCompanyBankId] = useState("");
+  const [sourceConnectUsers, setSourceConnectUsers] = useState<InterCompanyConnectUserEntry[]>([]);
+  const [targetConnectUsers, setTargetConnectUsers] = useState<InterCompanyConnectUserEntry[]>([]);
+  const [suggestedSourceAccountLabel, setSuggestedSourceAccountLabel] = useState("");
+  const [resolvedSourceMapKind, setResolvedSourceMapKind] = useState<InterCompanyEntityKind>("party");
+  const [resolvedSourceMapId, setResolvedSourceMapId] = useState("");
   /**
    * Live source company for combobox + entity lists (edit rematch / My companies).
    * Create default = current company.
@@ -593,6 +653,7 @@ export function InterCompanyVoucherForm({
     String(role) === "owner" ||
     customUser?.role === "CompanyAdmin" ||
     customUser?.role === "SuperAdmin";
+
   /** Bill-wise links: amount/accounts lock — attachments + Save apni company side pe open rehte hain. */
   const linkedLocksCoreFields = !!displayVoucher?.id && deleteDisabledWhenLinked;
   const coreEditBlocked = editingDisabled || isInterCompanyEditLocked;
@@ -812,6 +873,15 @@ export function InterCompanyVoucherForm({
     if (sourceEntity) {
       setSourcePayeeKind(sourceEntity.kind);
       setSourcePayeeId(sourceEntity.id);
+    }
+    setSuggestedSourceAccountLabel(String(row.interCompanySuggestedSourceAccountLabel || ""));
+    const resolvedKind = String(row.interCompanyResolvedSourceEntityKind || "").trim();
+    const resolvedId = String(row.interCompanyResolvedSourceEntityId || "").trim();
+    if (resolvedKind && resolvedId) {
+      setResolvedSourceMapKind(resolvedKind as InterCompanyEntityKind);
+      setResolvedSourceMapId(resolvedId);
+    } else {
+      setResolvedSourceMapId("");
     }
     if (targetEntity) {
       setTargetPayeeKind(targetEntity.kind);
@@ -1034,7 +1104,8 @@ export function InterCompanyVoucherForm({
     mobileForAnyCompanyId: joinedMobileForAnyCompanyId,
     panForAnyCompanyId: joinedPanForAnyCompanyId,
     partnerRowById: joinedPartnerRowById,
-  } = useInterCompanyJoinedTargetPartners(allCompanies, companyId, user?.uid);
+    connectInviteByCompanyId,
+  } = useInterCompanyJoinedTargetPartners(allCompanies, companyId, user?.uid, user?.email);
 
   // Firestore join settings — accept / shared user change par local cache + lookup refresh
   useEffect(() => {
@@ -1099,36 +1170,289 @@ export function InterCompanyVoucherForm({
 
   const { entities: sourceEntitiesRaw, loading: sourceEntitiesLoading, reload: reloadSourceEntities } =
     useInterCompanyEntities(sourceEntitiesCompanyId);
-  const { entities: targetEntitiesRaw, loading: targetEntitiesLoading } =
+  const { entities: targetEntitiesRaw, loading: targetEntitiesLoading, reload: reloadTargetEntities } =
     useInterCompanyEntities(targetEntitiesCompanyId);
 
+  useEffect(() => {
+    if (!sourceEntitiesCompanyId) {
+      setSourceConnectUsers([]);
+      return;
+    }
+    return subscribeInterCompanyConnectUsers(sourceEntitiesCompanyId, setSourceConnectUsers);
+  }, [sourceEntitiesCompanyId]);
+
+  useEffect(() => {
+    if (!targetEntitiesCompanyId) {
+      setTargetConnectUsers([]);
+      return;
+    }
+    return subscribeInterCompanyConnectUsers(targetEntitiesCompanyId, setTargetConnectUsers);
+  }, [targetEntitiesCompanyId]);
+
+  const sourceConnectAccess = useMemo(
+    () =>
+      resolveInterCompanyConnectUserAccess({
+        isCompanyOwnerOrAdmin: isCompanyAdmin,
+        userEmail: user?.email,
+        connectUsers: sourceConnectUsers,
+      }),
+    [isCompanyAdmin, user?.email, sourceConnectUsers]
+  );
+
+  const targetConnectAccess = useMemo(
+    () =>
+      resolveInterCompanyConnectUserAccess({
+        isCompanyOwnerOrAdmin: isCompanyAdmin,
+        userEmail: user?.email,
+        connectUsers: targetConnectUsers,
+      }),
+    [isCompanyAdmin, user?.email, targetConnectUsers]
+  );
+
   const voucherRow = (displayVoucher || null) as Record<string, unknown> | null;
+  const icViewerSide = interCompanyVoucherViewerSide(voucherRow);
+
+  const selectedTargetCompanyId = String(
+    targetCompanyId || editEntityCompanyIds.targetCompanyFieldId || ""
+  ).trim();
+
+  /** Target host par connect user grant — source owner/admin bypass nahi. */
+  const targetHostConnectAccess = useMemo(() => {
+    const fromConnectUsers = resolveInterCompanyConnectUserAccess({
+      isCompanyOwnerOrAdmin: isCompanyAdmin,
+      userEmail: user?.email,
+      connectUsers: targetConnectUsers,
+      ignoreOwnerAdminBypass: true,
+    });
+    if (!fromConnectUsers.isFullAccess) return fromConnectUsers;
+    const inviteAccess = connectAccessFromInviteGrant(
+      connectInviteByCompanyId.get(selectedTargetCompanyId)
+    );
+    if (inviteAccess && !inviteAccess.isFullAccess) return inviteAccess;
+    return fromConnectUsers;
+  }, [
+    targetConnectUsers,
+    user?.email,
+    isCompanyAdmin,
+    connectInviteByCompanyId,
+    selectedTargetCompanyId,
+  ]);
+
+  /** Connect user host (target) company par listed — create par source account restrict. */
+  const effectiveSourceConnectAccess = useMemo(() => {
+    if (sourceConnectAccess.sourceAccountListRestricted && !sourceConnectAccess.isFullAccess) {
+      return sourceConnectAccess;
+    }
+    if (icViewerSide === "source" && selectedTargetCompanyId && !targetHostConnectAccess.isFullAccess) {
+      return targetHostConnectAccess;
+    }
+    return sourceConnectAccess;
+  }, [
+    sourceConnectAccess,
+    targetHostConnectAccess,
+    icViewerSide,
+    selectedTargetCompanyId,
+  ]);
+  const sourceKindForMerge =
+    sourcePayeeKind === INTER_COMPANY_ENTITY_KIND_ALL
+      ? (String(voucherRow?.sourceEntityKind || "party").trim() as InterCompanyEntityKind) || "party"
+      : sourcePayeeKind;
+  const targetKindForMerge =
+    targetPayeeKind === INTER_COMPANY_ENTITY_KIND_ALL
+      ? (String(voucherRow?.targetEntityKind || "party").trim() as InterCompanyEntityKind) || "party"
+      : targetPayeeKind;
+
   const sourceEntities = useMemo(() => {
-    let list = mergeHydratedEntity(sourceEntitiesRaw, sourcePayeeKind, sourcePayeeId, voucherRow, "source");
+    let list = mergeHydratedEntity(sourceEntitiesRaw, sourceKindForMerge, sourcePayeeId, voucherRow, "source");
     list = mergeHydratedBankEntity(list, sourceCompanyBankId, voucherRow, "source", hydratedSourceBankExtra);
     return list;
   }, [
     sourceEntitiesRaw,
-    sourcePayeeKind,
+    sourceKindForMerge,
     sourcePayeeId,
     voucherRow,
     sourceCompanyBankId,
     hydratedSourceBankExtra,
   ]);
   const targetEntities = useMemo(() => {
-    let list = mergeHydratedEntity(targetEntitiesRaw, targetPayeeKind, targetPayeeId, voucherRow, "target");
+    let list = mergeHydratedEntity(targetEntitiesRaw, targetKindForMerge, targetPayeeId, voucherRow, "target");
     list = mergeHydratedBankEntity(list, targetCompanyBankId, voucherRow, "target", hydratedTargetBankExtra);
     return list;
   }, [
     targetEntitiesRaw,
-    targetPayeeKind,
+    targetKindForMerge,
     targetPayeeId,
     voucherRow,
     targetCompanyBankId,
     hydratedTargetBankExtra,
   ]);
 
+  const sourceEntitiesVisible = useMemo(
+    () => filterInterCompanyEntitiesForConnectAccess(sourceEntities, effectiveSourceConnectAccess),
+    [sourceEntities, effectiveSourceConnectAccess]
+  );
+  const targetEntitiesVisible = useMemo(() => {
+    // Create / source view — target host masters connect user ko mat chipkao (account baad me).
+    if (icViewerSide === "source" && !hasPersistedIc) return targetEntities;
+    return filterInterCompanyEntitiesForConnectAccess(targetEntities, targetConnectAccess);
+  }, [targetEntities, targetConnectAccess, icViewerSide, hasPersistedIc]);
+
   const isNewIcVoucher = !displayVoucher?.id && !savedSourceId;
+
+  const targetHasClearingOption = useMemo(
+    () => hasInterCompanyClearingBank(targetEntitiesRaw),
+    [targetEntitiesRaw]
+  );
+
+  /** Logged-in company = user ki side — create par source, target approve par target. */
+  const userOwnIcFormSide = useMemo((): "source" | "target" | null => {
+    const cid = String(companyId || "").trim();
+    if (!cid) return null;
+    if (icViewerSide === "target" && targetEntitiesCompanyId === cid) return "target";
+    if (icViewerSide !== "target" && sourceEntitiesCompanyId === cid) return "source";
+    return null;
+  }, [companyId, icViewerSide, sourceEntitiesCompanyId, targetEntitiesCompanyId]);
+
+  const [clearingPromptOpen, setClearingPromptOpen] = useState(false);
+  const [clearingCreateOpen, setClearingCreateOpen] = useState(false);
+  const [clearingPromptMode, setClearingPromptMode] = useState<"create_voucher" | "approve">(
+    "create_voucher"
+  );
+  const clearingPromptSideRef = useRef<"source" | "target" | null>(null);
+  const clearingPromptShownKeyRef = useRef("");
+  const clearingPromptScheduleKeyRef = useRef("");
+  const clearingPromptSearchStartedRef = useRef("");
+  const clearingPromptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingApproveAfterClearingRef = useRef(false);
+  const sourceEntitiesRawRef = useRef(sourceEntitiesRaw);
+  const sourceCompanyBankIdRef = useRef(sourceCompanyBankId);
+  const targetEntitiesRawRef = useRef(targetEntitiesRaw);
+  const targetCompanyBankIdRef = useRef(targetCompanyBankId);
+  const userOwnIcFormSideRef = useRef(userOwnIcFormSide);
+  sourceEntitiesRawRef.current = sourceEntitiesRaw;
+  sourceCompanyBankIdRef.current = sourceCompanyBankId;
+  targetEntitiesRawRef.current = targetEntitiesRaw;
+  targetCompanyBankIdRef.current = targetCompanyBankId;
+  userOwnIcFormSideRef.current = userOwnIcFormSide;
+
+  const IC_CLEARING_SEARCH_DELAY_MS = 2000;
+
+  const clearClearingPromptTimer = useCallback(() => {
+    if (clearingPromptTimerRef.current) {
+      clearTimeout(clearingPromptTimerRef.current);
+      clearingPromptTimerRef.current = null;
+    }
+  }, []);
+
+  const sourceClearingStillMissing = useCallback(() => {
+    if (userOwnIcFormSideRef.current !== "source") return false;
+    if (String(sourceCompanyBankIdRef.current || "").trim()) return false;
+    if (hasInterCompanyClearingBank(sourceEntitiesRawRef.current)) return false;
+    if (pickDefaultInterCompanyClearingBankId(sourceEntitiesRawRef.current)) return false;
+    return true;
+  }, []);
+
+  const targetClearingStillMissing = useCallback(() => {
+    if (String(targetCompanyBankIdRef.current || "").trim()) return false;
+    if (hasInterCompanyClearingBank(targetEntitiesRawRef.current)) return false;
+    if (pickDefaultInterCompanyClearingBankId(targetEntitiesRawRef.current)) return false;
+    return true;
+  }, []);
+
+  const waitThenRecheckClearingMissing = useCallback(
+    async (side: "source" | "target") => {
+      const searchKey =
+        side === "source"
+          ? `${sourceEntitiesCompanyId}:create`
+          : `${targetEntitiesCompanyId}:approve`;
+      if (side === "source") {
+        if (clearingPromptSearchStartedRef.current !== searchKey) {
+          clearingPromptSearchStartedRef.current = searchKey;
+          reloadSourceEntities();
+        }
+      } else if (clearingPromptSearchStartedRef.current !== searchKey) {
+        clearingPromptSearchStartedRef.current = searchKey;
+        reloadTargetEntities();
+      }
+      await new Promise<void>((resolve) => {
+        clearClearingPromptTimer();
+        clearingPromptTimerRef.current = setTimeout(() => {
+          clearingPromptTimerRef.current = null;
+          resolve();
+        }, IC_CLEARING_SEARCH_DELAY_MS);
+      });
+      return side === "source" ? sourceClearingStillMissing() : targetClearingStillMissing();
+    },
+    [
+      clearClearingPromptTimer,
+      reloadSourceEntities,
+      reloadTargetEntities,
+      sourceClearingStillMissing,
+      targetClearingStillMissing,
+      sourceEntitiesCompanyId,
+      targetEntitiesCompanyId,
+    ]
+  );
+
+  const runIcApproveRef = useRef<
+    (overrides?: { targetCompanyBankId?: string; sourceCompanyBankId?: string }) => Promise<void>
+  >(async () => {});
+
+  const handleClearingAccountCreated = useCallback(
+    (accountId: string, accountLabel = "Clearing Account") => {
+      const side = clearingPromptSideRef.current;
+      clearingPromptSideRef.current = null;
+      const optimisticBank: InterCompanyEntityDetail = {
+        id: accountId,
+        kind: "bank",
+        label: String(accountLabel || "Clearing Account").trim() || "Clearing Account",
+        isClearing: true,
+      };
+      if (side === "source") {
+        setHydratedSourceBankExtra(optimisticBank);
+        setSourceCompanyBankId(accountId);
+        reloadSourceEntities();
+        const cid = String(sourceEntitiesCompanyId || companyId || "").trim();
+        if (cid) {
+          void fetchInterCompanyBankEntityDetail(cid, accountId).then((row) => {
+            if (row) setHydratedSourceBankExtra(row);
+          });
+        }
+      } else if (side === "target") {
+        setHydratedTargetBankExtra(optimisticBank);
+        setTargetCompanyBankId(accountId);
+        reloadTargetEntities();
+        const cid = String(targetEntitiesCompanyId || companyId || "").trim();
+        if (cid) {
+          void fetchInterCompanyBankEntityDetail(cid, accountId).then((row) => {
+            if (row) setHydratedTargetBankExtra(row);
+          });
+        }
+      }
+      if (pendingApproveAfterClearingRef.current && side === "target") {
+        pendingApproveAfterClearingRef.current = false;
+        void runIcApproveRef.current({ targetCompanyBankId: accountId });
+      }
+    },
+    [
+      reloadSourceEntities,
+      reloadTargetEntities,
+      sourceEntitiesCompanyId,
+      targetEntitiesCompanyId,
+      companyId,
+    ]
+  );
+
+  useEffect(() => {
+    if (!isNewIcVoucher) {
+      clearingPromptShownKeyRef.current = "";
+      clearingPromptScheduleKeyRef.current = "";
+      clearingPromptSearchStartedRef.current = "";
+      clearClearingPromptTimer();
+    }
+  }, [isNewIcVoucher, clearClearingPromptTimer]);
+
+  useEffect(() => () => clearClearingPromptTimer(), [clearClearingPromptTimer]);
 
   useEffect(() => {
     if (!isNewIcVoucher || sourceEntitiesLoading) return;
@@ -1136,6 +1460,71 @@ export function InterCompanyVoucherForm({
     const id = pickDefaultInterCompanyClearingBankId(sourceEntitiesRaw);
     if (id) setSourceCompanyBankId(id);
   }, [isNewIcVoucher, sourceEntitiesLoading, sourceCompanyBankId, sourceEntitiesRaw]);
+
+  /** Sirf user ki source side — 2s search, phir bhi missing ho to prompt. */
+  useEffect(() => {
+    if (!isNewIcVoucher || sourceEntitiesLoading) return;
+    if (userOwnIcFormSide !== "source") return;
+    if (!sourceClearingStillMissing()) return;
+    const promptKey = `${sourceEntitiesCompanyId}:create`;
+    if (clearingPromptShownKeyRef.current === promptKey) return;
+    if (clearingPromptScheduleKeyRef.current === promptKey) return;
+
+    clearingPromptScheduleKeyRef.current = promptKey;
+    let cancelled = false;
+
+    void (async () => {
+      const stillMissing = await waitThenRecheckClearingMissing("source");
+      if (cancelled) return;
+      clearingPromptScheduleKeyRef.current = "";
+      if (clearingPromptShownKeyRef.current === promptKey) return;
+      if (!stillMissing) return;
+      clearingPromptShownKeyRef.current = promptKey;
+      clearingPromptSideRef.current = "source";
+      setClearingPromptMode("create_voucher");
+      setClearingPromptOpen(true);
+    })();
+
+    return () => {
+      cancelled = true;
+      if (clearingPromptScheduleKeyRef.current === promptKey) {
+        clearingPromptScheduleKeyRef.current = "";
+      }
+      clearClearingPromptTimer();
+    };
+  }, [
+    isNewIcVoucher,
+    sourceEntitiesLoading,
+    userOwnIcFormSide,
+    sourceCompanyBankId,
+    sourceEntitiesRaw,
+    sourceEntitiesCompanyId,
+    sourceClearingStillMissing,
+    waitThenRecheckClearingMissing,
+    clearClearingPromptTimer,
+  ]);
+
+  /** Entities load / auto-select ke baad galat prompt band — sirf user side. */
+  useEffect(() => {
+    if (!clearingPromptOpen || clearingPromptMode !== "create_voucher") return;
+    if (userOwnIcFormSide !== "source") {
+      setClearingPromptOpen(false);
+      return;
+    }
+    if (
+      String(sourceCompanyBankId || "").trim() ||
+      hasInterCompanyClearingBank(sourceEntitiesRaw) ||
+      pickDefaultInterCompanyClearingBankId(sourceEntitiesRaw)
+    ) {
+      setClearingPromptOpen(false);
+    }
+  }, [
+    clearingPromptOpen,
+    clearingPromptMode,
+    userOwnIcFormSide,
+    sourceCompanyBankId,
+    sourceEntitiesRaw,
+  ]);
 
   useEffect(() => {
     if (!isNewIcVoucher || targetEntitiesLoading) return;
@@ -1159,18 +1548,19 @@ export function InterCompanyVoucherForm({
       setHydratedSourceBankExtra(null);
       return;
     }
-    if (sourceEntities.some((e) => e.kind === "bank" && e.id === bid)) {
+    const rawRow = sourceEntitiesRaw.find((e) => e.kind === "bank" && e.id === bid);
+    if (rawRow && isInterCompanyHydratedBankLabelResolved(rawRow.label, bid)) {
       setHydratedSourceBankExtra(null);
       return;
     }
     let cancelled = false;
     void fetchInterCompanyBankEntityDetail(cid, bid).then((row) => {
-      if (!cancelled) setHydratedSourceBankExtra(row);
+      if (!cancelled && row) setHydratedSourceBankExtra(row);
     });
     return () => {
       cancelled = true;
     };
-  }, [sourceCompanyBankId, sourceEntitiesCompanyId, sourceEntities]);
+  }, [sourceCompanyBankId, sourceEntitiesCompanyId, sourceEntitiesRaw]);
 
   useEffect(() => {
     const bid = String(targetCompanyBankId || "").trim();
@@ -1179,18 +1569,19 @@ export function InterCompanyVoucherForm({
       setHydratedTargetBankExtra(null);
       return;
     }
-    if (targetEntities.some((e) => e.kind === "bank" && e.id === bid)) {
+    const rawRow = targetEntitiesRaw.find((e) => e.kind === "bank" && e.id === bid);
+    if (rawRow && isInterCompanyHydratedBankLabelResolved(rawRow.label, bid)) {
       setHydratedTargetBankExtra(null);
       return;
     }
     let cancelled = false;
     void fetchInterCompanyBankEntityDetail(cid, bid).then((row) => {
-      if (!cancelled) setHydratedTargetBankExtra(row);
+      if (!cancelled && row) setHydratedTargetBankExtra(row);
     });
     return () => {
       cancelled = true;
     };
-  }, [targetCompanyBankId, targetEntitiesCompanyId, targetEntities]);
+  }, [targetCompanyBankId, targetEntitiesCompanyId, targetEntitiesRaw]);
 
   const displayTargetCompanyId =
     targetCompanyId || editEntityCompanyIds.targetCompanyFieldId || "";
@@ -1214,8 +1605,69 @@ export function InterCompanyVoucherForm({
   const sourceStickyCompanyCode = useStickyInterCompanyCompanyCode(sourceCompanyForDisplay);
   const targetStickyCompanyCode = useStickyInterCompanyCompanyCode(targetCompany);
 
-  // Edit: interCompanyLink.role � source copy = Payment Out; target copy = Payment In
-  const icViewerSide = interCompanyVoucherViewerSide(voucherRow);
+  const icSourceAccountRestricted = useMemo(() => {
+    if (voucherRow?.interCompanySourceAccountRestricted === true) return true;
+    return effectiveSourceConnectAccess.sourceAccountListRestricted && icViewerSide === "source";
+  }, [voucherRow, effectiveSourceConnectAccess.sourceAccountListRestricted, icViewerSide]);
+
+  /** Connect User target — joined list / invite grant se pehchano (source admin par mat depend karo). */
+  const isConnectUserTargetCompany = useMemo(() => {
+    const id = selectedTargetCompanyId;
+    if (!id) return false;
+    if (connectInviteByCompanyId.has(id)) return true;
+    const row = joinedPartnerRowById.get(id);
+    return row?.systemNames?.includes("Connect User") === true;
+  }, [selectedTargetCompanyId, connectInviteByCompanyId, joinedPartnerRowById]);
+
+  /** Connect user create — target clearing + account host admin approve par choose karega. */
+  const icTargetAccountDeferred =
+    isNewIcVoucher &&
+    icViewerSide === "source" &&
+    Boolean(selectedTargetCompanyId) &&
+    isConnectUserTargetCompany;
+
+  const icSourceConnectPartialMasters =
+    icViewerSide === "source" &&
+    !icSourceAccountRestricted &&
+    !effectiveSourceConnectAccess.isFullAccess;
+
+  const icSourceAllowedMasterKinds = useMemo(
+    () => allowedConnectMasterKinds(effectiveSourceConnectAccess),
+    [effectiveSourceConnectAccess]
+  );
+
+  const icSourceAccountHint = useMemo(() => {
+    if (icSourceAccountRestricted) {
+      return "Type suggested account name — target company will map the real account.";
+    }
+    if (icSourceConnectPartialMasters && !isConnectMasterFullyAllowed(effectiveSourceConnectAccess)) {
+      return "Only allowed master types are shown below — pick account from the list.";
+    }
+    return undefined;
+  }, [icSourceAccountRestricted, icSourceConnectPartialMasters, effectiveSourceConnectAccess]);
+
+  useEffect(() => {
+    if (!icSourceConnectPartialMasters || !icSourceAllowedMasterKinds.length) return;
+    if (
+      sourcePayeeKind !== INTER_COMPANY_ENTITY_KIND_ALL &&
+      !icSourceAllowedMasterKinds.includes(sourcePayeeKind)
+    ) {
+      setSourcePayeeKind(INTER_COMPANY_ENTITY_KIND_ALL);
+      setSourcePayeeId("");
+    }
+  }, [icSourceConnectPartialMasters, icSourceAllowedMasterKinds, sourcePayeeKind]);
+
+  const icSuggestedSourceLabel = useMemo(() => {
+    const fromVoucher = String(voucherRow?.interCompanySuggestedSourceAccountLabel || "").trim();
+    return fromVoucher || suggestedSourceAccountLabel;
+  }, [voucherRow, suggestedSourceAccountLabel]);
+
+  const showSourceAccountResolve =
+    icViewerSide === "target" &&
+    voucherRow?.interCompanySourceAccountRestricted === true &&
+    isInterCompanySourceApprovedForTarget(voucherRow || {}) &&
+    !String(voucherRow?.interCompanyResolvedSourceEntityId || resolvedSourceMapId || "").trim();
+
   const showSourcePaymentOutBadge = hasPersistedIc && icViewerSide === "source";
   const showTargetPaymentInBadge = hasPersistedIc && icViewerSide === "target";
   const icLink = readInterCompanyLink(voucherRow);
@@ -1448,11 +1900,11 @@ export function InterCompanyVoucherForm({
     sourceCurrency.toUpperCase() !== targetCurrency.toUpperCase();
 
   const sourceSelected = useMemo(
-    () => sourceEntities.find((e) => e.kind === sourcePayeeKind && e.id === sourcePayeeId) ?? null,
+    () => findInterCompanyEntityById(sourceEntities, sourcePayeeId, sourcePayeeKind),
     [sourceEntities, sourcePayeeKind, sourcePayeeId]
   );
   const targetSelected = useMemo(
-    () => targetEntities.find((e) => e.kind === targetPayeeKind && e.id === targetPayeeId) ?? null,
+    () => findInterCompanyEntityById(targetEntities, targetPayeeId, targetPayeeKind),
     [targetEntities, targetPayeeKind, targetPayeeId]
   );
 
@@ -1555,11 +2007,15 @@ export function InterCompanyVoucherForm({
   // Auto narration must refresh — user typed extra lines rakho.
   useEffect(() => {
     if (fieldsDisabled || icViewerSide === "target") return;
+    const sourceLabelForNarration = icSourceAccountRestricted
+      ? icSuggestedSourceLabel || sourceSelected?.label
+      : sourceSelected?.label;
     const autoNarration = buildInterCompanyJournalNarration({
       sourceCompanyName: sourceCompanyForDisplay?.name || company?.name,
-      sourceEntityLabel: sourceSelected?.label,
+      sourceEntityLabel: sourceLabelForNarration,
       targetCompanyName: targetCompany?.name,
       targetEntityLabel: targetSelected?.label,
+      voucherNumber: form.getValues("voucherNumber"),
     });
     const userExtra = extractInterCompanyUserNarration(form.getValues("narration"), autoNarration);
     form.setValue("narration", composeInterCompanyNarrationBase(autoNarration, userExtra), {
@@ -1573,6 +2029,8 @@ export function InterCompanyVoucherForm({
     sourceSelected?.label,
     targetCompany?.name,
     targetSelected?.label,
+    icSourceAccountRestricted,
+    icSuggestedSourceLabel,
     form,
   ]);
 
@@ -1585,27 +2043,47 @@ export function InterCompanyVoucherForm({
       toast.error("Source: select clearing account");
       return false;
     }
-    if (!String(targetCompanyBankId || "").trim()) {
+    if (
+      !icTargetAccountDeferred &&
+      targetHasClearingOption &&
+      !String(targetCompanyBankId || "").trim()
+    ) {
       toast.error("Target: select clearing account");
       return false;
     }
-    if (!String(sourcePayeeId || "").trim()) {
+    if (icSourceAccountRestricted) {
+      if (!String(icSuggestedSourceLabel || "").trim()) {
+        toast.error("Source: type suggested account name");
+        return false;
+      }
+    } else if (!String(sourcePayeeId || "").trim()) {
       toast.error("Source: select account");
       return false;
     }
-    if (!String(targetPayeeId || "").trim()) {
+    if (!icTargetAccountDeferred && !String(targetPayeeId || "").trim()) {
       toast.error("Target: select account");
       return false;
     }
+    const resolvedSourceKind = resolveInterCompanyEntityKindForSave(
+      sourcePayeeKind,
+      sourcePayeeId,
+      sourceEntities
+    );
+    const resolvedTargetKind = resolveInterCompanyEntityKindForSave(
+      targetPayeeKind,
+      targetPayeeId,
+      targetEntities
+    );
     if (
-      sourcePayeeKind === "bank" &&
+      resolvedSourceKind === "bank" &&
       String(sourcePayeeId) === String(sourceCompanyBankId || "").trim()
     ) {
       toast.error("Source account must be different from clearing account");
       return false;
     }
     if (
-      targetPayeeKind === "bank" &&
+      !icTargetAccountDeferred &&
+      resolvedTargetKind === "bank" &&
       String(targetPayeeId) === String(targetCompanyBankId || "").trim()
     ) {
       toast.error("Target account must be different from clearing account");
@@ -1702,6 +2180,16 @@ export function InterCompanyVoucherForm({
       targetPayeeId,
       baseline?.targetPayeeId
     );
+    const saveSourceEntityKind = resolveInterCompanyEntityKindForSave(
+      saveSourcePayeeKind,
+      saveSourcePayeeId,
+      sourceEntities
+    );
+    const saveTargetEntityKind = resolveInterCompanyEntityKindForSave(
+      saveTargetPayeeKind,
+      saveTargetPayeeId,
+      targetEntities
+    );
     const saveSourceBankId = resolveAccountField(
       "sourceBank",
       sourceCompanyBankId,
@@ -1713,8 +2201,9 @@ export function InterCompanyVoucherForm({
       baseline?.targetCompanyBankId
     );
 
-    const sourceEntityLabelForSave =
-      saveSourcePayeeId === sourcePayeeId
+    const sourceEntityLabelForSave = icSourceAccountRestricted
+      ? icSuggestedSourceLabel
+      : saveSourcePayeeId === sourcePayeeId
         ? sourceSelected?.label || baseline?.sourcePayeeLabel
         : baseline?.sourcePayeeLabel || sourceSelected?.label;
     const targetEntityLabelForSave =
@@ -1722,13 +2211,14 @@ export function InterCompanyVoucherForm({
         ? targetSelected?.label || baseline?.targetPayeeLabel
         : baseline?.targetPayeeLabel || targetSelected?.label;
 
+    const valuesBefore = form.getValues();
     const autoNarration = buildInterCompanyJournalNarration({
       sourceCompanyName: sourceCompanyForDisplay?.name || company?.name,
       sourceEntityLabel: sourceEntityLabelForSave,
       targetCompanyName: targetCompany?.name,
       targetEntityLabel: targetEntityLabelForSave,
+      voucherNumber: valuesBefore.voucherNumber,
     });
-    const valuesBefore = form.getValues();
     const userExtra = extractInterCompanyUserNarration(valuesBefore.narration, autoNarration);
     const narrationForSave = composeInterCompanyNarrationBase(autoNarration, userExtra);
     form.setValue("narration", narrationForSave, { shouldDirty: true });
@@ -1864,9 +2354,9 @@ export function InterCompanyVoucherForm({
         otherChargeAmount: saveOtherChargeAmount || undefined,
         otherChargeKind: saveOtherChargeKind,
         narration: narrationForSave,
-        sourceEntityKind: saveSourcePayeeKind,
+        sourceEntityKind: saveSourceEntityKind,
         sourceEntityId: saveSourcePayeeId,
-        targetEntityKind: saveTargetPayeeKind,
+        targetEntityKind: saveTargetEntityKind,
         targetEntityId: saveTargetPayeeId,
         sourceCompanyBankAccountId: saveSourceBankId,
         targetCompanyBankAccountId: saveTargetBankId,
@@ -1897,6 +2387,10 @@ export function InterCompanyVoucherForm({
         targetPostMode: asJournal ? "journal" : "payment_in",
         editingSide: icViewerSide === "target" ? "target" : "source",
         applyPeerPendingFieldKeys: opts?.applyPeerPendingFieldKeys,
+        interCompanySuggestedSourceAccountLabel: icSourceAccountRestricted
+          ? icSuggestedSourceLabel
+          : undefined,
+        interCompanySourceAccountRestricted: icSourceAccountRestricted || undefined,
       });
 
       setSavedSourceId(result.sourceId);
@@ -1920,10 +2414,10 @@ export function InterCompanyVoucherForm({
             amount: Number(values.amount) || 0,
             dateIso: voucherDate.toISOString(),
             narration: narrationForSave,
-            sourceEntityKind: saveSourcePayeeKind,
+            sourceEntityKind: saveSourceEntityKind,
             sourceEntityId: saveSourcePayeeId,
             sourceEntityLabel: String(sourceEntityLabelForSave || ""),
-            targetEntityKind: saveTargetPayeeKind,
+            targetEntityKind: saveTargetEntityKind,
             targetEntityId: saveTargetPayeeId,
             targetEntityLabel: String(targetEntityLabelForSave || ""),
             sourceCompanyBankAccountId: saveSourceBankId,
@@ -2244,7 +2738,10 @@ export function InterCompanyVoucherForm({
     id: string,
     fallback: string
   ) => {
-    const hit = list.find((e) => e.kind === kind && e.id === id);
+    const hit =
+      kind === INTER_COMPANY_ENTITY_KIND_ALL
+        ? list.find((e) => e.id === id)
+        : list.find((e) => e.kind === kind && e.id === id);
     return String(hit?.label || fallback || id || "—").trim() || "—";
   };
 
@@ -2432,6 +2929,126 @@ export function InterCompanyVoucherForm({
     void processAndSave({ ...opts, targetPostMode });
   };
 
+  const runIcApprove = async (overrides?: {
+    targetCompanyBankId?: string;
+    sourceCompanyBankId?: string;
+  }) => {
+    const approveVoucherId = String(currentLinkedVoucherId || "").trim();
+    if (!approveVoucherId || !user?.uid || !companyId) return;
+
+    const effectiveTargetBankId =
+      String(overrides?.targetCompanyBankId ?? targetCompanyBankId ?? "").trim();
+    const effectiveSourceBankId =
+      String(overrides?.sourceCompanyBankId ?? sourceCompanyBankId ?? "").trim();
+
+    const toastId = toast.loading("Approving…");
+    setIsLoading(true);
+    try {
+      const approverName = customUser?.displayName || user.displayName || user.email || user.uid;
+      await approveVoucherWithHistory(companyId, approveVoucherId, user.uid, approverName);
+      const icPartyId = String(
+        (voucherRow as { interCompanyCounterpartyPartyId?: string })?.interCompanyCounterpartyPartyId ||
+          (displayVoucher as { interCompanyCounterpartyPartyId?: string } | undefined)
+            ?.interCompanyCounterpartyPartyId ||
+          ""
+      ).trim();
+      const useIcConduit = true;
+      const amount = Number(form.getValues().amount) || 0;
+      if (icViewerSide === "target") {
+        const approvedLegs = buildTargetInterCompanyLegsApproved({
+          amount,
+          entityKind: resolveInterCompanyEntityKindForSave(
+            targetPayeeKind,
+            targetPayeeId,
+            targetEntities
+          ),
+          entityId: targetPayeeId,
+          companyBankAccountId: effectiveTargetBankId,
+          interCompanyCounterpartyPartyId: icPartyId,
+          useIcConduit,
+          targetPostMode: postTargetAsJournal ? "journal" : "payment_in",
+        });
+        if (approvedLegs.length > 0) {
+          await patchVoucherFields(companyId, approveVoucherId, {
+            interCompanyLegs: approvedLegs,
+            interCompanyCounterpartyPartyId: icPartyId || null,
+            interCompanySourceApproved: true,
+            ...(effectiveTargetBankId
+              ? {
+                  targetCompanyBankAccountId: effectiveTargetBankId,
+                  targetCompanyBankLabel:
+                    targetEntities.find((e) => e.kind === "bank" && e.id === effectiveTargetBankId)
+                      ?.label || effectiveTargetBankId,
+                }
+              : {}),
+          });
+        }
+        const row = (displayVoucher || voucher || {}) as Record<string, unknown>;
+        if (
+          row.interCompanySourceAccountRestricted === true &&
+          resolvedSourceMapId &&
+          !String(row.interCompanyResolvedSourceEntityId || "").trim()
+        ) {
+          const resolvedLabel =
+            sourceEntities.find((e) => e.id === resolvedSourceMapId)?.label ||
+            String(row.interCompanySuggestedSourceAccountLabel || "");
+          await syncInterCompanyResolvedSourceAccountToPeer({
+            targetCompanyId: companyId,
+            targetVoucher: row,
+            resolvedKind: resolvedSourceMapKind,
+            resolvedId: resolvedSourceMapId,
+            resolvedLabel,
+            amount,
+            sourceCompanyBankAccountId: String(
+              row.sourceCompanyBankAccountId || row.companyBankAccountId || ""
+            ).trim(),
+            interCompanyCounterpartyPartyId: icPartyId,
+            sourceAlreadyApproved: true,
+          });
+        }
+      } else {
+        const approvedLegs = buildSourceInterCompanyLegsApproved({
+          amount,
+          entityKind: resolveInterCompanyEntityKindForSave(
+            sourcePayeeKind,
+            sourcePayeeId,
+            sourceEntities
+          ),
+          entityId: sourcePayeeId,
+          companyBankAccountId: effectiveSourceBankId,
+          interCompanyCounterpartyPartyId: icPartyId,
+          useIcConduit,
+        });
+        if (approvedLegs.length > 0) {
+          await patchVoucherFields(companyId, approveVoucherId, {
+            interCompanyLegs: approvedLegs,
+            interCompanyCounterpartyPartyId: icPartyId || null,
+          });
+        }
+      }
+      if (effectiveTargetBankId && icViewerSide === "target") {
+        setTargetCompanyBankId(effectiveTargetBankId);
+      }
+      setVoucherOverride((prev) => ({
+        ...((prev || displayVoucher || voucher || {}) as Record<string, unknown>),
+        id: approveVoucherId,
+        isApproved: true,
+        ...(effectiveTargetBankId && icViewerSide === "target"
+          ? { targetCompanyBankAccountId: effectiveTargetBankId }
+          : {}),
+      }));
+      toast.success("Inter Company approved", { id: toastId });
+      onVoucherAction?.("saved", false, approveVoucherId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not approve";
+      toast.error("Approve failed", { id: toastId, description: message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  runIcApproveRef.current = runIcApprove;
+
   const handleIcApprove = async () => {
     if (isLoading || isApproving) return;
     if (!user?.uid || !companyId) {
@@ -2466,66 +3083,47 @@ export function InterCompanyVoucherForm({
         toast.error("Source company must approve this Inter Company voucher first.");
         return;
       }
-    }
-    const toastId = toast.loading("Approving…");
-    setIsLoading(true);
-    try {
-      const approverName = customUser?.displayName || user.displayName || user.email || user.uid;
-      await approveVoucherWithHistory(companyId, approveVoucherId, user.uid, approverName);
-      const icPartyId = String(
-        (voucherRow as { interCompanyCounterpartyPartyId?: string })?.interCompanyCounterpartyPartyId ||
-          (displayVoucher as { interCompanyCounterpartyPartyId?: string } | undefined)
-            ?.interCompanyCounterpartyPartyId ||
-          ""
-      ).trim();
-      const useIcConduit = true;
-      const amount = Number(form.getValues().amount) || 0;
-      if (icViewerSide === "target") {
-        const approvedLegs = buildTargetInterCompanyLegsApproved({
-          amount,
-          entityKind: targetPayeeKind,
-          entityId: targetPayeeId,
-          companyBankAccountId: targetCompanyBankId,
-          interCompanyCounterpartyPartyId: icPartyId,
-          useIcConduit,
-          targetPostMode: postTargetAsJournal ? "journal" : "payment_in",
-        });
-        if (approvedLegs.length > 0) {
-          await patchVoucherFields(companyId, approveVoucherId, {
-            interCompanyLegs: approvedLegs,
-            interCompanyCounterpartyPartyId: icPartyId || null,
-            interCompanySourceApproved: true,
-          });
-        }
-      } else {
-        const approvedLegs = buildSourceInterCompanyLegsApproved({
-          amount,
-          entityKind: sourcePayeeKind,
-          entityId: sourcePayeeId,
-          companyBankAccountId: sourceCompanyBankId,
-          interCompanyCounterpartyPartyId: icPartyId,
-          useIcConduit,
-        });
-        if (approvedLegs.length > 0) {
-          await patchVoucherFields(companyId, approveVoucherId, {
-            interCompanyLegs: approvedLegs,
-            interCompanyCounterpartyPartyId: icPartyId || null,
-          });
-        }
+      if (
+        row.interCompanySourceAccountRestricted === true &&
+        !String(row.interCompanyResolvedSourceEntityId || resolvedSourceMapId || "").trim()
+      ) {
+        toast.error("Map the source account before approve");
+        return;
       }
-      setVoucherOverride((prev) => ({
-        ...((prev || displayVoucher || voucher || {}) as Record<string, unknown>),
-        id: approveVoucherId,
-        isApproved: true,
-      }));
-      toast.success("Inter Company approved", { id: toastId });
-      onVoucherAction?.("saved", false, approveVoucherId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Could not approve";
-      toast.error("Approve failed", { id: toastId, description: message });
-    } finally {
-      setIsLoading(false);
+      if (!String(targetPayeeId || "").trim()) {
+        toast.error("Target: select account before approve");
+        return;
+      }
+      const tid = String(targetCompanyBankId || "").trim();
+      if (!tid && userOwnIcFormSide === "target" && targetClearingStillMissing()) {
+        pendingApproveAfterClearingRef.current = true;
+        const stillMissing = await waitThenRecheckClearingMissing("target");
+        if (!stillMissing) {
+          pendingApproveAfterClearingRef.current = false;
+          const autoId = pickDefaultInterCompanyClearingBankId(targetEntitiesRawRef.current);
+          if (autoId) {
+            await runIcApprove({ targetCompanyBankId: autoId });
+          } else {
+            await runIcApprove();
+          }
+          return;
+        }
+        clearingPromptSideRef.current = "target";
+        setClearingPromptMode("approve");
+        setClearingPromptOpen(true);
+        return;
+      }
+      if (!tid && hasInterCompanyClearingBank(targetEntitiesRaw)) {
+        const autoId = pickDefaultInterCompanyClearingBankId(targetEntitiesRaw);
+        if (!autoId) {
+          toast.error("Target: select clearing account");
+          return;
+        }
+        await runIcApprove({ targetCompanyBankId: autoId });
+        return;
+      }
     }
+    await runIcApprove();
   };
 
   const handleDelete = async () => {
@@ -2566,6 +3164,45 @@ export function InterCompanyVoucherForm({
     } catch (err) {
       const message = err instanceof Error ? err.message : "Delete failed";
       toast.error("Delete failed", { id: toastId, description: message });
+    }
+  };
+
+  const handlePermanentDelete = async () => {
+    const voucherId = String(
+      voucher?.id || savedSourceId || currentLinkedVoucherId || displayVoucher?.id || ""
+    ).trim();
+    if (!voucherId) {
+      toast.error("Voucher not found");
+      return;
+    }
+    if (!companyId) {
+      toast.error("Select a company first");
+      return;
+    }
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+    } catch (err) {
+      toast.error(err instanceof PermissionDeniedError ? err.message : "Permission denied");
+      return;
+    }
+    const rowForPerm = (displayVoucher || voucher || { id: voucherId, type: "inter_company" }) as {
+      id?: string;
+      type?: string;
+      userId?: string;
+      isApproved?: boolean;
+    };
+    if (!canDeleteVoucher(rowForPerm as never)) {
+      toast.error("You do not have permission to delete this voucher");
+      return;
+    }
+    const toastId = toast.loading("Deleting permanently…");
+    try {
+      await permanentDeleteCompanySubdocFromRecycleBin(companyId, "vouchers", voucherId);
+      toast.success("Inter Company voucher deleted permanently on this company", { id: toastId });
+      onVoucherAction?.("cancelled");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Permanent delete failed";
+      toast.error("Permanent delete failed", { id: toastId, description: message });
     }
   };
 
@@ -2724,6 +3361,7 @@ export function InterCompanyVoucherForm({
                   }}
                   fieldsDisabled={targetCompanySelectLocked}
                   accountFieldsDisabled={targetSideDisabled}
+                  targetAccountDeferred={icTargetAccountDeferred}
                   headerTrailing={
                     peerCompanyExists ? (
                       <div className="flex shrink-0 items-center gap-1.5">
@@ -2757,7 +3395,7 @@ export function InterCompanyVoucherForm({
                   partners={targetJoinedPartners}
                   lookupPartners={lookupPartners}
                   targetPartnerPrivacy={targetPartnerPrivacy}
-                  entities={targetEntities}
+                  entities={targetEntitiesVisible}
                   entitiesLoading={targetEntitiesLoading}
                   payeeKind={targetPayeeKind}
                   onPayeeKindChange={(k) => {
@@ -2791,7 +3429,7 @@ export function InterCompanyVoucherForm({
             onSourceCompanyChange={handleSourceCompanyChange}
             companyComboboxOptions={sourceComboboxOptions}
             companySelectDisabled={sourceCompanySelectLocked}
-            entities={sourceEntities}
+            entities={sourceEntitiesVisible}
             entitiesLoading={sourceEntitiesLoading}
             payeeKind={sourcePayeeKind}
             onPayeeKindChange={(k) => {
@@ -2803,6 +3441,12 @@ export function InterCompanyVoucherForm({
               if (sourceSideDisabled) return;
               setSourcePayeeId(id);
             }}
+            sourceAccountListRestricted={icSourceAccountRestricted}
+            connectPartialMasters={icSourceConnectPartialMasters}
+            allowedSourceEntityKinds={icSourceAllowedMasterKinds}
+            accountNameHint={icSourceAccountHint}
+            suggestedSourceAccountLabel={icSuggestedSourceLabel}
+            onSuggestedSourceAccountLabelChange={setSuggestedSourceAccountLabel}
             fieldsDisabled={sourceSideDisabled}
             isPeerSourceCompany={isPeerSourceCompany}
             showPaymentOutBadge={showSourcePaymentOutBadge}
@@ -2819,6 +3463,20 @@ export function InterCompanyVoucherForm({
         }
         simpleView={simpleView}
       />
+
+      {showSourceAccountResolve ? (
+        <InterCompanySourceAccountResolveSection
+          suggestedLabel={icSuggestedSourceLabel}
+          entities={sourceEntities}
+          entitiesLoading={sourceEntitiesLoading}
+          entityKind={resolvedSourceMapKind}
+          onEntityKindChange={setResolvedSourceMapKind}
+          entityId={resolvedSourceMapId}
+          onEntityIdChange={setResolvedSourceMapId}
+          sourceCompanyId={sourceEntitiesCompanyId}
+          disabled={targetSideDisabled}
+        />
+      ) : null}
 
       <InterCompanyVoucherIdentityStrip
         source={{
@@ -3012,6 +3670,9 @@ export function InterCompanyVoucherForm({
                 onSettingsChange={() => setIcSettingsTick((n) => n + 1)}
               />
             ) : null}
+            {ribbonTab === "connect" && companyId ? (
+              <InterCompanyConnectUserPanel companyId={companyId} />
+            ) : null}
           </div>
         </ScrollArea>
 
@@ -3054,6 +3715,11 @@ export function InterCompanyVoucherForm({
             isFormDirty={icFooterDirty}
             onCancel={() => onVoucherAction?.("cancelled")}
             onDelete={() => void handleDelete()}
+            onPermanentDelete={() => void handlePermanentDelete()}
+            deleteEntityName={
+              String((displayVoucher as { voucherNumber?: string })?.voucherNumber || (voucher as { voucherNumber?: string })?.voucherNumber || "").trim() ||
+              "this Inter Company voucher"
+            }
             onPrint={handlePrint}
           />
         ) : null}
@@ -3312,11 +3978,24 @@ export function InterCompanyVoucherForm({
     </>
   );
 
+  const clearingAccountPrompt = (
+    <InterCompanyClearingAccountPrompt
+      promptOpen={clearingPromptOpen}
+      onPromptOpenChange={setClearingPromptOpen}
+      createOpen={clearingCreateOpen}
+      onCreateOpenChange={setClearingCreateOpen}
+      mode={clearingPromptMode}
+      companyName={company?.name}
+      onClearingAccountCreated={handleClearingAccountCreated}
+    />
+  );
+
   if (inDialog) {
     return (
       <>
         <div className="flex min-h-0 flex-col gap-3 px-1 pb-2 md:px-0">{ribbonLayout}</div>
         {payModeDialog}
+        {clearingAccountPrompt}
         {accountApplyDialogs}
         {otherChargeCreateDialogs}
       </>
@@ -3336,6 +4015,7 @@ export function InterCompanyVoucherForm({
       </div>
       <div className="min-h-0 flex-1 px-4 py-3">{ribbonLayout}</div>
       {payModeDialog}
+      {clearingAccountPrompt}
       {accountApplyDialogs}
       {otherChargeCreateDialogs}
     </div>

@@ -4,7 +4,9 @@ import * as React from "react";
 import { TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, Pencil, History, CheckCircle, CheckCheck, Printer, MousePointerClick, RefreshCw, Loader2 } from "lucide-react";
+import { MoreVertical, Pencil, History, CheckCircle, CheckCheck, CheckSquare, Printer, MousePointerClick, RefreshCw, Loader2 } from "lucide-react";
+import { StatementCheckedRowMessageLabel } from "@/components/vouchers/StatementCheckedRowMessageLabel";
+import { statementCheckedMessageColumn } from "@/lib/statementCheckRowMessage";
 import { VoucherAttachmentFileIndicator } from "@/components/vouchers/VoucherAttachmentFileIndicator";
 import {
   DropdownMenu,
@@ -31,11 +33,19 @@ import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { isLedgerTransactionPeerPendingChange, isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
+import { toast } from "sonner";
 import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import { getAllocationTotal } from "@/lib/payment-allocation-utils";
 import type { Item } from "@/components/items/types";
 import { motion } from "framer-motion";
 import { FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
+import { FY_OPENING_ROW_TYPE } from "@/lib/fyPagination/fyOpeningRows";
+import {
+  buildFiscalMergePartitionBannerLabelForDateSystem,
+  buildFyOpeningPillSplit,
+  buildFyPartitionOpeningPillLabel,
+  parseFiscalPartitionBoundaryMs,
+} from "@/lib/fiscalYearLabel";
 import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { companyRequiresLocalAttachmentUrlsOnly } from "@/lib/staticAttachmentDisplayUrl";
@@ -399,6 +409,13 @@ export const formatQuantity = (val: number) =>
 
 export const getDisplayType = (t: any) => {
   if (!t.type) return "";
+  if (t.type === FY_OPENING_ROW_TYPE) {
+    const pill = String(t._ledgerOpeningPillLabel || "").trim();
+    if (pill) return pill;
+    const rowDate = parseFirestoreDateFieldToJsDate(t.date);
+    if (rowDate) return buildFyPartitionOpeningPillLabel(null, rowDate);
+    return "fy opening";
+  }
   if (t.type === "journal" && t.subType === "add_salary") return "Add Salary";
   if (t.type === "inter_company") return "Inter Company";
   return t.type.replace(/_/g, " ");
@@ -1272,6 +1289,9 @@ export const TransactionRow = React.memo(
     isCheckModeFocused = false,
     /** Check mode: Space mark — halka green bg (border nahi) */
     isCheckModeMarked = false,
+    /** 3-dot Mark as checked — amber row + Dr/Cr message (check mode se alag) */
+    isStatementChecked = false,
+    onMarkAsChecked,
     /** Spend-wise group card: 3-dot me Select + Print */
     spendWiseInGroupCard = false,
     showSpendWiseGroupMenuActions = false,
@@ -1282,6 +1302,7 @@ export const TransactionRow = React.memo(
     activeRecurringTriggerVoucherIds = null,
   }: any) => {
     const { company } = useCompany();
+    const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } = useDate();
     const localLedgerOnly = companyRequiresLocalAttachmentUrlsOnly(company);
     const voucherAttachmentUiOpts = React.useMemo(() => voucherAttachmentUiOptionsForCompany(company), [company]);
     /* Main + narration hover ek block — narration par mouse par bhi dono rows highlight (globals.css [data-pl-txn-hovered]) */
@@ -1300,10 +1321,20 @@ export const TransactionRow = React.memo(
     // Merge fiscal mode: FY ke beech full-width divider — amounts / row actions nahi.
     if (transaction.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
       const span = typeof fullRowColSpan === "number" && fullRowColSpan > 0 ? fullRowColSpan : 12;
+      const boundaryMs = parseFiscalPartitionBoundaryMs(transaction);
+      const partitionDate = boundaryMs != null ? new Date(boundaryMs) : null;
       const label =
-        typeof (transaction as any)._partitionLabel === "string" && (transaction as any)._partitionLabel
-          ? (transaction as any)._partitionLabel
-          : "── Closing fiscal period · New fiscal period ──";
+        partitionDate && !Number.isNaN(partitionDate.getTime())
+          ? buildFiscalMergePartitionBannerLabelForDateSystem(
+              company,
+              partitionDate,
+              dateSystem,
+              formatDate,
+              company?.fiscalPartitionLabel ?? null
+            )
+          : typeof (transaction as any)._partitionLabel === "string" && (transaction as any)._partitionLabel
+            ? (transaction as any)._partitionLabel
+            : "── Closing fiscal period · New fiscal period ──";
       return (
         <motion.tr
           layout={animateLayout ? "position" : false}
@@ -1318,6 +1349,7 @@ export const TransactionRow = React.memo(
       );
     }
 
+    const isFyOpeningRow = transaction.type === FY_OPENING_ROW_TYPE;
     const isSpendWiseInGroup = isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild || (transaction as any)._spendWiseGroupFirst;
     const hasSpendWiseColor = typeof spendWiseGroupColorIndex === "number";
     const swColor = hasSpendWiseColor && (spendWiseGroupColorIndex === 1 ? "green" : spendWiseGroupColorIndex === 2 ? "pink" : "blue");
@@ -1352,7 +1384,6 @@ export const TransactionRow = React.memo(
       if (isMobileView && key === "date") return true;
       return visibleColumns == null || visibleColumns[key] !== false;
     };
-    const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } = useDate();
     const { effectiveNotificationSettings } = useCompany();
     const { user, customUser } = useAuth();
     const currentUserUid = user?.uid ?? null;
@@ -1367,6 +1398,10 @@ export const TransactionRow = React.memo(
     const numberAnimationDuration = isNumberAnimationEnabled ? (animationSettings?.numbers?.duration ?? 2.5) : 0;
 
     const d = safeToDate(transaction.date);
+    const fyOpeningPillSplit =
+      isFyOpeningRow && d
+        ? buildFyOpeningPillSplit(company, d, dateSystem)
+        : null;
     // Desktop table me bhi mobile card wali same entry-time priority dikhani hai: createdAt -> edited/updated -> voucher date.
     const entryClock = formatVoucherEntryTimeLocal(transaction as Record<string, unknown>);
     let debit = toLedgerAmount(transaction.debit);
@@ -1397,6 +1432,9 @@ export const TransactionRow = React.memo(
       credit = credit / factor;
       balance = balance / factor;
     }
+    const fyOpeningDrCrSide: TxnDrCrSide | null = isFyOpeningRow
+      ? resolveTxnDrCrSide(debit, credit, balance) ?? (Number(balance) >= 0 ? "dr" : "cr")
+      : null;
 
     // Blink animation: Dr/Cr/Balance numerals + Dr/Cr suffix only — not group border / full cell (see MainRow, no row-level animate).
     const activeBlinkModes = Array.isArray(blinkMode) ? blinkMode : [];
@@ -1523,7 +1561,7 @@ export const TransactionRow = React.memo(
               <TableCell className={ensureMinGaps ? "min-w-[112px] px-[5px]" : undefined}>
                 {d ? hlForColumn("date_ad")(formatDate(d)) : ""}
                 {entryClock ? (
-                  <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">• {hlForColumn("date_ad")(entryClock)}</span>
+                  <span className="ml-1 whitespace-nowrap text-[10px] text-foreground/70">• {hlForColumn("date_ad")(entryClock)}</span>
                 ) : null}
               </TableCell>
             </>
@@ -1531,7 +1569,7 @@ export const TransactionRow = React.memo(
             <TableCell className={ensureMinGaps ? "min-w-[112px] px-[5px]" : undefined}>
               {d ? hlForColumn("date")(dateSystem === "AD" ? formatDate(d) : formatDateBS(d)) : ""}
               {entryClock ? (
-                <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">• {hlForColumn("date")(entryClock)}</span>
+                <span className="ml-1 whitespace-nowrap text-[10px] text-foreground/70">• {hlForColumn("date")(entryClock)}</span>
               ) : null}
             </TableCell>
           ))}
@@ -1552,9 +1590,11 @@ export const TransactionRow = React.memo(
               variant="outline"
               className={cn(
                 voucherTypePillClassName(
-                  isNote || transaction.type === "note"
-                    ? null
-                    : resolveTxnDrCrSide(debit, credit, balance),
+                  isFyOpeningRow && fyOpeningDrCrSide
+                    ? fyOpeningDrCrSide
+                    : isNote || transaction.type === "note"
+                      ? "dr"
+                      : resolveTxnDrCrSide(debit, credit, balance),
                   { interCompanyReversed: isInterCompanyReversedVoucher(transaction) }
                 ),
                 (spendWiseInGroupCard ||
@@ -1564,16 +1604,28 @@ export const TransactionRow = React.memo(
                   "max-w-full whitespace-nowrap"
               )}
             >
-              {hlForColumn("type")(getDisplayType(transaction))}
+              {hlForColumn("type")(fyOpeningPillSplit?.typePill ?? getDisplayType(transaction))}
             </Badge>
           </TableCell>
         )}
         {showCol("voucherNo") && (
           <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined}>
             <span className="inline-flex max-w-full flex-wrap items-center gap-1">
+              {fyOpeningPillSplit?.voucherPill ? (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    voucherTypePillClassName(fyOpeningDrCrSide ?? "dr"),
+                    "max-w-full whitespace-nowrap"
+                  )}
+                >
+                  {hlForColumn("voucherNumber")(fyOpeningPillSplit.voucherPill)}
+                </Badge>
+              ) : (
               <span className="min-w-0 truncate">
                 {hlForColumn("voucherNumber")(getDisplayVoucherNumber(transaction))}
               </span>
+              )}
               {isPeerPendingChange ? (
                 <span
                   className="inline-flex shrink-0 items-center rounded-full border border-blue-600/50 bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white shadow-sm dark:border-blue-400/50 dark:bg-blue-600"
@@ -1705,13 +1757,21 @@ export const TransactionRow = React.memo(
           </TableCell>
         )}
         {showCol("dr") && (
-          <TableCell className={cn("text-right text-green-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {renderHlDrCr(formatAmountCell(debit), "debit")}
+          <TableCell className={cn("text-right font-semibold tabular-nums text-green-700", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+            {isStatementChecked && statementCheckedMessageColumn(debit, credit) === "debit" ? (
+              <StatementCheckedRowMessageLabel className="w-full" align="end" />
+            ) : (
+              renderHlDrCr(formatAmountCell(debit), "debit")
+            )}
           </TableCell>
         )}
         {showCol("cr") && (
-          <TableCell className={cn("text-right text-red-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {renderHlDrCr(formatAmountCell(credit), "credit")}
+          <TableCell className={cn("text-right font-semibold tabular-nums text-red-700", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+            {isStatementChecked && statementCheckedMessageColumn(debit, credit) === "credit" ? (
+              <StatementCheckedRowMessageLabel className="w-full" align="end" />
+            ) : (
+              renderHlDrCr(formatAmountCell(credit), "credit")
+            )}
           </TableCell>
         )}
         {showCol("status") && !hideStatusColumn &&
@@ -1787,7 +1847,7 @@ export const TransactionRow = React.memo(
               <TableCell
                 className={cn(
                   "text-right font-semibold",
-                  isZeroBalance ? "text-green-600" : (displayValue >= 0 ? "text-green-600" : "text-red-600"),
+                  isZeroBalance ? "text-green-700" : (displayValue >= 0 ? "text-green-700" : "text-red-700"),
                   ensureMinGaps && "min-w-[115px] px-[5px]"
                 )}
                 {...(isZeroBalance ? { "data-cell-settled": "true" } : {})}
@@ -1837,6 +1897,15 @@ export const TransactionRow = React.memo(
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
+              {onMarkAsChecked ? (
+                <DropdownMenuItem
+                  onClick={() => onMarkAsChecked()}
+                  className="flex items-center gap-2"
+                >
+                  <CheckSquare className="h-3.5 w-3.5" />
+                  {isStatementChecked ? "Unmark as checked" : "Mark as checked"}
+                </DropdownMenuItem>
+              ) : null}
               {showSpendWiseGroupMenuActions ? (
                 <>
                   <DropdownMenuItem
@@ -1853,7 +1922,8 @@ export const TransactionRow = React.memo(
                 </>
               ) : null}
               {/* Add Link action intentionally removed from 3-dot menu as per latest UX requirement. */}
-              {can("approve_transactions") &&
+              {!isFyOpeningRow &&
+                can("approve_transactions") &&
                 effectiveNotificationSettings?.approve?.on !== false &&
                 effectiveNotificationSettings?.approve?.onTransaction !== false &&
                 (transaction as any).isApproved !== true && (
@@ -1872,15 +1942,16 @@ export const TransactionRow = React.memo(
                     Approve All
                   </DropdownMenuItem>
                 )}
-              {(() => {
-                const icViewOnly = isInterCompanyVoucherEditDeleteBlocked(transaction as Record<string, unknown>);
-                return (
-                  <DropdownMenuItem onClick={() => onRowClick?.(transaction)} className="flex items-center gap-2">
-                    <Pencil className="h-3.5 w-3.5" />
-                    {icViewOnly ? "View" : "Edit"}
-                  </DropdownMenuItem>
-                );
-              })()}
+              {!isFyOpeningRow &&
+                (() => {
+                  const icViewOnly = isInterCompanyVoucherEditDeleteBlocked(transaction as Record<string, unknown>);
+                  return (
+                    <DropdownMenuItem onClick={() => onRowClick?.(transaction)} className="flex items-center gap-2">
+                      <Pencil className="h-3.5 w-3.5" />
+                      {icViewOnly ? "View" : "Edit"}
+                    </DropdownMenuItem>
+                  );
+                })()}
               {can('view_voucher_history') && onHistoryVoucher && (
                 <DropdownMenuItem onClick={() => onHistoryVoucher?.(transaction)} className="flex items-center gap-2">
                   <History className="h-3.5 w-3.5" />
@@ -1893,8 +1964,10 @@ export const TransactionRow = React.memo(
       </>
     );
 
-    const isPaid = (transaction as any).paymentStatus === "paid";
-    const isPendingApproval = highlightPendingApproval && isLedgerTransactionUnapproved(transaction as { isApproved?: boolean; type?: string; id?: string });
+    const isPendingApproval =
+      !isFyOpeningRow &&
+      highlightPendingApproval &&
+      isLedgerTransactionUnapproved(transaction as { isApproved?: boolean; type?: string; id?: string });
     // Peer change-detect blue wins over unapproved pink when both present
     const showPendingApprovalPink = isPendingApproval && !isPeerPendingChange;
     const narrationText =
@@ -1986,12 +2059,8 @@ export const TransactionRow = React.memo(
       typeof txnStripeIndex === "number" ? txnStripeIndex % 2 : null;
     const txnStripeAttr = txnStripeMod !== null ? String(txnStripeMod) : undefined;
     /* Spend-wise / pending / selected par apna rang — sirf normal rows par gray-white alternate */
-    const txnStripeBgClass =
-      txnStripeMod === null || isSelected || isCheckModeMarked || (highlightPendingApproval && isPendingApproval) || isPeerPendingChange || hasSpendWiseColor
-        ? ""
-        : txnStripeMod === 0
-          ? "[&>td]:!bg-muted/50"
-          : "[&>td]:!bg-card";
+    /* Stripe backgrounds: globals.css + tone (green/blue) — no semi-transparent muted overlay here. */
+    const txnStripeBgClass = "";
     /* Check mode: marked = green bg; focused (selected) row par orange border bhi rahe */
     const txnRowSelectedChrome = isSelected;
     /* Spend-wise: theme CSS ko group color / inflow-outflow tint batane ke liye data attrs */
@@ -2000,6 +2069,14 @@ export const TransactionRow = React.memo(
           .filter(Boolean)
           .join(" ") || undefined
       : undefined;
+    const handleRowDoubleClick = () => {
+      if (isFyOpeningRow) {
+        toast.message("This row cannot be edit", { duration: 2000 });
+        return;
+      }
+      onRowClick?.(transaction);
+    };
+
     const MainRow = (
       <motion.tr
         layout={animateLayout ? "position" : false}
@@ -2012,7 +2089,7 @@ export const TransactionRow = React.memo(
         }
         style={isRowAnimationEnabled && animateLayout ? { isolation: "isolate", willChange: "transform" } : undefined}
         onClick={() => onRowSelect?.(transaction)}
-        onDoubleClick={() => onRowClick?.(transaction)}
+        onDoubleClick={handleRowDoubleClick}
         data-txn-stripe={txnStripeAttr}
         /* Theme stripe rules (globals.css) se bachne + pink !important target */
         data-pl-pending-approval={showPendingApprovalPink ? "" : undefined}
@@ -2024,6 +2101,8 @@ export const TransactionRow = React.memo(
         data-pl-txn-hovered={pairHovered ? "" : undefined}
         data-pl-txn-selected={txnRowSelectedChrome ? "" : undefined}
         data-pl-check-marked={isCheckModeMarked ? "" : undefined}
+        data-pl-statement-checked={isStatementChecked ? "" : undefined}
+        data-pl-fy-opening-row={isFyOpeningRow ? "" : undefined}
         data-check-focus={isCheckModeFocused ? "true" : undefined}
         data-pl-spend-wise-group={useRowSpendBorders ? swColor : undefined}
         data-pl-spend-edge={useRowSpendBorders ? spendWiseEdgeAttr : undefined}
@@ -2033,7 +2112,8 @@ export const TransactionRow = React.memo(
           isSpendWiseOutflowRow || spendWiseGroupStandaloneOutflow ? "" : undefined
         }
         className={cn(
-          "transaction-main-row min-h-[28px] cursor-pointer",
+          "transaction-main-row min-h-[28px] cursor-pointer text-foreground",
+          isFyOpeningRow && "border-t-2 border-black [&>td]:border-t-2 [&>td]:border-black",
           txnStripeBgClass,
           isSpendWiseChild && "pl-6 text-sm [&>td]:py-1",
           isSpendWiseChild && !isSelected && !isSpendWiseInflowRow && !isSpendWiseOutflowRow && !spendWiseChildNeedsIndent && "bg-muted/20 [&>td]:bg-muted/20",
@@ -2045,7 +2125,6 @@ export const TransactionRow = React.memo(
           spendWiseBorderLastNarr,
           spendWiseBorderMid,
           isNote && !isSelected && "bg-amber-50 [&>td]:bg-amber-50 hover:bg-amber-100 [&>td]:hover:bg-amber-100",
-          isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
           /* Statement / non–spend-wise: full pink band — bank, item, tax, reports, etc. */
           showPendingApprovalPink && !isSelected && !inSpendWiseGroup &&
             cn(
@@ -2062,7 +2141,7 @@ export const TransactionRow = React.memo(
             ),
           isPeerPendingChange && !isSelected && inSpendWiseGroup &&
             "[&>td]:!bg-blue-100/90 dark:[&>td]:!bg-blue-950/45 [&>td]:hover:!bg-blue-200/95 dark:hover:[&>td]:!bg-blue-950/55 ring-2 ring-inset ring-blue-500/45 dark:ring-blue-400/35",
-          txnRowSelectedChrome && txnSelectedMainRowCn(showNarrationRow),
+          txnRowSelectedChrome && !isStatementChecked && txnSelectedMainRowCn(showNarrationRow),
           // Spend-wise blink: animation on Dr/Cr/Balance text only (see shouldAnimateSpendWiseAmountText), not on tr/border.
           // Keep transaction row compact when narration is visible (override default TableCell p-1).
           showNarrationRow && "[&>td]:pt-0.5 [&>td]:pb-0",
@@ -2107,13 +2186,14 @@ export const TransactionRow = React.memo(
         onMouseEnter={onPairHoverEnter}
         onMouseLeave={clearPairHoverIfLeavingBlock}
         onClick={() => onRowSelect?.(transaction)}
-        onDoubleClick={() => onRowClick?.(transaction)}
+        onDoubleClick={handleRowDoubleClick}
         data-txn-stripe={txnStripeAttr}
         data-pl-pending-approval={showPendingApprovalPink ? "" : undefined}
         data-pl-peer-pending={isPeerPendingChange ? "" : undefined}
         data-pl-txn-hovered={pairHovered ? "" : undefined}
         data-pl-txn-selected={txnRowSelectedChrome ? "" : undefined}
         data-pl-check-marked={isCheckModeMarked ? "" : undefined}
+        data-pl-statement-checked={isStatementChecked ? "" : undefined}
         data-pl-spend-wise-group={useRowSpendBorders ? swColor : undefined}
         data-pl-spend-edge={useRowSpendBorders ? spendWiseEdgeAttr : undefined}
         data-pl-spend-in-group-card={spendWiseInGroupCard ? "" : undefined}
@@ -2148,14 +2228,19 @@ export const TransactionRow = React.memo(
             "bg-blue-100 dark:bg-blue-950/40 [&>td]:bg-blue-100 [&>td]:dark:bg-blue-950/40 hover:bg-blue-200 dark:hover:bg-blue-950/50 [&>td]:hover:bg-blue-200 [&>td]:dark:hover:bg-blue-950/50",
           isPeerPendingChange && !isSelected && inSpendWiseGroup &&
             "[&>td]:!bg-blue-100/90 dark:[&>td]:!bg-blue-950/45 [&>td]:hover:!bg-blue-200/95 ring-2 ring-inset ring-blue-500/40 dark:ring-blue-400/30",
-          txnRowSelectedChrome
+          txnRowSelectedChrome && !isStatementChecked
             ? txnSelectedNarrationRowCn()
             : isSpendWiseChild && !isSpendWiseInflowRow && !isSpendWiseOutflowRow && !spendWiseChildNeedsIndent && "bg-muted/20 [&>td]:bg-muted/20",
           isSpendWiseInflowRow && !isSelected && "bg-green-100 dark:bg-green-900/30 [&>td]:bg-green-100 [&>td]:dark:bg-green-900/30 hover:bg-green-200 [&>td]:hover:bg-green-200 [&>td]:dark:hover:bg-green-900/40",
           (isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow) || spendWiseGroupStandaloneOutflow) && !isSelected && "bg-gray-50 dark:bg-gray-900/20 [&>td]:bg-gray-50 [&>td]:dark:bg-gray-900/20 [&>td]:text-xs",
           isNote && !isSelected && "bg-amber-50 hover:bg-amber-100 [&>td]:bg-amber-50 [&>td]:hover:bg-amber-100",
-          isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
-          !isSelected && !showPendingApprovalPink && !isPeerPendingChange && !isSpendWiseChild && !isNote && !isPaid && "hover:bg-muted/20 [&>td]:hover:bg-muted/20",
+          !isSelected &&
+            !isStatementChecked &&
+            !showPendingApprovalPink &&
+            !isPeerPendingChange &&
+            !isSpendWiseChild &&
+            !isNote &&
+            "hover:bg-muted/20 [&>td]:hover:bg-muted/20",
           // Avoid extra bottom expansion in sub-row; we only want a small top gap.
           "md:[&>td]:pb-0"
         )}

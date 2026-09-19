@@ -15,8 +15,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
       className="toaster group"
       position="bottom-right"
       expand
-      gap={14}
-      visibleToasts={4}
+      gap={12}
+      visibleToasts={6}
       toastOptions={{
         /** Short success/update feedback; loading toasts skip auto-dismiss in Sonner. */
         duration: 1000,

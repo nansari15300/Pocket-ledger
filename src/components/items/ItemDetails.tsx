@@ -97,6 +97,7 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { openPrintDirect } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import { useCompany } from "@/hooks/useCompany";
+import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useDateRangeTimestamps } from "@/hooks/useLedgerDetailDateRange";
 import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
@@ -110,7 +111,9 @@ import { useLocationSearchParams } from "@/hooks/useLocationSearchParams";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "@/components/ui/combobox";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
-import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { MasterLedgerDateRangePresetRow } from "@/components/ui/MasterLedgerDateRangePresetRow";
+import { useEnsureEntityMinTxnsInScope } from "@/hooks/useEnsureEntityMinTxnsInScope";
+import { ledgerMasterDateRangeLabel } from "@/lib/ledgerMasterDefaultView";
 import type { BSDate } from "@/lib/bs-date";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
@@ -241,6 +244,7 @@ export default function ItemDetails({
   const { can } = usePermissions();
 
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  useFyLoadOnDateRangeChange(dateRange);
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const ledgerViewMode: LedgerDetailViewMode =
@@ -606,6 +610,14 @@ export default function ItemDetails({
     [displayTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
   );
 
+  useEnsureEntityMinTxnsInScope({
+    dateRange,
+    entityId: currentItem?.id,
+    entityKind: "item",
+    entityTxnCount: sortedTransactions.length,
+    enabled: Boolean(currentItem?.id),
+  });
+
   const filteredMobileTransactions = useMemo(() => {
     if (!mobileSearchTerm) return sortedTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
@@ -779,20 +791,26 @@ export default function ItemDetails({
     return stockView === 'amount' ? (closingBalance >= 0 ? "Asset" : "Liability") : "Available";
   }, [closingBalance, stockView]);
 
-  const dateRangeLabel = useMemo(() => {
-    if (!dateRange || (dateRange.from == null && dateRange.to == null)) {
-      return rowsPerPage > 0 ? `Last ${rowsPerPage} Txns` : "All Txns";
+  const buildDateRangeText = () => {
+    const from = dateRange?.from;
+    const to = dateRange?.to;
+    let dateRangeText = "All Time";
+    if (from) {
+      const fromBS = formatDateBS(from);
+      const toBS = to ? formatDateBS(to) : fromBS;
+      const fromAD = formatDate(from);
+      const toAD = to ? formatDate(to) : fromAD;
+      if (dateSystem === "AD") dateRangeText = `AD: ${fromAD} to ${toAD}`;
+      else if (dateSystem === "BS") dateRangeText = `BS: ${fromBS} to ${toBS}`;
+      else dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
     }
-    const from = dateRange.from!;
-    const to = dateRange.to || from;
-    const fromBS = formatDateBS(from);
-    const toBS = to ? formatDateBS(to) : fromBS;
-    const fromAD = format(from, "LLL dd, y");
-    const toAD = to ? format(to, "LLL dd, y") : fromAD;
-    if (dateSystem === "AD") return `AD: ${fromAD}${to !== from ? " to " + toAD : ""}`;
-    if (dateSystem === "BS") return `BS: ${fromBS}${to !== from ? " to " + toBS : ""}`;
-    return `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
-  }, [dateRange, dateSystem, formatDateBS, rowsPerPage]);
+    return dateRangeText;
+  };
+
+  const dateRangeLabel = useMemo(
+    () => ledgerMasterDateRangeLabel(dateRange, buildDateRangeText()),
+    [dateRange, dateSystem, formatDateBS, formatDate]
+  );
 
   useEffect(() => {
     if (isMobile && dateRange?.from) {
@@ -1013,12 +1031,14 @@ export default function ItemDetails({
                     {(dateSystem === 'BS' || dateSystem === 'Both') && (
                        <NepaliCalendar
                           rangePresetSlot={
-                            <DateRangePresetRow
+                            <MasterLedgerDateRangePresetRow
                               country={company?.country}
+                              onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                               onApply={(r) => {
-                                setDateRange(r);
+                                onDateRangeChangeWithUnapprovedReset(r);
                                 setIsCalendarOpen(false);
                               }}
+                              onAfterDefault={() => setIsCalendarOpen(false)}
                             />
                           }
                           onSelect={handleNepaliSelect}
@@ -1031,12 +1051,14 @@ export default function ItemDetails({
                       <div className="flex-1 w-full min-w-0">
                         <AdCalendar
                           rangePresetSlot={
-                            <DateRangePresetRow
+                            <MasterLedgerDateRangePresetRow
                               country={company?.country}
+                              onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                               onApply={(r) => {
-                                setDateRange(r);
+                                onDateRangeChangeWithUnapprovedReset(r);
                                 setIsCalendarOpen(false);
                               }}
+                              onAfterDefault={() => setIsCalendarOpen(false)}
                             />
                           }
                           valueAD={dateRange}
@@ -1122,6 +1144,7 @@ export default function ItemDetails({
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
               <BsDatePicker
                 isRange
+                masterLedgerDatePresets
                 valueAD={dateRange}
                 onChangeAD={handleBsDateRangeChange}
                 transactionDates={transactionDates}
@@ -1146,11 +1169,16 @@ export default function ItemDetails({
                 <PopoverContent className="w-auto p-0" align="start">
                   <AdCalendar
                     rangePresetSlot={
-                      <DateRangePresetRow
+                      <MasterLedgerDateRangePresetRow
                         country={company?.country}
+                        onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
                           setTempDateRange(r);
-                          setDateRange(r);
+                          onDateRangeChangeWithUnapprovedReset(r);
+                          setIsDesktopCalendarOpen(false);
+                        }}
+                        onAfterDefault={() => {
+                          setTempDateRange(undefined);
                           setIsDesktopCalendarOpen(false);
                         }}
                       />
@@ -1215,7 +1243,7 @@ export default function ItemDetails({
       </div>
 
       {/* --- TRANSACTIONS TABLE --- */}
-        <ScrollArea className="flex-1">
+        <ScrollArea txnChrome className="flex-1">
             <div className="py-4">
                 <TransactionsTable {...itemTransactionsTableProps} />
             </div>

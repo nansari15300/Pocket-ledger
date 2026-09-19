@@ -11,9 +11,9 @@ import { formatVoucherNumber, normalizePrefix, parseVoucherNumberPart } from "@/
 
 export const DEFAULT_VOUCHER_PREFIX_LABELS: Record<string, string> = {
   sale: "Sale Inv",
-  sale_service: "SS-",
+  sale_service: "SER-",
   purchase: "PUR-",
-  purchase_service: "PS-",
+  purchase_service: "SER-",
   payment_in: "RCPT-",
   payment_out: "PYMT-",
   direct_income: "DINC-",
@@ -40,6 +40,68 @@ export function getVoucherPrefixKeyFromLike(v: {
   if (v.type === "sale") return v.lineItems?.[0]?.type === "service" ? "sale_service" : "sale";
   if (v.type === "purchase") return v.lineItems?.[0]?.type === "service" ? "purchase_service" : "purchase";
   return String(v.type || "sale");
+}
+
+const SERVICE_PREFIX_KEY = new Set(["sale_service", "purchase_service"]);
+
+function isLegacyServiceVoucherPrefix(prefixKey: string, prefix: string): boolean {
+  const norm = normalizePrefix(prefix).toUpperCase();
+  if (prefixKey === "purchase_service") return norm === "PS";
+  if (prefixKey === "sale_service") return norm === "SS";
+  return false;
+}
+
+/** Stored `PS-` / `SS-` → `SER-` (service rename); empty → company default. */
+export function resolveVoucherPrefixForKey(prefixKey: string, prefix: string | undefined | null): string {
+  const raw = String(prefix ?? "").trim();
+  if (SERVICE_PREFIX_KEY.has(prefixKey) && (!raw || isLegacyServiceVoucherPrefix(prefixKey, raw))) {
+    return DEFAULT_VOUCHER_PREFIX_LABELS[prefixKey] || "SER-";
+  }
+  if (raw) return raw;
+  return DEFAULT_VOUCHER_PREFIX_LABELS[prefixKey] || "V-";
+}
+
+/** Prefix dropdown list — legacy PS- / SS- labels ko SER- me normalize. */
+export function resolveCompanyVoucherPrefixList(
+  prefixKey: string,
+  list: string[] | undefined | null
+): string[] {
+  const src =
+    Array.isArray(list) && list.length > 0
+      ? list
+      : [DEFAULT_VOUCHER_PREFIX_LABELS[prefixKey] || "V-"];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of src) {
+    const resolved = resolveVoucherPrefixForKey(prefixKey, p);
+    const k = resolved.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(resolved);
+  }
+  return out.length > 0 ? out : [resolveVoucherPrefixForKey(prefixKey, null)];
+}
+
+/** Serial lookup: purane PS- / SS- vouchers bhi SER- numbering me count hon. */
+export function voucherSerialPrefixAliases(prefixKey: string, prefix: string): string[] {
+  const resolved = resolveVoucherPrefixForKey(prefixKey, prefix);
+  if (prefixKey === "purchase_service") {
+    return [...new Set([resolved, normalizePrefix(resolved), "PS-", "PS"].filter(Boolean))];
+  }
+  if (prefixKey === "sale_service") {
+    return [...new Set([resolved, normalizePrefix(resolved), "SS-", "SS"].filter(Boolean))];
+  }
+  return [resolved];
+}
+
+function parseStandardVoucherSerial(voucherNo: string, prefixAliases: string[]): number {
+  let best = NaN;
+  for (const p of prefixAliases) {
+    if (!voucherNo.startsWith(p) && !voucherNo.startsWith(normalizePrefix(p))) continue;
+    const parsed = parseVoucherNumberPart(voucherNo, p);
+    if (Number.isFinite(parsed) && (!Number.isFinite(best) || parsed > best)) best = parsed;
+  }
+  return best;
 }
 
 function filterVoucherRowsForSerial(
@@ -76,8 +138,10 @@ function parseContraVoucherSerial(voucherNo: string, prefix: string): number {
 function maxSerialForPrefix(
   rows: Array<Record<string, unknown>>,
   prefix: string,
-  voucherType: string | undefined
+  voucherType: string | undefined,
+  prefixKey?: string
 ): number {
+  const prefixAliases = prefixKey ? voucherSerialPrefixAliases(prefixKey, prefix) : [prefix];
   let maxNo = 0;
   for (const row of rows) {
     const voucherCandidates =
@@ -95,10 +159,7 @@ function maxSerialForPrefix(
       const parsed =
         voucherType === "contra"
           ? parseContraVoucherSerial(voucherNo, prefix)
-          : (() => {
-              if (!voucherNo.startsWith(prefix) && !voucherNo.startsWith(normalizePrefix(prefix))) return NaN;
-              return parseVoucherNumberPart(voucherNo, prefix);
-            })();
+          : parseStandardVoucherSerial(voucherNo, prefixAliases);
       if (Number.isFinite(parsed) && parsed > maxNo) maxNo = parsed;
     }
   }
@@ -131,9 +192,10 @@ export async function getNextVoucherNumberForCompany(params: GetNextVoucherNumbe
   const { companyId, companyDoc, voucherLike, selectedPrefix } = params;
   const prefixKey = getVoucherPrefixKeyFromLike(voucherLike);
   const configured = (companyDoc?.voucherPrefixes as Record<string, string[] | undefined> | undefined)?.[prefixKey];
-  const prefix =
+  const rawPrefix =
     selectedPrefix?.trim() ||
-    (Array.isArray(configured) && configured[0] ? configured[0] : DEFAULT_VOUCHER_PREFIX_LABELS[prefixKey] || "V-");
+    (Array.isArray(configured) && configured[0] ? configured[0] : "");
+  const prefix = resolveVoucherPrefixForKey(prefixKey, rawPrefix || null);
 
   const readSqlite =
     apkEntityWriteUsesLocalSqliteMirror(companyDoc as { storageOption?: string }) ||
@@ -164,6 +226,6 @@ export async function getNextVoucherNumberForCompany(params: GetNextVoucherNumbe
     dedupeVoucherRowsById([...fsRows, ...localRows]),
     voucherLike
   );
-  const maxNo = maxSerialForPrefix(mergedRows, prefix, voucherLike.type);
+  const maxNo = maxSerialForPrefix(mergedRows, prefix, voucherLike.type, prefixKey);
   return formatVoucherNumber(prefix, maxNo + 1);
 }

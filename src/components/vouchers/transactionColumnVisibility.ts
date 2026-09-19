@@ -5,6 +5,9 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import type { VisibleColumns, TransactionColumnKey } from "./TransactionsTable";
 
 export const COLUMN_VISIBILITY_KEY = "transactionVisibleColumns";
+const COLUMN_VISIBILITY_PREFS_VERSION_KEY = "transactionVisibleColumnsVersion";
+/** Bump when global column defaults change (e.g. Sync off by default). */
+const COLUMN_VISIBILITY_PREFS_VERSION = 2;
 
 export const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
   syncStatus: false,
@@ -18,6 +21,28 @@ export const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
   status: true,
   runningBalance: true,
 };
+
+/** Session prefs + one-time migration so Sync stays off unless user ticks it. */
+export function loadStoredVisibleColumns(): VisibleColumns {
+  if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
+  let parsed: VisibleColumns = {};
+  try {
+    const saved = sessionStorage.getItem(COLUMN_VISIBILITY_KEY);
+    if (saved) parsed = JSON.parse(saved) as VisibleColumns;
+  } catch {
+    parsed = {};
+  }
+
+  const storedVersion = Number(sessionStorage.getItem(COLUMN_VISIBILITY_PREFS_VERSION_KEY) || "1");
+  if (storedVersion < COLUMN_VISIBILITY_PREFS_VERSION) {
+    const migrated = { ...DEFAULT_VISIBLE_COLUMNS, ...parsed, syncStatus: false };
+    sessionStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(migrated));
+    sessionStorage.setItem(COLUMN_VISIBILITY_PREFS_VERSION_KEY, String(COLUMN_VISIBILITY_PREFS_VERSION));
+    return migrated;
+  }
+
+  return { ...DEFAULT_VISIBLE_COLUMNS, ...parsed };
+}
 
 export const COLUMN_LABELS: Record<TransactionColumnKey, string> = {
   syncStatus: "Sync",
@@ -33,19 +58,7 @@ export const COLUMN_LABELS: Record<TransactionColumnKey, string> = {
 };
 
 export function useTransactionVisibleColumns() {
-  const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
-    if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
-    const saved = sessionStorage.getItem(COLUMN_VISIBILITY_KEY);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as VisibleColumns;
-        return { ...DEFAULT_VISIBLE_COLUMNS, ...parsed };
-      } catch {
-        return DEFAULT_VISIBLE_COLUMNS;
-      }
-    }
-    return DEFAULT_VISIBLE_COLUMNS;
-  });
+  const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => loadStoredVisibleColumns());
 
   const handleColumnVisibilityChange = useCallback((key: TransactionColumnKey, checked: boolean) => {
     setVisibleColumns((prev) => {

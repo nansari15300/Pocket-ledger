@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -9,9 +9,16 @@ import { PermissionButton } from "@/components/permission";
 import { Calendar } from "@/components/ui/calendar";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
-import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2, X } from "lucide-react";
+import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2, Search, User, Users, X } from "lucide-react";
 import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 import type { Staff, StaffGroup } from "@/components/staff/types";
+import { StaffList } from "@/components/staff/StaffList";
+import { StaffGroupList } from "@/components/staff/StaffGroupList";
+import { StaffDetails } from "@/components/staff/StaffDetails";
+import { StaffGroupDetails } from "@/components/staff/StaffGroupDetails";
+import { ReportStatementDesktopShell } from "@/components/reports/ReportStatementDesktopShell";
+import { mlc } from "@/lib/mobileListChrome";
+import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
@@ -20,6 +27,7 @@ import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatemen
 import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
+import { buildStaffGroupReportEntity } from "@/lib/reportStatementGroupEntity";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -79,7 +87,7 @@ const ReportSummaryCard = React.memo(function ReportSummaryCard({
 }, (prev, next) => prev.title === next.title && prev.amount === next.amount && prev.color === next.color);
 
 export default function DesktopStaffStatementPage() {
-  const { processedStaff, processedStaffGroups, vouchers, loading, journalAccountNames } = useVouchers();
+  const { processedStaff, processedStaffGroups, vouchers, loading, journalAccountNames } = useFyScopedVouchers();
   const { company } = useCompany();
   const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
   const router = useRouter();
@@ -98,6 +106,14 @@ export default function DesktopStaffStatementPage() {
   const [selectedGroup, setSelectedGroup] = useState<StaffGroup | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
+  const [listTab, setListTab] = useState<"staff" | "groups">(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("groupId")
+      ? "groups"
+      : "staff"
+  );
+  const [listSearchTerm, setListSearchTerm] = useState("");
+  const [staffListQuickFilter, setStaffListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
   const fetchedUidsRef = useRef<Set<string>>(new Set());
 
   const pageTitle = selectedGroup ? "Staff Group Report" : "Staff Report";
@@ -204,6 +220,11 @@ export default function DesktopStaffStatementPage() {
     }
   }, [searchParams, processedStaff, processedStaffGroups]);
 
+  useEffect(() => {
+    if (searchParams.get("groupId")) setListTab("groups");
+    else if (searchParams.get("staffId")) setListTab("staff");
+  }, [searchParams]);
+
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     const range = dateRange;
     if (!range?.from || (range.from && range.to)) {
@@ -217,9 +238,12 @@ export default function DesktopStaffStatementPage() {
     }
   };
 
-  const activeEntity =
-    selectedStaff ||
-    (selectedGroup ? { ...selectedGroup, items: processedStaff.filter((p) => p.groupId === selectedGroup.id) } : null);
+  const groupReportEntity = useMemo(() => {
+    if (!selectedGroup) return null;
+    return buildStaffGroupReportEntity(selectedGroup, processedStaff, processedStaffGroups);
+  }, [selectedGroup, processedStaff, processedStaffGroups]);
+
+  const activeEntity = selectedStaff || groupReportEntity;
   const activeContext = selectedStaff ? "staff" : "group";
 
   const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance } = useTransactions(
@@ -453,8 +477,148 @@ export default function DesktopStaffStatementPage() {
     [processedStaffGroups]
   );
 
+  const handleEmbeddedStaffChange = useCallback(
+    (staffId: string) => {
+      const staff = processedStaff.find((p) => p.id === staffId);
+      if (!staff) return;
+      const newUrl = new URL(window.location.href);
+      newUrl.searchParams.set("staffId", staff.id);
+      newUrl.searchParams.delete("groupId");
+      window.history.pushState({}, "", newUrl);
+      setSelectedStaff(staff);
+      setSelectedGroup(null);
+      setListTab("staff");
+    },
+    [processedStaff]
+  );
+
+  const handleSelectStaffFromList = useCallback(
+    (staff: Staff) => {
+      handleEmbeddedStaffChange(staff.id);
+    },
+    [handleEmbeddedStaffChange]
+  );
+
+  const handleSelectGroupFromList = useCallback((group: StaffGroup) => {
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set("groupId", group.id);
+    newUrl.searchParams.delete("staffId");
+    window.history.pushState({}, "", newUrl);
+    setSelectedGroup(group);
+    setSelectedStaff(null);
+    setListTab("groups");
+  }, []);
+
+  const addVoucherDialog = (
+    <AddVoucherDialog
+      isOpen={isVoucherDialogOpen}
+      onOpenChange={(open: boolean) => {
+        if (!open) {
+          setIsVoucherDialogOpen(false);
+          setSelectedVoucher(null);
+          closeModalInUrl();
+        }
+      }}
+      voucher={selectedVoucher}
+      onVoucherAction={() => setSelectedVoucher(null)}
+    />
+  );
+
   if (loading && !activeEntity) {
     return <LoadingSpinner />;
+  }
+
+  if (!isMobile) {
+    return (
+      <ReportStatementDesktopShell
+        listChromeRouteKey="staff"
+        pageTitle={pageTitle}
+        listTab={listTab}
+        entityTabValue="staff"
+        groupTabValue="groups"
+        entityTabLabel={STAFF_ENTITY_LABEL}
+        onListTabChange={(tab) => setListTab(tab === "groups" ? "groups" : "staff")}
+        listSearchTerm={listSearchTerm}
+        onListSearchChange={setListSearchTerm}
+        entitySearchPlaceholder="Search staff..."
+        groupSearchPlaceholder="Search groups/staff"
+        entitySectionLabel={
+          <div className={mlc.sectionLabelRow}>
+            <User className={mlc.sectionIcon} />
+            <span>{STAFF_ENTITY_LABEL} ({processedStaff.length})</span>
+          </div>
+        }
+        groupSectionLabel={
+          <div className={mlc.sectionLabelRow}>
+            <Users className={mlc.sectionIcon} />
+            <span>Staff group ({processedStaffGroups.length})</span>
+          </div>
+        }
+        entityQuickFilter={staffListQuickFilter}
+        groupQuickFilter={groupListQuickFilter}
+        onEntityQuickFilterChange={setStaffListQuickFilter}
+        onGroupQuickFilterChange={setGroupListQuickFilter}
+        summaryCards={summaryCards}
+        showSummary={!!activeEntity}
+        entityList={
+          <StaffList
+            staff={processedStaff}
+            onSelectStaff={handleSelectStaffFromList}
+            selectedStaff={selectedStaff}
+            searchTerm={listSearchTerm}
+            quickFilter={staffListQuickFilter}
+            onQuickFilterChange={setStaffListQuickFilter}
+            hideQuickFilterBar
+          />
+        }
+        groupList={
+          <StaffGroupList
+            groups={processedStaffGroups}
+            onSelectGroup={handleSelectGroupFromList}
+            selectedGroup={selectedGroup}
+            searchTerm={listSearchTerm}
+            quickFilter={groupListQuickFilter}
+            onQuickFilterChange={setGroupListQuickFilter}
+            hideQuickFilterBar
+          />
+        }
+        detailView={
+          selectedStaff ? (
+            <StaffDetails
+              staff={selectedStaff}
+              allStaff={processedStaff}
+              allGroups={processedStaffGroups}
+              transactions={processedTransactions}
+              onStaffUpdated={() => {}}
+              onStaffDeleted={() => {}}
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+              userNames={userNames}
+              context="report"
+              mobileFooterVariant="report"
+              onSelectStaff={handleEmbeddedStaffChange}
+            />
+          ) : selectedGroup ? (
+            <StaffGroupDetails
+              group={selectedGroup}
+              staff={groupReportEntity?.items ?? []}
+              allGroups={processedStaffGroups}
+              userNames={userNames}
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+              onGroupUpdated={() => {}}
+              onGroupDeleted={() => {}}
+              onStaffUpdated={() => {}}
+            />
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center bg-muted/20">
+              <p className="text-sm text-muted-foreground">Select a staff or group</p>
+            </div>
+          )
+        }
+        footer={addVoucherDialog}
+      />
+    );
   }
 
   return (
@@ -755,18 +919,7 @@ export default function DesktopStaffStatementPage() {
           <BarChart2 className="w-4 h-4 mb-0" /> <span className="text-[10px] leading-tight">Chart</span>
         </Button>
       </footer>
-      <AddVoucherDialog
-        isOpen={isVoucherDialogOpen}
-        onOpenChange={(open: boolean) => {
-          if (!open) {
-            setIsVoucherDialogOpen(false);
-            setSelectedVoucher(null);
-            closeModalInUrl();
-          }
-        }}
-        voucher={selectedVoucher}
-        onVoucherAction={() => setSelectedVoucher(null)}
-      />
+      {addVoucherDialog}
     </div>
   );
 }

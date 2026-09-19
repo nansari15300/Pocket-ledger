@@ -40,12 +40,36 @@ export function filterInterCompanyEntitiesByName(
   return entities.filter((e) => e.label.toLowerCase().includes(needle));
 }
 
-/** Type dropdown (Party/Staff/…) — account naam / A/c / mobile sirf isi kind par */
+/** Type dropdown (Party/Staff/All/…) — account naam / A/c / mobile sirf isi kind par */
 export function filterInterCompanyEntitiesByKind(
   entities: InterCompanyEntityDetail[],
-  kind: InterCompanyEntityDetail["kind"]
+  kind: InterCompanyEntityDetail["kind"] | "all"
 ): InterCompanyEntityDetail[] {
+  if (kind === "all") return entities;
   return entities.filter((e) => e.kind === kind);
+}
+
+export function findInterCompanyEntityById(
+  entities: InterCompanyEntityDetail[],
+  entityId: string,
+  kind?: InterCompanyEntityDetail["kind"] | "all"
+): InterCompanyEntityDetail | null {
+  const id = String(entityId || "").trim();
+  if (!id) return null;
+  if (kind && kind !== "all") {
+    return entities.find((e) => e.kind === kind && e.id === id) ?? null;
+  }
+  return entities.find((e) => e.id === id) ?? null;
+}
+
+export function resolveInterCompanyEntityKindForSave(
+  filterKind: InterCompanyEntityDetail["kind"] | "all",
+  entityId: string,
+  entities: InterCompanyEntityDetail[],
+  fallback: InterCompanyEntityDetail["kind"] = "party"
+): InterCompanyEntityDetail["kind"] {
+  if (filterKind !== "all") return filterKind;
+  return findInterCompanyEntityById(entities, entityId)?.kind ?? fallback;
 }
 
 /** Bank ledger A/c number (party ke paas bank account number) */
@@ -151,6 +175,11 @@ export function pickDefaultInterCompanyClearingBankId(
 ): string {
   const clearing = filterInterCompanyClearingBankEntities(entities);
   return String(clearing[0]?.id || "").trim();
+}
+
+/** Company ke paas kam se kam ek isClearing bank/cash hai? */
+export function hasInterCompanyClearingBank(entities: InterCompanyEntityDetail[]): boolean {
+  return filterInterCompanyClearingBankEntities(entities).length > 0;
 }
 
 export { isSearchableInterCompanyPhone, normalizeInterCompanyPhone, interCompanyPhonesMatch };

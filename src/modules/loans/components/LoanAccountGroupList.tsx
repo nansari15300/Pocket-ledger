@@ -126,7 +126,7 @@ export function LoanAccountGroupList({
                 </MasterListGroupIcon>
               )}
               renderMemberRow={(member, group, ctx) => {
-                const linkedLoan = findLoanForAccount(loans, member.id);
+                const linkedLoan = findLoanForAccount(loans, member.id, member);
                 const attachmentPreviewUrl = resolveLoanAccountAvatarUrl(
                   member,
                   linkedLoan,

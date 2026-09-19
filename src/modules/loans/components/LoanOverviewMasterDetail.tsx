@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { Search } from "lucide-react";
-import { LoanLiabilityEntityIcon } from "@/components/entity/LoanLiabilityEntityIcon";
+import { StaffEntityNavIcon } from "@/components/entity/StaffEntityIcon";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
@@ -11,11 +11,12 @@ import { useDate } from "@/hooks/useDate";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
+import type { DateRange } from "@/components/ui/ad-calendar";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
-import { LoanStaffNavTitle } from "@/components/layout/LoanStaffNavTitle";
 import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
 import { PermissionButton } from "@/components/permission";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
+import { StaffDetails } from "@/components/staff/StaffDetails";
 import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import { resolveMasterListSelection } from "@/lib/masterEntityLiveUpdate";
 import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
@@ -24,7 +25,6 @@ import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntity
 import { staffGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
 import { staffGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
 import { LOAN_ACCOUNT_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
-import { bankAccountDisplayName } from "@/lib/bankAccountDisplayName";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import type { GroupListSelectOptions } from "@/lib/groupListExpand";
 import { isLoanLiabilityStaff } from "../utils/loanLiabilityStaff";
@@ -33,10 +33,13 @@ import { findLoanForAccount } from "../db/loanQueries";
 import type { Loan, LoanDraftInput } from "../types/loanTypes";
 import { resolveLoanAccountAvatarUrl } from "../utils/resolveLoanAccountAvatarUrl";
 import { buildLoanGroupTree, loanAccountsForGroupSelection } from "../utils/loanGroupTree";
-import { ConvertExistingBankAccountDialog } from "./ConvertExistingBankAccountDialog";
 import { LoanAccountList } from "./LoanAccountList";
 import { LoanAccountGroupList } from "./LoanAccountGroupList";
 import { LoanWorkspaceDetails } from "./LoanWorkspaceDetails";
+import { LoanStaffNavTitle } from "@/components/layout/LoanStaffNavTitle";
+import { ReportShowListButton } from "@/components/reports/ReportShowListButton";
+
+export type LoanOverviewChromeMode = "entityNav" | "reports";
 
 export function LoanOverviewMasterDetail({
   loans,
@@ -45,6 +48,8 @@ export function LoanOverviewMasterDetail({
   onSelectAccountId,
   onCreate,
   onReloadList,
+  chromeMode = "entityNav",
+  loansHydrated = true,
 }: {
   loans: Loan[];
   selectedId?: string | null;
@@ -52,16 +57,28 @@ export function LoanOverviewMasterDetail({
   onSelectAccountId: (accountId: string | null, tab?: "accounts" | "groups") => void;
   onCreate: (initial?: Partial<LoanDraftInput>) => void;
   onReloadList?: () => Promise<void> | void;
+  /** `reports` = embedded in Reports hub (no `/loans` sidebar highlight). */
+  chromeMode?: LoanOverviewChromeMode;
+  /** False while loan SQLite list is still loading — avoid false "Create Loan" empty state. */
+  loansHydrated?: boolean;
 }) {
+  const effectiveActiveView: "accounts" | "groups" = activeView;
   const { formatCurrencyForPrint } = useDate();
   const isMobile = useIsMobile();
   const { companyId, company } = useCompany();
-  const { loading: vouchersLoading, processedStaff, processedStaffGroups, processedAccounts } = useVouchers();
+  const {
+    loading: vouchersLoading,
+    processedStaff,
+    processedStaffGroups,
+    processedAccounts,
+    userNames,
+    patchMasterEntity,
+  } = useVouchers();
   const [searchTerm, setSearchTerm] = useState("");
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [accountListQuickFilter, setAccountListQuickFilter] = useState<EntityListQuickFilter>("default");
   const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
   const [groupMemberFilterId, setGroupMemberFilterId] = useState<string | null>(null);
-  const [convertOpen, setConvertOpen] = useState(false);
 
   const loanAccounts = useMemo(
     () => (processedStaff || []).filter((row) => isLoanLiabilityStaff(row)),
@@ -71,7 +88,7 @@ export function LoanOverviewMasterDetail({
   const loanAccountsForList = useMemo(
     () =>
       loanAccounts.map((acc) => {
-        const linkedLoan = findLoanForAccount(loans, acc.id);
+        const linkedLoan = findLoanForAccount(loans, acc.id, acc);
         const avatar = resolveLoanAccountAvatarUrl(acc, linkedLoan, processedAccounts);
         return avatar ? { ...acc, fileUrl: avatar } : acc;
       }),
@@ -91,21 +108,21 @@ export function LoanOverviewMasterDetail({
   const loanGroups = loanGroupTree.allGroups;
 
   const selected = useMemo(() => {
-    const list = activeView === "accounts" ? loanAccounts : loanGroups;
+    const list = effectiveActiveView === "accounts" ? loanAccounts : loanGroups;
     if (selectedId) {
       return list.find((row) => row.id === selectedId) || loanAccounts.find((row) => row.id === selectedId) || null;
     }
-    if (!isMobile && activeView === "groups") return loanGroupTree.systemGroup;
+    if (!isMobile && effectiveActiveView === "groups") return loanGroupTree.systemGroup;
     if (!isMobile && list.length > 0) return list[0]!;
     return null;
-  }, [selectedId, activeView, loanAccounts, loanGroups, loanGroupTree.systemGroup, isMobile]);
+  }, [selectedId, effectiveActiveView, loanAccounts, loanGroups, loanGroupTree.systemGroup, isMobile]);
 
-  const selectedAccountRaw = activeView === "accounts" ? (selected as Staff | null) : null;
+  const selectedAccountRaw = effectiveActiveView === "accounts" ? (selected as Staff | null) : null;
   const selectedAccount = useMemo(
     () => resolveMasterListSelection(selectedAccountRaw, loanAccounts),
     [selectedAccountRaw, loanAccounts]
   );
-  const selectedGroup = activeView === "groups" ? (selected as StaffGroup | null) : null;
+  const selectedGroup = effectiveActiveView === "groups" ? (selected as StaffGroup | null) : null;
 
   const totalBalance = useMemo(() => {
     return loanAccounts.reduce((sum, account) => sum + (Number(account.balance) || 0), 0);
@@ -186,28 +203,38 @@ export function LoanOverviewMasterDetail({
     onSelectAccountId(first, tab);
   };
 
-  const linkedLoan = findLoanForAccount(loans, selectedAccount?.id);
+  const handleStaffUpdated = useCallback(
+    (accountId: string, updated?: Partial<Staff>) => {
+      const id = String(updated?.id || accountId || "").trim();
+      if (!id) return;
+      patchMasterEntity("staff", id, (updated || {}) as Record<string, unknown>);
+    },
+    [patchMasterEntity]
+  );
+
+  const handleStaffDeleted = useCallback(
+    (deletedId: string) => {
+      if (!deletedId) return;
+      if (selectedAccount?.id === deletedId || groupMemberFilterId === deletedId) {
+        setGroupMemberFilterId(null);
+        onSelectAccountId(null, effectiveActiveView);
+      }
+    },
+    [selectedAccount?.id, groupMemberFilterId, onSelectAccountId, effectiveActiveView]
+  );
+
+  const linkedLoan = findLoanForAccount(loans, selectedAccount?.id, selectedAccount);
   const detailAccount = groupMemberFilterId
     ? loanAccounts.find((a) => a.id === groupMemberFilterId) || null
     : selectedAccount;
-  const groupMemberLoan = findLoanForAccount(loans, detailAccount?.id);
-
-  const bankAccountsForConvert = useMemo(
-    () =>
-      (processedAccounts || []).map((a) => ({
-        ...a,
-        id: String(a.id || ""),
-        accountName: bankAccountDisplayName(a) || String(a.id || ""),
-      })),
-    [processedAccounts]
-  );
+  const groupMemberLoan = findLoanForAccount(loans, detailAccount?.id, detailAccount);
 
   if (vouchersLoading && loanAccounts.length === 0) {
     return <LoadingSpinner />;
   }
 
   const loanTabsEl = (
-    <Tabs value={activeView} onValueChange={handleTabChange} className="w-full">
+    <Tabs value={effectiveActiveView} onValueChange={handleTabChange} className="w-full">
       <TabsList listChrome>
         <TabsTrigger listChrome value="accounts" className="flex-1">
           Accounts
@@ -224,7 +251,7 @@ export function LoanOverviewMasterDetail({
       <div className={mlc.searchWrap}>
         <Search className={mlc.searchIcon} />
         <Input
-          placeholder={activeView === "groups" ? "Search groups/account" : "Search accounts..."}
+          placeholder={effectiveActiveView === "groups" ? "Search groups/account" : "Search accounts..."}
           listChrome
           listChromeSearch
           value={searchTerm}
@@ -232,18 +259,10 @@ export function LoanOverviewMasterDetail({
           autoComplete="off"
         />
       </div>
-      {activeView === "accounts" ? (
+      {effectiveActiveView === "accounts" ? (
         <div className="flex shrink-0 items-center gap-1">
           <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => onCreate()}>
             + Add Account
-          </PermissionButton>
-          <PermissionButton
-            permission="create_records"
-            variant="chromePill"
-            size="list"
-            onClick={() => setConvertOpen(true)}
-          >
-            Add Existing
           </PermissionButton>
         </div>
       ) : null}
@@ -253,14 +272,14 @@ export function LoanOverviewMasterDetail({
   const actionRowEl = undefined;
 
   const sectionLabelEl =
-    activeView === "accounts" ? (
+    effectiveActiveView === "accounts" ? (
       <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
-        <LoanLiabilityEntityIcon className={mlc.sectionIcon} />
+        <StaffEntityNavIcon className={mlc.sectionIcon} />
         <span>Accounts ({filteredAccountCount})</span>
       </div>
     ) : (
       <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
-        <LoanLiabilityEntityIcon className={mlc.sectionIcon} />
+        <StaffEntityNavIcon className={mlc.sectionIcon} />
         <span>Groups ({filteredGroupCount})</span>
       </div>
     );
@@ -272,10 +291,10 @@ export function LoanOverviewMasterDetail({
       actionRow={actionRowEl}
       sectionLabel={sectionLabelEl}
       tabs={loanTabsEl}
-      quickFilter={activeView === "groups" ? groupListQuickFilter : accountListQuickFilter}
-      onQuickFilterChange={activeView === "groups" ? setGroupListQuickFilter : setAccountListQuickFilter}
+      quickFilter={effectiveActiveView === "groups" ? groupListQuickFilter : accountListQuickFilter}
+      onQuickFilterChange={effectiveActiveView === "groups" ? setGroupListQuickFilter : setAccountListQuickFilter}
     >
-      {activeView === "accounts" ? (
+      {effectiveActiveView === "accounts" ? (
         <LoanAccountList
           accounts={loanAccountsForList}
           loans={loans}
@@ -311,49 +330,72 @@ export function LoanOverviewMasterDetail({
     </MasterListViewShell>
   );
 
-  const emptyLoanSetup = (account: Staff) => (
-    <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center">
-      <LoanLiabilityEntityIcon className="h-10 w-10 text-muted-foreground" />
-      <div>
-        <h2 className={cn("text-lg font-semibold", masterDetailBalanceToneClass(account.balance))}>{account.name}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          This is a loan payable ledger. Create a loan to manage EMI, interest, and journals.
+  /** List account is a staff loan-liability row; SQLite loan doc may be missing — still show profile/ledger. */
+  const unlinkedLoanAccountDetails = (account: Staff) => (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2">
+        <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+          Loan EMI record not found. Edit or delete this account from the profile, or create a loan.
         </p>
+        <PermissionButton
+          permission="create_records"
+          variant="chromePill"
+          size="list"
+          onClick={() =>
+            onCreate({
+              loanName: account.name,
+              loanAccountId: account.id,
+              createLoanAccount: false,
+            })
+          }
+        >
+          Create Loan
+        </PermissionButton>
       </div>
-      <PermissionButton
-        permission="create_records"
-        onClick={() =>
-          onCreate({
-            loanName: account.name,
-            loanAccountId: account.id,
-            createLoanAccount: false,
-          })
-        }
-      >
-        Create Loan Account
-      </PermissionButton>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <StaffDetails
+          key={`loan-staff-${account.id}`}
+          staff={account}
+          allStaff={processedStaff}
+          allGroups={processedStaffGroups}
+          onStaffUpdated={(updated) => handleStaffUpdated(account.id, updated)}
+          onStaffDeleted={handleStaffDeleted}
+          dateRange={dateRange}
+          onDateRangeChange={setDateRange}
+          userNames={userNames}
+          mobileFooterVariant={chromeMode === "reports" ? "report" : "ledger"}
+        />
+      </div>
     </div>
   );
 
   const detailView = (
     <>
-      {activeView === "accounts" && selectedAccount ? (
-        linkedLoan ? (
+      {effectiveActiveView === "accounts" && selectedAccount ? (
+        !loansHydrated ? (
+          <div className="flex h-full min-h-0 items-center justify-center p-6">
+            <LoadingSpinner />
+          </div>
+        ) : linkedLoan ? (
           <div className="flex h-full min-h-0 flex-col overflow-hidden">
             <LoanWorkspaceDetails loanId={linkedLoan.id} onReloadList={onReloadList} />
           </div>
         ) : (
-          emptyLoanSetup(selectedAccount)
+          unlinkedLoanAccountDetails(selectedAccount)
         )
       ) : null}
-      {activeView === "groups" && selectedGroup ? (
+      {effectiveActiveView === "groups" && selectedGroup ? (
         groupMemberFilterId && detailAccount ? (
-          groupMemberLoan ? (
+          !loansHydrated ? (
+            <div className="flex h-full min-h-0 items-center justify-center p-6">
+              <LoadingSpinner />
+            </div>
+          ) : groupMemberLoan ? (
             <div className="flex h-full min-h-0 flex-col overflow-hidden">
               <LoanWorkspaceDetails loanId={groupMemberLoan.id} onReloadList={onReloadList} />
             </div>
           ) : (
-            emptyLoanSetup(detailAccount)
+            unlinkedLoanAccountDetails(detailAccount)
           )
         ) : (
           <div className="flex h-full min-h-0 flex-col">
@@ -381,13 +423,18 @@ export function LoanOverviewMasterDetail({
     </>
   );
 
-  const loanOverviewTitleEl = <LoanStaffNavTitle active="loans" />;
+  const loanOverviewTitleEl =
+    chromeMode === "reports" ? (
+      <span className="text-xs font-bold leading-snug">Loan Overview</span>
+    ) : (
+      <LoanStaffNavTitle active="loans" />
+    );
 
   return (
-    <>
       <ResponsiveMasterDetail
         title={loanOverviewTitleEl}
         balance={formatCurrencyForPrint(totalBalance, { showDrCr: true })}
+        listHeaderLeading={chromeMode === "reports" ? <ReportShowListButton /> : undefined}
         tabs={isMobile ? undefined : loanTabsEl}
         mobileTabsDocked={isMobile}
         listView={listView}
@@ -397,15 +444,15 @@ export function LoanOverviewMasterDetail({
         hasSelectedItem={!!selected}
         onBackToList={() => {
           setGroupMemberFilterId(null);
-          onSelectAccountId(null, activeView);
+          onSelectAccountId(null, effectiveActiveView);
         }}
         mobileListSelectionKey={
           selected
-            ? `${selected.id}:${activeView === "groups" ? groupMemberFilterId ?? "" : ""}`
+            ? `${selected.id}:${effectiveActiveView === "groups" ? groupMemberFilterId ?? "" : ""}`
             : null
         }
         mobileSelectionLabel={
-          activeView === "groups"
+          effectiveActiveView === "groups"
             ? selectedGroup?.name
             : selectedAccount?.name
         }
@@ -415,22 +462,5 @@ export function LoanOverviewMasterDetail({
             : undefined
         }
       />
-      <ConvertExistingBankAccountDialog
-        open={convertOpen}
-        onOpenChange={setConvertOpen}
-        accounts={bankAccountsForConvert}
-        onConverted={(link) => {
-          onCreate({
-            loanName: link.loanName,
-            lenderName: link.lenderName,
-            lenderType: "Bank",
-            bankAccountId: link.bankAccountId,
-            loanAccountId: link.loanAccountId,
-            createLoanAccount: false,
-            convertedFromBankAccountId: link.bankAccountId,
-          });
-        }}
-      />
-    </>
   );
 }

@@ -25,6 +25,7 @@ export function masterEntityProfileUiFields(row: Record<string, unknown> | null 
     String(row.groupId ?? ""),
     String(row.parentId ?? ""),
     String(row.openingBalance ?? ""),
+    String(row.openingBalanceDate ?? ""),
     String(row.openingBalanceNarration ?? ""),
     String(row.isSpecial ?? ""),
     String(row.isClearing ?? ""),

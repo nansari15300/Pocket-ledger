@@ -1,6 +1,12 @@
 "use client";
 
 import { toast as sonnerToast } from "sonner";
+import {
+  cancelAttachmentCompressionWork,
+  isAttachmentCompressionProgressActive,
+  showAttachmentCompressionCancelledToast,
+} from "@/lib/attachmentCompressionUi";
+import { resetVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
 
 /**
  * Global snappy voucher feedback (Sonner `Toaster` bhi ~1s rakhta hai) —
@@ -13,9 +19,9 @@ const VOUCHER_BACKGROUND_TOAST_POSITION = "bottom-center" as const;
 /** Save + compress loading toasts — bottom-right, stacked vertically (2 rows). */
 export const VOUCHER_SONNER_TOAST_POSITION = "bottom-right" as const;
 
-/** Voucher save / compress loading popups — same chhota size, full label visible. */
+/** Voucher save / compress loading popups — fixed height taaki Sonner stack rows overlap na kare. */
 export const VOUCHER_SONNER_TOAST_CN =
-  "text-sm py-2 px-3 min-h-0 w-auto max-w-[min(92vw,20rem)] whitespace-nowrap";
+  "text-sm py-2 px-3 min-h-[2.375rem] w-auto max-w-[min(92vw,20rem)] whitespace-nowrap";
 
 export const VOUCHER_SAVE_LOADING_TOAST_ID = "pl-voucher-save-loading";
 
@@ -80,11 +86,24 @@ export async function beginVoucherSaveLoadingOrBlock(
 }
 
 /** Authoritative / staff write errors — generic "Failed to save" ki jagah seedha message. */
+export function cancelVoucherInFlightWork(): void {
+  const wasCompressing = isAttachmentCompressionProgressActive();
+  cancelAttachmentCompressionWork();
+  resetVoucherAttachmentProcessing();
+  sonnerToast.dismiss(VOUCHER_SAVE_LOADING_TOAST_ID);
+  if (wasCompressing) showAttachmentCompressionCancelledToast();
+}
+
 export function voucherSaveErrorToast(
   toastId: string | number,
   error: unknown,
   fallback = "Failed to save voucher."
 ): void {
+  if (error instanceof Error && error.name === "AttachmentCompressionCancelledError") {
+    sonnerToast.dismiss(toastId);
+    showAttachmentCompressionCancelledToast();
+    return;
+  }
   if ((error as { plAuthoritativeWriteFailed?: boolean })?.plAuthoritativeWriteFailed) {
     sonnerToast.error("Cannot save", {
       id: toastId,
@@ -109,5 +128,7 @@ export function replaceVoucherSaveLoadingWithShortSuccess(
     id: toastId,
     description,
     duration: VOUCHER_SONNER_SUCCESS_MS,
+    position: VOUCHER_SONNER_TOAST_POSITION,
+    classNames: { toast: VOUCHER_SONNER_TOAST_CN },
   });
 }

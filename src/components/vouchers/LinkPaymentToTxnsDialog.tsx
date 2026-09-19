@@ -9,7 +9,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
+import { useFyLinkMissingHints } from "@/hooks/useFyLinkMissingHints";
+import { FyLinkLoadMissingPrompt } from "@/components/fyPagination/FyLinkLoadMissingPrompt";
 import { useDate } from "@/hooks/useDate";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
@@ -108,8 +110,17 @@ export function LinkPaymentToTxnsDialog({
   isJournalLinkDialog = false,
   onDone,
 }: LinkPaymentToTxnsDialogProps) {
-  const { vouchers, vouchersAll, processedPartiesForSelection, processedParties, processedStaff } = useVouchers();
+  const { vouchers, vouchersAll, processedPartiesForSelection, processedParties, processedStaff } = useFyScopedVouchers();
   const vouchersForAllocations = (vouchersAll && vouchersAll.length > 0) ? vouchersAll : (vouchers || []);
+  const {
+    hints: fyLinkHints,
+    loading: fyLinkLoading,
+    scanForParty: scanFyLinkMissing,
+    loadHintFy: loadFyLinkHint,
+    clearHints: clearFyLinkHints,
+  } = useFyLinkMissingHints();
+  const [fyPromptOpen, setFyPromptOpen] = React.useState(false);
+  const fyLinkScannedRef = React.useRef(false);
   const { formatDate, formatDateBS, formatCurrency, dateSystem } = useDate();
   const isMobile = useIsMobile();
   const effectiveAccountId = accountId ?? null;
@@ -650,6 +661,29 @@ export function LinkPaymentToTxnsDialog({
     setLinkedAmounts(initial);
   }, [isOpen, existingAllocations]);
 
+  useEffect(() => {
+    if (!isOpen || !partyId) {
+      clearFyLinkHints();
+      setFyPromptOpen(false);
+      fyLinkScannedRef.current = false;
+      return;
+    }
+    if (fyLinkScannedRef.current) return;
+    fyLinkScannedRef.current = true;
+    const inMemory = new Set(
+      (vouchersForAllocations as any[]).map((v) => String(v?.id ?? "")).filter(Boolean)
+    );
+    void scanFyLinkMissing(partyId, inMemory).then((found) => {
+      if (found.length > 0) setFyPromptOpen(true);
+    });
+  }, [isOpen, partyId, scanFyLinkMissing, clearFyLinkHints, vouchersForAllocations]);
+
+  const handleFyLoadYes = async (hint: import("@/lib/fyPagination/types").FyUnloadedLinkHint) => {
+    await loadFyLinkHint(hint);
+    setFyPromptOpen(false);
+    toast.success(`Loaded vouchers from FY ${hint.fyKey.replace(/-/g, "–")}.`);
+  };
+
   const totalLinked = useMemo(
     () => Object.values(linkedAmounts).reduce((s, n) => s + Number(n) || 0, 0),
     [linkedAmounts]
@@ -700,6 +734,18 @@ export function LinkPaymentToTxnsDialog({
   };
 
   return (
+    <>
+    <FyLinkLoadMissingPrompt
+      open={fyPromptOpen && fyLinkHints.length > 0}
+      onOpenChange={setFyPromptOpen}
+      hints={fyLinkHints}
+      loading={fyLinkLoading}
+      onYes={handleFyLoadYes}
+      onNo={() => {
+        setFyPromptOpen(false);
+        clearFyLinkHints();
+      }}
+    />
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent
         overlayClassName={NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN}
@@ -848,5 +894,6 @@ export function LinkPaymentToTxnsDialog({
         </div>
       </DialogContent>
     </Dialog>
+    </>
   );
 }

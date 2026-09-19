@@ -7,8 +7,13 @@
 
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { isLocalOnlyMode } from "@/lib/localMode";
-import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import { updateCompanyDocRoot } from "@/lib/companyDocsClient";
+import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
+import {
+  companyRootSettingsUseLocalStore,
+  type PersistCompanyRootSettingsResult,
+} from "@/lib/persistCompanyRootSettings";
+import { shouldPersistPermissionConfigViaPlServerHost } from "@/lib/plServerCompanyMetaSync";
 /** Normalize Firestore/local JSON into string[] (ignores non-strings). */
 export function parseCustomUnitsArray(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
@@ -46,8 +51,19 @@ export function unitListHas(units: string[], value: string | undefined | null): 
   return units.some((u) => u.trim().toLowerCase() === k);
 }
 
+type CompanyStorageLike = {
+  id?: string;
+  storageOption?: string | null;
+  syncedFromCloud?: boolean;
+  syncPolicy?: string | null;
+  plServerShared?: boolean;
+  authoritativeCompanyId?: string;
+} | null | undefined;
+
 export type PersistCustomUnitOptions = {
   companyId: string | null | undefined;
+  /** Active company row — routes local vs online persistence (same as company root settings). */
+  company?: CompanyStorageLike;
   /** Trimmed unit label from combobox (add-new or pick). */
   unitLabel: string;
   /** After SQLite / Firestore write — refresh `useCompany` local registry. */
@@ -58,22 +74,43 @@ export type PersistCustomUnitOptions = {
 
 /**
  * Append `unitLabel` to company `customUnits` if not already present (case-insensitive).
- * Local-only: SQLite company row; online: Firestore `companies/{id}`.
+ * Local / PL / offline company → SQLite registry; online → Firestore `companies/{id}`.
  */
-export async function persistCustomUnitIfNew(opts: PersistCustomUnitOptions): Promise<void> {
-  const { companyId, unitLabel, reloadLocalCompanyRegistry, triggerSync } = opts;
+export async function persistCustomUnitIfNew(
+  opts: PersistCustomUnitOptions
+): Promise<PersistCompanyRootSettingsResult | void> {
+  const { companyId, company, unitLabel, reloadLocalCompanyRegistry, triggerSync } = opts;
   const t = unitLabel.trim();
   if (!t || !companyId) return;
 
-  if (isLocalOnlyMode()) {
-    const row = await getLocalCompanyById(companyId);
-    if (!row) return;
-    const prev = parseCustomUnitsArray(row.customUnits);
+  const localRow = await getLocalCompanyById(companyId, { includeDeleted: true });
+  const companyLike = company ?? localRow;
+  const companyForStore = companyLike as {
+    storageOption?: string;
+    syncedFromCloud?: boolean;
+    plServerShared?: boolean;
+    syncPolicy?: string;
+    authoritativeCompanyId?: string;
+  } | null | undefined;
+  const preferLocal =
+    companyRootSettingsUseLocalStore(companyForStore) ||
+    (await shouldPersistPermissionConfigViaPlServerHost(companyId, companyForStore));
+
+  if (preferLocal) {
+    if (!localRow) return;
+    const prev = parseCustomUnitsArray(localRow.customUnits);
     if (prev.some((u) => u.toLowerCase() === t.toLowerCase())) return;
     const merged = mergeUnitsForDropdown(prev, [t]);
-    await upsertLocalCompany({ ...row, customUnits: merged } as Parameters<typeof upsertLocalCompany>[0]);
+    await upsertLocalCompany({
+      ...localRow,
+      customUnits: merged,
+      id: companyId,
+      updatedAt: Date.now(),
+    } as LocalCompanyDoc);
+    void updateCompanyDocRoot(companyId, { customUnits: merged });
     reloadLocalCompanyRegistry();
-    return;
+    triggerSync?.();
+    return "local";
   }
 
   const ref = doc(firestore, "companies", companyId);
@@ -83,6 +120,19 @@ export async function persistCustomUnitIfNew(opts: PersistCustomUnitOptions): Pr
   if (fromServer.some((u) => u.toLowerCase() === t.toLowerCase())) return;
   const merged = mergeUnitsForDropdown(fromServer, [t]);
   await updateDoc(ref, { customUnits: merged });
-  // Listener updates allCompanies; optional nudge if snapshot lags in edge cases.
+  try {
+    if (localRow) {
+      await upsertLocalCompany({
+        ...localRow,
+        customUnits: merged,
+        id: companyId,
+        updatedAt: Date.now(),
+      } as LocalCompanyDoc);
+    }
+  } catch {
+    /* online-only / no local DB */
+  }
+  reloadLocalCompanyRegistry();
   triggerSync?.();
+  return "firestore";
 }

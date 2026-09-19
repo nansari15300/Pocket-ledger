@@ -1,16 +1,24 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
+import { useLocationSearchParams } from "@/hooks/useLocationSearchParams";
 import { Button } from "@/components/ui/button";
 import { PermissionButton } from "@/components/permission";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
-import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2, X } from "lucide-react";
+import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2, DollarSign, Users, X } from "lucide-react";
 import { collectExpenseGroupScopeAccounts, collectExpenseGroupScopeGroupIds } from "@/lib/expenseGroupTree";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
+import { ExpenseAccountList } from "@/components/expenses/ExpenseAccountList";
+import { ExpenseGroupList } from "@/components/expenses/ExpenseGroupList";
+import { ExpenseAccountDetails } from "@/components/expenses/ExpenseAccountDetails";
+import { ExpenseGroupDetails } from "@/components/expenses/ExpenseGroupDetails";
+import { ReportStatementDesktopShell } from "@/components/reports/ReportStatementDesktopShell";
+import { mlc } from "@/lib/mobileListChrome";
+import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import AdCalendar from "@/components/ui/ad-calendar";
@@ -82,11 +90,11 @@ export default function DesktopExpenseStatementPage() {
     vouchers,
     loading,
     journalAccountNames,
-  } = useVouchers();
+  } = useFyScopedVouchers();
   const { company } = useCompany();
   const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useLocationSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
@@ -96,6 +104,14 @@ export default function DesktopExpenseStatementPage() {
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [transactionSearch, setTransactionSearch] = useState("");
   const [view, setView] = useState<"list" | "chart">("list");
+  const [listTab, setListTab] = useState<"accounts" | "groups">(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("groupId")
+      ? "groups"
+      : "accounts"
+  );
+  const [listSearchTerm, setListSearchTerm] = useState("");
+  const [accountListQuickFilter, setAccountListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
 
   const [selectedAccount, setSelectedAccount] = useState<ExpenseAccount | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<ExpenseGroup | null>(null);
@@ -204,16 +220,12 @@ export default function DesktopExpenseStatementPage() {
 
     if (accountId && processedExpenseAccounts.length > 0) {
       const acc = processedExpenseAccounts.find((a) => a.id === accountId);
-      if (acc) {
-        setSelectedAccount((prev) => (prev?.id === acc.id ? prev : acc));
-        setSelectedGroup(null);
-      }
+      setSelectedAccount((prev) => (prev?.id === acc?.id ? prev : acc || null));
+      setSelectedGroup((prev) => (prev !== null ? null : prev));
     } else if (groupId && processedExpenseGroups.length > 0) {
       const grp = processedExpenseGroups.find((g) => g.id === groupId);
-      if (grp) {
-        setSelectedGroup((prev) => (prev?.id === grp.id ? prev : grp));
-        setSelectedAccount(null);
-      }
+      setSelectedGroup((prev) => (prev?.id === grp?.id ? prev : grp || null));
+      setSelectedAccount((prev) => (prev !== null ? null : prev));
     } else if (processedExpenseAccounts.length > 0) {
       const first = processedExpenseAccounts[0];
       setSelectedAccount((prev) => {
@@ -222,9 +234,14 @@ export default function DesktopExpenseStatementPage() {
         if (prev && processedExpenseAccounts.some((a) => a.id === prev.id)) return prev;
         return first;
       });
-      setSelectedGroup(null);
+      setSelectedGroup((prev) => (prev !== null ? null : prev));
     }
   }, [searchParams, processedExpenseAccounts, processedExpenseGroups]);
+
+  useEffect(() => {
+    if (searchParams.get("groupId")) setListTab("groups");
+    else if (searchParams.get("accountId")) setListTab("accounts");
+  }, [searchParams]);
 
   const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance } = useTransactions(
     activeEntity as any,
@@ -472,8 +489,143 @@ export default function DesktopExpenseStatementPage() {
       .map((g) => ({ value: g.id, label: g.name }));
   }, [processedExpenseGroups, selectedGroup?.id]);
 
+  const groupsForReportList = useMemo(() => {
+    const exclude = ["income", "expenses"];
+    const currentId = selectedGroup?.id;
+    return processedExpenseGroups.filter(
+      (g) => g.id === currentId || !exclude.includes((g.id || "").toLowerCase())
+    );
+  }, [processedExpenseGroups, selectedGroup?.id]);
+
+  const handleSelectAccountFromList = useCallback((account: ExpenseAccount) => {
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set("accountId", account.id);
+    newUrl.searchParams.delete("groupId");
+    window.history.pushState({}, "", newUrl);
+    setSelectedAccount(account);
+    setSelectedGroup(null);
+    setListTab("accounts");
+  }, []);
+
+  const handleSelectGroupFromList = useCallback((group: ExpenseGroup) => {
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set("groupId", group.id);
+    newUrl.searchParams.delete("accountId");
+    window.history.pushState({}, "", newUrl);
+    setSelectedGroup(group);
+    setSelectedAccount(null);
+    setListTab("groups");
+  }, []);
+
   if (loading && !activeEntity) {
     return <LoadingSpinner />;
+  }
+
+  const addVoucherDialog = (
+    <AddVoucherDialog
+      isOpen={isVoucherDialogOpen}
+      onOpenChange={(open: boolean) => {
+        if (!open) {
+          setIsVoucherDialogOpen(false);
+          setSelectedVoucher(null);
+          closeModalInUrl();
+        }
+      }}
+      voucher={selectedVoucher}
+      onVoucherAction={() => setSelectedVoucher(null)}
+    />
+  );
+
+  if (!isMobile) {
+    return (
+      <ReportStatementDesktopShell
+        listChromeRouteKey="incomes"
+        pageTitle={pageTitle}
+        listTab={listTab}
+        entityTabValue="accounts"
+        groupTabValue="groups"
+        entityTabLabel="Accounts"
+        onListTabChange={(tab) => setListTab(tab === "groups" ? "groups" : "accounts")}
+        listSearchTerm={listSearchTerm}
+        onListSearchChange={setListSearchTerm}
+        entitySearchPlaceholder="Search accounts..."
+        groupSearchPlaceholder="Search groups/account"
+        entitySectionLabel={
+          <div className={mlc.sectionLabelRow}>
+            <DollarSign className={mlc.sectionIcon} />
+            <span>Account ({processedExpenseAccounts.length})</span>
+          </div>
+        }
+        groupSectionLabel={
+          <div className={mlc.sectionLabelRow}>
+            <Users className={mlc.sectionIcon} />
+            <span>Group ({groupsForReportList.length})</span>
+          </div>
+        }
+        entityQuickFilter={accountListQuickFilter}
+        groupQuickFilter={groupListQuickFilter}
+        onEntityQuickFilterChange={setAccountListQuickFilter}
+        onGroupQuickFilterChange={setGroupListQuickFilter}
+        summaryCards={summaryCards}
+        showSummary={!!activeEntity}
+        entityList={
+          <ExpenseAccountList
+            accounts={processedExpenseAccounts}
+            onSelectAccount={handleSelectAccountFromList}
+            selectedAccount={selectedAccount}
+            searchTerm={listSearchTerm}
+            quickFilter={accountListQuickFilter}
+            onQuickFilterChange={setAccountListQuickFilter}
+            hideQuickFilterBar
+          />
+        }
+        groupList={
+          <ExpenseGroupList
+            groups={groupsForReportList}
+            onSelectGroup={handleSelectGroupFromList}
+            selectedGroup={selectedGroup}
+            searchTerm={listSearchTerm}
+            quickFilter={groupListQuickFilter}
+            onQuickFilterChange={setGroupListQuickFilter}
+            hideQuickFilterBar
+          />
+        }
+        detailView={
+          selectedAccount ? (
+            <ExpenseAccountDetails
+              account={selectedAccount}
+              allAccounts={processedExpenseAccounts}
+              transactions={processedTransactions}
+              onAccountUpdated={() => {}}
+              onAccountDeleted={() => setSelectedAccount(null)}
+              userNames={userNames}
+              journalAccountNames={journalAccountNames}
+              context="report"
+              mobileFooterVariant="report"
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+            />
+          ) : selectedGroup ? (
+            <ExpenseGroupDetails
+              group={selectedGroup}
+              allGroups={processedExpenseGroups}
+              accounts={groupEntity?.items ?? []}
+              onGroupUpdated={() => {}}
+              onGroupDeleted={() => setSelectedGroup(null)}
+              onAccountUpdated={() => {}}
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+              userNames={userNames}
+            />
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center bg-muted/20">
+              <p className="text-sm text-muted-foreground">Select an account or group</p>
+            </div>
+          )
+        }
+        footer={addVoucherDialog}
+      />
+    );
   }
 
   return (
@@ -789,18 +941,7 @@ export default function DesktopExpenseStatementPage() {
           <span className="text-[10px] leading-tight">Chart</span>
         </Button>
       </footer>
-      <AddVoucherDialog
-        isOpen={isVoucherDialogOpen}
-        onOpenChange={(open: boolean) => {
-          if (!open) {
-            setIsVoucherDialogOpen(false);
-            setSelectedVoucher(null);
-            closeModalInUrl();
-          }
-        }}
-        voucher={selectedVoucher}
-        onVoucherAction={() => setSelectedVoucher(null)}
-      />
+      {addVoucherDialog}
     </div>
   );
 }

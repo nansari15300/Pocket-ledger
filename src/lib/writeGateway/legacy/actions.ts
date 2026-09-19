@@ -26,9 +26,9 @@ import { LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY, PL_CLIENT_OFFLINE_FIRST_PERSIST
 /** Default voucher prefixes matching VoucherSettings - used when creating new company */
 const DEFAULT_VOUCHER_PREFIXES: Record<string, string[]> = {
   sale: ["Sale Inv"],
-  sale_service: ["SS-"],
+  sale_service: ["SER-"],
   purchase: ["PUR-"],
-  purchase_service: ["PS-"],
+  purchase_service: ["SER-"],
   payment_in: ["RCPT-"],
   payment_out: ["PYMT-"],
   contra: ["CNTR-"],

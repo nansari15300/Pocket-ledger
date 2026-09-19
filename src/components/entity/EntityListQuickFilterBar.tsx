@@ -17,6 +17,8 @@ type Props = {
   active: EntityListQuickFilter;
   onChange: (next: EntityListQuickFilter) => void;
   className?: string;
+  /** Subset of footer toggles (e.g. notes list: default / By Name / By Date only). */
+  only?: EntityListQuickFilter[];
 };
 
 const FILTERS: Array<{ key: EntityListQuickFilter; label: string }> = [
@@ -30,12 +32,13 @@ const FILTERS: Array<{ key: EntityListQuickFilter; label: string }> = [
 ];
 
 /** Account/entity list footer filters — horizontal scroll for mobile + desktop compact bar. */
-export function EntityListQuickFilterBar({ active, onChange, className }: Props) {
+export function EntityListQuickFilterBar({ active, onChange, className, only }: Props) {
+  const filters = only?.length ? FILTERS.filter((f) => only.includes(f.key)) : FILTERS;
   return (
     <div className={cn("border-t border-blue-300/60 bg-blue-100/80 px-2 py-1.5", className)}>
-      <div className="overflow-x-auto scrollbar-hover-dim">
+      <div className="overflow-x-auto pl-ledger-footer-scroll">
         <div className="flex w-max items-center gap-1">
-          {FILTERS.map((f) => (
+          {filters.map((f) => (
             <Button
               key={f.key}
               type="button"

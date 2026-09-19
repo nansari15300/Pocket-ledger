@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { StaffDetails } from "@/components/staff/StaffDetails";
 import { StaffList } from "@/components/staff/StaffList";
 import type { Staff } from "@/components/staff/types";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { PermissionButton } from "@/components/permission";
@@ -17,12 +17,14 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSearchParams } from "next/navigation";
 import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
+import { ReportRegisterDesktopSplit } from "@/components/reports/ReportRegisterDesktopSplit";
+import { ReportRegisterListHeading } from "@/components/reports/ReportRegisterListHeading";
 
 export function AddSalaryReportDetail() {
   const isMobile = useIsMobile();
   const searchParams = useSearchParams();
   const { formatCurrency, formatCurrencyForPrint } = useDate();
-  const { vouchers: allVouchers, loading: vouchersLoading, processedStaff, userNames } = useVouchers();
+  const { vouchers: allVouchers, loading: vouchersLoading, processedStaff, userNames } = useFyScopedVouchers();
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [searchTerm, setSearchTerm] = useState("");
@@ -194,36 +196,34 @@ export function AddSalaryReportDetail() {
   return (
     <>
       <div className="flex flex-col h-full min-h-0 overflow-hidden">
-        <div className="flex-1 grid grid-cols-1 md:grid-cols-[minmax(280px,max-content)_minmax(0,1fr)] min-h-0 overflow-hidden">
-          <div className="flex flex-col min-h-0 border-r overflow-hidden bg-muted/30">
-            <div className="p-4 border-b space-y-3 flex-shrink-0">
-              <h2 className="text-lg font-bold font-headline">Add Salary</h2>
-              <PermissionButton permission="create_records" className="w-full" onClick={() => setIsVoucherOpen(true)}>
-                <PlusCircle className="mr-2 h-4 w-4" /> Add Salary Voucher
-              </PermissionButton>
-              <Card className="p-3 text-center">
-                <p className="text-xs text-muted-foreground">Total Salary Added</p>
-                <p className="text-xl font-bold text-blue-600">{formatCurrency(totalSalaryAdded, { noSuffix: true })}</p>
-              </Card>
-            </div>
-            <div className="p-3 border-b flex-shrink-0">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input placeholder={STAFF_ENTITY_SEARCH_PLACEHOLDER} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+        <ReportRegisterDesktopSplit
+          listPanel={
+            <>
+              <div className="p-4 border-b space-y-3 flex-shrink-0">
+                <ReportRegisterListHeading>Add Salary</ReportRegisterListHeading>
+                <Card className="p-3 text-center">
+                  <p className="text-xs text-muted-foreground">Total Salary Added</p>
+                  <p className="text-xl font-bold text-blue-600">{formatCurrency(totalSalaryAdded, { noSuffix: true })}</p>
+                </Card>
               </div>
-            </div>
-            <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
-              <h3 className="text-sm font-semibold">{STAFF_ENTITY_LABEL} ({filteredStaff.length})</h3>
-            </div>
-            <div className="flex-1 min-h-0 overflow-hidden">
-              <StaffList staff={filteredStaff} onSelectStaff={handleSelectStaff} selectedStaff={selectedStaff} searchTerm={searchTerm} />
-            </div>
-          </div>
-          <div className="flex flex-col min-h-0 overflow-hidden">
-            {currentStaff ? (
+              <div className="p-3 border-b flex-shrink-0">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input placeholder={STAFF_ENTITY_SEARCH_PLACEHOLDER} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                </div>
+              </div>
+              <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
+                <h3 className="text-sm font-semibold">{STAFF_ENTITY_LABEL} ({filteredStaff.length})</h3>
+              </div>
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <StaffList staff={filteredStaff} onSelectStaff={handleSelectStaff} selectedStaff={selectedStaff} searchTerm={searchTerm} />
+              </div>
+            </>
+          }
+          detailPanel={
+            currentStaff ? (
               <StaffDetails
                 staff={currentStaff}
-                // Keep dropdown data available so detail header can offer quick staff switching.
                 allStaff={staffWithSalary}
                 transactions={currentTransactions}
                 onStaffUpdated={() => {}}
@@ -235,7 +235,6 @@ export function AddSalaryReportDetail() {
                 userNames={userNames}
                 context="add_salary"
                 onSelectStaff={(staffId) => {
-                  // Keep user on report page: switch selected staff in-place, no route redirect.
                   const next = staffWithSalary.find((s) => s.id === staffId);
                   if (next) {
                     setShowAllCompanyVouchers(false);
@@ -257,9 +256,9 @@ export function AddSalaryReportDetail() {
                   </CardContent>
                 </Card>
               </div>
-            )}
-          </div>
-        </div>
+            )
+          }
+        />
       </div>
       <AddVoucherDialog isOpen={isVoucherOpen} onOpenChange={setIsVoucherOpen} onVoucherCreated={() => {}} defaultTab="add_salary" />
     </>

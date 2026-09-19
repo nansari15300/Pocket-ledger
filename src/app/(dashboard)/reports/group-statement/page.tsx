@@ -25,6 +25,8 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { doc, getDoc, query, collection, getDocs, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { ReportRegisterListHeading } from "@/components/reports/ReportRegisterListHeading";
+import { masterListSelectedCn, masterListUnselectedCn } from "@/lib/listSelectionChrome";
 import { format } from "date-fns";
 import { getAllSystemGroupNames } from "@/lib/system-group-names";
 
@@ -728,7 +730,7 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
       <div className="flex-1 grid grid-cols-1 md:grid-cols-[minmax(280px,max-content)_minmax(0,1fr)] min-h-0 overflow-hidden">
         <div className="flex flex-col min-h-0 border-r overflow-hidden bg-muted/30">
           <div className="p-4 border-b space-y-3 flex-shrink-0">
-            <h2 className="text-lg font-bold font-headline">Group Summary</h2>
+            <ReportRegisterListHeading>Group Summary</ReportRegisterListHeading>
             <Card className="p-3 text-center">
               <p className="text-xs text-muted-foreground">Total Balance</p>
               <p className={cn(
@@ -771,8 +773,9 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
                       type="button"
                       onClick={() => handleSelectGroup(sys)}
                       className={cn(
-                        "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left hover:bg-accent",
-                        selectedGroup?.id === sys.id && "border-orange-400 bg-orange-50"
+                        "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left",
+                        selectedGroup?.id === sys.id && masterListSelectedCn,
+                        selectedGroup?.id !== sys.id && masterListUnselectedCn
                       )}
                     >
                       <div className="flex items-center gap-2 min-w-0">
@@ -806,8 +809,9 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
                             type="button"
                             onClick={() => handleSelectGroup(child)}
                             className={cn(
-                              "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left hover:bg-accent",
-                              selectedGroup?.id === child.id && "border-orange-400 bg-orange-50"
+                              "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left",
+                              selectedGroup?.id === child.id && masterListSelectedCn,
+                              selectedGroup?.id !== child.id && masterListUnselectedCn
                             )}
                           >
                             <span className="truncate text-sm">{child.name}</span>
@@ -844,7 +848,7 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
                         type="button"
                         onClick={() => toggleExpenseParent(key)}
                         className={cn(
-                          "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left hover:bg-accent font-medium",
+                          "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left font-medium",
                           "bg-muted/50"
                         )}
                       >
@@ -871,8 +875,9 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
                                 type="button"
                                 onClick={() => handleSelectGroup(sys)}
                                 className={cn(
-                                  "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left hover:bg-accent",
-                                  selectedGroup?.id === sys.id && "border-orange-400 bg-orange-50"
+                                  "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left",
+                                  selectedGroup?.id === sys.id && masterListSelectedCn,
+                        selectedGroup?.id !== sys.id && masterListUnselectedCn
                                 )}
                               >
                                 <div className="flex items-center gap-2 min-w-0">
@@ -906,8 +911,9 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
                                       type="button"
                                       onClick={() => handleSelectGroup(child)}
                                       className={cn(
-                                        "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left hover:bg-accent",
-                                        selectedGroup?.id === child.id && "border-orange-400 bg-orange-50"
+                                        "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left",
+                                        selectedGroup?.id === child.id && masterListSelectedCn,
+                              selectedGroup?.id !== child.id && masterListUnselectedCn
                                       )}
                                     >
                                       <span className="truncate text-sm">{child.name}</span>
@@ -934,8 +940,9 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
                   type="button"
                   onClick={() => handleSelectGroup(g)}
                   className={cn(
-                    "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left hover:bg-accent",
-                    selectedGroup?.id === g.id && "border-orange-400 bg-orange-50"
+                    "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left",
+                    selectedGroup?.id === g.id && masterListSelectedCn,
+                    selectedGroup?.id !== g.id && masterListUnselectedCn
                   )}
                 >
                   <span className="truncate text-sm">{g.name}</span>
@@ -947,17 +954,7 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
           </div>
         </div>
 
-        <div className="flex flex-col min-h-0 overflow-hidden">
-          {selectedGroup && (
-            <div className="flex-shrink-0 flex justify-center items-center gap-2 py-2 border-b bg-muted/30">
-              <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
-              {hasDateFilter && (
-                <Button variant="ghost" size="icon" className="h-6 w-6 flex-shrink-0" onClick={() => setDateRange(undefined)} title="Clear date filter">
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              )}
-            </div>
-          )}
+        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
           {selectedGroup ? (
             renderGroupDetailsContent()
           ) : (

@@ -145,18 +145,26 @@ const formSchema = z.object({
   }).optional(),
 }).superRefine(refineMasterOpeningBalanceDateRequired);
 
+export type CreateBankAccountInitialPrefill = {
+  accountName?: string;
+  isClearing?: boolean;
+  accountType?: "Bank" | "Cash";
+};
+
 export function CreateBankAccountDialog({
   onAccountCreated,
   children,
   isOpen: parentIsOpen,
   onOpenChange: parentOnOpenChange,
   contextNote,
+  initialPrefill,
 }: {
   onAccountCreated: (id: string) => void;
   children?: React.ReactNode;
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
   contextNote?: string;
+  initialPrefill?: CreateBankAccountInitialPrefill;
 }) {
   const [isLoading, setIsLoading] = useState(false);
   const [internalIsOpen, setInternalIsOpen] = useState(false);
@@ -304,6 +312,24 @@ export function CreateBankAccountDialog({
       alive = false;
     };
   }, [companyId, user?.uid, isOpen, form, company]);
+
+  useEffect(() => {
+    if (!isOpen || !initialPrefill) return;
+    if (initialPrefill.accountName !== undefined) {
+      form.setValue("accountName", initialPrefill.accountName, { shouldDirty: false });
+    }
+    if (initialPrefill.isClearing !== undefined) {
+      form.setValue("isClearing", initialPrefill.isClearing, { shouldDirty: false });
+    }
+    if (initialPrefill.accountType !== undefined) {
+      form.setValue("accountType", initialPrefill.accountType, { shouldDirty: false });
+      form.setValue(
+        "groupId",
+        getDefaultSystemGroupId("bank", { accountType: initialPrefill.accountType }),
+        { shouldDirty: false }
+      );
+    }
+  }, [isOpen, initialPrefill, form]);
 
   useEffect(() => {
     const handlePrefill = (event: CustomEvent) => {

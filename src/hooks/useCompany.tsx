@@ -323,8 +323,10 @@ export type Company = {
      * Fiscal split — UI me `localFiscalSplitStore` se merge; Firestore company doc par ye fields persist nahi.
      * `getFiscalMergePartitionDateFromCompany` / ledger divider isi pe chalta hai.
      */
-    fiscalSplitMode?: "off" | "merge" | "separate";
+    fiscalSplitMode?: "off" | "merge";
     fiscalMergePartitionAt?: Timestamp | { toDate: () => Date } | null;
+    fiscalMergePartitionAtIsos?: string[] | null;
+    fiscalMergeTickedFyKeys?: string[] | null;
     fiscalPartitionLabel?: string | null;
     /** Sale/Purchase line "+ Add unit" — persisted labels (deduped) for dropdown without retyping. */
     customUnits?: string[];
@@ -346,12 +348,16 @@ function isCompanyVisibleInMainApp(row: { isDeleted?: unknown; movedToAdminRecyc
 function mergeCompanyWithLocalFiscal(base: Company | null, cid: string | null): Company | null {
   if (!base) return null;
   const local = getLocalFiscalSplitOrDefaults(cid ?? base.id);
-  const iso = local.fiscalMergePartitionAtIso;
+  const isos =
+    local.fiscalSplitMode === "merge" ? local.fiscalMergePartitionAtIsos ?? (local.fiscalMergePartitionAtIso ? [local.fiscalMergePartitionAtIso] : null) : null;
+  const iso = isos?.[0] ?? null;
   return {
     ...base,
     fiscalSplitMode: local.fiscalSplitMode,
     fiscalMergePartitionAt:
       local.fiscalSplitMode === "merge" && iso ? { toDate: () => new Date(iso) } : null,
+    fiscalMergePartitionAtIsos: isos,
+    fiscalMergeTickedFyKeys: local.fiscalMergeTickedFyKeys,
     fiscalPartitionLabel: local.fiscalPartitionLabel,
   };
 }
@@ -2397,6 +2403,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
 
     const companyMap = new Map<string, Company>();
+    const liveSharedIds = new Set(shared.map((c: Company) => c.id));
+    const liveOwnedIds = new Set([
+      ...owned.map((c: Company) => c.id),
+      ...ownedByEmail.map((c: Company) => c.id),
+    ]);
+    const liveFirestoreIds = new Set<string>([...liveSharedIds, ...liveOwnedIds]);
+    const revokedSharedMirrorIds: string[] = [];
     const preferPlServerOverCloudSnap = (row: { id?: string; plServerHostCompanyId?: string; plServerShared?: boolean } | null | undefined) =>
       shouldPreferPlServerOverCloudRow(row);
 
@@ -2427,7 +2440,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
     const shareUser = { uid: user?.uid || "", email: user?.email ?? null };
 
-    // Snapshot race: pehle pull/listener se aayi shared rows mat hatao jab nayi snap partial ho.
+    // Snapshot race: partial listener tick par shared row briefly missing ho sakti hai — lekin live revoke par stale cache mat dikhao.
     if (shareUser.uid) {
       for (const c of latestOnlineMergedUnfilteredRef.current) {
         if (companyMap.has(c.id)) continue;
@@ -2437,7 +2450,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           String((c.storageOption || "local")).toLowerCase() === "local" &&
           (c as { syncedFromCloud?: boolean }).syncedFromCloud !== true;
         if (offlineLocal) continue;
-        if (c.isOwned === false || isCurrentUserSharedOnCompanyRow(c, shareUser)) {
+        const sharedOnlyRow = c.isOwned === false;
+        if (sharedOnlyRow && !liveSharedIds.has(c.id) && !liveOwnedIds.has(c.id)) {
+          revokedSharedMirrorIds.push(c.id);
+          continue;
+        }
+        if (sharedOnlyRow || isCurrentUserSharedOnCompanyRow(c, shareUser)) {
           companyMap.set(c.id, { ...c, isOwned: false });
         }
       }
@@ -2525,6 +2543,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             !isPureLocalRow ||
             (row as { syncedFromCloud?: boolean }).syncedFromCloud === true;
           if (isOnlineMirrorRow) {
+            if (!liveFirestoreIds.has(c.id)) {
+              revokedSharedMirrorIds.push(c.id);
+              continue;
+            }
             const shareUser = { uid: user.uid, email: user?.email ?? null };
             const isSharedRow = isCurrentUserSharedOnCompanyRow(normalized, shareUser);
             companyMap.set(c.id, {
@@ -2534,13 +2556,21 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             continue;
           }
           // Shared online mirror revoke — device-local owner rows upar `isPureLocalRow && isOwnerRow` se safe.
-          await removeLocalCompanyById(c.id, { firebaseUid: user.uid });
+          revokedSharedMirrorIds.push(c.id);
           continue;
         }
         companyMap.set(c.id, normalized);
       } else {
         companyMap.set(c.id, mergeOnlineCompanyWithLocalPlanOverlay(existing as Company, normalized));
       }
+    }
+
+    if (user?.uid && revokedSharedMirrorIds.length) {
+      const uniqueRevoked = [...new Set(revokedSharedMirrorIds)];
+      await Promise.all(
+        uniqueRevoked.map((id) => removeLocalCompanyById(id, { firebaseUid: user.uid }))
+      );
+      reloadLocalCompanyRegistry();
     }
 
     const unfilteredMerged = Array.from(companyMap.values());
@@ -2629,7 +2659,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       // Background mirror failure se foreground company load block nahi karna.
       console.warn("Background company mirror sync failed:", error);
     });
-  }, [user?.uid, user?.email, normalizeLocalCompany, isSuperAdminUser]);
+  }, [user?.uid, user?.email, normalizeLocalCompany, isSuperAdminUser, reloadLocalCompanyRegistry]);
 
   useEffect(() => {
     // Static/APK offline: SQLite registry (upar wala effect). Online + web: live Firestore onSnapshot.
@@ -3012,7 +3042,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
-    const companyFromList = allCompaniesForUi.find((c) => companyRowMatchesSelectionId(c, companyId));
+    const companyFromList =
+      allCompaniesForUi.find((c) => companyRowMatchesSelectionId(c, companyId)) ??
+      allCompaniesRegistry.find((c) => companyRowMatchesSelectionId(c, companyId));
     plDbgCompanyRecovery("listRecovery:tick", {
       companyId,
       listLen: allCompaniesForUi.length,
@@ -3160,7 +3192,27 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       cancelled = true;
     };
-  }, [companyId, allCompaniesForUi, loadingPulse, clearCompanyId, normalizeLocalCompany, user?.uid, scheduleListRecoveryDeferPulse]);
+  }, [companyId, allCompaniesForUi, allCompaniesRegistry, loadingPulse, clearCompanyId, normalizeLocalCompany, user?.uid, scheduleListRecoveryDeferPulse]);
+
+  /** Refresh boot: companyId storage se aa gaya lekin row abhi null — list/registry aate hi turant hydrate (shared user masters). */
+  useEffect(() => {
+    if (!hasCheckedStorageRef.current) return;
+    const id = String(companyId || "").trim();
+    if (!id || company?.id === id) return;
+
+    const fromList =
+      allCompaniesForUi.find((c) => companyRowMatchesSelectionId(c, id)) ??
+      allCompaniesRegistry.find((c) => companyRowMatchesSelectionId(c, id)) ??
+      allCompaniesLiveRef.current.find((c) => companyRowMatchesSelectionId(c, id)) ??
+      allCompaniesRegistryLiveRef.current.find((c) => companyRowMatchesSelectionId(c, id)) ??
+      null;
+    if (!fromList || !isCompanyVisibleInMainApp(fromList)) return;
+
+    setCompanyFrom("bootPinned:listHydrate:keepRef", (prev) =>
+      keepCompanyRefIfLedgerUnchanged(prev, fromList)
+    );
+    setLoading(false);
+  }, [companyId, company?.id, allCompaniesForUi, allCompaniesRegistry, setCompanyFrom]);
 
   useEffect(() => {
     if (companyId) return;

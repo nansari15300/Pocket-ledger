@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { useTransactions } from "@/hooks/use-transactions";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { cn } from "@/lib/utils";
 import type { Account } from "@/components/bank-cash/types";
@@ -50,7 +50,7 @@ export function DaybookAccountDayPeekDialog({
   summaryOut,
   summaryClosing,
 }: DaybookAccountDayPeekDialogProps) {
-  const { processedAccounts: allAccounts, userNames } = useVouchers();
+  const { processedAccounts: allAccounts, userNames } = useFyScopedVouchers();
   const { formatCurrency, formatDate, formatDateBS, dateSystem } = useDate();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);

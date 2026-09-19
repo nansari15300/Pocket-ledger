@@ -26,6 +26,12 @@ import {
   PrintMastersOptionsPanel,
   type PrintMastersSettings,
 } from "@/components/print/PrintMastersOptionsDialog";
+import {
+  NESTED_LEDGER_CHILD_DIALOG_CONTENT_CN,
+  NESTED_LEDGER_CHILD_DIALOG_OVERLAY_CN,
+  NESTED_LEDGER_MASTER_EDIT_POPOVER_CN,
+} from "@/lib/nestedLedgerMasterEditPresentation";
+import { cn } from "@/lib/utils";
 
 export type PrintOptionsResult = {
   printIncludeLogo: boolean;
@@ -122,7 +128,11 @@ export function promptPrintOptions({ showConfirmationTabs = false }: { showConfi
           }}
         >
           <DialogContent
-            className="!flex flex-col gap-0 overflow-hidden p-4 pb-3 max-sm:!w-[98%] max-sm:!max-w-[98%] max-sm:rounded-xl max-sm:left-[50%] max-sm:-translate-x-1/2 h-[min(92dvh,calc(100vh-1.5rem))] max-h-[min(92dvh,calc(100vh-1.5rem))] sm:h-auto sm:max-h-none sm:w-full sm:max-w-md max-sm:top-[max(0.75rem,env(safe-area-inset-top,0px))] max-sm:translate-y-0"
+            overlayClassName={NESTED_LEDGER_CHILD_DIALOG_OVERLAY_CN}
+            className={cn(
+              NESTED_LEDGER_CHILD_DIALOG_CONTENT_CN,
+              "!flex flex-col gap-0 overflow-hidden p-4 pb-3 max-sm:!w-[98%] max-sm:!max-w-[98%] max-sm:rounded-xl max-sm:left-[50%] max-sm:-translate-x-1/2 h-[min(92dvh,calc(100vh-1.5rem))] max-h-[min(92dvh,calc(100vh-1.5rem))] sm:h-auto sm:max-h-none sm:w-full sm:max-w-md max-sm:top-[max(0.75rem,env(safe-area-inset-top,0px))] max-sm:translate-y-0"
+            )}
             aria-describedby={view === "report" ? "print-options-desc" : undefined}
           >
             {view === "masters" ? (
@@ -145,7 +155,13 @@ export function promptPrintOptions({ showConfirmationTabs = false }: { showConfi
                         title="Print options help"
                       />
                     </PopoverTrigger>
-                    <PopoverContent align="start" className="w-[min(360px,calc(100vw-2rem))] text-xs leading-relaxed">
+                    <PopoverContent
+                      align="start"
+                      className={cn(
+                        NESTED_LEDGER_MASTER_EDIT_POPOVER_CN,
+                        "w-[min(360px,calc(100vw-2rem))] text-xs leading-relaxed"
+                      )}
+                    >
                       Choose what appears in the PDF header. Cancel stops printing. Internal opens in-app
                       preview; External opens your device PDF app. Use Print masters for a masters-only list.
                     </PopoverContent>

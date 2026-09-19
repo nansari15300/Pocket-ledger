@@ -53,6 +53,37 @@ export function defaultPlansRecordFallback(): Record<PlanId, Plan> {
   return { ...DEFAULT_PLANS } as Record<PlanId, Plan>;
 }
 
+let plansCatalogHydratePromise: Promise<Record<PlanId, Plan>> | null = null;
+
+/** Admin Firestore plans — cache miss par fetch (dev: save se pehle useLivePlans mount na ho). */
+export async function resolvePlansCatalogForEntitlements(): Promise<Record<PlanId, Plan>> {
+  const cached = readCachedPlansRecord();
+  if (cached) return cached;
+  if (typeof window === "undefined") return defaultPlansRecordFallback();
+
+  if (!plansCatalogHydratePromise) {
+    plansCatalogHydratePromise = (async () => {
+      try {
+        const { doc, getDoc } = await import("firebase/firestore");
+        const { firestore } = await import("@/lib/firebase");
+        const { mergeAppSettingsPlansDoc } = await import("@/lib/mergeAppSettingsPlans");
+        const snap = await getDoc(doc(firestore, "app_settings", "plans"));
+        if (snap.exists()) {
+          const list = mergeAppSettingsPlansDoc(snap.data() as Record<string, unknown>);
+          const merged = {} as Record<PlanId, Plan>;
+          for (const p of list) merged[p.id as PlanId] = p;
+          writeCachedPlansRecord(merged);
+          return merged;
+        }
+      } catch {
+        /* offline */
+      }
+      return defaultPlansRecordFallback();
+    })();
+  }
+  return plansCatalogHydratePromise;
+}
+
 const ADMIN_PLANS_SELECTED_PLAN_ID_KEY = "admin:plans:selectedPlanId";
 
 /** Admin Plans UI: refresh ke baad wahi tier card khula rahe. */

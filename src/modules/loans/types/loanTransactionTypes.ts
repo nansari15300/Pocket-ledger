@@ -41,6 +41,7 @@ export type LoanTransaction = {
   createdAt: string;
   createdBy: string;
   isReversed: boolean;
+  isDeleted?: boolean;
 };
 
 export type LoanRateHistory = {
@@ -136,6 +137,15 @@ export type LoanChargeInput = {
   amount: number;
   date: string;
   accountId: string;
+  bankAccountId: string;
+  notes?: string;
+  attachmentFiles?: (File | string)[];
+};
+
+/** Later tranche after the first disbursement journal. */
+export type LoanDisbursementInput = {
+  amount: number;
+  date: string;
   bankAccountId: string;
   notes?: string;
   attachmentFiles?: (File | string)[];

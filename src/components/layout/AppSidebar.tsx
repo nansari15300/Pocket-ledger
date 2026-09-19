@@ -81,7 +81,6 @@ import {
   masterDetailRouteKeyFromPath,
 } from "@/lib/masterDetailSidebarNav";
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
-import { Badge } from "../ui/badge";
 import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
 import { useCachedFeatureConfig } from "@/hooks/useCachedFeatureConfig";
 import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesPartyLedger";
@@ -89,7 +88,6 @@ import { collectBankAccountIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTo
 import { collectItemIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesItemLedger";
 import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 import { StaffEntityNavIcon } from "@/components/entity/StaffEntityIcon";
-import { LOAN_LIABILITY_ENTITY_ICON_PATH } from "@/lib/loanLiabilityEntityIcon";
 import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesStaffLedger";
 import { collectInterCompanyIdsForPendingApproval } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
@@ -650,34 +648,17 @@ export function AppSidebar() {
         {pendingCount}
       </span>
     ) : null;
-    const iconEl =
-      item.id === "staff" ? (
-        <AttachmentHoverPortal
-          clickOpensPreview
-          triggerClassName="relative flex shrink-0 cursor-pointer items-center justify-center overflow-visible [&_svg]:size-5 [&_img]:size-5"
-          preview={<PublicStaticImagePreviewBody url={staffNavIconPreviewUrl} />}
-        >
-          <StaffEntityNavIcon />
-          {pendingBadgeEl}
-        </AttachmentHoverPortal>
-      ) : (
-        <span className="relative flex shrink-0 items-center justify-center overflow-visible [&_svg]:size-5 [&_img]:size-5">
-          <item.icon />
-          {pendingBadgeEl}
-        </span>
-      );
+    const iconEl = (
+      <span className="relative flex shrink-0 items-center justify-center overflow-visible [&_svg]:size-5 [&_img]:size-5">
+        <item.icon />
+        {pendingBadgeEl}
+      </span>
+    );
     const button = (
       <SidebarMenuButton isActive={isMenuItemActive(item)} tooltip={tooltipText} data-theme-nav={item.id}>
         {iconEl}
         {isOpen && (
-          <span className="flex min-w-0 flex-1 items-center gap-1">
-            <span className="truncate">{item.label}</span>
-            {item.id === "reports" ? (
-              <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] leading-none">
-                Experimental
-              </Badge>
-            ) : null}
-          </span>
+          <span className="truncate">{item.label}</span>
         )}
       </SidebarMenuButton>
     );
@@ -767,7 +748,6 @@ export function AppSidebar() {
   const sidebarBrandPreviewUrl =
     trimEntityFileUrlForPreview(company?.logoUrl) || publicAssetUrl("/app-icon.png");
   const sidebarBrandAppIconUrl = publicAssetUrl("/app-icon.png");
-  const staffNavIconPreviewUrl = publicAssetUrl(LOAN_LIABILITY_ENTITY_ICON_PATH);
   const sidebarBrandIconEl = (
     <div
       data-pl-sidebar-brand-icon

@@ -1,18 +1,10 @@
 "use client";
 
-import { useVouchers } from "@/hooks/useVouchers";
-import { useState, useMemo } from "react";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../ui/card";
-import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
+import { useCallback, useMemo, useState } from "react";
 import { useDate } from "@/hooks/useDate";
+import { useCompany } from "@/hooks/useCompany";
 import { useCalendarMonths } from "@/hooks/use-mobile";
-import BsDatePicker from "../ui/BsDatePicker";
-import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-import { Button } from "../ui/button";
-import { cn } from "@/lib/utils";
-import { format } from "date-fns";
-import { Calendar as CalendarIcon, Printer } from "lucide-react";
-import { Calendar } from "../ui/calendar";
 import {
   Table,
   TableBody,
@@ -21,143 +13,173 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  collectGstrInvoiceTaxAccountIds,
+  formatGstrDrCrAmount,
+  gstrTaxPaymentAmount,
+  gstrVoucherInDateRange,
+  isGstrTaxAccountPayment,
+  resolveGstrSalePurchaseAmounts,
+  resolveGstrVoucherDateSpan,
+} from "@/lib/reports/gstrVoucherAmounts";
+import { openGstr3bPrint } from "@/lib/reports/gstrReportPrint";
+import { GstrDateRangeControls, GstrReportShell, GstrReportTableScroll, GSTR_TABLE_CLASS, GSTR_AMOUNT_DR_CN, GSTR_AMOUNT_CR_CN, gstrAmountClass, gstrFormatCurrency, GstrSelectableTableRow, useGstrReportDateRange } from "@/components/reports/GstrReportShell";
+import { cn } from "@/lib/utils";
 
 export function GSTR3BReport() {
-  const { vouchers, loading, processedParties } = useVouchers();
-  const [dateRange, setDateRange] = useState<DateRange | undefined>();
-  const { dateSystem, formatCurrency, formatDate, formatDateBS } = useDate();
+  const { company } = useCompany();
+  const { vouchers } = useFyScopedVouchers();
+  const { dateRange, setDateRange, clearDateRange } = useGstrReportDateRange();
+  const { dateSystem, formatCurrency, formatCurrencyForPrint, formatDate, formatDateBS } = useDate();
   const calendarMonths = useCalendarMonths();
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
+  const showDrCr = company?.showDrCr ?? true;
+  const money = (amount: number, side: "dr" | "cr") => gstrFormatCurrency(formatCurrency, amount, side, showDrCr);
+
+  const gstVouchers = useMemo(
+    () => vouchers.filter((v) => v.type === "sale" || v.type === "purchase"),
+    [vouchers]
+  );
+  const invoiceTaxAccountIds = useMemo(() => collectGstrInvoiceTaxAccountIds(vouchers), [vouchers]);
+  const taxSettlementVouchers = useMemo(
+    () => vouchers.filter((v) => isGstrTaxAccountPayment(v, invoiceTaxAccountIds)),
+    [vouchers, invoiceTaxAccountIds]
+  );
+  const allTimeRange = useMemo(
+    () => resolveGstrVoucherDateSpan([...gstVouchers, ...taxSettlementVouchers]),
+    [gstVouchers, taxSettlementVouchers]
+  );
 
   const gstr3bData = useMemo(() => {
-    let filtered = vouchers.filter(v => ['sale', 'purchase'].includes(v.type));
-    
-    if (dateRange?.from) {
-      const from = dateRange.from;
-      const to = dateRange.to || from;
-      filtered = filtered.filter(v => {
-        const vDate = v.date?.toDate ? v.date.toDate() : new Date(v.date);
-        return vDate >= from && vDate <= to;
-      });
-    }
+    const filtered = gstVouchers.filter((v) => gstrVoucherInDateRange(v, dateRange));
+    const taxPayments = taxSettlementVouchers.filter((v) => gstrVoucherInDateRange(v, dateRange));
 
-    const sales = filtered.filter(v => v.type === 'sale');
-    const purchases = filtered.filter(v => v.type === 'purchase');
+    const sales = filtered.filter((v) => v.type === "sale");
+    const purchases = filtered.filter((v) => v.type === "purchase");
+    const paidRows = taxPayments.filter((v) => v.type === "payment_out");
+    const receivedRows = taxPayments.filter((v) => v.type === "payment_in");
 
-    const salesTotal = sales.reduce((sum, v) => sum + Number(v.subTotal || v.total || 0), 0);
-    const salesTax = sales.reduce((sum, v) => sum + Number(v.taxAmount || 0), 0);
-    const purchaseTotal = purchases.reduce((sum, v) => sum + Number(v.subTotal || v.total || 0), 0);
-    const purchaseTax = purchases.reduce((sum, v) => sum + Number(v.taxAmount || 0), 0);
-    const netTax = salesTax - purchaseTax;
+    const sumBucket = (rows: typeof filtered) =>
+      rows.reduce(
+        (acc, v) => {
+          const { taxableAmount, taxAmount, totalAmount } = resolveGstrSalePurchaseAmounts(v);
+          acc.taxableAmount += taxableAmount;
+          acc.taxAmount += taxAmount;
+          acc.totalAmount += totalAmount;
+          return acc;
+        },
+        { taxableAmount: 0, taxAmount: 0, totalAmount: 0 }
+      );
+
+    const salesAgg = sumBucket(sales);
+    const purchasesAgg = sumBucket(purchases);
+    const taxPaid = paidRows.reduce((sum, v) => sum + gstrTaxPaymentAmount(v), 0);
+    const taxReceived = receivedRows.reduce((sum, v) => sum + gstrTaxPaymentAmount(v), 0);
+    const netTax = salesAgg.taxAmount - purchasesAgg.taxAmount - taxPaid + taxReceived;
 
     return {
       sales: {
         count: sales.length,
-        taxableAmount: salesTotal,
-        taxAmount: salesTax,
-        totalAmount: salesTotal + salesTax,
+        ...salesAgg,
       },
       purchases: {
         count: purchases.length,
-        taxableAmount: purchaseTotal,
-        taxAmount: purchaseTax,
-        totalAmount: purchaseTotal + purchaseTax,
+        ...purchasesAgg,
       },
+      taxPaid: { count: paidRows.length, amount: taxPaid },
+      taxReceived: { count: receivedRows.length, amount: taxReceived },
       netTax,
     };
-  }, [vouchers, dateRange]);
+  }, [gstVouchers, taxSettlementVouchers, dateRange]);
+
+  const handlePrint = useCallback(() => {
+    if (!company) return;
+    void openGstr3bPrint({
+      company,
+      dateSystem,
+      dateRange,
+      allTimeRange,
+      formatDate,
+      formatDateBS,
+      data: gstr3bData,
+      formatAmount: (amount, side) =>
+        formatGstrDrCrAmount(formatCurrencyForPrint, amount, side, showDrCr),
+    });
+  }, [company, dateSystem, dateRange, allTimeRange, formatDate, formatDateBS, formatCurrencyForPrint, gstr3bData, showDrCr]);
 
   return (
-    <div className="p-4 sm:p-6 md:p-8 space-y-4 h-full flex flex-col overflow-hidden">
-      <Card className="flex-1 flex flex-col min-h-0">
-        <CardHeader className="flex-shrink-0">
-          <div className="flex justify-between items-center">
-            <div>
-              <CardTitle>GSTR-3B</CardTitle>
-              <CardDescription>Monthly summary return of sales and purchases.</CardDescription>
-            </div>
-            <Button variant="outline" size="icon" onClick={() => window.print()}>
-              <Printer className="h-4 w-4" />
-            </Button>
-          </div>
-          <div className="flex items-center gap-2 pt-4">
-            {(dateSystem === 'BS' || dateSystem === 'Both') && (
-              <BsDatePicker valueAD={dateRange} onChangeAD={(range) => setDateRange(range as DateRange)} />
-            )}
-            {(dateSystem === 'AD' || dateSystem === 'Both') && (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    id="date"
-                    variant={"outline"}
-                    className={cn("w-auto justify-start text-left font-normal", !dateRange && "text-muted-foreground")}
-                  >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {dateRange?.from ? (
-                      dateRange.to ? (
-                        <>
-                          {format(dateRange.from, "LLL dd, y")} -{" "}
-                          {format(dateRange.to, "LLL dd, y")}
-                        </>
-                      ) : (
-                        format(dateRange.from, "LLL dd, y")
-                      )
-                    ) : (
-                      <span>Pick a date range</span>
-                    )}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    initialFocus
-                    mode="range"
-                    defaultMonth={dateRange?.from}
-                    selected={asCalendarRange(dateRange)}
-                    onSelect={setDateRange}
-                    numberOfMonths={calendarMonths}
-                  />
-                </PopoverContent>
-              </Popover>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="flex-1 flex flex-col min-h-0 p-0">
-          <ScrollArea className="flex-1">
-            <Table>
-              <TableHeader className="sticky top-0 bg-background z-10">
-                <TableRow>
-                  <TableHead>Description</TableHead>
-                  <TableHead className="text-right">Count</TableHead>
-                  <TableHead className="text-right">Taxable Amount</TableHead>
-                  <TableHead className="text-right">Tax Amount</TableHead>
-                  <TableHead className="text-right">Total Amount</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <TableRow>
-                  <TableCell className="font-semibold">Outward Supplies (Sales)</TableCell>
-                  <TableCell className="text-right">{gstr3bData.sales.count}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(gstr3bData.sales.taxableAmount)}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(gstr3bData.sales.taxAmount)}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(gstr3bData.sales.totalAmount)}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell className="font-semibold">Inward Supplies (Purchases)</TableCell>
-                  <TableCell className="text-right">{gstr3bData.purchases.count}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(gstr3bData.purchases.taxableAmount)}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(gstr3bData.purchases.taxAmount)}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(gstr3bData.purchases.totalAmount)}</TableCell>
-                </TableRow>
-                <TableRow className="bg-muted font-bold">
-                  <TableCell>Net Tax Payable</TableCell>
-                  <TableCell colSpan={3}></TableCell>
-                  <TableCell className="text-right">{formatCurrency(gstr3bData.netTax)}</TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-          </ScrollArea>
-        </CardContent>
-      </Card>
-    </div>
+    <GstrReportShell
+      title="GSTR-3B"
+      description="Monthly summary return of sales and purchases."
+      onPrint={handlePrint}
+      dateControls={
+        <GstrDateRangeControls
+          dateRange={dateRange}
+          setDateRange={setDateRange}
+          onClear={clearDateRange}
+          dateSystem={dateSystem}
+          calendarMonths={calendarMonths}
+          allTimeRange={allTimeRange}
+        />
+      }
+    >
+      <GstrReportTableScroll>
+        <Table scrollContainer={false} className={GSTR_TABLE_CLASS}>
+          <TableHeader className="sticky top-0 z-10 bg-card">
+            <TableRow>
+              <TableHead>Description</TableHead>
+              <TableHead className="text-right">Count</TableHead>
+              <TableHead className="text-right">Taxable Amount</TableHead>
+              <TableHead className="text-right">Tax Amount</TableHead>
+              <TableHead className="text-right">Total Amount</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <GstrSelectableTableRow rowId="sales" selectedRowId={selectedRowId} onSelect={setSelectedRowId}>
+              <TableCell className="font-semibold">Outward Supplies (Sales)</TableCell>
+              <TableCell className="text-right tabular-nums">{gstr3bData.sales.count}</TableCell>
+              <TableCell className={GSTR_AMOUNT_DR_CN}>{money(gstr3bData.sales.taxableAmount, "dr")}</TableCell>
+              <TableCell className={GSTR_AMOUNT_DR_CN}>{money(gstr3bData.sales.taxAmount, "dr")}</TableCell>
+              <TableCell className={GSTR_AMOUNT_DR_CN}>{money(gstr3bData.sales.totalAmount, "dr")}</TableCell>
+            </GstrSelectableTableRow>
+            <GstrSelectableTableRow rowId="purchases" selectedRowId={selectedRowId} onSelect={setSelectedRowId}>
+              <TableCell className="font-semibold">Inward Supplies (Purchases)</TableCell>
+              <TableCell className="text-right tabular-nums">{gstr3bData.purchases.count}</TableCell>
+              <TableCell className={GSTR_AMOUNT_CR_CN}>{money(gstr3bData.purchases.taxableAmount, "cr")}</TableCell>
+              <TableCell className={GSTR_AMOUNT_CR_CN}>{money(gstr3bData.purchases.taxAmount, "cr")}</TableCell>
+              <TableCell className={GSTR_AMOUNT_CR_CN}>{money(gstr3bData.purchases.totalAmount, "cr")}</TableCell>
+            </GstrSelectableTableRow>
+            <GstrSelectableTableRow rowId="taxPaid" selectedRowId={selectedRowId} onSelect={setSelectedRowId}>
+              <TableCell className="font-semibold">Net Tax Paid</TableCell>
+              <TableCell className="text-right tabular-nums">{gstr3bData.taxPaid.count}</TableCell>
+              <TableCell />
+              <TableCell className={GSTR_AMOUNT_CR_CN}>{money(gstr3bData.taxPaid.amount, "cr")}</TableCell>
+              <TableCell />
+            </GstrSelectableTableRow>
+            <GstrSelectableTableRow rowId="taxReceived" selectedRowId={selectedRowId} onSelect={setSelectedRowId}>
+              <TableCell className="font-semibold">Net Tax Received</TableCell>
+              <TableCell className="text-right tabular-nums">{gstr3bData.taxReceived.count}</TableCell>
+              <TableCell />
+              <TableCell className={GSTR_AMOUNT_DR_CN}>{money(gstr3bData.taxReceived.amount, "dr")}</TableCell>
+              <TableCell />
+            </GstrSelectableTableRow>
+            <GstrSelectableTableRow rowId="netPayable" selectedRowId={selectedRowId} onSelect={setSelectedRowId}>
+              <TableCell />
+              <TableCell />
+              <TableCell />
+              <TableCell className={cn(gstrAmountClass(gstr3bData.netTax >= 0 ? "dr" : "cr"), "font-bold")}>
+                <div className="flex items-baseline justify-end gap-2 whitespace-nowrap">
+                  <span>Net Tax Payable</span>
+                  <span className="tabular-nums">
+                    {money(gstr3bData.netTax, gstr3bData.netTax >= 0 ? "dr" : "cr")}
+                  </span>
+                </div>
+              </TableCell>
+              <TableCell />
+            </GstrSelectableTableRow>
+          </TableBody>
+        </Table>
+      </GstrReportTableScroll>
+    </GstrReportShell>
   );
 }

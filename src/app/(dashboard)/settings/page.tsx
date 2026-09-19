@@ -46,10 +46,10 @@ const SETTINGS_NAV_INSET_X = "px-[4px]";
 /** Settings nav column — dashboard-jaisa halka sky fill + baen ribbon; device cards se grid gap 5px (page grid). */
 /** Settings nav shell — normal 1px black border (pehle `border-2` moti dikhti thi) */
 const SETTINGS_LIST_SHELL =
-  "app-chrome-sidebar-ribbon pl-settings-list-shell w-full min-w-0 rounded-lg border border-black pl-dashboard-ribbon-sky overflow-hidden shadow-sm dark:border-black";
+  "app-chrome-sidebar-ribbon pl-settings-list-shell pl-dashboard-tone-card pl-dashboard-ribbon-emerald w-full min-w-0 rounded-lg border bg-card overflow-hidden shadow-none";
 /** Header ↔ items split — 1px divider */
 const SETTINGS_LIST_HEADER_RULE =
-  "border-b border-black dark:border-black";
+  "border-b border-emerald-400/55";
 /** Mobile detail: footer bar — 1px divider */
 const SETTINGS_MOBILE_DETAIL_FOOTER_RULE =
   "border-t border-black bg-background dark:border-black";
@@ -63,13 +63,13 @@ const SETTINGS_LIST_SHEET_RIGHT_EDGE_OPTS: EdgeSwipeDocumentOptions = { edgeWidt
  */
 function settingsNavRowClass(isActive: boolean, isDanger?: boolean) {
   return cn(
-    "min-w-0 max-w-full w-full overflow-hidden py-2 px-3 cursor-pointer border rounded-md transition-all duration-200",
+    "pl-settings-nav-row pl-dashboard-tone-card pl-dashboard-ribbon-emerald",
+    "min-w-0 max-w-full w-full overflow-hidden rounded-lg border bg-card py-2 px-3 shadow-none",
+    "cursor-pointer transition-all duration-200",
     "flex items-center gap-3 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-    isActive
-      ? "border-black bg-secondary shadow-sm font-medium"
-      : "border-black hover:bg-muted/30",
+    isActive ? "font-medium ring-1 ring-inset ring-emerald-500/40" : "hover:brightness-[0.98]",
     isDanger && !isActive && "text-destructive hover:text-destructive",
-    isDanger && isActive && "text-destructive border-black"
+    isDanger && isActive && "text-destructive"
   );
 }
 

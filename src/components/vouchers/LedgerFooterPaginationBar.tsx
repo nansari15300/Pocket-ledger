@@ -22,6 +22,8 @@ import {
   ledgerFooterRowCn,
 } from "@/components/vouchers/ledgerFooterChrome";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
+import { NESTED_LEDGER_FOOTER_DROPDOWN_CONTENT_CN } from "@/lib/nestedLedgerMasterEditPresentation";
+import type { MasterEditPresentationMode } from "@/lib/nestedLedgerMasterEditPresentation";
 import { cn } from "@/lib/utils";
 
 export type LedgerFooterPaginationBarProps = {
@@ -46,6 +48,7 @@ export type LedgerFooterPaginationBarProps = {
   hideSort?: boolean;
   /** Reconciling footer: Trxn count alag pill me — parent ke andar mat dikhao */
   hideTotalCount?: boolean;
+  ledgerPresentationMode?: MasterEditPresentationMode;
 };
 
 /**
@@ -70,14 +73,17 @@ export function LedgerFooterPaginationBar({
   className,
   hideSort = false,
   hideTotalCount = false,
+  ledgerPresentationMode = "default",
 }: LedgerFooterPaginationBarProps) {
   const options = rowsPerPageOptions as readonly number[];
+  const footerDropdownCn =
+    ledgerPresentationMode === "nested-ledger" ? NESTED_LEDGER_FOOTER_DROPDOWN_CONTENT_CN : undefined;
 
   return (
     <div
       className={cn(
         ledgerFooterRowCn,
-        "flex-shrink-0 justify-end overflow-x-auto scrollbar-slim-dim",
+        "flex-shrink-0 justify-end overflow-x-auto pl-ledger-footer-scroll",
         !hideSort && "sm:ml-auto",
         className
       )}
@@ -90,6 +96,7 @@ export function LedgerFooterPaginationBar({
           viewMode={viewMode}
           chromePill
           className={ledgerFooterPillBtnCn}
+          menuContentClassName={footerDropdownCn}
         />
       ) : null}
       <LedgerFooterParentPill>
@@ -124,7 +131,7 @@ export function LedgerFooterPaginationBar({
           >
             <SelectValue placeholder={rowsPerPageSelectValue} />
           </SelectTrigger>
-          <SelectContent side="top">
+          <SelectContent side="top" className={footerDropdownCn}>
             {options.map((pageSize) => (
               <SelectItem key={pageSize} value={`${pageSize}`}>
                 {pageSize}

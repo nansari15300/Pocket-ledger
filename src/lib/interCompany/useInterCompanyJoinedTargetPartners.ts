@@ -36,6 +36,11 @@ import {
   lookupInterCompanyByCompanyCodeFirebase,
 } from "@/lib/interCompany/interCompanyFirebaseCompanyLookup";
 import { isPureLocalInterCompanyCompanyFromShape } from "@/lib/interCompany/localInterCompanyPolicy";
+import {
+  connectInviteLabelForPartner,
+  subscribeConnectInvitesForEmail,
+  type InterCompanyConnectInviteHost,
+} from "@/lib/interCompany/interCompanyConnectUserInvites";
 
 /** Public profile → partner row (Inter Co. A/c company doc par hai — yahan sirf code/PAN/phone) */
 function partnerRowFromPublicProfile(
@@ -80,8 +85,11 @@ function partnerKindLabel(c: Company): string[] | undefined {
 export function useInterCompanyJoinedTargetPartners(
   allCompanies: Company[] | undefined,
   sourceCompanyId: string | null | undefined,
-  userId: string | null | undefined
+  userId: string | null | undefined,
+  userEmail: string | null | undefined = null
 ) {
+  const [connectInviteHosts, setConnectInviteHosts] = useState<InterCompanyConnectInviteHost[]>([]);
+  const [inviteProfileRows, setInviteProfileRows] = useState<InterCompanyPartnerRow[]>([]);
   const [sourceJoinedCompanyIds, setSourceJoinedCompanyIds] = useState<string[]>([]);
   const [joinedIdsByCompanyId, setJoinedIdsByCompanyId] = useState<Map<string, string[]>>(new Map());
   const [ownedGroups, setOwnedGroups] = useState<InterCompanyGroupDoc[]>([]);
@@ -100,6 +108,16 @@ export function useInterCompanyJoinedTargetPartners(
     }
     return [...byId.values()];
   }, [ownedGroups, linkedPublicSystems]);
+
+  useEffect(() => {
+    if (!userEmail) {
+      setConnectInviteHosts([]);
+      return;
+    }
+    return subscribeConnectInvitesForEmail(userEmail, setConnectInviteHosts, (err) =>
+      console.warn("[IC voucher] connect invites:", err)
+    );
+  }, [userEmail]);
 
   useEffect(() => {
     if (!sourceCompanyId) {
@@ -225,6 +243,58 @@ export function useInterCompanyJoinedTargetPartners(
     };
   }, [allCompanies, systemPartnerIds.join("|"), sourceCompanyId, systemTargetEntries]);
 
+  const connectInviteByCompanyId = useMemo(() => {
+    const map = new Map<string, InterCompanyConnectInviteHost>();
+    for (const h of connectInviteHosts) {
+      if (h.hostCompanyId) map.set(h.hostCompanyId, h);
+    }
+    return map;
+  }, [connectInviteHosts]);
+
+  const missingInviteCompanyIds = useMemo(() => {
+    const localIds = new Set((allCompanies || []).map((c) => c?.id).filter(Boolean) as string[]);
+    return connectInviteHosts
+      .map((h) => h.hostCompanyId)
+      .filter((id) => id && id !== sourceCompanyId && !localIds.has(id));
+  }, [connectInviteHosts, allCompanies, sourceCompanyId]);
+
+  useEffect(() => {
+    if (!missingInviteCompanyIds.length) {
+      setInviteProfileRows([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchInterCompanyPublicCompanyProfiles(missingInviteCompanyIds).then((map) => {
+      if (cancelled) return;
+      const rows = missingInviteCompanyIds
+        .map((id) => {
+          const profile = map.get(id);
+          const grant = connectInviteByCompanyId.get(id);
+          const name =
+            grant?.hostCompanyName ||
+            (profile ? String(profile.name || id).trim() : id);
+          if (!profile) {
+            return {
+              id,
+              name,
+              acNo: "",
+              companyCode: "",
+              pan: "",
+              mobile: "",
+              isShared: true,
+              systemNames: ["Connect User"],
+            } satisfies InterCompanyPartnerRow;
+          }
+          return partnerRowFromPublicProfile(id, profile, ["Connect User"]);
+        })
+        .filter((r): r is InterCompanyPartnerRow => r != null);
+      setInviteProfileRows(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [missingInviteCompanyIds.join("|"), connectInviteByCompanyId]);
+
   const rememberFirebaseHit = useCallback((hit: InterCompanyPartnerRow) => {
     if (!hit?.id) return;
     setFirebaseExtraRows((prev) => {
@@ -252,8 +322,11 @@ export function useInterCompanyJoinedTargetPartners(
       const prev = byId.get(row.id);
       byId.set(row.id, prev ? { ...prev, ...row } : row);
     }
+    for (const row of inviteProfileRows) {
+      if (!byId.has(row.id)) byId.set(row.id, row);
+    }
     return [...byId.values()];
-  }, [allCompanies, profileRows, firebaseExtraRows]);
+  }, [allCompanies, profileRows, firebaseExtraRows, inviteProfileRows]);
 
   /** Dropdown: my + shared + local + remote joined; source exclude; local↔online allowed */
   const joinedPartners = useMemo(() => {
@@ -291,6 +364,30 @@ export function useInterCompanyJoinedTargetPartners(
       }
     }
 
+    for (const grant of connectInviteHosts) {
+      const partnerId = grant.hostCompanyId;
+      if (!partnerId || partnerId === sourceCompanyId) continue;
+      const existing = byId.get(partnerId) || mergedAllRows.find((r) => r.id === partnerId);
+      const baseName =
+        existing?.name ||
+        grant.hostCompanyName ||
+        partnerId;
+      const tag = "Connect User";
+      const systemNames = existing?.systemNames?.includes(tag)
+        ? existing.systemNames
+        : [...(existing?.systemNames || []), tag];
+      byId.set(partnerId, {
+        id: partnerId,
+        name: baseName,
+        acNo: existing?.acNo || "",
+        companyCode: existing?.companyCode || "",
+        pan: existing?.pan || "",
+        mobile: existing?.mobile || "",
+        isShared: true,
+        systemNames,
+      });
+    }
+
     return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [
     mergedAllRows,
@@ -298,6 +395,7 @@ export function useInterCompanyJoinedTargetPartners(
     systemTargetEntries,
     acceptedLinksForSource,
     sourceCompanyId,
+    connectInviteHosts,
   ]);
 
   const directory = useMemo(
@@ -312,10 +410,20 @@ export function useInterCompanyJoinedTargetPartners(
     return map;
   }, [mergedAllRows, joinedPartners]);
 
-  const optionLabel = useCallback((p: InterCompanyPartnerRow) => {
-    if (p.systemNames?.length) return `${p.name} (${p.systemNames[0]})`;
-    return p.name;
-  }, []);
+  const optionLabel = useCallback(
+    (p: InterCompanyPartnerRow) => {
+      const grant = connectInviteByCompanyId.get(p.id);
+      const displayName = connectInviteLabelForPartner(p.name, grant);
+      if (p.systemNames?.includes("Connect User")) {
+        return grant && !grant.showCompanyName
+          ? "Connected company (Connect User)"
+          : `${displayName} (Connect User)`;
+      }
+      if (p.systemNames?.length) return `${displayName} (${p.systemNames[0]})`;
+      return displayName;
+    },
+    [connectInviteByCompanyId]
+  );
 
   const comboboxOptions = useMemo(
     () => joinedPartners.map((p) => ({ value: p.id, label: optionLabel(p) })),
@@ -386,5 +494,7 @@ export function useInterCompanyJoinedTargetPartners(
     joinedPartners,
     profilesLoading,
     partnerRowById,
+    connectInviteHosts,
+    connectInviteByCompanyId,
   };
 }

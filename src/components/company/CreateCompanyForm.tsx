@@ -55,6 +55,8 @@ import { planCompanyCapWithAddOns } from "@/lib/planAddOns";
 import { countOnlineCompanySlotsForOwner, maxOnlineCompaniesForPlan } from "@/lib/companyOnlineSlots";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
 import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
+import { getFiscalYearConventionLabel } from "@/lib/companyFyVoucherSuggestion";
+import { Checkbox } from "@/components/ui/checkbox";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { upsertLocalCompany } from "@/lib/localCompanyStore";
 import { type LocalCompanyUserRecord, upsertUserInList } from "@/lib/localCompanyUsers";
@@ -1080,7 +1082,8 @@ export function CreateCompanyForm({
 
         <Separator />
         
-        <div className="grid grid-cols-2 gap-2 sm:gap-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+          <div className="grid grid-cols-2 gap-2 sm:gap-4 lg:flex-1 lg:min-w-0">
           <FormField
             control={form.control}
             name="fiscalYearStart"
@@ -1146,6 +1149,20 @@ export function CreateCompanyForm({
               </FormItem>
             )}
           />
+          <p className="col-span-2 text-xs text-muted-foreground">
+            Suggested from country ({getFiscalYearConventionLabel(selectedCountry)}). Change dates to set how fiscal
+            years divide in this company.
+          </p>
+          </div>
+          <div className="flex items-start gap-2 rounded-md border border-border/80 bg-muted/30 p-3 lg:w-[min(100%,18rem)] lg:shrink-0">
+            <Checkbox id="fy-auto-split-create-company" checked disabled className="mt-0.5 shrink-0" />
+            <Label
+              htmlFor="fy-auto-split-create-company"
+              className="cursor-default text-sm font-normal leading-snug text-muted-foreground"
+            >
+              auto split by selected date for upcoming fy
+            </Label>
+          </div>
         </div>
 
         <div className="flex justify-end gap-4 pt-4">

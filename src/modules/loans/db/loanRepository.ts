@@ -79,6 +79,26 @@ export async function saveTransaction(tx: LoanTransaction): Promise<string> {
   return upsertDoc(tx.companyId, LOAN_COLLECTIONS.transactions, tx.id, tx as unknown as Record<string, unknown>);
 }
 
+export async function deleteTransaction(companyId: string, transactionId: string): Promise<void> {
+  const res = await writeLoanEntity({
+    companyId,
+    collectionName: LOAN_COLLECTIONS.transactions,
+    docId: transactionId,
+    operation: "delete",
+  });
+  if (res.ok === false) throw new Error(res.error || "Failed to delete loan transaction");
+}
+
+export async function deleteCharge(companyId: string, chargeId: string): Promise<void> {
+  const res = await writeLoanEntity({
+    companyId,
+    collectionName: LOAN_COLLECTIONS.charges,
+    docId: chargeId,
+    operation: "delete",
+  });
+  if (res.ok === false) throw new Error(res.error || "Failed to delete loan charge");
+}
+
 export async function listTransactions(companyId: string, loanId: string): Promise<LoanTransaction[]> {
   const rows = await listCollection<LoanTransaction>(companyId, LOAN_COLLECTIONS.transactions);
   return rows

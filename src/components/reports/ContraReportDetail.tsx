@@ -8,8 +8,10 @@ import { Input } from "@/components/ui/input";
 import { AccountDetails } from "@/components/account/AccountDetails";
 import { AccountList } from "@/components/bank-cash/AccountList";
 import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
+import { ReportRegisterDesktopSplit } from "@/components/reports/ReportRegisterDesktopSplit";
+import { ReportRegisterListHeading } from "@/components/reports/ReportRegisterListHeading";
 import type { Account } from "@/components/bank-cash/types";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { PermissionButton } from "@/components/permission";
@@ -21,7 +23,7 @@ export function ContraReportDetail() {
   const isMobile = useIsMobile();
   const searchParams = useSearchParams();
   const { formatCurrency, formatCurrencyForPrint } = useDate();
-  const { vouchers: allVouchers, loading: vouchersLoading, processedAccounts, userNames } = useVouchers();
+  const { vouchers: allVouchers, loading: vouchersLoading, processedAccounts, userNames } = useFyScopedVouchers();
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [searchTerm, setSearchTerm] = useState("");
@@ -187,47 +189,44 @@ export function ContraReportDetail() {
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-[minmax(280px,max-content)_minmax(0,1fr)] min-h-0 overflow-hidden">
-        <div className="flex flex-col min-h-0 border-r overflow-hidden bg-muted/30">
-          <div className="p-4 border-b space-y-3 flex-shrink-0">
-            <h2 className="text-lg font-bold font-headline">Contra</h2>
-            <AddVoucherDialog onVoucherCreated={() => {}} defaultTab="contra">
-              <PermissionButton permission="create_records" className="w-full">
-                <PlusCircle className="mr-2 h-4 w-4" /> Create Contra Entry
-              </PermissionButton>
-            </AddVoucherDialog>
-            <Card className="p-3 text-center">
-              <p className="text-xs text-muted-foreground">Total Transferred</p>
-              <p className="text-xl font-bold text-blue-600">
-                {formatCurrency(totalContra, { noSuffix: true })}
-              </p>
-            </Card>
-          </div>
-          <div className="p-3 border-b flex-shrink-0">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search accounts..."
-                className="pl-9"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+      <ReportRegisterDesktopSplit
+        listPanel={
+          <>
+            <div className="p-4 border-b space-y-3 flex-shrink-0">
+              <ReportRegisterListHeading>Contra</ReportRegisterListHeading>
+              <Card className="p-3 text-center">
+                <p className="text-xs text-muted-foreground">Total Transferred</p>
+                <p className="text-xl font-bold text-blue-600">
+                  {formatCurrency(totalContra, { noSuffix: true })}
+                </p>
+              </Card>
+            </div>
+            <div className="p-3 border-b flex-shrink-0">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search accounts..."
+                  className="pl-9"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
+              <h3 className="text-sm font-semibold">Accounts ({filteredAccounts.length})</h3>
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <AccountList
+                accounts={filteredAccounts}
+                onSelectAccount={handleSelectAccount}
+                selectedAccount={selectedAccount}
+                searchTerm={searchTerm}
               />
             </div>
-          </div>
-          <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
-            <h3 className="text-sm font-semibold">Accounts ({filteredAccounts.length})</h3>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <AccountList
-              accounts={filteredAccounts}
-              onSelectAccount={handleSelectAccount}
-              selectedAccount={selectedAccount}
-              searchTerm={searchTerm}
-            />
-          </div>
-        </div>
-        <div className="flex flex-col min-h-0 overflow-hidden">
-          {currentAccount ? (
+          </>
+        }
+        detailPanel={
+          currentAccount ? (
             <AccountDetails
               account={currentAccount as any}
               allAccounts={processedAccounts}
@@ -258,9 +257,9 @@ export function ContraReportDetail() {
                 </CardContent>
               </Card>
             </div>
-          )}
-        </div>
-      </div>
+          )
+        }
+      />
     </div>
   );
 }

@@ -37,7 +37,7 @@ export type MastersPrintBuildParams = {
 };
 
 const DEFAULT_AD_FORMAT: ADFormatKey = "yyyy-MM-dd";
-const DEFAULT_BS_FORMAT: BSFormatKey = "YYYY-MM-DD";
+const DEFAULT_BS_FORMAT: BSFormatKey = "MMM DD, YYYY";
 
 function getStoredDateFormatAD(): ADFormatKey {
   if (typeof window === "undefined") return DEFAULT_AD_FORMAT;

@@ -62,18 +62,41 @@ export function noteVoucherToLoanTransaction(
   };
 }
 
+/** Live (not deleted) voucher ids from the in-memory voucher list. `null` = list not ready yet. */
+export function liveJournalIdSetFromVouchers(
+  vouchers: Record<string, unknown>[] | null | undefined,
+  opts?: { skipWhenEmptyLoading?: boolean }
+): Set<string> | null {
+  const list = vouchers || [];
+  if (opts?.skipWhenEmptyLoading && list.length === 0) return null;
+  const ids = new Set<string>();
+  for (const v of list) {
+    if (!v || v.isDeleted === true) continue;
+    const id = String(v.id || "").trim();
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
+export function loanTxnHasLiveJournal(txn: LoanTransaction, liveJournalIds: Set<string> | null): boolean {
+  const id = String(txn.journalEntryId || "").trim();
+  if (!id) return false;
+  if (!liveJournalIds) return true;
+  return liveJournalIds.has(id);
+}
+
 /** Loan journal rows + staff note vouchers for the loan liability account. */
 export function mergeLoanAccountingTransactions(
   loanTxns: LoanTransaction[],
   vouchers: Record<string, unknown>[] | null | undefined,
   staffAccountId: string,
   loanId: string,
-  companyId: string
+  companyId: string,
+  liveJournalIds?: Set<string> | null
 ): LoanTransaction[] {
-  const journalIds = new Set(
-    loanTxns.map((t) => t.journalEntryId).filter((id): id is string => Boolean(id))
-  );
-  const base = loanTxns.filter((t) => Boolean(t.journalEntryId));
+  const liveIds = liveJournalIds === undefined ? liveJournalIdSetFromVouchers(vouchers) : liveJournalIds;
+  const base = loanTxns.filter((t) => loanTxnHasLiveJournal(t, liveIds));
+  const journalIds = new Set(base.map((t) => String(t.journalEntryId || "")).filter(Boolean));
   const noteRows: LoanTransaction[] = [];
   for (const v of vouchers || []) {
     if (!v || v.isDeleted) continue;

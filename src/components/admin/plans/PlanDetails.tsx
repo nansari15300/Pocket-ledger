@@ -158,7 +158,35 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
         editablePlan.regionalPrices?.nepal?.yearly,
     ]);
 
+    const compressKbRangeValidation = useMemo(() => {
+        const e = editablePlan.entitlements;
+        const readKb = (key: EntitlementKey) => {
+            const v = e[key];
+            const n = typeof v === "number" ? v : Number(v ?? 0);
+            return Number.isFinite(n) ? n : 0;
+        };
+        const onlineMin = readKb("minCompressImageKb");
+        const onlineMax = readKb("maxCompressImageKb");
+        const localMin = readKb("minCompressImageKbLocal");
+        const localMax = readKb("maxCompressImageKbLocal");
+        const invalidOnline = onlineMin > 0 && onlineMax > 0 && onlineMax < onlineMin;
+        const invalidLocal = localMin > 0 && localMax > 0 && localMax < localMin;
+        return {
+            invalid: invalidOnline || invalidLocal,
+            onlineMinFloor: invalidOnline ? onlineMin : null,
+            localMinFloor: invalidLocal ? localMin : null,
+        };
+    }, [editablePlan.entitlements]);
+
     const handleSave = async () => {
+        if (compressKbRangeValidation.invalid) {
+            toast({
+                variant: "destructive",
+                title: "Invalid compress range",
+                description: "Max KB must be greater than Min KB.",
+            });
+            return;
+        }
         setIsUpdating(true);
         const success = await onSave(editablePlan);
         if (success) {
@@ -398,7 +426,11 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                             className="w-24 h-9"
                         />
                     </div>
-                    <Button onClick={handleSave} disabled={isUpdating} className="self-end">
+                    <Button
+                        onClick={handleSave}
+                        disabled={isUpdating || compressKbRangeValidation.invalid}
+                        className="self-end"
+                    >
                         <Save className="mr-2 h-4 w-4" /> Save Changes
                     </Button>
                 </div>
@@ -622,16 +654,13 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                             raw: string
                         ) => {
                             const value = parseCompressKb(raw);
-                            setEditablePlan((prev) => {
-                                const nextEnt = { ...prev.entitlements, [side === "min" ? minKey : maxKey]: value };
-                                const a = Number(nextEnt[minKey] ?? 0);
-                                const b = Number(nextEnt[maxKey] ?? 0);
-                                if (a > 0 && b > 0 && a > b) {
-                                    nextEnt[minKey] = b;
-                                    nextEnt[maxKey] = a;
-                                }
-                                return { ...prev, entitlements: nextEnt };
-                            });
+                            setEditablePlan((prev) => ({
+                                ...prev,
+                                entitlements: {
+                                    ...prev.entitlements,
+                                    [side === "min" ? minKey : maxKey]: value,
+                                },
+                            }));
                         };
                         const compressInputCn =
                             "h-7 min-h-7 max-h-7 w-10 min-w-[2.25rem] flex-1 max-w-[3.25rem] px-1.5 py-0 text-xs text-center shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:outline-none";
@@ -648,7 +677,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                 </div>
                                 {uiVariant === "compressKb" && onlineMin && localMin ? (
                                     <div className="space-y-1.5">
-                                        <div className="flex w-full min-w-0 items-center gap-1">
+                                        <div className="flex w-full min-w-0 items-start gap-1">
                                             <Input
                                                 id={`${plan.id}-${onlineMin}`}
                                                 type="number"
@@ -662,28 +691,40 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                                 aria-label="Compress from KB online"
                                                 className={compressInputCn}
                                             />
-                                            <span className="shrink-0 text-[10px] text-muted-foreground">–</span>
-                                            <Input
-                                                id={`${plan.id}-${online}`}
-                                                type="number"
-                                                min={0}
-                                                value={String(Number.isFinite(onlineNum) ? onlineNum : 0)}
-                                                onChange={(e) =>
-                                                    handleCompressRangeChange(onlineMin, online, "max", e.target.value)
-                                                }
-                                                placeholder="100"
-                                                data-pl-compress-online-max=""
-                                                aria-label="Compress to KB online"
-                                                className={compressInputCn}
-                                            />
-                                            <span className={cn(compressChipCn, "w-8 bg-muted/60 text-muted-foreground")}>
+                                            <span className="mt-1.5 shrink-0 text-[10px] text-muted-foreground">–</span>
+                                            <div className="flex min-w-0 flex-1 flex-col items-center">
+                                                <Input
+                                                    id={`${plan.id}-${online}`}
+                                                    type="number"
+                                                    min={0}
+                                                    value={String(Number.isFinite(onlineNum) ? onlineNum : 0)}
+                                                    onChange={(e) =>
+                                                        handleCompressRangeChange(onlineMin, online, "max", e.target.value)
+                                                    }
+                                                    placeholder="100"
+                                                    data-pl-compress-online-max=""
+                                                    aria-label="Compress to KB online"
+                                                    aria-invalid={compressKbRangeValidation.onlineMinFloor != null}
+                                                    className={cn(
+                                                        compressInputCn,
+                                                        compressKbRangeValidation.onlineMinFloor != null &&
+                                                            "border-destructive focus-visible:ring-destructive"
+                                                    )}
+                                                />
+                                                {compressKbRangeValidation.onlineMinFloor != null ? (
+                                                    <p className="mt-0.5 w-full text-center text-[10px] leading-tight text-destructive">
+                                                        must be Morethan {compressKbRangeValidation.onlineMinFloor}
+                                                    </p>
+                                                ) : null}
+                                            </div>
+                                            <span className={cn(compressChipCn, "mt-0 w-8 bg-muted/60 text-muted-foreground")}>
                                                 KB
                                             </span>
-                                            <span className={cn(compressChipCn, "w-[3.75rem] border-blue-200 bg-blue-50/80 text-blue-900")}>
+                                            <span className={cn(compressChipCn, "mt-0 w-[3.75rem] border-blue-200 bg-blue-50/80 text-blue-900")}>
                                                 Online
                                             </span>
                                         </div>
-                                        <div className="flex w-full min-w-0 items-center gap-1">
+                                        <div className="flex w-full min-w-0 items-start gap-1">
                                             <Input
                                                 id={`${plan.id}-${localMin}`}
                                                 type="number"
@@ -697,24 +738,36 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                                 aria-label="Compress from KB offline"
                                                 className={compressInputCn}
                                             />
-                                            <span className="shrink-0 text-[10px] text-muted-foreground">–</span>
-                                            <Input
-                                                id={`${plan.id}-${local}`}
-                                                type="number"
-                                                min={0}
-                                                value={String(Number.isFinite(localNum) ? localNum : 0)}
-                                                onChange={(e) =>
-                                                    handleCompressRangeChange(localMin, local, "max", e.target.value)
-                                                }
-                                                placeholder="150"
-                                                disabled={pairDisabled}
-                                                aria-label="Compress to KB offline"
-                                                className={compressInputCn}
-                                            />
-                                            <span className={cn(compressChipCn, "w-8 bg-muted/60 text-muted-foreground")}>
+                                            <span className="mt-1.5 shrink-0 text-[10px] text-muted-foreground">–</span>
+                                            <div className="flex min-w-0 flex-1 flex-col items-center">
+                                                <Input
+                                                    id={`${plan.id}-${local}`}
+                                                    type="number"
+                                                    min={0}
+                                                    value={String(Number.isFinite(localNum) ? localNum : 0)}
+                                                    onChange={(e) =>
+                                                        handleCompressRangeChange(localMin, local, "max", e.target.value)
+                                                    }
+                                                    placeholder="150"
+                                                    disabled={pairDisabled}
+                                                    aria-label="Compress to KB offline"
+                                                    aria-invalid={compressKbRangeValidation.localMinFloor != null}
+                                                    className={cn(
+                                                        compressInputCn,
+                                                        compressKbRangeValidation.localMinFloor != null &&
+                                                            "border-destructive focus-visible:ring-destructive"
+                                                    )}
+                                                />
+                                                {compressKbRangeValidation.localMinFloor != null ? (
+                                                    <p className="mt-0.5 w-full text-center text-[10px] leading-tight text-destructive">
+                                                        must be Morethan {compressKbRangeValidation.localMinFloor}
+                                                    </p>
+                                                ) : null}
+                                            </div>
+                                            <span className={cn(compressChipCn, "mt-0 w-8 bg-muted/60 text-muted-foreground")}>
                                                 KB
                                             </span>
-                                            <span className={cn(compressChipCn, "w-[3.75rem] border-blue-200 bg-blue-50/80 text-blue-900")}>
+                                            <span className={cn(compressChipCn, "mt-0 w-[3.75rem] border-blue-200 bg-blue-50/80 text-blue-900")}>
                                                 Offline
                                             </span>
                                         </div>

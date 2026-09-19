@@ -48,6 +48,7 @@ export type TransactionTableSortDropdownProps = {
   /** PC footer: chrome pill trigger (global ledger footer). */
   chromePill?: boolean;
   className?: string;
+  menuContentClassName?: string;
 };
 
 /** Footer sort dropdown: list options with ascending/descending arrow on the right of each. */
@@ -58,6 +59,7 @@ export function TransactionTableSortDropdown({
   viewMode = "statement",
   chromePill: chromePillProp,
   className,
+  menuContentClassName,
 }: TransactionTableSortDropdownProps) {
   const isMobile = useIsMobile();
   // PC ledger footer: default chrome pill jab caller ne override na kiya ho.
@@ -81,7 +83,7 @@ export function TransactionTableSortDropdown({
           </span>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
+      <DropdownMenuContent align="end" className={cn("w-56", menuContentClassName)}>
         {visibleOptions.map((opt) => (
           <DropdownMenuItem
             key={opt.value}

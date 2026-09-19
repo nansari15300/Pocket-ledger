@@ -22,6 +22,7 @@ import {
   shouldBindFirebaseLedgerChangeFeed,
 } from "@/lib/firebaseLedgerSyncPolicy";
 import { notifyBrowserDbCollectionUpdated } from "@/lib/localCompanyDocMirror";
+import { LEDGER_STATEMENT_CHECKS_COLLECTION } from "@/lib/ledgerStatementCheckPersist";
 
 const VOUCHER_FORM_MASTER_COLLECTION_PATHS = new Set([
   "vouchers",
@@ -37,17 +38,22 @@ const VOUCHER_FORM_MASTER_COLLECTION_PATHS = new Set([
   "staff_groups",
   "tax_groups",
   "expense_groups",
+  LEDGER_STATEMENT_CHECKS_COLLECTION,
 ]);
+
+function ledgerRouteCollections(...collections: string[]): Set<string> {
+  return new Set([...collections, LEDGER_STATEMENT_CHECKS_COLLECTION]);
+}
 
 function activeDeltaCollectionsForRoute(pathname: string): Set<string> {
   const route = String(pathname || "").trim().toLowerCase();
-  if (route.startsWith("/bank-cash")) return new Set(["vouchers", "bank_accounts", "account_groups"]);
-  if (route.startsWith("/party")) return new Set(["vouchers", "parties", "groups", "expense_accounts"]);
-  if (route.startsWith("/staff")) return new Set(["vouchers", "staff", "staff_groups"]);
-  if (route.startsWith("/loans")) return new Set(["vouchers", "staff", "staff_groups", "bank_accounts", "account_groups", "expense_accounts", "expense_groups", "loans", "loan_schedules", "loan_transactions", "loan_rate_history", "loan_charges", "loan_audit_logs", "loan_settings", "loan_documents"]);
-  if (route.startsWith("/tax")) return new Set(["vouchers", "taxes", "tax_groups"]);
-  if (route.startsWith("/items")) return new Set(["vouchers", "items", "item_groups"]);
-  if (route.startsWith("/incomes")) return new Set(["vouchers", "expense_accounts", "expense_groups"]);
+  if (route.startsWith("/bank-cash")) return ledgerRouteCollections("vouchers", "bank_accounts", "account_groups");
+  if (route.startsWith("/party")) return ledgerRouteCollections("vouchers", "parties", "groups", "expense_accounts");
+  if (route.startsWith("/staff")) return ledgerRouteCollections("vouchers", "staff", "staff_groups");
+  if (route.startsWith("/loans")) return ledgerRouteCollections("vouchers", "staff", "staff_groups", "bank_accounts", "account_groups", "expense_accounts", "expense_groups", "loans", "loan_schedules", "loan_transactions", "loan_rate_history", "loan_charges", "loan_audit_logs", "loan_settings", "loan_documents");
+  if (route.startsWith("/tax")) return ledgerRouteCollections("vouchers", "taxes", "tax_groups");
+  if (route.startsWith("/items")) return ledgerRouteCollections("vouchers", "items", "item_groups");
+  if (route.startsWith("/incomes")) return ledgerRouteCollections("vouchers", "expense_accounts", "expense_groups");
   if (route.startsWith("/company") || route.startsWith("/admin") || route === "/" || route === "") {
     return new Set();
   }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Landmark } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,13 +37,11 @@ import { effectiveRepaymentType, installmentAmountLabel, isNonEmiRepayment } fro
 import { resolveExistingLoanExpenseDefaults } from "../utils/loanExpenseAccountLookup";
 import { isLoanLiabilityStaff } from "../utils/loanLiabilityStaff";
 import { buildScheduleAndPreview } from "../services/loanCalculationService";
-import type { ConvertedBankLoanLink } from "../services/convertExistingBankToLoanAccount";
 import { todayIso } from "../utils/loanDateUtils";
 import { useDate } from "@/hooks/useDate";
 import { LoanSystemDateField, LoanTableDateCell, LoanTableDateHead, useFormatLoanIso } from "./LoanSystemDateField";
 import { useVouchers } from "@/hooks/useVouchers";
 import { LoanHelpInfo } from "./LoanHelpInfo";
-import { ConvertExistingBankAccountDialog } from "./ConvertExistingBankAccountDialog";
 import { LoanAccountingAccountTile, LOAN_ACCOUNTING_COMBO_TRIGGER_CLASS } from "./LoanAccountingAccountTile";
 
 const methodLabel: Record<string, string> = {
@@ -192,7 +189,6 @@ export function LoanForm({
   const [preview, setPreview] = useState<LoanPreview | null>(null);
   const [previewRows, setPreviewRows] = useState<GeneratedScheduleRow[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [convertOpen, setConvertOpen] = useState(false);
   const expenseDefaultsApplied = useRef(false);
   const [extraStaff, setExtraStaff] = useState<{ value: string; label: string }[]>(() =>
     initial?.loanAccountId
@@ -286,23 +282,6 @@ export function LoanForm({
     });
     setPreview(null);
     setPreviewRows([]);
-  };
-
-  const applyConvertedBank = (link: ConvertedBankLoanLink) => {
-    setExtraStaff((prev) => [{ value: link.loanAccountId, label: link.loanName }, ...prev.filter((r) => r.value !== link.loanAccountId)]);
-    setForm((prev) => ({
-      ...prev,
-      loanName: link.loanName,
-      lenderName: link.lenderName,
-      lenderType: "Bank",
-      bankAccountId: link.bankAccountId,
-      loanAccountId: link.loanAccountId,
-      createLoanAccount: false,
-      convertedFromBankAccountId: link.bankAccountId,
-    }));
-    setPreview(null);
-    setPreviewRows([]);
-    setError(null);
   };
 
   const repaymentType = effectiveRepaymentType(form.repaymentType);
@@ -494,8 +473,8 @@ export function LoanForm({
         void onSave(form);
       }}
     >
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
+      <div className="mb-3">
         <div>
           <div className="flex items-center gap-1.5">
             <h1 className="text-xl font-semibold">{mode === "edit" ? "Edit Loan Account" : "Create Loan Account"}</h1>
@@ -503,32 +482,13 @@ export function LoanForm({
           </div>
           <p className="text-sm text-muted-foreground">
             {mode === "edit"
-              ? lockPostedFields
-                ? "Name, lender, and notes can be changed. Amounts and schedule stay locked after disbursement — use Rate Change or Prepayment."
-                : "Update the loan, then Calculate Schedule and Save."
+              ? "Update any field, then Calculate Schedule and Save. Disbursement journal is updated on Save."
               : "Fill the loan, then Calculate Schedule and Save. Click (i) for full help."}
           </p>
         </div>
-        {mode === "create" ? (
-          <div className="flex items-center gap-1.5">
-            <Button type="button" variant="outline" className="gap-2" onClick={() => setConvertOpen(true)}>
-              <Landmark className="h-4 w-4" aria-hidden />
-              Add Existing Account
-            </Button>
-            <LoanHelpInfo introKey="addExistingAccount" />
-          </div>
-        ) : null}
       </div>
 
-      {mode === "create" ? (
-      <ConvertExistingBankAccountDialog
-        open={convertOpen}
-        onOpenChange={setConvertOpen}
-        accounts={bankAccounts}
-        onConverted={applyConvertedBank}
-      />
-      ) : null}
-
+      <div className="flex flex-col gap-[6px]">
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Basic Information</CardTitle>
@@ -590,16 +550,16 @@ export function LoanForm({
         </CardContent>
       </Card>
 
-      <div className={lockPostedFields ? "pointer-events-none space-y-4 opacity-70" : "contents"}>
+      <div className={lockPostedFields ? "pointer-events-none flex flex-col gap-[6px] opacity-70" : "contents"}>
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Financial Information</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-2">
-          <Field label="Principal Amount" introKey="principalAmount">
+          <Field label="Sanctioned Amount" introKey="principalAmount">
             <Input type="number" min={0} step="0.01" value={form.principalAmount || ""} onChange={(e) => set("principalAmount", Number(e.target.value) || 0)} />
           </Field>
-          <Field label="Disbursed Amount" introKey="disbursedAmount">
+          <Field label={mode === "create" ? "First Disbursement" : "Disbursed Amount"} introKey="disbursedAmount">
             <Input type="number" min={0} step="0.01" value={form.disbursedAmount || ""} onChange={(e) => set("disbursedAmount", Number(e.target.value) || 0)} />
           </Field>
           <Field label="Interest Method" introKey="interestMethod" optionIntroKey={`opt:interestMethod:${form.interestMethod}`}>
@@ -987,6 +947,7 @@ export function LoanForm({
         </Card>
       ) : null}
 
+      </div>
       </div>
       <div className="flex-shrink-0 border-t bg-background px-4 py-3">
         {error ? <p className="mb-2 text-sm text-destructive">{error}</p> : null}

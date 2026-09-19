@@ -51,6 +51,7 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
+import { nestedLedgerChildDialogShell } from "@/lib/nestedLedgerMasterEditPresentation";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -112,6 +113,7 @@ import {
 } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
+import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillLabel";
@@ -139,6 +141,7 @@ import {
   sortAndRebalancePageTransactions,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
+import { applyStatementCheckModeHiddenToLedgerList } from "@/lib/statementCheckModeLedger";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { SpendWiseBlinkInfoDialog } from "../vouchers/SpendWiseBlinkInfoDialog";
 import { doc, getDoc } from "firebase/firestore";
@@ -151,7 +154,9 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
-import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { MasterLedgerDateRangePresetRow } from "@/components/ui/MasterLedgerDateRangePresetRow";
+import { useEnsureEntityMinTxnsInScope } from "@/hooks/useEnsureEntityMinTxnsInScope";
+import { ledgerMasterDateRangeLabel } from "@/lib/ledgerMasterDefaultView";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -180,6 +185,7 @@ import {
 } from "@/lib/spendWiseDateRangeGroups";
 import { applySpendWiseStatementRunningBalances } from "@/lib/spendWiseStatementRunningBalance";
 import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
+import { useBankSpendWiseView } from "@/hooks/useBankSpendWiseView";
 import {
   applyBankDrCrPerspectiveToTxnRows,
   bankLedgerTxnColumnLabels,
@@ -199,6 +205,7 @@ interface AccountDetailsProps {
   transactions?: any[];
   /** Master-detail mobile: "Showing x of y" title row me — set ho to niche duplicate row nahi */
   onMobileVoucherListStatsChange?: (stats: { showing: number; total: number } | null) => void;
+  ledgerPresentationMode?: import("@/lib/nestedLedgerMasterEditPresentation").MasterEditPresentationMode;
 }
 
 export function AccountDetails({
@@ -212,7 +219,13 @@ export function AccountDetails({
   userNames,
   transactions,
   onMobileVoucherListStatsChange,
+  ledgerPresentationMode = "default",
 }: AccountDetailsProps) {
+  const nestedLedgerNoteDialogShell =
+    ledgerPresentationMode === "nested-ledger"
+      ? nestedLedgerChildDialogShell("h-[95vh] w-full max-w-3xl flex flex-col")
+      : { overlayClassName: undefined, className: "h-[95vh] w-full max-w-3xl flex flex-col" };
+  useFyLoadOnDateRangeChange(dateRange);
   const { company, companyId } = useCompany();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatRunning } =
     useDate();
@@ -248,24 +261,7 @@ export function AccountDetails({
   const [mobileFooterDialogOpen, setMobileFooterDialogOpen] = useState<null | "payment_in" | "payment_out" | "contra">(null);
   const [mobileSearchTerm, setMobileSearchTerm] = useState("");
   const [isDateSearchMode, setIsDateSearchMode] = useState(false);
-  const BANK_SPEND_WISE_VIEW_KEY = "bank-cash-spendWiseView";
-  const [spendWiseView, setSpendWiseViewState] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return localStorage.getItem(BANK_SPEND_WISE_VIEW_KEY) === "true";
-    } catch {
-      return false;
-    }
-  });
-  const setSpendWiseView = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
-    setSpendWiseViewState((prev) => {
-      const next = typeof value === "function" ? value(prev) : value;
-      try {
-        localStorage.setItem(BANK_SPEND_WISE_VIEW_KEY, next ? "true" : "false");
-      } catch {}
-      return next;
-    });
-  }, []);
+  const { spendWiseView, setSpendWiseView } = useBankSpendWiseView();
   const ledgerViewMode: LedgerDetailViewMode = spendWiseView ? "spend_wise" : "statement";
   const { perspective: bankDrCrPerspective, setPerspective: setBankDrCrPerspective } =
     useBankLedgerDrCrPerspective();
@@ -766,6 +762,14 @@ export function AccountDetails({
     );
   }, [displayTransactions, filterByUnapprovedOnly, unapprovedOnly, spendWiseView, ledgerOpeningForRunning, company]);
 
+  useEnsureEntityMinTxnsInScope({
+    dateRange,
+    entityId: account?.id,
+    entityKind: "account",
+    entityTxnCount: sortedTransactions.length,
+    enabled: Boolean(account?.id),
+  });
+
   // Check mode: hide/mark rows; statement view par running balance dubara (spend-wise par filter only)
   const [statementKeyboardNav, setStatementKeyboardNav] = useState<
     ReadonlyArray<{ id?: string; _rowKey?: string }>
@@ -779,13 +783,17 @@ export function AccountDetails({
     keyboardNavTransactions: statementKeyboardNav,
   });
   const ledgerSortedTransactions = useMemo(() => {
-    const filtered = statementCheck.filterTransactions([...sortedTransactions]);
-    if (!statementCheck.checkModeActive || spendWiseView) return filtered;
-    return recomputeRunningBalanceTopToBottom(filtered, ledgerOpeningForRunning);
+    if (spendWiseView) return statementCheck.filterTransactions([...sortedTransactions]);
+    return applyStatementCheckModeHiddenToLedgerList(sortedTransactions, {
+      checkModeActive: statementCheck.checkModeActive,
+      hiddenIds: statementCheck.hiddenIds,
+      openingBalance: ledgerOpeningForRunning,
+    });
   }, [
     sortedTransactions,
     statementCheck.filterTransactions,
     statementCheck.checkModeActive,
+    statementCheck.hiddenIds,
     spendWiseView,
     ledgerOpeningForRunning,
   ]);
@@ -795,11 +803,11 @@ export function AccountDetails({
     if (!spendWiseView) return ledgerSortedTransactions as any[];
     const rows = filterByUnapprovedOnly(baseTransactions);
     const sorted = sortTransactionsWithFiscalMergeForCompany(rows, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company);
-    const filtered = statementCheck.filterTransactions([...sorted]);
-    if (statementCheck.checkModeActive) {
-      return recomputeRunningBalanceTopToBottom(filtered, ledgerOpeningForRunning);
-    }
-    return filtered;
+    return applyStatementCheckModeHiddenToLedgerList(sorted, {
+      checkModeActive: statementCheck.checkModeActive,
+      hiddenIds: statementCheck.hiddenIds,
+      openingBalance: ledgerOpeningForRunning,
+    });
   }, [
     spendWiseView,
     ledgerSortedTransactions,
@@ -1519,13 +1527,10 @@ export function AccountDetails({
     filteredMobileTransactions.length,
   ]);
 
-  const dateRangeLabel = useMemo(() => {
-    // Bina date filter = Party/Bank entity reports jaisa "All Time" (na ki Last N Txns label)
-    if (!dateRange || (dateRange.from == null && dateRange.to == null)) {
-      return "All Time";
-    }
-    return buildDateRangeText();
-  }, [dateRange, dateSystem, formatDateBS, formatDate]);
+  const dateRangeLabel = useMemo(
+    () => ledgerMasterDateRangeLabel(dateRange, buildDateRangeText()),
+    [dateRange, dateSystem, formatDateBS, formatDate]
+  );
 
   const accountNamesMap = useMemo(
     () => ({
@@ -1791,12 +1796,14 @@ export function AccountDetails({
                     {(dateSystem === 'BS' || dateSystem === 'Both') && (
                        <NepaliCalendar
                           rangePresetSlot={
-                            <DateRangePresetRow
+                            <MasterLedgerDateRangePresetRow
                               country={company?.country}
+                              onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                               onApply={(r) => {
                                 onDateRangeChange?.(r);
                                 setIsCalendarOpen(false);
                               }}
+                              onAfterDefault={() => setIsCalendarOpen(false)}
                             />
                           }
                           onSelect={handleNepaliSelect}
@@ -1809,12 +1816,14 @@ export function AccountDetails({
                       <div className="flex-1 w-full min-w-0">
                         <AdCalendar
                           rangePresetSlot={
-                            <DateRangePresetRow
+                            <MasterLedgerDateRangePresetRow
                               country={company?.country}
+                              onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                               onApply={(r) => {
                                 onDateRangeChange?.(r);
                                 setIsCalendarOpen(false);
                               }}
+                              onAfterDefault={() => setIsCalendarOpen(false)}
                             />
                           }
                           valueAD={dateRange}
@@ -1912,6 +1921,7 @@ export function AccountDetails({
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
                   isRange
+                  masterLedgerDatePresets
                   valueAD={dateRange}
                   onChangeAD={onDateRangeChangeWithUnapprovedReset}
                   transactionDates={transactionDates}
@@ -1945,11 +1955,16 @@ export function AccountDetails({
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
                       rangePresetSlot={
-                        <DateRangePresetRow
+                        <MasterLedgerDateRangePresetRow
                           country={company?.country}
+                          onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
                             setTempDateRange(r);
                             onDateRangeChange(r);
+                            setIsDesktopCalendarOpen(false);
+                          }}
+                          onAfterDefault={() => {
+                            setTempDateRange(undefined);
                             setIsDesktopCalendarOpen(false);
                           }}
                         />
@@ -2003,7 +2018,7 @@ export function AccountDetails({
         {/* Opening-balance documents: no preview strip here—only File column tick on opening row (openingBalanceAttachmentUrls). */}
 
         {/* TABLE AREA - Statement = running balance; Bill wise = per-row outstanding (same as PartyDetails) */}
-        <div className="flex-1 flex flex-col min-h-0 overflow-x-auto scrollbar-slim-dim">
+        <div className="flex-1 flex flex-col min-h-0 overflow-x-auto pl-ledger-txn-scroll-native">
           <div className={cn("py-4 min-w-0", spendWiseView ? "p-[2px]" : "flex-1 flex flex-col min-h-0")}>
             {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}
             <MasterAccountFreezeTxnShell
@@ -2075,7 +2090,7 @@ export function AccountDetails({
                 onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
-              <LedgerFooterColumnsMenu>
+              <LedgerFooterColumnsMenu ledgerPresentationMode={ledgerPresentationMode}>
                 <DropdownMenuContent align="start" className="w-52 p-2">
                   {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
                     .filter((key) => key !== "status")
@@ -2189,6 +2204,7 @@ export function AccountDetails({
           beforeCount={ledgerFooterPagingCounts.beforeCount}
           afterCount={ledgerFooterPagingCounts.afterCount}
           totalCount={ledgerFooterPagingCounts.totalCount}
+          ledgerPresentationMode={ledgerPresentationMode}
         />
       </div>
   );
@@ -2212,7 +2228,10 @@ export function AccountDetails({
           }
         }}
       >
-        <DialogContent className="h-[95vh] w-full max-w-3xl flex flex-col">
+        <DialogContent
+          overlayClassName={nestedLedgerNoteDialogShell.overlayClassName}
+          className={nestedLedgerNoteDialogShell.className}
+        >
           <DialogHeader>
             <DialogTitle>Add a New Note for {account.accountName}</DialogTitle>
             <DialogDescription>

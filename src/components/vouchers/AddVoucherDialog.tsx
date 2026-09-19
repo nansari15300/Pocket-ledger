@@ -60,6 +60,7 @@ import { routeHasVoucherFormMastersLoaded, useVouchers, VoucherProvider } from "
 import { determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { HistoryDialog } from "./HistoryDialog";
 import { toast } from "sonner";
+import { cancelVoucherInFlightWork } from "@/lib/voucherSaveUi";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -3685,6 +3686,7 @@ export function AddVoucherDialog(props: any) {
       setCommittedAutoMonthlyEnabled(false);
     }
     if (status === "cancelled") {
+      cancelVoucherInFlightWork();
       setPostCopyNewFormSeed(null);
       setCopyMismatchCategories([]);
       setCopySourceVoucherSnapshot(null);
@@ -4721,11 +4723,14 @@ export function AddVoucherDialog(props: any) {
    */
   const handleDialogOpenChange = useCallback(
     (open: boolean) => {
-      if (!open && !suppressDashboardRedirectGuard) {
-        plNavDbg("AddVoucherDialog.onClose (dialog root)", {
-          ledgerModalWide: ledgerModalGuardWide,
-        });
-        armDashboardRedirectGuard(router, { isMobile: ledgerModalGuardWide });
+      if (!open) {
+        cancelVoucherInFlightWork();
+        if (!suppressDashboardRedirectGuard) {
+          plNavDbg("AddVoucherDialog.onClose (dialog root)", {
+            ledgerModalWide: ledgerModalGuardWide,
+          });
+          armDashboardRedirectGuard(router, { isMobile: ledgerModalGuardWide });
+        }
       }
       setDialogOpen(open);
     },

@@ -276,7 +276,7 @@ export const LOAN_FORM_INTROS: Record<string, LoanIntroSet> = {
       title: "Disbursed Amount",
       paragraphs: [
         "Disbursed Amount is the money actually credited to your Bank/Cash. It may equal Principal, or be less if the bank released the facility in part. It cannot exceed Principal and cannot be negative.",
-        "The repayment schedule and outstanding principal start from Disbursed Amount, not from a higher sanctioned figure that never entered the bank. If the bank later releases another tranche, record that as a separate loan or as an additional disbursement process — this form posts one disbursement journal for this amount when that option is on.",
+        "The repayment schedule and outstanding principal start from Disbursed Amount, not from a higher sanctioned figure that never entered the bank. Later tranches use Add Disbursement on the loan details screen — this form posts only the first draw.",
         "If you leave it blank or zero, Pocket Ledger copies Principal into Disbursed when you first type Principal, so a fully drawn loan needs only one amount.",
       ],
     },

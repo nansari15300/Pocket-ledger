@@ -103,6 +103,7 @@ import {
 } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
+import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
@@ -155,7 +156,9 @@ import { pushIncomeExpenseAccountSwitch } from "@/lib/incomeExpenseDetailNav";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
-import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { MasterLedgerDateRangePresetRow } from "@/components/ui/MasterLedgerDateRangePresetRow";
+import { useEnsureEntityMinTxnsInScope } from "@/hooks/useEnsureEntityMinTxnsInScope";
+import { ledgerMasterDateRangeLabel } from "@/lib/ledgerMasterDefaultView";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -199,6 +202,7 @@ export function ExpenseAccountDetails({
   mobileFooterVariant = "ledger",
   mobileReportStickyTitle,
 }: ExpenseAccountDetailsProps) {
+  useFyLoadOnDateRangeChange(dateRange);
   const { company, companyId } = useCompany();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatRunning } =
     useDate();
@@ -457,6 +461,14 @@ export function ExpenseAccountDetails({
     [displayTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
   );
 
+  useEnsureEntityMinTxnsInScope({
+    dateRange,
+    entityId: account?.id,
+    entityKind: "expense",
+    entityTxnCount: sortedTransactions.length,
+    enabled: Boolean(account?.id),
+  });
+
 
   const balanceText = useMemo(() => {
     if (closingBalance === 0) return "Settled Up";
@@ -615,6 +627,11 @@ export function ExpenseAccountDetails({
     return `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
   };
 
+  const dateRangeLabel = useMemo(
+    () => ledgerMasterDateRangeLabel(dateRange, buildDateRangeText()),
+    [dateRange, dateSystem, formatDateBS, formatDate]
+  );
+
   const handlePrint = () => {
     if (!company) return;
     const dateRangeText = buildDateRangeText();
@@ -664,8 +681,6 @@ export function ExpenseAccountDetails({
       true
     );
   };
-
-  const dateRangeLabel = buildDateRangeText();
 
   const handleMobileBack = useCallback(() => {
     if (mobileFooterDialogOpen) {
@@ -811,6 +826,7 @@ export function ExpenseAccountDetails({
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
                   isRange
+                  masterLedgerDatePresets
                   valueAD={dateRange}
                   onChangeAD={onDateRangeChange || (() => {})}
                   transactionDates={transactionDates}
@@ -843,11 +859,16 @@ export function ExpenseAccountDetails({
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
                       rangePresetSlot={
-                        <DateRangePresetRow
+                        <MasterLedgerDateRangePresetRow
                           country={company?.country}
+                          onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
                             setTempDateRange(r);
                             onDateRangeChange?.(r);
+                            setIsDesktopCalendarOpen(false);
+                          }}
+                          onAfterDefault={() => {
+                            setTempDateRange(undefined);
                             setIsDesktopCalendarOpen(false);
                           }}
                         />
@@ -897,7 +918,7 @@ export function ExpenseAccountDetails({
         </div>
 
         {/* TABLE AREA â€” min-h-0: flex-1 ScrollArea shrink ho kar vertical scroll */}
-        <ScrollArea className="min-h-0 flex-1">
+        <ScrollArea txnChrome className="min-h-0 flex-1">
           <div className="py-4">
             <MasterAccountFreezeTxnShell
               overlay={expenseFreezeOverlay}
@@ -1092,11 +1113,7 @@ export function ExpenseAccountDetails({
           {/* Row 2: Last 10 Txns / date range */}
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
             <span className="text-xs font-medium text-muted-foreground">
-              {!dateRange || (dateRange.from == null && dateRange.to == null)
-                ? rowsPerPage > 0
-                  ? `Last ${rowsPerPage} Txns`
-                  : "All Txns"
-                : dateRangeLabel}
+              {dateRangeLabel}
             </span>
             {dateRange != null && (dateRange.from != null || dateRange.to != null) && onDateRangeChange && (
               <button
@@ -1304,12 +1321,14 @@ export function ExpenseAccountDetails({
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <NepaliCalendar
                   rangePresetSlot={
-                    <DateRangePresetRow
+                    <MasterLedgerDateRangePresetRow
                       country={company?.country}
+                      onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                       onApply={(r) => {
                         onDateRangeChange?.(r);
                         setIsCalendarOpen(false);
                       }}
+                      onAfterDefault={() => setIsCalendarOpen(false)}
                     />
                   }
                   onSelect={handleNepaliSelect}
@@ -1322,12 +1341,14 @@ export function ExpenseAccountDetails({
                 <div className="flex-1 w-full min-w-0">
                   <AdCalendar
                     rangePresetSlot={
-                      <DateRangePresetRow
+                      <MasterLedgerDateRangePresetRow
                         country={company?.country}
+                        onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
                           onDateRangeChange?.(r);
                           setIsCalendarOpen(false);
                         }}
+                        onAfterDefault={() => setIsCalendarOpen(false)}
                       />
                     }
                     valueAD={dateRange}
@@ -1405,12 +1426,14 @@ export function ExpenseAccountDetails({
                 {(dateSystem === "BS" || dateSystem === "Both") && (
                   <NepaliCalendar
                     rangePresetSlot={
-                      <DateRangePresetRow
+                      <MasterLedgerDateRangePresetRow
                         country={company?.country}
+                        onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
                           onDateRangeChange?.(r);
                           setIsCalendarOpen(false);
                         }}
+                        onAfterDefault={() => setIsCalendarOpen(false)}
                       />
                     }
                     onSelect={handleNepaliSelect}
@@ -1423,12 +1446,14 @@ export function ExpenseAccountDetails({
                   <div className="flex-1 w-full min-w-0">
                     <AdCalendar
                       rangePresetSlot={
-                        <DateRangePresetRow
+                        <MasterLedgerDateRangePresetRow
                           country={company?.country}
+                          onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
                             onDateRangeChange?.(r);
                             setIsCalendarOpen(false);
                           }}
+                          onAfterDefault={() => setIsCalendarOpen(false)}
                         />
                       }
                       valueAD={dateRange}

@@ -17,9 +17,9 @@ import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/
 /** VoucherSettings defaults se align — prefix na mile to yahi fallback */
 const DEFAULT_PREFIX_LABELS: Record<string, string> = {
   sale: "Sale Inv",
-  sale_service: "SS-",
+  sale_service: "SER-",
   purchase: "PUR-",
-  purchase_service: "PS-",
+  purchase_service: "SER-",
   payment_in: "RCPT-",
   payment_out: "PYMT-",
   contra: "CNTR-",

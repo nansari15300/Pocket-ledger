@@ -12,7 +12,7 @@ import { StaffAccountFallbackIcon } from "@/components/entity/StaffEntityIcon";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { masterEntityAttachmentPreviewUrl } from "@/lib/masterEntityAttachmentPreviewUrl";
-import { MASTER_LIST_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN } from "@/lib/masterListChrome";
+import { MASTER_LIST_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN, masterListShellCn } from "@/lib/masterListChrome";
 import { useCompany } from "@/hooks/useCompany";
 
 export type UnifiedPayee = {
@@ -51,8 +51,8 @@ export function UnifiedPayeeList({
   );
 
   return (
-    <div className="flex flex-col h-full min-h-0 rounded-b-lg border-t-0 bg-transparent">
-      <ScrollArea listChrome className="flex-1 min-h-0">
+    <div className={masterListShellCn} data-theme-list="account-list">
+      <ScrollArea listChrome className="flex-1 min-h-0 min-w-0">
         <ul className="pl-master-list-ul">
           {filteredPayees.map((payee) => {
             const isSelected = selectedPayee?.id === payee.id && selectedPayee?.type === payee.type;

@@ -273,7 +273,7 @@ export function VoucherAttachmentFileIndicator({
         : fileCount > 0
       : readyState === "ready";
   const iconClass = size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4";
-  const thumbClass = size === "sm" ? "h-7 w-7" : "h-8 w-8";
+  const thumbClass = size === "sm" ? "h-8 w-8" : "h-9 w-9";
   const countBadgeClass =
     size === "sm"
       ? "absolute -bottom-0.5 -right-0.5 flex h-3.5 min-w-[0.875rem] items-center justify-center rounded-full border border-background bg-primary px-0.5 text-[8px] font-bold leading-none tabular-nums text-primary-foreground"
@@ -316,11 +316,12 @@ export function VoucherAttachmentFileIndicator({
 
     return (
       <span
+        data-pl-txn-file-thumb=""
         className={cn(
           "relative inline-flex box-border shrink-0 rounded-[4px]",
           thumbClass,
           className,
-          !reuseFrameBackground && "border border-border/80 bg-muted/30"
+          !reuseFrameBackground && "border border-slate-300 bg-white shadow-sm"
         )}
         style={
           reuseFrameBackground
@@ -332,8 +333,8 @@ export function VoucherAttachmentFileIndicator({
       >
         <span
           className={cn(
-            "relative flex h-full w-full items-center justify-center overflow-hidden rounded-[2px]",
-            canShowThumb ? "bg-muted/30" : "bg-muted/40"
+            "relative flex h-full w-full items-center justify-center overflow-hidden rounded-[2px] bg-white",
+            !canShowThumb && "bg-slate-50"
           )}
         >
           {thumbInner}

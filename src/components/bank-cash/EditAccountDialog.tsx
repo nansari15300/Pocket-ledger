@@ -22,7 +22,8 @@ import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageCl
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { MasterDeleteConfirmAlertDialog } from "@/components/common/MasterDeleteConfirmAlertDialog";
+import { permanentDeleteCompanySubdocFromRecycleBin } from "@/lib/recycleBinEntityLifecycle";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import { Input } from "@/components/ui/input";
@@ -80,6 +81,10 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { useAuth } from "@/hooks/useAuth";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import {
+  finalizeMasterOpeningBalanceSideEffects,
+  masterOpeningPatchFromPersisted,
+} from "@/lib/fyPagination/masterOpeningSaveHooks";
 import { FilePreview } from "../vouchers/FilePreview";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
@@ -507,15 +512,29 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           };
           const payload: Record<string, unknown> = { ...base, ...updatePayload, id: accountRefSnap.id, companyId };
           await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", accountRefSnap.id, payload);
-          await enqueueCompanyDocOutbox(companyId, "bank_accounts", "update", accountRefSnap.id, payload);
+          const persisted =
+            (await getCompanyDocFromBrowserDb(companyId, "bank_accounts", accountRefSnap.id)) ?? payload;
+          await enqueueCompanyDocOutbox(companyId, "bank_accounts", "update", accountRefSnap.id, persisted);
           await syncEntityAttachmentsAfterSave(companyId);
+
+          await finalizeMasterOpeningBalanceSideEffects({
+            company,
+            companyId,
+            collection: "bank_accounts",
+            entityId: accountRefSnap.id,
+            oldOpeningBalance,
+            newOpeningBalance,
+            oldOpeningBalanceDate: (accountRefSnap as any).openingBalanceDate,
+            newOpeningBalanceDate: values.openingBalanceDate,
+          });
+
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onAccountUpdated({
             id: accountRefSnap.id,
             ...values,
+            ...masterOpeningPatchFromPersisted(persisted),
             fileUrl: fileUrl || "",
             documentFileUrls,
-            openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
             useFor: {
               in: values.useFor?.in || [],
               out: values.useFor?.out || [],
@@ -547,18 +566,25 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         await updateDoc(accountRef, updatePayload);
         await syncEntityAttachmentsAfterSave(companyId);
 
-        // Automatically balance opening balance change with Capital Account
-        if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
-          const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
-          await balanceOpeningBalanceWithCapital(companyId, "bank_accounts", accountRefSnap.id, oldOpeningBalance, newOpeningBalance);
-        }
+        await finalizeMasterOpeningBalanceSideEffects({
+          company,
+          companyId,
+          collection: "bank_accounts",
+          entityId: accountRefSnap.id,
+          oldOpeningBalance,
+          newOpeningBalance,
+          oldOpeningBalanceDate: (accountRefSnap as any).openingBalanceDate,
+          newOpeningBalanceDate: values.openingBalanceDate,
+        });
 
         onAccountUpdated({
           id: accountRefSnap.id,
           ...values,
+          openingBalance: newOpeningBalance,
+          openingBalanceDate: values.openingBalanceDate,
+          openingBalanceNarration: narrationClean ?? "",
           fileUrl: fileUrl || "",
           documentFileUrls,
-          openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
           useFor: {
             in: values.useFor?.in || [],
             out: values.useFor?.out || [],
@@ -649,6 +675,43 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         setIsLoading(false);
     }
   }
+
+  const handlePermanentDelete = async () => {
+    if (!companyId) {
+      toast({ variant: "destructive", title: "Error", description: "No company selected." });
+      return;
+    }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    if (hasTransactions) {
+      sonnerToast.error("Cannot Delete", { description: "This account has transactions and cannot be deleted." });
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await permanentDeleteCompanySubdocFromRecycleBin(companyId, "bank_accounts", account.id);
+      toast({
+        title: "Account deleted permanently",
+        description: `"${account.accountName}" was permanently deleted.`,
+      });
+      onAccountDeleted(account.id);
+      setIsOpen(false);
+      setIsDeleteDialogOpen(false);
+    } catch (error) {
+      console.error("Error permanently deleting account: ", error);
+      toast({
+        variant: "destructive",
+        title: "Delete Failed",
+        description: "Could not permanently delete the account.",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.[0]) return;
@@ -1164,22 +1227,17 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         </DialogContent>
       </Dialog>
       
-      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-        <AlertDialogContent>
-            <AlertDialogHeader>
-                <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                <AlertDialogDescription>
-                    This action will move the account <span className="font-semibold text-foreground">{account.accountName}</span> to the recycle bin.
-                </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-                <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS}>Cancel</AlertDialogCancel>
-                <AlertDialogAction disabled={apkOfflineViewOnly} onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                    Move to Bin
-                </AlertDialogAction>
-            </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <MasterDeleteConfirmAlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        entityKind="account"
+        entityName={account.accountName}
+        onMoveToBin={handleDelete}
+        onDeletePermanently={handlePermanentDelete}
+        busy={isLoading}
+        moveToBinDisabled={apkOfflineViewOnly}
+        permanentDeleteDisabled={apkOfflineViewOnly}
+      />
       <CreateAccountGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} />
     </>
   );

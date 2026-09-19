@@ -10,10 +10,13 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Textarea } from "../ui/textarea";
 import { ScrollArea } from "../ui/scroll-area";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "../ui/alert-dialog";
+import { VoucherDeleteConfirmAlertDialog } from "@/components/vouchers/VoucherDeleteConfirmAlertDialog";
+import {
+  assertCanPermanentDeleteFromForm,
+  permanentDeleteVoucherFromForm,
+} from "@/lib/permanentDeleteFromForm";
 import { PlusCircle, Trash2, Loader2, CheckCircle, History, Printer } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
 import { format, startOfDay } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { toast as sonnerToast } from "sonner";
@@ -180,7 +183,7 @@ export function CreateProductionForm({
   const { user, customUser } = useAuth();
   const { company, companyId } = useCompany();
   const { dateSystem, formatDate } = useDate();
-  const { can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
+  const { can, role, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const { processedItems } = useVouchers();
   const [items, setItems] = useState<Item[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -697,7 +700,35 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
   };
 
+  const handlePermanentDelete = async () => {
+    if (!voucher?.id || !user || !companyId) return;
+    if (voucher && hasPaymentLinks(voucher)) {
+      toast({ variant: "destructive", title: "Cannot Delete", description: "First unlink linked transactions." });
+      return;
+    }
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+      const isOwnRecord = voucher?.userId === user.uid;
+      assertCanEdit(canEditRecord, isOwnRecord, voucher);
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message || "Permission denied.", variant: "destructive" });
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await permanentDeleteVoucherFromForm(companyId, voucher.id);
+      toast({ title: "Deleted permanently", description: "Production order deleted permanently." });
+      setIsDeleteDialogOpen(false);
+      onVoucherAction?.("cancelled");
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message || "Failed to permanently delete", variant: "destructive" });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
+    <>
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col h-full min-w-0 w-full max-w-full">
         <ScrollArea className="flex-1 min-h-0 overflow-x-hidden min-w-0 w-full px-6 py-4">
@@ -1260,23 +1291,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           {isMobile ? (
             <div className={cn("grid grid-cols-3 gap-2 w-full min-w-0", VOUCHER_BUTTONS_CLASS)}>
               {/* Row 0: Delete (left) | History (middle) | Save & Print (right) */}
-              <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                <AlertDialogTrigger asChild>
-                  <Button type="button" variant="destructive" className="w-full" disabled={!isEditing || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+              <Button type="button" variant="destructive" className="w-full" disabled={!isEditing || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))} onClick={() => setIsDeleteDialogOpen(true)}>
                     Delete
                   </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Delete Production Order</AlertDialogTitle>
-                    <AlertDialogDescription>Are you sure? This action cannot be undone.</AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction onClick={handleDelete}>Delete</AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
               <Button type="button" className={cn("w-full", BTN_HISTORY_CLASS, "opacity-60")} disabled>
                 History
               </Button>
@@ -1306,23 +1323,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="button" disabled className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
                   <History className="mr-2 h-4 w-4" /> History
                 </Button>
-                <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                  <AlertDialogTrigger asChild>
-                    <Button type="button" variant="destructive" size="sm" className="shrink-0 rounded-full" disabled={!isEditing || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                <Button type="button" variant="destructive" size="sm" className="shrink-0 rounded-full" disabled={!isEditing || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))} onClick={() => setIsDeleteDialogOpen(true)}>
                       <Trash2 className="mr-2 h-4 w-4" /> Delete
                     </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Delete Production Order</AlertDialogTitle>
-                      <AlertDialogDescription>Are you sure? This action cannot be undone.</AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={handleDelete}>Delete</AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
               </div>
               <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
@@ -1393,6 +1396,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         )}
       </form>
     </Form>
+    <VoucherDeleteConfirmAlertDialog
+      open={isDeleteDialogOpen}
+      onOpenChange={setIsDeleteDialogOpen}
+      entityKind="production order"
+      entityName={voucher?.productionNumber || form.watch("productionNumber") || "this production order"}
+      onMoveToBin={handleDelete}
+      onDeletePermanently={handlePermanentDelete}
+      busy={isLoading}
+    />
+    </>
   );
 }
 

@@ -325,17 +325,79 @@ export function getPaymentOutPartyLinkAmount(v: any): number {
   return Number(v?.amount ?? v?.total ?? 0) || 0;
 }
 
+/** Infer party/staff account that owns journal other charge when `otherChargePartyAccountId` was not persisted. */
+export function inferJournalOtherChargePartyAccountId(v: any): string {
+  const saved = String(v?.otherChargePartyAccountId ?? "").trim();
+  if (saved) return saved;
+  const charge = Number(v?.otherChargeAmount) || 0;
+  if (charge <= 0 || !Array.isArray(v?.entries)) return "";
+  const debitEntry = v.entries.find((e: any) => (Number(e?.debit) || 0) > 0);
+  const creditEntry = v.entries.find((e: any) => (Number(e?.credit) || 0) > 0);
+  return String(debitEntry?.accountId ?? creditEntry?.accountId ?? "").trim();
+}
+
 /** Journal party/staff line bill-wise linkable amount — excludes voucher-level other charge on that account. */
 export function getJournalPartyBillWiseLinkAmount(v: any, ledgerId: string, lineAmount: number): number {
   const amt = Number(lineAmount) || 0;
   if (amt <= 0) return 0;
   const charge = Number(v?.otherChargeAmount) || 0;
   if (charge <= 0) return amt;
-  const chargeParty = String(v?.otherChargePartyAccountId ?? "").trim();
+  const chargeParty = inferJournalOtherChargePartyAccountId(v);
   if (chargeParty && chargeParty === String(ledgerId)) {
     return Math.max(0, amt - charge);
   }
   return amt;
+}
+
+/**
+ * Bilateral bill-wise sync writes the same link on both vouchers — sum once per counter-voucher id.
+ */
+export function sumDedupedBillWiseAllocatedForVoucher(args: {
+  selfVoucherId: string;
+  incomingEdges: ReadonlyArray<{ src: { id?: string } | null; alloc: unknown }>;
+  outgoingAllocations: ReadonlyArray<Allocation>;
+  includeIncoming?: (src: { id?: string } | null, alloc: unknown) => boolean;
+}): number {
+  const byCounter = new Map<string, number>();
+  const selfId = String(args.selfVoucherId ?? "");
+  for (const { src, alloc } of args.incomingEdges) {
+    const cid = String(src?.id ?? "");
+    if (!cid || cid === selfId) continue;
+    if (args.includeIncoming && !args.includeIncoming(src, alloc)) continue;
+    byCounter.set(cid, Math.max(byCounter.get(cid) ?? 0, getAllocationTotal(alloc as Allocation)));
+  }
+  for (const a of args.outgoingAllocations) {
+    const cid = String(a?.voucherId ?? "");
+    if (!cid || cid === selfId || cid === OPENING_BALANCE_VOUCHER_ID) continue;
+    byCounter.set(cid, Math.max(byCounter.get(cid) ?? 0, getAllocationTotal(a)));
+  }
+  let sum = 0;
+  byCounter.forEach((v) => {
+    sum += v;
+  });
+  return sum;
+}
+
+/** Cap a bill-wise allocation so it never exceeds the target voucher's linkable payee/party leg. */
+export function clampBillWiseAllocationToTarget(allocation: Allocation, targetVoucher: any): Allocation {
+  if (!allocation?.voucherId || !targetVoucher) return allocation;
+  const amt = getAllocationTotal(allocation);
+  if (amt <= 0) return allocation;
+  const ttype = String(targetVoucher?.type ?? "");
+  let cap = amt;
+  if (ttype === "payment_out" || ttype === "direct_expense" || ttype === "contra") {
+    cap = Math.min(cap, getPaymentOutPartyLinkAmount(targetVoucher));
+  } else if (ttype === "journal" || ttype === "adjustment") {
+    const lid = String((allocation as { linkedAccountId?: string }).linkedAccountId ?? "").trim();
+    if (lid) {
+      const partyAmt = getJournalPartyBillWiseAmountFromEntries(targetVoucher, lid);
+      if (partyAmt?.total) cap = Math.min(cap, partyAmt.total);
+    }
+  } else if (isSaleOrPurchaseBillVoucherType(ttype)) {
+    cap = Math.min(cap, Number(targetVoucher?.total ?? targetVoucher?.amount ?? 0) || 0);
+  }
+  if (cap >= amt) return allocation;
+  return { ...allocation, amount: cap };
 }
 
 /** Journal or adjustment party/staff entry Dr/Cr for bill-wise — other charge excluded when charge ties to this account. */

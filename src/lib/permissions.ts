@@ -37,8 +37,6 @@ export type Permission =
   | "edit_link"
   /** Header Copy ledger — doosri company ka party ledger */
   | "copy_ledger_cross_company"
-  /** Split-books FY mode: allow dated entries before company fiscalYearStart */
-  | "edit_prior_fiscal_year_split_books"
   /** Dashboard “Auto recurring” summary card (read accrued / schedules). */
   | "view_recurring_auto_summary"
   /** Company master toggle + run scope (Voucher Settings / dashboard card). */
@@ -153,12 +151,6 @@ export const PermissionGroups: PermissionGroup[] = [
             { key: "edit_link", label: "Edit Link (Unlink / Change allocation)" },
             { key: "copy_ledger_cross_company", label: "Copy ledger across companies" },
         ]
-    },
-    {
-        title: "Fiscal period",
-        permissions: [
-            { key: "edit_prior_fiscal_year_split_books", label: "Edit vouchers before current fiscal year (split books mode)" },
-        ],
     },
     {
         title: "Recurring Auto Voucher",

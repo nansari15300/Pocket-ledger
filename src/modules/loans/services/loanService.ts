@@ -10,13 +10,14 @@ import {
   saveAudit,
   saveLoan,
   saveRateHistory,
+  listTransactions,
   saveScheduleRows,
   saveTransaction,
 } from "../db/loanRepository";
 import { ensureLoanAccountingAccounts } from "./loanAccountMappingService";
 import { buildScheduleAndPreview } from "./loanCalculationService";
 import { materializeSchedule, refreshScheduleStatuses } from "./loanScheduleService";
-import { disbursementLines, postLoanJournal } from "./loanAccountingService";
+import { disbursementLines, postLoanJournal, updateLoanJournal } from "./loanAccountingService";
 import { saveLoanLiabilityAttachments } from "./loanLiabilityAttachmentSave";
 import { effectiveRepaymentType } from "../utils/loanRepaymentType";
 
@@ -290,7 +291,9 @@ export async function updateLoan(params: {
   const { getLoan, listSchedules } = await import("../db/loanRepository");
   const { writeLoanEntity } = await import("../db/loanEntityWrite");
   const { LOAN_UNGROUPED_GROUP_ID } = await import("../constants/loanConstants");
-  const { markHistorical, materializeSchedule, refreshScheduleStatuses } = await import("./loanScheduleService");
+  const { markHistorical, materializeSchedule, regenerateFutureSchedule, refreshScheduleStatuses } =
+    await import("./loanScheduleService");
+  const { currentSchedule } = await import("../db/loanQueries");
 
   const loan = await getLoan(params.companyId, params.loanId);
   if (!loan) throw new Error("Loan not found.");
@@ -311,74 +314,138 @@ export async function updateLoan(params: {
 
   const posted = Boolean(loan.disbursementJournalId);
   const nextName = String(params.input.loanName || loan.loanName).trim();
+  const nextDisbursed = roundMoney(params.input.disbursedAmount || params.input.principalAmount);
+  const { schedule: generated, preview, emiAmount } = buildScheduleAndPreview({
+    principal: nextDisbursed,
+    interestRate: params.input.interestRate,
+    interestMethod: params.input.interestMethod,
+    tenure: params.input.tenure,
+    tenureUnit: params.input.tenureUnit,
+    paymentFrequency: params.input.paymentFrequency,
+    customIntervalMonths: params.input.customIntervalMonths,
+    disbursementDate: params.input.disbursementDate,
+    firstPaymentDate: params.input.firstPaymentDate,
+    paymentDayMode: params.input.paymentDayMode,
+    paymentDay: params.input.paymentDay,
+    dayBasis: params.input.dayBasis,
+    compoundingFrequency: params.input.compoundingFrequency,
+    emiAmount: params.input.emiAmount,
+    emiIsManual: params.input.emiIsManual,
+    repaymentType: effectiveRepaymentType(params.input.repaymentType),
+    scheduleVersion: loan.scheduleVersion + 1,
+  });
+
   let next: Loan = {
     ...loan,
     loanName: nextName,
-    loanNumber: posted ? loan.loanNumber : nextNumber,
+    loanNumber: nextNumber,
     lenderName: String(params.input.lenderName || loan.lenderName).trim(),
     lenderType: params.input.lenderType || loan.lenderType,
     loanType: resolvedLoanType(params.input) || loan.loanType,
     loanPurpose: params.input.loanPurpose ?? loan.loanPurpose,
     notes: params.input.notes ?? loan.notes,
+    bankAccountId: params.input.bankAccountId || loan.bankAccountId,
+    loanAccountId: params.input.loanAccountId || loan.loanAccountId,
+    interestExpenseAccountId: params.input.interestExpenseAccountId || loan.interestExpenseAccountId,
+    processingFeeAccountId: params.input.processingFeeAccountId || loan.processingFeeAccountId,
+    lateFeeAccountId: params.input.lateFeeAccountId || loan.lateFeeAccountId,
+    principalAmount: roundMoney(params.input.principalAmount),
+    disbursedAmount: nextDisbursed,
+    disbursementDate: params.input.disbursementDate,
+    firstPaymentDate: params.input.firstPaymentDate,
+    maturityDate: preview.maturityDate,
+    interestMethod: params.input.interestMethod,
+    interestRate: params.input.interestRate,
+    interestRateType: params.input.interestRateType,
+    tenure: params.input.tenure,
+    tenureUnit: params.input.tenureUnit,
+    paymentFrequency: params.input.paymentFrequency,
+    customIntervalMonths: params.input.customIntervalMonths || 1,
+    emiAmount,
+    emiIsManual: !!params.input.emiIsManual,
+    repaymentType: effectiveRepaymentType(params.input.repaymentType),
+    paymentDayMode: params.input.paymentDayMode,
+    paymentDay: params.input.paymentDay || 1,
+    gracePeriodDays: params.input.gracePeriodDays || 0,
+    dayBasis: params.input.dayBasis || 365,
+    compoundingFrequency: params.input.compoundingFrequency || params.input.paymentFrequency,
+    lateFeeMode: params.input.lateFeeMode,
+    lateFeeValue: params.input.lateFeeValue || 0,
+    autoPostLateFee: !!params.input.autoPostLateFee,
+    scheduleVersion: loan.scheduleVersion + 1,
     updatedAt: nowIso(),
     updatedBy: params.userId,
   };
 
-  if (!posted) {
-    const { schedule: generated, preview, emiAmount } = buildScheduleAndPreview({
-      principal: roundMoney(params.input.disbursedAmount || params.input.principalAmount),
-      interestRate: params.input.interestRate,
-      interestMethod: params.input.interestMethod,
-      tenure: params.input.tenure,
-      tenureUnit: params.input.tenureUnit,
-      paymentFrequency: params.input.paymentFrequency,
-      customIntervalMonths: params.input.customIntervalMonths,
-      disbursementDate: params.input.disbursementDate,
-      firstPaymentDate: params.input.firstPaymentDate,
-      paymentDayMode: params.input.paymentDayMode,
-      paymentDay: params.input.paymentDay,
-      dayBasis: params.input.dayBasis,
-      compoundingFrequency: params.input.compoundingFrequency,
-      emiAmount: params.input.emiAmount,
-      emiIsManual: params.input.emiIsManual,
-      repaymentType: effectiveRepaymentType(params.input.repaymentType),
-      scheduleVersion: loan.scheduleVersion + 1,
-    });
+  const oldRows = await listSchedules(params.companyId, loan.id);
+  const live = currentSchedule(oldRows);
+  const paidRows = live.filter((row) => row.status === "paid" || row.status === "partially_paid");
+  const hasPaid = paidRows.length > 0;
+
+  if (!hasPaid) {
     next = {
       ...next,
-      bankAccountId: params.input.bankAccountId || loan.bankAccountId,
-      principalAmount: roundMoney(params.input.principalAmount),
-      disbursedAmount: roundMoney(params.input.disbursedAmount || params.input.principalAmount),
-      disbursementDate: params.input.disbursementDate,
-      firstPaymentDate: params.input.firstPaymentDate,
-      maturityDate: preview.maturityDate,
-      interestMethod: params.input.interestMethod,
-      interestRate: params.input.interestRate,
-      interestRateType: params.input.interestRateType,
-      tenure: params.input.tenure,
-      tenureUnit: params.input.tenureUnit,
-      paymentFrequency: params.input.paymentFrequency,
-      customIntervalMonths: params.input.customIntervalMonths || 1,
-      emiAmount,
-      emiIsManual: !!params.input.emiIsManual,
-      repaymentType: effectiveRepaymentType(params.input.repaymentType),
-      paymentDayMode: params.input.paymentDayMode,
-      paymentDay: params.input.paymentDay || 1,
-      gracePeriodDays: params.input.gracePeriodDays || 0,
-      dayBasis: params.input.dayBasis || 365,
-      compoundingFrequency: params.input.compoundingFrequency || params.input.paymentFrequency,
-      lateFeeMode: params.input.lateFeeMode,
-      lateFeeValue: params.input.lateFeeValue || 0,
-      autoPostLateFee: !!params.input.autoPostLateFee,
-      outstandingPrincipal: 0,
-      scheduleVersion: loan.scheduleVersion + 1,
+      outstandingPrincipal: posted ? nextDisbursed : 0,
+      paidPrincipal: posted ? loan.paidPrincipal : 0,
     };
-    const oldRows = await listSchedules(params.companyId, loan.id);
     await saveScheduleRows(params.companyId, markHistorical(oldRows));
     await saveScheduleRows(
       params.companyId,
       refreshScheduleStatuses(next, materializeSchedule(params.companyId, loan.id, generated))
     );
+  } else {
+    const unpaidFuture = live.filter((row) => row.status !== "paid" && row.status !== "partially_paid" && !row.isHistorical);
+    const firstFuture = unpaidFuture[0];
+    const remainingCount = Math.max(0, generated.length - paidRows.length);
+    if (firstFuture && remainingCount > 0) {
+      const historical = markHistorical(unpaidFuture);
+      const futureGenerated = regenerateFutureSchedule({
+        loan: next,
+        paidRows,
+        outstandingPrincipal: loan.outstandingPrincipal,
+        interestRate: next.interestRate,
+        remainingCount,
+        firstFutureDate: firstFuture.dueDate,
+        emiAmount: next.emiIsManual ? next.emiAmount : undefined,
+        emiIsManual: next.emiIsManual,
+      });
+      next = {
+        ...next,
+        outstandingPrincipal: loan.outstandingPrincipal,
+        maturityDate: futureGenerated[futureGenerated.length - 1]?.dueDate || next.maturityDate,
+      };
+      await saveScheduleRows(params.companyId, historical);
+      await saveScheduleRows(
+        params.companyId,
+        refreshScheduleStatuses(next, materializeSchedule(params.companyId, loan.id, futureGenerated))
+      );
+    } else {
+      next = { ...next, outstandingPrincipal: loan.outstandingPrincipal, scheduleVersion: loan.scheduleVersion };
+    }
+  }
+
+  const txns = posted ? await listTransactions(params.companyId, loan.id) : [];
+  const disbursementTxns = txns.filter((row) => row.kind === "disbursement" && !row.isReversed);
+  if (posted && loan.disbursementJournalId && disbursementTxns.length <= 1) {
+    await updateLoanJournal({
+      companyId: params.companyId,
+      voucherId: loan.disbursementJournalId,
+      dateIso: next.disbursementDate,
+      narration: `Loan disbursement — ${next.loanName} (${next.loanNumber})`,
+      lines: disbursementLines(next.bankAccountId, next.loanAccountId, next.disbursedAmount),
+    });
+    const disbursementTxn = disbursementTxns[0];
+    if (disbursementTxn) {
+      await saveTransaction({
+        ...disbursementTxn,
+        amount: next.disbursedAmount,
+        principalAmount: next.disbursedAmount,
+        paymentDate: next.disbursementDate,
+        journalDate: next.disbursementDate,
+        bankAccountId: next.bankAccountId,
+        notes: `Loan disbursement — ${next.loanName} (${next.loanNumber})`,
+      });
+    }
   }
 
   await saveLoan(next);
@@ -415,8 +482,16 @@ export async function updateLoan(params: {
       userId: params.userId,
       userName: params.userName,
       oldValue: { loanName: loan.loanName, lenderName: loan.lenderName, notes: loan.notes },
-      newValue: { loanName: next.loanName, lenderName: next.lenderName, notes: next.notes, posted },
-      reason: posted ? "Identity fields" : "Draft loan updated",
+      newValue: {
+        loanName: next.loanName,
+        lenderName: next.lenderName,
+        notes: next.notes,
+        principalAmount: next.principalAmount,
+        interestRate: next.interestRate,
+        tenure: next.tenure,
+        posted,
+      },
+      reason: posted ? "Posted loan updated (disbursement journal synced)" : "Draft loan updated",
     })
   );
   return next;

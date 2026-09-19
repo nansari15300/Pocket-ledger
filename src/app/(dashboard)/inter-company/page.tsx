@@ -35,7 +35,7 @@ function InterCompanyPageContent() {
   const urlIcTab = String(searchParams.get("icTab") || "").trim();
 
   const initialInterCompanyRibbonTab = useMemo((): InterCompanyRibbonTab | undefined => {
-    if (urlIcTab === "join" || urlIcTab === "voucher") {
+    if (urlIcTab === "join" || urlIcTab === "voucher" || urlIcTab === "connect") {
       return urlIcTab;
     }
     // Legacy deep links (removed ribbons) → voucher

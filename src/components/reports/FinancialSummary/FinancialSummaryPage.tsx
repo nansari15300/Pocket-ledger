@@ -6,7 +6,7 @@ import { AlertCircle, Landmark, Receipt, TrendingDown, TrendingUp, Wallet } from
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { DateRange } from "@/components/ui/ad-calendar";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useCompany } from "@/hooks/useCompany";
 import { useDate } from "@/hooks/useDate";
 import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
@@ -49,7 +49,7 @@ function FinancialSummaryPageBody({ country }: FinancialSummaryPageBodyProps) {
     processedExpenseAccounts,
     processedExpenseGroups,
     processedItems,
-  } = useVouchers();
+  } = useFyScopedVouchers();
 
   const [draftRange, setDraftRange] = React.useState<DateRange | undefined>(() =>
     initialRangeForCountry(country)

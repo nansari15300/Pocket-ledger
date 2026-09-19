@@ -8,6 +8,10 @@ import {
   hideUnapprovedTargetInterCompanyEntityLedger,
 } from "@/lib/interCompany/interCompanyLedgerAmounts";
 import { sumJournalAmountsForAccount } from "@/lib/journalLedgerAmounts";
+import {
+  getOutflowBillWiseLinkAmount,
+  getPaymentOutPartyLinkAmount,
+} from "@/lib/payment-allocation-utils";
 import { voucherTouchesPartyLedger } from "@/lib/voucherTouchesPartyLedger";
 
 export type PartyLedgerDebitCredit = { debit: number; credit: number };
@@ -28,16 +32,21 @@ export function getPartyLedgerTransactionAmounts(transaction: any, partyId: stri
   let credit = 0;
   const amount = toNum(transaction?.total ?? transaction?.amount ?? 0);
   const paymentOutPayeeAmount =
-    transaction?.type === "payment_out" && toNum(transaction?.payeeAmount) > 0
-      ? toNum(transaction?.payeeAmount)
-      : amount;
+    transaction?.type === "payment_out" ? getPaymentOutPartyLinkAmount(transaction) : amount;
+  const directExpenseMainAmount =
+    transaction?.type === "direct_expense" ? getOutflowBillWiseLinkAmount(transaction) : amount;
 
   if (String(transaction?.partyId ?? "") === partyId) {
     if (["sale", "sale_service", "direct_income"].includes(transaction.type)) debit += amount;
     if (transaction.type === "payment_out") debit += paymentOutPayeeAmount;
-    if (["purchase", "purchase_service", "payment_in", "direct_expense"].includes(transaction.type)) credit += amount;
+    if (["purchase", "purchase_service", "payment_in", "direct_expense"].includes(transaction.type)) {
+      credit += transaction.type === "direct_expense" ? directExpenseMainAmount : amount;
+    }
   }
   if (transaction?.type === "payment_out" && String(transaction?.otherChargeAccountId ?? "") === partyId) {
+    debit += toNum(transaction?.otherChargeAmount);
+  }
+  if (transaction?.type === "direct_expense" && String(transaction?.otherChargeAccountId ?? "") === partyId) {
     debit += toNum(transaction?.otherChargeAmount);
   }
 
@@ -105,6 +114,7 @@ function collectPartyIdCandidatesFromVoucher(v: any, partyIdSet: Set<string>): S
     for (const e of v.entries) bump(e?.accountId);
   }
   if (v?.type === "note") bump(v?.entityId);
+  if (v?.type === "adjustment") bump((v?.adjustmentTarget as { id?: unknown } | undefined)?.id);
   if (String(v?.type || "") === "inter_company") {
     const legs = resolveInterCompanyLegsForVoucher(v as Record<string, unknown>);
     for (const leg of legs) {

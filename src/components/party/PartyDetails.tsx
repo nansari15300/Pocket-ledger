@@ -4,7 +4,7 @@
 
 import * as React from "react";
 import { toast } from "sonner";
-import { openPrintDirect, getPdfBlob } from "@/lib/printDirect";
+import { openPrintDirect, getPdfBlob, companyFiscalFieldsForPrint } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { Party, Group } from "@/components/party/types";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
@@ -46,6 +46,10 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import {
+  nestedLedgerChildDialogShell,
+  type MasterEditPresentationMode,
+} from "@/lib/nestedLedgerMasterEditPresentation";
 import { mdc, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
 import * as XLSX from "xlsx";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
@@ -65,6 +69,12 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { CreateNoteForm } from "@/components/vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
+import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
+import { useFyVoucherScope } from "@/contexts/FyVoucherScopeContext";
+import {
+  extractEntityBalanceFromFySnapshot,
+  isLedgerDateFilterFromAtFyStart,
+} from "@/lib/fyPagination/ledgerOpeningMeta";
 import { useAuth } from "@/hooks/useAuth";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { Checkbox } from "../ui/checkbox";
@@ -107,7 +117,11 @@ import {
   BillWiseAutoLinkPromptDialog,
   usePartyBillWiseAutoLinkPrompt,
 } from "@/components/vouchers/BillWiseAutoLinkPrompt";
-import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
+import {
+  COLUMN_LABELS,
+  useTransactionVisibleColumns,
+} from "@/components/vouchers/transactionColumnVisibility";
+import { TransactionsTable, type Context, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { OpeningBalanceLedgerAccountsTable } from "@/components/reports/OpeningBalanceLedgerAccountsTable";
 import {
   computeOpeningBalanceLedgerBreakdown,
@@ -146,7 +160,9 @@ import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "../ui/nepali-calendar";
-import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { MasterLedgerDateRangePresetRow } from "@/components/ui/MasterLedgerDateRangePresetRow";
+import { useEnsureEntityMinTxnsInScope } from "@/hooks/useEnsureEntityMinTxnsInScope";
+import { ledgerMasterDateRangeLabel } from "@/lib/ledgerMasterDefaultView";
 import type { BSDate } from "@/lib/bs-date";
 import { Combobox } from "@/components/ui/combobox";
 import {
@@ -195,6 +211,7 @@ import {
   LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_BALANCE_CN,
   LEDGER_HEADER_PILL_CN,
+  LEDGER_DATE_RANGE_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
@@ -206,32 +223,6 @@ const getInitials = (name: string) => {
     .map((n) => n[0])
     .slice(0, 2)
     .join("");
-};
-
-const COLUMN_VISIBILITY_KEY = "transactionVisibleColumns";
-const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
-  syncStatus: true,
-  date: true,
-  type: true,
-  voucherNo: true,
-  user: true,
-  file: true,
-  dr: true,
-  cr: true,
-  status: true,
-  runningBalance: true,
-};
-const COLUMN_LABELS: Record<TransactionColumnKey, string> = {
-  syncStatus: "Sync",
-  date: "Date",
-  type: "Type",
-  voucherNo: "Voucher No.",
-  user: "User",
-  file: "File",
-  dr: "Dr",
-  cr: "Cr",
-  status: "Status",
-  runningBalance: "Running Balance",
 };
 
 const DEFAULT_STATUS_FILTER = { paid: true, unpaid: true, partial: true, overdue: true };
@@ -285,6 +276,7 @@ export function PartyDetails({
   confirmationFyKey,
   confirmationFyRange,
   confirmationAllVouchers,
+  ledgerPresentationMode = "default",
 }: {
   party: Party & { saleTotal?: number; purchaseTotal?: number };
   allParties?: Party[];
@@ -307,7 +299,12 @@ export function PartyDetails({
   confirmationFyKey?: string;
   confirmationFyRange?: { start: Date; end: Date };
   confirmationAllVouchers?: any[];
+  ledgerPresentationMode?: MasterEditPresentationMode;
 }) {
+  const nestedLedgerNoteDialogShell =
+    ledgerPresentationMode === "nested-ledger"
+      ? nestedLedgerChildDialogShell("h-[95vh] w-full max-w-3xl flex flex-col")
+      : { overlayClassName: undefined, className: "h-[95vh] w-full max-w-3xl flex flex-col" };
   const { company, companyId } = useCompany();
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } =
@@ -335,6 +332,8 @@ export function PartyDetails({
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
+  useFyLoadOnDateRangeChange(dateRange);
+  const fy = useFyVoucherScope();
   const [isDateChange, setIsDateChange] = useState(false);
   const [mobileReportView, setMobileReportView] = useState<"list" | "chart">("list");
 
@@ -378,17 +377,7 @@ export function PartyDetails({
     useState<OpeningBalanceLedgerAccountRow | null>(null);
   const [openingBalanceEditOpen, setOpeningBalanceEditOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
-  const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
-    if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
-    try {
-      const saved = sessionStorage.getItem(COLUMN_VISIBILITY_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as VisibleColumns;
-        return { ...DEFAULT_VISIBLE_COLUMNS, ...parsed };
-      }
-    } catch (_) {}
-    return DEFAULT_VISIBLE_COLUMNS;
-  });
+  const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
     if (typeof window === "undefined") return { ...DEFAULT_STATUS_FILTER };
     try {
@@ -490,12 +479,6 @@ export function PartyDetails({
   const handleShowNarrationChange = (checked: boolean) => {
     setShowNarration(checked);
     sessionStorage.setItem("showNarration", String(checked));
-  };
-
-  const handleColumnVisibilityChange = (key: TransactionColumnKey, checked: boolean) => {
-    const next = { ...visibleColumns, [key]: checked };
-    setVisibleColumns(next);
-    sessionStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(next));
   };
 
   const { showNotes, setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
@@ -776,15 +759,60 @@ export function PartyDetails({
     ]
   );
   
-  const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(transactionEntity, transactionContext, dateRange, undefined, allParties, passedTransactions, context, filters, undefined, resolvedJournalAccountNames, mergedUserNames);
+  const {
+    processedTransactions,
+    openingBalanceForPeriod,
+    periodDr,
+    periodCr,
+    closingBalance,
+    openingBalanceOutstanding,
+    openingBalanceLinkedVoucherNos,
+    periodOpeningUnavailable,
+    periodOpeningLoading,
+  } = useTransactions(
+    transactionEntity,
+    transactionContext,
+    dateRange,
+    undefined,
+    allParties,
+    passedTransactions,
+    context,
+    filters,
+    undefined,
+    resolvedJournalAccountNames,
+    mergedUserNames
+  );
 
   // View/period brought-forward can be 0 (date range) while books still have an opening; running balance must
   // start from the same value as the opening row (see TransactionsTable booksOpeningBalance).
+  const fyStartDateFilterActive = useMemo(
+    () => isLedgerDateFilterFromAtFyStart(company?.country, dateRange),
+    [company?.country, dateRange]
+  );
+  const fySnapshotPartyOpening = useMemo(
+    () => extractEntityBalanceFromFySnapshot(fy.openingBalances, ledgerContextId),
+    [fy.openingBalances, ledgerContextId]
+  );
   const ledgerOpeningForRunning = useMemo(() => {
+    if (periodOpeningUnavailable || periodOpeningLoading) return openingBalanceForPeriod;
+    if (fyStartDateFilterActive) {
+      if (fySnapshotPartyOpening != null && Number.isFinite(fySnapshotPartyOpening)) {
+        return fySnapshotPartyOpening;
+      }
+      return openingBalanceForPeriod;
+    }
     const master = Number(transactionEntity?.openingBalance ?? party?.openingBalance) || 0;
     if (Math.abs(openingBalanceForPeriod) < 1e-6 && Math.abs(master) > 1e-6) return master;
     return openingBalanceForPeriod;
-  }, [openingBalanceForPeriod, transactionEntity?.openingBalance, party?.openingBalance]);
+  }, [
+    periodOpeningUnavailable,
+    periodOpeningLoading,
+    fyStartDateFilterActive,
+    fySnapshotPartyOpening,
+    openingBalanceForPeriod,
+    transactionEntity?.openingBalance,
+    party?.openingBalance,
+  ]);
 
   const masterPartyOpeningForAutoLink =
     Number(transactionEntity?.openingBalance ?? party?.openingBalance) || 0;
@@ -945,30 +973,19 @@ export function PartyDetails({
     });
   }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, mergedUserNames, mobileSearchNames, party.id]);
 
-  /** Opening Balance ledger header = system equity closing (− master net). */
-  const headerClosingBalance = useMemo(() => {
-    if (isOpeningBalanceLedger && openingBalanceLedgerBreakdown) {
-      return -openingBalanceLedgerBreakdown.masterTotals.netSigned;
-    }
-    const list = searchFilteredTransactions as any[];
-    if (list.length > 0) {
-      const last = list[list.length - 1];
-      const bal = last?.balance ?? last?.runningBalance;
-      if (typeof bal === "number" && Number.isFinite(bal)) return bal;
-    }
-    return ledgerOpeningForRunning + (Number(periodDr) || 0) - (Number(periodCr) || 0);
-  }, [
-    isOpeningBalanceLedger,
-    openingBalanceLedgerBreakdown,
-    searchFilteredTransactions,
-    ledgerOpeningForRunning,
-    periodDr,
-    periodCr,
-  ]);
+  useEnsureEntityMinTxnsInScope({
+    dateRange,
+    entityId: party?.id,
+    entityKind: "party",
+    entityTxnCount: searchFilteredTransactions.length,
+    enabled: Boolean(party?.id && party.id !== "all"),
+  });
 
   // Statement check mode + tail paging (PC footer Check mode + hidden-row totals)
   const {
     statementCheck,
+    ledgerListForPaging,
+    ledgerClosingAfterHidden,
     desktopPaginationMeta,
     paginatedTransactions,
     totalPages,
@@ -984,6 +1001,57 @@ export function PartyDetails({
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
   });
+
+  /** Default tail view page 1 = newest rows — footer shows full ledger closing, not slice math. */
+  const ledgerFooterClosingBalance = useMemo(() => {
+    if (ledgerClosingAfterHidden != null) return ledgerClosingAfterHidden;
+    if (!dateRange?.from && !dateRange?.to && currentPage === 1) {
+      return closingBalance;
+    }
+    return desktopPaginationMeta.closingForPage;
+  }, [
+    ledgerClosingAfterHidden,
+    dateRange?.from,
+    dateRange?.to,
+    currentPage,
+    closingBalance,
+    desktopPaginationMeta.closingForPage,
+  ]);
+
+  /** Opening Balance ledger header = system equity closing (− master net). */
+  const headerClosingBalance = useMemo(() => {
+    if (ledgerClosingAfterHidden != null) return ledgerClosingAfterHidden;
+    if (isOpeningBalanceLedger && openingBalanceLedgerBreakdown) {
+      return -openingBalanceLedgerBreakdown.masterTotals.netSigned;
+    }
+    // Default "Last N" view: full loaded-set closing (not page slice / FY scope snapshot).
+    if (
+      !dateRange?.from &&
+      !dateRange?.to &&
+      typeof closingBalance === "number" &&
+      Number.isFinite(closingBalance)
+    ) {
+      return closingBalance;
+    }
+    const list = searchFilteredTransactions as any[];
+    if (list.length > 0) {
+      const last = list[list.length - 1];
+      const bal = last?.balance ?? last?.runningBalance;
+      if (typeof bal === "number" && Number.isFinite(bal)) return bal;
+    }
+    return ledgerOpeningForRunning + (Number(periodDr) || 0) - (Number(periodCr) || 0);
+  }, [
+    ledgerClosingAfterHidden,
+    isOpeningBalanceLedger,
+    openingBalanceLedgerBreakdown,
+    searchFilteredTransactions,
+    dateRange?.from,
+    dateRange?.to,
+    closingBalance,
+    ledgerOpeningForRunning,
+    periodDr,
+    periodCr,
+  ]);
 
   useLedgerDetailSessionMemory({
     companyId: companyId ?? undefined,
@@ -1111,6 +1179,7 @@ export function PartyDetails({
             showDrCr: company.showDrCr,
             showCurrencySymbol: company.showCurrencySymbol,
             logoUrl: company.logoUrl,
+            ...companyFiscalFieldsForPrint(company as Record<string, unknown>),
           },
           title: getPrintTitle(variant),
           context: "party",
@@ -1191,6 +1260,7 @@ export function PartyDetails({
           showDrCr: company.showDrCr,
           showCurrencySymbol: company.showCurrencySymbol,
           logoUrl: company.logoUrl,
+          ...companyFiscalFieldsForPrint(company as Record<string, unknown>),
         },
         title: getPrintTitle("statement"),
         context: "party",
@@ -1363,7 +1433,7 @@ export function PartyDetails({
 
   if(!party) return null;
 
-  const dateRangeLabel = buildDateRangeText() || "All Time";
+  const dateRangeLabel = ledgerMasterDateRangeLabel(dateRange, buildDateRangeText());
   const balanceLabel = headerClosingBalance >= 0 ? "To Receive" : "To Pay";
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
   const masterPartyOpening = Number(transactionEntity?.openingBalance ?? party.openingBalance) || 0;
@@ -1469,7 +1539,7 @@ export function PartyDetails({
           <MobileDetailSummaryCollapsible>
           {/* Row 2 (center): Date range - compact; no filter = "Last 10 Txns", else date range; cross to reset when filter is on */}
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
-            <span className="text-xs font-medium text-muted-foreground">{!dateRange || (dateRange.from == null && dateRange.to == null) ? "All Time" : dateRangeLabel}</span>
+            <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
             {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
               <button
                 type="button"
@@ -1552,9 +1622,13 @@ export function PartyDetails({
             >
             <TransactionsTable
               transactions={paginatedTransactions}
+              ledgerTransactionsForFyOpening={ledgerListForPaging}
+              fyLedgerScopeOpeningBalance={ledgerOpeningForRunning}
               context={transactionContext}
               contextId={ledgerContextId}
               openingBalance={desktopPaginationMeta.openingForPage}
+              periodOpeningUnavailable={periodOpeningUnavailable}
+              periodOpeningLoading={periodOpeningLoading}
               booksOpeningBalance={masterPartyOpening}
               openingBalanceOutstanding={partyOpeningBalanceOutstandingForTable}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
@@ -1580,7 +1654,7 @@ export function PartyDetails({
               setActiveFilter={setActiveFilter}
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
-              closingBalance={desktopPaginationMeta.closingForPage}
+              closingBalance={ledgerFooterClosingBalance}
               isAllVouchersView={isAllVouchersView}
               hideDebitColumn={false}
               hideCreditColumn={false}
@@ -1699,12 +1773,14 @@ export function PartyDetails({
                 {(dateSystem === "BS" || dateSystem === "Both") && (
                   <NepaliCalendar
                     rangePresetSlot={
-                      <DateRangePresetRow
+                      <MasterLedgerDateRangePresetRow
                         country={company?.country}
+                        onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
                           onDateRangeChange(r);
                           setIsCalendarOpen(false);
                         }}
+                        onAfterDefault={() => setIsCalendarOpen(false)}
                       />
                     }
                     onSelect={(_bs, adDate) => {
@@ -1728,12 +1804,14 @@ export function PartyDetails({
                   <div className="flex-1 w-full min-w-0">
                     <AdCalendar
                       rangePresetSlot={
-                        <DateRangePresetRow
+                        <MasterLedgerDateRangePresetRow
                           country={company?.country}
+                          onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
                             onDateRangeChange(r);
                             setIsCalendarOpen(false);
                           }}
+                          onAfterDefault={() => setIsCalendarOpen(false)}
                         />
                       }
                       valueAD={dateRange}
@@ -1772,7 +1850,10 @@ export function PartyDetails({
             if (!open) closeModalInUrl();
           }}
         >
-          <DialogContent className="h-[95vh] w-full max-w-3xl flex flex-col">
+          <DialogContent
+            overlayClassName={nestedLedgerNoteDialogShell.overlayClassName}
+            className={nestedLedgerNoteDialogShell.className}
+          >
             <DialogHeader>
               <DialogTitle>Add a New Note for {party.name}</DialogTitle>
               <DialogDescription>Record a new note associated with this party.</DialogDescription>
@@ -1945,10 +2026,11 @@ export function PartyDetails({
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                   <BsDatePicker
                     isRange
+                    masterLedgerDatePresets
                     valueAD={dateRange}
                     onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                     transactionDates={transactionDates}
-                    className={cn("w-auto", LEDGER_HEADER_PILL_CN)}
+                    className={cn("w-auto", LEDGER_DATE_RANGE_PILL_CN)}
                   />
               )}
               {(dateSystem === 'AD' || dateSystem === 'Both') && (
@@ -1958,9 +2040,8 @@ export function PartyDetails({
                         id="date"
                         variant={"outline"}
                         className={cn(
-                          "justify-start text-left font-normal px-2 w-auto",
-                          LEDGER_HEADER_PILL_CN,
-                          !dateRange && "text-muted-foreground"
+                          "justify-start text-left px-2 w-auto",
+                          LEDGER_DATE_RANGE_PILL_CN
                         )}
                         data-theme-detail="date-range"
                       >
@@ -1982,11 +2063,16 @@ export function PartyDetails({
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
                       rangePresetSlot={
-                        <DateRangePresetRow
+                        <MasterLedgerDateRangePresetRow
                           country={company?.country}
+                          onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
                             setTempDateRange(r);
                             onDateRangeChange(r);
+                            setIsDesktopCalendarOpen(false);
+                          }}
+                          onAfterDefault={() => {
+                            setTempDateRange(undefined);
                             setIsDesktopCalendarOpen(false);
                           }}
                         />
@@ -2066,7 +2152,7 @@ export function PartyDetails({
           </div>
         </div>
         {/* Party docs sirf table Opening row File column + Edit party dialog — yahan duplicate thumbnail strip nahi */}
-        <div className={cn("flex-1 flex flex-col min-h-0", balanceMode === "bill_wise" ? "min-w-0" : "overflow-x-auto scrollbar-slim-dim")}>
+        <div className={cn("flex-1 flex flex-col min-h-0", balanceMode === "bill_wise" ? "min-w-0" : "overflow-x-auto pl-ledger-txn-scroll-native")}>
           <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
             <MasterAccountFreezeTxnShell
               overlay={partyFreezeOverlay}
@@ -2076,9 +2162,13 @@ export function PartyDetails({
             ) : (
             <TransactionsTable
               transactions={paginatedTransactions}
+              ledgerTransactionsForFyOpening={ledgerListForPaging}
+              fyLedgerScopeOpeningBalance={ledgerOpeningForRunning}
               context={transactionContext}
               contextId={ledgerContextId}
               openingBalance={desktopPaginationMeta.openingForPage}
+              periodOpeningUnavailable={periodOpeningUnavailable}
+              periodOpeningLoading={periodOpeningLoading}
               booksOpeningBalance={masterPartyOpening}
               openingBalanceOutstanding={partyOpeningBalanceOutstandingForTable}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
@@ -2117,7 +2207,7 @@ export function PartyDetails({
               setActiveFilter={setActiveFilter}
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
-              closingBalance={desktopPaginationMeta.closingForPage}
+              closingBalance={ledgerFooterClosingBalance}
               isAllVouchersView={isAllVouchersView}
               hideDebitColumn={false}
               hideCreditColumn={false}
@@ -2147,7 +2237,7 @@ export function PartyDetails({
                 onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
                 label="Show Narration"
               />
-              <LedgerFooterColumnsMenu>
+              <LedgerFooterColumnsMenu ledgerPresentationMode={ledgerPresentationMode}>
                 <DropdownMenuContent align="start" className="w-52 p-2">
                   {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
                     .filter((key) => key !== "status" || balanceMode === "bill_wise")
@@ -2213,10 +2303,14 @@ export function PartyDetails({
           beforeCount={desktopPaginationMeta.beforeCount}
           afterCount={desktopPaginationMeta.afterCount}
           totalCount={statusFilteredTransactions.length}
+          ledgerPresentationMode={ledgerPresentationMode}
         />
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>
-        <DialogContent className="h-[95vh] w-full max-w-3xl flex flex-col">
+        <DialogContent
+          overlayClassName={nestedLedgerNoteDialogShell.overlayClassName}
+          className={nestedLedgerNoteDialogShell.className}
+        >
           <DialogHeader>
             <DialogTitle>Add a New Note for {party.name}</DialogTitle>
             <DialogDescription>

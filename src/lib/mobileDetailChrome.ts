@@ -86,8 +86,8 @@ export const mdc = {
   reportChromeBalance: "shrink-0 whitespace-nowrap text-xs font-bold",
 
   /** Report mobile: sirf txn table scroll — pager alag row (footer ke upar, hamesha dikhe). */
-  reportTxnScrollBody: "flex-1 min-h-0 overflow-y-auto scroll-touch",
-  ledgerTxnScrollBody: "flex-1 min-h-0 overflow-auto scroll-touch",
+  reportTxnScrollBody: "flex-1 min-h-0 overflow-y-auto scroll-touch pl-ledger-txn-scroll-native",
+  ledgerTxnScrollBody: "flex-1 min-h-0 overflow-auto scroll-touch pl-ledger-txn-scroll-native",
   /** Report register: pager scroll ke bahar — `ReportMobileLedgerFooter` fixed niche rehta hai */
   reportTxnPagerOutside:
     "flex-shrink-0 border-t bg-background/95 z-40 mb-[calc(env(safe-area-inset-bottom,0px)+3.25rem)]",

@@ -1,19 +1,27 @@
 
 "use client";
 
+import * as React from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MasterListRow } from "@/components/ui/master-list-row";
-import { Badge } from "@/components/ui/badge";
+import { MasterListNameTooltip } from "@/components/entity/MasterListNameTooltip";
 import { useDate } from "@/hooks/useDate";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { Users, Briefcase, Receipt, DollarSign, Building } from "lucide-react";
+import { masterListOrderKey, useMasterListDisplayRows, useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { Receipt, DollarSign, Building } from "lucide-react";
 import { StaffAccountFallbackIcon } from "@/components/entity/StaffEntityIcon";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { masterEntityAttachmentPreviewUrl } from "@/lib/masterEntityAttachmentPreviewUrl";
-import { MASTER_LIST_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN } from "@/lib/masterListChrome";
+import { reportEntityInitials } from "@/lib/reportEntityInitials";
+import { MASTER_LIST_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN, masterListShellCn } from "@/lib/masterListChrome";
 import { useCompany } from "@/hooks/useCompany";
+import {
+  EntityListQuickFilterBar,
+  type EntityListQuickFilter,
+} from "@/components/entity/EntityListQuickFilterBar";
+import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows";
 
 export type UnifiedPayee = {
   id: string;
@@ -23,13 +31,38 @@ export type UnifiedPayee = {
   entity: any;
 };
 
-const typeIconMap = {
-    Party: Users,
-    Staff: Briefcase,
-    Tax: Receipt,
-    Expense: DollarSign,
-    Income: DollarSign,
-    Other: Building,
+const payeeFallbackIconMap = {
+  Tax: Receipt,
+  Expense: DollarSign,
+  Income: DollarSign,
+  Other: Building,
+} as const;
+
+function payeeAvatarFallback(payee: UnifiedPayee): { fallbackText?: string; fallbackSlot?: React.ReactNode } {
+  if (payee.type === "Party") {
+    return { fallbackText: reportEntityInitials(payee.name) };
+  }
+  if (payee.type === "Staff") {
+    return { fallbackSlot: <StaffAccountFallbackIcon staff={payee.entity} /> };
+  }
+  const Icon = payeeFallbackIconMap[payee.type] ?? Building;
+  return { fallbackSlot: <Icon className="h-4 w-4 text-muted-foreground" /> };
+}
+
+/** Party/Tax masters jaisa — search + footer sort/filter. */
+export function filterPayeeListRows(
+  payees: UnifiedPayee[],
+  searchTerm: string,
+  quickFilter: EntityListQuickFilter
+): UnifiedPayee[] {
+  return filterAndSortMasterEntityListRows(
+    payees.map((p) => ({
+      ...p,
+      openingBalanceDate: p.entity?.openingBalanceDate,
+    })),
+    searchTerm,
+    quickFilter
+  );
 }
 
 export function PayeeList({
@@ -37,29 +70,63 @@ export function PayeeList({
   selectedPayee,
   onSelectPayee,
   searchTerm,
+  quickFilter: quickFilterProp,
+  onQuickFilterChange,
+  hideQuickFilterBar = false,
 }: {
   payees: UnifiedPayee[];
   selectedPayee: UnifiedPayee | null;
   onSelectPayee: (payee: UnifiedPayee) => void;
   searchTerm: string;
+  quickFilter?: EntityListQuickFilter;
+  onQuickFilterChange?: (next: EntityListQuickFilter) => void;
+  hideQuickFilterBar?: boolean;
 }) {
   const { formatCurrency } = useDate();
   const { company } = useCompany();
+  const [internalQuickFilter, setInternalQuickFilter] = React.useState<EntityListQuickFilter>("default");
+  const quickFilter = quickFilterProp ?? internalQuickFilter;
+  const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
 
-  const filteredPayees = payees.filter((payee) =>
-    payee.name.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredPayees = React.useMemo(
+    () => filterPayeeListRows(payees, searchTerm, quickFilter),
+    [payees, searchTerm, quickFilter]
+  );
+
+  const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } =
+    useMasterListRowMotion();
+
+  const listOrderKey = React.useMemo(
+    () => masterListOrderKey(filteredPayees.map((p) => `${p.type}-${p.id}`)),
+    [filteredPayees]
+  );
+
+  const { displayRows: displayPayees, displayOrderKey } = useMasterListDisplayRows(
+    filteredPayees,
+    listOrderKey,
+    { enabled: isRowAnimationEnabled, holdMs: layoutHoldMs }
   );
 
   return (
-    <div className="flex flex-col h-full min-h-0 rounded-b-lg border-t-0 bg-transparent">
-      <ScrollArea listChrome className="flex-1 min-h-0">
+    <div className={masterListShellCn} data-theme-list="account-list">
+      <ScrollArea
+        listChrome
+        className="flex-1 min-h-0 min-w-0"
+        onViewportScroll={markListScrolling}
+        onViewportTouchMove={markListScrolling}
+      >
         <ul className="pl-master-list-ul">
-          {filteredPayees.map((payee) => {
+          <AnimatePresence mode={animatePresenceMode}>
+          {displayPayees.map((payee) => {
             const isSelected = selectedPayee?.id === payee.id && selectedPayee?.type === payee.type;
-            const Icon = typeIconMap[payee.type] || Building;
             const attachmentPreviewUrl = masterEntityAttachmentPreviewUrl(payee.entity);
+            const avatarFallback = payeeAvatarFallback(payee);
             return (
-              <li key={`${payee.type}-${payee.id}`}>
+              <motion.li
+                key={`${payee.type}-${payee.id}`}
+                layoutDependency={displayOrderKey}
+                {...rowMotionProps}
+              >
                 <MasterListRow
                   selected={isSelected}
                   className={cn(
@@ -67,40 +134,29 @@ export function PayeeList({
                   )}
                   onClick={() => onSelectPayee(payee)}
                 >
-                  <div className="flex items-center justify-between w-full gap-2">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                        <EntityFileAttachmentHover
-                          fileUrl={attachmentPreviewUrl}
-                          triggerClassName="inline-flex shrink-0 rounded-full"
-                        >
-                          <ResolvedEntityAvatar
-                            className={MASTER_LIST_AVATAR_CN}
-                            fallbackClassName={MASTER_LIST_AVATAR_FALLBACK_CN}
-                            companyId={payee.entity?.companyId ?? company?.id}
-                            src={attachmentPreviewUrl ?? undefined}
-                            alt={payee.name}
-                            fallbackSlot={
-                              payee.type === "Staff" ? (
-                                <StaffAccountFallbackIcon staff={payee.entity} />
-                              ) : (
-                                <Icon className="h-4 w-4 text-muted-foreground" />
-                              )
-                            }
-                          />
-                        </EntityFileAttachmentHover>
-                       <Tooltip>
-                        <TooltipTrigger className="text-sm font-medium whitespace-nowrap truncate flex-1 min-w-0 text-left p-0 h-auto bg-transparent hover:bg-transparent border-none shadow-none">
-                          {payee.name}
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>{payee.name}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                      <Badge variant="outline" className="flex-shrink-0 text-xs">{payee.type}</Badge>
+                  <div className="pl-master-list-row">
+                    <div className="pl-master-list-row-leading">
+                      <EntityFileAttachmentHover
+                        fileUrl={attachmentPreviewUrl}
+                        triggerClassName="inline-flex shrink-0 rounded-full"
+                      >
+                        <ResolvedEntityAvatar
+                          className={MASTER_LIST_AVATAR_CN}
+                          fallbackClassName={MASTER_LIST_AVATAR_FALLBACK_CN}
+                          companyId={payee.entity?.companyId ?? company?.id}
+                          src={attachmentPreviewUrl ?? undefined}
+                          alt={payee.name}
+                          fallbackText={avatarFallback.fallbackText}
+                          fallbackSlot={avatarFallback.fallbackSlot}
+                        />
+                      </EntityFileAttachmentHover>
+                      <MasterListNameTooltip measureKey={payee.name} tooltipContent={<p>{payee.name}</p>}>
+                        {payee.name}
+                      </MasterListNameTooltip>
                     </div>
                     <p
                       className={cn(
-                        "text-sm font-medium whitespace-nowrap flex-shrink-0 ml-2",
+                        "pl-master-list-row-amount ml-2",
                         payee.balance >= 0 ? "text-green-600" : "text-red-600",
                         isSelected &&
                           (payee.balance >= 0
@@ -108,20 +164,24 @@ export function PayeeList({
                             : "text-red-800")
                       )}
                     >
-                      {formatCurrency(payee.balance, { showDrCr: true })}
+                      {formatCurrency(payee.balance, { showDrCr: true, context: "list" })}
                     </p>
                   </div>
                 </MasterListRow>
-              </li>
+              </motion.li>
             );
           })}
-          {filteredPayees.length === 0 && (
+          </AnimatePresence>
+          {displayPayees.length === 0 && (
             <div className="text-center text-muted-foreground p-8">
               No payees found.
             </div>
           )}
         </ul>
       </ScrollArea>
+      {!hideQuickFilterBar ? (
+        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+      ) : null}
     </div>
   );
 }

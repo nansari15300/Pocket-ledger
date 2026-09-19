@@ -32,14 +32,14 @@ import { Textarea } from "../ui/textarea";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Checkbox } from "../ui/checkbox";
+import { VoucherDeleteConfirmAlertDialog } from "@/components/vouchers/VoucherDeleteConfirmAlertDialog";
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
-} from "../ui/alert-dialog";
+  assertCanPermanentDeleteFromForm,
+  permanentDeleteVoucherFromForm,
+} from "@/lib/permanentDeleteFromForm";
 
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, Wand2, History, CheckCircle, Link2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
 import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
@@ -49,7 +49,14 @@ import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
-import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
+import {
+  saveVoucher,
+  isVoucherLimitError,
+  patchVoucherFields,
+  softDeleteVoucherMoveToRecycleBin,
+  voucherRecycleBinDeletedAt,
+  applyJournalBillWiseLinkAllocations,
+} from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
@@ -124,7 +131,7 @@ import usePermissions from "@/hooks/usePermissions";
 import { useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { loadJournalLedgerScopeSnapshot, type JournalScopedLedgerSnapshot } from "@/lib/journalLedgerScopeLoad";
-import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID, getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts, getJournalPartyBillWiseLinkAmount, getJournalPartyBillWiseAmountFromEntries, getPaymentOutPartyLinkAmount } from "@/lib/payment-allocation-utils";
+import { getAllocationTotal, hasPaymentLinks, hasBillWiseAllocationSyncWork, OPENING_BALANCE_VOUCHER_ID, getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts, getJournalPartyBillWiseLinkAmount, getJournalPartyBillWiseAmountFromEntries, getPaymentOutPartyLinkAmount, inferJournalOtherChargePartyAccountId } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
@@ -376,7 +383,7 @@ export function CreateJournalForm({
   const companyId = effectiveCompanyId;
 
   const { dateSystem, formatDate, formatCurrencyForPrint } = useDate();
-  const { can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
+  const { can, role, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const { deviceLimitReached } = useDeviceLimitContext();
   const { vouchers, processedPartiesForSelection, processedStaff, processedAccounts, expenseAccounts, processedTaxes } = useVouchers();
   /** Header company ≠ compare company: Firestore/SQLite se usi company ki ledger lists. */
@@ -464,6 +471,8 @@ export function CreateJournalForm({
   const savedFileUrlsSnapshotRef = useRef<string[] | null>(null);
   // Track initial allocations when voucher loads so link/unlink changes are detected for isFormDirty.
   const initialJournalAllocationsRef = useRef<{ debit: Allocation[]; credit: Allocation[] }>({ debit: [], credit: [] });
+  /** Incoming-only links user removed in bill-wise dialog (source voucher still points at this journal until save). */
+  const journalIncomingLinksToClearRef = useRef<Set<string>>(new Set());
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
   const lastResetVoucherIdRef = useRef<string | null>(null);
   /** Edit hydrate complete — isDirty/file/allocation refs settle hone se pehle Save mat enable (exp jaisa). */
@@ -497,6 +506,7 @@ export function CreateJournalForm({
   const resetLinksOnCopyTargetChange = useCallback(() => {
     setJournalAllocationsBySide({ debit: [], credit: [] });
     initialJournalAllocationsRef.current = { debit: [], credit: [] };
+    journalIncomingLinksToClearRef.current.clear();
     setShowLinkSections(false);
     setSelectedBillWiseCard(null);
     setActiveJournalLinkSide(null);
@@ -637,6 +647,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         });
         setJournalAllocationsBySide({ debit, credit });
         initialJournalAllocationsRef.current = { debit: [...debit], credit: [...credit] };
+        journalIncomingLinksToClearRef.current.clear();
+        if (Number((voucher as any)?.otherChargeAmount || 0) > 0 && !String((voucher as any)?.otherChargePartyAccountId ?? "").trim()) {
+          const inferredParty = inferJournalOtherChargePartyAccountId(voucher);
+          if (inferredParty) {
+            form.setValue("otherChargePartyAccountId", inferredParty, { shouldDirty: false });
+          }
+        }
         setEditBaselineHydrated(true);
     } else if (voucher) {
         // Naya journal + Gallery `initialVoucherData`: pehle yahan files kabhi set nahi hoti thi; aur `isFormDirty` har baar allocations clear kar deta tha
@@ -656,6 +673,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           });
           setJournalAllocationsBySide({ debit: [], credit: [] });
           initialJournalAllocationsRef.current = { debit: [], credit: [] };
+          journalIncomingLinksToClearRef.current.clear();
           const urlsNew = voucherAttachmentUrlsForFormState(voucher);
           setFiles(urlsNew);
           initialFilesRef.current = urlsNew.filter((f: any) => typeof f === "string");
@@ -668,6 +686,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         lastResetVoucherIdRef.current = null;
         setJournalAllocationsBySide({ debit: [], credit: [] });
         initialJournalAllocationsRef.current = { debit: [], credit: [] };
+        journalIncomingLinksToClearRef.current.clear();
     }
 }, [voucher, form, isEditingAndConverting, isFormDirty, allAccountsWithEntity]);
 
@@ -801,6 +820,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const chargeCtx = {
       otherChargeAmount: otherChargeAmountValue,
       otherChargePartyAccountId: String(form.getValues("otherChargePartyAccountId") || ""),
+      entries: lines.map((l: any) => ({
+        accountId: l?.accountId,
+        debit: l?.type === "debit" ? Number(l?.amount) || 0 : 0,
+        credit: l?.type === "credit" ? Number(l?.amount) || 0 : 0,
+      })),
     };
     const findForSide = (side: "debit" | "credit") => {
       // Ledger context: sirf opened party/staff ki usi side (Dr/Cr) — doosre account par fallback mat karo.
@@ -1622,6 +1646,76 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     staffIdSet,
   ]);
 
+  const computeJournalBillWiseDialogDone = useCallback(
+    (
+      side: "debit" | "credit",
+      accountId: string,
+      allocations: Allocation[],
+      dialogExisting: Allocation[],
+      currentBySide: { debit: Allocation[]; credit: Allocation[] }
+    ) => {
+      const tagged = (Array.isArray(allocations) ? allocations : []).map((a: any) => ({
+        ...a,
+        linkedAccountId: accountId,
+      }));
+      const newIds = new Set(
+        tagged
+          .filter((a) => getAllocationTotal(a) > 0)
+          .map((a) => String(a.voucherId ?? ""))
+          .filter(Boolean)
+      );
+      const removedIds: string[] = [];
+      for (const a of dialogExisting) {
+        const id = String(a?.voucherId ?? "");
+        if (!id || id === OPENING_BALANCE_VOUCHER_ID) continue;
+        if (!newIds.has(id)) removedIds.push(id);
+      }
+      for (const id of removedIds) {
+        if (journalLinkedFromRows.some((row) => String(row.voucherId) === id)) {
+          journalIncomingLinksToClearRef.current.add(id);
+        } else {
+          journalIncomingLinksToClearRef.current.delete(id);
+        }
+      }
+      for (const a of tagged) {
+        const id = String(a?.voucherId ?? "");
+        if (id) journalIncomingLinksToClearRef.current.delete(id);
+      }
+      const nextBySide = {
+        debit: side === "debit" ? tagged : [...(currentBySide.debit || [])],
+        credit: side === "credit" ? tagged : [...(currentBySide.credit || [])],
+      };
+      return {
+        nextBySide,
+        merged: [...nextBySide.debit, ...nextBySide.credit],
+        removedIds,
+      };
+    },
+    [journalLinkedFromRows]
+  );
+
+  const persistJournalBillWiseLinks = useCallback(
+    async (
+      merged: Allocation[],
+      removedIds: string[],
+      nextBySide: { debit: Allocation[]; credit: Allocation[] }
+    ) => {
+      const vid = journalVoucherId;
+      if (!companyId || !vid) return;
+      const previous = [
+        ...(initialJournalAllocationsRef.current.debit || []),
+        ...(initialJournalAllocationsRef.current.credit || []),
+      ];
+      await applyJournalBillWiseLinkAllocations(companyId, vid, merged, previous, removedIds);
+      initialJournalAllocationsRef.current = {
+        debit: [...nextBySide.debit],
+        credit: [...nextBySide.credit],
+      };
+      journalIncomingLinksToClearRef.current.clear();
+    },
+    [companyId, journalVoucherId]
+  );
+
   // Dialog ko signed books OB — ledger prop pehle (Dr→Cr / Cr→Dr mirror ke liye same source).
   const activePartySignedOpeningBalance = useMemo(() => {
     if (!activeJournalLinkContext || activeJournalLinkContext.kind !== "party") return 0;
@@ -1863,6 +1957,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         // Persist links made from Journal debit/credit bill-wise cards.
         allocations: effectiveJournalAllocations,
         ...voucherAttachmentFieldsForSave(fileUrls, voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))),
+        ...(String(voucher?.loanId || "").trim()
+          ? {
+              loanId: String(voucher.loanId).trim(),
+              ...(String(voucher?.loanTransactionKind || "").trim()
+                ? { loanTransactionKind: String(voucher.loanTransactionKind).trim() }
+                : {}),
+              ...(voucher?.isLoanModuleVoucher === true ? { isLoanModuleVoucher: true } : {}),
+            }
+          : {}),
       };
 
       if (!idArgForFirestore) delete (submissionData as { id?: string }).id;
@@ -1896,6 +1999,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
         const docId = savedDoc.id;
         const approveBanner = !!(approveAfterSave && docId);
+        const savedJournalAllocations = [
+          ...(journalAllocationsBySide.debit || []),
+          ...(journalAllocationsBySide.credit || []),
+        ];
+        const previousJournalAllocations = [
+          ...(initialJournalAllocationsRef.current.debit || []),
+          ...(initialJournalAllocationsRef.current.credit || []),
+        ];
+        const needsBillWiseLinkSync =
+          !!(companyId && docId) &&
+          hasBillWiseAllocationSyncWork(savedJournalAllocations, previousJournalAllocations);
+        const incomingLinksToClear = [...journalIncomingLinksToClearRef.current];
+        const needsIncomingLinkClear = incomingLinksToClear.length > 0;
+        const capturedSideAllocations = {
+          debit: [...(journalAllocationsBySide.debit || [])],
+          credit: [...(journalAllocationsBySide.credit || [])],
+        };
         // Save & Close: dialog turant band — approve/alerts background (`postSaveTail`).
         if (approveBanner) {
           replaceVoucherSaveLoadingWithShortSuccess(
@@ -1932,6 +2052,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
 
         const postSaveTail = async () => {
+          if (companyId && docId && (needsBillWiseLinkSync || needsIncomingLinkClear)) {
+            try {
+              await applyJournalBillWiseLinkAllocations(
+                companyId,
+                docId,
+                savedJournalAllocations,
+                previousJournalAllocations,
+                incomingLinksToClear
+              );
+              initialJournalAllocationsRef.current = capturedSideAllocations;
+              journalIncomingLinksToClearRef.current.clear();
+            } catch (e) {
+              console.error("[CreateJournalForm] bill-wise link sync", e);
+              sonnerToast.error("Journal saved but bill-wise link sync failed.", {
+                description: e instanceof Error ? e.message : "Try opening Link for bill wise again.",
+              });
+            }
+          } else if (companyId && docId) {
+            initialJournalAllocationsRef.current = capturedSideAllocations;
+          }
+
           // New create: saveVoucher(approveAfterSave) already set isApproved — skip second approve lookup.
           if (companyId && company) {
             const isEdit = !!voucher?.id;
@@ -2081,6 +2222,69 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         toast({ variant: "destructive", title: "Error", description: "Failed to delete voucher." });
     } finally {
         setIsLoading(false);
+    }
+  };
+
+  const handlePermanentDelete = async () => {
+    const voucherIdToDelete = savedVoucherId || voucher?.id || null;
+    if (!voucherIdToDelete || !companyId) return;
+
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+      const { voucherData, exists: voucherDocExists } = await loadVoucherDataForDeletePreCheck({
+        companyId,
+        voucherId: voucherIdToDelete,
+        company,
+        fallbackVoucher: (voucher as Record<string, unknown> | null) ?? null,
+        vouchers: vouchers as Array<{ id?: string } & Record<string, unknown>> | null,
+      });
+      if (!canDeleteVoucher(voucherData)) {
+        throw new PermissionDeniedError(
+          (voucherData as any)?.isApproved
+            ? "You do not have permission to delete approved vouchers."
+            : "You do not have permission to delete records."
+        );
+      }
+      if (voucherData && hasPaymentLinks(voucherData)) {
+        toast({ variant: "destructive", title: "Cannot Delete", description: "First unlink linked transactions." });
+        return;
+      }
+      if (voucherDocExists && voucherData) {
+        const voucherDate = resolveVoucherDeleteBackdateDate(voucherData, {
+          form: "journal",
+          companyId,
+          voucherId: voucherIdToDelete,
+        });
+        assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
+      }
+    } catch (error) {
+      if (error instanceof PermissionDeniedError) {
+        toast({
+          variant: "destructive",
+          title: "Permission Denied",
+          description: error.message,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to check permissions.",
+        });
+      }
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      await permanentDeleteVoucherFromForm(companyId, voucherIdToDelete);
+      toast({ title: "Journal deleted permanently." });
+      setIsDeleteDialogOpen(false);
+      onVoucherAction?.("cancelled");
+    } catch (error) {
+      console.error("Error permanently deleting voucher:", error);
+      toast({ variant: "destructive", title: "Error", description: "Failed to permanently delete journal." });
+    } finally {
+      setIsLoading(false);
     }
   };
   
@@ -2423,6 +2627,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               )}
               onClick={() => setSelectedBillWiseCard(null)}
             >
+              {(voucher as { _loanDisbursementContext?: { sanctioned: number; disbursed: number; remaining: number } })
+                ?._loanDisbursementContext ? (
+                <div className="rounded-lg border border-sky-300/80 bg-sky-50 px-3 py-2 text-sm text-sky-950 dark:border-sky-700 dark:bg-sky-950/40 dark:text-sky-100">
+                  <p className="font-medium">Loan disbursement</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Sanctioned {formatCurrencyForPrint((voucher as any)._loanDisbursementContext.sanctioned, { noAnimation: true, noSuffix: true, showDrCr: false })} · already disbursed{" "}
+                    {formatCurrencyForPrint((voucher as any)._loanDisbursementContext.disbursed, { noAnimation: true, noSuffix: true, showDrCr: false })} · remaining{" "}
+                    {formatCurrencyForPrint((voucher as any)._loanDisbursementContext.remaining, { noAnimation: true, noSuffix: true, showDrCr: false })}.
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Rule: Debit Bank/Cash, Credit Loan Liability. Amount cannot exceed remaining sanctioned.
+                  </p>
+                </div>
+              ) : null}
               {/* PC View: All 4 Fields in Same Row with Responsive Wrapping */}
               {isMobile ? (
                 <>
@@ -3282,25 +3500,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             {isMobile ? (
               <div className={cn("grid grid-cols-3 gap-2 w-full", VOUCHER_BUTTONS_CLASS)}>
                 {/* Row 0: Delete (left) | History (middle) | Save & Print (right) */}
-                <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                  <AlertDialogTrigger asChild>
-                    <Button type="button" variant="destructive" className="w-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                <Button type="button" variant="destructive" className="w-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))} onClick={() => setIsDeleteDialogOpen(true)}>
                       Delete
                     </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                      <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                        Delete
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
                 <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
                   History
                 </Button>
@@ -3333,25 +3535,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
                     <History className="mr-2 h-4 w-4" /> History
                   </Button>
-                  <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                    <AlertDialogTrigger asChild>
-                      <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                  <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))} onClick={() => setIsDeleteDialogOpen(true)}>
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                        <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                          Move to Bin
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
                 </div>
                 <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
@@ -3411,9 +3597,28 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         onDone={(allocations) => {
           const side = activeJournalLinkContext?.side;
           const accountId = activeJournalLinkContext?.accountId ?? "";
-          const tagged = (Array.isArray(allocations) ? allocations : []).map((a: any) => ({ ...a, linkedAccountId: accountId }));
-          setJournalAllocationsBySide((prev) => ({ ...prev, [side === "debit" ? "debit" : "credit"]: tagged }));
+          if (!side) {
+            setActiveJournalLinkSide(null);
+            return;
+          }
+          const linkSide = side === "debit" ? "debit" : "credit";
+          const { nextBySide, merged, removedIds } = computeJournalBillWiseDialogDone(
+            linkSide,
+            accountId,
+            allocations as Allocation[],
+            journalDialogExistingAllocations,
+            journalAllocationsBySide
+          );
+          setJournalAllocationsBySide(nextBySide);
           setActiveJournalLinkSide(null);
+          if (journalVoucherId && companyId) {
+            void persistJournalBillWiseLinks(merged, removedIds, nextBySide).catch((err) => {
+              console.error("[CreateJournalForm] bill-wise link persist", err);
+              sonnerToast.error("Could not save bill-wise links.", {
+                description: err instanceof Error ? err.message : "Try saving the journal again.",
+              });
+            });
+          }
         }}
       />
       {/* Staff-side Journal linking for credit card (to Dr sources): uses Payment In → Salary linking behavior. */}
@@ -3432,9 +3637,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         paymentInDate={form.getValues("date")}
         onDone={(allocations) => {
           const accountId = activeJournalLinkContext?.accountId ?? "";
-          const tagged = (Array.isArray(allocations) ? allocations : []).map((a: any) => ({ ...a, linkedAccountId: accountId }));
-          setJournalAllocationsBySide((prev) => ({ ...prev, credit: tagged }));
+          const { nextBySide, merged, removedIds } = computeJournalBillWiseDialogDone(
+            "credit",
+            accountId,
+            allocations as Allocation[],
+            journalDialogExistingAllocations,
+            journalAllocationsBySide
+          );
+          setJournalAllocationsBySide(nextBySide);
           setActiveJournalLinkSide(null);
+          if (journalVoucherId && companyId) {
+            void persistJournalBillWiseLinks(merged, removedIds, nextBySide).catch((err) => {
+              console.error("[CreateJournalForm] bill-wise link persist", err);
+              sonnerToast.error("Could not save bill-wise links.", {
+                description: err instanceof Error ? err.message : "Try saving the journal again.",
+              });
+            });
+          }
         }}
       />
       {/* Staff-side Journal linking for debit card (to Cr sources): uses Payment Out → Salary linking behavior. */}
@@ -3453,9 +3672,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         paymentOutDate={form.getValues("date")}
         onDone={(allocations) => {
           const accountId = activeJournalLinkContext?.accountId ?? "";
-          const tagged = (Array.isArray(allocations) ? allocations : []).map((a: any) => ({ ...a, linkedAccountId: accountId }));
-          setJournalAllocationsBySide((prev) => ({ ...prev, debit: tagged }));
+          const { nextBySide, merged, removedIds } = computeJournalBillWiseDialogDone(
+            "debit",
+            accountId,
+            allocations as Allocation[],
+            journalDialogExistingAllocations,
+            journalAllocationsBySide
+          );
+          setJournalAllocationsBySide(nextBySide);
           setActiveJournalLinkSide(null);
+          if (journalVoucherId && companyId) {
+            void persistJournalBillWiseLinks(merged, removedIds, nextBySide).catch((err) => {
+              console.error("[CreateJournalForm] bill-wise link persist", err);
+              sonnerToast.error("Could not save bill-wise links.", {
+                description: err instanceof Error ? err.message : "Try saving the journal again.",
+              });
+            });
+          }
         }}
       />
       {/*
@@ -3479,6 +3712,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           setIsCreateTaxOpen(open);
           if (!open) setJournalTaxPrefillName("");
         }}
+      />
+      <VoucherDeleteConfirmAlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        entityKind="journal"
+        entityName={voucher?.voucherNumber || "this journal"}
+        onMoveToBin={handleDelete}
+        onDeletePermanently={handlePermanentDelete}
+        busy={isLoading}
       />
     </>
   );

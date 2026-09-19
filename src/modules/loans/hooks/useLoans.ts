@@ -13,7 +13,8 @@ const LOAN_BUMP_COLLECTIONS = new Set(Object.values(LOAN_COLLECTIONS));
 export function useLoans(companyId: string | null | undefined, filters?: { search?: string; status?: string; lender?: string }) {
   const [loans, setLoans] = useState<Loan[]>([]);
   const [schedulesByLoan, setSchedulesByLoan] = useState<Record<string, LoanScheduleRow[]>>({});
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => Boolean(String(companyId || "").trim()));
+  const [hydrated, setHydrated] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
@@ -21,6 +22,8 @@ export function useLoans(companyId: string | null | undefined, filters?: { searc
     if (!cid) {
       setLoans([]);
       setSchedulesByLoan({});
+      setHydrated(true);
+      setLoading(false);
       return;
     }
     setLoading(true);
@@ -37,7 +40,13 @@ export function useLoans(companyId: string | null | undefined, filters?: { searc
       setError(e instanceof Error ? e.message : "Failed to load loans");
     } finally {
       setLoading(false);
+      setHydrated(true);
     }
+  }, [companyId]);
+
+  useEffect(() => {
+    setHydrated(false);
+    setLoading(Boolean(String(companyId || "").trim()));
   }, [companyId]);
 
   useEffect(() => {
@@ -65,5 +74,5 @@ export function useLoans(companyId: string | null | undefined, filters?: { searc
   const filtered = filterLoans(loans, filters || {});
   const stats: LoanDashboardStats = buildDashboardStats(filtered, schedulesByLoan);
 
-  return { loans: filtered, allLoans: loans, schedulesByLoan, stats, loading, error, reload };
+  return { loans: filtered, allLoans: loans, schedulesByLoan, stats, loading, hydrated, error, reload };
 }

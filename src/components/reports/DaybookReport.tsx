@@ -4,7 +4,7 @@
 
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { useCompany } from "@/hooks/useCompany";
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useState, useMemo, useCallback, useDeferredValue } from "react";
 import { Info, X, Calendar as CalendarIcon, Expand, Filter, RotateCw, ChevronLeft, ChevronRight, ChevronDown, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
@@ -23,7 +23,7 @@ import { useCalendarMonths } from "@/hooks/use-mobile";
 import usePermissions from "@/hooks/usePermissions";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemFilterDropdown } from "../items/ItemFilterDropdown";
-import { collection, onSnapshot, query, getDoc, doc, getDocs, where } from "firebase/firestore";
+import { collection, onSnapshot, query } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { applyPaymentBillWiseLinkAllocations } from "@/lib/voucherActionsClient";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
@@ -35,7 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "../ui/input";
 import { TransactionsTable } from "../vouchers/TransactionsTable";
 import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
-import { useVouchers } from "@/hooks/useVouchers";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { Skeleton } from "../ui/skeleton";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useServerDaybookDailySummary } from "@/hooks/useServerDaybookDailySummary";
@@ -46,59 +46,6 @@ import {
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-mobile";
-
-type Voucher = {
-    id: string;
-    type: string;
-    total?: number;
-    amount?: number;
-    partyId?: string;
-    accountId?: string;
-    fromAccountId?: string;
-    toAccountId?: string;
-    staffId?: string;
-    date: any;
-    voucherNumber?: string;
-    invoiceNumber?: string;
-    narration?: string;
-    title?: string;
-    entries?: any[];
-    lineItems?: any[];
-    userId?: string;
-};
-
-// 💡 Utility to compute debit, credit, and balance impact
-function getTransactionAmounts(transaction: any) {
-    const t = transaction;
-    const amount = t.total || t.amount || 0;
-    let debit = 0;
-    let credit = 0;
-  
-    switch (t.type) {
-      case "sale":
-      case "direct_income":
-      case "payment_in":
-        credit = amount;
-        break;
-      case "purchase":
-      case "direct_expense":
-      case "payment_out":
-        debit = amount;
-        break;
-      case "contra":
-        debit = amount;
-        credit = amount;
-        break;
-      case "journal":
-        if (t.entries && Array.isArray(t.entries)) {
-          debit = t.entries.reduce((sum: number, e: any) => sum + (Number(e.debit) || 0), 0);
-          credit = t.entries.reduce((sum: number, e: any) => sum + (Number(e.credit) || 0), 0);
-        }
-        break;
-    }
-  
-    return { debit, credit };
-  }
 
 interface DaybookReportProps {
   onFullScreenToggle?: () => void;
@@ -114,7 +61,7 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
       processedParties,
       journalAccountNames: voucherJournalAccountNames,
       userNames: vouchersUserNames,
-    } = useVouchers();
+    } = useFyScopedVouchers();
     const { company, companyId } = useCompany();
     const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
     const { can } = usePermissions();
@@ -125,7 +72,6 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
     const [showDaybookNarration, setShowDaybookNarration] = useState(true);
     const [daybookNarrationNoteSearch, setDaybookNarrationNoteSearch] = useState("");
     const [items, setItems] = useState<Item[]>([]);
-    const [journalAccountNames, setJournalAccountNames] = useState<Record<string, string>>({});
     const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
     const [selectedVoucher, setSelectedVoucher] = React.useState<any>(null);
     const [historyVoucher, setHistoryVoucher] = React.useState<any>(null);
@@ -133,7 +79,6 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
     const [linkPaymentVoucher, setLinkPaymentVoucher] = React.useState<any>(null);
     const [daybookFilters, setDaybookFilters] = useState<Record<string, string>>({});
     const [activeDaybookFilter, setActiveDaybookFilter] = useState<string | null>(null);
-    const [userNames, setUserNames] = React.useState<Record<string, string>>({});
     const [isDateChange, setIsDateChange] = useState(false);
     const [daybookRotated, setDaybookRotated] = useState(false);
     const [isDaybookCalendarOpen, setIsDaybookCalendarOpen] = useState(false);
@@ -172,116 +117,6 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
     useEffect(() => {
       setDaybookDate(new Date());
     }, []);
-
-    const fetchAccountName = useCallback(async (accountId: string): Promise<string> => {
-        if (!companyId) return 'Unknown Account';
-
-        // VoucherProvider has already hydrated these master names for the
-        // dashboard. Reuse them instead of repeating Firestore lookups while
-        // opening Daybook.
-        const cachedName =
-          journalAccountNames[accountId] ??
-          voucherJournalAccountNames[accountId] ??
-          userNames[accountId] ??
-          vouchersUserNames[accountId];
-        if (cachedName) return cachedName;
-
-        const collectionsToSearch = ['parties', 'bank_accounts', 'staff', 'items', 'expense_accounts', 'taxes', 'users'];
-        const nameFields = ['name', 'accountName', 'name', 'name', 'name', 'name', 'displayName'];
-
-        for (let i = 0; i < collectionsToSearch.length; i++) {
-            const collectionName = collectionsToSearch[i];
-            const nameField = nameFields[i];
-            try {
-                let data: any = null;
-                
-                if (collectionName === 'users') {
-                    // User doc ID may be name_uid format, so query by uid field first
-                    const q = query(collection(firestore, "users"), where("uid", "==", accountId));
-                    const snap = await getDocs(q);
-                    data = snap.docs[0]?.data();
-                    
-                    if (!data) {
-                        // Fallback: doc ID might be uid (legacy)
-                        const docSnap = await getDoc(doc(firestore, "users", accountId));
-                        if (docSnap.exists()) {
-                            data = docSnap.data();
-                        }
-                    }
-                } else {
-                    const docRef = doc(firestore, `companies/${companyId}/${collectionName}`, accountId);
-                    const docSnap = await getDoc(docRef);
-                    if (docSnap.exists()) {
-                        data = docSnap.data();
-                    }
-                }
-                
-                if (data) {
-                    const name = data[nameField] || 'Unknown';
-                    // For users, store in userNames; for others, store in journalAccountNames
-                    if (collectionName === 'users') {
-                        setUserNames(prev => ({...prev, [accountId]: name}));
-                    } else {
-                        setJournalAccountNames(prev => ({...prev, [accountId]: name}));
-                    }
-                    return name;
-                }
-            } catch (error) {
-            }
-        }
-        
-        setJournalAccountNames(prev => ({...prev, [accountId]: 'Unknown Account'}));
-        return 'Unknown Account';
-    }, [
-      companyId,
-      journalAccountNames,
-      userNames,
-      voucherJournalAccountNames,
-      vouchersUserNames,
-      setUserNames,
-    ]);
-
-
-    const loadJournalAccountNames = useCallback(async (vouchersToLoad: Voucher[]) => {
-        const accountIdsToFetch = new Set<string>();
-        vouchersToLoad.forEach(v => {
-            // Note: linked party/account/staff/item ka naam resolve karne ke liye entityId bhi fetch karo
-            const noteEntityId = (v as any).type === "note" ? (v as any).entityId : undefined;
-            if (noteEntityId && !journalAccountNames[noteEntityId] && !voucherJournalAccountNames[noteEntityId]) accountIdsToFetch.add(noteEntityId);
-            if (v.type === 'journal' || v.type === 'contra' || v.type === 'payment_in' || v.type === 'payment_out' || v.type === 'direct_income' || v.type === 'direct_expense' || v.type === 'sale' || v.type === 'purchase') {
-                (v.entries || []).forEach((entry: any) => {
-                    if (entry.accountId && !journalAccountNames[entry.accountId] && !voucherJournalAccountNames[entry.accountId]) accountIdsToFetch.add(entry.accountId);
-                });
-                if(v.fromAccountId && !journalAccountNames[v.fromAccountId] && !voucherJournalAccountNames[v.fromAccountId]) accountIdsToFetch.add(v.fromAccountId);
-                if(v.toAccountId && !journalAccountNames[v.toAccountId] && !voucherJournalAccountNames[v.toAccountId]) accountIdsToFetch.add(v.toAccountId);
-                if(v.partyId && !journalAccountNames[v.partyId] && !voucherJournalAccountNames[v.partyId]) accountIdsToFetch.add(v.partyId);
-                if(v.staffId && !journalAccountNames[v.staffId] && !voucherJournalAccountNames[v.staffId]) accountIdsToFetch.add(v.staffId);
-                if(v.accountId && !journalAccountNames[v.accountId] && !voucherJournalAccountNames[v.accountId]) accountIdsToFetch.add(v.accountId);
-                if((v as any).expenseAccountId && !journalAccountNames[(v as any).expenseAccountId] && !voucherJournalAccountNames[(v as any).expenseAccountId]) accountIdsToFetch.add((v as any).expenseAccountId);
-                if((v as any).incomeAccountId && !journalAccountNames[(v as any).incomeAccountId] && !voucherJournalAccountNames[(v as any).incomeAccountId]) accountIdsToFetch.add((v as any).incomeAccountId);
-                 if((v as any).userId && !userNames[(v as any).userId] && !vouchersUserNames[(v as any).userId]) {
-                    fetchAccountName((v as any).userId).then(name => setUserNames(prev => ({...prev, [(v as any).userId]: name})))
-                }
-            }
-        });
-        
-        if (accountIdsToFetch.size > 0) {
-            const entries = await Promise.all(
-              Array.from(accountIdsToFetch).map(async (accountId) =>
-                [accountId, await fetchAccountName(accountId)] as const
-              )
-            );
-            const newNames = Object.fromEntries(entries);
-            setJournalAccountNames(prev => ({...prev, ...newNames}));
-        }
-    }, [fetchAccountName, journalAccountNames, userNames, voucherJournalAccountNames, vouchersUserNames]);
-
-
-    useEffect(() => {
-        if (vouchers.length > 0) {
-            loadJournalAccountNames(vouchers as Voucher[]);
-        }
-    }, [vouchers, loadJournalAccountNames]);
 
     useEffect(() => {
         if (!companyId) return;
@@ -420,11 +255,14 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
         undefined, 
         daybookFilters, 
         daybookVoucherTypes, 
-        journalAccountNames, 
-        { ...vouchersUserNames, ...userNames },
+        voucherJournalAccountNames, 
+        vouchersUserNames,
         undefined,
         daybookUserFilter
       );
+
+    const deferredDaybookTransactions = useDeferredValue(daybookTransactions);
+    const isDaybookTransactionsPending = deferredDaybookTransactions !== daybookTransactions;
 
     // Server only jab client voucher cache khali/incomplete ho — warna ledger jaisi client math (Aftab Settled vs -5000 bug).
     const {
@@ -547,7 +385,7 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                                             <SelectItem value="__all__">All users</SelectItem>
                                             {daybookUserFilterIds.map((uid) => (
                                                 <SelectItem key={uid} value={uid}>
-                                                    {daybookUserLabelHints[uid] || vouchersUserNames[uid] || userNames[uid] || uid}
+                                                    {daybookUserLabelHints[uid] || vouchersUserNames[uid] || uid}
                                                 </SelectItem>
                                             ))}
                                         </SelectContent>
@@ -821,7 +659,7 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                                     <SelectItem value="__all__">All users</SelectItem>
                                     {daybookUserFilterIds.map((uid) => (
                                         <SelectItem key={uid} value={uid}>
-                                            {daybookUserLabelHints[uid] || vouchersUserNames[uid] || userNames[uid] || uid}
+                                            {daybookUserLabelHints[uid] || vouchersUserNames[uid] || uid}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
@@ -839,26 +677,30 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                             </Select>
                         </div>
                     </div>
-                    <span className="text-sm font-medium text-muted-foreground w-full block">Total Vouchers: {daybookTransactions ? daybookTransactions.length : 0}</span>
+                    <span className="text-sm font-medium text-muted-foreground w-full block">Total Vouchers: {deferredDaybookTransactions ? deferredDaybookTransactions.length : 0}</span>
                 </div>
             </CardHeader>
             <CardContent className={cn(
                 "flex-1 min-h-0 overflow-hidden flex flex-col relative px-0 min-w-full",
                 isMobile && "px-0",
-                (!daybookTransactions || daybookTransactions.length === 0) && "min-h-[420px]"
+                (!deferredDaybookTransactions || deferredDaybookTransactions.length === 0) && !isDaybookTransactionsPending && "min-h-[420px]"
             )}>
-                 {daybookTransactions && daybookTransactions.length > 0 ? (
+                 {isDaybookTransactionsPending ? (
+                    <div className="flex flex-1 min-h-[420px] items-center justify-center p-6">
+                        <Skeleton className="h-8 w-48" />
+                    </div>
+                 ) : deferredDaybookTransactions && deferredDaybookTransactions.length > 0 ? (
                 <div className="flex-1 min-h-0 flex flex-col overflow-hidden min-w-full w-full">
                     <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto min-w-full w-full">
                            {/* Mobile: 2px horizontal gap so transaction cards match Daily Summary card spacing */}
                            <div className={cn("w-full min-w-full overflow-hidden pr-[15px]", isMobile && "px-[2px]")}>
                            <TransactionsTable
-                                transactions={daybookTransactions || []}
+                                transactions={deferredDaybookTransactions || []}
                                 context="daybook" 
                                 showNarration={showDaybookNarration}
                                 narrationNoteSearch={daybookNarrationNoteSearch}
-                                journalAccountNames={journalAccountNames}
-                                userNames={{ ...vouchersUserNames, ...userNames }}
+                                journalAccountNames={voucherJournalAccountNames}
+                                userNames={vouchersUserNames}
                                 onRowClick={handleEditVoucher}
                                 onHistoryVoucher={handleHistoryVoucher}
                                 onAddLink={handleAddLink}

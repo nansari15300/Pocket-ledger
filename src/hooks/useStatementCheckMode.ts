@@ -347,6 +347,7 @@ export function useStatementCheckMode({
     setCheckModeEnabled,
     filterTransactions,
     adjustPeriodTotals,
+    hiddenIds,
     hiddenCount: hiddenIds.size,
     tableProps,
     focusId,

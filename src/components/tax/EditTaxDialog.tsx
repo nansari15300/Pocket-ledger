@@ -31,7 +31,9 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { MasterDeleteConfirmAlertDialog } from "@/components/common/MasterDeleteConfirmAlertDialog";
+import { permanentDeleteCompanySubdocFromRecycleBin } from "@/lib/recycleBinEntityLifecycle";
+import { assertCanPermanentDeleteFromForm } from "@/lib/permanentDeleteFromForm";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import {
@@ -84,6 +86,10 @@ import { toast as sonnerToast } from "sonner";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import {
+  finalizeMasterOpeningBalanceSideEffects,
+  masterOpeningPatchFromPersisted,
+} from "@/lib/fyPagination/masterOpeningSaveHooks";
 import { useVouchers } from "@/hooks/useVouchers";
 
 const formSchema = z.object({
@@ -136,7 +142,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     [company, navigatorOnline]
   );
   const { user } = useAuth();
-  const { canAddAvatar, canAddFileImagePdf, can } = usePermissions();
+  const { canAddAvatar, canAddFileImagePdf, can, role } = usePermissions();
   const isMobile = useIsMobile();
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { processedTaxGroups } = useVouchers();
@@ -372,15 +378,29 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           };
           const payload: Record<string, unknown> = { ...base, ...updatePayload, id: taxRefSnap.id, companyId };
           await upsertCompanyDocInBrowserDb(companyId, "taxes", taxRefSnap.id, payload);
-          await enqueueCompanyDocOutbox(companyId, "taxes", "update", taxRefSnap.id, payload);
+          const persisted =
+            (await getCompanyDocFromBrowserDb(companyId, "taxes", taxRefSnap.id)) ?? payload;
+          await enqueueCompanyDocOutbox(companyId, "taxes", "update", taxRefSnap.id, persisted);
           await syncEntityAttachmentsAfterSave(companyId);
+
+          await finalizeMasterOpeningBalanceSideEffects({
+            company,
+            companyId,
+            collection: "taxes",
+            entityId: taxRefSnap.id,
+            oldOpeningBalance,
+            newOpeningBalance,
+            oldOpeningBalanceDate: (taxRefSnap as any).openingBalanceDate,
+            newOpeningBalanceDate: values.openingBalanceDate,
+          });
+
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onTaxUpdated({
             id: taxRefSnap.id,
             ...values,
+            ...masterOpeningPatchFromPersisted(persisted),
             fileUrl: fileUrl || "",
             documentFileUrls,
-            openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
           });
           initialFileRef.current = fileUrl || null;
           initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
@@ -408,17 +428,25 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
         await updateDoc(taxRef, updatePayload);
         await syncEntityAttachmentsAfterSave(companyId);
 
-        if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
-          const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
-          await balanceOpeningBalanceWithCapital(companyId, "taxes", taxRefSnap.id, oldOpeningBalance, newOpeningBalance);
-        }
+        await finalizeMasterOpeningBalanceSideEffects({
+          company,
+          companyId,
+          collection: "taxes",
+          entityId: taxRefSnap.id,
+          oldOpeningBalance,
+          newOpeningBalance,
+          oldOpeningBalanceDate: (taxRefSnap as any).openingBalanceDate,
+          newOpeningBalanceDate: values.openingBalanceDate,
+        });
 
         onTaxUpdated({
           id: taxRefSnap.id,
           ...values,
+          openingBalance: newOpeningBalance,
+          openingBalanceDate: values.openingBalanceDate,
+          openingBalanceNarration: narrationClean ?? "",
           fileUrl: fileUrl || "",
           documentFileUrls,
-          openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
         });
         initialFileRef.current = fileUrl || null;
         initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
@@ -490,6 +518,51 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
         setIsLoading(false);
     }
   }
+
+  const handlePermanentDelete = async () => {
+    if (!companyId) {
+      toast({ variant: "destructive", title: "Error", description: "No company selected." });
+      return;
+    }
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+    } catch (err) {
+      sonnerToast.error("Permission Denied", {
+        description: err instanceof Error ? err.message : "No permission",
+      });
+      return;
+    }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    if (hasTransactions) {
+      sonnerToast.error("Cannot Delete", { description: "This tax ledger has transactions and cannot be deleted." });
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await permanentDeleteCompanySubdocFromRecycleBin(companyId, "taxes", tax.id);
+      toast({
+        title: "Tax deleted permanently",
+        description: `"${tax.name}" was permanently deleted.`,
+      });
+      onTaxDeleted(tax.id);
+      setIsOpen(false);
+      setIsDeleteDialogOpen(false);
+    } catch (error) {
+      console.error("Error permanently deleting tax: ", error);
+      toast({
+        variant: "destructive",
+        title: "Delete Failed",
+        description: "Could not permanently delete the tax ledger.",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
   const handleGroupCreated = (newGroupId: string) => {
     form.setValue('groupId', newGroupId);
@@ -780,22 +853,17 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
         </DialogContent>
       </Dialog>
       
-      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-        <AlertDialogContent>
-            <AlertDialogHeader>
-                <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                <AlertDialogDescription>
-                    This action will move the tax ledger <span className="font-semibold text-foreground">{tax.name}</span> to the recycle bin.
-                </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-                <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS}>Cancel</AlertDialogCancel>
-                <AlertDialogAction disabled={apkOfflineViewOnly} onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                    Move to Bin
-                </AlertDialogAction>
-            </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <MasterDeleteConfirmAlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        entityKind="tax ledger"
+        entityName={tax.name}
+        onMoveToBin={handleDelete}
+        onDeletePermanently={handlePermanentDelete}
+        busy={isLoading}
+        moveToBinDisabled={apkOfflineViewOnly}
+        permanentDeleteDisabled={apkOfflineViewOnly}
+      />
       <CreateTaxGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} />
     </>
   );

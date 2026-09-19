@@ -23,10 +23,6 @@ import {
   Printer,
   Landmark,
   Calendar as CalendarIcon,
-  ChevronsLeft,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsRight,
   FilePlus,
   XCircle,
   X,
@@ -61,13 +57,6 @@ import {
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { mdc } from "@/lib/mobileDetailChrome";
 import { Calendar } from "@/components/ui/calendar";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
@@ -108,12 +97,19 @@ import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { AdjustBalancePillLabel } from "../vouchers/AdjustBalancePillLabel";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { LedgerFooterCheckboxPill, LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
+import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
-import { useStatementCheckMode } from "@/hooks/useStatementCheckMode";
+import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
+import type {
+  TransactionSortBy,
+  TransactionSortOrder,
+} from "@/components/vouchers/TransactionTableSortDropdown";
+import { DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT, rowsPerPageSelectValue } from "@/lib/rowsPerPageSelect";
 
-import { useTransactionVisibleColumns, COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
+import { useTransactionVisibleColumns, useShowNotes, COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -124,7 +120,6 @@ import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Checkbox } from "../ui/checkbox";
 import { useTransactions } from "@/hooks/use-transactions";
-import { recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter } from "next/navigation";
@@ -189,6 +184,9 @@ export function AccountDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   
@@ -298,30 +296,44 @@ export function AccountDetails({
     setFilters({});
   };
 
-  const [statementKeyboardNav, setStatementKeyboardNav] = useState<
-    ReadonlyArray<{ id?: string; _rowKey?: string }>
-  >([]);
-  const statementCheck = useStatementCheckMode({
+  const searchFilteredTransactions = useMemo(
+    () =>
+      includeNotesInTable
+        ? processedTransactions
+        : processedTransactions.filter((t: any) => t.type !== "note"),
+    [processedTransactions, includeNotesInTable]
+  );
+
+  const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+
+  const {
+    statementCheck,
+    desktopPaginationMeta,
+    paginatedTransactions,
+    totalPages,
+  } = useStatementLedgerCheckModePaging({
     companyId,
     context: "account",
     contextId: account?.id,
     viewMode: "statement",
-    orderedTransactions: processedTransactions,
-    keyboardNavTransactions: statementKeyboardNav,
+    searchFilteredTransactions,
+    rowsPerPage,
+    currentPage,
+    ledgerOpeningForRunning: openingBalanceForPeriod,
+    pageSortBy: sortBy,
+    pageSortOrder: sortOrder,
   });
-  const ledgerListForDisplay = useMemo(() => {
-    const filtered = statementCheck.filterTransactions([...processedTransactions]);
-    if (!statementCheck.checkModeActive) return filtered;
-    return recomputeRunningBalanceTopToBottom(filtered, openingBalanceForPeriod);
-  }, [
-    processedTransactions,
-    statementCheck.filterTransactions,
-    statementCheck.checkModeActive,
-    openingBalanceForPeriod,
-  ]);
 
-  const totalPages =
-    rowsPerPage > 0 ? Math.ceil(ledgerListForDisplay.length / rowsPerPage) : 1;
+  const ledgerPageStats = {
+    openingForPage: desktopPaginationMeta.openingForPage,
+    periodDrForPage: desktopPaginationMeta.periodDrForPage,
+    periodCrForPage: desktopPaginationMeta.periodCrForPage,
+    closingForPage: desktopPaginationMeta.closingForPage,
+  };
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), totalPages));
+  }, [totalPages]);
 
   useLedgerDetailSessionMemory({
     companyId: companyId ?? undefined,
@@ -338,102 +350,29 @@ export function AccountDetails({
     setIsVoucherDialogOpen,
   });
 
-  /** Oldest-first pages: page1 = shuru wale txn (1–10) Book OB; page2+ Dated. rowsPerPage=0 = sab ek page. */
-  const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
-
-  const ledgerPagination = useMemo(() => {
-    const list = ledgerListForDisplay as any[];
-    const total = list.length;
-    if (rowsPerPage <= 0) {
-      const periodDrForPage = list.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
-      const periodCrForPage = list.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
-      return {
-        pageRows: list,
-        openingForPage: openingBalanceForPeriod,
-        periodDrForPage,
-        periodCrForPage,
-        closingForPage: openingBalanceForPeriod + periodDrForPage - periodCrForPage,
-      };
-    }
-    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
-    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    let startIdx: number;
-    let endIdx: number;
-    if (useTailPaging) {
-      endIdx = total - (safePage - 1) * rowsPerPage;
-      startIdx = Math.max(0, endIdx - rowsPerPage);
-    } else {
-      startIdx = (safePage - 1) * rowsPerPage;
-      endIdx = Math.min(startIdx + rowsPerPage, total);
-    }
-    const pageRows = list.slice(startIdx, endIdx);
-    const previousTx = startIdx > 0 ? list[startIdx - 1] : null;
-    const previousRunningBalance =
-      previousTx != null
-        ? (typeof previousTx.balance === "number"
-            ? previousTx.balance
-            : typeof previousTx.runningBalance === "number"
-              ? previousTx.runningBalance
-              : undefined)
-        : undefined;
-    const openingForPage =
-      typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
-        ? previousRunningBalance
-        : openingBalanceForPeriod;
-    let periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
-    let periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
-    let closingForPage = openingForPage + periodDrForPage - periodCrForPage;
-    const adjusted = statementCheck.adjustPeriodTotals(pageRows, openingForPage);
-    if (adjusted) {
-      periodDrForPage = adjusted.periodDrForPage;
-      periodCrForPage = adjusted.periodCrForPage;
-      closingForPage = adjusted.closingForPage;
-    }
-    return { pageRows, openingForPage, periodDrForPage, periodCrForPage, closingForPage };
-  }, [ledgerListForDisplay, rowsPerPage, currentPage, openingBalanceForPeriod, statementCheck.adjustPeriodTotals, useTailPaging]);
-
-  useEffect(() => {
-    setCurrentPage((prev) => Math.min(Math.max(1, prev), totalPages));
-  }, [totalPages]);
-
-  const paginatedTransactions = ledgerPagination.pageRows;
-  const ledgerPageStats = {
-    openingForPage: ledgerPagination.openingForPage,
-    periodDrForPage: ledgerPagination.periodDrForPage,
-    periodCrForPage: ledgerPagination.periodCrForPage,
-    closingForPage: ledgerPagination.closingForPage,
-  };
-
-
-  useEffect(() => {
-    setStatementKeyboardNav(paginatedTransactions ?? []);
-  }, [paginatedTransactions]);
-  /** Page2+ Dated date = pichle page ki last txn (#10 on page2); page1+filter = range-from. */
+  /** Page2+ Dated date = pichle page ki last txn; page1+filter = range-from. */
   const ledgerOpeningPeriodStartDate = useMemo(() => {
-    const list = processedTransactions as any[];
+    const list = searchFilteredTransactions as any[];
+    const start = desktopPaginationMeta.sliceStart;
     if (rowsPerPage <= 0) {
       if (hasLedgerDateFilter) return dateRange?.from;
       return undefined;
     }
-    const totalPagesLocal = Math.max(1, Math.ceil(list.length / rowsPerPage));
-    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    let sliceStart: number;
-    if (useTailPaging) {
-      const total = list.length;
-      const end = total - (safePage - 1) * rowsPerPage;
-      sliceStart = Math.max(0, end - rowsPerPage);
-    } else {
-      sliceStart = (safePage - 1) * rowsPerPage;
-    }
-    if (sliceStart === 0) {
+    if (start === 0) {
       if (hasLedgerDateFilter) return dateRange?.from;
       return undefined;
     }
-    const t = list[sliceStart - 1] as any;
+    const t = list[start - 1] as any;
     if (!t) return undefined;
     const raw = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : undefined;
     return raw instanceof Date && !isNaN(raw.getTime()) ? raw : undefined;
-  }, [processedTransactions, rowsPerPage, currentPage, hasLedgerDateFilter, dateRange?.from, useTailPaging]);
+  }, [
+    searchFilteredTransactions,
+    rowsPerPage,
+    desktopPaginationMeta.sliceStart,
+    hasLedgerDateFilter,
+    dateRange?.from,
+  ]);
 
   /** Master books OB — Book Opening pill / stacked card (form se). */
   const masterAccountOpening = Number(account.openingBalance) || 0;
@@ -899,7 +838,7 @@ export function AccountDetails({
                 booksOpeningBalance={masterAccountOpening}
                 openingBalanceDate={(account as { openingBalanceDate?: unknown }).openingBalanceDate}
                 ledgerDateFilterActive={hasLedgerDateFilter}
-                ledgerShowBookOpeningRow={rowsPerPage <= 0 || currentPage === 1}
+                ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0}
                 openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
                 showNarration={showNarration}
                 visibleColumns={visibleColumns}
@@ -1022,7 +961,7 @@ export function AccountDetails({
           </div>
         )}
 
-        <ScrollArea className="min-h-0 flex-1">
+        <ScrollArea txnChrome className="min-h-0 flex-1">
           <div className="pb-24">
             {filteredMobileTransactions.map((t: any) => (
               <TransactionRow key={t.id} transaction={t} />
@@ -1191,7 +1130,7 @@ export function AccountDetails({
         </div>
 
         {/* TABLE: page1=oldest block (1–10); Book OB; p2+ Dated w/ date=prev page last txn */}
-        <ScrollArea className="flex-1">
+        <ScrollArea txnChrome className="flex-1">
           <div className="p-4">
             <TransactionsTable
               transactions={paginatedTransactions}
@@ -1202,7 +1141,7 @@ export function AccountDetails({
               booksOpeningBalance={masterAccountOpening}
               openingBalanceDate={(account as any).openingBalanceDate}
               ledgerDateFilterActive={hasLedgerDateFilter}
-              ledgerShowBookOpeningRow={rowsPerPage <= 0 || currentPage === 1}
+              ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0}
               openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               showNarration={showNarration}
               visibleColumns={visibleColumns}
@@ -1234,13 +1173,12 @@ export function AccountDetails({
             
               {...statementCheck.tableProps}/>
           </div>
-          <ScrollBar orientation="horizontal" />
+          <ScrollBar orientation="horizontal" txnChrome />
         </ScrollArea>
-        {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className={LEDGER_HEADER_OUTER_ROW_CN}>
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <span className="whitespace-nowrap flex-shrink-0">{processedTransactions.length} transaction(s).</span>
+        {/* Footer — masters-style compact LedgerDesktopFooter */}
+        <LedgerDesktopFooter
+          left={
+            <>
               <LedgerFooterCheckboxPill
                 id="show-narration-account"
                 checked={showNarration}
@@ -1267,6 +1205,13 @@ export function AccountDetails({
                   ))}
                 </DropdownMenuContent>
               </LedgerFooterColumnsMenu>
+              <LedgerFooterCheckboxPill
+                id="show-notes-account"
+                checked={includeNotesInTable}
+                disabled={notesPreferenceLockedOnMobile}
+                onCheckedChange={(c) => setShowNotes(Boolean(c))}
+                label="Note"
+              />
               <StatementCheckModeFooterControls
                 idPrefix="income-expense-account"
                 enabled={statementCheck.checkModeEnabled}
@@ -1274,55 +1219,31 @@ export function AccountDetails({
                 viewMode="statement"
                 hiddenCount={statementCheck.hiddenCount}
               />
-            </div>
-            <div className={LEDGER_HEADER_PILL_ROW_CN}>
-              <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronsLeft className="h-4 w-4" />
-              </Button>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(currentPage - 1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <LedgerFooterChromePill className="px-1">
-
-              <Select
-                value={`${rowsPerPage}`}
-                onValueChange={(value) => {
-                  setRowsPerPage(Number(value) || 0);
-                  setCurrentPage(1);
-                }}
-              >
-                <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
-                  <SelectValue placeholder={`${rowsPerPage}`} />
-                </SelectTrigger>
-                <SelectContent side="top">
-                  {[10, 20, 30, 50].map((pageSize) => (
-                    <SelectItem key={pageSize} value={`${pageSize}`}>{pageSize}</SelectItem>
-                  ))}
-                  <SelectItem value="0">All</SelectItem>
-                </SelectContent>
-              </Select>
-              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(currentPage + 1)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronsRight className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSortChange={(by, order) => {
+            setSortBy(by);
+            setSortOrder(order);
+          }}
+          viewMode="statement"
+          currentPage={currentPage}
+          totalPages={totalPages}
+          setCurrentPage={setCurrentPage}
+          rowsPerPageSelectValue={rowsPerPageSelectValue(
+            rowsPerPage,
+            ROWS_PER_PAGE_OPTIONS_DEFAULT,
+            "10"
+          )}
+          onRowsPerPageChange={(value) => {
+            setRowsPerPage(Number(value) || 0);
+            setCurrentPage(1);
+          }}
+          beforeCount={desktopPaginationMeta.beforeCount}
+          afterCount={desktopPaginationMeta.afterCount}
+          totalCount={searchFilteredTransactions.length}
+        />
       </div>
   );
   }

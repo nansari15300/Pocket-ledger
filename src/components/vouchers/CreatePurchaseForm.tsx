@@ -31,14 +31,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Textarea } from "../ui/textarea";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Checkbox } from "../ui/checkbox";
+import { VoucherDeleteConfirmAlertDialog } from "@/components/vouchers/VoucherDeleteConfirmAlertDialog";
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
-} from "../ui/alert-dialog";
+  assertCanPermanentDeleteFromForm,
+  permanentDeleteVoucherFromForm,
+} from "@/lib/permanentDeleteFromForm";
 
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, ArrowRight, Link2, History, CheckCircle, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
 import { mapPartiesForVoucherCombobox } from "@/lib/masterAccountFreeze/comboboxOptions";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
@@ -65,7 +65,7 @@ import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_MOBILE_ATTACH_TILE_SLOT, VOUCHER_MOBILE_ATTACH_PREVIEW_CLASS, VOUCHER_MOBILE_ATTACH_ADD_SURFACE_CLASS, VOUCHER_DESKTOP_ATTACH_TILE_SLOT, VOUCHER_DESKTOP_ATTACH_PREVIEW_CLASS, VOUCHER_DESKTOP_ATTACH_ADD_SURFACE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
-import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
+import { getNextVoucherNumberForCompany, resolveCompanyVoucherPrefixList } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { loadVoucherDataForDeletePreCheck, resolveVoucherDeleteBackdateDate } from "@/lib/voucherDeletePreCheck";
 import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
@@ -227,15 +227,20 @@ const FLAT_SELECT_TRIGGER = "h-9 w-full border-0 shadow-none focus-visible:ring-
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-const getVoucherPrefix = (
-  type: "item" | "service",
-  prefixes?: Record<string, string[]>
-) => {
-  if (type === "service") {
-    return (prefixes?.purchase_service && prefixes.purchase_service[0]) || "PS-";
-  }
-  return (prefixes?.purchase && prefixes.purchase[0]) || "PUR-";
-};
+function createEmptyPurchaseLineItem(type: "item" | "service" = "item") {
+  return {
+    type,
+    itemId: "",
+    quantity: 1,
+    rate: 0,
+    unit: "",
+    amount: 0,
+    taxAccountId: "",
+    taxAmount: 0,
+    isTaxInclusive: false,
+    allowManualRate: true,
+  };
+}
 
 function getInitialFormValues(voucher?: any): PurchaseFormValues {
   if (!voucher) {
@@ -247,20 +252,7 @@ function getInitialFormValues(voucher?: any): PurchaseFormValues {
       narration: "",
       dueDate: undefined,
       overdueImportant: false,
-      lineItems: [
-        {
-          type: "item",
-          itemId: "",
-          quantity: 1,
-          rate: 0,
-          unit: "",
-          amount: 0,
-          taxAccountId: "",
-          taxAmount: 0,
-          isTaxInclusive: false,
-          allowManualRate: true,
-        },
-      ],
+      lineItems: [createEmptyPurchaseLineItem("item")],
       subTotal: 0,
       totalPurchasePrice: 0,
       discount: 0,
@@ -520,6 +512,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       if (comboboxVal !== "add-new" || !unitLabel.trim()) return;
       void persistCustomUnitIfNew({
         companyId,
+        company,
         unitLabel,
         reloadLocalCompanyRegistry,
         triggerSync,
@@ -528,7 +521,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         toast({ variant: "destructive", title: "Could not save unit list", description: "Check connection and try again." });
       });
     },
-    [companyId, reloadLocalCompanyRegistry, triggerSync, toast]
+    [company, companyId, reloadLocalCompanyRegistry, triggerSync, toast]
   );
 
   const voucherIdForLinks = isCopiedDraftFirstInsert ? undefined : (voucher?.id ?? savedVoucherId ?? undefined);
@@ -800,13 +793,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   /* ---------------------- AUTO VOUCHER NUMBER GENERATION ------------------ */
 
   const fetchVoucherNumber = useCallback(
-    async (prefix?: string) => {
+    async (prefix?: string, lineItemType?: "item" | "service") => {
       if (!companyId || !company || !isAutoVoucherEnabled) return;
+      const liType = lineItemType ?? primaryLineItemType;
       try {
         const nextNo = await getNextVoucherNumberForCompany({
           companyId,
           companyDoc: company as Record<string, unknown>,
-          voucherLike: { type: "purchase", lineItems: [{ type: primaryLineItemType }] },
+          voucherLike: { type: "purchase", lineItems: [{ type: liType }] },
           selectedPrefix: prefix,
         });
         form.setValue("voucherNumber", nextNo);
@@ -1392,6 +1386,78 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
   };
 
+  const handlePermanentDelete = async () => {
+    const voucherIdToDelete = savedVoucherId || voucher?.id || null;
+    if (!voucherIdToDelete || !companyId) {
+      toast({ variant: "destructive", title: "Delete failed", description: "Voucher id missing." });
+      return;
+    }
+
+    try {
+      assertCanPermanentDeleteFromForm(can, role);
+      const localVoucherData = voucher ?? vouchers?.find((v: any) => v.id === voucherIdToDelete) ?? null;
+      const { voucherData, exists: voucherDocExists } = await loadVoucherDataForDeletePreCheck({
+        companyId,
+        voucherId: voucherIdToDelete,
+        company,
+        fallbackVoucher: (localVoucherData as Record<string, unknown> | null) ?? null,
+        vouchers: vouchers as Array<{ id?: string } & Record<string, unknown>> | null,
+      });
+      if (!canDeleteVoucher(voucherData)) {
+        throw new PermissionDeniedError(
+          (voucherData as any)?.isApproved ? "You do not have permission to delete approved vouchers." : "You do not have permission to delete records."
+        );
+      }
+      if (voucherData && hasPaymentLinks(voucherData)) {
+        toast({ variant: "destructive", title: "Cannot Delete", description: "First unlink linked transactions." });
+        return;
+      }
+      if (voucherDocExists && voucherData) {
+        const voucherDate = resolveVoucherDeleteBackdateDate(voucherData, {
+          form: "purchase",
+          companyId,
+          voucherId: voucherIdToDelete,
+        });
+        assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
+      }
+    } catch (error) {
+      if (error instanceof PermissionDeniedError) {
+        toast({
+          variant: "destructive",
+          title: "Permission Denied",
+          description: error.message,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to check permissions.",
+        });
+      }
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      await permanentDeleteVoucherFromForm(companyId, voucherIdToDelete);
+      toast({
+        title: "Purchase deleted permanently.",
+        description: "The purchase bill has been permanently deleted.",
+      });
+      setIsDeleteDialogOpen(false);
+      if (onVoucherAction) onVoucherAction("cancelled");
+    } catch (err) {
+      console.error("permanent delete purchase error:", err);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to permanently delete purchase.",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!allowAttachments) return;
     await handleVoucherAttachmentInputChange(e, {
@@ -1415,12 +1481,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   /* ------------------------- DERIVED MEMOS / WATCHES ---------------------- */
 
-  const voucherPrefixes = useMemo(
-    () =>
-      company?.voucherPrefixes?.[primaryLineItemType === "service" ? "purchase_service" : "purchase"] ||
-      [getVoucherPrefix(primaryLineItemType)],
-    [company, primaryLineItemType, files]
-  );
+  const voucherPrefixes = useMemo(() => {
+    const prefixKey = primaryLineItemType === "service" ? "purchase_service" : "purchase";
+    return resolveCompanyVoucherPrefixList(
+      prefixKey,
+      company?.voucherPrefixes?.[prefixKey]
+    );
+  }, [company, primaryLineItemType]);
   // Keep ref current so handleFormSubmit always calls latest version
   processAndSaveRef.current = processAndSave;
 
@@ -1441,6 +1508,52 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }),
     [filteredItems, allProcessedItems, watchedLineItems, items]
   );
+
+  /** Items/Services tab — line type + voucher prefix/number sync (har click par). */
+  const handleItemTypeTabChange = useCallback(
+    (next: "item" | "service") => {
+      if (deleteDisabledWhenLinked) return;
+      if (next === itemType) return;
+      setItemType(next);
+      let lines = form.getValues("lineItems") || [];
+      if (lines.length === 0) {
+        append(createEmptyPurchaseLineItem(next));
+        lines = form.getValues("lineItems") || [];
+      }
+      lines.forEach((li, idx) => {
+        form.setValue(`lineItems.${idx}.type`, next, { shouldDirty: true });
+        const itemId = String(li.itemId || "").trim();
+        if (!itemId) return;
+        const row = allProcessedItems.find((i) => i.id === itemId);
+        if (row && row.type !== next) {
+          form.setValue(`lineItems.${idx}.itemId`, "", { shouldDirty: true });
+          form.setValue(`lineItems.${idx}.rate`, 0, { shouldDirty: true });
+          form.setValue(`lineItems.${idx}.amount`, 0, { shouldDirty: true });
+          form.setValue(`lineItems.${idx}.unit`, "", { shouldDirty: true });
+        }
+      });
+      if ((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled) {
+        void fetchVoucherNumber(undefined, next);
+      }
+    },
+    [
+      deleteDisabledWhenLinked,
+      itemType,
+      form,
+      append,
+      allProcessedItems,
+      savedVoucherId,
+      isEditingAndConverting,
+      isAutoVoucherEnabled,
+      fetchVoucherNumber,
+    ]
+  );
+
+  useEffect(() => {
+    if (voucher?.id || savedVoucherId) return;
+    if ((form.getValues("lineItems") || []).length > 0) return;
+    append(createEmptyPurchaseLineItem(itemType));
+  }, [voucher?.id, savedVoucherId, fields.length, itemType, append, form]);
   
   const availableAccounts = useMemo(() => processedAccounts.filter(acc => !acc.isSpecial), [processedAccounts]);
   /** Save & Copy To: mismatch categories source-driven rakho; source me item na ho to item Copy chip hide. */
@@ -2051,7 +2164,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   isMobile ? "w-[calc(100%-4px)] mx-auto px-[2px] overflow-hidden" : "px-[2px] overflow-x-visible"
                 )}>
                 <div className={cn("mb-2", isMobile && "flex justify-start")}>
-                  <Tabs value={itemType} onValueChange={(v) => { if (deleteDisabledWhenLinked) return; setItemType(v as "item" | "service"); }} className={cn(isMobile && "w-auto")}>
+                  <Tabs value={itemType} onValueChange={(v) => handleItemTypeTabChange(v as "item" | "service")} className={cn(isMobile && "w-auto")}>
                     <TabsList className={cn(
                       isMobile && "flex gap-[2px] px-[2px]"
                     )}>
@@ -2404,20 +2517,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         variant="outline"
                         size="sm"
                         disabled={(voucher?.id || savedVoucherId) ? (hasItemEditLock || deleteDisabledWhenLinked) : false}
-                        onClick={() =>
-                          append({
-                            type: itemType,
-                            itemId: "",
-                            quantity: 1,
-                            rate: 0,
-                            unit: "",
-                            amount: 0,
-                            taxAccountId: "",
-                            taxAmount: 0,
-                            isTaxInclusive: false,
-                            allowManualRate: true,
-                          })
-                        }
+                        onClick={() => append(createEmptyPurchaseLineItem(itemType))}
                       >
                         <PlusCircle className="mr-2 h-4 w-4" /> Add Line
                       </Button>
@@ -2755,20 +2855,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           variant="outline"
                           size="sm"
                           disabled={(voucher?.id || savedVoucherId) ? (hasItemEditLock || deleteDisabledWhenLinked) : false}
-                          onClick={() =>
-                            append({
-                              type: itemType,
-                              itemId: "",
-                              quantity: 1,
-                              rate: 0,
-                              unit: "",
-                              amount: 0,
-                              taxAccountId: "",
-                              taxAmount: 0,
-                              isTaxInclusive: false,
-                              allowManualRate: true,
-                            })
-                          }
+                          onClick={() => append(createEmptyPurchaseLineItem(itemType))}
                         >
                           <PlusCircle className="mr-2 h-4 w-4" /> Add Line
                         </Button>
@@ -3475,25 +3562,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             {isMobile ? (
               <div className={cn("grid grid-cols-3 gap-2 w-full min-w-0", VOUCHER_BUTTONS_CLASS)}>
                 {/* Row 0: Delete (left) | History (middle) | Save & Print (right) */}
-                <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                  <AlertDialogTrigger asChild>
-                    <Button type="button" variant="destructive" className="w-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                <Button type="button" variant="destructive" className="w-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))} onClick={() => setIsDeleteDialogOpen(true)}>
                       Delete
                     </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                      <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                        Delete
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
                 <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
                   History
                 </Button>
@@ -3517,25 +3588,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || !showHistoryButton || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
                     <History className="mr-2 h-4 w-4" /> History
                   </Button>
-                  <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                    <AlertDialogTrigger asChild>
-                      <Button type="button" variant="destructive" className="shrink-0 rounded-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                  <Button type="button" variant="destructive" className="shrink-0 rounded-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))} onClick={() => setIsDeleteDialogOpen(true)}>
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                        <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                          Move to Bin
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
                 </div>
                 <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={() => { setPendingLinkAllocations(null); onVoucherAction?.('cancelled'); }} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
@@ -3619,6 +3674,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         />
       )}
       <LinkSectionInfoDialog open={linkSectionInfoOpen} onOpenChange={setLinkSectionInfoOpen} />
+      <VoucherDeleteConfirmAlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        entityKind="purchase"
+        entityName={voucher?.voucherNumber || form.watch("voucherNumber") || "this purchase"}
+        onMoveToBin={handleDelete}
+        onDeletePermanently={handlePermanentDelete}
+        busy={isLoading}
+      />
     </>
   );
 }

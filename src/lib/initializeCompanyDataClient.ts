@@ -20,7 +20,7 @@ const DEFAULT_VOUCHER_SETTINGS = {
   },
   allowRateEditing: { sale: true, purchase: true },
   voucherPrefixes: {
-    sale: ["Sale Inv"], sale_service: ["SS-"], purchase: ["PUR-"], purchase_service: ["PS-"],
+    sale: ["Sale Inv"], sale_service: ["SER-"], purchase: ["PUR-"], purchase_service: ["SER-"],
     payment_in: ["RCPT-"], payment_out: ["PYMT-"], contra: ["CNTR-"], direct_income: ["DINC-"],
     direct_expense: ["DEXP-"], journal: ["JRNL-"], note: ["NOTE-"], add_salary: ["ADD-SAL-"], pay_salary: ["PYSAL-"],
     pay_emi: ["EMI-"],

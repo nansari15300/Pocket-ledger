@@ -944,11 +944,10 @@ function PartyPageContent() {
     };
   }, [companyId, pageDataLoading]);
 
-  // Mobile overdue: force bill-wise mode while on this page (party default is already bill_wise; restore on leave)
+  // Mobile overdue: bill-wise while overdue row open — cleanup me persist mat karo (statement preference overwrite hota tha).
   useEffect(() => {
     if (isMobile && selectedParty?.id === OVERDUE_ACCOUNT_ID) {
       setBalanceMode("bill_wise");
-      return () => setBalanceMode("bill_wise");
     }
   }, [isMobile, selectedParty?.id, setBalanceMode]);
 

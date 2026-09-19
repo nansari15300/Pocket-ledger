@@ -249,6 +249,49 @@ export function computeAccountLedgerDaySummary(
   };
 }
 
+/** Bank/cash account ids this voucher may touch — superset for index (false positives OK). */
+function collectBankCashAccountIdsForVoucher(v: any, bankCashIds: Set<string>): string[] {
+  const ids: string[] = [];
+  const tryAdd = (value: unknown) => {
+    const id = String(value ?? "").trim();
+    if (id && bankCashIds.has(id)) ids.push(id);
+  };
+  tryAdd(v?.accountId);
+  tryAdd(v?.bankAccountId);
+  tryAdd(v?.fromAccountId);
+  tryAdd(v?.toAccountId);
+  tryAdd(v?.companyBankAccountId);
+  if (Array.isArray(v?.entries)) {
+    for (const entry of v.entries) tryAdd(entry?.accountId);
+  }
+  if (Array.isArray(v?.interCompanyLegs)) {
+    for (const leg of v.interCompanyLegs) tryAdd(leg?.accountId);
+  }
+  return ids;
+}
+
+function buildVouchersByBankCashAccountIndex(
+  vouchers: any[] | undefined,
+  bankCashIds: Set<string>,
+  userIdFilter?: string | null
+): Map<string, any[]> {
+  const index = new Map<string, any[]>();
+  for (const v of vouchers || []) {
+    if (!v || v.isDeleted) continue;
+    if (userIdFilter && String(v.userId || "") !== String(userIdFilter)) continue;
+    const touched = collectBankCashAccountIdsForVoucher(v, bankCashIds);
+    const seen = new Set<string>();
+    for (const id of touched) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const list = index.get(id);
+      if (list) list.push(v);
+      else index.set(id, [v]);
+    }
+  }
+  return index;
+}
+
 function emptyBucket() {
   return { yesterday: 0, in: 0, out: 0, today: 0 };
 }
@@ -280,10 +323,18 @@ export function buildDaybookDailySummary(opts: {
     .slice()
     .sort((a, b) => String(a.accountName || "").localeCompare(String(b.accountName || "")));
 
+  const bankCashIds = new Set(live.map((a) => String(a.id)));
+  const vouchersByAccountId = buildVouchersByBankCashAccountIndex(
+    vouchers,
+    bankCashIds,
+    userIdFilter
+  );
+
   const mapRow = (acc: DaybookSummaryAccountInput, fallbackName: string): DaybookAccountSummaryRow => {
+    const accountVouchers = vouchersByAccountId.get(String(acc.id)) ?? [];
     const ledgerDay = computeAccountLedgerDaySummary(
       acc,
-      vouchers,
+      accountVouchers,
       selectedDay,
       userIdFilter,
       getLedgerAmounts

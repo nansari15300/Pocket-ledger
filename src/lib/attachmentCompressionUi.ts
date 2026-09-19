@@ -3,12 +3,13 @@
 import { useSyncExternalStore } from "react";
 import { toast as sonnerToast } from "sonner";
 import {
+  VOUCHER_SONNER_SUCCESS_MS,
   VOUCHER_SONNER_TOAST_CN,
   VOUCHER_SONNER_TOAST_POSITION,
 } from "@/lib/voucherSaveUi";
 import {
-  isDeviceLocalCompany,
   isServerGateCompany,
+  isStrictLocalOnlyCompany,
   type CompanyStorageRow,
 } from "@/lib/companyStorageKind";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
@@ -52,6 +53,53 @@ const COMPRESSION_PROGRESS_SERVER_SNAPSHOT = { active: false, percent: 0 };
 const COMPRESSION_PROGRESS_MIN_VISIBLE_MS = 650;
 const COMPRESSION_TOAST_ID = "pl-attachment-compression-progress";
 
+export class AttachmentCompressionCancelledError extends Error {
+  constructor() {
+    super("Attachment compression cancelled");
+    this.name = "AttachmentCompressionCancelledError";
+  }
+}
+
+let compressionAbortController: AbortController | null = null;
+/** Cancel ke baad in-flight onProgress loading toast dubara na banaye. */
+let compressionUserCancelled = false;
+
+/** Naya save / add-file batch — purana compress abort. */
+export function beginAttachmentCompressionAbortScope(): AbortSignal {
+  compressionAbortController?.abort();
+  compressionUserCancelled = false;
+  compressionAbortController = new AbortController();
+  return compressionAbortController.signal;
+}
+
+export function endAttachmentCompressionAbortScope(): void {
+  compressionAbortController = null;
+}
+
+export function cancelAttachmentCompressionWork(): void {
+  compressionUserCancelled = true;
+  compressionAbortController?.abort();
+  compressionAbortController = null;
+  dismissAttachmentCompressionProgressToast();
+}
+
+export function isAttachmentCompressionUserCancelled(): boolean {
+  return compressionUserCancelled;
+}
+
+export function getAttachmentCompressionAbortSignal(): AbortSignal | undefined {
+  return compressionAbortController?.signal;
+}
+
+export function throwIfAttachmentCompressionAborted(signal?: AbortSignal | null): void {
+  const active = signal ?? compressionAbortController?.signal;
+  if (active?.aborted) throw new AttachmentCompressionCancelledError();
+}
+
+export function isAttachmentCompressionCancelledError(error: unknown): boolean {
+  return error instanceof AttachmentCompressionCancelledError;
+}
+
 function syncCompressionSonnerToast(percent: number): void {
   sonnerToast.loading(`Attachment compressing… ${percent}%`, {
     id: COMPRESSION_TOAST_ID,
@@ -80,6 +128,7 @@ function emitCompressionProgressChange(): void {
 }
 
 export function setAttachmentCompressionProgress(percent: number): void {
+  if (compressionUserCancelled || compressionAbortController?.signal.aborted) return;
   const next = Math.min(100, Math.max(0, Math.round(percent)));
   if (!compressionProgressActive) compressionProgressShownAt = Date.now();
   if (compressionFinishTimer) {
@@ -92,18 +141,50 @@ export function setAttachmentCompressionProgress(percent: number): void {
   emitCompressionProgressChange();
 }
 
+/** Compress loading toast turant hatao — success / next row alag stack me dikhe. */
+export function dismissAttachmentCompressionProgressToast(): void {
+  if (compressionFinishTimer) {
+    clearTimeout(compressionFinishTimer);
+    compressionFinishTimer = null;
+  }
+  compressionProgressActive = false;
+  compressionProgressPercent = 0;
+  compressionProgressShownAt = 0;
+  sonnerToast.dismiss(COMPRESSION_TOAST_ID);
+  emitCompressionProgressChange();
+}
+
 export function finishAttachmentCompressionProgress(): void {
   const elapsed = compressionProgressShownAt ? Date.now() - compressionProgressShownAt : 0;
   const wait = Math.max(0, COMPRESSION_PROGRESS_MIN_VISIBLE_MS - elapsed);
   if (compressionFinishTimer) clearTimeout(compressionFinishTimer);
   compressionFinishTimer = setTimeout(() => {
     compressionFinishTimer = null;
-    compressionProgressActive = false;
-    compressionProgressPercent = 0;
-    compressionProgressShownAt = 0;
-    sonnerToast.dismiss(COMPRESSION_TOAST_ID);
-    emitCompressionProgressChange();
+    dismissAttachmentCompressionProgressToast();
   }, wait);
+}
+
+export function showAttachmentCompressionDoneToast(message: string): void {
+  dismissAttachmentCompressionProgressToast();
+  sonnerToast.success(message, {
+    position: VOUCHER_SONNER_TOAST_POSITION,
+    duration: VOUCHER_SONNER_SUCCESS_MS,
+    classNames: { toast: VOUCHER_SONNER_TOAST_CN },
+  });
+}
+
+export function isAttachmentCompressionProgressActive(): boolean {
+  return compressionProgressActive;
+}
+
+/** Cancel — console error nahi; chhota info toast (duplicate id se ek hi). */
+export function showAttachmentCompressionCancelledToast(): void {
+  sonnerToast.message("Attachment compression cancelled", {
+    id: "pl-attachment-compression-cancelled",
+    position: VOUCHER_SONNER_TOAST_POSITION,
+    duration: VOUCHER_SONNER_SUCCESS_MS,
+    classNames: { toast: VOUCHER_SONNER_TOAST_CN },
+  });
 }
 
 /** Batch compress: file index + inner 0–100 → overall %. */
@@ -118,6 +199,20 @@ export function reportAttachmentCompressionProgress(
   }
   const overall = ((fileIndex + fileInnerPct / 100) / fileCount) * 100;
   setAttachmentCompressionProgress(Math.max(1, Math.min(99, Math.round(overall))));
+}
+
+/** Multi-file parallel compress — har file ka % average karke overall toast update. */
+export function createParallelAttachmentCompressionReporter(
+  fileCount: number,
+  silent?: boolean
+): (fileIndex: number, fileInnerPct: number) => void {
+  const inner = new Array(Math.max(0, fileCount)).fill(0);
+  return (fileIndex, fileInnerPct) => {
+    if (silent || fileCount <= 0 || fileIndex < 0 || fileIndex >= fileCount) return;
+    inner[fileIndex] = fileInnerPct;
+    const overall = inner.reduce((sum, pct) => sum + pct, 0) / fileCount;
+    setAttachmentCompressionProgress(Math.max(1, Math.min(99, Math.round(overall))));
+  };
 }
 
 export function useAttachmentCompressionProgress(): { active: boolean; percent: number } {
@@ -167,17 +262,33 @@ export function attachmentMaxBytes(): number {
   return ATTACHMENT_MAX_SIZE_MB * 1024 * 1024;
 }
 
-/** Local / PL Server / Drive → 150KB; online / unknown → 100KB. */
+function isOnlineFirebaseCompressBandCompany(
+  company: CompanyStorageRow | null | undefined
+): boolean {
+  if (!company) return false;
+  const so = String(company.storageOption ?? "").toLowerCase().trim();
+  if (so === "local") return false;
+  if (so === "firebase") return true;
+  if (company.syncedFromCloud === true) return true;
+  if (String(company.syncPolicy ?? "").toLowerCase() === "online") return true;
+  if (String(company.authoritativeCompanyId ?? "").trim()) return true;
+  return false;
+}
+
+/** Local / PL / Drive → Offline band; Firebase online → Online band (admin 40–45 KB). */
 export function companyUsesRelaxedImageAttachmentCap(
   company: CompanyStorageRow | null | undefined
 ): boolean {
   if (!company) return false;
+  if (isOnlineFirebaseCompressBandCompany(company)) return false;
   if (isServerGateCompany(company)) return true;
-  if (isDeviceLocalCompany(company)) return true;
-  if (isOfflineCompanyStorage(company as Parameters<typeof isOfflineCompanyStorage>[0])) return true;
   if (isDriveCloudSyncLocalRegistryRow(company as never)) return true;
+  if (isStrictLocalOnlyCompany(company)) return true;
   const so = String(company.storageOption ?? "").toLowerCase().trim();
-  return so === "drive" || so === "local";
+  if (so === "local" || so === "drive") return true;
+  if (String(company.syncPolicy ?? "").toLowerCase() === "offline") return true;
+  if (isOfflineCompanyStorage(company as Parameters<typeof isOfflineCompanyStorage>[0])) return true;
+  return false;
 }
 
 export type CompressImageKbBand = { minKb: number; maxKb: number };
@@ -197,19 +308,13 @@ export function compressImageKbBandFromEntitlements(
   const defaultMin = IMAGE_SOFT_MIN_KB;
   const e = entitlements ?? {};
 
-  const maxRaw = useLocalLimit
-    ? typeof e.maxCompressImageKbLocal === "number"
-      ? e.maxCompressImageKbLocal
-      : e.maxCompressImageKb
-    : e.maxCompressImageKb;
-  const minRaw = useLocalLimit
-    ? typeof e.minCompressImageKbLocal === "number"
-      ? e.minCompressImageKbLocal
-      : e.minCompressImageKb
-    : e.minCompressImageKb;
+  const localMaxKb = readEntitlementKb(e.maxCompressImageKbLocal);
+  const localMinKb = readEntitlementKb(e.minCompressImageKbLocal);
+  const onlineMaxKb = readEntitlementKb(e.maxCompressImageKb);
+  const onlineMinKb = readEntitlementKb(e.minCompressImageKb);
 
-  let maxKb = readEntitlementKb(maxRaw);
-  let minKb = readEntitlementKb(minRaw);
+  let maxKb = useLocalLimit ? (localMaxKb > 0 ? localMaxKb : onlineMaxKb) : onlineMaxKb;
+  let minKb = useLocalLimit ? (localMinKb > 0 ? localMinKb : onlineMinKb) : onlineMinKb;
   if (maxKb <= 0) maxKb = defaultMax;
   if (minKb <= 0) {
     // Legacy: sirf To set tha — From ≈ 90% of To; defaults par platform floor.
@@ -248,20 +353,43 @@ export function attachmentImageMaxKbForCompany(
   return attachmentImageKbBandForCompany(company, entitlements).maxKb;
 }
 
+async function resolveCompressionPlanId(
+  companyId: string,
+  companyRow?: CompanyStorageRow | null
+): Promise<PlanId> {
+  const { resolveEffectivePlanIdForVoucherQuota } = await import("@/lib/companyPlanLocalCache");
+  const sqliteHint = companyRow as { planId?: string | null; planExpiryMs?: unknown } | null | undefined;
+  let planId = resolveEffectivePlanIdForVoucherQuota(companyId, sqliteHint ?? null);
+  if (planId === "basic") {
+    try {
+      const { auth } = await import("@/lib/firebase");
+      const uid = auth.currentUser?.uid?.trim();
+      if (uid) {
+        const { readAccountPlanLocalCache } = await import("@/lib/accountPlanLocalCache");
+        const accountPlan = readAccountPlanLocalCache(uid)?.planId;
+        if (accountPlan && accountPlan !== "basic") {
+          planId = normalizePlanIdForClient(accountPlan);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return planId;
+}
+
 async function resolvePlanEntitlementsForCompany(
   companyId: string,
   companyRow?: CompanyStorageRow | null
-): Promise<Partial<Entitlements> | undefined> {
+): Promise<Partial<Entitlements>> {
   try {
-    const { readCachedPlansRecord, defaultPlansRecordFallback } = await import("@/lib/plansCatalogCache");
+    const { resolvePlansCatalogForEntitlements } = await import("@/lib/plansCatalogCache");
     const { getPlanFromPlans } = await import("@/hooks/useLivePlans");
-    const { readCompanyPlanLocalCache } = await import("@/lib/companyPlanLocalCache");
-    const planId = normalizePlanIdForClient(
-      String(readCompanyPlanLocalCache(companyId)?.planId || "basic")
-    ) as PlanId;
-    return getPlanFromPlans(readCachedPlansRecord() ?? defaultPlansRecordFallback(), planId).entitlements;
+    const planId = await resolveCompressionPlanId(companyId, companyRow);
+    const plans = await resolvePlansCatalogForEntitlements();
+    return getPlanFromPlans(plans, planId).entitlements;
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -272,17 +400,29 @@ export function attachmentImageMaxBytesForCompany(
   return attachmentImageMaxKbForCompany(company, entitlements) * 1024;
 }
 
+const attachmentImageKbBandCache = new Map<
+  string,
+  { band: CompressImageKbBand; atMs: number }
+>();
+const ATTACHMENT_IMAGE_KB_BAND_CACHE_MS = 5 * 60 * 1000;
+
 /** Resolve From–To KB band from company id. Unknown → online 50–100 KB. */
 export async function resolveAttachmentImageKbBand(
   companyId?: string | null
 ): Promise<CompressImageKbBand> {
   const cid = String(companyId || "").trim();
   if (!cid) return { minKb: IMAGE_SOFT_MIN_KB, maxKb: ONLINE_IMAGE_MAX_KB };
+  const cached = attachmentImageKbBandCache.get(cid);
+  if (cached && Date.now() - cached.atMs < ATTACHMENT_IMAGE_KB_BAND_CACHE_MS) {
+    return cached.band;
+  }
   try {
     const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
     const row = (await getLocalCompanyById(cid, { includeDeleted: true })) as CompanyStorageRow | null;
     const entitlements = await resolvePlanEntitlementsForCompany(cid, row);
-    return attachmentImageKbBandForCompany(row, entitlements);
+    const band = attachmentImageKbBandForCompany(row, entitlements ?? {});
+    attachmentImageKbBandCache.set(cid, { band, atMs: Date.now() });
+    return band;
   } catch {
     return { minKb: IMAGE_SOFT_MIN_KB, maxKb: ONLINE_IMAGE_MAX_KB };
   }

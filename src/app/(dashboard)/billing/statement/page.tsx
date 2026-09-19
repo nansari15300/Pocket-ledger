@@ -28,6 +28,7 @@ import { format as formatDateFns } from "date-fns";
 import { useDate } from "@/hooks/useDate";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { cn } from "@/lib/utils";
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 
 /** API `payments` subcollection row — mirrors `/api/company/billing-payments-statement` mapping. */
 type StatementPaymentRow = {
@@ -564,7 +565,7 @@ export default function BillingStatementPage() {
                           <SelectValue placeholder={`${rowsPerPage}`} />
                         </SelectTrigger>
                         <SelectContent side="top">
-                          {[10, 20, 30, 50].map((n) => (
+                          {ROWS_PER_PAGE_OPTIONS_DEFAULT.map((n) => (
                             <SelectItem key={n} value={`${n}`}>
                               {n}
                             </SelectItem>

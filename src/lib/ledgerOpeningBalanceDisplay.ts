@@ -1,5 +1,14 @@
 import { startOfDay } from "date-fns";
 import { parseOpeningBalanceDateToLocalNoon } from "@/lib/voucherDateNormalize";
+import {
+  isLedgerDateFilterFromAtFyStart,
+  ledgerOpeningPillLabel,
+  resolveTopLedgerOpeningPillKind,
+  type LedgerOpeningPillKind,
+} from "@/lib/fyPagination/ledgerOpeningMeta";
+import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
+import { buildFyPartitionOpeningPillLabel } from "@/lib/fiscalYearLabel";
+import type { FyActiveScope } from "@/lib/fyPagination/types";
 
 export const BOOK_OB_EPS = 5e-4;
 
@@ -117,6 +126,11 @@ export type LedgerOpeningPrintInput = {
   openingBalancePeriodStartDate?: unknown;
   masterOpeningBalanceDate?: unknown;
   dateRange?: { from?: Date | null; to?: Date | null };
+  country?: string;
+  fyScopeEnabled?: boolean;
+  activeScope?: FyActiveScope | null;
+  entitySnapshotOpening?: number | null;
+  fyFloorMs?: number | null;
 };
 
 /** Match TransactionsTable Book Opening / Dated Opening rows for print. */
@@ -132,6 +146,11 @@ export function resolveLedgerOpeningPrintRows(
     openingBalancePeriodStartDate,
     masterOpeningBalanceDate,
     dateRange,
+    country,
+    fyScopeEnabled = false,
+    activeScope = null,
+    entitySnapshotOpening = null,
+    fyFloorMs = null,
   } = input;
 
   const pillsEnabled =
@@ -165,22 +184,39 @@ export function resolveLedgerOpeningPrintRows(
     masterOpeningDateWithinLedgerRange,
   });
 
-  const datedRowDate = ledgerDateFilterActive
-    ? periodRowDate
-    : !ledgerShowBookOpeningRow && periodRowDate
-      ? periodRowDate
-      : masterObDay;
-
-  const primaryPillLabel = showBookOpeningAboveDatedRow
-    ? "Dated Opening"
-    : ledgerShowBookOpeningRow &&
-        (!ledgerDateFilterActive ||
-          (masterOpeningDateWithinLedgerRange &&
-            (booksOpeningBalance == null ||
-              Math.abs(openingBalance - booksOb) < BOOK_OB_EPS ||
-              Math.abs(openingBalance) < BOOK_OB_EPS)))
-      ? "Book Opening"
-      : "Dated Opening";
+  const topKind: LedgerOpeningPillKind = showBookOpeningAboveDatedRow
+    ? "dated"
+    : resolveTopLedgerOpeningPillKind({
+        ledgerDateFilterActive,
+        ledgerShowBookOpeningRow,
+        booksOpeningBalance,
+        periodOpeningBalance: openingBalance,
+        masterOpeningDateWithinLedgerRange,
+        dateRange,
+        country,
+        fyScopeEnabled,
+        activeScope,
+        entitySnapshotOpening,
+      });
+  const atFyStartFilter = isLedgerDateFilterFromAtFyStart(country, dateRange);
+  const datedRowDate =
+    topKind === "fy" && (fyFloorMs || atFyStartFilter)
+      ? parseOpeningBalanceDateToLocalNoon(
+          atFyStartFilter && dateRange?.from
+            ? getFiscalRangeForCountry(country, dateRange.from).start
+            : new Date(fyFloorMs!)
+        )
+      : ledgerDateFilterActive
+        ? periodRowDate
+        : !ledgerShowBookOpeningRow && periodRowDate
+          ? periodRowDate
+          : topKind === "dated" && periodRowDate
+            ? periodRowDate
+            : masterObDay;
+  const primaryPillLabel =
+    topKind === "fy" && datedRowDate
+      ? buildFyPartitionOpeningPillLabel({ country }, datedRowDate)
+      : ledgerOpeningPillLabel(topKind);
 
   if (showBookOpeningAboveDatedRow) {
     return [

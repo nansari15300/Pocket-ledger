@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { BROWSER_DB_COLLECTION_BUMP } from "@/lib/localCompanyDocMirror";
+import { useAuth } from "@/hooks/useAuth";
 import {
   getLoan,
   listAudit,
@@ -15,9 +16,11 @@ import type { Loan } from "../types/loanTypes";
 import type { LoanScheduleRow } from "../types/loanScheduleTypes";
 import type { LoanAuditLog, LoanCharge, LoanDocument, LoanRateHistory, LoanTransaction } from "../types/loanTransactionTypes";
 import { refreshScheduleStatuses } from "../services/loanScheduleService";
+import { reconcileLoanTransactionsToLiveJournals } from "../services/loanJournalReconcileService";
 import { currentSchedule } from "../db/loanQueries";
 
 export function useLoan(companyId: string | null | undefined, loanId: string | null | undefined) {
+  const { user } = useAuth();
   const [loan, setLoan] = useState<Loan | null>(null);
   const [schedule, setSchedule] = useState<LoanScheduleRow[]>([]);
   const [allSchedule, setAllSchedule] = useState<LoanScheduleRow[]>([]);
@@ -46,9 +49,21 @@ export function useLoan(companyId: string | null | undefined, loanId: string | n
         setSchedule([]);
         return;
       }
+      let loanRow = row;
+      try {
+        const reconciled = await reconcileLoanTransactionsToLiveJournals({
+          companyId: cid,
+          loanId: lid,
+          userId: user?.uid || "",
+        });
+        if (reconciled.loan) loanRow = reconciled.loan;
+      } catch {
+        /* display still filters missing journals */
+      }
+      setLoan(loanRow);
       const rows = await listSchedules(cid, lid);
       setAllSchedule(rows);
-      setSchedule(refreshScheduleStatuses(row, currentSchedule(rows)));
+      setSchedule(refreshScheduleStatuses(loanRow, currentSchedule(rows)));
       setTransactions(await listTransactions(cid, lid));
       setCharges(await listCharges(cid, lid));
       setRateHistory(await listRateHistory(cid, lid));
@@ -59,7 +74,7 @@ export function useLoan(companyId: string | null | undefined, loanId: string | n
     } finally {
       setLoading(false);
     }
-  }, [companyId, loanId]);
+  }, [companyId, loanId, user?.uid]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
