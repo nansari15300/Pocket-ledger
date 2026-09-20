@@ -76,7 +76,15 @@ import {
   getEffectiveNotificationSettings,
   NOTIFICATION_PREFS_CHANGED_EVENT,
 } from "@/lib/localUserNotificationSettings";
-import { getLocalFiscalSplitOrDefaults, LOCAL_FISCAL_SPLIT_CHANGED_EVENT } from "@/lib/localFiscalSplitStore";
+import {
+  getLocalFiscalSplitOrDefaults,
+  LOCAL_FISCAL_SPLIT_CHANGED_EVENT,
+  readLocalFiscalSplit,
+} from "@/lib/localFiscalSplitStore";
+import {
+  scheduleBackfillCloudFiscalSplitFromLocal,
+  seedLocalFiscalSplitFromCompanyDocIfNeeded,
+} from "@/lib/persistFiscalSplitSettings";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
 import { getActiveGate, writeActiveGateId } from "@/lib/gates/gateStore";
@@ -320,7 +328,7 @@ export type Company = {
     /** Server offline-license window end (`sync-plan` har online + max 20d chunk) */
     offlineLicenseValidUntilMs?: number;
     /**
-     * Fiscal split — UI me `localFiscalSplitStore` se merge; Firestore company doc par ye fields persist nahi.
+     * Fiscal split — device `localFiscalSplitStore` + company root doc (SQLite / Firestore) merge.
      * `getFiscalMergePartitionDateFromCompany` / ledger divider isi pe chalta hai.
      */
     fiscalSplitMode?: "off" | "merge";
@@ -344,12 +352,43 @@ function isCompanyVisibleInMainApp(row: { isDeleted?: unknown; movedToAdminRecyc
   return row.isDeleted !== true && row.movedToAdminRecycleAt == null;
 }
 
-/** Firestore row + device-local fiscal split — Cloud ko bina likhe tables/sort ko ek hi ` company` shape. */
+function normalizeFiscalPartitionIsos(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out = raw
+    .filter((v): v is string => typeof v === "string" && Boolean(v.trim()))
+    .map((v) => v.trim());
+  return out.length ? out : null;
+}
+
+/** Firestore/SQLite row + device-local fiscal split → single `company` shape for ledgers. */
 function mergeCompanyWithLocalFiscal(base: Company | null, cid: string | null): Company | null {
   if (!base) return null;
-  const local = getLocalFiscalSplitOrDefaults(cid ?? base.id);
+  const companyKey = cid ?? base.id;
+  const localStored = readLocalFiscalSplit(companyKey);
+  const local = localStored ?? getLocalFiscalSplitOrDefaults(companyKey);
+  const cloudIsos = normalizeFiscalPartitionIsos(base.fiscalMergePartitionAtIsos);
+  const cloudMerge = base.fiscalSplitMode === "merge" && Boolean(cloudIsos?.length);
+  const localConfigured =
+    local.fiscalSplitConfiguredByUser ||
+    (local.fiscalSplitMode === "merge" &&
+      Boolean(local.fiscalMergePartitionAtIsos?.length || local.fiscalMergePartitionAtIso));
+
+  if (!localConfigured && !localStored && cloudMerge && cloudIsos) {
+    const iso = cloudIsos[0] ?? null;
+    return {
+      ...base,
+      fiscalSplitMode: "merge",
+      fiscalMergePartitionAt: iso ? { toDate: () => new Date(iso) } : null,
+      fiscalMergePartitionAtIsos: cloudIsos,
+      fiscalMergeTickedFyKeys: base.fiscalMergeTickedFyKeys ?? null,
+      fiscalPartitionLabel: base.fiscalPartitionLabel ?? null,
+    };
+  }
+
   const isos =
-    local.fiscalSplitMode === "merge" ? local.fiscalMergePartitionAtIsos ?? (local.fiscalMergePartitionAtIso ? [local.fiscalMergePartitionAtIso] : null) : null;
+    local.fiscalSplitMode === "merge"
+      ? local.fiscalMergePartitionAtIsos ?? (local.fiscalMergePartitionAtIso ? [local.fiscalMergePartitionAtIso] : null)
+      : null;
   const iso = isos?.[0] ?? null;
   return {
     ...base,
@@ -3361,6 +3400,24 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     () => mergeCompanyWithLocalFiscal(company, companyId),
     [company, companyId, fiscalLocalEpoch]
   );
+
+  useEffect(() => {
+    const cid = String(companyId || company?.id || "").trim();
+    if (!cid || !company) return;
+    const seeded = seedLocalFiscalSplitFromCompanyDocIfNeeded(cid, company);
+    if (seeded) {
+      setFiscalLocalEpoch((n) => n + 1);
+      return;
+    }
+    const local = readLocalFiscalSplit(cid) ?? getLocalFiscalSplitOrDefaults(cid);
+    scheduleBackfillCloudFiscalSplitFromLocal({
+      companyId: cid,
+      company,
+      payload: local,
+      reloadLocalCompanyRegistry,
+      triggerSync,
+    });
+  }, [companyId, company, reloadLocalCompanyRegistry, triggerSync]);
 
   const companyContextValue = useMemo(
     () => ({

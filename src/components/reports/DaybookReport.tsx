@@ -136,7 +136,7 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
         sessionStorage.setItem("showNarration", String(checked));
     };
 
-    // PC: toolbar arrows + side chevrons + keyboard (- / =); mobile: swipe left/right.
+    // PC: toolbar arrows + side chevrons + keyboard (- / =); mobile: swipe only on bottom ← → strip.
     const shiftDaybookDateBy = useCallback((deltaDays: number) => {
         setDaybookDate((prev) => startOfDay(addDays(prev ?? new Date(), deltaDays)));
     }, []);
@@ -334,8 +334,6 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
             isMobile && "px-0",
             isMobile && daybookRotated && "max-w-[90vh] w-[90vh] h-[100vw] fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rotate-90 z-50"
         )}
-            onTouchStart={handleDaybookTouchStart}
-            onTouchEnd={handleDaybookTouchEnd}
         >
             <CardHeader className={cn("print:hidden flex-shrink-0", isMobile && "px-0.5")}>
                 <div className="flex flex-wrap items-center justify-between gap-4">
@@ -730,27 +728,33 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                     </div>
                 </div>
               )}
-            {/* Blue txn list ke niche card-green strip — arrows yahan, cards par overlap nahi. */}
+            {/* Blue txn list ke niche ← → strip — mobile swipe sirf yahan (portal / summary / cards par nahi). */}
             <div className="relative shrink-0 flex h-10 items-center print:hidden">
                 <button
                     type="button"
+                    data-pl-daybook-date-swipe=""
                     aria-label="Previous day"
                     className={cn(
-                        "absolute left-0 flex h-9 w-9 items-center justify-center rounded-r-md text-muted-foreground/35 hover:text-muted-foreground/70 hover:bg-muted/25 transition-colors",
-                        isMobile && "w-8"
+                        "absolute left-0 flex h-10 items-center justify-center rounded-r-md text-muted-foreground/35 hover:text-muted-foreground/70 hover:bg-muted/25 transition-colors",
+                        isMobile ? "w-12" : "h-9 w-9"
                     )}
                     onClick={() => shiftDaybookDateBy(-1)}
+                    onTouchStart={isMobile ? handleDaybookTouchStart : undefined}
+                    onTouchEnd={isMobile ? handleDaybookTouchEnd : undefined}
                 >
                     <ChevronLeft className={cn(isMobile ? "h-7 w-7" : "h-8 w-8")} strokeWidth={1.5} />
                 </button>
                 <button
                     type="button"
+                    data-pl-daybook-date-swipe=""
                     aria-label="Next day"
                     className={cn(
-                        "absolute right-0 flex h-9 w-9 items-center justify-center rounded-l-md text-muted-foreground/35 hover:text-muted-foreground/70 hover:bg-muted/25 transition-colors",
-                        isMobile && "w-8"
+                        "absolute right-0 flex h-10 items-center justify-center rounded-l-md text-muted-foreground/35 hover:text-muted-foreground/70 hover:bg-muted/25 transition-colors",
+                        isMobile ? "w-12" : "h-9 w-9"
                     )}
                     onClick={() => shiftDaybookDateBy(1)}
+                    onTouchStart={isMobile ? handleDaybookTouchStart : undefined}
+                    onTouchEnd={isMobile ? handleDaybookTouchEnd : undefined}
                 >
                     <ChevronRight className={cn(isMobile ? "h-7 w-7" : "h-8 w-8")} strokeWidth={1.5} />
                 </button>
@@ -758,9 +762,9 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
             </CardContent>
         </Card>
         {isMobile && showSwipeDateIntro && isPanelVisible ? (
-            <div className="pointer-events-none fixed left-1/2 top-[42%] z-[120] w-[min(92vw,20rem)] -translate-x-1/2 print:hidden">
+            <div className="pointer-events-none fixed left-1/2 bottom-20 z-[120] w-[min(92vw,20rem)] -translate-x-1/2 print:hidden">
                 <div className="rounded-lg bg-black/80 px-3 py-2 text-center text-xs font-medium text-white shadow-lg">
-                    Swipe left/right to change date
+                    Swipe ← → arrows at bottom to change date
                 </div>
             </div>
         ) : null}

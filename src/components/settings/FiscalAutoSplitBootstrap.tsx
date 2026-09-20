@@ -28,6 +28,7 @@ export function FiscalAutoSplitBootstrap() {
 
     runFiscalAutoSplitDailyCheck({
       companyId: cid,
+      company,
       country: company.country,
       companyDates: resolveCompanyFiscalYearDates(company),
       vouchers,

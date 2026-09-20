@@ -329,6 +329,48 @@ When the human asks for PL Server fixes (including “make PL like online”):
 - Keep the diff minimal and scoped to that request.
 - Preserve: instant local persist + dialog close + background sync on all platforms.
 
+## Freeze: Ledger Approve / Approve All (hard — web + EXE + APK)
+
+**Sep 2026:** Party/bank/staff ledger **Approve** (row menu) and **Approve All** (page) are stabilized on **web, EXE, and APK** — same shared client bundle, no platform-specific approve fork. **Do not edit unless the human explicitly asks to change ledger approve / approval sync in that same message.**
+
+### Frozen paths (do not touch casually)
+
+- `src/lib/writeGateway/voucherActionsClient.ts` — `approveVoucherWithHistory`, `approveVouchersWithHistoryBatch`, `approveVoucherLocalPersist` (approve-only; save paths stay under voucher-save freeze above)
+- `src/lib/ledgerPendingApproval.ts` — unapproved filter, local approve hold, `preserveLocalVoucherApprovalOverIncoming`, merge helpers
+- `src/lib/localVoucherOutbox.ts` — `scheduleVoucherApprovalOutboxFlush`, `readPendingApprovalOutboxByVoucherId` (approve background Firestore push)
+- `src/lib/voucherFormAttachmentSave.ts` — `dispatchVoucherLivePatch`, `dispatchVoucherLivePatchMany`, `subscribeVoucherLivePatch`
+- `src/lib/firestoreToLocalCompanyPull.ts` — voucher `isApproved` preserve inside `mergeRemoteSnapshotWithLocalOnlyDocs`
+- `src/lib/localCompanyDocMirror.ts` — voucher approval preserve on `mirrorCollectionDocsToBrowserDbSilent` / `mirrorCompanyDocToBrowserDb`
+- `src/lib/fyPagination/scopeFilter.ts` — `mergeFyHydratedWithLiveVouchers`
+- `src/contexts/FyVoucherScopeContext.tsx` — `patchHydratedVouchers`
+- `src/components/fyPagination/FyVoucherScopeBootstrap.tsx` — `FyHydratedVoucherLivePatchSync`
+- `src/hooks/useVouchers.tsx` — `patchVoucherInCache`, `patchVouchersInCache`, live-patch listener (`voucherIds.length > 0`), FY scoped voucher merge
+- `src/hooks/useFyScopedVouchers.ts` — scope filter only (no double FY hydrated merge)
+- `src/components/vouchers/TransactionsTable.tsx` — `handleApproveVoucherDefault`, `handleApproveAllVisible`, `pageUnapprovedVouchers` (FY partition/opening rows excluded from approve targets only — not from normal txn pink styling)
+
+### Stabilized behavior to preserve (all platforms)
+
+- **Live UI first:** optimistic `dispatchVoucherLivePatch` / `dispatchVoucherLivePatchMany` before SQLite write — pink row turns white without refresh.
+- **Local persist:** SQLite `isApproved: true` + history entry; Approve All uses quiet writes (`skipUiNotify`) — no per-row collection bump race.
+- **Background server:** `scheduleVoucherApprovalOutboxFlush` (priority per-voucher outbox flush) — Firestore gets `isApproved` without blocking ledger UI.
+- **Refresh / listener:** stale Firestore snapshot must not wipe local or pending-outbox approval (`preserveLocalVoucherApprovalOverIncoming`).
+- **FY scope:** `mergeFyHydratedWithLiveVouchers(hydrated, live)` — live `useVouchers` patch wins over stale `hydratedVouchers`; hydrated cache also patched on live approve events.
+- **EXE / APK:** same paths as web (`embeddedClientPrefersQuietBackgroundSync` may debounce SQLite UI bumps — approve live patch + preserve rules still apply).
+
+### Do not
+
+- Revert to Firestore-first approve that blocks UI or requires page refresh for pink → white.
+- Remove optimistic dispatch, batch quiet writes, or end-of-batch re-patch.
+- Let `mergeVouchersById(hydrated, live)` overwrite live approve with stale FY hydrate.
+- Drop approval preserve on Firestore pull / silent mirror (causes refresh flash back to unapproved).
+- `await` full outbox flush before ledger paint on Approve / Approve All click.
+
+### If the human explicitly asks to change ledger approve
+
+- Keep the diff minimal and scoped to that request.
+- Preserve: live paint, local-first persist, background server flush, refresh-safe approval merge on web + EXE + APK.
+- Test at minimum: single Approve, Approve All (2+ rows), refresh after approve, FY-scoped party ledger on web and one embedded build (EXE or APK).
+
 ## Freeze: Mobile Default txn card UI (hard)
 
 **Sep 2026:** Mobile **Default** card theme (picker label “Default”, code `violet`) on party ledger + Dashboard **Recent** uses stabilized list layout: white cards, blue gap strip, 3D shadow, 8px side inset + 8px card gap. **Do not edit unless the human explicitly asks to change mobile Default txn card UI in that same message.**

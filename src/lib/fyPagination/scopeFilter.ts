@@ -1,6 +1,7 @@
 import { getAnusuchi13FyKey } from "@/lib/reports/anusuchi13Confirmation";
 import { monthPeriodKey } from "@/lib/fyPagination/periodBounds";
 import type { FyActiveScope, FyDateRangeMs } from "@/lib/fyPagination/types";
+import { mergeVoucherRowKeepingLocalApproval } from "@/lib/ledgerPendingApproval";
 
 function voucherJsDate(date: unknown): Date | null {
   if (!date) return null;
@@ -59,6 +60,33 @@ export function mergeVouchersById<T extends { id?: string }>(...lists: T[][]): T
       if (!id) continue;
       map.set(id, row);
     }
+  }
+  return [...map.values()];
+}
+
+/**
+ * FY hydrate + live vouchers context: SQLite range rows pehle, phir `useVouchers` overlay.
+ * Purana `mergeVouchersById(hydrated, live)` hydrated ko last rakhta tha — approve patch turant revert.
+ */
+export function mergeFyHydratedWithLiveVouchers<T extends { id?: string; isApproved?: boolean }>(
+  hydratedVouchers: T[],
+  liveVouchers: T[]
+): T[] {
+  const map = new Map<string, T>();
+  for (const row of hydratedVouchers) {
+    const id = String(row?.id || "").trim();
+    if (id) map.set(id, row);
+  }
+  for (const row of liveVouchers) {
+    const id = String(row?.id || "").trim();
+    if (!id) continue;
+    const existing = map.get(id);
+    if (!existing) {
+      map.set(id, row);
+      continue;
+    }
+    const combined = { ...existing, ...row } as T;
+    map.set(id, mergeVoucherRowKeepingLocalApproval(existing, combined));
   }
   return [...map.values()];
 }

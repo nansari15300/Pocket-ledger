@@ -1,5 +1,9 @@
 import { format } from "date-fns";
 import { adToBs } from "@/lib/bs-date";
+import {
+  type FyOpeningPillFormat,
+  readFyOpeningPillFormat,
+} from "@/lib/fyOpeningPillFormat";
 import { getFiscalRangeForCompany, type CompanyFiscalYearDates } from "@/lib/fiscalRange";
 
 export type LedgerDateSystem = "AD" | "BS" | "Both";
@@ -43,22 +47,50 @@ export function parseFiscalPartitionBoundaryMs(row: { id?: string } | null | und
   return Number.isFinite(ms) ? ms : null;
 }
 
-function fiscalYearShortYyRangeBs(partitionAt: Date): string {
+function bsFyYearSpan(partitionAt: Date): { startYear: number; endYear: number } {
   const bs = adToBs(partitionAt);
-  const fyStartYear = bs.m >= 4 ? bs.y : bs.y - 1;
-  return `${String(fyStartYear).slice(-2)}-${String(fyStartYear + 1).slice(-2)}`;
+  const startYear = bs.m >= 4 ? bs.y : bs.y - 1;
+  return { startYear, endYear: startYear + 1 };
 }
 
-function fiscalYearShortYyRangeAd(
+function adFyYearSpan(
   company: FiscalCompanyLike | null | undefined,
   partitionAt: Date
-): string {
+): { startYear: number; endYear: number } {
   const { start, end } = getFiscalRangeForCompany(
     company?.country,
     partitionAt,
     companyFiscalYearDates(company)
   );
-  return `${String(start.getFullYear()).slice(-2)}-${String(end.getFullYear()).slice(-2)}`;
+  let startYear = start.getFullYear();
+  let endYear = end.getFullYear();
+  // Calendar-year template (Jan–Dec) on a mid-year partition → same AD year both ends (26-26). Anchor +1 FY.
+  if (endYear <= startYear) endYear = startYear + 1;
+  return { startYear, endYear };
+}
+
+function formatFyOpeningYearSpan(
+  formatStyle: FyOpeningPillFormat,
+  startYear: number,
+  endYear: number
+): string {
+  if (formatStyle === "full") return `${startYear}-${endYear}`;
+  if (formatStyle === "mixed") return `${startYear}-${String(endYear).slice(-2)}`;
+  return `${String(startYear).slice(-2)}-${String(endYear).slice(-2)}`;
+}
+
+function fiscalYearShortYyRangeBs(partitionAt: Date, formatStyle: FyOpeningPillFormat = "short"): string {
+  const { startYear, endYear } = bsFyYearSpan(partitionAt);
+  return formatFyOpeningYearSpan(formatStyle, startYear, endYear);
+}
+
+function fiscalYearShortYyRangeAd(
+  company: FiscalCompanyLike | null | undefined,
+  partitionAt: Date,
+  formatStyle: FyOpeningPillFormat = "short"
+): string {
+  const { startYear, endYear } = adFyYearSpan(company, partitionAt);
+  return formatFyOpeningYearSpan(formatStyle, startYear, endYear);
 }
 
 /**
@@ -91,16 +123,12 @@ export function formatFiscalMergePartitionStartDateYmd(
 
 function fiscalYearShortYyRange(
   company: { country?: string; fiscalYearStart?: unknown } | null | undefined,
-  partitionAt: Date
+  partitionAt: Date,
+  formatStyle: FyOpeningPillFormat = "short"
 ): string {
   const nepalish = company?.country === "Nepal" || !!company?.fiscalYearStart;
-  if (nepalish) {
-    const bs = adToBs(partitionAt);
-    const fyStartYear = bs.m >= 4 ? bs.y : bs.y - 1;
-    return `${String(fyStartYear).slice(-2)}-${String(fyStartYear + 1).slice(-2)}`;
-  }
-  const y = partitionAt.getFullYear();
-  return `${String(y).slice(-2)}-${String(y + 1).slice(-2)}`;
+  if (nepalish) return fiscalYearShortYyRangeBs(partitionAt, formatStyle);
+  return fiscalYearShortYyRangeAd(company, partitionAt, formatStyle);
 }
 
 /**
@@ -110,10 +138,11 @@ function fiscalYearShortYyRange(
 /** FY merge divider ke turant baad wali opening row pill — e.g. "fy 83-84 opening". */
 export function buildFyPartitionOpeningPillLabel(
   company: { country?: string; fiscalYearStart?: unknown } | null | undefined,
-  partitionAt: Date
+  partitionAt: Date,
+  formatStyle: FyOpeningPillFormat = readFyOpeningPillFormat()
 ): string {
   if (!(partitionAt instanceof Date) || isNaN(partitionAt.getTime())) return "fy opening";
-  return `fy ${fiscalYearShortYyRange(company, partitionAt)} opening`;
+  return `fy ${fiscalYearShortYyRange(company, partitionAt, formatStyle)} opening`;
 }
 
 export function buildFiscalMergePartitionBannerLabel(
@@ -171,13 +200,14 @@ export function buildFiscalMergePartitionBannerLabelForDateSystem(
 export function buildFyOpeningPillSplit(
   company: FiscalCompanyLike | null | undefined,
   partitionAt: Date,
-  dateSystem: LedgerDateSystem
+  dateSystem: LedgerDateSystem,
+  formatStyle: FyOpeningPillFormat = readFyOpeningPillFormat()
 ): { typePill: string; voucherPill: string | null } {
   if (!(partitionAt instanceof Date) || isNaN(partitionAt.getTime())) {
     return { typePill: "fy opening", voucherPill: null };
   }
-  const bsRange = fiscalYearShortYyRangeBs(partitionAt);
-  const adRange = fiscalYearShortYyRangeAd(company, partitionAt);
+  const bsRange = fiscalYearShortYyRangeBs(partitionAt, formatStyle);
+  const adRange = fiscalYearShortYyRangeAd(company, partitionAt, formatStyle);
   if (dateSystem === "Both") {
     return {
       typePill: `fy ${bsRange} opening`,

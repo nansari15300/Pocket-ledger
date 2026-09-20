@@ -1336,6 +1336,7 @@ export function AttachmentHoverPortal({
         onPointerMove={handleTriggerPointerMove}
         onPointerLeave={handleTriggerPointerLeave}
         onClick={handleTriggerClick}
+        onDoubleClick={(e) => e.stopPropagation()}
       >
         {children}
       </span>

@@ -23,6 +23,7 @@ import {
 import { openingBoundaryPeriodKey } from "@/lib/fyPagination/openingBoundaryKeys";
 import type { FyActiveScope, FyDateRangeMs } from "@/lib/fyPagination/types";
 import { listVouchersFromBrowserDbByDateRange } from "@/lib/fyPagination/voucherQueries";
+import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import type { CompanyStorageRow } from "@/lib/companyStorageKind";
 
@@ -106,6 +107,23 @@ export function countEntityVouchersInList(
   return n;
 }
 
+/** Full SQLite mirror count for this entity — used so default view loads all txns, not just min 10. */
+export async function countEntityVouchersInSqliteFull(
+  companyId: string,
+  entityId: string,
+  kind: MasterLedgerEntityKind
+): Promise<number> {
+  const cid = String(companyId || "").trim();
+  const id = String(entityId || "").trim();
+  if (!cid || !id) return 0;
+  try {
+    const rows = await listCompanyDocsFromBrowserDb(cid, "vouchers", { forBackupMerge: true });
+    return countEntityVouchersInList(rows, id, kind);
+  } catch {
+    return 0;
+  }
+}
+
 function resolveOpeningSnapshotIdForWiden(
   today: Date,
   effectiveRange: FyDateRangeMs,
@@ -128,12 +146,19 @@ export async function widenFyScopeUntilEntityMinTxns(params: {
   entityId: string;
   entityKind: MasterLedgerEntityKind;
   minTxn?: number;
+  targetTxnCount?: number;
   today?: Date;
 }): Promise<void> {
   const { company, fy, entityId, entityKind, minTxn = MASTER_LEDGER_DEFAULT_TXN_COUNT, today = new Date() } =
     params;
   const companyId = String(company?.id || "").trim();
   if (!companyId || !fy.enabled || !fy.activeScope) return;
+
+  const fullEntityCount =
+    typeof params.targetTxnCount === "number" && params.targetTxnCount > 0
+      ? params.targetTxnCount
+      : await countEntityVouchersInSqliteFull(companyId, entityId, entityKind);
+  const targetCount = Math.max(minTxn, fullEntityCount);
 
   const absoluteFloorMs = atNoonAd(bsToAd({ y: BS_CALENDAR_MIN_YEAR, m: 1, d: 1 })).getTime();
   let scope: FyActiveScope = fy.activeScope;
@@ -143,7 +168,7 @@ export async function widenFyScopeUntilEntityMinTxns(params: {
   for (let i = 0; i < MAX_WIDEN_MONTHS; i++) {
     const rows = await listVouchersFromBrowserDbByDateRange(companyId, scope.range);
     const count = countEntityVouchersInList(rows, entityId, entityKind);
-    if (count >= minTxn) return;
+    if (count >= targetCount) return;
     if (count === lastCount) stagnantPasses++;
     else stagnantPasses = 0;
     lastCount = count;

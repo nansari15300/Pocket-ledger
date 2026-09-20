@@ -19,7 +19,6 @@ import { StatementCheckedRowMessageLabel } from "@/components/vouchers/Statement
 import { toast } from "sonner";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
-import { dispatchVoucherLivePatch } from "@/lib/voucherFormAttachmentSave";
 import { isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
 import { useAuth } from "@/hooks/useAuth";
 import { openPrintDirect } from "@/lib/printDirect";
@@ -387,12 +386,6 @@ export const LoanTransactions = forwardRef(function LoanTransactions(
       try {
         const approverName = customUser?.displayName || user.displayName || user.email || user.uid;
         await approveVoucherWithHistory(companyId, voucherId, user.uid, approverName);
-        dispatchVoucherLivePatch(companyId, voucherId, {
-          id: voucherId,
-          isApproved: true,
-          approvedByUserId: user.uid,
-          approvedByUserName: approverName,
-        });
         toast.success("Transaction approved.");
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Failed to approve transaction.");

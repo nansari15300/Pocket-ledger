@@ -33,6 +33,7 @@ type FyVoucherScopeContextValue = {
   requestLoadRange: (range: FyDateRangeMs, fyKey?: string) => Promise<any[]>;
   requestLoadFyKey: (fyKey: string, country?: string) => Promise<any[]>;
   mergeHydratedVouchers: (rows: any[]) => void;
+  patchHydratedVouchers: (voucherIds: string[], patch: Record<string, unknown>) => void;
   registerInMemoryVoucherIds: (ids: Iterable<string>) => void;
   resetScopeState: () => void;
 };
@@ -99,6 +100,21 @@ export function FyVoucherScopeProvider({
     registerInMemoryVoucherIds(rows.map((r) => String(r.id || "")));
   }, [registerInMemoryVoucherIds]);
 
+  const patchHydratedVouchers = useCallback((voucherIds: string[], patch: Record<string, unknown>) => {
+    const idSet = new Set((voucherIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+    if (!idSet.size) return;
+    setHydratedVouchers((prev) => {
+      let changed = false;
+      const next = prev.map((row) => {
+        const id = String(row?.id || "").trim();
+        if (!id || !idSet.has(id)) return row;
+        changed = true;
+        return { ...row, ...patch, id };
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
   const requestLoadRange = useCallback(
     async (range: FyDateRangeMs, fyKey?: string) => {
       if (!companyId || !enabled) return [];
@@ -137,6 +153,7 @@ export function FyVoucherScopeProvider({
       requestLoadRange,
       requestLoadFyKey,
       mergeHydratedVouchers,
+      patchHydratedVouchers,
       registerInMemoryVoucherIds,
       resetScopeState,
     }),
@@ -151,6 +168,7 @@ export function FyVoucherScopeProvider({
       requestLoadRange,
       requestLoadFyKey,
       mergeHydratedVouchers,
+      patchHydratedVouchers,
       registerInMemoryVoucherIds,
       applyOpeningBalances,
       setOpeningBalancesLoading,
@@ -180,6 +198,7 @@ export function useFyVoucherScope(): FyVoucherScopeContextValue {
       requestLoadRange: async () => [],
       requestLoadFyKey: async () => [],
       mergeHydratedVouchers: () => {},
+      patchHydratedVouchers: () => {},
       registerInMemoryVoucherIds: () => {},
       resetScopeState: () => {},
     };

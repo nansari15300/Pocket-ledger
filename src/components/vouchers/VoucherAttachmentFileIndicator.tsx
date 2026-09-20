@@ -330,6 +330,7 @@ export function VoucherAttachmentFileIndicator({
         }
         title={reuseTitle}
         aria-label={fileCount > 1 ? `${ariaLabel} preview (${fileCount} files)` : `${ariaLabel} preview`}
+        onDoubleClick={(e) => e.stopPropagation()}
       >
         <span
           className={cn(

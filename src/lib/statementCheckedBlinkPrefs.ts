@@ -3,7 +3,8 @@ export const STATEMENT_CHECKED_BLINK_CHANGED_EVENT = "pl-statement-checked-blink
 
 export const STATEMENT_CHECKED_BLINK_CYCLE_MIN_SEC = 1;
 export const STATEMENT_CHECKED_BLINK_CYCLE_MAX_SEC = 10;
-export const STATEMENT_CHECKED_BLINK_CYCLE_DEFAULT_SEC = 1;
+/** Default: 3 blinks in 1s, then pause — repeat every 5s (not continuous 1s blink). */
+export const STATEMENT_CHECKED_BLINK_CYCLE_DEFAULT_SEC = 5;
 
 const STATEMENT_CHECKED_BLINK_KEYFRAMES_STYLE_ID = "pl-statement-checked-blink-keyframes";
 

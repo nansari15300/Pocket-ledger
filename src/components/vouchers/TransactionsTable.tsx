@@ -90,8 +90,7 @@ import {
   MobileTransactionCardColorPicker,
   type MobileTransactionCardPreview,
 } from "./MobileTransactionCardColorPicker";
-import { clearLedgerVouchersLocallyApproved, isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
-import { dispatchVoucherLivePatch, dispatchVoucherLivePatchMany } from "@/lib/voucherFormAttachmentSave";
+import { isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
 import {
   buildFiscalMergePartitionEntriesFromCompany,
   insertFiscalPartitionRowsMulti,
@@ -120,6 +119,8 @@ import {
   buildFyPartitionOpeningPillLabel,
   parseFiscalPartitionBoundaryMs,
 } from "@/lib/fiscalYearLabel";
+import { useFyOpeningPillFormat } from "@/hooks/useFyOpeningPillFormat";
+import { FyOpeningPillFormatPill } from "@/components/vouchers/FyOpeningPillFormatPill";
 import { useFyVoucherScope } from "@/contexts/FyVoucherScopeContext";
 import {
   readShowOpeningBalanceAmount,
@@ -723,12 +724,6 @@ export function TransactionsTable({
       try {
         const approverName = customUser?.displayName || user?.displayName || user?.email || user.uid;
         await approveVoucherWithHistory(companyId, transaction.id, user.uid, approverName);
-        dispatchVoucherLivePatch(companyId, String(transaction.id), {
-          id: String(transaction.id),
-          isApproved: true,
-          approvedByUserId: user.uid,
-          approvedByUserName: approverName,
-        });
         refreshPendingOutboxVoucherIds();
         toast.success("Transaction approved.");
       } catch (e) {
@@ -773,46 +768,17 @@ export function TransactionsTable({
     }
     approveAllInFlightRef.current = true;
     const approverName = customUser?.displayName || user?.displayName || user?.email || user.uid;
-    const pendingById = new Map<string, any>();
-    for (const row of pending as any[]) {
-      const id = String(row?.id || "").trim();
-      if (id) pendingById.set(id, row);
-    }
     const pendingIds = pending
       .map((t) => String(t?.id || "").trim())
       .filter(Boolean);
     try {
-      // Optimistic page patch first, then quiet row writes.
-      dispatchVoucherLivePatchMany(companyId, pendingIds, {
-        isApproved: true,
-        approvedByUserId: user.uid,
-        approvedByUserName: approverName,
-      });
       const result = await approveVouchersWithHistoryBatch(
         companyId,
         pendingIds,
         user.uid,
         approverName
       );
-      if (result.failed > 0) {
-        const approvedSet = new Set(result.approvedIds);
-        for (const id of pendingIds) {
-          if (approvedSet.has(id)) continue;
-          const original = pendingById.get(id);
-          if (!original) continue;
-          clearLedgerVouchersLocallyApproved([id]);
-          dispatchVoucherLivePatch(companyId, id, {
-            ...original,
-            id,
-          });
-        }
-      }
       refreshPendingOutboxVoucherIds();
-      if (result.ok > 0) {
-        void flushVoucherOutbox()
-          .catch(() => undefined)
-          .finally(refreshPendingOutboxVoucherIds);
-      }
       if (result.ok > 0) {
         toast.success(
           result.ok === 1 ? "1 transaction approved." : `${result.ok} transactions approved.`
@@ -854,6 +820,7 @@ export function TransactionsTable({
   const [txnTableTone, setTxnTableTone] = useState<LedgerTxnTableTone>("default");
   const [mobileCardColor, setMobileCardColor] = useState<MobileTransactionCardColor>("violet");
   const [mobileCardColorPickerOpen, setMobileCardColorPickerOpen] = useState(false);
+  const { format: fyOpeningPillFormat } = useFyOpeningPillFormat();
   useEffect(() => {
     setTxnTableTone(readLedgerTxnTableTone());
     const onTone = () => setTxnTableTone(readLedgerTxnTableTone());
@@ -2466,7 +2433,9 @@ export function TransactionsTable({
       if (t.type === FY_OPENING_ROW_TYPE) {
         const signed = Number(t.balance ?? t.runningBalance) || 0;
         const rowDate = parseFirestoreDateFieldToJsDate(t.date);
-        const pillSplit = rowDate ? buildFyOpeningPillSplit(company, rowDate, dateSystem) : null;
+        const pillSplit = rowDate
+          ? buildFyOpeningPillSplit(company, rowDate, dateSystem, fyOpeningPillFormat)
+          : null;
         const fyOpeningSide = signed >= 0 ? "dr" : "cr";
         const dateLabel =
           rowDate && dateSystem === "Both"
@@ -2484,23 +2453,27 @@ export function TransactionsTable({
           >
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                <span
-                  className={cn(
-                    "rounded-xl border px-2 py-0.5 text-xs font-medium",
-                    voucherTypePillClassName(fyOpeningSide)
-                  )}
-                >
-                  {pillSplit?.typePill ?? String(t._ledgerOpeningPillLabel || "fy opening").trim()}
-                </span>
-                {pillSplit?.voucherPill ? (
+                <FyOpeningPillFormatPill>
                   <span
                     className={cn(
                       "rounded-xl border px-2 py-0.5 text-xs font-medium",
                       voucherTypePillClassName(fyOpeningSide)
                     )}
                   >
-                    {pillSplit.voucherPill}
+                    {pillSplit?.typePill ?? String(t._ledgerOpeningPillLabel || "fy opening").trim()}
                   </span>
+                </FyOpeningPillFormatPill>
+                {pillSplit?.voucherPill ? (
+                  <FyOpeningPillFormatPill>
+                    <span
+                      className={cn(
+                        "rounded-xl border px-2 py-0.5 text-xs font-medium",
+                        voucherTypePillClassName(fyOpeningSide)
+                      )}
+                    >
+                      {pillSplit.voucherPill}
+                    </span>
+                  </FyOpeningPillFormatPill>
                 ) : null}
               </div>
               <span className="text-xs text-muted-foreground shrink-0">{dateLabel}</span>
@@ -2714,7 +2687,12 @@ export function TransactionsTable({
             </div>
             <div className={cn("relative flex shrink-0 items-center justify-end gap-1 font-bold text-sm", showFileBySelection && "pl-8")}>
               {showFileBySelection ? (
-                <div className="absolute left-0 top-1/2 -translate-y-1/2">
+                <div
+                  className="absolute left-0 top-1/2 -translate-y-1/2"
+                  data-pl-txn-file-cell=""
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                >
                   <MobileTransactionFilePreview
                     transaction={t}
                     showAll={fileShowAll && fileDisplayMode === "preview"}

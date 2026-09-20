@@ -13,6 +13,7 @@ import {
   writeLocalFiscalSplit,
   type LocalFiscalSplitPayload,
 } from "@/lib/localFiscalSplitStore";
+import { persistFiscalSplitSettingsToCompany } from "@/lib/persistFiscalSplitSettings";
 
 /** 45 full days in running FY spent → auto split on calendar day 46 (inclusive). */
 export const FISCAL_AUTO_SPLIT_TRIGGER_DAY = 46;
@@ -110,8 +111,34 @@ function buildAutoSplitPayload(
  * Silent daily check (real calendar date): on day 46+ of running FY, enable merge split at running FY start
  * unless the user already saved fiscal split settings manually on this device.
  */
+type FiscalAutoSplitCompany = {
+  id?: string;
+  country?: string;
+  storageOption?: string | null;
+  syncedFromCloud?: boolean;
+  syncPolicy?: string | null;
+  plServerShared?: boolean;
+  authoritativeCompanyId?: string;
+};
+
+function persistAutoSplitPayload(
+  companyId: string,
+  company: FiscalAutoSplitCompany | null | undefined,
+  payload: LocalFiscalSplitPayload
+): void {
+  if (!company) return;
+  void persistFiscalSplitSettingsToCompany({
+    companyId,
+    company,
+    payload,
+  }).catch((err) => {
+    console.warn("[fiscalAutoSplit] persist fiscal split", err);
+  });
+}
+
 export function runFiscalAutoSplitDailyCheck(options: {
   companyId: string;
+  company?: FiscalAutoSplitCompany | null;
   country?: string;
   companyDates?: CompanyFiscalYearDates | null;
   vouchers: Array<{ date?: unknown }>;
@@ -158,6 +185,8 @@ export function runFiscalAutoSplitDailyCheck(options: {
   }
 
   const next = buildAutoSplitPayload(current, fyRows, runningFyKey);
-  writeLocalFiscalSplit(options.companyId, { ...next, fiscalAutoSplitLastCheckDay: dayKey });
+  const saved = { ...next, fiscalAutoSplitLastCheckDay: dayKey };
+  writeLocalFiscalSplit(options.companyId, saved);
+  persistAutoSplitPayload(options.companyId, options.company, saved);
   return true;
 }

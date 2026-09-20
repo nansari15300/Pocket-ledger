@@ -27,6 +27,7 @@ import {
   canSyncCompanyToServer,
   removeOutboxRowsForCompanyDoc,
   flushVoucherOutbox,
+  scheduleVoucherApprovalOutboxFlush,
 } from "@/lib/localVoucherOutbox";
 import { syncPendingFiles } from "@/lib/localPendingFiles";
 import { classifyAttachmentRef, logAttachmentPipeline } from "@/lib/attachmentPipelineDebug";
@@ -100,7 +101,13 @@ import {
 } from "@/lib/voucherLocalAttachmentUpload";
 import { scheduleBrowserDbPersistAfterWrite } from "@/lib/localSqlite";
 import { parseAttachmentHoldClipboardText } from "@/lib/attachmentHoldClipboard";
-import { dispatchVoucherLivePatch, dispatchVoucherAttachmentSaved, materializeVoucherAttachmentsInSavePayload } from "@/lib/voucherFormAttachmentSave";
+import {
+  dispatchVoucherLivePatch,
+  dispatchVoucherLivePatchMany,
+  dispatchVoucherAttachmentSaved,
+  materializeVoucherAttachmentsInSavePayload,
+} from "@/lib/voucherFormAttachmentSave";
+import { clearLedgerVouchersLocallyApproved } from "@/lib/ledgerPendingApproval";
 import {
   finalizeFormAttachmentEditAfterSave,
   mergeAttachmentCleanupContexts,
@@ -2386,11 +2393,27 @@ export async function approveVoucherWithHistory(
   if (!companyId || !voucherId || !approvedByUserId) {
     throw new Error("Missing required approval parameters.");
   }
-  beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
   const skipUiNotify = options?.skipUiNotify === true;
+  const approverName = approvedByName || approvedByUserId;
+  const approveLivePatch = {
+    id: voucherId,
+    isApproved: true,
+    approvedByUserId,
+    approvedByUserName: approverName,
+  };
 
   // Live + SQLite-first: local row ho to local approve; warna Firestore (live) pe try.
   const localResolved = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId);
+  const rollbackRow = localResolved?.voucher as Record<string, unknown> | undefined;
+
+  // Optimistic ledger paint before SQLite bump / Firestore mirror (Approve All jaisa).
+  if (!skipUiNotify) {
+    dispatchVoucherLivePatch(companyId, voucherId, approveLivePatch);
+  }
+
+  beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
+
+  try {
   // Save & Approve create already embeds isApproved — skip FS race ("Voucher not found").
   if (localResolved?.voucher?.isApproved === true) {
     await approveInterCompanyPeerCopy(
@@ -2408,7 +2431,7 @@ export async function approveVoucherWithHistory(
       skipPeerApprove: options?.skipPeerApprove,
     });
     if (!skipUiNotify) {
-      void flushVoucherOutbox().catch(() => undefined);
+      scheduleVoucherApprovalOutboxFlush(companyId, [voucherId]);
     }
     return;
   }
@@ -2486,7 +2509,7 @@ export async function approveVoucherWithHistory(
           skipPeerApprove: options?.skipPeerApprove,
         });
         if (!skipUiNotify) {
-          void flushVoucherOutbox().catch(() => undefined);
+          scheduleVoucherApprovalOutboxFlush(companyId, [voucherId]);
         }
         return;
       }
@@ -2510,14 +2533,25 @@ export async function approveVoucherWithHistory(
       skipPeerApprove: options?.skipPeerApprove,
     });
     if (!skipUiNotify) {
-      void flushVoucherOutbox().catch(() => undefined);
+      scheduleVoucherApprovalOutboxFlush(companyId, [voucherId]);
     }
     return;
   }
   throw new Error("Voucher not found.");
+  } catch (e) {
+    if (!skipUiNotify) {
+      clearLedgerVouchersLocallyApproved([voucherId]);
+      dispatchVoucherLivePatch(
+        companyId,
+        voucherId,
+        rollbackRow ? { ...rollbackRow, id: voucherId } : { id: voucherId, isApproved: false }
+      );
+    }
+    throw e;
+  }
 }
 
-/** Approve All: quiet batch writes; caller handles one optimistic page patch + one flush. */
+/** Approve All: local-first optimistic patch, quiet row writes, one background flush. */
 export async function approveVouchersWithHistoryBatch(
   companyId: string,
   voucherIds: string[],
@@ -2527,6 +2561,25 @@ export async function approveVouchersWithHistoryBatch(
   const ids = Array.from(
     new Set((voucherIds || []).map((id) => String(id || "").trim()).filter(Boolean))
   );
+  if (!ids.length) return { ok: 0, failed: 0, approvedIds: [] };
+
+  const approverName = approvedByName || approvedByUserId;
+  const approvePatch = {
+    isApproved: true,
+    approvedByUserId,
+    approvedByUserName: approverName,
+  };
+
+  const rollbackById = new Map<string, Record<string, unknown>>();
+  for (const voucherId of ids) {
+    const resolved = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId);
+    if (resolved?.voucher) {
+      rollbackById.set(voucherId, { ...(resolved.voucher as Record<string, unknown>), id: voucherId });
+    }
+  }
+
+  dispatchVoucherLivePatchMany(companyId, ids, approvePatch);
+
   let ok = 0;
   let failed = 0;
   const approvedIds: string[] = [];
@@ -2539,8 +2592,21 @@ export async function approveVouchersWithHistoryBatch(
       approvedIds.push(voucherId);
     } catch {
       failed += 1;
+      clearLedgerVouchersLocallyApproved([voucherId]);
+      const rollback = rollbackById.get(voucherId);
+      dispatchVoucherLivePatch(
+        companyId,
+        voucherId,
+        rollback ?? { id: voucherId, isApproved: false }
+      );
     }
   }
+
+  if (approvedIds.length) {
+    dispatchVoucherLivePatchMany(companyId, approvedIds, approvePatch);
+    scheduleVoucherApprovalOutboxFlush(companyId, approvedIds);
+  }
+
   return { ok, failed, approvedIds };
 }
 

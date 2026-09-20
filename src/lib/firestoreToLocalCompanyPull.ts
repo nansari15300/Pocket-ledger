@@ -21,6 +21,8 @@ import {
 } from "@/lib/localMirrorServerMeta";
 import { decryptFirestoreCompanyDocIfNeeded, type ServerBackupCryptoContext } from "@/lib/serverBackupEncryption";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { preserveLocalVoucherApprovalOverIncoming } from "@/lib/ledgerPendingApproval";
+import { readPendingApprovalOutboxByVoucherId } from "@/lib/localVoucherOutbox";
 
 /** Merge options: `storageOption: local` par same doc id pe Firestore purana na jeete (restore / backup). */
 export type MergeRemoteLocalDocsOptions = {
@@ -465,6 +467,22 @@ export async function mergeRemoteSnapshotWithLocalOnlyDocs(
   options?: MergeRemoteLocalDocsOptions
 ): Promise<any[]> {
   try {
+    const isVoucherCollection = collectionPath === "vouchers";
+    const pendingApprovalById = isVoucherCollection
+      ? await readPendingApprovalOutboxByVoucherId(localCompanyId)
+      : new Map<string, Record<string, unknown>>();
+    const preserveVoucherApproval = (
+      localRow: Record<string, unknown> | null | undefined,
+      incoming: Record<string, unknown>
+    ): Record<string, unknown> => {
+      if (!isVoucherCollection) return incoming;
+      const id = String(incoming?.id || localRow?.id || "").trim();
+      return preserveLocalVoucherApprovalOverIncoming(
+        localRow,
+        incoming,
+        id ? pendingApprovalById.get(id) : undefined
+      );
+    };
     // Har Firestore snapshot row ko mirror marker lagao taaki purge vs pending-local differentiate ho sake.
     const remoteStamped = remoteData.map((r: any) =>
       stampLocalMirrorBackedByFirestore({ ...(typeof r === "object" && r ? r : {}), id: r?.id } as Record<string, unknown>)
@@ -508,7 +526,10 @@ export async function mergeRemoteSnapshotWithLocalOnlyDocs(
         const id = String(c?.id ?? "");
         if (!id || c?.isDeleted === true) continue;
         const remoteRow = remoteStamped.find((r: any) => String(r?.id ?? "") === id) as Record<string, unknown> | undefined;
-        byId.set(id, remoteRow ? mergeDocAttachmentFieldsPreferRemote(remoteRow, c as Record<string, unknown>, localCompanyId) : c);
+        const mergedRow = remoteRow
+          ? mergeDocAttachmentFieldsPreferRemote(remoteRow, c as Record<string, unknown>, localCompanyId)
+          : (c as Record<string, unknown>);
+        byId.set(id, preserveVoucherApproval(c as Record<string, unknown>, mergedRow));
       }
       const merged = [...byId.values()];
       if (!orderByField) return merged;
@@ -539,8 +560,13 @@ export async function mergeRemoteSnapshotWithLocalOnlyDocs(
         const merged = remoteStamped.map((r: Record<string, unknown>) => {
           const id = String(r?.id ?? "").trim();
           const localRow = id ? cachedById.get(id) : undefined;
-          if (!localRow) return r;
-          return mergeDocAttachmentFieldsForPull(r, localRow, localCompanyId);
+          if (!localRow) {
+            return preserveVoucherApproval(null, r);
+          }
+          return preserveVoucherApproval(
+            localRow,
+            mergeDocAttachmentFieldsForPull(r, localRow, localCompanyId)
+          );
         });
         if (!orderByField) return merged;
         return sortMergedByField(merged, orderByField);

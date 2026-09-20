@@ -3,10 +3,7 @@
 import { useMemo } from "react";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useFyVoucherScope } from "@/contexts/FyVoucherScopeContext";
-import {
-  filterVouchersToFyScope,
-  mergeVouchersById,
-} from "@/lib/fyPagination/scopeFilter";
+import { filterVouchersToFyScope } from "@/lib/fyPagination/scopeFilter";
 
 /**
  * Voucher context with FY/month scope applied (dashboard, reports, link dialogs).
@@ -20,31 +17,26 @@ export function useFyScopedVouchers() {
     if (!fy.enabled || !fy.activeScope) {
       return base.vouchers;
     }
-    const merged = mergeVouchersById(base.vouchers || [], fy.hydratedVouchers || []);
-    return filterVouchersToFyScope(merged, fy.activeScope, fy.loadedRanges, fy.scopedVoucherIds);
-  }, [
-    base.vouchers,
-    fy.enabled,
-    fy.activeScope,
-    fy.loadedRanges,
-    fy.hydratedVouchers,
-    fy.scopedVoucherIds,
-  ]);
+    return filterVouchersToFyScope(
+      base.vouchers || [],
+      fy.activeScope,
+      fy.loadedRanges,
+      fy.scopedVoucherIds
+    );
+  }, [base.vouchers, fy.enabled, fy.activeScope, fy.loadedRanges, fy.scopedVoucherIds]);
 
   const scopedVouchersAll = useMemo(() => {
     if (!fy.enabled || !fy.activeScope) {
       return base.vouchersAll?.length ? base.vouchersAll : base.vouchers;
     }
     const allBase = base.vouchersAll?.length ? base.vouchersAll : base.vouchers || [];
-    const merged = mergeVouchersById(allBase, fy.hydratedVouchers || []);
-    return filterVouchersToFyScope(merged, fy.activeScope, fy.loadedRanges, fy.scopedVoucherIds);
+    return filterVouchersToFyScope(allBase, fy.activeScope, fy.loadedRanges, fy.scopedVoucherIds);
   }, [
     base.vouchers,
     base.vouchersAll,
     fy.enabled,
     fy.activeScope,
     fy.loadedRanges,
-    fy.hydratedVouchers,
     fy.scopedVoucherIds,
   ]);
 

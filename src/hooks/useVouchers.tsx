@@ -9,7 +9,10 @@ import { firestore } from "@/lib/firebase";
 import { useCompany } from "./useCompany";
 import { useAuth } from "./useAuth";
 import { useFyVoucherScope } from "@/contexts/FyVoucherScopeContext";
-import { filterVouchersToFyScope, mergeVouchersById } from "@/lib/fyPagination/scopeFilter";
+import {
+  filterVouchersToFyScope,
+  mergeFyHydratedWithLiveVouchers,
+} from "@/lib/fyPagination/scopeFilter";
 import usePermissions from "./usePermissions";
 import type { Party, Group } from "@/components/party/types";
 import type { Staff, StaffGroup } from "@/components/staff/types";
@@ -1207,7 +1210,7 @@ export const VoucherProvider = ({
     if (!companyId) return;
     return subscribeVoucherLivePatch((detail) => {
       if (detail.companyId !== companyId) return;
-      if (Array.isArray(detail.voucherIds) && detail.voucherIds.length > 1) {
+      if (Array.isArray(detail.voucherIds) && detail.voucherIds.length > 0) {
         patchVouchersInCache(detail.voucherIds, detail.patch);
         return;
       }
@@ -3614,7 +3617,10 @@ export const useVouchers = () => {
   const fy = useFyVoucherScope();
   const scopedVouchers = useMemo(() => {
     if (!fy.enabled || !fy.activeScope) return context.vouchers;
-    const merged = mergeVouchersById(context.vouchers || [], fy.hydratedVouchers || []);
+    const merged = mergeFyHydratedWithLiveVouchers(
+      fy.hydratedVouchers || [],
+      context.vouchers || []
+    );
     return filterVouchersToFyScope(
       merged,
       fy.activeScope,
@@ -3632,7 +3638,10 @@ export const useVouchers = () => {
 
   const scopedVouchersAll = useMemo(() => {
     if (!fy.enabled || !fy.activeScope) return context.vouchersAll;
-    const mergedAll = mergeVouchersById(context.vouchersAll || [], fy.hydratedVouchers || []);
+    const mergedAll = mergeFyHydratedWithLiveVouchers(
+      fy.hydratedVouchers || [],
+      context.vouchersAll || []
+    );
     return filterVouchersToFyScope(
       mergedAll,
       fy.activeScope,

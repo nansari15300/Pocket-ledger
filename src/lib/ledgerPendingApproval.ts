@@ -139,6 +139,29 @@ export function isLedgerTransactionPeerPendingChange(
   return !!proposed && typeof proposed === "object" && Object.keys(proposed as object).length > 0;
 }
 
+/** Local SQLite / pending outbox approve — stale Firestore snapshot refresh par mat wipe karo. */
+export function preserveLocalVoucherApprovalOverIncoming(
+  local: Record<string, unknown> | null | undefined,
+  incoming: Record<string, unknown>,
+  pendingOutbox?: Record<string, unknown> | null
+): Record<string, unknown> {
+  if (incoming?.isApproved === true) return incoming;
+  const src =
+    local?.isApproved === true
+      ? local
+      : pendingOutbox?.isApproved === true
+        ? pendingOutbox
+        : null;
+  if (!src) return incoming;
+  return {
+    ...incoming,
+    isApproved: true,
+    approvedByUserId: src.approvedByUserId ?? incoming.approvedByUserId,
+    approvedByUserName: src.approvedByUserName ?? incoming.approvedByUserName,
+    approvedAt: src.approvedAt ?? incoming.approvedAt,
+  };
+}
+
 /** PC "Unapproved" chip: sirf pending-approval rows. */
 export function filterLedgerUnapprovedOnly<T extends { isApproved?: boolean }>(
   list: T[],

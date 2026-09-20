@@ -1,6 +1,6 @@
 /**
- * Fiscal split (merge / off) — sirf device par localStorage.
- * Firestore company doc me ye fields nahi bhejte; `useCompany` inhe merge karke UI ko deta hai.
+ * Fiscal split (merge / off) — device localStorage + company root doc sync.
+ * `useCompany` merges local + cloud/SQLite company fields for ledgers.
  */
 
 export const LOCAL_FISCAL_SPLIT_CHANGED_EVENT = "pl_local_fiscal_split_changed";

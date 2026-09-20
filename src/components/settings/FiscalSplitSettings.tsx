@@ -34,6 +34,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { startOfDay } from "date-fns";
 import { writeLocalFiscalSplit, getLocalFiscalSplitOrDefaults, type FiscalSplitMode } from "@/lib/localFiscalSplitStore";
+import { persistFiscalSplitSettingsToCompany } from "@/lib/persistFiscalSplitSettings";
 import { SettingsInfoTip } from "@/components/settings/SettingsInfoTip";
 import { cn } from "@/lib/utils";
 
@@ -48,9 +49,9 @@ const FISCAL_MERGE_PERIOD_GRID_CN = "grid grid-cols-[2.5rem_minmax(0,1fr)] items
 
 const FISCAL_SPLIT_INFO_DESCRIPTION = (
   <>
-    Merge keeps one company and shows a clear divider from the date you choose (on screen and in PDF). Settings here are
-    saved <strong>only on this device</strong> (local storage), not on the company Firestore document. Saving edits in the
-    old period may ask for confirmation because balances after the divider change automatically.
+    Merge keeps one company and shows a clear divider from the date you choose (on screen and in PDF). Settings sync to
+    your company so web, EXE, and APK show the same dividers. Saving edits in the old period may ask for confirmation
+    because balances after the divider change automatically.
   </>
 );
 
@@ -167,8 +168,8 @@ export function FiscalSplitSettings() {
     const tickedKeysList = [...allTicked];
 
     const local = getLocalFiscalSplitOrDefaults(companyId);
-    writeLocalFiscalSplit(companyId, {
-      fiscalSplitMode: "merge",
+    const payload = {
+      fiscalSplitMode: "merge" as const,
       fiscalMergePartitionAtIso: partitionIsos[0] ?? null,
       fiscalMergePartitionAtIsos: partitionIsos.length ? partitionIsos : null,
       fiscalMergeTickedFyKeys: tickedKeysList,
@@ -176,10 +177,18 @@ export function FiscalSplitSettings() {
       fiscalAutoSplitEnabled: true,
       fiscalSplitConfiguredByUser: true,
       fiscalAutoSplitLastCheckDay: local.fiscalAutoSplitLastCheckDay,
+    };
+    writeLocalFiscalSplit(companyId, payload);
+    void persistFiscalSplitSettingsToCompany({
+      companyId,
+      company,
+      payload,
+    }).catch((err) => {
+      console.warn("[FiscalSplitSettings] persist fiscal split", err);
     });
     toast({
       title: "Split applied",
-      description: `Each fiscal year is now a separate period (${tickedKeysList.length} periods on this device).`,
+      description: `Each fiscal year is now a separate period (${tickedKeysList.length} periods).`,
     });
   };
 

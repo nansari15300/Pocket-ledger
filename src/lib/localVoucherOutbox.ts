@@ -665,6 +665,52 @@ export async function listPendingOutboxDocIdsForCompany(
   return out;
 }
 
+/** Firestore pull merge: pending approve outbox row abhi flush na hua ho to `isApproved` preserve. */
+export async function readPendingApprovalOutboxByVoucherId(
+  companyId: string
+): Promise<Map<string, Record<string, unknown>>> {
+  const out = new Map<string, Record<string, unknown>>();
+  try {
+    const cid = companyId.trim();
+    if (!cid) return out;
+    const db = await getBrowserDbForCompanyId(companyId);
+    if (!db) return out;
+    const rows = db
+      .prepare(
+        `SELECT doc_id, payload FROM sync_outbox WHERE company_id = ? AND collection_name = 'vouchers'`
+      )
+      .all(cid) as Array<{ doc_id?: string; payload?: string }>;
+    for (const row of rows) {
+      const id = String(row?.doc_id || "").trim();
+      if (!id) continue;
+      try {
+        const payload = outboxJsonParse(String(row.payload || "{}"));
+        if (payload.isApproved === true) out.set(id, payload);
+      } catch {
+        /* skip row */
+      }
+    }
+  } catch {
+    /* empty */
+  }
+  return out;
+}
+
+/** Approve / Approve All: server pe turant push — refresh se pehle Firestore align ho. */
+export function scheduleVoucherApprovalOutboxFlush(companyId: string, voucherIds: string[]): void {
+  const cid = String(companyId || "").trim();
+  const ids = Array.from(new Set((voucherIds || []).map((id) => String(id || "").trim()).filter(Boolean)));
+  if (!cid || !ids.length) return;
+  void (async () => {
+    for (const docId of ids) {
+      await flushVoucherOutbox({
+        priority: { companyId: cid, collectionName: "vouchers", docId },
+        only: { companyId: cid, collectionName: "vouchers", docId },
+      });
+    }
+  })().catch(() => undefined);
+}
+
 export async function removeOutboxRowsForCompanyDoc(
   companyId: string,
   collectionName: string,

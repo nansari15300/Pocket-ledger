@@ -46,6 +46,8 @@ import {
   buildFyPartitionOpeningPillLabel,
   parseFiscalPartitionBoundaryMs,
 } from "@/lib/fiscalYearLabel";
+import { useFyOpeningPillFormat } from "@/hooks/useFyOpeningPillFormat";
+import { FyOpeningPillFormatPill } from "@/components/vouchers/FyOpeningPillFormatPill";
 import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { companyRequiresLocalAttachmentUrlsOnly } from "@/lib/staticAttachmentDisplayUrl";
@@ -53,6 +55,20 @@ import { getVoucherAttachmentUrlsForUi, voucherAttachmentUiOptionsForCompany } f
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { getJournalVoucherLegs } from "@/lib/journalLedgerAmounts";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
+
+/** File column / attachment thumb — row dblclick se voucher edit na khule (EXE/web). */
+function stopTxnRowOpenFromFilePreview(e: React.SyntheticEvent): void {
+  e.stopPropagation();
+}
+
+function isTxnFilePreviewInteractionTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      "[data-pl-txn-file-cell],[data-pl-txn-file-thumb],[data-attachment-index],[data-attachment-preview-portal]"
+    )
+  );
+}
 import {
   isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay,
   resolveLedgerTransactionUserDisplayName,
@@ -278,14 +294,21 @@ export function OpeningBalanceFileCellContent({
       : undefined;
 
   return (
-    <AttachmentHoverPortal
-      triggerClassName="inline-flex cursor-pointer"
-      onPreviewDoubleClick={singlePdfOpen}
-      galleryUrls={urls.length > 1 ? urls : undefined}
-      preview={<StableAttachmentPortalPreview urls={urls} companyId={company?.id} />}
+    <span
+      data-pl-txn-file-cell=""
+      className="inline-flex"
+      onClick={stopTxnRowOpenFromFilePreview}
+      onDoubleClick={stopTxnRowOpenFromFilePreview}
     >
-      {indicator}
-    </AttachmentHoverPortal>
+      <AttachmentHoverPortal
+        triggerClassName="inline-flex cursor-pointer"
+        onPreviewDoubleClick={singlePdfOpen}
+        galleryUrls={urls.length > 1 ? urls : undefined}
+        preview={<StableAttachmentPortalPreview urls={urls} companyId={company?.id} />}
+      >
+        {indicator}
+      </AttachmentHoverPortal>
+    </span>
   );
 }
 
@@ -354,6 +377,12 @@ export function MobileTransactionFilePreview({
     );
 
   return (
+    <span
+      data-pl-txn-file-cell=""
+      className="inline-flex"
+      onClick={stopTxnRowOpenFromFilePreview}
+      onDoubleClick={stopTxnRowOpenFromFilePreview}
+    >
     <AttachmentHoverPortal
       triggerClassName="inline-flex h-7 shrink-0 cursor-pointer items-center justify-center overflow-visible rounded bg-transparent"
       onPreviewDoubleClick={singlePdfOpen}
@@ -368,6 +397,7 @@ export function MobileTransactionFilePreview({
     >
       {indicator}
     </AttachmentHoverPortal>
+    </span>
   );
 }
 
@@ -1302,6 +1332,7 @@ export const TransactionRow = React.memo(
     activeRecurringTriggerVoucherIds = null,
   }: any) => {
     const { company } = useCompany();
+    const { format: fyOpeningPillFormat } = useFyOpeningPillFormat();
     const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } = useDate();
     const localLedgerOnly = companyRequiresLocalAttachmentUrlsOnly(company);
     const voucherAttachmentUiOpts = React.useMemo(() => voucherAttachmentUiOptionsForCompany(company), [company]);
@@ -1400,7 +1431,7 @@ export const TransactionRow = React.memo(
     const d = safeToDate(transaction.date);
     const fyOpeningPillSplit =
       isFyOpeningRow && d
-        ? buildFyOpeningPillSplit(company, d, dateSystem)
+        ? buildFyOpeningPillSplit(company, d, dateSystem, fyOpeningPillFormat)
         : null;
     // Desktop table me bhi mobile card wali same entry-time priority dikhani hai: createdAt -> edited/updated -> voucher date.
     const entryClock = formatVoucherEntryTimeLocal(transaction as Record<string, unknown>);
@@ -1586,32 +1617,8 @@ export const TransactionRow = React.memo(
                   : "min-w-[75px] px-[5px]")
             )}
           >
-            <Badge
-              variant="outline"
-              className={cn(
-                voucherTypePillClassName(
-                  isFyOpeningRow && fyOpeningDrCrSide
-                    ? fyOpeningDrCrSide
-                    : isNote || transaction.type === "note"
-                      ? "dr"
-                      : resolveTxnDrCrSide(debit, credit, balance),
-                  { interCompanyReversed: isInterCompanyReversedVoucher(transaction) }
-                ),
-                (spendWiseInGroupCard ||
-                  isSpendWiseChild ||
-                  isSpendWiseGroupFirst ||
-                  typeof spendWiseGroupColorIndex === "number") &&
-                  "max-w-full whitespace-nowrap"
-              )}
-            >
-              {hlForColumn("type")(fyOpeningPillSplit?.typePill ?? getDisplayType(transaction))}
-            </Badge>
-          </TableCell>
-        )}
-        {showCol("voucherNo") && (
-          <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined}>
-            <span className="inline-flex max-w-full flex-wrap items-center gap-1">
-              {fyOpeningPillSplit?.voucherPill ? (
+            {isFyOpeningRow && fyOpeningPillSplit ? (
+              <FyOpeningPillFormatPill>
                 <Badge
                   variant="outline"
                   className={cn(
@@ -1619,8 +1626,46 @@ export const TransactionRow = React.memo(
                     "max-w-full whitespace-nowrap"
                   )}
                 >
-                  {hlForColumn("voucherNumber")(fyOpeningPillSplit.voucherPill)}
+                  {hlForColumn("type")(fyOpeningPillSplit.typePill)}
                 </Badge>
+              </FyOpeningPillFormatPill>
+            ) : (
+              <Badge
+                variant="outline"
+                className={cn(
+                  voucherTypePillClassName(
+                    isNote || transaction.type === "note"
+                      ? "dr"
+                      : resolveTxnDrCrSide(debit, credit, balance),
+                    { interCompanyReversed: isInterCompanyReversedVoucher(transaction) }
+                  ),
+                  (spendWiseInGroupCard ||
+                    isSpendWiseChild ||
+                    isSpendWiseGroupFirst ||
+                    typeof spendWiseGroupColorIndex === "number") &&
+                    "max-w-full whitespace-nowrap"
+                )}
+              >
+                {hlForColumn("type")(getDisplayType(transaction))}
+              </Badge>
+            )}
+          </TableCell>
+        )}
+        {showCol("voucherNo") && (
+          <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined}>
+            <span className="inline-flex max-w-full flex-wrap items-center gap-1">
+              {fyOpeningPillSplit?.voucherPill ? (
+                <FyOpeningPillFormatPill>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      voucherTypePillClassName(fyOpeningDrCrSide ?? "dr"),
+                      "max-w-full whitespace-nowrap"
+                    )}
+                  >
+                    {hlForColumn("voucherNumber")(fyOpeningPillSplit.voucherPill)}
+                  </Badge>
+                </FyOpeningPillFormatPill>
               ) : (
               <span className="min-w-0 truncate">
                 {hlForColumn("voucherNumber")(getDisplayVoucherNumber(transaction))}
@@ -1687,7 +1732,12 @@ export const TransactionRow = React.memo(
           </TableCell>
         )}
         {showFileColumn && (
-          <TableCell className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")} onClick={(e) => e.stopPropagation()}>
+          <TableCell
+            data-pl-txn-file-cell=""
+            className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")}
+            onClick={stopTxnRowOpenFromFilePreview}
+            onDoubleClick={stopTxnRowOpenFromFilePreview}
+          >
             {(() => {
               const rowUrls = getVoucherAttachmentUrlsForUi(transaction, voucherAttachmentUiOpts);
               if (rowUrls.length === 0) return "-";
@@ -2069,7 +2119,8 @@ export const TransactionRow = React.memo(
           .filter(Boolean)
           .join(" ") || undefined
       : undefined;
-    const handleRowDoubleClick = () => {
+    const handleRowDoubleClick = (e: React.MouseEvent) => {
+      if (isTxnFilePreviewInteractionTarget(e.target)) return;
       if (isFyOpeningRow) {
         toast.message("This row cannot be edit", { duration: 2000 });
         return;

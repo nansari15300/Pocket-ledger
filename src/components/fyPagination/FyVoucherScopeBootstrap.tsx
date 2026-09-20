@@ -21,6 +21,30 @@ import {
   applyFyScopeFromSqlite,
   scheduleBackgroundOnlineFyRangeHydrate,
 } from "@/lib/fyPagination/sqliteFirstFyLoad";
+import { subscribeVoucherLivePatch } from "@/lib/voucherFormAttachmentSave";
+
+function FyHydratedVoucherLivePatchSync() {
+  const { companyId } = useCompany();
+  const fy = useFyVoucherScope();
+
+  useEffect(() => {
+    const cid = String(companyId || "").trim();
+    if (!cid || !fy.enabled) return;
+    return subscribeVoucherLivePatch((detail) => {
+      if (detail.companyId !== cid) return;
+      const ids =
+        Array.isArray(detail.voucherIds) && detail.voucherIds.length > 0
+          ? detail.voucherIds
+          : detail.voucherId
+            ? [detail.voucherId]
+            : [];
+      if (!ids.length) return;
+      fy.patchHydratedVouchers(ids, detail.patch);
+    });
+  }, [companyId, fy.enabled, fy.patchHydratedVouchers]);
+
+  return null;
+}
 
 function FyScopeLoaderInner() {
   const { company } = useCompany();
@@ -128,6 +152,7 @@ export function FyVoucherScopeBootstrap({ children }: { children: React.ReactNod
   return (
     <FyVoucherScopeProvider companyId={companyId} enabled={Boolean(companyId)}>
       <FyScopeLoaderInner />
+      <FyHydratedVoucherLivePatchSync />
       {children}
     </FyVoucherScopeProvider>
   );

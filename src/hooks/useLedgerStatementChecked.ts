@@ -24,6 +24,14 @@ type Args = {
   enabled?: boolean;
 };
 
+function sameCheckedIdSet(prev: Set<string>, ids: readonly string[]): boolean {
+  if (prev.size !== ids.length) return false;
+  for (const id of ids) {
+    if (!prev.has(id)) return false;
+  }
+  return true;
+}
+
 /** 3-dot → Mark as checked — SQLite + online sync; check mode se alag tool. */
 export function useLedgerStatementChecked({
   companyId,
@@ -81,20 +89,17 @@ export function useLedgerStatementChecked({
       const detail = (e as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
       if (!detail || detail.companyId !== companyId) return;
       if (detail.collection !== LEDGER_STATEMENT_CHECKS_COLLECTION) return;
+      // Apna save → bump → reload → persist loop (page hang) mat chalao.
+      if (detail.source === "local_write") return;
       void readLedgerStatementCheckedIdsFromDb(companyId, scope).then((ids) => {
         if (hydratedScopeRef.current !== scopeKey) return;
-        setCheckedIds(new Set(ids));
+        setCheckedIds((prev) => (sameCheckedIdSet(prev, ids) ? prev : new Set(ids)));
         marksHydratedRef.current = true;
       });
     };
     window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
     return () => window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
   }, [scope, companyId, scopeKey]);
-
-  useEffect(() => {
-    if (!scope || !marksHydratedRef.current) return;
-    void persistLedgerStatementCheckedIds(company, scope, [...checkedIds]);
-  }, [scope, company, checkedIds]);
 
   const isChecked = useCallback(
     (tx: { id?: string; _rowKey?: string }) => {
@@ -111,14 +116,13 @@ export function useLedgerStatementChecked({
       if (!id) return;
       userTouchedRef.current = true;
       marksHydratedRef.current = true;
-      setCheckedIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        return next;
-      });
+      const next = new Set(checkedIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setCheckedIds(next);
+      void persistLedgerStatementCheckedIds(company, scope, [...next]);
     },
-    [scope]
+    [scope, company, checkedIds]
   );
 
   const canMark = Boolean(scope);
