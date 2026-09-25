@@ -9,6 +9,12 @@
   var auth;
   var db;
   var cachedRecent = [];
+  var cachedRecentAll = [];
+  var cachedStatsNew = { total: 0, byPlatform: {} };
+  var cachedStatsUpdate = { total: 0, byPlatform: {} };
+  var currentReleaseVersion = "";
+  var activeAnalyticsTab = "new";
+  var updateVersionFilter = "all";
   var cachedEmailProfiles = {};
   var emailAnchorByEmail = {};
   var recentPage = 1;
@@ -49,6 +55,151 @@
   function setText(id, value) {
     var el = document.getElementById(id);
     if (el) el.textContent = value;
+  }
+
+  function compareVersions(a, b) {
+    var left = String(a || "0")
+      .split(/[.-]/)
+      .map(function (part) {
+        return Number(part) || 0;
+      });
+    var right = String(b || "0")
+      .split(/[.-]/)
+      .map(function (part) {
+        return Number(part) || 0;
+      });
+    var size = Math.max(left.length, right.length);
+    for (var i = 0; i < size; i += 1) {
+      var delta = (left[i] || 0) - (right[i] || 0);
+      if (delta !== 0) return delta;
+    }
+    return 0;
+  }
+
+  function eventKindOf(row) {
+    return row && row.eventKind === "update" ? "update" : "new";
+  }
+
+  function eventsForActiveTab() {
+    return cachedRecentAll.filter(function (row) {
+      if (eventKindOf(row) !== activeAnalyticsTab) return false;
+      if (activeAnalyticsTab === "update" && updateVersionFilter !== "all") {
+        return String(row.version || "") === updateVersionFilter;
+      }
+      return true;
+    });
+  }
+
+  function byCountryFromEvents(rows) {
+    var map = {};
+    (rows || []).forEach(function (row) {
+      var c = String(row.country || "ZZ");
+      map[c] = (map[c] || 0) + 1;
+    });
+    return Object.keys(map)
+      .map(function (country) {
+        return { country: country, count: map[country] };
+      })
+      .sort(function (a, b) {
+        return b.count - a.count || a.country.localeCompare(b.country);
+      });
+  }
+
+  function populateUpdateVersionSelect() {
+    var sel = document.getElementById("updateVersionFilter");
+    if (!sel) return;
+    var versions = {};
+    cachedRecentAll.forEach(function (row) {
+      if (eventKindOf(row) !== "update") return;
+      var v = String(row.version || "").trim();
+      if (v) versions[v] = true;
+    });
+    if (currentReleaseVersion) versions[currentReleaseVersion] = true;
+    var list = Object.keys(versions).sort(function (a, b) {
+      return compareVersions(b, a);
+    });
+    var prev = updateVersionFilter;
+    sel.innerHTML = "";
+    var allOpt = document.createElement("option");
+    allOpt.value = "all";
+    allOpt.textContent = "All versions";
+    sel.appendChild(allOpt);
+    list.forEach(function (v) {
+      var opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = "v" + v;
+      sel.appendChild(opt);
+    });
+    if (prev && (prev === "all" || versions[prev])) {
+      updateVersionFilter = prev;
+    } else if (currentReleaseVersion && versions[currentReleaseVersion]) {
+      updateVersionFilter = currentReleaseVersion;
+    } else {
+      updateVersionFilter = "all";
+    }
+    sel.value = updateVersionFilter;
+  }
+
+  function statsFromEvents(rows) {
+    var byPlatform = { windows: 0, android: 0, play: 0 };
+    (rows || []).forEach(function (row) {
+      var p = String(row.platform || "");
+      if (p === "windows" || p === "android" || p === "play") {
+        byPlatform[p] += 1;
+      }
+    });
+    var total = byPlatform.windows + byPlatform.android + byPlatform.play;
+    return { total: total, byPlatform: byPlatform };
+  }
+
+  function applyAnalyticsView() {
+    cachedRecent = eventsForActiveTab();
+    var stats;
+    if (activeAnalyticsTab === "update" && updateVersionFilter !== "all") {
+      stats = statsFromEvents(cachedRecent);
+    } else {
+      stats = activeAnalyticsTab === "update" ? cachedStatsUpdate : cachedStatsNew;
+    }
+    var byPlatform = stats.byPlatform || {};
+    setText("statTotal", String(stats.total || 0));
+    setText("statWindows", String(byPlatform.windows || 0));
+    setText("statAndroid", String(byPlatform.android || 0));
+    setText("statPlay", String(byPlatform.play || 0));
+    renderPlatformChart(byPlatform);
+    rebuildEmailAnchors();
+    recentPage = 1;
+    renderTimelineChart(cachedRecent);
+
+    var countryBody = document.getElementById("countryBody");
+    var byCountry = byCountryFromEvents(cachedRecent);
+    if (countryBody) {
+      countryBody.innerHTML = "";
+      if (!byCountry.length) {
+        countryBody.innerHTML = '<tr><td colspan="2">No downloads recorded yet.</td></tr>';
+      } else {
+        byCountry.forEach(function (row) {
+          var tr = document.createElement("tr");
+          tr.innerHTML = "<td></td><td></td>";
+          tr.children[0].textContent = countryLabel(row.country) + " (" + row.country + ")";
+          tr.children[1].textContent = String(row.count || 0);
+          countryBody.appendChild(tr);
+        });
+      }
+    }
+    renderRecentTable();
+  }
+
+  function setAnalyticsTab(tab) {
+    activeAnalyticsTab = tab === "update" ? "update" : "new";
+    var wrap = document.getElementById("updateVersionFilterWrap");
+    if (wrap) wrap.hidden = activeAnalyticsTab !== "update";
+    document.querySelectorAll("[data-dl-analytics-tab]").forEach(function (btn) {
+      var isActive = btn.getAttribute("data-dl-analytics-tab") === activeAnalyticsTab;
+      btn.classList.toggle("is-active", isActive);
+      btn.setAttribute("aria-selected", isActive ? "true" : "false");
+    });
+    if (activeAnalyticsTab === "update") populateUpdateVersionSelect();
+    applyAnalyticsView();
   }
 
   function dayKey(ms) {
@@ -663,46 +814,60 @@
     });
   }
 
+  function parseApiJsonResponse(res, text) {
+    var body = String(text || "").trim();
+    if (!body) {
+      throw new Error("Empty response from app API (HTTP " + res.status + ").");
+    }
+    if (body.indexOf("[dev-gateway]") === 0) {
+      throw new Error(
+        "App server not ready. Run npm run dev, wait until Next starts on port 3001, then Refresh."
+      );
+    }
+    try {
+      return JSON.parse(body);
+    } catch (_) {
+      throw new Error(
+        "App API did not return JSON. Use http://localhost:3000/website-settings/downloads/ with npm run dev, or deploy the latest app."
+      );
+    }
+  }
+
+  async function fetchDownloadStats(token, attempt) {
+    var res = await fetch("/app/api/admin/download-stats", {
+      headers: { Authorization: "Bearer " + token },
+      cache: "no-store",
+    });
+    var text = await res.text();
+    if (
+      !res.ok &&
+      res.status === 502 &&
+      text.indexOf("[dev-gateway]") === 0 &&
+      attempt < 8
+    ) {
+      await new Promise(function (resolve) {
+        window.setTimeout(resolve, 1500);
+      });
+      return fetchDownloadStats(token, attempt + 1);
+    }
+    var json = parseApiJsonResponse(res, text);
+    if (!res.ok) throw new Error(json.error || "HTTP " + res.status);
+    return json;
+  }
+
   async function load() {
     setStatus("Loading…", true);
     try {
       var token = await auth.currentUser.getIdToken();
-      var res = await fetch("/app/api/admin/download-stats", {
-        headers: { Authorization: "Bearer " + token },
-        cache: "no-store",
-      });
-      var json = await res.json();
-      if (!res.ok) throw new Error(json.error || "HTTP " + res.status);
-      var stats = json.stats || { total: 0, byPlatform: {} };
-      var byPlatform = stats.byPlatform || {};
-      setText("statTotal", String(stats.total || 0));
-      setText("statWindows", String(byPlatform.windows || 0));
-      setText("statAndroid", String(byPlatform.android || 0));
-      setText("statPlay", String(byPlatform.play || 0));
-      renderPlatformChart(byPlatform);
-      cachedRecent = Array.isArray(json.recent) ? json.recent : [];
+      var json = await fetchDownloadStats(token, 0);
+      cachedStatsNew = json.stats || { total: 0, byPlatform: {} };
+      cachedStatsUpdate = json.statsUpdate || { total: 0, byPlatform: {} };
+      currentReleaseVersion = String(json.currentReleaseVersion || "").trim();
+      cachedRecentAll = Array.isArray(json.recent) ? json.recent : [];
       cachedEmailProfiles =
         json.emailProfiles && typeof json.emailProfiles === "object" ? json.emailProfiles : {};
-      rebuildEmailAnchors();
-      recentPage = 1;
-      renderTimelineChart(cachedRecent);
-
-      var countryBody = document.getElementById("countryBody");
-      var byCountry = Array.isArray(json.byCountry) ? json.byCountry : [];
-      countryBody.innerHTML = "";
-      if (!byCountry.length) {
-        countryBody.innerHTML = '<tr><td colspan="2">No downloads recorded yet.</td></tr>';
-      } else {
-        byCountry.forEach(function (row) {
-          var tr = document.createElement("tr");
-          tr.innerHTML = "<td></td><td></td>";
-          tr.children[0].textContent = countryLabel(row.country) + " (" + row.country + ")";
-          tr.children[1].textContent = String(row.count || 0);
-          countryBody.appendChild(tr);
-        });
-      }
-
-      renderRecentTable();
+      if (activeAnalyticsTab === "update") populateUpdateVersionSelect();
+      applyAnalyticsView();
       setStatus("Ready.", true);
     } catch (e) {
       setStatus(e && e.message ? e.message : "Could not load download stats.", false);
@@ -734,6 +899,18 @@
     };
     if (outBtn) outBtn.onclick = function () { auth.signOut(); };
     document.getElementById("refreshBtn").onclick = function () { void load(); };
+    document.querySelectorAll("[data-dl-analytics-tab]").forEach(function (btn) {
+      btn.onclick = function () {
+        setAnalyticsTab(btn.getAttribute("data-dl-analytics-tab"));
+      };
+    });
+    var updateVersionFilterEl = document.getElementById("updateVersionFilter");
+    if (updateVersionFilterEl) {
+      updateVersionFilterEl.onchange = function () {
+        updateVersionFilter = updateVersionFilterEl.value || "all";
+        applyAnalyticsView();
+      };
+    }
     var timelineRangeEl = document.getElementById("timelineRange");
     if (timelineRangeEl) {
       timelineRangeEl.onchange = function () {
@@ -778,6 +955,7 @@
           return;
         }
         showAdmin(user);
+        setAnalyticsTab("new");
         void load();
       });
     });

@@ -138,6 +138,8 @@ export function InterCompanyAmountDualFields({
 }: Props) {
   const [sourceFocused, setSourceFocused] = useState(false);
   const [sourceDraft, setSourceDraft] = useState("");
+  const [otherChargeFocused, setOtherChargeFocused] = useState(false);
+  const [otherChargeDraft, setOtherChargeDraft] = useState("");
 
   const targetDisplay = formatInterCompanyAmountDisplay(formatCurrencyForPrint, amount);
   const sourceReadOnly = Boolean(fieldsDisabled || editLocked);
@@ -250,10 +252,16 @@ export function InterCompanyAmountDualFields({
                       {otherChargeBalance >= 0 ? "Dr" : "Cr"}
                     </p>
                   ) : null}
-                  <div className="flex flex-wrap items-end gap-2">
-                    <div className="min-w-0 flex-1">
+                  <div className="flex flex-nowrap items-end gap-2">
+                    <div className="flex min-w-0 flex-1 flex-col gap-1">
+                      <span
+                        className="block text-xs leading-tight text-muted-foreground invisible select-none"
+                        aria-hidden
+                      >
+                        Amount
+                      </span>
                       <Combobox
-                        triggerClassName="w-full min-w-0"
+                        triggerClassName="h-9 w-full min-w-0"
                         options={otherChargeAccountOptions}
                         value={field.value}
                         onChange={(val, newName) => {
@@ -268,42 +276,77 @@ export function InterCompanyAmountDualFields({
                         disabled={fieldsDisabled || sourceReadOnly}
                       />
                     </div>
-                    {otherChargeAccountId && onOtherChargeDefault && !sourceReadOnly ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-9 shrink-0 rounded-full px-3 text-sm font-medium"
-                        onClick={onOtherChargeDefault}
-                      >
-                        Default
-                      </Button>
-                    ) : null}
                     <FormField
                       control={control}
                       name="otherChargeAmount"
-                      render={({ field: amountField }) => (
-                        <FormItem className="min-w-[5.5rem] shrink-0 space-y-1">
-                          <FormLabel className="text-xs whitespace-nowrap">Amount</FormLabel>
-                          <FormControl>
-                            <Input
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={amountField.value ?? ""}
-                              onChange={(e) => {
-                                amountField.onChange(
-                                  e.target.value === "" ? 0 : Number(e.target.value)
-                                );
-                              }}
-                              disabled={fieldsDisabled || sourceReadOnly}
-                              className={cn(interCompanyInputClass, interCompanyAmountInputSizingClass)}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
+                      render={({ field: amountField }) => {
+                        const ocFormatted = formatInterCompanyAmountDisplay(
+                          formatCurrencyForPrint,
+                          Number(amountField.value) || 0
+                        );
+                        const ocDisplay = sourceReadOnly
+                          ? ocFormatted
+                          : otherChargeFocused
+                            ? otherChargeDraft
+                            : ocFormatted;
+                        return (
+                          <FormItem className="min-w-[5.5rem] shrink-0 space-y-1">
+                            <FormLabel className="block text-xs leading-tight text-muted-foreground whitespace-nowrap">
+                              Amount
+                            </FormLabel>
+                            <FormControl>
+                              <InterCompanyResponsiveAmountInput
+                                type="text"
+                                inputMode="decimal"
+                                displayText={ocDisplay}
+                                placeholder={AMOUNT_MEASURE_FALLBACK}
+                                value={ocDisplay}
+                                readOnly={sourceReadOnly}
+                                disabled={sourceReadOnly ? false : fieldsDisabled}
+                                className={cn(sourceReadOnly && interCompanyReadOnlyCopyInputClass)}
+                                onFocus={() => {
+                                  if (sourceReadOnly) return;
+                                  setOtherChargeFocused(true);
+                                  const n = Number(amountField.value) || 0;
+                                  setOtherChargeDraft(n > 0 ? String(n) : "");
+                                }}
+                                onChange={(e) => {
+                                  if (sourceReadOnly) return;
+                                  const raw = e.target.value;
+                                  setOtherChargeDraft(raw);
+                                  amountField.onChange(parseInterCompanyAmountInput(raw));
+                                }}
+                                onBlur={() => {
+                                  if (sourceReadOnly) return;
+                                  setOtherChargeFocused(false);
+                                  amountField.onChange(parseInterCompanyAmountInput(otherChargeDraft));
+                                }}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        );
+                      }}
                     />
+                    {otherChargeAccountId && onOtherChargeDefault && !sourceReadOnly ? (
+                      <div className="flex shrink-0 flex-col gap-1">
+                        <span
+                          className="block text-xs leading-tight text-muted-foreground invisible select-none"
+                          aria-hidden
+                        >
+                          Amount
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-9 rounded-full px-3 text-sm font-medium"
+                          onClick={onOtherChargeDefault}
+                        >
+                          Default
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
                   <FormMessage />
                 </FormItem>

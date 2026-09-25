@@ -1,5 +1,5 @@
 
-export function numToWords(num: number): string {
+export function numToWords(num: number, minorUnit?: string): string {
     const a = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
     const b = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
     const inWords = (n: number): string => {
@@ -15,7 +15,7 @@ export function numToWords(num: number): string {
         const hundreds = Math.floor((n % 1000) / 100);
         const remainder = n % 100;
         let str = '';
-        if (crore > 0) str += `${inWords(crore)} crore `;
+        if (crore > 0) str += `${toWords(crore)} crore `;
         if (lakh > 0) str += `${inWords(lakh)} lakh `;
         if (thousand > 0) str += `${inWords(thousand)} thousand `;
         if (hundreds > 0) str += `${inWords(hundreds)} hundred `;
@@ -24,6 +24,9 @@ export function numToWords(num: number): string {
     };
     const [integerPart, decimalPart] = num.toFixed(2).split('.').map(Number);
     let words = toWords(integerPart);
-    if (decimalPart > 0) words += ` and ${toWords(decimalPart)} paisa`;
+    if (decimalPart > 0) {
+        const unit = String(minorUnit || "paisa").trim() || "paisa";
+        words += ` and ${toWords(decimalPart)} ${unit}`;
+    }
     return words.replace(/\s+/g, ' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 }

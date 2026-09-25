@@ -139,6 +139,20 @@ import {
   EntityOpeningBalanceNarrationField,
   MasterPdfAsImageToggle,
 } from "@/components/common/EntityProfileDocumentsNarrationFields";
+import {
+  fetchAdminPanelSubscriptionCatalogFields,
+  isAdminPanelSubscriptionCatalogItemForCompany,
+} from "@/lib/adminPanelCompany/subscriptionCatalogItemClient";
+import {
+  ADMIN_PANEL_SUBSCRIPTION_BILLING_UNITS,
+  ADMIN_PANEL_SUBSCRIPTION_CATALOG_OPENING_STOCK_QTY,
+  ADMIN_PANEL_SUBSCRIPTION_YEARLY_UNIT,
+  subscriptionCatalogDefaultOpeningBalanceUnit,
+  subscriptionCatalogUnitConversions,
+} from "@/lib/adminPanelCompany/subscriptionCatalogItemPricing";
+import { usePersistedResizableDialogSize } from "@/lib/usePersistedResizableDialogSize";
+import { ResizableDialogEdgeHandles } from "@/components/ui/ResizableDialogEdgeHandles";
+import { MasterEntityDialogDragRibbon } from "@/components/ui/MasterEntityDialogDragRibbon";
 
 
 const fileSchema = z.object({
@@ -289,6 +303,13 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   const initialFileUrlsRef = useRef<string[]>(item.fileUrls || []);
   const { dateSystem, formatDate } = useDate();
   const isMobile = useIsMobile();
+  const {
+    size: dialogSize,
+    position: dialogPosition,
+    handleResizeStart,
+    handleDragStart,
+    resizable: dialogResizable,
+  } = usePersistedResizableDialogSize(isOpen, !isMobile);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
@@ -318,6 +339,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   const openingStockQty = form.watch('openingBalance') || 0;
   const openingStockRate = form.watch('openingBalanceRate') || 0;
   const { companyId, company } = useCompany();
+  const catalogLocked = isAdminPanelSubscriptionCatalogItemForCompany(companyId, item.id);
   const navigatorOnline = useNavigatorOnline();
   /** IndexedDB/outbox — embedded static/APK par hamesha local mirror path. */
   const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
@@ -465,7 +487,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
           finalDate = undefined;
       }
 
-      form.reset({
+      const baseValues: ItemFormValues = {
         name: item.name,
         type: item.type,
         hsCode: (item as any).hsCode || "",
@@ -486,13 +508,49 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         saleTaxId: item.saleTaxId || "",
         purchaseTaxId: item.purchaseTaxId || "",
         openingBalanceNarration: item.openingBalanceNarration ?? "",
-      });
+      };
+      if (catalogLocked) {
+        const openingUnit = subscriptionCatalogDefaultOpeningBalanceUnit(
+          (item as any).openingBalanceUnit
+        );
+        const openingQty =
+          item.openingBalance > 0 ? item.openingBalance : ADMIN_PANEL_SUBSCRIPTION_CATALOG_OPENING_STOCK_QTY;
+        form.reset({
+          ...baseValues,
+          openingBalance: openingQty,
+          openingBalanceUnit: openingUnit,
+          unitConversions: subscriptionCatalogUnitConversions(),
+          openingBalanceDate: finalDate ?? (openingQty > 0 ? new Date() : undefined),
+        });
+        void fetchAdminPanelSubscriptionCatalogFields(item.id).then((catalog) => {
+          if (!catalog) return;
+          const openingRate =
+            Number((item as any).openingBalanceRate) > 0
+              ? Number((item as any).openingBalanceRate)
+              : catalog.openingBalanceRate;
+          form.reset({
+            ...baseValues,
+            ...catalog,
+            openingBalance: openingQty,
+            openingBalanceUnit: subscriptionCatalogDefaultOpeningBalanceUnit(catalog.openingBalanceUnit),
+            openingBalanceRate: openingRate,
+            openingBalanceDate: finalDate ?? (openingQty > 0 ? new Date() : undefined),
+            saleTaxId: item.saleTaxId || "",
+            purchaseTaxId: item.purchaseTaxId || "",
+            isSalePriceTaxInclusive: (item as any).isSalePriceTaxInclusive || false,
+            isPurchasePriceTaxInclusive: (item as any).isPurchasePriceTaxInclusive || false,
+            unitConversions: catalog.unitConversions,
+          });
+        });
+      } else {
+        form.reset(baseValues);
+      }
       setFiles(item.fileUrls || []);
       initialFileUrlsRef.current = item.fileUrls || [];
     }
-  }, [isOpen, item, form]);
+  }, [isOpen, item, form, catalogLocked]);
 
-  function onSubmit(values: z.infer<typeof formSchema>): void {
+  async function onSubmit(values: z.infer<typeof formSchema>): Promise<void> {
     if (!companyId) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
@@ -501,6 +559,33 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
     if (apkOfflineViewOnly) {
       sonnerToast.error("Offline — view only.");
       return;
+    }
+
+    let submitValues = values;
+    if (catalogLocked) {
+      const catalog = await fetchAdminPanelSubscriptionCatalogFields(item.id);
+      if (catalog) {
+        submitValues = {
+          ...values,
+          ...catalog,
+          type: catalog.type,
+          openingBalance: values.openingBalance > 0 ? values.openingBalance : catalog.openingBalance,
+          openingBalanceUnit: catalog.openingBalanceUnit,
+          openingBalanceRate:
+            Number(values.openingBalanceRate) > 0
+              ? values.openingBalanceRate
+              : catalog.openingBalanceRate,
+          openingBalanceTaxId: values.openingBalanceTaxId || "",
+          openingBalanceNarration: values.openingBalanceNarration || "",
+          openingBalanceDate: values.openingBalanceDate,
+          isOpeningBalanceTaxInclusive: values.isOpeningBalanceTaxInclusive,
+          unitConversions: catalog.unitConversions,
+          saleTaxId: values.saleTaxId,
+          purchaseTaxId: values.purchaseTaxId,
+          isSalePriceTaxInclusive: values.isSalePriceTaxInclusive,
+          isPurchasePriceTaxInclusive: values.isPurchasePriceTaxInclusive,
+        };
+      }
     }
 
     const filesSnap = files;
@@ -572,33 +657,34 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
           }
         }
 
-        const narrationClean = values.openingBalanceNarration?.trim() || null;
-        const balance = (values.openingBalance || 0) * (values.openingBalanceRate || 0);
-        const stockQty = computeItemStockQty(values);
+        const narrationClean = submitValues.openingBalanceNarration?.trim() || null;
+        const balance = (submitValues.openingBalance || 0) * (submitValues.openingBalanceRate || 0);
+        const stockQty = computeItemStockQty(submitValues);
 
         /** Explicit fields — `undefined` Firestore / SQLite JSON me avoid */
         const updatePayload: Record<string, unknown> = {
-          name: values.name,
-          type: values.type,
-          hsCode: values.hsCode?.trim() || null,
-          salePrice: values.salePrice,
-          isSalePriceTaxInclusive: values.isSalePriceTaxInclusive,
-          purchasePrice: values.purchasePrice,
-          isPurchasePriceTaxInclusive: values.isPurchasePriceTaxInclusive,
-          openingBalance: values.openingBalance,
-          openingBalanceUnit: values.openingBalanceUnit || null,
-          openingBalanceTaxId: values.openingBalanceTaxId || null,
-          isOpeningBalanceTaxInclusive: values.isOpeningBalanceTaxInclusive || false,
-          openingBalanceDate: values.openingBalanceDate || null,
-          openingBalanceRate: values.openingBalanceRate ?? 0,
-          groupId: values.groupId || null,
-          unitConversions: values.unitConversions || [],
-          salePriceUnit: values.salePriceUnit || null,
-          purchasePriceUnit: values.purchasePriceUnit || null,
-          saleTaxId: values.saleTaxId || null,
-          purchaseTaxId: values.purchaseTaxId || null,
+          name: submitValues.name,
+          type: submitValues.type,
+          hsCode: submitValues.hsCode?.trim() || null,
+          salePrice: submitValues.salePrice,
+          isSalePriceTaxInclusive: submitValues.isSalePriceTaxInclusive,
+          purchasePrice: submitValues.purchasePrice,
+          isPurchasePriceTaxInclusive: submitValues.isPurchasePriceTaxInclusive,
+          openingBalance: submitValues.openingBalance,
+          openingBalanceUnit: submitValues.openingBalanceUnit || null,
+          openingBalanceTaxId: submitValues.openingBalanceTaxId || null,
+          isOpeningBalanceTaxInclusive: submitValues.isOpeningBalanceTaxInclusive || false,
+          openingBalanceDate: submitValues.openingBalanceDate || null,
+          openingBalanceRate: submitValues.openingBalanceRate ?? 0,
+          groupId: submitValues.groupId || null,
+          unitConversions: submitValues.unitConversions || [],
+          salePriceUnit: submitValues.salePriceUnit || null,
+          purchasePriceUnit: submitValues.purchasePriceUnit || null,
+          saleTaxId: submitValues.saleTaxId || null,
+          purchaseTaxId: submitValues.purchaseTaxId || null,
           openingBalanceNarration: narrationClean,
-          fileUrls,
+          fileUrls: catalogLocked ? item.fileUrls || [] : fileUrls,
+          ...(catalogLocked ? { systemGenerated: true, catalogSource: "admin_plans" } : {}),
         };
 
         if (localSqlMirror) {
@@ -632,9 +718,9 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
           setTimeout(() => {
             onItemUpdated({
               id: itemRefSnap.id,
-              ...values,
-              fileUrls,
-              openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+              ...submitValues,
+              fileUrls: catalogLocked ? itemRefSnap.fileUrls || [] : fileUrls,
+              openingBalanceNarration: submitValues.openingBalanceNarration?.trim() || "",
             });
           }, 100);
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Item Updated!", {
@@ -825,7 +911,18 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   }
 
 
-    const allUnits = [...new Set(watchedUnitConversions?.flatMap(uc => [uc.fromUnit, uc.toUnit]) || [])].filter(Boolean);
+    const allUnits = useMemo(() => {
+      const set = new Set(
+        watchedUnitConversions?.flatMap((uc) => [uc.fromUnit, uc.toUnit]).filter(Boolean) || []
+      );
+      if (catalogLocked) {
+        ADMIN_PANEL_SUBSCRIPTION_BILLING_UNITS.forEach((u) => set.add(u));
+        set.add(ADMIN_PANEL_SUBSCRIPTION_YEARLY_UNIT);
+      }
+      const ob = watchedOpeningBalanceUnit;
+      if (ob) set.add(ob);
+      return Array.from(set);
+    }, [watchedUnitConversions, catalogLocked, watchedOpeningBalanceUnit]);
   
     const unitPrices = useMemo(() => {
         const prices: Record<string, { purchase: number; sale: number; purchaseTax: number; saleTax: number; }> = {};
@@ -962,22 +1059,60 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {/* Mobile: 85vh height, 98vw width. PC: 90% screen height & width (90vh / 90vw) so dialog uses most of viewport. */}
         <DialogContent
-            className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-5xl")}
+            className={cn(
+              cnMasterEntityDialogContent(isMobile),
+              "sm:max-w-5xl",
+              dialogResizable &&
+                "relative !flex !max-h-none flex-col overflow-hidden sm:!left-0 sm:!top-0 sm:!h-auto sm:!max-w-none sm:!translate-x-0 sm:!translate-y-0"
+            )}
+            style={
+              dialogResizable
+                ? {
+                    left: dialogPosition.x,
+                    top: dialogPosition.y,
+                    width: dialogSize.w,
+                    height: dialogSize.h,
+                    maxWidth: "98vw",
+                    maxHeight: "92vh",
+                    transform: "none",
+                  }
+                : undefined
+            }
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
-          <DialogHeader className={masterEntityDialogHeaderClassName}>
-            <DialogTitle>Edit Item/Service</DialogTitle>
-            <DialogDescription>Update the details for {item.name}.</DialogDescription>
-          </DialogHeader>
+          {dialogResizable ? (
+            <MasterEntityDialogDragRibbon onDragStart={handleDragStart}>
+              <DialogHeader className={cn(masterEntityDialogHeaderClassName, "space-y-0.5 p-0 text-left")}>
+                <DialogTitle>Edit Item/Service</DialogTitle>
+                <DialogDescription>Update the details for {item.name}.</DialogDescription>
+              </DialogHeader>
+            </MasterEntityDialogDragRibbon>
+          ) : (
+            <DialogHeader className={masterEntityDialogHeaderClassName}>
+              <DialogTitle>Edit Item/Service</DialogTitle>
+              <DialogDescription>Update the details for {item.name}.</DialogDescription>
+            </DialogHeader>
+          )}
           <div className={masterEntityDialogFormWrapperClassName}>
           <div className="pl-master-form-scroll min-h-0 flex-1 overflow-y-auto pr-1">
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4">
-                <Tabs value={itemType} onValueChange={(v) => form.setValue('type', v as "item" | "service")}>
+                {catalogLocked ? (
+                  <p className="text-sm text-muted-foreground rounded-md border bg-muted/40 px-3 py-2">
+                    Subscription catalog item — name and rates sync from Admin → Plans &amp; add-on pricing.
+                    Only purchase/sale tax can be edited here.
+                  </p>
+                ) : null}
+                <Tabs
+                  value={itemType}
+                  onValueChange={(v) => {
+                    if (!catalogLocked) form.setValue("type", v as "item" | "service");
+                  }}
+                >
                 <TabsList>
-                  <TabsTrigger value="item">Item</TabsTrigger>
-                  <TabsTrigger value="service">Service</TabsTrigger>
+                  <TabsTrigger value="item" disabled={catalogLocked}>Item</TabsTrigger>
+                  <TabsTrigger value="service" disabled={catalogLocked}>Service</TabsTrigger>
                 </TabsList>
               </Tabs>
                  <div className="space-y-4 py-4">
@@ -989,7 +1124,12 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                   <FormItem>
                     <FormLabel>Item Name</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g., T-Shirt (Red)" className="h-9" {...field} />
+                      <Input
+                        placeholder="e.g., T-Shirt (Red)"
+                        className={cn("h-9", catalogLocked && "bg-muted cursor-not-allowed")}
+                        readOnly={catalogLocked}
+                        {...field}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -1002,7 +1142,12 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                   <FormItem>
                     <FormLabel>HS Code</FormLabel>
                     <FormControl>
-                      <Input placeholder="Enter HS Code" className="h-9" {...field} />
+                      <Input
+                        placeholder="Enter HS Code"
+                        className={cn("h-9", catalogLocked && "bg-muted cursor-not-allowed")}
+                        readOnly={catalogLocked}
+                        {...field}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -1020,8 +1165,10 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                       processedGroups={processedItemGroups as unknown as ItemGroup[]}
                       popoverModal={false}
                       confirmWithOk
+                      disabled={catalogLocked}
                       value={field.value}
                       onChange={(value, newName) => {
+                        if (catalogLocked) return;
                         if (value === "add-new") {
                           setIsCreateGroupOpen(true);
                           setTimeout(() => {
@@ -1041,7 +1188,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
               />
             </div>
             
-            {/* Unit Conversions: horizontal scroll so Base Unit + delete icon visible on small screens (do not remove overflow-x-auto). */}
             <div className="space-y-4 border p-4 rounded-md">
                 <FormLabel className="text-base font-semibold">Unit Conversions</FormLabel>
                 <div className="w-full overflow-x-auto overflow-y-visible -mx-1 px-1">
@@ -1124,8 +1270,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                         </div>
                     </div>
                     <div className="grid grid-cols-[1fr_auto] items-end gap-2">
-                        <FormField control={form.control} name="purchasePrice" render={({ field }: any) => (<FormItem><FormControl><Input type="number" placeholder="0.00" className="h-9" {...field} value={field.value ?? ''} onChange={(e) => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))} /></FormControl><FormMessage /></FormItem>)} />
-                        <FormField control={form.control} name="purchasePriceUnit" render={({ field }: any) => (<FormItem><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger className="w-28 h-9"><SelectValue placeholder="Unit"/></SelectTrigger></FormControl><SelectContent>{allUnits.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select><FormMessage /></FormItem>)} />
+                        <FormField control={form.control} name="purchasePrice" render={({ field }: any) => (<FormItem><FormControl><Input type="number" placeholder="0.00" className={cn("h-9", catalogLocked && "bg-muted cursor-not-allowed")} readOnly={catalogLocked} {...field} value={field.value ?? ''} onChange={(e) => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))} /></FormControl><FormMessage /></FormItem>)} />
+                        <FormField control={form.control} name="purchasePriceUnit" render={({ field }: any) => (<FormItem><Select onValueChange={field.onChange} value={field.value} disabled={catalogLocked}><FormControl><SelectTrigger className="w-28 h-9"><SelectValue placeholder="Unit"/></SelectTrigger></FormControl><SelectContent>{allUnits.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select><FormMessage /></FormItem>)} />
                     </div>
                </div>
                 <div className="order-3 sm:order-2 space-y-4 border p-4 rounded-md">
@@ -1137,8 +1283,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                         </div>
                     </div>
                     <div className="grid grid-cols-[1fr_auto] items-end gap-2">
-                       <FormField control={form.control} name="salePrice" render={({ field }: any) => (<FormItem className="flex-1"><FormControl><Input type="number" placeholder="0.00" className="h-9" {...field} value={field.value ?? ''} onChange={(e) => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))} /></FormControl><FormMessage /></FormItem>)} />
-                       <FormField control={form.control} name="salePriceUnit" render={({ field }: any) => (<FormItem><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger className="w-28 h-9"><SelectValue placeholder="Unit"/></SelectTrigger></FormControl><SelectContent>{allUnits.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select><FormMessage /></FormItem>)} />
+                       <FormField control={form.control} name="salePrice" render={({ field }: any) => (<FormItem className="flex-1"><FormControl><Input type="number" placeholder="0.00" className={cn("h-9", catalogLocked && "bg-muted cursor-not-allowed")} readOnly={catalogLocked} {...field} value={field.value ?? ''} onChange={(e) => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))} /></FormControl><FormMessage /></FormItem>)} />
+                       <FormField control={form.control} name="salePriceUnit" render={({ field }: any) => (<FormItem><Select onValueChange={field.onChange} value={field.value} disabled={catalogLocked}><FormControl><SelectTrigger className="w-28 h-9"><SelectValue placeholder="Unit"/></SelectTrigger></FormControl><SelectContent>{allUnits.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select><FormMessage /></FormItem>)} />
                    </div>
                </div>
                 <ScrollArea className="order-2 sm:order-3 w-full">
@@ -1183,6 +1329,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                 </ScrollArea>
             </div>
             
+            <div className="space-y-4">
             {/* Opening Stock first, then Opening Stock Summary below (do not revert to side-by-side). */}
             <div className="space-y-4">
               <div className="space-y-4 border p-4 rounded-md">
@@ -1243,7 +1390,13 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                         render={({ field }: any) => (
                         <FormItem>
                             <FormLabel>Unit</FormLabel>
-                            <Select onValueChange={field.onChange} value={field.value}>
+                            <Select
+                              onValueChange={field.onChange}
+                              value={
+                                field.value ||
+                                (catalogLocked ? ADMIN_PANEL_SUBSCRIPTION_YEARLY_UNIT : "")
+                              }
+                            >
                                 <FormControl><SelectTrigger className="h-9"><SelectValue placeholder="Select Unit"/></SelectTrigger></FormControl>
                                 <SelectContent>
                                     {allUnits.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
@@ -1361,6 +1514,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                 </div>
             </div>
             </div>
+            </div>
 
               <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
                 <DialogClose asChild>
@@ -1378,7 +1532,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                             variant="destructive"
                             className="shrink-0 px-3 sm:px-4"
                             onClick={() => setIsDeleteDialogOpen(true)}
-                            disabled={hasTransactions || apkOfflineViewOnly}
+                            disabled={hasTransactions || apkOfflineViewOnly || catalogLocked}
                           >
                             <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Move to Bin
                           </Button>
@@ -1397,7 +1551,16 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading || isCompressing || apkOfflineViewOnly || openingBalanceDateMissing} className="shrink-0">
+                <Button
+                  type="submit"
+                  disabled={
+                    isLoading ||
+                    isCompressing ||
+                    apkOfflineViewOnly ||
+                    openingBalanceDateMissing
+                  }
+                  className="shrink-0"
+                >
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>
@@ -1406,6 +1569,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
           </Form>
           </div>
           </div>
+          {dialogResizable ? <ResizableDialogEdgeHandles onResizeStart={handleResizeStart} /> : null}
         </DialogContent>
       </Dialog>
       

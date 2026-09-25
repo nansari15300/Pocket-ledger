@@ -16,6 +16,7 @@ export const BS_DATE_RANGE_PRESETS = [
   { key: "3m" as const, label: "3 months" },
   { key: "6m" as const, label: "6 months" },
   { key: "fy" as const, label: "F Y" },
+  /** Clears explicit date filter; detail footers show newest 10 txns (see `ledgerLast10View`). */
   { key: "last10" as const, label: "Last 10" },
 ] as const;
 

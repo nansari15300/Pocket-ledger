@@ -587,6 +587,116 @@ html[data-pl-app-ui-zoom-shell="android-zoom"] .min-h-dvh {
   }
 
   /**
+   * Receivables / Payables details dialog — 1px gray H-lines (popup 0.4px mat),
+   * green / blue 1px list cards, pink active R/P tab, blue Print + inactive tabs.
+   */
+  .dashboard-financial-popup[data-pl-rp-dialog-shell] [data-pl-rp-header-divider],
+  .dashboard-financial-popup[data-pl-rp-dialog-shell] [data-pl-rp-group-divider] {
+    border-top-width: 1px !important;
+    border-top-style: solid !important;
+    border-top-color: rgb(156 163 175) !important;
+  }
+  body.theme-pro.dark .dashboard-financial-popup[data-pl-rp-dialog-shell] [data-pl-rp-header-divider],
+  body[class*="theme-"].dark .dashboard-financial-popup[data-pl-rp-dialog-shell] [data-pl-rp-group-divider],
+  body.theme-pro.dark .dashboard-financial-popup[data-pl-rp-dialog-shell] [data-pl-rp-group-divider],
+  body[class*="theme-"].dark .dashboard-financial-popup[data-pl-rp-dialog-shell] [data-pl-rp-header-divider] {
+    border-top-color: rgb(107 114 128) !important;
+  }
+  .dashboard-financial-popup[data-pl-rp-dialog-shell] [data-pl-rp-side-pill]:not([data-pl-rp-side-pill-active]):not([data-state="active"]) {
+    border-width: 1px !important;
+    border-style: solid !important;
+    border-color: rgb(147 197 253) !important;
+  }
+  .dashboard-financial-popup[data-pl-rp-dialog-shell] [data-pl-rp-side-pill][data-pl-rp-side-pill-active],
+  .dashboard-financial-popup[data-pl-rp-dialog-shell] [data-pl-rp-side-pill][data-state="active"] {
+    border-width: 1px !important;
+    border-style: solid !important;
+    border-color: rgb(22 163 74) !important;
+  }
+  body.theme-pro main [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]),
+  body[class*="theme-"] main [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]) {
+    border-width: 1px !important;
+    border-style: solid !important;
+    border-color: rgb(74 222 128) !important;
+    background-color: #ecfdf5 !important;
+    background-image: linear-gradient(
+      90deg,
+      rgba(236, 253, 245, 0.98) 0%,
+      #ffffff 50%,
+      rgba(209, 250, 229, 0.92) 100%
+    ) !important;
+    box-shadow: none !important;
+  }
+  body.theme-pro main [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]):hover,
+  body[class*="theme-"] main [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]):hover,
+  body.theme-pro main [data-pl-rp-dialog] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]),
+  body[class*="theme-"] main [data-pl-rp-dialog] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]) {
+    border-color: rgb(34 197 94) !important;
+  }
+  body.theme-pro main [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row],
+  body[class*="theme-"] main [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row] {
+    border-width: 1px !important;
+    border-style: solid !important;
+    border-color: rgb(59 130 246) !important;
+    background-color: rgb(219 234 254) !important;
+    background-image: none !important;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.55),
+      0 1px 2px rgba(15, 23, 42, 0.06) !important;
+  }
+  body.theme-pro main [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row]:hover,
+  body[class*="theme-"] main [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row]:hover,
+  body.theme-pro main [data-pl-rp-dialog] .pl-master-list-ul > li:hover > [data-pl-list-row][data-pl-ic-company-row],
+  body[class*="theme-"] main [data-pl-rp-dialog] .pl-master-list-ul > li:hover > [data-pl-list-row][data-pl-ic-company-row] {
+    border-color: rgb(37 99 235) !important;
+    background-color: rgb(219 234 254) !important;
+  }
+  body.theme-pro main [data-pl-rp-dialog] [data-pl-list-selected]:not([data-pl-ic-company-row]),
+  body[class*="theme-"] main [data-pl-rp-dialog] [data-pl-list-selected]:not([data-pl-ic-company-row]) {
+    border-width: 1px !important;
+    border-style: solid !important;
+    border-color: rgb(59 130 246) !important;
+    background-color: rgb(219 234 254) !important;
+    background-image: none !important;
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
+  }
+  body.theme-pro main [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row][data-pl-list-selected],
+  body[class*="theme-"] main [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row][data-pl-list-selected] {
+    border-width: 1px !important;
+    border-style: solid !important;
+    border-color: rgb(37 99 235) !important;
+    background-color: rgb(191 219 254) !important;
+    background-image: none !important;
+  }
+  body.theme-pro.dark main [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]),
+  body[class*="theme-"].dark main [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]) {
+    border-width: 1px !important;
+    border-color: rgb(34 197 94 / 0.75) !important;
+    background-color: rgb(6 78 59 / 0.22) !important;
+    background-image: linear-gradient(
+      90deg,
+      rgba(6, 78, 59, 0.35) 0%,
+      rgba(15, 23, 42, 0.55) 50%,
+      rgba(6, 95, 70, 0.3) 100%
+    ) !important;
+  }
+  body.theme-pro.dark main [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row],
+  body[class*="theme-"].dark main [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row] {
+    border-width: 1px !important;
+    border-color: rgb(96 165 250) !important;
+    background-color: rgb(30 58 138 / 0.42) !important;
+    background-image: none !important;
+    box-shadow: none !important;
+  }
+  body.theme-pro.dark main [data-pl-rp-dialog] [data-pl-list-selected]:not([data-pl-ic-company-row]),
+  body[class*="theme-"].dark main [data-pl-rp-dialog] [data-pl-list-selected]:not([data-pl-ic-company-row]) {
+    border-width: 1px !important;
+    border-color: rgb(96 165 250) !important;
+    background-color: rgb(30 64 175 / 0.45) !important;
+    background-image: none !important;
+  }
+
+  /**
    * Balance Sheet account ledger dialog — crisp txn table (no dashboard-financial-popup 0.4px borders).
    */
   .balance-sheet-ledger-popup [data-theme-table="transactions"] table {
@@ -1239,6 +1349,27 @@ body.theme-pro footer button.pl-chrome-btn-drop[aria-pressed="true"]:not(.border
   border-color: rgb(22 163 74) !important;
   background-color: rgb(220 252 231) !important;
   color: rgb(20 83 45) !important;
+}
+/* Quotation Bottom/Right: selected = blue fill like Right, green border only */
+body.theme-pro main button.pl-chrome-btn-drop.quotation-flow-pill[data-chrome-pill-active="true"]:not(.border-0):not([data-pl-txn-icon-btn]):not([data-pl-ledger-view-active="true"]),
+body.theme-pro main button.pl-chrome-btn-drop.quotation-flow-pill[aria-pressed="true"]:not(.border-0):not([data-pl-txn-icon-btn]):not([data-pl-ledger-view-active="true"]),
+html body .quotation-form-ribbon button.quotation-flow-pill[aria-pressed="true"],
+html body .quotation-form-ribbon button.quotation-flow-pill[data-chrome-pill-active="true"] {
+  background-color: rgb(219 234 254) !important;
+  background-image: none !important;
+  color: rgb(30 58 138) !important;
+  border-color: rgb(22 163 74) !important;
+  border-width: 2px !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body.theme-pro main button.pl-chrome-btn-drop.quotation-flow-pill[data-chrome-pill-active="true"]:not(.border-0):hover:not([data-pl-ledger-view-active="true"]),
+body.theme-pro main button.pl-chrome-btn-drop.quotation-flow-pill[aria-pressed="true"]:not(.border-0):hover:not([data-pl-ledger-view-active="true"]),
+html body .quotation-form-ribbon button.quotation-flow-pill[aria-pressed="true"]:hover {
+  background-color: rgb(191 219 254) !important;
+  color: rgb(30 58 138) !important;
+  border-color: rgb(22 163 74) !important;
 }
 /* Pro: legacy single toggle — sirf inactive; active green rule se cover */
 body.theme-pro main button[data-theme-btn="statement"]:not([aria-pressed="true"]):not([data-chrome-pill-active="true"]),
@@ -2606,13 +2737,13 @@ button.day_selected.is-today.has-transactions {
   
   /* Table borders - common in financial apps like transaction tables */
   /* 4K ma lines dherai moto chahiyeko - pure black thick lines */
-  table,
-  table td,
-  table th,
-  table tr,
-  thead th,
-  tbody td,
-  tfoot td {
+  table:not([data-pl-subscription-payments-table]),
+  table:not([data-pl-subscription-payments-table]) td,
+  table:not([data-pl-subscription-payments-table]) th,
+  table:not([data-pl-subscription-payments-table]) tr,
+  table:not([data-pl-subscription-payments-table]) thead th,
+  table:not([data-pl-subscription-payments-table]) tbody td,
+  table:not([data-pl-subscription-payments-table]) tfoot td {
     border-width: 3px !important;
     border-color: #000000 !important;
   }
@@ -2955,37 +3086,37 @@ button.day_selected.is-today.has-transactions {
     border-color: rgb(4 120 87 / 0.55) !important;
   }
   /* Popup dialog — andar ke borders 4K black override se bachao */
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border:not(.border-0):not([data-pl-list-row]),
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border-t:not(.border-t-0),
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border-b:not(.border-b-0),
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border-r:not(.border-r-0),
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border-l:not(.border-l-0),
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border-x:not(.border-x-0),
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border-y:not(.border-y-0),
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) [class*="border-border"]:not([class*="border-0"]),
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table,
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table td,
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table th,
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table tr,
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) input:not(.border-0),
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) textarea:not(.border-0),
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) select:not(.border-0),
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) button:not(.border-0):not([data-pl-list-row]):not(.pl-master-list-row-name):not([data-pl-list-name]),
-  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) [role="combobox"]:not(.border-0) {
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) .border:not(.border-0):not([data-pl-list-row]),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) .border-t:not(.border-t-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) .border-b:not(.border-b-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) .border-r:not(.border-r-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) .border-l:not(.border-l-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) .border-x:not(.border-x-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) .border-y:not(.border-y-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) [class*="border-border"]:not([class*="border-0"]),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) table,
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) table td,
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) table th,
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) table tr,
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) input:not(.border-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) textarea:not(.border-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) select:not(.border-0),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) button:not(.border-0):not([data-pl-list-row]):not(.pl-master-list-row-name):not([data-pl-list-name]),
+  [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) [role="combobox"]:not(.border-0) {
     border-color: var(--pl-dialog-inner-border, rgb(110 231 183 / 0.65)) !important;
   }
-  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border:not(.border-0):not([data-pl-list-row]),
-  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table,
-  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table td,
-  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table th,
-  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) input:not(.border-0),
-  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) button:not(.border-0):not([data-pl-list-row]),
-  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) .border:not(.border-0):not([data-pl-list-row]),
-  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table,
-  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table td,
-  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) table th,
-  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) input:not(.border-0),
-  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) button:not(.border-0):not([data-pl-list-row]) {
+  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) .border:not(.border-0):not([data-pl-list-row]),
+  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) table,
+  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) table td,
+  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) table th,
+  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) input:not(.border-0),
+  body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) button:not(.border-0):not([data-pl-list-row]),
+  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) .border:not(.border-0):not([data-pl-list-row]),
+  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) table,
+  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) table td,
+  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) table th,
+  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) input:not(.border-0),
+  body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) button:not(.border-0):not([data-pl-list-row]) {
     border-color: var(--pl-dialog-inner-border, rgb(4 120 87 / 0.45)) !important;
   }
   /* Auto Monthly settings — stable 2px pill-blue (4K black dialog border override) */
@@ -3781,6 +3912,117 @@ button.day_selected.is-today.has-transactions {
   border-top-width: 0 !important;
   border-color: hsl(var(--border)) !important;
 }
+
+/* Admin Subscription Payments — crisp 1px row lines (ui/table 3px + 4K 3px se alag) */
+table[data-pl-subscription-payments-table],
+html.pl-admin-route table[data-pl-subscription-payments-table] {
+  border-collapse: collapse !important;
+  width: 1800px !important;
+  min-width: 1800px !important;
+  max-width: none !important;
+  table-layout: fixed !important;
+}
+[data-pl-subscription-payments-scroll] {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+[data-pl-subscription-payments-footer] {
+  width: 100%;
+}
+html.pl-admin-route main:has([data-pl-subscription-payments-page]) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+[data-pl-subscription-payments-page] {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+[data-pl-subscription-payments-user-card] {
+  max-width: 100%;
+  overflow: hidden;
+}
+[data-pl-subscription-payments-inner-table] {
+  width: 100% !important;
+  max-width: 100% !important;
+  table-layout: fixed !important;
+}
+table[data-pl-subscription-payments-table] th,
+table[data-pl-subscription-payments-table] td,
+table[data-pl-subscription-payments-table] tr,
+html.pl-admin-route table[data-pl-subscription-payments-table] th,
+html.pl-admin-route table[data-pl-subscription-payments-table] td,
+html.pl-admin-route table[data-pl-subscription-payments-table] tr {
+  border-width: 0 !important;
+  border-color: transparent !important;
+}
+table[data-pl-subscription-payments-table] thead.subscription-payments-table-header tr > th,
+html.pl-admin-route table[data-pl-subscription-payments-table] thead.subscription-payments-table-header tr > th {
+  background: hsl(0 0% 90%) !important;
+  color: hsl(0 0% 9%) !important;
+  font-weight: 700 !important;
+  box-shadow: inset 0 -1px 0 0 #000 !important;
+  padding-top: 0.5rem !important;
+  padding-bottom: 0.5rem !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Header text aligns with card cell text (shared colgroup + amount rail) */
+table[data-pl-subscription-payments-table] thead th,
+[data-pl-subscription-payments-inner-table] tbody td {
+  padding-left: 0.625rem;
+  padding-right: 0.875rem;
+}
+[data-pl-subscription-payments-inner-table] td.subscription-payments-online-company-col,
+[data-pl-subscription-payments-inner-table] td.subscription-payments-offline-company-col,
+table[data-pl-subscription-payments-table] th.subscription-payments-online-company-col,
+table[data-pl-subscription-payments-table] th.subscription-payments-offline-company-col {
+  max-width: 1px;
+  overflow: hidden;
+}
+table[data-pl-subscription-payments-table] th.subscription-payments-amount-col,
+html.pl-admin-route table[data-pl-subscription-payments-table] th.subscription-payments-amount-col {
+  padding-left: calc(0.5rem + 1.75rem) !important;
+}
+[data-pl-subscription-payments-inner-table] td.subscription-payments-amount-col .subscription-payments-amount-value {
+  padding-left: 1.75rem;
+}
+table[data-pl-subscription-payments-table] th.subscription-payments-online-company-col,
+table[data-pl-subscription-payments-table] th.subscription-payments-offline-company-col,
+html.pl-admin-route table[data-pl-subscription-payments-table] th.subscription-payments-online-company-col,
+html.pl-admin-route table[data-pl-subscription-payments-table] th.subscription-payments-offline-company-col {
+  padding-left: calc(0.625rem + 1.75rem) !important;
+}
+[data-pl-subscription-payments-inner-table] .subscription-payments-company-value {
+  padding-left: 1.75rem;
+}
+table[data-pl-subscription-payments-table] tbody tr > td,
+html.pl-admin-route table[data-pl-subscription-payments-table] tbody tr > td {
+  box-shadow: inset 0 -1px 0 0 #000 !important;
+}
+/* Subscription Payments: per-user card row — gap strip, no outer H-line on wrapper */
+table[data-pl-subscription-payments-table] tbody tr.subscription-payments-user-card-row > td,
+html.pl-admin-route table[data-pl-subscription-payments-table] tbody tr.subscription-payments-user-card-row > td {
+  box-shadow: none !important;
+  background: transparent !important;
+}
+/* Inner card table: H-line between expanded rows (spend-wise style) */
+[data-pl-subscription-payments-user-card] table[data-pl-subscription-payments-inner-table] tbody tr > td,
+html.pl-admin-route [data-pl-subscription-payments-user-card] table[data-pl-subscription-payments-inner-table] tbody tr > td {
+  box-shadow: inset 0 -1px 0 0 #000 !important;
+}
+[data-pl-subscription-payments-user-card] table[data-pl-subscription-payments-inner-table] tbody tr:last-child > td,
+html.pl-admin-route [data-pl-subscription-payments-user-card] table[data-pl-subscription-payments-inner-table] tbody tr:last-child > td {
+  box-shadow: none !important;
+}
 [data-pl-gstr-report] table td.text-green-600 {
   color: rgb(22 163 74) !important;
 }
@@ -4112,6 +4354,12 @@ body.theme-pro [data-pl-company-profile-chrome] {
   --border: 0 0% 0% !important;
   --input: 0 0% 0% !important;
   --ring: 0 0% 0% !important;
+  overflow: hidden;
+  border: 1px solid #000 !important;
+  border-radius: 0.5rem;
+}
+[data-pl-company-profile-chrome] > .rounded-b-lg {
+  background-clip: padding-box;
 }
 [data-pl-company-profile-chrome] input:not([type="checkbox"]):not([type="radio"]),
 [data-pl-company-profile-chrome] textarea,
@@ -5964,6 +6212,41 @@ body:not(.theme-pro):not(.theme-pure-white) .app-chrome-sidebar-ribbon::before {
 body:not(.theme-pro):not(.theme-pure-white) .bg-background {
   background-color: hsl(var(--background)) !important;
 }
+body:not(.theme-pro):not(.theme-pure-white) .quotation-form-pill,
+body:not(.theme-pro):not(.theme-pure-white) .quotation-form-pill.bg-background,
+html body .quotation-form-pill,
+html body .quotation-form-pill.bg-background {
+  background-color: rgb(219 234 254) !important;
+  background-image: none !important;
+  border-color: rgb(147 197 253) !important;
+  color: rgb(30 58 138) !important;
+}
+body.theme-pro main .quotation-form-pill,
+body[class*="theme-"] main .quotation-form-pill {
+  background-color: rgb(219 234 254) !important;
+  background-image: none !important;
+  border-color: rgb(147 197 253) !important;
+  color: rgb(30 58 138) !important;
+}
+html body .quotation-form-pill input,
+html body .quotation-form-pill input[type="number"],
+html body .quotation-form-pill input[type="text"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  color: rgb(30 58 138) !important;
+  -webkit-appearance: none;
+  appearance: none;
+}
+html body .quotation-form-ribbon,
+body.theme-pro main .quotation-form-ribbon,
+body[class*="theme-"] main .quotation-form-ribbon {
+  background-color: rgb(239 246 255) !important;
+  background-image: none !important;
+  border-color: rgb(191 219 254) !important;
+}
 body:not(.theme-pro):not(.theme-pure-white) .bg-card {
   background-color: hsl(var(--card)) !important;
 }
@@ -6977,6 +7260,33 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-w
   max-width: 100%;
 }
 
+/* Full view — company / account field groups ek row; panel horizontal scroll */
+.pl-inter-company-voucher[data-ic-simple-view="0"] .ic-account-lookup-row,
+.pl-inter-company-voucher[data-ic-simple-view="0"] .ic-company-fields-row {
+  display: grid;
+  width: 100%;
+  min-width: 40rem;
+  max-width: 100%;
+  align-items: end;
+  gap: 0.5rem;
+}
+.pl-inter-company-voucher[data-ic-simple-view="0"] .ic-account-lookup-row {
+  grid-template-columns:
+    minmax(7.25rem, 8rem)
+    minmax(9rem, 1fr)
+    minmax(6.25rem, 7.5rem)
+    minmax(6.25rem, 7.5rem)
+    minmax(6.25rem, 7.5rem);
+}
+.pl-inter-company-voucher[data-ic-simple-view="0"] .ic-company-fields-row {
+  grid-template-columns:
+    minmax(8.5rem, 1fr)
+    minmax(6.5rem, 8rem)
+    minmax(7rem, 9rem)
+    minmax(6.5rem, 8rem)
+    minmax(7rem, 9.5rem);
+}
+
 /* Inter Company — edit lock par bhi text select + copy (readOnly fields; `disabled` par select band hota hai) */
 .pl-inter-company-voucher.select-text,
 .pl-inter-company-voucher .select-text {
@@ -7599,48 +7909,48 @@ body[class*="theme-"].dark [data-radix-dialog-content][data-pl-dialog-shell] {
  * Popup dialog — andar ke sab borders (panels, header line, table, inputs, buttons)
  * Auto Monthly blue shell alag; IC company blue tree alag rules se.
  */
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) {
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) {
   --pl-dialog-inner-border: rgb(110 231 183 / 0.65);
 }
-body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]),
-body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) {
+body.theme-pro.dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]),
+body[class*="theme-"].dark [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) {
   --pl-dialog-inner-border: rgb(4 120 87 / 0.45);
 }
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border:not(.border-0):not([data-pl-list-row]),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-t:not(.border-t-0),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-b:not(.border-b-0),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-r:not(.border-r-0),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-l:not(.border-l-0),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-x:not(.border-x-0),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-y:not(.border-y-0),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [class*="border-border"]:not([class*="border-0"]),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) hr:not([class*="border-0"]),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [role="separator"]:not([class*="border-0"]),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) table,
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) table td,
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) table th,
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) table tr,
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) thead tr,
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) tbody tr,
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) tfoot,
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) input:not(.border-0),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) textarea:not(.border-0),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) select:not(.border-0),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) button:not(.border-0):not([data-pl-list-row]):not(.pl-master-list-row-name):not([data-pl-list-name]),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [role="combobox"]:not(.border-0),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [role="tablist"]:not([class*="border-0"]),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [role="tab"]:not([class*="border-0"]),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [class*="card"]:not([class*="border-0"]),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [class*="Card"]:not([class*="border-0"]),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) [class*="border-blue"]:not([class*="border-0"]),
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .border-input,
-[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-balance-sheet-difference-trace-popup]) .pl-chrome-btn-drop:not(.border-0) {
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) .border:not(.border-0):not([data-pl-list-row]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) .border-t:not(.border-t-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) .border-b:not(.border-b-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) .border-r:not(.border-r-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) .border-l:not(.border-l-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) .border-x:not(.border-x-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) .border-y:not(.border-y-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) [class*="border-border"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) hr:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) [role="separator"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) table,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) table td,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) table th,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) table tr,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) thead tr,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) tbody tr,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) tfoot,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) input:not(.border-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) textarea:not(.border-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) select:not(.border-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) button:not(.border-0):not([data-pl-list-row]):not(.pl-master-list-row-name):not([data-pl-list-name]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) [role="combobox"]:not(.border-0),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) [role="tablist"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) [role="tab"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) [class*="card"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) [class*="Card"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) [class*="border-blue"]:not([class*="border-0"]),
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) .border-input,
+[data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]):not([data-balance-sheet-difference-trace-popup]):not([data-pl-rp-dialog-shell]) .pl-chrome-btn-drop:not(.border-0) {
   border-color: var(--pl-dialog-inner-border) !important;
 }
-body.theme-pro [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) button.pl-chrome-btn-drop:not(.border-0),
-body[class*="theme-"] [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) button.pl-chrome-btn-drop:not(.border-0),
-body.theme-pro [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) [role="combobox"],
-body[class*="theme-"] [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]) [role="combobox"] {
+body.theme-pro [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) button.pl-chrome-btn-drop:not(.border-0),
+body[class*="theme-"] [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) button.pl-chrome-btn-drop:not(.border-0),
+body.theme-pro [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) [role="combobox"],
+body[class*="theme-"] [data-pl-dialog-shell]:not([data-pl-auto-monthly-settings]):not([data-pl-rp-dialog-shell]) [role="combobox"] {
   border-color: var(--pl-dialog-inner-border) !important;
 }
 
@@ -8800,4 +9110,130 @@ html.dark body [data-pl-mobile-transaction-card].pl-mobile-txn-card-marked {
 body:has([data-pl-nested-ledger-popup][data-state="open"]) [role="menu"],
 body:has([data-pl-nested-ledger-popup][data-state="open"]) [role="listbox"] {
   z-index: 110 !important;
+}
+
+/*
+ * Receivables / Payables details dialog — unlayered (beats @layer + global list-row green).
+ * Root: [data-pl-dialog-shell][data-pl-rp-dialog-shell] on DialogContent.
+ */
+[data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-header-divider],
+[data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-group-divider] {
+  border-top-width: 1px !important;
+  border-top-style: solid !important;
+  border-top-color: rgb(156 163 175) !important;
+}
+body.theme-pro.dark [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-header-divider],
+body[class*="theme-"].dark [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-group-divider],
+body.theme-pro.dark [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-group-divider],
+body[class*="theme-"].dark [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-header-divider] {
+  border-top-color: rgb(107 114 128) !important;
+}
+[data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-side-pill]:not([data-pl-rp-side-pill-active]):not([data-state="active"]) {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(147 197 253) !important;
+}
+[data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-side-pill][data-pl-rp-side-pill-active],
+[data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-side-pill][data-state="active"] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(22 163 74) !important;
+}
+[data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-category-header],
+[data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-category-header] .pl-chrome-btn-drop {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(147 197 253) !important;
+}
+[data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-list-search] input {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(147 197 253) !important;
+}
+body[class*="theme-"] main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]),
+body.theme-pro main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]) {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(74 222 128) !important;
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(
+    90deg,
+    rgba(236, 253, 245, 0.98) 0%,
+    #ffffff 50%,
+    rgba(209, 250, 229, 0.92) 100%
+  ) !important;
+  box-shadow: none !important;
+}
+body[class*="theme-"] main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]):hover,
+body[class*="theme-"] main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]),
+body.theme-pro main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]):hover,
+body.theme-pro main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]) {
+  border-color: rgb(34 197 94) !important;
+}
+body[class*="theme-"] main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row],
+body.theme-pro main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(59 130 246) !important;
+  background-color: rgb(219 234 254) !important;
+  background-image: none !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body[class*="theme-"] main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row]:hover,
+body[class*="theme-"] main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] .pl-master-list-ul > li:hover > [data-pl-list-row][data-pl-ic-company-row],
+body.theme-pro main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row]:hover,
+body.theme-pro main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] .pl-master-list-ul > li:hover > [data-pl-list-row][data-pl-ic-company-row] {
+  border-color: rgb(37 99 235) !important;
+  background-color: rgb(219 234 254) !important;
+}
+body[class*="theme-"] main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-selected]:not([data-pl-ic-company-row]),
+body.theme-pro main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-selected]:not([data-pl-ic-company-row]) {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(59 130 246) !important;
+  background-color: rgb(219 234 254) !important;
+  background-image: none !important;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
+}
+body[class*="theme-"] main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row][data-pl-list-selected],
+body.theme-pro main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row][data-pl-list-selected] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(37 99 235) !important;
+  background-color: rgb(191 219 254) !important;
+  background-image: none !important;
+}
+body[class*="theme-"].dark main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]),
+body.theme-pro.dark main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]) {
+  border-width: 1px !important;
+  border-color: rgb(34 197 94 / 0.75) !important;
+}
+body[class*="theme-"].dark main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row],
+body.theme-pro.dark main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-row][data-pl-ic-company-row] {
+  border-width: 1px !important;
+  border-color: rgb(96 165 250) !important;
+}
+body[class*="theme-"].dark main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-selected],
+body.theme-pro.dark main [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-dialog] [data-pl-list-selected] {
+  border-width: 1px !important;
+  border-color: rgb(96 165 250) !important;
+}
+
+/* R/P dialog — selected Receivables/Payables tab: green border (Tailwind blue + theme chrome se upar; portal = main ke bahar) */
+html body [data-pl-dialog-shell][data-pl-rp-dialog-shell] button[data-pl-rp-side-pill][data-pl-rp-side-pill-active],
+html body [data-pl-dialog-shell][data-pl-rp-dialog-shell] button[data-pl-rp-side-pill][data-state="active"],
+html body [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-side-pill][data-pl-rp-side-pill-active],
+html body [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-side-pill][data-state="active"] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(22 163 74) !important;
+  --tw-border-opacity: 1 !important;
+}
+html body [data-pl-dialog-shell][data-pl-rp-dialog-shell] button[data-pl-rp-side-pill]:not([data-pl-rp-side-pill-active]):not([data-state="active"]),
+html body [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-side-pill]:not([data-pl-rp-side-pill-active]):not([data-state="active"]) {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(147 197 253) !important;
 }

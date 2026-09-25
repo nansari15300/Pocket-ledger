@@ -5,10 +5,13 @@ import { isSuperAdminServer } from "@/lib/server/isSuperAdminServer";
 import {
   DOWNLOAD_EVENTS_COLLECTION,
   DOWNLOAD_STATS_DOC,
+  DOWNLOAD_STATS_UPDATE_DOC,
   mergeDownloadStatsDoc,
   type WebsiteDownloadEvent,
   type WebsiteDownloadPlatform,
 } from "@/lib/websiteDownloadStats";
+import { ANDROID_APP_VERSION, DESKTOP_APP_VERSION } from "@/config/releaseVersion";
+import { compareReleaseVersions } from "@/lib/releaseUpdateCheck";
 import { loadEmailCompanyProfiles } from "@/lib/downloadStatsEmailCompanies";
 
 export const dynamic = "force-dynamic";
@@ -39,11 +42,17 @@ export async function GET(req: NextRequest) {
     if ("error" in gate) return gate.error;
 
     const db = getAdminDb();
-    const [statsSnap, eventsSnap] = await Promise.all([
+    const [statsSnap, statsUpdateSnap, eventsSnap] = await Promise.all([
       db.doc(DOWNLOAD_STATS_DOC).get(),
+      db.doc(DOWNLOAD_STATS_UPDATE_DOC).get(),
       db.collection(DOWNLOAD_EVENTS_COLLECTION).orderBy("createdAtMs", "desc").limit(500).get(),
     ]);
     const stats = mergeDownloadStatsDoc(statsSnap.exists ? statsSnap.data() : undefined);
+    const statsUpdate = mergeDownloadStatsDoc(statsUpdateSnap.exists ? statsUpdateSnap.data() : undefined);
+    const currentReleaseVersion =
+      compareReleaseVersions(ANDROID_APP_VERSION, DESKTOP_APP_VERSION) >= 0
+        ? ANDROID_APP_VERSION
+        : DESKTOP_APP_VERSION;
     const recent: WebsiteDownloadEvent[] = eventsSnap.docs.map((d) => {
       const row = d.data() as Record<string, unknown>;
       return {
@@ -53,6 +62,7 @@ export async function GET(req: NextRequest) {
         version: row.version ? String(row.version) : undefined,
         fileName: row.fileName ? String(row.fileName) : undefined,
         source: row.source ? String(row.source) : undefined,
+        eventKind: row.eventKind === "update" ? "update" : "new",
         userId: row.userId ? String(row.userId) : undefined,
         userEmail: row.userEmail ? String(row.userEmail) : undefined,
         createdAtMs: Number(row.createdAtMs) || 0,
@@ -70,6 +80,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       stats,
+      statsUpdate,
+      currentReleaseVersion,
+      releaseVersions: { windows: DESKTOP_APP_VERSION, android: ANDROID_APP_VERSION },
       byCountry: byCountryRows,
       recent,
       emailProfiles,

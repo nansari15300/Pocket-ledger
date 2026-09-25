@@ -952,6 +952,8 @@ export type RemoteAttachmentBlobPreferCacheOptions = {
   galleryUrls?: readonly string[];
   /** Google Drive download resolve ke liye company registry. */
   companyId?: string;
+  /** Online lazy gate — embedded EXE/APK matches web visible-page rules. */
+  company?: import("@/hooks/useCompany").Company | null;
   /** true = disk/IDB write complete hone ka wait (prefetch). false = turant blob return (preview). */
   awaitDiskWrite?: boolean;
   /** Local company gallery: cache miss par Firebase/network mat chalao. */
@@ -1054,6 +1056,7 @@ export async function getRemoteAttachmentBlobPreferOfflineCache(
       if (
         !isRemoteAttachmentNetworkFetchAllowed(trimmed, {
           companyId: attachmentSyncCompanyId || null,
+          company: preferCacheOptions?.company ?? null,
           explicitUserRequest: preferCacheOptions?.explicitUserRequest,
           bypassVisiblePageCheck: preferCacheOptions?.bypassVisiblePageCheck,
         })

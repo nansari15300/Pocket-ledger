@@ -48,6 +48,7 @@ import {
   getStatusDetail,
   getStatusDetailVouchers,
   LinkedVouchersColored,
+  LinkedVouchersColoredCollapsible,
   BillWiseLinkedDetailCells,
   voucherTypePillClassName,
   type FileColumnDisplayMode,
@@ -240,6 +241,8 @@ interface TransactionsTableProps {
   activeFilter?: string | null;
   setActiveFilter?: React.Dispatch<React.SetStateAction<string | null>>;
   onRowClick?: (transaction: any) => void;
+  /** Inter-company peer pending: blue badge opens compare dialog (not plain row edit). */
+  onInterCompanyChangeDetectedClick?: (transaction: any) => void;
   periodDr?: number;
   periodCr?: number;
   closingBalance?: number;
@@ -355,6 +358,7 @@ export function TransactionsTable({
   activeFilter,
   setActiveFilter,
   onRowClick,
+  onInterCompanyChangeDetectedClick,
   periodDr = 0,
   periodCr = 0,
   closingBalance = 0,
@@ -1711,7 +1715,7 @@ export function TransactionsTable({
     let idleHandle: number | null = null;
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     const runWarm = () => {
-      if (shouldSkipVisibleRowFullIdlePrewarmOnWeb()) return;
+      if (shouldSkipVisibleRowFullIdlePrewarmOnWeb(company)) return;
       void prewarmHoverPreviewHttpsUrls(visibleAttachmentUrls, {
         signal: ac.signal,
         maxUrls: 220,
@@ -2680,9 +2684,17 @@ export function TransactionsTable({
             <div className="min-w-0 flex-1 overflow-hidden">
               <p className="font-bold text-sm truncate">{hl(titleLabel)}</p>
               {isPeerPendingChange ? (
-                <span className="mt-0.5 inline-flex items-center rounded-full border border-blue-600/50 bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white shadow-sm">
+                <button
+                  type="button"
+                  className="mt-0.5 inline-flex cursor-pointer items-center rounded-full border border-blue-600/50 bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white shadow-sm hover:bg-blue-600"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    onInterCompanyChangeDetectedClick?.(t);
+                  }}
+                >
                   Change Detected
-                </span>
+                </button>
               ) : null}
             </div>
             <div className={cn("relative flex shrink-0 items-center justify-end gap-1 font-bold text-sm", showFileBySelection && "pl-8")}>
@@ -2852,7 +2864,7 @@ export function TransactionsTable({
           {/* Bill-wise mobile: linked vouchers Status→Balance width par wrap (print parity) */}
           {showStatusDetailInCard ? (
             <div className="mt-0.5 w-full min-w-0 flex justify-end">
-              <LinkedVouchersColored
+              <LinkedVouchersColoredCollapsible
                 vouchers={statusDetailVouchers}
                 wrapInline
                 align="start"
@@ -3097,7 +3109,7 @@ export function TransactionsTable({
                     {/* Bill-wise OB mobile: linked vouchers Status→Balance wrap */}
                     {showNarration && openingBalanceLinkedVoucherNos?.length ? (
                       <div className="mt-0.5 w-full min-w-0 flex justify-end">
-                        <LinkedVouchersColored
+                        <LinkedVouchersColoredCollapsible
                           vouchers={openingBalanceLinkedVoucherNos}
                           wrapInline
                           align="start"
@@ -3141,7 +3153,7 @@ export function TransactionsTable({
                 {/* Bill-wise OB (no outstanding split): linked vouchers full-width wrap */}
                 {isBillWiseCardContext && showNarration && openingBalanceLinkedVoucherNos?.length && obOutstandingDisplay == null ? (
                   <div className="mt-0.5 w-full min-w-0 flex justify-end">
-                    <LinkedVouchersColored
+                    <LinkedVouchersColoredCollapsible
                       vouchers={openingBalanceLinkedVoucherNos}
                       wrapInline
                       align="start"
@@ -3591,6 +3603,7 @@ export function TransactionsTable({
                                           highlightPendingApproval={highlightPendingApproval}
                                           syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
                                           onSyncNow={handleSyncVoucherNow}
+                                          onInterCompanyChangeDetectedClick={onInterCompanyChangeDetectedClick}
                                           activeRecurringTriggerVoucherIds={activeRecurringTriggerVoucherIds}
                                           textSearchHighlight={rowTextSearchHighlight}
                                           columnFilters={filters}
@@ -3668,6 +3681,7 @@ export function TransactionsTable({
                           highlightPendingApproval={highlightPendingApproval}
                           syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
                           onSyncNow={handleSyncVoucherNow}
+                          onInterCompanyChangeDetectedClick={onInterCompanyChangeDetectedClick}
                           activeRecurringTriggerVoucherIds={activeRecurringTriggerVoucherIds}
                           textSearchHighlight={rowTextSearchHighlight}
                           columnFilters={filters}
@@ -3753,6 +3767,7 @@ export function TransactionsTable({
                           highlightPendingApproval={highlightPendingApproval}
                           syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
                           onSyncNow={handleSyncVoucherNow}
+                          onInterCompanyChangeDetectedClick={onInterCompanyChangeDetectedClick}
                           activeRecurringTriggerVoucherIds={activeRecurringTriggerVoucherIds}
                           textSearchHighlight={rowTextSearchHighlight}
                           columnFilters={filters}

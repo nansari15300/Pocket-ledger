@@ -15,6 +15,7 @@ import { Loader2, Filter, XCircle, Users, Dot } from "lucide-react";
 import { RoleSelector } from "./RoleSelector";
 import type { Role } from "@/utils/rbac";
 import { logActivity } from "@/hooks/useFirestore";
+import { appApiUrl } from "@/lib/webAppBasePath";
 import {
   getPlan,
   DEFAULT_PLANS,
@@ -44,7 +45,7 @@ async function postReconcileOwnerPlanFromAdmin(
   if (!oid || !firebaseUser) return;
   try {
     const token = await firebaseUser.getIdToken();
-    const res = await fetch("/api/admin/reconcile-owner-plan", {
+    const res = await fetch(appApiUrl("/api/admin/reconcile-owner-plan"), {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ ownerId: oid }),

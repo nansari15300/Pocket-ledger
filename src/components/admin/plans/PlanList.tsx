@@ -73,6 +73,13 @@ export function PlanList({
     setAddonDraft(deviceUserAddOns);
   }, [deviceUserAddOns]);
 
+  const persistAddonDraft = (next: DeviceUserAddOnOffer) => {
+    setAddonDraft(next);
+    if (!onSaveDeviceUserAddOns) return;
+    setAddonSaving(true);
+    void onSaveDeviceUserAddOns(next).finally(() => setAddonSaving(false));
+  };
+
   if (plans.length === 0) {
     return (
       <div className="text-center text-muted-foreground p-8">No plans found.</div>
@@ -281,7 +288,8 @@ export function PlanList({
             <Switch
               id="addon-service-enabled"
               checked={addonDraft.enabled}
-              onCheckedChange={(enabled) => setAddonDraft((prev) => ({ ...prev, enabled }))}
+              disabled={addonSaving}
+              onCheckedChange={(enabled) => persistAddonDraft({ ...addonDraft, enabled })}
             />
           </div>
 
@@ -298,8 +306,9 @@ export function PlanList({
                 <Switch
                   id="addon-online-billing-visible"
                   checked={addonDraft.billingOnlineVisible !== false}
+                  disabled={addonSaving}
                   onCheckedChange={(visible) =>
-                    setAddonDraft((prev) => ({ ...prev, billingOnlineVisible: visible }))
+                    persistAddonDraft({ ...addonDraft, billingOnlineVisible: visible })
                   }
                 />
               </div>
@@ -367,8 +376,9 @@ export function PlanList({
                 <Switch
                   id="addon-local-billing-visible"
                   checked={addonDraft.billingLocalVisible !== false}
+                  disabled={addonSaving}
                   onCheckedChange={(visible) =>
-                    setAddonDraft((prev) => ({ ...prev, billingLocalVisible: visible }))
+                    persistAddonDraft({ ...addonDraft, billingLocalVisible: visible })
                   }
                 />
               </div>
@@ -424,7 +434,9 @@ export function PlanList({
           </div>
 
           <p className="text-[11px] text-muted-foreground leading-snug">
-            Turn off a section&apos;s switch to hide that tab on Billing only — existing purchased add-ons stay valid.
+            &quot;Show on billing&quot; and master switch save immediately. Price changes still need{" "}
+            <strong>Save Add-on Service</strong>. Turning off a section hides that tab on Billing only — purchased
+            add-ons stay valid.
           </p>
 
           <Button

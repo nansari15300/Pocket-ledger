@@ -4,9 +4,11 @@ import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebaseAdmin";
 import {
   DOWNLOAD_EVENTS_COLLECTION,
   DOWNLOAD_STATS_DOC,
+  DOWNLOAD_STATS_UPDATE_DOC,
   countryFromRequestHeaders,
   isWebsiteDownloadPlatform,
   normalizeCountryCode,
+  normalizeDownloadEventKind,
 } from "@/lib/websiteDownloadStats";
 
 export const dynamic = "force-dynamic";
@@ -74,6 +76,7 @@ export async function POST(req: NextRequest) {
     const version = String(body.version || "").trim().slice(0, 40);
     const fileName = String(body.fileName || body.file || "").trim().slice(0, 120);
     const source = String(body.source || "").trim().slice(0, 40);
+    const eventKind = normalizeDownloadEventKind(body.eventKind);
     const country = normalizeCountryCode(body.country || countryFromRequestHeaders(req.headers));
     const now = Date.now();
     const ip = clientIp(req);
@@ -81,7 +84,7 @@ export async function POST(req: NextRequest) {
 
     const db = getAdminDb();
     const eventRef = db.collection(DOWNLOAD_EVENTS_COLLECTION).doc();
-    const statsRef = db.doc(DOWNLOAD_STATS_DOC);
+    const statsRef = db.doc(eventKind === "update" ? DOWNLOAD_STATS_UPDATE_DOC : DOWNLOAD_STATS_DOC);
 
     await db.runTransaction(async (tx) => {
       const statsSnap = await tx.get(statsRef);
@@ -112,6 +115,7 @@ export async function POST(req: NextRequest) {
         version: version || null,
         fileName: fileName || null,
         source: source || null,
+        eventKind,
         userId: userGate.uid,
         userEmail: userGate.email,
         ip,

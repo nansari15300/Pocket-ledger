@@ -1,3 +1,5 @@
+import { cn } from "@/lib/utils";
+
 /** Company Profile — dashboard jaisa zone colors + form field chrome */
 export const companyProfileChromeRoot = "data-pl-company-profile-chrome";
 
@@ -20,7 +22,15 @@ export const companyProfileTabsTrigger =
   "flex h-full min-h-9 items-center justify-center rounded-full border-0 py-0 shadow-none text-foreground data-[state=inactive]:bg-transparent data-[state=inactive]:text-foreground data-[state=active]:border data-[state=active]:border-black data-[state=active]:bg-blue-500 data-[state=active]:text-white";
 
 /** Company Profile + Manage Sharing outer card shell */
-export const settingsDetailCardShell = `border border-black ${companyProfilePageBg}`;
+export const settingsDetailCardShell = cn(
+  companyProfilePageBg,
+  "overflow-hidden rounded-lg border border-black shadow-none"
+);
+
+/** Manage Sharing / Role Permissions body — green fill only (tone class border corners pe card line chipka deta) */
+export const settingsDetailCardBodyClass = cn(
+  "p-4 pl-chrome-tone-emerald !border-0 rounded-b-lg"
+);
 
 /** Cloud sync — dashboard stat cards jaisa emerald shell */
 export const cloudSyncPageCard = "pl-chrome-card pl-chrome-tone-emerald border border-black";

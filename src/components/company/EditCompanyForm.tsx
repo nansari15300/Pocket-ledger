@@ -23,6 +23,8 @@ import { uploadCompanyLogo, tryDeleteStorageFileByUrl } from "@/lib/storage";
 import { compressImageForCompany, attachmentImageStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { FilePreview } from "../vouchers/FilePreview";
 import { CompanyInterCompanyCodeField } from "@/components/inter-company/CompanyInterCompanyCodeField";
+import { isAdminPanelCompanyLocalId } from "@/lib/adminPanelCompany/ledgerMode";
+import { adminPanelCompanyStorageLabel } from "@/lib/adminPanelCompany/patchCompanyProfile";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -439,6 +441,36 @@ export function EditCompanyForm({
 
     setIsLoading(true);
     try {
+      const { isAdminPanelCompanyLocalId } = await import("@/lib/adminPanelCompany/ledgerMode");
+      if (isAdminPanelCompanyLocalId(companyId)) {
+        const { patchAdminPanelCompanyProfile } = await import("@/lib/adminPanelCompany/patchCompanyProfile");
+        await patchAdminPanelCompanyProfile({
+          name: values.name,
+          address: values.address,
+          phone: values.phone,
+          email: values.email,
+          pan: values.pan,
+        });
+        const existingLocal = await getLocalCompanyById(companyId);
+        if (existingLocal) {
+          await upsertLocalCompany({
+            ...existingLocal,
+            id: companyId,
+            name: values.name,
+            address: values.address,
+            phone: values.phone,
+            email: values.email,
+            pan: values.pan,
+          });
+        }
+        reloadLocalCompanyRegistry();
+        toast({
+          title: "Admin Panel Company saved",
+          description: "Profile updated in admin_panel_companies cloud tenant.",
+        });
+        setIsLoading(false);
+        return;
+      }
       let skipGenericSuccessToast = false;
       const localOnly = isLocalOnlyMode();
       const companyRef = doc(firestore, "companies", companyId);
@@ -982,11 +1014,23 @@ export function EditCompanyForm({
     );
   }
 
+  const isAdminPanelCompanyForm = Boolean(companyId && isAdminPanelCompanyLocalId(companyId));
+  const adminPanelStorageHint = isAdminPanelCompanyForm ? adminPanelCompanyStorageLabel() : null;
+
   return (
     <div className="min-w-0">
         <Form {...form}>
         <fieldset disabled={readOnly} className="min-w-0 border-0 p-0 m-0 space-y-6 disabled:opacity-100">
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+            {adminPanelStorageHint ? (
+              <div className="rounded-md border border-primary/25 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Admin Panel Company data</span>
+                {" — "}
+                Profile saves to{" "}
+                <span className="font-mono text-[11px] text-foreground">{adminPanelStorageHint}</span>
+                ; this device keeps a SQLite mirror for the normal app UI.
+              </div>
+            ) : null}
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <FormField
                 control={form.control}

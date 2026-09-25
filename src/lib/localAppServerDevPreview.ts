@@ -62,7 +62,4 @@ export function isAdminPanelDevPreview(): boolean {
   return isLocalhostDevPreview();
 }
 
-export function isAdminPanelNavVisible(isSuperAdminUser: boolean, isStaticAppBundle: boolean): boolean {
-  if (isAdminPanelDevPreview()) return true;
-  return isSuperAdminUser && !isStaticAppBundle;
-}
+export { isAdminPanelNavVisible } from "@/lib/adminDevPreview";

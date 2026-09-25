@@ -46,6 +46,10 @@ import {
 import { useCompany } from "@/hooks/useCompany";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import {
+  NESTED_VOUCHER_ATTACHMENT_REUSE_CONTENT_CN,
+  NESTED_VOUCHER_ATTACHMENT_REUSE_OVERLAY_CN,
+} from "@/lib/dialogShellChrome";
 
 /** Thumbnail sirf row screen par aane par load — 400+ files par dialog open pe Storage burst nahi. */
 function ReuseAttachmentLazyThumb({
@@ -302,7 +306,9 @@ export function CompanyAttachmentReuseDialog({
     >
       <DialogContent
         data-pl-reuse-dialog
+        overlayClassName={NESTED_VOUCHER_ATTACHMENT_REUSE_OVERLAY_CN}
         className={cn(
+          NESTED_VOUCHER_ATTACHMENT_REUSE_CONTENT_CN,
           "flex h-[90vh] max-h-[90vh] min-h-0 w-[min(100vw-0.75rem,42rem)] max-w-2xl flex-col gap-2 overflow-hidden sm:gap-3",
           "rounded-xl border-2 border-emerald-500/75 pl-dashboard-ribbon-emerald bg-emerald-50/90 sm:rounded-lg sm:gap-4"
         )}

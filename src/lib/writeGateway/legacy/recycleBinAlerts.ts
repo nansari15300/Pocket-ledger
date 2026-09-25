@@ -199,6 +199,7 @@ export function displayNameFromRecycleBinPatch(
     data.name ??
     data.accountName ??
     data.voucherNumber ??
+    data.quotationNumber ??
     data.title ??
     `Unnamed ${masterTypeLabel(collectionName)}`;
   return String(name);

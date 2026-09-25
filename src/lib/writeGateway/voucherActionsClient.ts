@@ -1200,6 +1200,19 @@ async function saveVoucherOfflineLocalCreate(
   await enqueueVoucherOutbox(companyId, "create", newId, payload);
   scheduleBrowserDbPersistAfterWrite();
   dispatchSavedVoucherAttachmentUrls(companyId, newId, payload);
+  // Online company: background flush so other devices get `_pl_change_log` without re-save.
+  if (
+    !isFirebaseLedgerDataSyncDisabled() &&
+    isFirebaseLedgerCompanyDataSyncEnabled(companyId) &&
+    shouldAutoFlushOutboxAfterEnqueue()
+  ) {
+    const canSync = await canSyncCompanyToServer(companyId);
+    if (canSync) {
+      void flushVoucherOutbox().catch((e) => {
+        console.warn("[saveVoucherOfflineLocalCreate] background flush after create failed", e);
+      });
+    }
+  }
   return { id: newId };
 }
 
@@ -2076,7 +2089,8 @@ export async function syncBillWiseAllocationsToTargetVouchers(
   companyId: string,
   sourceVoucherId: string,
   newAllocations: Allocation[],
-  previousAllocations: Allocation[] = []
+  previousAllocations: Allocation[] = [],
+  options?: { forceSqliteFirst?: boolean }
 ): Promise<void> {
   if (!companyId || !sourceVoucherId) return;
   const hasNew = newAllocations.some(
@@ -2088,8 +2102,10 @@ export async function syncBillWiseAllocationsToTargetVouchers(
   if (!hasNew && !hasPrev) return;
   // Multi-doc allocation sync — APK par turant-heavy write burst; ledger shield ek hi entry se arm
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
-  if (await shouldUseLocalVoucherPipeline(companyId)) {
-    // Local-only mode me reverse allocation links local vouchers par maintain karo.
+  const sqliteFirst =
+    options?.forceSqliteFirst === true || (await shouldUseLocalVoucherPipeline(companyId));
+  if (sqliteFirst) {
+    // SQLite-first: reverse allocation links local vouchers par maintain karo; cloud via outbox.
     const prevIds = new Set(
       previousAllocations
         .filter((a) => a.voucherId && a.voucherId !== OPENING_BALANCE_VOUCHER_ID)
@@ -2111,6 +2127,7 @@ export async function syncBillWiseAllocationsToTargetVouchers(
         coerceVoucherDocumentDate(payload);
         await upsertCompanyDocInBrowserDb(companyId, "vouchers", targetId, payload);
         await enqueueVoucherOutbox(companyId, "update", targetId, payload);
+        dispatchVoucherLivePatch(companyId, targetId, { allocations: filtered });
       }
     }
     for (const a of newAllocations) {
@@ -2134,6 +2151,14 @@ export async function syncBillWiseAllocationsToTargetVouchers(
       coerceVoucherDocumentDate(payload);
       await upsertCompanyDocInBrowserDb(companyId, "vouchers", targetId, payload);
       await enqueueVoucherOutbox(companyId, "update", targetId, payload);
+      dispatchVoucherLivePatch(companyId, targetId, { allocations });
+    }
+    if (options?.forceSqliteFirst && shouldAutoFlushOutboxAfterEnqueue()) {
+      void flushVoucherOutbox({
+        priority: { companyId, collectionName: "vouchers", docId: sourceVoucherId },
+      }).catch((e) => {
+        console.warn("[syncBillWiseAllocations] priority outbox flush failed", e);
+      });
     }
     return;
   }
@@ -2244,7 +2269,7 @@ export async function clearBillWiseAllocationsFromSourcesToTarget(
   }
 }
 
-async function listBillWiseSourceIdsAllocatingToTarget(
+export async function listBillWiseSourceIdsAllocatingToTarget(
   companyId: string,
   targetVoucherId: string
 ): Promise<string[]> {
@@ -2300,12 +2325,13 @@ export async function applyJournalBillWiseLinkAllocations(
     ? [...((dbJournal as { allocations: Allocation[] }).allocations ?? [])]
     : [...previousAllocations];
   const sanitizedNew = await clampJournalBillWiseAllocationsForSave(companyId, newAllocations);
-  await patchVoucherFields(companyId, journalVoucherId, { allocations: sanitizedNew });
+  await patchVoucherFields(companyId, journalVoucherId, { allocations: sanitizedNew }, { forceSqliteFirst: true });
   await syncBillWiseAllocationsToTargetVouchers(
     companyId,
     journalVoucherId,
     sanitizedNew,
-    dbPrevious
+    dbPrevious,
+    { forceSqliteFirst: true }
   );
 
   const keepTargetIds = new Set(
@@ -2359,8 +2385,10 @@ export async function applyPaymentBillWiseLinkAllocations(
   if (!companyId || !sourceVoucher?.id) throw new Error("Missing companyId or voucher");
   const sourceId = sourceVoucher.id;
   const previousAllocations = Array.isArray(sourceVoucher.allocations) ? sourceVoucher.allocations : [];
-  await patchVoucherFields(companyId, sourceId, { allocations: newAllocations });
-  await syncBillWiseAllocationsToTargetVouchers(companyId, sourceId, newAllocations, previousAllocations);
+  await patchVoucherFields(companyId, sourceId, { allocations: newAllocations }, { forceSqliteFirst: true });
+  await syncBillWiseAllocationsToTargetVouchers(companyId, sourceId, newAllocations, previousAllocations, {
+    forceSqliteFirst: true,
+  });
 
   dispatchVoucherLivePatch(companyId, sourceId, { allocations: newAllocations });
 

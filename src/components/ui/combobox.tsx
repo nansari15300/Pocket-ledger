@@ -65,6 +65,8 @@ type ComboboxProps = {
    * yahan ~N character worth width + `truncate` se uske baad ellipsis.
    */
   triggerLabelMinCh?: number;
+  /** Trigger pill naam ki width jitni — w-full stretch nahi. */
+  fitTrigger?: boolean;
   /** Optional: cap visible filtered options (useful for mobile dropdown performance/clarity). */
   maxVisibleOptions?: number;
   /** Popover panel extra classes; agar set ho to default trigger-width inline style skip (mobile width jaise). */
@@ -76,6 +78,8 @@ type ComboboxProps = {
    * Web + APK/Capacitor dono: `useIsMobile()` breakpoint.
    */
   mobileWideOptionList?: boolean;
+  /** Native tooltip on trigger (e.g. disabled picker hint). */
+  title?: string;
 };
 
 export function Combobox({
@@ -98,10 +102,12 @@ export function Combobox({
   autoFocusSearchOnOpen = true,
   triggerLabelScrollable = false,
   triggerLabelMinCh,
+  fitTrigger = false,
   maxVisibleOptions,
   popoverContentClassName,
   commandListClassName,
   mobileWideOptionList = true,
+  title,
 }: ComboboxProps) {
   const isMobile = useIsMobile();
   /** Voucher / sab combo: mobile par list ~80vw jab tak caller ne `popoverContentClassName` na di ho. */
@@ -172,6 +178,9 @@ export function Combobox({
     onChange?.(val);
     setOpen(false);
     setSearch("");
+    requestAnimationFrame(() => {
+      triggerRef.current?.focus({ preventScroll: true });
+    });
   };
   
   const handleMultiSelect = (val: string) => {
@@ -203,6 +212,9 @@ export function Combobox({
     onChange?.(val, newName);
     setOpen(false);
     setSearch("");
+    requestAnimationFrame(() => {
+      triggerRef.current?.focus({ preventScroll: true });
+    });
   };
   
   const displayValue = () => {
@@ -309,10 +321,11 @@ export function Combobox({
           variant="outline"
           role="combobox"
           aria-expanded={open}
+          title={title}
           className={cn(
             // overflow label wrapper par; button par nahi — warna ChevronsUpDown clip (Unit = lamba minWidth).
-            "w-full max-w-full justify-between gap-0.5 h-9 px-2",
-            labelMinCh == null ? "min-w-0" : "",
+            fitTrigger ? "w-fit max-w-full justify-between gap-0.5 h-9 px-2" : "w-full max-w-full justify-between gap-0.5 h-9 px-2",
+            !fitTrigger && labelMinCh == null ? "min-w-0" : "",
             triggerLabelScrollable ? "overflow-x-auto" : "overflow-visible",
             triggerClassName
           )}
@@ -325,10 +338,12 @@ export function Combobox({
         >
           <span
             className={cn(
-              "flex min-w-0 flex-1 items-center gap-1",
-              triggerLabelScrollable
-                ? "max-w-full overflow-x-auto"
-                : "max-w-[calc(100%-1.75rem)] overflow-hidden"
+              "flex items-center gap-1",
+              fitTrigger
+                ? "w-auto shrink-0 whitespace-nowrap"
+                : triggerLabelScrollable
+                  ? "min-w-0 flex-1 max-w-full overflow-x-auto"
+                  : "min-w-0 flex-1 max-w-[calc(100%-1.75rem)] overflow-hidden"
             )}
             style={
               labelMinCh != null
@@ -339,9 +354,14 @@ export function Combobox({
             {!isMultiSelect && (options.find((o) => o.value === value))?.isSpecial && <Crown className="h-4 w-4 shrink-0 text-amber-500" />}
             <span
               className={cn(
-                "block flex-1 max-w-full text-left",
-                labelMinCh == null ? "min-w-0" : "",
-                triggerLabelScrollable ? "overflow-x-auto whitespace-nowrap" : "truncate"
+                "block text-left",
+                fitTrigger
+                  ? "w-auto whitespace-nowrap"
+                  : cn(
+                      "flex-1 max-w-full",
+                      labelMinCh == null ? "min-w-0" : "",
+                      triggerLabelScrollable ? "overflow-x-auto whitespace-nowrap" : "truncate"
+                    )
               )}
               style={
                 labelMinCh != null

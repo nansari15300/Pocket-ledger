@@ -121,10 +121,6 @@ export function FirebaseLedgerDeltaSyncManager() {
         for (const change of snap.docChanges()) {
           const changeId = change.doc.id;
           if (seenChangeIdsRef.current.has(changeId)) continue;
-          seenChangeIdsRef.current.add(changeId);
-          if (seenChangeIdsRef.current.size > 300) {
-            seenChangeIdsRef.current = new Set([...seenChangeIdsRef.current].slice(-150));
-          }
           const data = change.doc.data() as {
             collectionName?: unknown;
             docId?: unknown;
@@ -142,6 +138,10 @@ export function FirebaseLedgerDeltaSyncManager() {
             { op: String(data.op || "") }
           )
             .then(() => {
+              seenChangeIdsRef.current.add(changeId);
+              if (seenChangeIdsRef.current.size > 300) {
+                seenChangeIdsRef.current = new Set([...seenChangeIdsRef.current].slice(-150));
+              }
               notifyBrowserDbCollectionUpdated(localCompanyId, collectionName, {
                 immediate: true,
                 source: "firebase_delta_pull",

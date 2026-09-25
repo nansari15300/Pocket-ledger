@@ -9,7 +9,7 @@ import {
   useAttachmentThumbDisplayUrl,
 } from "@/hooks/useAttachmentThumbDisplayUrl";
 import { useCompany } from "@/hooks/useCompany";
-import { isWebBrowserAttachmentLazyLoad } from "@/lib/webAttachmentLazyLoadPolicy";
+import { shouldUseAttachmentLazyLoad } from "@/lib/webAttachmentLazyLoadPolicy";
 import { isOnlineCompanyFilesUiAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
 import {
   FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT,
@@ -96,7 +96,7 @@ export function VoucherAttachmentFileIndicator({
   const allowThumbLoad =
     wantsPreview &&
     filesNetworkAllowed &&
-    (readyState === "ready" || isWebBrowserAttachmentLazyLoad());
+    (readyState === "ready" || shouldUseAttachmentLazyLoad(company));
   const thumbUrl = useAttachmentThumbDisplayUrl(
     primaryUrl,
     allowThumbLoad,
@@ -291,7 +291,7 @@ export function VoucherAttachmentFileIndicator({
       !!thumbUrl &&
       thumbRetryKey < 4 &&
       (filesNetworkAllowed
-        ? isReady || isWebBrowserAttachmentLazyLoad()
+        ? isReady || shouldUseAttachmentLazyLoad(company)
         : true);
 
     const thumbInner = canShowThumb ? (

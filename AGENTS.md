@@ -421,6 +421,32 @@ When the human asks for PL Server fixes (including “make PL like online”):
 - Keep the diff minimal and scoped to that request.
 - Confirm whether they want type on all mobile ledgers or only a specific screen.
 
+## Freeze: Bill-wise linked voucher Show more / Show less (hard)
+
+**Sep 2026:** Bill-wise **Status** linked voucher numbers (Partial/Paid rows, opening balance links, mobile bill-wise cards) show **2 voucher nos** by default with **Show more (+N)** / **Show less**. **Do not edit unless the human explicitly asks to change this linked-voucher collapse UX in that same message.**
+
+### Frozen paths (do not touch casually)
+
+- `src/components/vouchers/transactionTableShared.tsx` — `LinkedVouchersColoredCollapsible`, `LINKED_VOUCHERS_COLLAPSED_COUNT`, `LinkedVouchersColored` (when used from collapsible), status-under-badge + narration sub-row + `BillWiseLinkedDetailCells` linked list
+- `src/components/vouchers/TransactionsTable.tsx` — **only** `LinkedVouchersColoredCollapsible` usages (mobile bill-wise status detail + opening-balance linked voucher rows); other `TransactionsTable` areas stay under their own freezes (approve, mobile card UI, etc.)
+
+### Stabilized behavior to preserve
+
+- **Collapsed:** max **2** linked voucher numbers visible (2-per-line colors unchanged).
+- **Expanded:** full list via **Show more (+N)**; **Show less** restores collapsed.
+- Toggle is a **button** with **stopPropagation** — must not trigger row click / open voucher.
+- Desktop status badge stack + bill-wise narration detail + mobile bill-wise parity.
+
+### Do not
+
+- Revert to showing all linked PUR/PYMT nos at once on long Partial rows while fixing unrelated bill-wise or status work.
+- Change collapsed count or button copy casually; remove collapsible wrapper without explicit request.
+
+### If the human explicitly asks to change linked-voucher show more
+
+- Keep the diff minimal and scoped to that request.
+- Preserve row-click isolation unless they ask to change that too.
+
 ## Freeze: Dashboard boot — SQLite-first, no UI freeze (hard)
 
 **Sep 2026:** App start, company switch, and navigate to `/dashboard` (web, EXE, APK): show dashboard **immediately** from SQLite; full voucher merge and sync run **in background** without blocking clicks or full-page skeleton. **Do not edit unless the human explicitly asks to change dashboard boot / voucher load UX in that same message.**

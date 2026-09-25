@@ -182,6 +182,7 @@ import {
   allowedConnectMasterKinds,
   connectAccessFromInviteGrant,
   isConnectMasterFullyAllowed,
+  isEmailOnCompanyManageSharingList,
   resolveInterCompanyConnectUserAccess,
   subscribeInterCompanyConnectUsers,
   type InterCompanyConnectUserEntry,
@@ -510,6 +511,9 @@ export type InterCompanyVoucherFormProps = {
   initialRibbonTab?: InterCompanyRibbonTab;
   /** Edit Trxn header — pay mode badge (Account/Company to Company) */
   onPayModeLabelChange?: (label: string | null) => void;
+  /** Ledger “Change Detected” badge — dialog turant khule */
+  openChangeDetectOnMount?: boolean;
+  onChangeDetectOnMountConsumed?: () => void;
 };
 
 export function InterCompanyVoucherForm({
@@ -528,6 +532,8 @@ export function InterCompanyVoucherForm({
   onRibbonTabChange,
   initialRibbonTab,
   onPayModeLabelChange,
+  openChangeDetectOnMount = false,
+  onChangeDetectOnMountConsumed,
 }: InterCompanyVoucherFormProps) {
   const { user, customUser } = useAuth();
   const { can, canEditRecord, canPerformBackdatedAction, canDeleteVoucher, fileAttachmentLimits, allowAttachments, role } =
@@ -1173,6 +1179,29 @@ export function InterCompanyVoucherForm({
   const { entities: targetEntitiesRaw, loading: targetEntitiesLoading, reload: reloadTargetEntities } =
     useInterCompanyEntities(targetEntitiesCompanyId);
 
+  const companyRowById = useMemo(() => {
+    const map = new Map<string, (typeof company) & { id?: string }>();
+    for (const row of allCompanies ?? []) {
+      const id = String(row?.id || "").trim();
+      if (id) map.set(id, row);
+    }
+    const activeId = String(companyId || "").trim();
+    if (company && activeId) map.set(activeId, company);
+    return map;
+  }, [allCompanies, company, companyId]);
+
+  const sourceCompanyForConnectSharing = companyRowById.get(sourceEntitiesCompanyId) ?? null;
+  const targetCompanyForConnectSharing = companyRowById.get(targetEntitiesCompanyId) ?? null;
+
+  const viewerOnSourceManageSharing = useMemo(
+    () => isEmailOnCompanyManageSharingList(sourceCompanyForConnectSharing, user?.email),
+    [sourceCompanyForConnectSharing, user?.email]
+  );
+  const viewerOnTargetManageSharing = useMemo(
+    () => isEmailOnCompanyManageSharingList(targetCompanyForConnectSharing, user?.email),
+    [targetCompanyForConnectSharing, user?.email]
+  );
+
   useEffect(() => {
     if (!sourceEntitiesCompanyId) {
       setSourceConnectUsers([]);
@@ -1195,8 +1224,9 @@ export function InterCompanyVoucherForm({
         isCompanyOwnerOrAdmin: isCompanyAdmin,
         userEmail: user?.email,
         connectUsers: sourceConnectUsers,
+        isManageSharingMember: viewerOnSourceManageSharing,
       }),
-    [isCompanyAdmin, user?.email, sourceConnectUsers]
+    [isCompanyAdmin, user?.email, sourceConnectUsers, viewerOnSourceManageSharing]
   );
 
   const targetConnectAccess = useMemo(
@@ -1205,8 +1235,9 @@ export function InterCompanyVoucherForm({
         isCompanyOwnerOrAdmin: isCompanyAdmin,
         userEmail: user?.email,
         connectUsers: targetConnectUsers,
+        isManageSharingMember: viewerOnTargetManageSharing,
       }),
-    [isCompanyAdmin, user?.email, targetConnectUsers]
+    [isCompanyAdmin, user?.email, targetConnectUsers, viewerOnTargetManageSharing]
   );
 
   const voucherRow = (displayVoucher || null) as Record<string, unknown> | null;
@@ -1218,6 +1249,15 @@ export function InterCompanyVoucherForm({
 
   /** Target host par connect user grant — source owner/admin bypass nahi. */
   const targetHostConnectAccess = useMemo(() => {
+    if (viewerOnTargetManageSharing) {
+      return resolveInterCompanyConnectUserAccess({
+        isCompanyOwnerOrAdmin: false,
+        userEmail: user?.email,
+        connectUsers: targetConnectUsers,
+        isManageSharingMember: true,
+        ignoreOwnerAdminBypass: true,
+      });
+    }
     const fromConnectUsers = resolveInterCompanyConnectUserAccess({
       isCompanyOwnerOrAdmin: isCompanyAdmin,
       userEmail: user?.email,
@@ -1236,6 +1276,7 @@ export function InterCompanyVoucherForm({
     isCompanyAdmin,
     connectInviteByCompanyId,
     selectedTargetCompanyId,
+    viewerOnTargetManageSharing,
   ]);
 
   /** Connect user host (target) company par listed — create par source account restrict. */
@@ -1909,7 +1950,6 @@ export function InterCompanyVoucherForm({
   );
 
   const showIcOtherCharge = icViewerSide !== "target";
-  const transferAmountValue = Number(form.watch("amount")) || 0;
   const otherChargeAccountId = form.watch("otherChargeAccountId");
   const otherChargeAmountValue = Number(form.watch("otherChargeAmount")) || 0;
   const otherChargeAccountOptions = useMemo(() => {
@@ -1981,8 +2021,10 @@ export function InterCompanyVoucherForm({
   const showOtherChargeCard =
     showIcOtherCharge &&
     (otherChargeEnabled || Boolean(otherChargeAccountId) || otherChargeAmountValue > 0);
+  const transferAmountValue = Number(form.watch("amount")) || 0;
+  /** Simple view + other charge — source account row: transfer + charge total. */
   const sourceSimpleViewBankOutTotal =
-    simpleView && showOtherChargeCard && showIcOtherCharge
+    simpleView && showIcOtherCharge && showOtherChargeCard
       ? Math.round((transferAmountValue + otherChargeAmountValue) * 100) / 100
       : null;
 
@@ -2842,6 +2884,29 @@ export function InterCompanyVoucherForm({
     );
     setChangeDetectDialogOpen(true);
   };
+
+  const consumedChangeDetectOnMountRef = useRef<string | null>(null);
+  useEffect(() => {
+    consumedChangeDetectOnMountRef.current = null;
+  }, [voucher?.id]);
+  useEffect(() => {
+    if (!openChangeDetectOnMount) return;
+    const vid = String(voucher?.id || "").trim();
+    if (!vid || consumedChangeDetectOnMountRef.current === vid) return;
+    const peerDiffs = computePeerPendingDiffs();
+    const localDiffs = peerDiffs.length > 0 ? [] : computeAccountDiffs();
+    if (peerDiffs.length === 0 && localDiffs.length === 0) return;
+    consumedChangeDetectOnMountRef.current = vid;
+    onChangeDetectOnMountConsumed?.();
+    const frame = window.requestAnimationFrame(() => openChangeDetectDialog());
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    openChangeDetectOnMount,
+    voucher?.id,
+    peerPendingDoc,
+    onChangeDetectOnMountConsumed,
+    displayVoucher,
+  ]);
 
   const confirmChangeDetectApply = () => {
     const keys = accountDiffRows

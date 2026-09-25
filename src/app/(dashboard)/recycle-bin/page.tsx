@@ -267,6 +267,7 @@ const COLLECTIONS_TO_CHECK = [
     { path: 'taxes', nameField: 'name', type: 'Tax' },
     { path: 'tax_groups', nameField: 'name', type: 'Tax Group' },
     { path: 'vouchers', nameField: 'voucherNumber', type: 'Voucher' },
+    { path: 'quotations', nameField: 'quotationNumber', type: 'Quotation' },
     { path: 'unassigned_documents', nameField: 'name', type: 'Unassigned File' }
 ];
 

@@ -139,6 +139,12 @@ import {
   lineItemIdFromComboboxValue,
   normalizeVoucherLineItemForForm,
 } from "@/components/vouchers/voucherLineItemCombobox";
+import {
+  ADMIN_PANEL_SUBSCRIPTION_BILLING_UNITS,
+  isAdminPanelSubscriptionCatalogItemId,
+  normalizeSubscriptionCatalogLineUnit,
+} from "@/lib/adminPanelCompany/subscriptionCatalogItemPricing";
+import { enrichSubscriptionMirrorSaleLineItemsForForm } from "@/lib/adminPanelCompany/subscriptionCatalogItemClient";
 
 
 const fileSchema = z.object({
@@ -231,9 +237,28 @@ const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const round6 = (n: number) => Math.round((n + Number.EPSILON) * 1_000_000) / 1_000_000;
 
 /** Sale line: item ki default sale unit — amount type par khali unit par auto-select */
-function getItemDefaultSaleUnit(item: { salePriceUnit?: string; unitConversions?: unknown[] }): string {
+function getItemDefaultSaleUnit(item: { id?: string; salePriceUnit?: string; unitConversions?: unknown[] }): string {
+  if (item.id && isAdminPanelSubscriptionCatalogItemId(item.id)) {
+    return item.salePriceUnit || ADMIN_PANEL_SUBSCRIPTION_BILLING_UNITS[ADMIN_PANEL_SUBSCRIPTION_BILLING_UNITS.length - 1];
+  }
   const conversions = (item.unitConversions || []) as { fromUnit?: string }[];
   return item.salePriceUnit || conversions[0]?.fromUnit || "";
+}
+
+function saleLineUnitOptionsForItem(
+  selectedItem: { id: string; unitConversions?: unknown[] } | undefined,
+  companyUnitsMerged: string[]
+): string[] {
+  if (!selectedItem) return companyUnitsMerged;
+  const fromConv =
+    (selectedItem.unitConversions as { fromUnit?: string; toUnit?: string }[])?.flatMap((uc) => [
+      uc.fromUnit,
+      uc.toUnit,
+    ])?.filter((v, i, a) => Boolean(v) && a.indexOf(v) === i) || [];
+  if (isAdminPanelSubscriptionCatalogItemId(selectedItem.id)) {
+    return Array.from(new Set([...ADMIN_PANEL_SUBSCRIPTION_BILLING_UNITS, ...fromConv]));
+  }
+  return fromConv.length > 0 ? fromConv : companyUnitsMerged;
 }
 
 /** Qty × rate → line amount (tax inclusive/exclusive) */
@@ -320,9 +345,22 @@ function getInitialFormValues(voucher?: any): SaleFormValues {
   const attachmentEntries = voucherAttachmentUrlsForFormState(voucher);
   // Restore/cache dueDate may be `{ seconds, nanoseconds }`; parse it exactly like voucher date.
   const dueDate = parseFirestoreDateFieldToJsDate(voucher.dueDate ?? voucher.due_date) ?? undefined;
-  const lineItemsNorm = Array.isArray(copiedVoucher.lineItems)
-    ? copiedVoucher.lineItems.map((li: any) => normalizeVoucherLineItemForForm(li))
+  const subscriptionTermKey =
+    voucher.subscriptionTermKey ?? voucher.subscription_term_key ?? null;
+  const lineItemsEnriched = Array.isArray(copiedVoucher.lineItems)
+    ? enrichSubscriptionMirrorSaleLineItemsForForm(voucher, copiedVoucher.lineItems)
     : copiedVoucher.lineItems;
+  const lineItemsNorm = Array.isArray(lineItemsEnriched)
+    ? lineItemsEnriched.map((li: any) => {
+        const base = normalizeVoucherLineItemForForm(li);
+        const itemId = String(base.itemId ?? "").trim();
+        return {
+          ...base,
+          name: li.name ?? base.name,
+          unit: normalizeSubscriptionCatalogLineUnit(itemId, base.unit, subscriptionTermKey),
+        };
+      })
+    : lineItemsEnriched;
   return {
     ...copiedVoucher,
     lineItems: lineItemsNorm,
@@ -1234,6 +1272,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           date: submitDate,
           lineItems: lineItemsWithTax,
           type: "sale",
+          ...(voucher?.quotationId
+            ? {
+                quotationId: String(voucher.quotationId),
+                quotationNumber: String(voucher.quotationNumber || ""),
+              }
+            : {}),
         };
 
         const filesForSave = await prepareVoucherAttachmentsForSave(files, {
@@ -1901,6 +1945,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const itemRows = items ?? [];
       // Items listener hydrate hone se pehle saved itemId mat hatao (parties pehle aa jate hain).
       if (iid && itemsListHydratedRef.current && !itemRows.some((it: Item) => it.id === iid)) {
+        const subMirror =
+          String(voucher?.kind ?? "") === "subscription-payment" ||
+          (voucher as { systemGenerated?: boolean })?.systemGenerated === true;
+        if (subMirror && isAdminPanelSubscriptionCatalogItemId(iid)) {
+          return;
+        }
         missing.push(`line ${idx + 1} item`);
         form.setValue(`lineItems.${idx}.itemId`, "");
       }
@@ -1926,6 +1976,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     processedTaxes,
     form,
     copySaveTargetCompanyId,
+    voucher?.kind,
+    voucher?.systemGenerated,
   ]);
 
   // Pending party ab listener ke baad list me — ref clear (Payment Out jaisa create-party race fix).
@@ -2380,10 +2432,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   );
 
                   // When item selected: use item's units; else item-derived + persisted customUnits (creatable)
-                  const unitOptions =
-                    selectedItem
-                      ? (selectedItem.unitConversions as any[])?.flatMap((uc) => [uc.fromUnit, uc.toUnit])?.filter((v, i, a) => a.indexOf(v) === i && v) || []
-                      : companyUnitsMerged;
+                  const unitOptions = saleLineUnitOptionsForItem(selectedItem, companyUnitsMerged);
                   const itemFieldsDisabled = hasItemEditLock || deleteDisabledWhenLinked;
 
                   return (
@@ -3102,10 +3151,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           (i) => i.id === form.getValues(`lineItems.${index}.itemId`)
                         );
                         // When item selected: use item's units; else item-derived + persisted customUnits (creatable)
-                        const unitOptions =
-                          selectedItem
-                            ? (selectedItem.unitConversions as any[])?.flatMap((uc) => [uc.fromUnit, uc.toUnit])?.filter((v, i, a) => a.indexOf(v) === i && v) || []
-                            : companyUnitsMerged;
+                        const unitOptions = saleLineUnitOptionsForItem(selectedItem, companyUnitsMerged);
                         // When payment linked, lock all item row fields (Item, Qty, Unit, Rate, Tax) in this desktop table view too.
                         const itemFieldsDisabled = hasItemEditLock || deleteDisabledWhenLinked;
 

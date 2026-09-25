@@ -1106,6 +1106,8 @@ function VoucherDialogContent({
   onInterCompanyRibbonTabChange,
   onInterCompanyPayModeLabelChange,
   initialInterCompanyRibbonTab,
+  openInterCompanyChangeDetectOnMount = false,
+  onInterCompanyChangeDetectOnMountConsumed,
   recurringVoucherSaveBlocked = false,
   recurringVoucherAuxiliaryDirty = false,
 }: { 
@@ -1146,6 +1148,9 @@ function VoucherDialogContent({
   onInterCompanyPayModeLabelChange?: (label: string | null) => void;
   /** `/inter-company?icTab=join` — dialog open par Join ribbon */
   initialInterCompanyRibbonTab?: InterCompanyRibbonTab;
+  /** Ledger IC row “Change Detected” — edit open par compare dialog */
+  openInterCompanyChangeDetectOnMount?: boolean;
+  onInterCompanyChangeDetectOnMountConsumed?: () => void;
   /** `true` jab account me 1 se zyada company — header company dropdown dikhane ke liye. */
   showHeaderCompanySelector?: boolean;
   headerCompanyReadOnlyLabel?: string;
@@ -1459,6 +1464,12 @@ function VoucherDialogContent({
                     onPayModeLabelChange: onInterCompanyPayModeLabelChange,
                     ...(initialInterCompanyRibbonTab
                       ? { initialRibbonTab: initialInterCompanyRibbonTab }
+                      : {}),
+                    ...(openInterCompanyChangeDetectOnMount
+                      ? { openChangeDetectOnMount: openInterCompanyChangeDetectOnMount }
+                      : {}),
+                    ...(onInterCompanyChangeDetectOnMountConsumed
+                      ? { onChangeDetectOnMountConsumed: onInterCompanyChangeDetectOnMountConsumed }
                       : {}),
                   }
                 : {})}

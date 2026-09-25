@@ -16,6 +16,7 @@ import { TransactionsTable, type TransactionColumnKey } from "../vouchers/Transa
 import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { useLedgerPaginationReset } from "@/hooks/useLedgerPaginationReset";
 import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
@@ -214,6 +215,7 @@ export function ExpenseGroupDetails({
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerPaginationReset = useLedgerPaginationReset(setRowsPerPage, setCurrentPage);
   const ledgerViewMode: LedgerDetailViewMode =
     balanceMode === "bill_wise" ? "bill_wise" : "statement";
   const ledgerSessionKey = useMemo(
@@ -976,6 +978,7 @@ export function ExpenseGroupDetails({
                 <BsDatePicker
                   isRange
                   masterLedgerDatePresets
+                  ledgerPaginationReset={ledgerPaginationReset}
                   valueAD={dateRange}
                   onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                   transactionDates={transactionDates}

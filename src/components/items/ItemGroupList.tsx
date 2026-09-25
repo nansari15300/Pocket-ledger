@@ -16,7 +16,8 @@ import { Boxes } from "lucide-react";
 import { masterListShellCn } from "@/lib/masterListChrome";
 import type { GroupListSelectOptions } from "@/lib/groupListExpand";
 import { MasterGroupNestedListBody } from "@/components/entity/MasterGroupNestedListBody";
-import { ITEM_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { resolveItemGroupListConfigForCompany } from "@/lib/adminPanelCompany/resolveItemGroupListConfig";
+import { useCompany } from "@/hooks/useCompany";
 import { useMasterGroupListForest } from "@/hooks/useMasterGroupListForest";
 import { GroupListMemberRow } from "@/components/entity/GroupListMemberRow";
 import { groupListMemberAvatarFromRow } from "@/components/entity/GroupListMemberAvatar";
@@ -62,6 +63,11 @@ export function ItemGroupList({
   canMoveGroup?: (group: ItemGroup) => boolean;
   allGroupsForMove?: ItemGroup[];
 }) {
+  const { companyId } = useCompany();
+  const groupListConfig = React.useMemo(
+    () => resolveItemGroupListConfigForCompany(companyId),
+    [companyId]
+  );
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } =
     useMasterListRowMotion();
@@ -80,7 +86,7 @@ export function ItemGroupList({
 
   const { forest, visibleGroups, displayOrderKey } = useMasterGroupListForest({
     groups,
-    config: ITEM_GROUP_LIST_CONFIG,
+    config: groupListConfig,
     searchTerm,
     quickFilter,
     groupMembersByGroupId,
@@ -98,7 +104,7 @@ export function ItemGroupList({
         >
           <ul className="pl-master-list-ul w-full">
             <MasterGroupNestedListBody
-              config={ITEM_GROUP_LIST_CONFIG}
+              config={groupListConfig}
               forest={forest}
               allGroups={allGroupsForMove ?? visibleGroups}
               displayOrderKey={displayOrderKey}

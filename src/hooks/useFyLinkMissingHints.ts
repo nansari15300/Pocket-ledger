@@ -62,5 +62,9 @@ export function useFyLinkMissingHints() {
     [company?.country, fy]
   );
 
-  return { hints, loading, scanForParty, loadHintFy, clearHints: () => setHints([]) };
+  const clearHints = useCallback(() => {
+    setHints((prev) => (prev.length === 0 ? prev : []));
+  }, []);
+
+  return { hints, loading, scanForParty, loadHintFy, clearHints };
 }

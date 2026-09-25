@@ -12,6 +12,7 @@ import { getEffectivePlanPrices } from "@/lib/server/getEffectivePlanPrices";
 import { PAID_PLAN_IDS } from "@/lib/payments/stripeCheckoutFulfill";
 import { applyOwnerPlanMirrorBatched } from "@/lib/server/mirrorOwnerCompanyPlanBilling";
 import { persistAccountCanonicalPlanDoc } from "@/lib/server/accountCanonicalPlan";
+import { mirrorSubscriptionPaymentToAdminCompany } from "@/lib/adminPanelAccounting/mirrorSubscriptionPayment";
 
 /** Snapshot stored on payment docs + merged into admin plan-change History dialog. */
 export type PlanChangeHistoryFirestore = {
@@ -189,6 +190,30 @@ export async function applyPlanChangeOneTimeToFirestore(input: ApplyPlanChangeOn
     paymentId,
     ...(historyExtra ?? {}),
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  let userName: string | null = null;
+  let userEmail: string | null = null;
+  if (userId) {
+    const userSnap = await db.collection("users").doc(userId).get();
+    if (userSnap.exists) {
+      const u = userSnap.data() as Record<string, unknown>;
+      userName = String(u.displayName ?? u.name ?? u.email ?? "").trim() || null;
+      userEmail = String(u.email ?? "").trim() || null;
+    }
+  }
+
+  await mirrorSubscriptionPaymentToAdminCompany(db, {
+    paymentId,
+    userId,
+    userName,
+    userEmail,
+    amountNpr,
+    gateway,
+    planId: targetPlanId,
+    customerCompanyId: companyId,
+    customerCompanyName: String(cdata.name ?? cdata.companyName ?? "").trim() || null,
+    subscriptionTermKey: planChangeHistory.termKey ?? null,
   });
 
   return { ok: true };

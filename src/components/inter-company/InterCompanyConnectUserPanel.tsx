@@ -16,6 +16,7 @@ import {
   IC_CONNECT_MASTER_ORDER,
   newInterCompanyConnectUserEntry,
   saveInterCompanyConnectUsers,
+  isEmailOnCompanyManageSharingList,
   subscribeInterCompanyConnectUsers,
   type InterCompanyConnectMasterVisibility,
   type InterCompanyConnectUserEntry,
@@ -167,13 +168,21 @@ export function InterCompanyConnectUserPanel({ companyId }: Props) {
         <ul className="space-y-3">
           {workingUsers.map((u) => {
             const expanded = editingId === u.id;
+            const onManageSharingList = isEmailOnCompanyManageSharingList(company, u.email);
             return (
               <li
                 key={u.id}
                 className="rounded-lg border border-black/15 bg-card p-3 dark:border-white/15"
               >
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{u.email}</span>
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{u.email}</span>
+                    {onManageSharingList ? (
+                      <span className="text-[11px] leading-snug text-amber-800 dark:text-amber-200">
+                        On Manage Sharing — IC masters always show
+                      </span>
+                    ) : null}
+                  </div>
                   <Button
                     type="button"
                     size="sm"
@@ -208,6 +217,12 @@ export function InterCompanyConnectUserPanel({ companyId }: Props) {
 
                 {expanded ? (
                   <div className="mt-3 space-y-3 border-t border-border pt-3">
+                    {onManageSharingList ? (
+                      <p className="rounded-md border border-amber-300/80 bg-amber-50 px-2.5 py-2 text-xs leading-snug text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-100">
+                        This user is on the Manage Sharing list — masters must show on IC vouchers.
+                        To apply Connect User hide settings, remove them from Manage Sharing first.
+                      </p>
+                    ) : null}
                     <label className="flex cursor-pointer items-center gap-2">
                       <Checkbox
                         checked={u.showCompanyName}
@@ -216,10 +231,17 @@ export function InterCompanyConnectUserPanel({ companyId }: Props) {
                       <span className="text-sm">Show company name</span>
                     </label>
 
-                    <label className="flex cursor-pointer items-center gap-2">
+                    <label
+                      className={cn(
+                        "flex items-center gap-2",
+                        onManageSharingList ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+                      )}
+                    >
                       <Checkbox
+                        disabled={onManageSharingList}
                         checked={isAllMastersVisible(u.masterVisibility)}
                         onCheckedChange={(v) => {
+                          if (onManageSharingList) return;
                           const allOn = v === true;
                           updateUser(u.id, {
                             showMasters: allOn,
@@ -237,7 +259,8 @@ export function InterCompanyConnectUserPanel({ companyId }: Props) {
                     <div
                       className={cn(
                         "grid gap-2 pl-1",
-                        "grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5"
+                        "grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5",
+                        onManageSharingList && "pointer-events-none opacity-60"
                       )}
                     >
                       {IC_CONNECT_MASTER_ORDER.map((kind) => (
@@ -247,8 +270,10 @@ export function InterCompanyConnectUserPanel({ companyId }: Props) {
                         >
                           <Checkbox
                             className="mt-0.5"
+                            disabled={onManageSharingList}
                             checked={u.masterVisibility[kind] !== false}
                             onCheckedChange={(v) => {
+                              if (onManageSharingList) return;
                               const nextVisibility = {
                                 ...u.masterVisibility,
                                 [kind]: v === true,

@@ -154,6 +154,7 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useMasterEntityLivePatch } from "@/hooks/useMasterEntityLivePatch";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useDateRangeTimestamps } from "@/hooks/useLedgerDetailDateRange";
+import { useLedgerPaginationReset } from "@/hooks/useLedgerPaginationReset";
 import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
 import { ROWS_PER_PAGE_OPTIONS_STAFF } from "@/lib/rowsPerPageSelect";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
@@ -341,6 +342,7 @@ export function StaffDetails({
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerPaginationReset = useLedgerPaginationReset(setRowsPerPage, setCurrentPage);
   const ledgerViewMode: LedgerDetailViewMode =
     balanceMode === "bill_wise" ? "bill_wise" : "statement";
   const ledgerSessionKey = useMemo(
@@ -405,7 +407,7 @@ export function StaffDetails({
 
   const { fromMs: dateRangeFromMs, toMs: dateRangeToMs } = useDateRangeTimestamps(dateRange);
   const { selectValue: rowsPerPageSelectValue, onSelectValueChange: handleRowsPerPageChange } =
-    useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_STAFF, "15");
+    useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_STAFF, "10");
   const handleBsDateRangeChange = useCallback(
     (range?: DateRange) => {
       onDateRangeChangeWithUnapprovedReset(range);
@@ -1417,6 +1419,7 @@ export function StaffDetails({
                 <NepaliCalendar
                   rangePresetSlot={
                     <MasterLedgerDateRangePresetRow
+                      ledgerPaginationReset={ledgerPaginationReset}
                       country={company?.country}
                       onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                       onApply={(r) => {
@@ -1437,6 +1440,7 @@ export function StaffDetails({
                   <AdCalendar
                     rangePresetSlot={
                       <MasterLedgerDateRangePresetRow
+                        ledgerPaginationReset={ledgerPaginationReset}
                         country={company?.country}
                         onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
@@ -1563,6 +1567,7 @@ export function StaffDetails({
                 <NepaliCalendar
                   rangePresetSlot={
                     <MasterLedgerDateRangePresetRow
+                      ledgerPaginationReset={ledgerPaginationReset}
                       country={company?.country}
                       onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                       onApply={(r) => {
@@ -1583,6 +1588,7 @@ export function StaffDetails({
                   <AdCalendar
                     rangePresetSlot={
                       <MasterLedgerDateRangePresetRow
+                        ledgerPaginationReset={ledgerPaginationReset}
                         country={company?.country}
                         onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
@@ -1679,6 +1685,7 @@ export function StaffDetails({
               <BsDatePicker
                 isRange
                 masterLedgerDatePresets
+                ledgerPaginationReset={ledgerPaginationReset}
                 valueAD={dateRange}
                 onChangeAD={handleBsDateRangeChange}
                 transactionDates={transactionDates}
@@ -1713,6 +1720,7 @@ export function StaffDetails({
                   <AdCalendar
                     rangePresetSlot={
                       <MasterLedgerDateRangePresetRow
+                        ledgerPaginationReset={ledgerPaginationReset}
                         country={company?.country}
                         onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {

@@ -20,6 +20,10 @@ export const NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN = "z-[91]";
 /** Date/calendar popovers inside voucher add/edit dialog — above content z-[81] and nested link z-[91]. */
 export const VOUCHER_DIALOG_CALENDAR_POPOVER_CN = "z-[102]";
 
+/** Reuse company attachment — voucher edit z-[81] ke upar. */
+export const NESTED_VOUCHER_ATTACHMENT_REUSE_OVERLAY_CN = "z-[100] bg-black/45 backdrop-blur-sm";
+export const NESTED_VOUCHER_ATTACHMENT_REUSE_CONTENT_CN = "!z-[101]";
+
 /** Add New master (party/staff/expense/item) opened from voucher add/edit — above z-[81] shell. */
 export const NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN = "z-[92] bg-black/45 backdrop-blur-sm";
 export const NESTED_VOUCHER_MASTER_CREATE_CONTENT_CN = "!z-[93]";

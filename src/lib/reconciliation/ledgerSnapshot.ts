@@ -3,7 +3,7 @@
 import { endOfDay, startOfDay } from "date-fns";
 import { getDocs, getDoc, collection, doc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { buildCopyLedgerComparison } from "@/lib/copyLedgerCrossCompany";
+import { buildCopyLedgerComparison, reconciliationCollectionToLedgerContext } from "@/lib/copyLedgerCrossCompany";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import type { ReconciliationLedgerRow, ReconciliationShareScope } from "@/lib/reconciliation/types";
@@ -216,6 +216,7 @@ export async function buildReconciliationLedgerSnapshot(params: {
     vouchers,
     sourcePartyId: accountId,
     targetKnownIds: new Set(),
+    ledgerContext: reconciliationCollectionToLedgerContext(collectionName),
   });
   const voucherById = new Map<string, Record<string, unknown>>();
   for (const v of vouchers) {

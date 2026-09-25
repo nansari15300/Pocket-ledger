@@ -16,6 +16,7 @@ import type { Plan, PlanId, EntitlementKey } from "@/config/plans";
 import { DEFAULT_PLANS } from "@/config/plans";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { appApiUrl } from "@/lib/webAppBasePath";
 import {
   Dialog,
   DialogContent,
@@ -40,7 +41,7 @@ async function postReconcileOwnerPlanFromAdmin(
   if (!oid || !firebaseUser) return;
   try {
     const token = await firebaseUser.getIdToken();
-    const res = await fetch("/api/admin/reconcile-owner-plan", {
+    const res = await fetch(appApiUrl("/api/admin/reconcile-owner-plan"), {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ ownerId: oid }),

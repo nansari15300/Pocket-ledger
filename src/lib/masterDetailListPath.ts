@@ -7,7 +7,8 @@ export type MasterDetailListRouteKey =
   | "staff"
   | "items"
   | "tax"
-  | "incomes";
+  | "incomes"
+  | "quotations";
 
 /**
  * List-only path (bina ?selected=). Static APK ma trailingSlash true → `/party/`; dev ma `/party`.

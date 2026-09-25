@@ -199,7 +199,8 @@ export function FirebaseLedgerOnlineCompanySyncList({
             await runOfflineFullWarmSync({
               company,
               localCompanyId: id,
-              includeAttachmentPrefetch: draft[id]?.attachments === true,
+              // Data mirror only — EXE/APK/web: visible FY rows + click/hover lazy attachment load.
+              includeAttachmentPrefetch: false,
               skipWarmBootstrapFlag: true,
             }).catch(() => null);
           }

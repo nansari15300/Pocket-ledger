@@ -14,6 +14,7 @@ import {
   type WebsiteDownloadEvent,
   type WebsiteDownloadStats,
 } from "@/lib/websiteDownloadStats";
+import { appApiUrl } from "@/lib/webAppBasePath";
 
 function countryLabel(code: string): string {
   const c = String(code || "ZZ").toUpperCase();
@@ -48,7 +49,7 @@ export default function WebsiteDownloadsAdminPage() {
     try {
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error("Not signed in");
-      const res = await fetch("/api/admin/download-stats", {
+      const res = await fetch(appApiUrl("/api/admin/download-stats"), {
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
       });

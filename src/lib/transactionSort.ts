@@ -191,6 +191,32 @@ export function sortTransactionsWithFiscalMergeForCompany<T = any>(
   return sortTransactionsWithFiscalMerge(list, sortBy, sortOrder, options, at);
 }
 
+/** Preserve books running balance when UI filters/sorts rows — match by voucher id (incl. contra `-out`/`-in` legs). */
+export function stampRunningBalanceFromFullLedger<T extends { id?: string; balance?: number; runningBalance?: number }>(
+  displayRows: readonly T[],
+  fullLedgerRows: readonly T[]
+): T[] {
+  if (!displayRows.length || !fullLedgerRows.length) return [...displayRows];
+  const byId = new Map<string, T>();
+  for (const row of fullLedgerRows) {
+    const id = String(row?.id ?? "").trim();
+    if (id) byId.set(id, row);
+  }
+  return displayRows.map((row) => {
+    const id = String(row?.id ?? "").trim();
+    const source = id ? byId.get(id) : undefined;
+    if (!source) return row;
+    const bal =
+      typeof source.balance === "number"
+        ? source.balance
+        : typeof source.runningBalance === "number"
+          ? source.runningBalance
+          : undefined;
+    if (bal == null || !Number.isFinite(bal)) return row;
+    return { ...row, balance: bal, runningBalance: bal };
+  });
+}
+
 /** Recompute running balance in current visible order (top to bottom), used after custom sorting in statement view. */
 export function recomputeRunningBalanceTopToBottom<T = any>(list: T[], openingBalance: number): T[] {
   let running = Number(openingBalance) || 0;

@@ -183,6 +183,10 @@ export function BillingAddOnPurchaseCard({
   const localTabVisible = isAddonScopeVisibleOnBilling(offer, "local");
 
   const kinds = kindsForScope(scope);
+  const ownedDevices = scope === "local" ? owned.extraDevicesLocal : owned.extraDevicesOnline;
+  const ownedUsers = scope === "local" ? owned.extraUsersLocal : owned.extraUsersOnline;
+  const ownedCompanySlots =
+    scope === "local" ? owned.extraCompaniesLocal : owned.extraCompaniesOnline;
   const deviceUnit = unitPriceForAddonKind(offer, kinds.device);
   const userUnit = unitPriceForAddonKind(offer, kinds.user);
   const companyUnit = unitPriceForAddonKind(offer, kinds.company);
@@ -407,6 +411,9 @@ export function BillingAddOnPurchaseCard({
               <tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
                 <th className="px-3 py-2 font-medium">Item</th>
                 <th className="px-3 py-2 font-medium text-right">Unit</th>
+                <th className="px-3 py-2 font-medium text-right" title="Already purchased add-on slots for this plan period">
+                  Added
+                </th>
                 <th className="px-3 py-2 font-medium">Qty</th>
                 <th className="px-3 py-2 font-medium text-right">Cost</th>
               </tr>
@@ -417,6 +424,9 @@ export function BillingAddOnPurchaseCard({
                   {scope === "local" ? "Local device" : "Online device"}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">Rs. {deviceUnit}</td>
+                <td className="px-3 py-2 text-right tabular-nums font-medium text-foreground whitespace-nowrap">
+                  {ownedDevices}
+                </td>
                 <td className="px-3 py-2">
                   <Input
                     type="number"
@@ -435,6 +445,9 @@ export function BillingAddOnPurchaseCard({
                   {scope === "local" ? "Local user" : "Online user"}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">Rs. {userUnit}</td>
+                <td className="px-3 py-2 text-right tabular-nums font-medium text-foreground whitespace-nowrap">
+                  {ownedUsers}
+                </td>
                 <td className="px-3 py-2">
                   <Input
                     type="number"
@@ -453,6 +466,9 @@ export function BillingAddOnPurchaseCard({
                   {scope === "local" ? "Local company slot" : "Online company slot"}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">Rs. {companyUnit}</td>
+                <td className="px-3 py-2 text-right tabular-nums font-medium text-foreground whitespace-nowrap">
+                  {ownedCompanySlots}
+                </td>
                 <td className="px-3 py-2">
                   <Input
                     type="number"
@@ -467,7 +483,7 @@ export function BillingAddOnPurchaseCard({
                 <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">Rs. {companyLine}</td>
               </tr>
               <tr className="bg-muted/20">
-                <td className="px-3 py-2 font-semibold" colSpan={3}>
+                <td className="px-3 py-2 font-semibold" colSpan={4}>
                   Total
                 </td>
                 <td className="px-3 py-2 text-right font-semibold tabular-nums whitespace-nowrap">Rs. {total}</td>

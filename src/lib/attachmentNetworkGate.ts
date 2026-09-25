@@ -3,7 +3,8 @@
 import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 import { isFirebaseLedgerCompanyAttachmentSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
-import { isWebBrowserAttachmentLazyLoad } from "@/lib/webAttachmentLazyLoadPolicy";
+import type { Company } from "@/hooks/useCompany";
+import { shouldUseAttachmentLazyLoad } from "@/lib/webAttachmentLazyLoadPolicy";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { looksLikeFirebaseStorageDownloadUrl } from "@/lib/storageGetBlobFromDownloadUrl";
@@ -85,6 +86,8 @@ function isOnVisiblePage(url: string, companyId: string): boolean {
 
 export type AttachmentNetworkFetchOpts = {
   companyId?: string | null;
+  /** When set, embedded Online companies use the same visible-page gate as web. */
+  company?: Company | null;
   /** EXE/APK / embedded — visible-page list mat lagao. */
   bypassVisiblePageCheck?: boolean;
   /** Edit form open / user click open / hover intentional load. */
@@ -108,7 +111,7 @@ export function isRemoteAttachmentNetworkFetchAllowed(
   if (opts?.explicitUserRequest) return true;
   if (cid && hasExplicitGrant(trimmed, cid)) return true;
 
-  if (opts?.bypassVisiblePageCheck || !isWebBrowserAttachmentLazyLoad()) {
+  if (opts?.bypassVisiblePageCheck || !shouldUseAttachmentLazyLoad(opts?.company, cid)) {
     return true;
   }
 

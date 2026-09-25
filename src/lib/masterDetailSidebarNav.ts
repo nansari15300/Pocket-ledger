@@ -37,5 +37,6 @@ export function masterDetailRouteKeyFromPath(pathname: string): MasterDetailList
   if (p === "/items") return "items";
   if (p === "/tax") return "tax";
   if (p === "/incomes") return "incomes";
+  if (p === "/quotations") return "quotations";
   return null;
 }

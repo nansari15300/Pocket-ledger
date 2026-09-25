@@ -95,6 +95,12 @@ export function publicAssetUrl(assetPath: string): string {
   return `${webAppBasePath()}${clean}`;
 }
 
+/** Same-origin Next.js API route (`npm run dev` gateway: `/app/api/...`, not `/api/...`). */
+export function appApiUrl(apiPath: string): string {
+  const path = String(apiPath || "").startsWith("/") ? String(apiPath) : `/${String(apiPath || "")}`;
+  return `${webAppBasePath()}${path}`;
+}
+
 /**
  * `window.history.replaceState` / `pushState` do NOT apply Next `basePath`.
  * Passing `/party?...` drops `/app` from the address bar — hard refresh then hits the

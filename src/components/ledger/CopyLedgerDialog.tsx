@@ -28,6 +28,7 @@ import { voucherTouchesPartyLedger } from "@/lib/voucherTouchesPartyLedger";
 import {
   executeCopyLedgerCrossCompany,
   buildCopyLedgerComparison,
+  copyCompareBucketToLedgerContext,
   collectVoucherReferenceIds,
   collectOppositeReferenceIdsForCompare,
   pairCompareLedgerRows,
@@ -40,6 +41,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useDate } from "@/hooks/useDate";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
+import { getDisplayType } from "@/components/vouchers/transactionTableShared";
 import { Combobox } from "@/components/ui/combobox";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { isPartyMasterDetailPath, PARTY_PAGE_OVERDUE_SELECTED_ID } from "@/lib/partyUrlContext";
@@ -48,7 +50,7 @@ import { auth, firestore } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
-import { Pencil, RefreshCw, RotateCw } from "lucide-react";
+import { ArrowLeft, ArrowRight, Pencil, RefreshCw, RotateCw } from "lucide-react";
 
 /** Copy merge + async `getDocs` race: naya voucher `setState` ke baad purani fetch overwrite na kare — id map merge, incoming same id par authoritative. */
 function mergeVoucherRowsById(
@@ -135,6 +137,48 @@ const COMPARE_ENTITY_SELECT_ITEMS: { value: CompareEntityBucket; label: string }
   { value: "income_expense", label: "Income & Expense" },
 ];
 
+/** Compare table Type column — party ledger jaisa label (e.g. Add Salary, not raw `journal`). */
+function compareRowTypeLabel(row: CopyLedgerComparisonRow): string {
+  return getDisplayType({ type: row.type, subType: row.subType });
+}
+
+const COMPARE_SYNC_TICK_COL_W = "w-11 min-w-[2.75rem] max-w-[2.75rem] px-2";
+/** Center V-line se dono tick columns ka gap same — Side A end-align, Side B start-align. */
+const COMPARE_SYNC_CHECKBOX_CN =
+  "h-[18px] w-[18px] border-2 border-primary bg-background shadow-sm ring-1 ring-primary/30 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground disabled:opacity-85 disabled:border-primary/75";
+
+/** Dono sides par voucher aligned (signature / cross-copy ref) — sync select band. */
+function isComparePairRowSyncMatched(pair: CompareLedgerPair): boolean {
+  return Boolean(pair.left?.id && pair.right?.id);
+}
+
+function CompareSyncTickStack({
+  side,
+  children,
+  showArrow = true,
+}: {
+  side: "left" | "right";
+  children: React.ReactNode;
+  showArrow?: boolean;
+}) {
+  const towardCenter = side === "left";
+  return (
+    <div
+      className={`flex w-full flex-col gap-0.5 ${towardCenter ? "items-end" : "items-start"}`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {children}
+      {showArrow ? (
+        towardCenter ? (
+          <ArrowRight className="h-3.5 w-3.5 shrink-0 text-primary" strokeWidth={2.5} aria-hidden />
+        ) : (
+          <ArrowLeft className="h-3.5 w-3.5 shrink-0 text-primary" strokeWidth={2.5} aria-hidden />
+        )
+      ) : null}
+    </div>
+  );
+}
+
 function partyOptionMatchesCompareBucket(opt: PartyOption, bucket: CompareEntityBucket): boolean {
   if (bucket === "all") return true;
   const k = opt.kind || "party";
@@ -142,34 +186,38 @@ function partyOptionMatchesCompareBucket(opt: PartyOption, bucket: CompareEntity
   return k === bucket;
 }
 
+/** Compare table: har side par 9 cells (BS + AD date alag, …, tick). */
+const COMPARE_SIDE_COL_COUNT = 9;
+
 /**
- * Ek hi compare `<tr>` me kabhi 16 cells, kabhi 9 (ek half `colSpan={8}`) — double-click half detect.
+ * Ek hi compare `<tr>` me kabhi 18 cells, kabhi 10 (ek half `colSpan={9}`) — double-click half detect.
  */
 function getCompareHalfFromCell(tr: HTMLTableRowElement, cellIndex: number): "left" | "right" {
+  const half = COMPARE_SIDE_COL_COUNT;
   const cells = tr.cells;
   const n = cells.length;
-  if (n === 16) return cellIndex < 8 ? "left" : "right";
-  if (n === 9) {
+  if (n === half * 2) return cellIndex < half ? "left" : "right";
+  if (n === half + 1) {
     const c0 = cells[0] as HTMLTableCellElement;
-    const c8 = cells[8] as HTMLTableCellElement;
-    if (c0.colSpan === 8) return cellIndex === 0 ? "left" : "right";
-    if (c8.colSpan === 8) return cellIndex < 8 ? "left" : "right";
-    return cellIndex < 8 ? "left" : "right";
+    const cHalf = cells[half] as HTMLTableCellElement;
+    if (c0.colSpan === half) return cellIndex === 0 ? "left" : "right";
+    if (cHalf.colSpan === half) return cellIndex < half ? "left" : "right";
+    return cellIndex < half ? "left" : "right";
   }
   if (n === 4) return cellIndex <= 1 ? "left" : "right";
   if (n === 3) {
     const c0 = cells[0] as HTMLTableCellElement;
     const c2 = cells[2] as HTMLTableCellElement;
-    if (c0.colSpan === 8) return cellIndex === 0 ? "left" : "right";
-    if (c2.colSpan === 8) return cellIndex === 2 ? "right" : "left";
+    if (c0.colSpan === half) return cellIndex === 0 ? "left" : "right";
+    if (c2.colSpan === half) return cellIndex === 2 ? "right" : "left";
     return cellIndex <= 1 ? "left" : "right";
   }
   if (n === 2) {
     const c0 = cells[0] as HTMLTableCellElement;
     const c1 = cells[1] as HTMLTableCellElement;
-    if (c0.colSpan === 8 && c1.colSpan === 8) return cellIndex === 0 ? "left" : "right";
+    if (c0.colSpan === half && c1.colSpan === half) return cellIndex === 0 ? "left" : "right";
   }
-  return cellIndex < 8 ? "left" : "right";
+  return cellIndex < half ? "left" : "right";
 }
 
 /**
@@ -202,7 +250,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
   }, [allCompaniesRegistry, allCompanies, syncLedgerGateEpoch]);
   const { processedParties, vouchers: vouchersForDisplay } = useVouchers();
   const { user, customUser } = useAuth();
-  const { dateSystem, formatDate, formatDateBS } = useDate();
+  const { formatDate, formatDateBS } = useDate();
   const { toast } = useToast();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -239,6 +287,10 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
   /** Compare header: left/right company — same list me se, dono alag; ek side select = doosri side same id disabled. */
   const [compareLeftCompanyId, setCompareLeftCompanyId] = React.useState("");
   const [compareRightCompanyId, setCompareRightCompanyId] = React.useState("");
+  /** Side B = Side A company (tick on right header); Side A ledger combobox band — account sirf B par. */
+  const [compareUseSameCompanyOnSideB, setCompareUseSameCompanyOnSideB] = React.useState(false);
+  /** Side A = Side B company (tick on left header); Side B ledger combobox band. */
+  const [compareUseSameCompanyOnSideA, setCompareUseSameCompanyOnSideA] = React.useState(false);
   /** Dono header me ek hi bucket — ek side change = dono sync (ledger list isi se filter). Default `all` = sale/purchase/items sab dikhen. */
   const [compareEntityBucket, setCompareEntityBucket] = React.useState<CompareEntityBucket>("all");
   /** Side A vouchers — hamesha `compareLeftCompanyId` se Firestore+local merge (app header `useVouchers` se alag). */
@@ -487,7 +539,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
     [targetPartyId, compareRightEntityOptions]
   );
 
-  /** Side par valid ledger select hai tab hi 8-column grid; warna placeholder half ko center me `colSpan={8}`. */
+  /** Side par valid ledger select hai tab hi 9-column grid; warna placeholder half ko center me `colSpan={9}`. */
   const compareSideAHasLedger = React.useMemo(
     () =>
       Boolean(String(sourcePartyId || "").trim()) &&
@@ -660,6 +712,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
       selectedVoucherIds: undefined,
       idMap: { ...autoNameMap, [sourcePartyId]: targetPartyId, ...manualIdMap },
       targetKnownIds: targetKnownPartyIds,
+      ledgerContext: copyCompareBucketToLedgerContext(compareEntityBucket),
     });
     return res.rows;
   }, [
@@ -671,6 +724,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
     targetKnownPartyIds,
     sourcePartyNameById,
     targetPartyIdByName,
+    compareEntityBucket,
   ]);
 
   /** Side B: target company ke vouchers jo sirf Side B ke selected ledger ko touch karte — Side A list se independent. */
@@ -695,6 +749,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
       selectedVoucherIds: undefined,
       idMap: { ...autoNameMap, [sourcePartyId]: targetPartyId, ...manualIdMap },
       targetKnownIds: targetKnownPartyIds,
+      ledgerContext: copyCompareBucketToLedgerContext(compareEntityBucket),
     });
     return res.rows;
   }, [
@@ -705,6 +760,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
     targetKnownPartyIds,
     sourcePartyNameById,
     targetPartyIdByName,
+    compareEntityBucket,
   ]);
 
   /** Pehle `crossCopySourceRef` (copy = same horizontal line), phir signature; phir dono dates mix sort. */
@@ -718,6 +774,33 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
       ),
     [compareRows, compareRowsSideB, compareLeftCompanyId, compareRightCompanyId]
   );
+
+  /** Sirf unmatched + us side par voucher — matched / khali line par tick band. */
+  const selectableCompareLeftRowIds = React.useMemo(
+    () =>
+      comparePairs
+        .filter((p) => p.left?.id && !isComparePairRowSyncMatched(p))
+        .map((p) => String(p.left!.id)),
+    [comparePairs]
+  );
+  const selectableCompareRightRowIds = React.useMemo(
+    () =>
+      comparePairs
+        .filter((p) => p.right?.id && !isComparePairRowSyncMatched(p))
+        .map((p) => String(p.right!.id)),
+    [comparePairs]
+  );
+
+  /** Matched rows state me ho sakte hain — sync / unresolved sirf selectable ids (no setState loop). */
+  const selectedVoucherIdsForSync = React.useMemo(() => {
+    const allowed = new Set(selectableCompareLeftRowIds);
+    return selectedVoucherIds.filter((id) => allowed.has(id));
+  }, [selectedVoucherIds, selectableCompareLeftRowIds]);
+
+  const selectedRightVoucherIdsForSync = React.useMemo(() => {
+    const allowed = new Set(selectableCompareRightRowIds);
+    return selectedRightVoucherIds.filter((id) => allowed.has(id));
+  }, [selectedRightVoucherIds, selectableCompareRightRowIds]);
 
   /** Side A: missing refs → mapping popup (copy ke liye resolve). Ready = map complete. */
   const renderSideAStatus = React.useCallback(
@@ -772,7 +855,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
 
   const unresolvedReferenceIds = React.useMemo(() => {
     const out = new Set<string>();
-    const selectedSet = new Set(selectedVoucherIds);
+    const selectedSet = new Set(selectedVoucherIdsForSync);
     const autoNameMap: Record<string, string> = {};
     sourcePartyNameById.forEach((srcName, srcId) => {
       const k = String(srcName || "").trim().toLowerCase();
@@ -791,7 +874,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
     });
     return Array.from(out);
   }, [
-    selectedVoucherIds,
+    selectedVoucherIdsForSync,
     sourcePartyId,
     targetPartyId,
     manualIdMap,
@@ -804,7 +887,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
   /** B→A: Side B voucher ke opposite refs → map ke baad Side A par valid account hona chahiye. */
   const unresolvedReferenceIdsBtoA = React.useMemo(() => {
     const out = new Set<string>();
-    const selectedSet = new Set(selectedRightVoucherIds);
+    const selectedSet = new Set(selectedRightVoucherIdsForSync);
     const reverseManual: Record<string, string> = {};
     Object.entries(manualIdMap).forEach(([a, b]) => {
       if (b && typeof b === "string") reverseManual[b] = a;
@@ -826,7 +909,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
     });
     return Array.from(out);
   }, [
-    selectedRightVoucherIds,
+    selectedRightVoucherIdsForSync,
     sourcePartyId,
     targetPartyId,
     manualIdMap,
@@ -891,11 +974,11 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
   const [activeComparePairIndex, setActiveComparePairIndex] = React.useState(0);
   /** Side A ki saari rows tick hon — tab button "Deselect all" dikhata hai. */
   const compareSideASelectAllActive = React.useMemo(() => {
-    const ids = compareRows.map((r) => r.id);
+    const ids = selectableCompareLeftRowIds;
     return ids.length > 0 && ids.every((id) => selectedVoucherIds.includes(id));
-  }, [compareRows, selectedVoucherIds]);
+  }, [selectableCompareLeftRowIds, selectedVoucherIds]);
   const toggleSelectAllCompareVouchers = React.useCallback(() => {
-    const ids = compareRows.map((r) => r.id);
+    const ids = selectableCompareLeftRowIds;
     const idSet = new Set(ids);
     const allSelected = ids.length > 0 && ids.every((id) => selectedVoucherIds.includes(id));
     if (allSelected) {
@@ -903,14 +986,14 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
     } else {
       setSelectedVoucherIds(ids);
     }
-  }, [compareRows, selectedVoucherIds]);
+  }, [selectableCompareLeftRowIds, selectedVoucherIds]);
 
   const compareSideBSelectAllActive = React.useMemo(() => {
-    const ids = compareRowsSideB.map((r) => r.id);
+    const ids = selectableCompareRightRowIds;
     return ids.length > 0 && ids.every((id) => selectedRightVoucherIds.includes(id));
-  }, [compareRowsSideB, selectedRightVoucherIds]);
+  }, [selectableCompareRightRowIds, selectedRightVoucherIds]);
   const toggleSelectAllCompareVouchersSideB = React.useCallback(() => {
-    const ids = compareRowsSideB.map((r) => r.id);
+    const ids = selectableCompareRightRowIds;
     const idSet = new Set(ids);
     const allSelected = ids.length > 0 && ids.every((id) => selectedRightVoucherIds.includes(id));
     if (allSelected) {
@@ -918,7 +1001,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
     } else {
       setSelectedRightVoucherIds(ids);
     }
-  }, [compareRowsSideB, selectedRightVoucherIds]);
+  }, [selectableCompareRightRowIds, selectedRightVoucherIds]);
   const openVoucherEditForRow = React.useCallback(
     (pairIndex: number) => {
       const row = comparePairs[pairIndex]?.left;
@@ -995,8 +1078,8 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
     });
     return out;
   }, [compareRows, touchedVouchers, sourcePartyId, targetPartyId, manualIdMap, sourceNameOnly, targetPartyNameById]);
-  const compareRowDateLabel = React.useMemo(() => {
-    const out = new Map<string, string>();
+  const compareRowDateCells = React.useMemo(() => {
+    const out = new Map<string, { bs: string; ad: string }>();
     const parseRawDate = (raw: unknown): Date | null => {
       if (raw instanceof Date) return isNaN(raw.getTime()) ? null : raw;
       if (raw && typeof raw === "object" && "toDate" in (raw as Record<string, unknown>)) {
@@ -1015,15 +1098,17 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
     };
     const addLabel = (r: CopyLedgerComparisonRow) => {
       const d = parseRawDate(r.rawDate);
-      // Compare table date ko app date-system (AD/BS/Both) ke format se sync rakho.
-      const label =
-        !d ? "—" : dateSystem === "AD" ? formatDate(d) : dateSystem === "BS" ? formatDateBS(d) : `${formatDateBS(d)} / ${formatDate(d)}`;
-      out.set(r.id, label);
+      out.set(r.id, {
+        bs: d ? formatDateBS(d) : "—",
+        ad: d ? formatDate(d) : "—",
+      });
     };
     compareRows.forEach(addLabel);
     compareRowsSideB.forEach(addLabel);
     return out;
-  }, [compareRows, compareRowsSideB, dateSystem, formatDate, formatDateBS]);
+  }, [compareRows, compareRowsSideB, formatDate, formatDateBS]);
+
+  const compareDateCellCn = "whitespace-nowrap px-1 py-0.5 text-[11px] tabular-nums leading-tight";
 
   /** Default target company — compare open + ledger list ke liye. */
   React.useEffect(() => {
@@ -1145,13 +1230,70 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
     if (r) setTargetCompanyId(r);
   }, [open, compareRightCompanyId]);
 
-  // Dono side same company na ho — guard (disabled items ke baad bhi edge case).
+  // Dono side same company na ho — jab tak "Same company" tick nahi (within-company sync).
   React.useEffect(() => {
     if (!open || !compareLeftCompanyId || !compareRightCompanyId) return;
+    if (compareUseSameCompanyOnSideA || compareUseSameCompanyOnSideB) return;
     if (compareLeftCompanyId !== compareRightCompanyId) return;
     const alt = allCompaniesSorted.find((c) => c.id !== compareLeftCompanyId)?.id;
     if (alt) setCompareRightCompanyId(alt);
-  }, [open, compareLeftCompanyId, compareRightCompanyId, allCompaniesSorted]);
+  }, [
+    open,
+    compareLeftCompanyId,
+    compareRightCompanyId,
+    allCompaniesSorted,
+    compareUseSameCompanyOnSideA,
+    compareUseSameCompanyOnSideB,
+  ]);
+
+  React.useEffect(() => {
+    if (!open || !compareUseSameCompanyOnSideB || !compareLeftCompanyId) return;
+    if (compareRightCompanyId !== compareLeftCompanyId) {
+      setCompareRightCompanyId(compareLeftCompanyId);
+    }
+  }, [open, compareUseSameCompanyOnSideB, compareLeftCompanyId, compareRightCompanyId]);
+
+  React.useEffect(() => {
+    if (!open || !compareUseSameCompanyOnSideA || !compareRightCompanyId) return;
+    if (compareLeftCompanyId !== compareRightCompanyId) {
+      setCompareLeftCompanyId(compareRightCompanyId);
+    }
+  }, [open, compareUseSameCompanyOnSideA, compareRightCompanyId, compareLeftCompanyId]);
+
+  const onCompareLeftCompanyChange = React.useCallback(
+    (nextId: string) => {
+      if (compareRightCompanyId && nextId === compareRightCompanyId) {
+        setCompareUseSameCompanyOnSideA(true);
+        setCompareUseSameCompanyOnSideB(false);
+        setCompareLeftCompanyId(nextId);
+        return;
+      }
+      setCompareUseSameCompanyOnSideA(false);
+      setCompareLeftCompanyId(nextId);
+      if (compareUseSameCompanyOnSideB) setCompareRightCompanyId(nextId);
+    },
+    [compareRightCompanyId, compareUseSameCompanyOnSideB]
+  );
+
+  const onCompareRightCompanyChange = React.useCallback(
+    (nextId: string) => {
+      if (compareLeftCompanyId && nextId === compareLeftCompanyId) {
+        setCompareUseSameCompanyOnSideB(true);
+        setCompareUseSameCompanyOnSideA(false);
+        setCompareRightCompanyId(nextId);
+        return;
+      }
+      setCompareUseSameCompanyOnSideB(false);
+      setCompareRightCompanyId(nextId);
+      if (compareUseSameCompanyOnSideA) setCompareLeftCompanyId(nextId);
+    },
+    [compareLeftCompanyId, compareUseSameCompanyOnSideA]
+  );
+
+  const compareLeftLedgerPickerDisabled =
+    !compareLeftCompanyId || compareUseSameCompanyOnSideB;
+  const compareRightLedgerPickerDisabled =
+    !compareRightCompanyId || compareUseSameCompanyOnSideA;
 
   // Compare me company / voucher list badle to frozen copy payload bhi align rahe.
   React.useEffect(() => {
@@ -1203,6 +1345,8 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
     };
     // Default "All accounts" — sale/purchase/item ledgers bhi combobox me (sirf Parties filter nahi).
     setCompareEntityBucket("all");
+    setCompareUseSameCompanyOnSideA(false);
+    setCompareUseSameCompanyOnSideB(false);
   }, [
     effectiveSourceCompanyId,
     targetCompanyId,
@@ -1303,7 +1447,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
       let knownIdsForUnresolved: Set<string>;
 
       if (isBtoA) {
-        effectiveSelectedVoucherIds = selectedRightVoucherIds;
+        effectiveSelectedVoucherIds = selectedRightVoucherIdsForSync;
         effectiveIdMap = {
           ...autoNameMapBtoA,
           [copySourcePartyId]: copyTargetPartyId,
@@ -1311,7 +1455,8 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
         };
         knownIdsForUnresolved = leftKnownPartyIds;
       } else {
-        effectiveSelectedVoucherIds = selectedVoucherIds.length > 0 ? selectedVoucherIds : frozen?.selectedVoucherIds ?? [];
+        effectiveSelectedVoucherIds =
+          selectedVoucherIdsForSync.length > 0 ? selectedVoucherIdsForSync : frozen?.selectedVoucherIds ?? [];
         effectiveIdMap = { ...autoNameMap, [copySourcePartyId]: copyTargetPartyId, ...(manualIdMap || {}) };
         knownIdsForUnresolved = targetKnownPartyIds;
       }
@@ -1423,8 +1568,8 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
     [
       user?.uid,
       customUser?.uid,
-      selectedVoucherIds,
-      selectedRightVoucherIds,
+      selectedVoucherIdsForSync,
+      selectedRightVoucherIdsForSync,
       manualIdMap,
       targetKnownPartyIds,
       leftKnownPartyIds,
@@ -1452,8 +1597,8 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
 
   /** Ek hi Sync: left tick → Side B; right tick → Side A; batch (fast). Dono tick ho to pehle A→B phir B→A. */
   const runUnifiedSync = React.useCallback(async () => {
-    const leftOk = selectedVoucherIds.length > 0 && unresolvedReferenceIds.length === 0;
-    const rightOk = selectedRightVoucherIds.length > 0 && unresolvedReferenceIdsBtoA.length === 0;
+    const leftOk = selectedVoucherIdsForSync.length > 0 && unresolvedReferenceIds.length === 0;
+    const rightOk = selectedRightVoucherIdsForSync.length > 0 && unresolvedReferenceIdsBtoA.length === 0;
     if (!leftOk && !rightOk) {
       toast({
         variant: "destructive",
@@ -1468,8 +1613,8 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
   }, [
     runCopyWithMode,
     toast,
-    selectedVoucherIds,
-    selectedRightVoucherIds,
+    selectedVoucherIdsForSync,
+    selectedRightVoucherIdsForSync,
     unresolvedReferenceIds,
     unresolvedReferenceIdsBtoA,
   ]);
@@ -1568,9 +1713,9 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
 
   /** Sync button enable: left ya right me se kam se kam ek valid selection. */
   const canSyncAtoB =
-    selectedVoucherIds.length > 0 && unresolvedReferenceIds.length === 0;
+    selectedVoucherIdsForSync.length > 0 && unresolvedReferenceIds.length === 0;
   const canSyncBtoA =
-    selectedRightVoucherIds.length > 0 && unresolvedReferenceIdsBtoA.length === 0;
+    selectedRightVoucherIdsForSync.length > 0 && unresolvedReferenceIdsBtoA.length === 0;
   const canRunUnifiedSync = canSyncAtoB || canSyncBtoA;
 
   return (
@@ -1612,16 +1757,23 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                     Company
                   </Label>
                   {/* Saari companies; jo right par select hai wahi yahan disabled (same id do jagah nahi). */}
-                  <Select value={compareLeftCompanyId} onValueChange={setCompareLeftCompanyId}>
+                  <Select value={compareLeftCompanyId} onValueChange={onCompareLeftCompanyChange}>
                     <SelectTrigger id="compare-sync-target-company-left" className="h-8 min-w-[120px] max-w-[46%] flex-1 text-xs sm:max-w-[200px]">
                       <SelectValue placeholder="Select company" />
                     </SelectTrigger>
                     <SelectContent>
-                      {allCompaniesSorted.map((c) => (
-                        <SelectItem key={c.id} value={c.id} disabled={c.id === compareRightCompanyId}>
-                          {c.name}
+                      {compareRightCompanyId ? (
+                        <SelectItem key="same-co-side-a" value={compareRightCompanyId}>
+                          Same company
                         </SelectItem>
-                      ))}
+                      ) : null}
+                      {allCompaniesSorted
+                        .filter((c) => c.id !== compareRightCompanyId)
+                        .map((c) => (
+                          <SelectItem key={c.id} value={c.id}>
+                            {c.name}
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                   {/* Dono header me same `compareEntityBucket` — ek jagah change = doosri auto sync. */}
@@ -1660,16 +1812,23 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                   <Label htmlFor="compare-sync-target-company-right" className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">
                     Company
                   </Label>
-                  <Select value={compareRightCompanyId} onValueChange={setCompareRightCompanyId}>
+                  <Select value={compareRightCompanyId} onValueChange={onCompareRightCompanyChange}>
                     <SelectTrigger id="compare-sync-target-company-right" className="h-8 min-w-[120px] max-w-[42%] flex-1 text-xs sm:max-w-[180px]">
                       <SelectValue placeholder="Select company" />
                     </SelectTrigger>
                     <SelectContent>
-                      {allCompaniesSorted.map((c) => (
-                        <SelectItem key={`r-${c.id}`} value={c.id} disabled={c.id === compareLeftCompanyId}>
-                          {c.name}
+                      {compareLeftCompanyId ? (
+                        <SelectItem key="same-co-side-b" value={compareLeftCompanyId}>
+                          Same company
                         </SelectItem>
-                      ))}
+                      ) : null}
+                      {allCompaniesSorted
+                        .filter((c) => c.id !== compareLeftCompanyId)
+                        .map((c) => (
+                          <SelectItem key={`r-${c.id}`} value={c.id}>
+                            {c.name}
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                   <Label htmlFor="compare-entity-bucket-right" className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">
@@ -1697,7 +1856,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
             {/* From/To subheaders fix, tables neeche ek hi scroll — left/right alag scrollbar nahi. */}
             <div className="col-start-1 row-start-2 flex min-h-0 min-w-0 flex-col overflow-hidden border-border bg-slate-50/90 dark:bg-slate-950/60">
               <div className="grid shrink-0 grid-cols-1 border-b border-border lg:grid-cols-2 lg:divide-x lg:divide-border">
-                <div className="flex items-start justify-between gap-2 bg-muted/40 px-3 py-2">
+                <div className="flex items-start gap-2 bg-muted/40 px-3 py-2">
                   {/* Company line + Ledger row: searchable account (selected company) + pencil rename (party only). */}
                   <div className="min-w-0 flex-1 space-y-1.5">
                     <p className="text-[11px] text-muted-foreground">
@@ -1720,7 +1879,12 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                         placeholder={compareLeftCompanyId ? "Select account" : "Select company first"}
                         searchPlaceholder="Search account…"
                         addNewLabel={compareEntityBucket === "party" ? "Add new account" : undefined}
-                        disabled={!compareLeftCompanyId}
+                        disabled={compareLeftLedgerPickerDisabled}
+                        title={
+                          compareUseSameCompanyOnSideB
+                            ? "Same company — account Side B par select karein"
+                            : undefined
+                        }
                         triggerClassName="h-8 min-w-[160px] max-w-full flex-1 justify-between"
                         contentWidthMode="auto"
                         popoverModal={false}
@@ -1732,26 +1896,15 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                         size="icon"
                         className="h-8 w-8 shrink-0"
                         title="Edit selected account"
-                        disabled={!sourcePartyId}
+                        disabled={!sourcePartyId || compareUseSameCompanyOnSideB}
                         onClick={() => openCompareLedgerEdit("left")}
                       >
                         <Pencil className="h-4 w-4" />
                       </Button>
                     </div>
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    onClick={toggleSelectAllCompareVouchers}
-                    disabled={compareRows.length === 0}
-                  >
-                    {compareSideASelectAllActive ? "Deselect all" : "Select all"}
-                  </Button>
                 </div>
-                <div className="flex items-start justify-between gap-2 border-t border-border bg-muted/40 px-3 py-2 lg:border-t-0">
-                  {/* Side B checkbox column alag state — yahan "Select all" B ki rows ke liye. */}
+                <div className="flex items-start gap-2 border-t border-border bg-muted/40 px-3 py-2 lg:border-t-0">
                   <div className="min-w-0 flex-1 space-y-1.5">
                     <p className="text-[11px] text-muted-foreground">
                       Side B — company: {companyDisplayNameById.get(compareRightCompanyId) || targetCompanyName || "—"}
@@ -1773,7 +1926,12 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                         placeholder={compareRightCompanyId ? "Select account" : "Select company first"}
                         searchPlaceholder="Search account…"
                         addNewLabel={compareEntityBucket === "party" ? "Add new account" : undefined}
-                        disabled={!compareRightCompanyId}
+                        disabled={compareRightLedgerPickerDisabled}
+                        title={
+                          compareUseSameCompanyOnSideA
+                            ? "Same company — account Side A par select karein"
+                            : undefined
+                        }
                         triggerClassName="h-8 min-w-[160px] max-w-full flex-1 justify-between"
                         contentWidthMode="auto"
                         popoverModal={false}
@@ -1785,23 +1943,13 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                         size="icon"
                         className="h-8 w-8 shrink-0"
                         title="Edit selected account"
-                        disabled={!targetPartyId}
+                        disabled={!targetPartyId || compareUseSameCompanyOnSideA}
                         onClick={() => openCompareLedgerEdit("right")}
                       >
                         <Pencil className="h-4 w-4" />
                       </Button>
                     </div>
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    onClick={toggleSelectAllCompareVouchersSideB}
-                    disabled={compareRowsSideB.length === 0}
-                  >
-                    {compareSideBSelectAllActive ? "Deselect all" : "Select all"}
-                  </Button>
                 </div>
               </div>
               {/* Ek row: Side A/B ka selected ledger — neeche table rows se map Missing refs samajhna asaan. */}
@@ -1830,7 +1978,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                 </div>
               </div>
               <div
-                className="min-h-0 flex-1 overflow-y-auto overflow-x-auto overscroll-contain [scrollbar-gutter:stable]"
+                className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain [scrollbar-gutter:stable]"
                 tabIndex={0}
                 onKeyDown={(e) => {
                   if (comparePairs.length === 0) return;
@@ -1855,32 +2003,56 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                   }
                 }}
               >
-                <div className="min-w-0 overflow-x-auto">
-                  {/* `table-fixed` + colgroup 50%/50%: Cr|Date beech ki line header ke divide-x se same center par mile. */}
-                  <table className="w-full min-w-[880px] table-fixed border-collapse text-xs">
+                <div className="min-w-0 overflow-x-hidden overflow-y-visible">
+                  {/* `table-fixed` + colgroup 50%/50% — vertical scroll only; BS/AD alag columns (ledger Both jaisa). */}
+                  <table className="w-full min-w-0 table-fixed border-collapse text-xs">
                     <colgroup>
-                      <col span={8} style={{ width: "50%" }} />
-                      <col span={8} style={{ width: "50%" }} />
+                      <col span={COMPARE_SIDE_COL_COUNT} style={{ width: "50%" }} />
+                      <col span={COMPARE_SIDE_COL_COUNT} style={{ width: "50%" }} />
                     </colgroup>
                     <thead className="bg-muted sticky top-0 z-10">
                       <tr>
-                        {/* Checkbox ↔ Date ke beech sirf 3px — `pr-[3px]` + Date `pl-0` (dono halves). */}
-                        <th className="w-10 py-2 pl-2 pr-[3px]" aria-label="Select Side A for copy to Side B" />
-                        <th className="py-2 pl-0 pr-2 text-left">Date</th>
-                        <th className="px-2 py-2 text-left">Voucher</th>
-                        <th className="px-2 py-2 text-left">Type</th>
-                        <th className="px-2 py-2 text-left">Ledger</th>
-                        <th className="px-2 py-2 text-left">Status</th>
-                        <th className="px-2 py-2 text-right">Dr</th>
-                        <th className="border-r border-border px-2 py-2 text-right">Cr</th>
-                        <th className="w-10 py-2 pl-2 pr-[3px]" aria-label="Select Side B for copy to Side A" />
-                        <th className="py-2 pl-0 pr-2 text-left">Date</th>
-                        <th className="px-2 py-2 text-left">Voucher</th>
-                        <th className="px-2 py-2 text-left">Type</th>
-                        <th className="px-2 py-2 text-left">Ledger</th>
-                        <th className="px-2 py-2 text-left">Status</th>
-                        <th className="px-2 py-2 text-right">Dr</th>
-                        <th className="px-2 py-2 text-right">Cr</th>
+                        {/* Side A: tick Cr ke baad (A→B copy); Side B: tick Date se pehle (B→A). */}
+                        <th className="py-2 pl-2 pr-0.5 text-left whitespace-nowrap">Date (BS)</th>
+                        <th className="py-2 px-0.5 text-left whitespace-nowrap">Date (AD)</th>
+                        <th className="px-1 py-2 text-left">Voucher</th>
+                        <th className="px-1 py-2 text-left">Type</th>
+                        <th className="px-1 py-2 text-left truncate">Ledger</th>
+                        <th className="px-1 py-2 text-left">Status</th>
+                        <th className="px-1 py-2 text-right">Dr</th>
+                        <th className="px-1 py-2 text-right">Cr</th>
+                        <th className={`${COMPARE_SYNC_TICK_COL_W} border-r border-border py-1.5 align-bottom`}>
+                          <CompareSyncTickStack side="left" showArrow={false}>
+                            <Checkbox
+                              className={COMPARE_SYNC_CHECKBOX_CN}
+                              checked={compareSideASelectAllActive}
+                              disabled={selectableCompareLeftRowIds.length === 0}
+                              title={compareSideASelectAllActive ? "Deselect all (Side A)" : "Select all (Side A)"}
+                              aria-label={compareSideASelectAllActive ? "Deselect all Side A rows" : "Select all Side A rows"}
+                              onCheckedChange={() => toggleSelectAllCompareVouchers()}
+                            />
+                          </CompareSyncTickStack>
+                        </th>
+                        <th className={`${COMPARE_SYNC_TICK_COL_W} py-1.5 align-bottom`}>
+                          <CompareSyncTickStack side="right" showArrow={false}>
+                            <Checkbox
+                              className={COMPARE_SYNC_CHECKBOX_CN}
+                              checked={compareSideBSelectAllActive}
+                              disabled={selectableCompareRightRowIds.length === 0}
+                              title={compareSideBSelectAllActive ? "Deselect all (Side B)" : "Select all (Side B)"}
+                              aria-label={compareSideBSelectAllActive ? "Deselect all Side B rows" : "Select all Side B rows"}
+                              onCheckedChange={() => toggleSelectAllCompareVouchersSideB()}
+                            />
+                          </CompareSyncTickStack>
+                        </th>
+                        <th className="py-2 pl-0 pr-0.5 text-left whitespace-nowrap">Date (BS)</th>
+                        <th className="py-2 px-0.5 text-left whitespace-nowrap">Date (AD)</th>
+                        <th className="px-1 py-2 text-left">Voucher</th>
+                        <th className="px-1 py-2 text-left">Type</th>
+                        <th className="px-1 py-2 text-left">Ledger</th>
+                        <th className="px-1 py-2 text-left">Status</th>
+                        <th className="px-1 py-2 text-right">Dr</th>
+                        <th className="px-1 py-2 text-right">Cr</th>
                       </tr>
                     </thead>
                     <tbody className="[&_td]:align-top [&_th]:align-top">
@@ -1897,8 +2069,9 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                               ? "No row on Side B for this line (Side A has a voucher)"
                               : undefined;
                         // Left = A→B selection (Side A voucher id); right = B→A (Side B id) — alag state.
-                        const canToggleLeft = Boolean(r?.id);
-                        const canToggleRight = Boolean(br?.id);
+                        const pairRowSyncMatched = isComparePairRowSyncMatched(pair);
+                        const canToggleLeft = Boolean(r?.id) && !pairRowSyncMatched;
+                        const canToggleRight = Boolean(br?.id) && !pairRowSyncMatched;
                         const checkedLeft = canToggleLeft ? selectedVoucherIds.includes(r!.id) : false;
                         const checkedRight = canToggleRight ? selectedRightVoucherIds.includes(br!.id) : false;
                         const rowSummary = r ? compareRowLedgerSummary.get(r.id) : undefined;
@@ -1918,10 +2091,15 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                         };
                         const renderLeftCheckbox = () => (
                           <Checkbox
+                            className={COMPARE_SYNC_CHECKBOX_CN}
                             checked={checkedLeft}
                             disabled={!canToggleLeft}
                             title={
-                              canToggleLeft ? undefined : "Is line par Side A par voucher nahi — A→B copy select nahi"
+                              canToggleLeft
+                                ? undefined
+                                : pairRowSyncMatched
+                                  ? "Side A aur B matched — select nahi"
+                                  : "Is line par Side A par voucher nahi — select nahi"
                             }
                             onCheckedChange={(next) => onLeftCheckChange(!!next)}
                             onClick={(e) => e.stopPropagation()}
@@ -1929,10 +2107,15 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                         );
                         const renderRightCheckbox = () => (
                           <Checkbox
+                            className={COMPARE_SYNC_CHECKBOX_CN}
                             checked={checkedRight}
                             disabled={!canToggleRight}
                             title={
-                              canToggleRight ? undefined : "Is line par Side B par voucher nahi — B→A copy select nahi"
+                              canToggleRight
+                                ? undefined
+                                : pairRowSyncMatched
+                                  ? "Side A aur B matched — select nahi"
+                                  : "Is line par Side B par voucher nahi — select nahi"
                             }
                             onCheckedChange={(next) => onRightCheckChange(!!next)}
                             onClick={(e) => e.stopPropagation()}
@@ -1949,58 +2132,67 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                             >
                               {r ? (
                                 <>
-                                  <td className={`pl-2 pr-[3px] py-0.5 ${rowBg}`} onClick={(e) => e.stopPropagation()}>
-                                    {renderLeftCheckbox()}
+                                  <td className={`${compareDateCellCn} pl-2 ${rowBg}`}>
+                                    {compareRowDateCells.get(r.id)?.bs ?? "—"}
                                   </td>
-                                  <td className={`pl-0 pr-2 py-0.5 ${rowBg}`}>{compareRowDateLabel.get(r.id) || "—"}</td>
-                                  <td className={`px-2 py-0.5 font-medium ${rowBg}`}>{r.voucherNumber || "—"}</td>
-                                  <td className={`px-2 py-0.5 ${rowBg}`}>{r.type || "—"}</td>
+                                  <td className={`${compareDateCellCn} ${rowBg}`}>
+                                    {compareRowDateCells.get(r.id)?.ad ?? "—"}
+                                  </td>
+                                  <td className={`px-1 py-0.5 font-medium truncate ${rowBg}`}>{r.voucherNumber || "—"}</td>
+                                  <td className={`px-2 py-0.5 ${rowBg}`}>{compareRowTypeLabel(r)}</td>
                                   <td className={`px-2 py-0.5 ${rowBg}`}>{rowSummary?.fromLedger || "—"}</td>
                                   <td className={`px-2 py-0.5 ${rowBg}`}>{renderSideAStatus(r)}</td>
                                   <td className={`px-2 py-0.5 text-right text-green-700 ${rowBg}`}>
                                     {formatLedgerAmountCell(r.debit || 0)}
                                   </td>
-                                  <td className={`border-r border-border px-2 py-0.5 text-right text-red-600 ${rowBg}`}>
+                                  <td className={`px-2 py-0.5 text-right text-red-600 ${rowBg}`}>
                                     {formatLedgerAmountCell(r.credit || 0)}
+                                  </td>
+                                  <td className={`${COMPARE_SYNC_TICK_COL_W} border-r border-border py-0.5 align-top ${rowBg}`}>
+                                    <CompareSyncTickStack side="left">{renderLeftCheckbox()}</CompareSyncTickStack>
                                   </td>
                                 </>
                               ) : !compareSideAHasLedger ? (
                                 <td
-                                  colSpan={8}
+                                  colSpan={COMPARE_SIDE_COL_COUNT}
                                   className={`border-r border-border px-3 py-3 text-center align-middle text-muted-foreground/90 ${rowBg}`}
                                 >
                                   {/* Account choose nahi — poora half center (dash grid left-align na lage). */}
-                                  <div className="flex flex-col items-center justify-center gap-2 sm:flex-row sm:justify-center">
-                                    <div onClick={(e) => e.stopPropagation()}>{renderLeftCheckbox()}</div>
+                                  <div className="flex flex-col items-center justify-center gap-2 sm:flex-row sm:justify-end">
                                     <span className="max-w-[14rem] text-[11px] leading-snug">
                                       Select account above (Side A)
                                     </span>
+                                    <CompareSyncTickStack side="left">{renderLeftCheckbox()}</CompareSyncTickStack>
                                   </div>
                                 </td>
                               ) : (
                                 <>
-                                  <td className={`pl-2 pr-[3px] py-0.5 ${rowBg}`} onClick={(e) => e.stopPropagation()}>
-                                    {renderLeftCheckbox()}
-                                  </td>
-                                  <td className={`pl-0 pr-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
-                                  <td className={`px-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
-                                  <td className={`px-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
-                                  <td className={`px-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
-                                  <td className={`px-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
-                                  <td className={`px-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
-                                  <td className={`border-r border-border px-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>
-                                    {dash}
+                                  <td className={`${compareDateCellCn} pl-2 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`${compareDateCellCn} text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`px-1 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`px-1 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`px-1 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`px-1 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`px-1 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`px-1 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`${COMPARE_SYNC_TICK_COL_W} border-r border-border py-0.5 align-top ${rowBg}`}>
+                                    <CompareSyncTickStack side="left">{renderLeftCheckbox()}</CompareSyncTickStack>
                                   </td>
                                 </>
                               )}
                               {br ? (
                                 <>
-                                  <td className={`pl-2 pr-[3px] py-0.5 ${rowBg}`} onClick={(e) => e.stopPropagation()}>
-                                    {renderRightCheckbox()}
+                                  <td className={`${COMPARE_SYNC_TICK_COL_W} py-0.5 align-top ${rowBg}`}>
+                                    <CompareSyncTickStack side="right">{renderRightCheckbox()}</CompareSyncTickStack>
                                   </td>
-                                  <td className={`pl-0 pr-2 py-0.5 ${rowBg}`}>{compareRowDateLabel.get(br.id) || "—"}</td>
+                                  <td className={`${compareDateCellCn} pl-0 ${rowBg}`}>
+                                    {compareRowDateCells.get(br.id)?.bs ?? "—"}
+                                  </td>
+                                  <td className={`${compareDateCellCn} ${rowBg}`}>
+                                    {compareRowDateCells.get(br.id)?.ad ?? "—"}
+                                  </td>
                                   <td className={`px-2 py-0.5 font-medium ${rowBg}`}>{br.voucherNumber || "—"}</td>
-                                  <td className={`px-2 py-0.5 ${rowBg}`}>{br.type || "—"}</td>
+                                  <td className={`px-2 py-0.5 ${rowBg}`}>{compareRowTypeLabel(br)}</td>
                                   <td className={`px-2 py-0.5 ${rowBg}`}>{compareTargetPartyName}</td>
                                   <td className={`px-2 py-0.5 ${rowBg}`}>{renderSideBStatus(pair)}</td>
                                   <td className={`px-2 py-0.5 text-right text-green-700 ${rowBg}`}>
@@ -2011,9 +2203,9 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                                   </td>
                                 </>
                               ) : !compareSideBHasLedger ? (
-                                <td colSpan={8} className={`px-3 py-3 text-center align-middle text-muted-foreground/90 ${rowBg}`}>
-                                  <div className="flex flex-col items-center justify-center gap-2 sm:flex-row sm:justify-center">
-                                    <div onClick={(e) => e.stopPropagation()}>{renderRightCheckbox()}</div>
+                                <td colSpan={COMPARE_SIDE_COL_COUNT} className={`px-3 py-3 text-center align-middle text-muted-foreground/90 ${rowBg}`}>
+                                  <div className="flex flex-col items-center justify-center gap-2 sm:flex-row sm:justify-start">
+                                    <CompareSyncTickStack side="right">{renderRightCheckbox()}</CompareSyncTickStack>
                                     <span className="max-w-[14rem] text-[11px] leading-snug">
                                       Select account above (Side B)
                                     </span>
@@ -2021,16 +2213,17 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                                 </td>
                               ) : (
                                 <>
-                                  <td className={`pl-2 pr-[3px] py-0.5 ${rowBg}`} onClick={(e) => e.stopPropagation()}>
-                                    {renderRightCheckbox()}
+                                  <td className={`${COMPARE_SYNC_TICK_COL_W} py-0.5 align-top ${rowBg}`}>
+                                    <CompareSyncTickStack side="right">{renderRightCheckbox()}</CompareSyncTickStack>
                                   </td>
-                                  <td className={`pl-0 pr-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
-                                  <td className={`px-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
-                                  <td className={`px-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
-                                  <td className={`px-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
-                                  <td className={`px-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
-                                  <td className={`px-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
-                                  <td className={`px-2 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`${compareDateCellCn} pl-0 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`${compareDateCellCn} text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`px-1 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`px-1 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`px-1 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`px-1 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`px-1 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
+                                  <td className={`px-1 py-0.5 text-center text-muted-foreground/80 ${rowBg}`}>{dash}</td>
                                 </>
                               )}
                             </tr>
@@ -2042,34 +2235,34 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
                             >
                               {!r && !compareSideAHasLedger ? (
                                 <td
-                                  colSpan={8}
+                                  colSpan={COMPARE_SIDE_COL_COUNT}
                                   className={`border-r border-border px-2 pb-0.5 text-center text-[9px] leading-tight text-muted-foreground italic whitespace-normal break-words ${rowBg}`}
                                 >
                                   Narration: —
                                 </td>
                               ) : (
                                 <>
-                                  <td className={`px-2 py-0 ${rowBg}`} />
                                   <td
-                                    colSpan={7}
-                                    className={`border-r border-border px-2 pb-0.5 text-[9px] leading-tight text-muted-foreground italic whitespace-normal break-words ${rowBg}`}
+                                    colSpan={COMPARE_SIDE_COL_COUNT - 1}
+                                    className={`px-2 pb-0.5 text-[9px] leading-tight text-muted-foreground italic whitespace-normal break-words ${rowBg}`}
                                   >
                                     Narration: {r ? r.narration || "-" : "—"}
                                   </td>
+                                  <td className={`${COMPARE_SYNC_TICK_COL_W} border-r border-border py-0 ${rowBg}`} />
                                 </>
                               )}
                               {!br && !compareSideBHasLedger ? (
                                 <td
-                                  colSpan={8}
+                                  colSpan={COMPARE_SIDE_COL_COUNT}
                                   className={`px-2 pb-0.5 text-center text-[9px] leading-tight text-muted-foreground italic whitespace-normal break-words ${rowBg}`}
                                 >
                                   Narration: —
                                 </td>
                               ) : (
                                 <>
-                                  <td className={`px-2 py-0 ${rowBg}`} />
+                                  <td className={`${COMPARE_SYNC_TICK_COL_W} py-0 ${rowBg}`} />
                                   <td
-                                    colSpan={7}
+                                    colSpan={COMPARE_SIDE_COL_COUNT - 1}
                                     className={`px-2 pb-0.5 text-[9px] leading-tight text-muted-foreground italic whitespace-normal break-words ${rowBg}`}
                                   >
                                     Narration: {br ? br.narration || "-" : "—"}

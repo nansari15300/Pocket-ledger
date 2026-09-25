@@ -104,6 +104,7 @@ import {
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useSyncTempDateRangeFromProp, useDateRangeTimestamps } from "@/hooks/useLedgerDetailDateRange";
+import { useLedgerPaginationReset } from "@/hooks/useLedgerPaginationReset";
 import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
@@ -205,6 +206,7 @@ export function StaffGroupDetails({
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerPaginationReset = useLedgerPaginationReset(setRowsPerPage, setCurrentPage);
   const ledgerViewMode: LedgerDetailViewMode =
     balanceMode === "bill_wise" ? "bill_wise" : "statement";
   const ledgerSessionKey = useMemo(
@@ -1045,6 +1047,7 @@ export function StaffGroupDetails({
                 <BsDatePicker
                   isRange
                   masterLedgerDatePresets
+                  ledgerPaginationReset={ledgerPaginationReset}
                   valueAD={dateRange}
                   onChangeAD={handleBsDateRangeChange}
                   transactionDates={transactionDates}

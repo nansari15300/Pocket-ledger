@@ -14,6 +14,13 @@ import {
   getOutflowBillWiseLinkAmount,
   type Allocation,
 } from "@/lib/payment-allocation-utils";
+import {
+  applyJournalBillWiseLinkAllocations,
+  applyPaymentBillWiseLinkAllocations,
+  clearBillWiseAllocationsFromSourcesToTarget,
+  listBillWiseSourceIdsAllocatingToTarget,
+  patchVoucherFields,
+} from "@/lib/writeGateway/voucherActionsClient";
 
 export type BillWiseAutoLinkSide = "dr" | "cr";
 
@@ -54,6 +61,7 @@ export type BillWiseAutoLinkLedgerRow = {
 export type BillWiseAutoLinkProposal = {
   ledgerId: string;
   ledgerName: string;
+  ledgerKind: "party" | "staff";
   fingerprint: string;
   /** Unlinked DR total before auto link. */
   drOpenTotal: number;
@@ -512,6 +520,7 @@ export function buildPartyBillWiseAutoLinkProposal(opts: {
   return {
     ledgerId,
     ledgerName,
+    ledgerKind,
     fingerprint,
     drOpenTotal,
     crOpenTotal,
@@ -572,4 +581,85 @@ export function groupSelectedAutoLinkAllocations(
     });
   }
   return out;
+}
+
+function stripLedgerAllocations(
+  allocations: Allocation[],
+  ledgerId: string,
+  ledgerVoucherIds: Set<string>
+): Allocation[] {
+  return allocations.filter((a) => !allocationBelongsToLedger(a, ledgerId, ledgerVoucherIds));
+}
+
+function voucherHoldsBillWiseSourceAllocations(v: any): boolean {
+  const type = String(v?.type ?? "");
+  return (
+    type === "payment_in" ||
+    type === "payment_out" ||
+    type === "direct_income" ||
+    type === "direct_expense" ||
+    type === "contra" ||
+    type === "journal" ||
+    type === "adjustment" ||
+    type === "inter_company"
+  );
+}
+
+/** Remove bill-wise links on one ledger for the selected voucher rows (bilateral). */
+export async function applyLedgerBillWiseUnlinks(opts: {
+  companyId: string;
+  ledgerId: string;
+  ledgerKind: "party" | "staff";
+  voucherIds: string[];
+  vouchers: any[];
+  ledgerVoucherIds: Set<string>;
+}): Promise<number> {
+  const { companyId, ledgerId, ledgerKind, vouchers, ledgerVoucherIds } = opts;
+  const uniqueIds = [
+    ...new Set(
+      opts.voucherIds
+        .map((id) => String(id || "").trim())
+        .filter((id) => id && id !== OPENING_BALANCE_VOUCHER_ID)
+    ),
+  ];
+  if (!uniqueIds.length) return 0;
+
+  let touched = 0;
+
+  for (const vid of uniqueIds) {
+    const v = vouchers.find((row) => String(row?.id ?? "") === vid);
+    if (!v || !voucherTouchesLedger(v, ledgerId, ledgerKind)) continue;
+
+    const prev: Allocation[] = Array.isArray(v.allocations) ? [...v.allocations] : [];
+    const next = stripLedgerAllocations(prev, ledgerId, ledgerVoucherIds);
+    const hadOwnLedgerLinks = prev.some((a) => allocationBelongsToLedger(a, ledgerId, ledgerVoucherIds));
+
+    const type = String(v?.type ?? "");
+    const isJournalLike = type === "journal" || type === "adjustment" || type === "inter_company";
+
+    if (hadOwnLedgerLinks && isJournalLike) {
+      await applyJournalBillWiseLinkAllocations(companyId, vid, next, prev, []);
+      touched += 1;
+    } else if (hadOwnLedgerLinks && voucherHoldsBillWiseSourceAllocations(v)) {
+      await applyPaymentBillWiseLinkAllocations(companyId, { id: vid, allocations: prev }, next);
+      touched += 1;
+    }
+
+    const inbound = await listBillWiseSourceIdsAllocatingToTarget(companyId, vid);
+    const ledgerInbound = inbound.filter((sourceId) => ledgerVoucherIds.has(sourceId));
+    if (ledgerInbound.length) {
+      await clearBillWiseAllocationsFromSourcesToTarget(companyId, vid, ledgerInbound);
+      touched += 1;
+    }
+
+    if (["sale", "sale_service", "purchase", "purchase_service"].includes(type)) {
+      const ob = Number(v.openingBalanceAllocated) || 0;
+      if (ob > 0) {
+        await patchVoucherFields(companyId, vid, { openingBalanceAllocated: 0 }, { forceSqliteFirst: true });
+        touched += 1;
+      }
+    }
+  }
+
+  return touched;
 }

@@ -17,6 +17,10 @@ import {
   interCompanyAccountFieldsRowSimpleClass,
   interCompanyAccountFieldsRowSimpleWithTotalClass,
   interCompanyAccountNameFieldColClass,
+  interCompanyAccountNameFieldColSimpleClass,
+  interCompanyAccountGridFieldInputClass,
+  interCompanyAccountSimpleTotalColClass,
+  interCompanyAccountTypeFieldColClass,
   interCompanyDropdownContentClass,
   interCompanyIcAccountComboboxTriggerClass,
   interCompanyIcInputSizingClass,
@@ -341,15 +345,13 @@ export function InterCompanyAccountLookupSection({
   // Bade screen: text length se width; chhote screen par CSS max 20ch + …
   const accountNameTriggerMinCh = useMemo(() => {
     const len = selectedAccountLabel.length || 8;
-    return Math.max(8, Math.min(len, 48));
+    return Math.max(8, Math.min(len, 24));
   }, [selectedAccountLabel]);
 
   const typeLabel =
     INTER_COMPANY_ENTITY_KIND_FILTER_LABELS[
       (lockEntityKind || entityKind) as InterCompanyEntityKindFilter
     ];
-  const typeTriggerMinCh = Math.max(6, typeLabel.length);
-
   /** Voucher par select — entity par prefixed Inter Co. A/c missing ho to generate */
   const ensureInterCoAcNoForRow = useCallback(
     async (row: InterCompanyEntityDetail, companyId: string) => {
@@ -907,7 +909,12 @@ export function InterCompanyAccountLookupSection({
             )}
             data-simple-view={simpleView ? "1" : "0"}
           >
-            <div className={interCompanyAccountFieldColClass}>
+            <div
+              className={cn(
+                simpleView ? interCompanyAccountTypeFieldColClass : interCompanyAccountFieldColClass,
+                "min-w-0"
+              )}
+            >
               <Label className="block text-xs text-muted-foreground">Type</Label>
               {viewOnlyCopyMode ? (
                 <Input
@@ -917,9 +924,9 @@ export function InterCompanyAccountLookupSection({
                     interCompanyInputClass,
                     interCompanyIcReadonlyFieldClass,
                     interCompanyReadOnlyCopyInputClass,
-                    interCompanyIcTypeSelectTriggerClass
+                    interCompanyIcTypeSelectTriggerClass,
+                    !simpleView && interCompanyAccountGridFieldInputClass
                   )}
-                  style={{ minWidth: `calc(${typeTriggerMinCh}ch + 2.25rem)` }}
                 />
               ) : (
                 <Select
@@ -936,8 +943,10 @@ export function InterCompanyAccountLookupSection({
                   }}
                 >
                   <SelectTrigger
-                    className={interCompanyIcTypeSelectTriggerClass}
-                    style={{ minWidth: `calc(${typeTriggerMinCh}ch + 2.25rem)` }}
+                    className={cn(
+                      interCompanyIcTypeSelectTriggerClass,
+                      !simpleView && interCompanyAccountGridFieldInputClass
+                    )}
                   >
                     <SelectValue />
                   </SelectTrigger>
@@ -956,7 +965,11 @@ export function InterCompanyAccountLookupSection({
                 </Select>
               )}
             </div>
-            <div className={interCompanyAccountNameFieldColClass}>
+            <div
+              className={
+                simpleView ? interCompanyAccountNameFieldColSimpleClass : interCompanyAccountNameFieldColClass
+              }
+            >
               <Label className="block w-full text-xs text-muted-foreground">Account name</Label>
               {accountNameHint ? (
                 <p className="mb-1 text-[11px] leading-snug text-amber-800 dark:text-amber-200">
@@ -975,7 +988,6 @@ export function InterCompanyAccountLookupSection({
                       interCompanyIcAccountComboboxTriggerClass,
                       "text-xs"
                     )}
-                    style={{ minWidth: `calc(${accountNameTriggerMinCh}ch + 2.25rem)` }}
                   />
                 ) : searchBy.accountName ? (
                   <Combobox
@@ -983,8 +995,11 @@ export function InterCompanyAccountLookupSection({
                     value={comboValue}
                     onChange={commitAccountName}
                     placeholder="Select account"
-                    triggerClassName={interCompanyIcAccountComboboxTriggerClass}
-                    triggerLabelMinCh={accountNameTriggerMinCh}
+                    triggerClassName={cn(
+                      interCompanyIcAccountComboboxTriggerClass,
+                      !simpleView && interCompanyAccountGridFieldInputClass
+                    )}
+                    triggerLabelMinCh={simpleView ? undefined : accountNameTriggerMinCh}
                     disabled={disabled || crossSearching || ensuringAcNo}
                     noWrapOptions
                     showFullOptionText
@@ -1011,21 +1026,35 @@ export function InterCompanyAccountLookupSection({
               </div>
             </div>
             {showSimpleViewBankOutTotal ? (
-              <div className={interCompanyAccountFieldColClass}>
-                <Label className="block text-xs text-muted-foreground">Total Cr</Label>
-                <Input
-                  readOnly
-                  tabIndex={-1}
-                  value={bankOutTotalDisplay}
-                  aria-label={`Total bank out ${bankOutTotalDisplay}`}
-                  className={cn(
-                    interCompanyInputClass,
-                    interCompanyAmountInputSizingClass,
-                    interCompanyIcReadonlyFieldClass,
-                    interCompanyReadOnlyCopyInputClass,
-                    "min-w-[25mm] text-right tabular-nums"
-                  )}
-                />
+              <div className={interCompanyAccountSimpleTotalColClass}>
+                <Label className="block text-xs text-muted-foreground whitespace-nowrap">
+                  Total amount
+                </Label>
+                <div className="inline-grid max-w-full justify-items-end [&>*]:col-start-1 [&>*]:row-start-1">
+                  <span
+                    className={cn(
+                      interCompanyInputClass,
+                      interCompanyAmountInputSizingClass,
+                      "invisible whitespace-pre border border-transparent px-3 text-sm pointer-events-none"
+                    )}
+                    aria-hidden
+                  >
+                    {bankOutTotalDisplay || "0.00 Cr"}
+                  </span>
+                  <Input
+                    readOnly
+                    tabIndex={-1}
+                    value={bankOutTotalDisplay}
+                    aria-label={`Total amount ${bankOutTotalDisplay}`}
+                    className={cn(
+                      interCompanyInputClass,
+                      interCompanyAmountInputSizingClass,
+                      interCompanyIcReadonlyFieldClass,
+                      interCompanyReadOnlyCopyInputClass,
+                      "whitespace-nowrap"
+                    )}
+                  />
+                </div>
               </div>
             ) : null}
             {!simpleView ? (
@@ -1058,6 +1087,7 @@ export function InterCompanyAccountLookupSection({
                   className={cn(
                     interCompanyInputClass,
                     interCompanyIcInputSizingClass,
+                    interCompanyAccountGridFieldInputClass,
                     "pr-8 font-mono text-xs tabular-nums",
                     ensuringAcNo && "text-muted-foreground",
                     partnerFieldReadOnly && interCompanyReadOnlyCopyInputClass
@@ -1089,6 +1119,7 @@ export function InterCompanyAccountLookupSection({
                 className={cn(
                   interCompanyInputClass,
                   interCompanyIcInputSizingClass,
+                  interCompanyAccountGridFieldInputClass,
                   "font-mono text-xs uppercase",
                   partnerFieldReadOnly && interCompanyReadOnlyCopyInputClass
                 )}
@@ -1115,6 +1146,7 @@ export function InterCompanyAccountLookupSection({
                 className={cn(
                   interCompanyInputClass,
                   interCompanyIcInputSizingClass,
+                  interCompanyAccountGridFieldInputClass,
                   partnerFieldReadOnly && interCompanyReadOnlyCopyInputClass
                 )}
                 readOnly={partnerFieldReadOnly}

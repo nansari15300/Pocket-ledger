@@ -119,6 +119,7 @@ import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { useLedgerPaginationReset } from "@/hooks/useLedgerPaginationReset";
 import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
@@ -220,6 +221,7 @@ export function ExpenseAccountDetails({
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerPaginationReset = useLedgerPaginationReset(setRowsPerPage, setCurrentPage);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
@@ -827,6 +829,7 @@ export function ExpenseAccountDetails({
                 <BsDatePicker
                   isRange
                   masterLedgerDatePresets
+                  ledgerPaginationReset={ledgerPaginationReset}
                   valueAD={dateRange}
                   onChangeAD={onDateRangeChange || (() => {})}
                   transactionDates={transactionDates}
@@ -860,6 +863,7 @@ export function ExpenseAccountDetails({
                     <AdCalendar
                       rangePresetSlot={
                         <MasterLedgerDateRangePresetRow
+                          ledgerPaginationReset={ledgerPaginationReset}
                           country={company?.country}
                           onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
@@ -1322,6 +1326,7 @@ export function ExpenseAccountDetails({
                 <NepaliCalendar
                   rangePresetSlot={
                     <MasterLedgerDateRangePresetRow
+                      ledgerPaginationReset={ledgerPaginationReset}
                       country={company?.country}
                       onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                       onApply={(r) => {
@@ -1342,6 +1347,7 @@ export function ExpenseAccountDetails({
                   <AdCalendar
                     rangePresetSlot={
                       <MasterLedgerDateRangePresetRow
+                        ledgerPaginationReset={ledgerPaginationReset}
                         country={company?.country}
                         onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
@@ -1427,6 +1433,7 @@ export function ExpenseAccountDetails({
                   <NepaliCalendar
                     rangePresetSlot={
                       <MasterLedgerDateRangePresetRow
+                        ledgerPaginationReset={ledgerPaginationReset}
                         country={company?.country}
                         onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
@@ -1447,6 +1454,7 @@ export function ExpenseAccountDetails({
                     <AdCalendar
                       rangePresetSlot={
                         <MasterLedgerDateRangePresetRow
+                          ledgerPaginationReset={ledgerPaginationReset}
                           country={company?.country}
                           onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {

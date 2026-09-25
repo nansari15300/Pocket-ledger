@@ -10,6 +10,7 @@ import { LOAN_LIABILITY_GROUP_ID } from "@/modules/loans/constants/loanConstants
 import { isLoanLiabilityStaff } from "@/modules/loans/utils/loanLiabilityStaff";
 import { STAFF_SYSTEM_GROUP_ID } from "@/lib/staffSystemGroups";
 import type { UngroupedEntityType } from "@/lib/writeGateway/legacy/ungrouped-groups";
+import { resolveAdminPanelSubscriptionItemGroupId } from "@/lib/adminPanelCompany/subscriptionCatalogItemPricing";
 
 export const BANK_SYSTEM_BANK_BRANCH_ID = "bank_accounts_group";
 export const BANK_SYSTEM_CASH_BRANCH_ID = "cash_in_hand_group";
@@ -197,9 +198,12 @@ export function normalizeItemGroupIdForStorage(
 }
 
 export function resolveItemListGroupBucketId(item: {
+  id?: string;
   groupId?: string | null;
   type?: string | null;
 }): string {
+  const catalogGroup = item.id ? resolveAdminPanelSubscriptionItemGroupId(String(item.id)) : null;
+  if (catalogGroup) return catalogGroup;
   const gid = String(item.groupId ?? "").trim();
   if (isMasterEntitySystemGroupId(ITEM_ENTITY_GROUP_PRESET, gid)) return gid;
   if (isMasterEntityLegacyUngroupedGroupId("item", gid)) {

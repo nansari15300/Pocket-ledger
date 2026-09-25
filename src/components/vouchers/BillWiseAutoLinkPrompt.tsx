@@ -2,7 +2,7 @@
 
 import { STAFF_ENTITY_LABEL } from "@/lib/staffEntityDisplayName";
 import * as React from "react";
-import { Loader2 } from "lucide-react";
+import { Link2, Loader2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -33,7 +33,9 @@ import {
   isBillWiseAutoLinkPromptSuppressed,
   type BillWiseAutoLinkSnoozeChoice,
 } from "@/lib/billWiseAutoLinkPromptPrefs";
+import { OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import {
+  applyLedgerBillWiseUnlinks,
   buildPartyBillWiseAutoLinkProposal,
   groupSelectedAutoLinkAllocations,
   voucherTouchesLedger,
@@ -176,6 +178,7 @@ export function BillWiseAutoLinkPromptDialog({
     [formatDateBySystem]
   );
   const [rows, setRows] = React.useState<BillWiseAutoLinkProposalRow[]>([]);
+  const [unlinkVoucherIds, setUnlinkVoucherIds] = React.useState<Set<string>>(() => new Set());
   const [askAgain, setAskAgain] = React.useState<BillWiseAutoLinkSnoozeChoice>("later");
   const [saving, setSaving] = React.useState(false);
   const [activeVoucherId, setActiveVoucherId] = React.useState<string | null>(null);
@@ -183,6 +186,7 @@ export function BillWiseAutoLinkPromptDialog({
   React.useEffect(() => {
     if (open && proposal) {
       setRows(proposal.rows.map((r) => ({ ...r, selected: true })));
+      setUnlinkVoucherIds(new Set());
       setAskAgain("later");
       setSaving(false);
       setActiveVoucherId(null);
@@ -203,6 +207,11 @@ export function BillWiseAutoLinkPromptDialog({
     activeLinks.flatMap((row) => [row.sourceVoucherId, row.targetVoucherId])
   );
   const linkGroupByVoucher = buildLinkGroupMapFromLedger(rows, proposal.ledgerRows);
+  const ledgerVoucherIds = new Set(proposal.ledgerRows.map((r) => r.voucherId));
+  const linkedLedgerRows = proposal.ledgerRows.filter(
+    (r) => r.linked > 0 && r.voucherId !== OPENING_BALANCE_VOUCHER_ID
+  );
+  const unlinkCount = unlinkVoucherIds.size;
 
   const linkedAmountToActive = (voucherId: string): number => {
     if (!activeVoucherId || voucherId === activeVoucherId) return 0;
@@ -230,30 +239,59 @@ export function BillWiseAutoLinkPromptDialog({
     handleDismiss(askAgain);
   };
 
-  const handleYes = () => {
+  const handleReset = () => {
+    setRows((prev) => prev.map((r) => ({ ...r, selected: false })));
+    setUnlinkVoucherIds(new Set());
+    toast.info("Link and unlink selections cleared.");
+  };
+
+  const handleOk = () => {
     const selected = rows.filter((r) => r.selected);
-    if (!selected.length) {
-      toast.error("Select at least one proposed link.");
+    const unlinkIds = [...unlinkVoucherIds];
+    if (!selected.length && !unlinkIds.length) {
+      toast.error("Select proposed links to add and/or linked rows to unlink.");
       return;
     }
     setSaving(true);
-    // Close immediately; link writes can continue in the background without
-    // making the review dialog look frozen.
     rememberChoice(askAgain === "later" ? "later" : askAgain);
     onOpenChange(false);
 
     void (async () => {
       try {
-        const batches = groupSelectedAutoLinkAllocations(selected, vouchers);
-        for (const batch of batches) {
-          await applyPaymentBillWiseLinkAllocations(companyId, batch.source, batch.allocations);
+        let unlinked = 0;
+        if (unlinkIds.length) {
+          unlinked = await applyLedgerBillWiseUnlinks({
+            companyId,
+            ledgerId: proposal.ledgerId,
+            ledgerKind: proposal.ledgerKind,
+            voucherIds: unlinkIds,
+            vouchers,
+            ledgerVoucherIds,
+          });
         }
-        toast.success(
-          `Linked ${selected.length} bill-wise allocation${selected.length === 1 ? "" : "s"}.`
-        );
+        if (selected.length) {
+          const batches = groupSelectedAutoLinkAllocations(selected, vouchers);
+          for (const batch of batches) {
+            await applyPaymentBillWiseLinkAllocations(companyId, batch.source, batch.allocations);
+          }
+        }
+        const parts: string[] = [];
+        if (unlinkIds.length) {
+          parts.push(
+            unlinked > 0
+              ? `Unlinked ${unlinkIds.length} row${unlinkIds.length === 1 ? "" : "s"}`
+              : `Unlink checked for ${unlinkIds.length} row${unlinkIds.length === 1 ? "" : "s"}`
+          );
+        }
+        if (selected.length) {
+          parts.push(
+            `linked ${selected.length} allocation${selected.length === 1 ? "" : "s"}`
+          );
+        }
+        toast.success(parts.join("; ") + ".");
         onApplied?.();
       } catch (e: any) {
-        toast.error(e?.message || "Failed to save auto links.");
+        toast.error(e?.message || "Failed to save bill-wise changes.");
       } finally {
         setSaving(false);
       }
@@ -262,6 +300,23 @@ export function BillWiseAutoLinkPromptDialog({
 
   const toggleAll = (selected: boolean) => {
     setRows((prev) => prev.map((r) => ({ ...r, selected })));
+  };
+
+  const toggleUnlinkAll = (selected: boolean) => {
+    if (!selected) {
+      setUnlinkVoucherIds(new Set());
+      return;
+    }
+    setUnlinkVoucherIds(new Set(linkedLedgerRows.map((r) => r.voucherId)));
+  };
+
+  const toggleUnlinkVoucher = (voucherId: string, selected: boolean) => {
+    setUnlinkVoucherIds((prev) => {
+      const next = new Set(prev);
+      if (selected) next.add(voucherId);
+      else next.delete(voucherId);
+      return next;
+    });
   };
 
   const linksForVoucher = (voucherId: string) =>
@@ -337,14 +392,27 @@ export function BillWiseAutoLinkPromptDialog({
           </span>
         </div>
 
-        <div className="flex items-center justify-between text-xs shrink-0">
-          <label className="inline-flex items-center gap-2 cursor-pointer">
-            <Checkbox
-              checked={selectedCount > 0 && selectedCount === rows.length}
-              onCheckedChange={(v) => toggleAll(!!v)}
-            />
-            Select all proposed links ({selectedCount}/{rows.length})
-          </label>
+        <div className="flex flex-col gap-1.5 text-xs shrink-0">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <Checkbox
+                checked={rows.length > 0 && selectedCount === rows.length}
+                onCheckedChange={(v) => toggleAll(!!v)}
+                disabled={!rows.length}
+              />
+              Select all proposed links ({selectedCount}/{rows.length})
+            </label>
+            {linkedLedgerRows.length > 0 ? (
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <Checkbox
+                  checked={unlinkCount > 0 && unlinkCount === linkedLedgerRows.length}
+                  onCheckedChange={(v) => toggleUnlinkAll(!!v)}
+                  className="border-orange-600 data-[state=checked]:bg-orange-600 data-[state=checked]:border-orange-600 data-[state=checked]:text-white"
+                />
+                Unlink selected linked rows ({unlinkCount}/{linkedLedgerRows.length})
+              </label>
+            ) : null}
+          </div>
           {activeVoucherId ? (
             <span className="text-muted-foreground">
               Click highlight: related rows like ledger hover ({activeLinks.length})
@@ -359,10 +427,11 @@ export function BillWiseAutoLinkPromptDialog({
         </div>
 
         <div className="flex-1 min-h-0 border rounded-md overflow-auto scrollbar-slim-dim">
-          <table className="w-full text-sm border-collapse min-w-[800px]">
+          <table className="w-full text-sm border-collapse min-w-[860px]">
             <thead>
               <tr className="border-b bg-muted/50">
-                <th className="text-left p-2 w-10 whitespace-nowrap"></th>
+                <th className="text-left p-2 w-10 whitespace-nowrap" title="Proposed auto link" />
+                <th className="text-left p-2 w-10 whitespace-nowrap" title="Unlink existing links on this row" />
                 <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
                 <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
                 <th className="text-left p-2 font-medium whitespace-nowrap">Type</th>
@@ -380,6 +449,9 @@ export function BillWiseAutoLinkPromptDialog({
                   !!activeVoucherId && connectedVoucherIds.has(row.voucherId) && !isActive;
                 const partnerLinkAmount = linkedAmountToActive(row.voucherId);
                 const hasProposed = row.proposedLinked > 0 || linksForVoucher(row.voucherId).length > 0;
+                const canUnlinkRow =
+                  row.linked > 0 && row.voucherId !== OPENING_BALANCE_VOUCHER_ID;
+                const rowUnlinkSelected = unlinkVoucherIds.has(row.voucherId);
                 const rowTickSelected = isPartner
                   ? partnerLinkAmount > 0
                   : isVoucherTickSelected(row.voucherId);
@@ -426,6 +498,25 @@ export function BillWiseAutoLinkPromptDialog({
                             rowTickSelected
                               ? "Included in proposed links (group color)"
                               : "Include this voucher's proposed links"
+                          }
+                        />
+                      ) : (
+                        <span className="inline-block h-4 w-4" />
+                      )}
+                    </td>
+                    <td className="p-2 w-10 whitespace-nowrap align-middle">
+                      {canUnlinkRow ? (
+                        <Checkbox
+                          checked={rowUnlinkSelected}
+                          onClick={(event) => event.stopPropagation()}
+                          onCheckedChange={(checked) =>
+                            toggleUnlinkVoucher(row.voucherId, !!checked)
+                          }
+                          className="border-orange-600 data-[state=checked]:bg-orange-600 data-[state=checked]:border-orange-600 data-[state=checked]:text-white"
+                          title={
+                            rowUnlinkSelected
+                              ? "Will unlink bill-wise links on this row"
+                              : "Unlink existing bill-wise links on this row"
                           }
                         />
                       ) : (
@@ -483,14 +574,43 @@ export function BillWiseAutoLinkPromptDialog({
           </Select>
         </div>
 
-        <DialogFooter className="gap-2 sm:gap-2 border-t pt-2">
+        <DialogFooter className="gap-2 sm:gap-2 border-t pt-2 flex-wrap sm:justify-between">
           <Button type="button" size="sm" variant="outline" disabled={saving} onClick={handleLater}>
             Later
           </Button>
-          <Button type="button" size="sm" disabled={saving || selectedCount === 0} onClick={() => void handleYes()}>
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Yes, auto link
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={saving || !rows.length}
+              onClick={() => setRows((prev) => prev.map((r) => ({ ...r, selected: true })))}
+              className="bg-blue-600 hover:bg-blue-700 text-white border-0"
+            >
+              <Link2 className="h-4 w-4 mr-1" />
+              Auto Link
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={saving}
+              onClick={handleReset}
+              className="bg-violet-600 hover:bg-violet-700 text-white border-0"
+            >
+              <RotateCcw className="h-4 w-4 mr-1" />
+              Reset
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={saving || (selectedCount === 0 && unlinkCount === 0)}
+              onClick={() => void handleOk()}
+              className="bg-green-600 hover:bg-green-700 text-white border-0"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              OK
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

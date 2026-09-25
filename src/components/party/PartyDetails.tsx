@@ -46,6 +46,11 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { isAdminPanelCompanyLocalId } from "@/lib/adminPanelCompany/ledgerMode";
+import {
+  isSubscriberPartyRow,
+  resolveSubscriberPartyDisplayName,
+} from "@/lib/adminPanelCompany/subscriberPartyListDisplay";
 import {
   nestedLedgerChildDialogShell,
   type MasterEditPresentationMode,
@@ -72,10 +77,15 @@ import { useCompany } from "@/hooks/useCompany";
 import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { useFyVoucherScope } from "@/contexts/FyVoucherScopeContext";
 import {
+  companyUsesFiscalMergeDividers,
+  hasFullLocalLedgerVoucherMirror,
+} from "@/lib/fyPagination/fiscalMergeFullVoucherScope";
+import {
   extractEntityBalanceFromFySnapshot,
   isLedgerDateFilterFromAtFyStart,
 } from "@/lib/fyPagination/ledgerOpeningMeta";
 import { useAuth } from "@/hooks/useAuth";
+import { useLedgerPaginationReset } from "@/hooks/useLedgerPaginationReset";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
@@ -97,6 +107,7 @@ import { batchFetchUserDisplayNamesFromFirestore } from "@/lib/batchFetchUserDis
 import { firestore } from "@/lib/firebase";
 import { applyPaymentBillWiseLinkAllocations } from "@/lib/voucherActionsClient";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
+import { useInterCompanyLedgerChangeDetectDialog } from "@/hooks/useInterCompanyLedgerChangeDetectDialog";
 import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillLabel";
 import { HistoryDialog } from "@/components/vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
@@ -152,6 +163,7 @@ import { useShowNotes } from "@/components/vouchers/transactionColumnVisibility"
 import {
   sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
+  stampRunningBalanceFromFullLedger,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
@@ -360,6 +372,7 @@ export function PartyDetails({
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerPaginationReset = useLedgerPaginationReset(setRowsPerPage, setCurrentPage);
   const ledgerViewMode: LedgerDetailViewMode =
     balanceMode === "bill_wise" ? "bill_wise" : "statement";
   const ledgerSessionKey = useMemo(
@@ -405,6 +418,8 @@ export function PartyDetails({
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
+  const { handleInterCompanyChangeDetectedClick, interCompanyChangeDetectDialog } =
+    useInterCompanyLedgerChangeDetectDialog(() => onPartyUpdated());
   const [historyVoucher, setHistoryVoucher] = useState<any>(null);
   const [linkAdvancesVoucher, setLinkAdvancesVoucher] = useState<any>(null);
   const [linkPaymentVoucher, setLinkPaymentVoucher] = useState<any>(null);
@@ -560,7 +575,18 @@ export function PartyDetails({
     return interCompanyClearingAccountDisplayName(icGroupFilteredMember);
   }, [icGroupFilteredMember]);
 
-  const headerDisplayTitle = icMemberDisplayName ?? party.name;
+  const headerDisplayTitle =
+    icMemberDisplayName ??
+    (isAdminPanelCompanyLocalId(companyId) && isSubscriberPartyRow(party)
+      ? resolveSubscriberPartyDisplayName(party)
+      : party.name);
+  const headerDisplayEmail =
+    isAdminPanelCompanyLocalId(companyId) && isSubscriberPartyRow(party)
+      ? String(party.email ?? "").trim() || null
+      : null;
+
+  const adminSubscriberPartyLedger =
+    isAdminPanelCompanyLocalId(companyId) && isSubscriberPartyRow(party);
 
   const canShowAdjustBalance =
     party.id !== "all" && !(party as any).isSystemAccount;
@@ -793,9 +819,15 @@ export function PartyDetails({
     () => extractEntityBalanceFromFySnapshot(fy.openingBalances, ledgerContextId),
     [fy.openingBalances, ledgerContextId]
   );
+  const useSqliteBooksRunningBalance = useMemo(
+    () =>
+      companyUsesFiscalMergeDividers(company) ||
+      hasFullLocalLedgerVoucherMirror(company, fy.activeScope),
+    [company, fy.activeScope]
+  );
   const ledgerOpeningForRunning = useMemo(() => {
     if (periodOpeningUnavailable || periodOpeningLoading) return openingBalanceForPeriod;
-    if (fyStartDateFilterActive) {
+    if (fyStartDateFilterActive && !useSqliteBooksRunningBalance) {
       if (fySnapshotPartyOpening != null && Number.isFinite(fySnapshotPartyOpening)) {
         return fySnapshotPartyOpening;
       }
@@ -808,6 +840,7 @@ export function PartyDetails({
     periodOpeningUnavailable,
     periodOpeningLoading,
     fyStartDateFilterActive,
+    useSqliteBooksRunningBalance,
     fySnapshotPartyOpening,
     openingBalanceForPeriod,
     transactionEntity?.openingBalance,
@@ -940,15 +973,26 @@ export function PartyDetails({
   // Sort state: footer dropdown â€” sirf current page par apply (paging hook); list chronological rahe
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
-  const sortedTransactions = useMemo(
-    () =>
-      recomputeRunningBalanceTopToBottom(
-        sortTransactionsWithFiscalMergeForCompany(
-          filterByUnapprovedOnly(statusFilteredTransactions), "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
-        ledgerOpeningForRunning
-      ),
-    [statusFilteredTransactions, filterByUnapprovedOnly, ledgerOpeningForRunning, company]
-  );
+  const sortedTransactions = useMemo(() => {
+    const sorted = sortTransactionsWithFiscalMergeForCompany(
+      filterByUnapprovedOnly(statusFilteredTransactions),
+      "date",
+      DEFAULT_TRANSACTION_SORT_ORDER,
+      undefined,
+      company
+    );
+    if (useSqliteBooksRunningBalance) {
+      return stampRunningBalanceFromFullLedger(sorted, processedTransactions);
+    }
+    return recomputeRunningBalanceTopToBottom(sorted, ledgerOpeningForRunning);
+  }, [
+    statusFilteredTransactions,
+    filterByUnapprovedOnly,
+    ledgerOpeningForRunning,
+    company,
+    useSqliteBooksRunningBalance,
+    processedTransactions,
+  ]);
 
   const searchFilteredTransactions = useMemo(() => {
     if (!mobileSearchTerm.trim()) return sortedTransactions;
@@ -1645,6 +1689,7 @@ export function PartyDetails({
               journalAccountNames={resolvedJournalAccountNames}
               userNames={mergedUserNames}
               onRowClick={handleEditVoucher}
+              onInterCompanyChangeDetectedClick={handleInterCompanyChangeDetectedClick}
               onDeleteVoucher={handleDeleteVoucher}
               onHistoryVoucher={handleHistoryVoucher}
               onAddLink={handleAddLink}
@@ -1668,6 +1713,7 @@ export function PartyDetails({
               onStatusFilterAll={handleStatusFilterAll}
               onStatusFilterChange={handleStatusFilterChange}
               statusFilterIdPrefix="party"
+              forceBalanceMode={adminSubscriberPartyLedger ? "statement" : undefined}
               {...statementCheck.tableProps}
             />
             </MasterAccountFreezeTxnShell>
@@ -1774,6 +1820,7 @@ export function PartyDetails({
                   <NepaliCalendar
                     rangePresetSlot={
                       <MasterLedgerDateRangePresetRow
+                        ledgerPaginationReset={ledgerPaginationReset}
                         country={company?.country}
                         onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
@@ -1805,6 +1852,7 @@ export function PartyDetails({
                     <AdCalendar
                       rangePresetSlot={
                         <MasterLedgerDateRangePresetRow
+                          ledgerPaginationReset={ledgerPaginationReset}
                           country={company?.country}
                           onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
@@ -1897,6 +1945,7 @@ export function PartyDetails({
           onOpenChange={(open: boolean) => !open && setHistoryVoucher(null)}
           onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)}
         />
+        {interCompanyChangeDetectDialog}
         {linkAdvancesVoucher && (
           <LinkAdvancesToVoucherDialog
             isOpen={!!linkAdvancesVoucher}
@@ -1998,9 +2047,14 @@ export function PartyDetails({
                     memberName={icMemberDisplayName}
                   />
                 ) : (
-                  <h2 className={LEDGER_HEADER_TITLE_CN} title={party.name}>
-                    {party.name}
-                  </h2>
+                  <div className="min-w-0">
+                    <h2 className={LEDGER_HEADER_TITLE_CN} title={headerDisplayTitle}>
+                      {headerDisplayTitle}
+                    </h2>
+                    {headerDisplayEmail ? (
+                      <p className="truncate text-xs font-normal text-muted-foreground">{headerDisplayEmail}</p>
+                    ) : null}
+                  </div>
                 )}
               </div>
               <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
@@ -2027,6 +2081,7 @@ export function PartyDetails({
                   <BsDatePicker
                     isRange
                     masterLedgerDatePresets
+                    ledgerPaginationReset={ledgerPaginationReset}
                     valueAD={dateRange}
                     onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                     transactionDates={transactionDates}
@@ -2064,6 +2119,7 @@ export function PartyDetails({
                     <AdCalendar
                       rangePresetSlot={
                         <MasterLedgerDateRangePresetRow
+                          ledgerPaginationReset={ledgerPaginationReset}
                           country={company?.country}
                           onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
@@ -2198,6 +2254,7 @@ export function PartyDetails({
               journalAccountNames={resolvedJournalAccountNames}
               userNames={mergedUserNames}
               onRowClick={handleEditVoucher}
+              onInterCompanyChangeDetectedClick={handleInterCompanyChangeDetectedClick}
               onDeleteVoucher={handleDeleteVoucher}
               onHistoryVoucher={handleHistoryVoucher}
               onAddLink={handleAddLink}
@@ -2221,6 +2278,7 @@ export function PartyDetails({
               onStatusFilterAll={handleStatusFilterAll}
               onStatusFilterChange={handleStatusFilterChange}
               statusFilterIdPrefix="party"
+              forceBalanceMode={adminSubscriberPartyLedger ? "statement" : undefined}
               {...statementCheck.tableProps}
             />
             )}
@@ -2300,6 +2358,7 @@ export function PartyDetails({
             setRowsPerPage(Number(value) || 0);
             setCurrentPage(1);
           }}
+          rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS_DEFAULT}
           beforeCount={desktopPaginationMeta.beforeCount}
           afterCount={desktopPaginationMeta.afterCount}
           totalCount={statusFilteredTransactions.length}
@@ -2352,6 +2411,7 @@ export function PartyDetails({
         ledgerBooksOpeningBalanceSigned={ledgerOpeningForRunning}
       />
       <HistoryDialog voucher={historyVoucher} isOpen={!!historyVoucher} onOpenChange={(open) => !open && setHistoryVoucher(null)} onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)} />
+      {interCompanyChangeDetectDialog}
       {linkAdvancesVoucher && (
         <LinkAdvancesToVoucherDialog
           isOpen={!!linkAdvancesVoucher}

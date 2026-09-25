@@ -1037,7 +1037,7 @@ export function getStatusBadgeOutlineClassName(
     return "text-muted-foreground border-muted-foreground/40";
   }
 
-  if (statusLabel === "Paid" || (transaction as any).paymentStatus === "paid") {
+  if (statusLabel === "Settled" || statusLabel === "Paid" || (transaction as any).paymentStatus === "paid") {
     return "text-green-600 border-green-600/50";
   }
 
@@ -1193,6 +1193,50 @@ export function LinkedVouchersColored({
   );
 }
 
+const LINKED_VOUCHERS_COLLAPSED_COUNT = 2;
+
+type LinkedVouchersColoredProps = {
+  vouchers: string[];
+  vouchersPerLine?: number;
+  className?: string;
+  align?: "start" | "center" | "end";
+  billWisePink?: boolean;
+  wrapInline?: boolean;
+};
+
+/** Bill-wise status: pehle 2 linked voucher nos, baaki "Show more" / "Show less". */
+export function LinkedVouchersColoredCollapsible({
+  vouchers,
+  collapsedCount = LINKED_VOUCHERS_COLLAPSED_COUNT,
+  ...rest
+}: LinkedVouchersColoredProps & { collapsedCount?: number }) {
+  const [expanded, setExpanded] = React.useState(false);
+  if (!vouchers?.length) return null;
+  const needToggle = vouchers.length > collapsedCount;
+  const visible =
+    needToggle && !expanded ? vouchers.slice(0, collapsedCount) : vouchers;
+  const hiddenCount = vouchers.length - collapsedCount;
+
+  return (
+    <div className={cn("flex flex-col min-w-0", rest.align === "start" ? "items-start" : rest.align === "end" ? "items-end" : "items-center")}>
+      <LinkedVouchersColored vouchers={visible} {...rest} />
+      {needToggle ? (
+        <button
+          type="button"
+          className="mt-0.5 text-[9px] font-semibold text-blue-600 hover:text-blue-800 hover:underline dark:text-blue-400"
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            setExpanded((v) => !v);
+          }}
+        >
+          {expanded ? "Show less" : `Show more (+${hiddenCount})`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 /** Bill-wise print parity: linked voucher / overdue detail spans Status + Balance columns in narration sub-rows. */
 export function BillWiseLinkedDetailCells({
   vouchers,
@@ -1238,7 +1282,7 @@ export function BillWiseLinkedDetailCells({
         )}
       >
         <div className="flex flex-col items-start gap-[1px] min-w-0">
-          <LinkedVouchersColored vouchers={vouchers} wrapInline align="start" billWisePink={billWisePink} />
+          <LinkedVouchersColoredCollapsible vouchers={vouchers} wrapInline align="start" billWisePink={billWisePink} />
           {overdueText ? <span className="block font-medium text-red-600">{overdueText}</span> : null}
         </div>
       </TableCell>
@@ -1328,6 +1372,8 @@ export const TransactionRow = React.memo(
     onPrintRow,
     syncInFlight = false,
     onSyncNow,
+    /** IC row badge: ledger se edit + Change Detected compare dialog */
+    onInterCompanyChangeDetectedClick,
     /** Enabled recurring templates se active trigger ids — switch sirf in par (dashboard jaisa). */
     activeRecurringTriggerVoucherIds = null,
   }: any) => {
@@ -1672,12 +1718,18 @@ export const TransactionRow = React.memo(
               </span>
               )}
               {isPeerPendingChange ? (
-                <span
-                  className="inline-flex shrink-0 items-center rounded-full border border-blue-600/50 bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white shadow-sm dark:border-blue-400/50 dark:bg-blue-600"
-                  title="Peer company saved changes — open voucher and use Change Detected to apply"
+                <button
+                  type="button"
+                  className="inline-flex shrink-0 cursor-pointer items-center rounded-full border border-blue-600/50 bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white shadow-sm hover:bg-blue-600 dark:border-blue-400/50 dark:bg-blue-600 dark:hover:bg-blue-500"
+                  title="Peer company saved changes — click to review and apply"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    onInterCompanyChangeDetectedClick?.(transaction);
+                  }}
                 >
                   Change Detected
-                </span>
+                </button>
               ) : null}
             </span>
           </TableCell>
@@ -1830,7 +1882,12 @@ export const TransactionRow = React.memo(
               context === "daybook" &&
               transaction.type === "journal" &&
               transaction.subType === "add_salary";
-            const statusLabel = isDashboardAddSalary ? "Salary" : getStatusLabel(transaction, context);
+            let statusLabel = isDashboardAddSalary ? "Salary" : getStatusLabel(transaction, context);
+            const fyOpeningZeroBalance =
+              isFyOpeningRow && !isBalanceMasked && Math.abs(balance) < 1e-6;
+            if (fyOpeningZeroBalance) {
+              statusLabel = "Settled";
+            }
             const statusDetailText = getStatusDetail(transaction, { billWiseOnly: statusBillWiseOnly });
             const statusDetailVouchersForRow = getStatusDetailVouchers(transaction, { billWiseOnly: statusBillWiseOnly });
             // Keep status voucher-link text tied to the shared "Show Narration" toggle.
@@ -1855,7 +1912,7 @@ export const TransactionRow = React.memo(
                     {hlForColumn("status")(statusLabel || "-")}
                   </Badge>
                   {showStatusDetailUnderBadge && (
-                    <LinkedVouchersColored
+                    <LinkedVouchersColoredCollapsible
                       vouchers={statusDetailVouchersForRow}
                       align="center"
                       billWisePink={isBillWise}
@@ -2336,7 +2393,7 @@ export const TransactionRow = React.memo(
                 )}
               >
                 <div className="flex flex-col items-center gap-[1px]">
-                  <LinkedVouchersColored vouchers={statusDetailVouchers} align="center" billWisePink={isBillWise} />
+                  <LinkedVouchersColoredCollapsible vouchers={statusDetailVouchers} align="center" billWisePink={isBillWise} />
                   {overdueSubText ? (
                     <span className="block font-medium text-red-600">{hl(overdueSubText)}</span>
                   ) : null}

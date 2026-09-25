@@ -35,6 +35,8 @@ export type DeviceUserAddOnOffer = {
 
 export const DEFAULT_DEVICE_USER_ADDON_OFFER: DeviceUserAddOnOffer = {
   enabled: false,
+  billingOnlineVisible: true,
+  billingLocalVisible: true,
   pricePerDeviceOnlineNpr: 500,
   pricePerDeviceLocalNpr: 400,
   pricePerUserOnlineNpr: 300,
@@ -76,7 +78,10 @@ function resolveAddonBillingScopeVisible(
   const key = scope === "online" ? "billingOnlineVisible" : "billingLocalVisible";
   const specific = o[key];
   if (typeof specific === "boolean") return specific;
-  if (o.hiddenFromBilling === true) return false;
+  // Legacy single flag (whole add-on hidden) — only when scope-specific keys were never saved.
+  const hasOnlineKey = typeof o.billingOnlineVisible === "boolean";
+  const hasLocalKey = typeof o.billingLocalVisible === "boolean";
+  if (!hasOnlineKey && !hasLocalKey && o.hiddenFromBilling === true) return false;
   return true;
 }
 
@@ -143,10 +148,23 @@ export function readDeviceUserAddOnOfferFromPlansDoc(
   return sanitizeDeviceUserAddOnOffer(raw.deviceUserAddOns);
 }
 
+/** Firestore nested map — always write explicit scope flags; drop legacy `hiddenFromBilling`. */
+export function deviceUserAddOnOfferForFirestoreWrite(
+  offerInput: DeviceUserAddOnOffer
+): Record<string, unknown> {
+  const cleaned = sanitizeDeviceUserAddOnOffer(offerInput);
+  return {
+    ...cleaned,
+    billingOnlineVisible: cleaned.billingOnlineVisible !== false,
+    billingLocalVisible: cleaned.billingLocalVisible !== false,
+    hiddenFromBilling: false,
+  };
+}
+
 export function buildDeviceUserAddOnOfferWritePatch(
   offerInput: DeviceUserAddOnOffer
 ): Record<string, unknown> {
-  return { deviceUserAddOns: sanitizeDeviceUserAddOnOffer(offerInput) };
+  return { deviceUserAddOns: deviceUserAddOnOfferForFirestoreWrite(offerInput) };
 }
 
 export function unitPriceForAddonKind(offer: DeviceUserAddOnOffer, kind: AddonKind): number {
@@ -251,16 +269,28 @@ export function planDeviceCapWithAddOns(
   localCompany: boolean,
   addons: PurchasedPlanAddOns
 ): number {
+  return planDeviceCapBreakdown(plan, localCompany, addons).total;
+}
+
+export function planDeviceCapBreakdown(
+  plan: Plan,
+  localCompany: boolean,
+  addons: PurchasedPlanAddOns
+): { planBase: number; extraSlots: number; total: number } {
   const raw = localCompany
     ? Number(plan.entitlements.maxDevicesLocal ?? plan.entitlements.maxDevices)
     : Number(plan.entitlements.maxDevices);
-  const planCap = isUnlimitedEntitlementCap(raw)
+  const planBase = isUnlimitedEntitlementCap(raw)
     ? -1
     : Number.isFinite(raw)
       ? Math.max(0, Math.floor(raw))
       : 1;
-  const extra = localCompany ? addons.extraDevicesLocal : addons.extraDevicesOnline;
-  return effectiveEntitlementCapWithAddOns(planCap, extra);
+  const extraSlots = Math.max(
+    0,
+    Math.floor(localCompany ? addons.extraDevicesLocal : addons.extraDevicesOnline)
+  );
+  const total = effectiveEntitlementCapWithAddOns(planBase, extraSlots);
+  return { planBase, extraSlots, total };
 }
 
 export function planUserCapWithAddOns(
@@ -268,16 +298,28 @@ export function planUserCapWithAddOns(
   localCompany: boolean,
   addons: PurchasedPlanAddOns
 ): number {
+  return planUserCapBreakdown(plan, localCompany, addons).total;
+}
+
+export function planUserCapBreakdown(
+  plan: Plan,
+  localCompany: boolean,
+  addons: PurchasedPlanAddOns
+): { planBase: number; extraSlots: number; total: number } {
   const raw = localCompany
     ? Number(plan.entitlements.maxUsersLocal ?? plan.entitlements.maxUsers)
     : Number(plan.entitlements.maxUsers);
-  const planCap = isUnlimitedEntitlementCap(raw)
+  const planBase = isUnlimitedEntitlementCap(raw)
     ? -1
     : Number.isFinite(raw)
       ? Math.max(0, Math.floor(raw))
       : 1;
-  const extra = localCompany ? addons.extraUsersLocal : addons.extraUsersOnline;
-  return effectiveEntitlementCapWithAddOns(planCap, extra);
+  const extraSlots = Math.max(
+    0,
+    Math.floor(localCompany ? addons.extraUsersLocal : addons.extraUsersOnline)
+  );
+  const total = effectiveEntitlementCapWithAddOns(planBase, extraSlots);
+  return { planBase, extraSlots, total };
 }
 
 export function planCompanyCapWithAddOns(

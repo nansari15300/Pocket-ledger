@@ -47,6 +47,25 @@ export function resolveEffectiveAccountPlanId(
   return best;
 }
 
+/**
+ * Billing / user caps: owner `users/{uid}.accountCanonicalPlanId` wins (Stripe + admin SKU),
+ * then viewer's own canonical when they are the owner, then owned-company aggregate.
+ */
+export function resolveAccountPlanIdForEntitlements(
+  ownerUserData: Record<string, unknown> | null | undefined,
+  allCompanies: ReadonlyArray<{ planId?: string | null | undefined; isOwned?: boolean; ownerId?: string }>,
+  ownerUid: string | undefined | null,
+  activeCompanyPlanId: string | undefined | null,
+  viewerAccountCanonicalPlanId?: string | null
+): PlanId {
+  const ownerCanon = String(ownerUserData?.accountCanonicalPlanId || "").trim();
+  if (ownerCanon) return normalizePlanIdForClient(ownerCanon);
+  const uid = String(ownerUid || "").trim();
+  const viewerCanon = String(viewerAccountCanonicalPlanId || "").trim();
+  if (uid && viewerCanon) return normalizePlanIdForClient(viewerCanon);
+  return resolveEffectiveAccountPlanId(allCompanies, ownerUid, activeCompanyPlanId);
+}
+
 type CompanyPlanRow = {
   id?: string;
   planId?: string | null | undefined;

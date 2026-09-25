@@ -52,6 +52,7 @@ import { PL_APK_LEDGER_WRITE_ARM_EVENT } from "@/lib/apkLedgerRouteShield";
 // APK par `[PL-NAV]` traces screen pe — adb/browser ki zarurat kam (flags: `plNavRedirectDebug.ts` header)
 import { PlNavDebugOnDeviceOverlay } from "@/components/debug/PlNavDebugOnDeviceOverlay";
 import { DashboardDocumentTitleSync } from "@/components/layout/DashboardDocumentTitleSync";
+import { AdminPanelCompanyLedgerBootstrap } from "@/adminPanelCompany/components/AdminPanelCompanyLedgerBootstrap";
 import { PrefetchDashboardChunk } from "@/components/dashboard/PrefetchDashboardChunk";
 import { ElectronTabStripSyncBridge } from "@/components/layout/ElectronTabStripSyncBridge";
 import { RecurringVoucherAutoRunner } from "@/components/vouchers/RecurringVoucherAutoRunner";
@@ -1000,6 +1001,7 @@ export default function DashboardLayout({
             <FileHoverPreviewProvider>
               {/* Overlay LayoutContent ke bahar: `/company` jaisi bare routes par bhi trace dikhai de */}
               <DashboardDocumentTitleSync />
+              <AdminPanelCompanyLedgerBootstrap />
               <PrefetchDashboardChunk />
               <ElectronTabStripSyncBridge />
               <PlNavDebugOnDeviceOverlay />

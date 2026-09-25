@@ -17,6 +17,7 @@ import {
   RELEASE_UPDATE_MANUAL_CHECK_EVENT,
   type ReleaseUpdateInfo,
 } from "@/lib/releaseUpdateCheck";
+import { recordReleaseUpdateDownload } from "@/lib/websiteDownloadEventClient";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 
@@ -46,6 +47,14 @@ function ReleaseUpdateBanner({
   }, [electronAutoInstall]);
 
   const onInstall = useCallback(async () => {
+    const trackPlatform = update.kind === "desktop" ? "windows" : "android";
+    void recordReleaseUpdateDownload({
+      platform: trackPlatform,
+      version: update.version,
+      fileName: update.url.split("/").pop() || "",
+      source: "in_app_update",
+    });
+
     if (update.kind === "android" && androidInAppUpdate) {
       setPhase("downloading");
       setErrorMessage("");

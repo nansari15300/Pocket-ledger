@@ -27,6 +27,7 @@ import { collection, onSnapshot, query } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { applyPaymentBillWiseLinkAllocations } from "@/lib/voucherActionsClient";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { useInterCompanyLedgerChangeDetectDialog } from "@/hooks/useInterCompanyLedgerChangeDetectDialog";
 import { HistoryDialog } from "../vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "../vouchers/LinkAdvancesToVoucherDialog";
 import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
@@ -106,6 +107,9 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
         setSelectedVoucher(voucher);
         setIsVoucherDialogOpen(true);
     };
+
+    const { handleInterCompanyChangeDetectedClick, interCompanyChangeDetectDialog } =
+      useInterCompanyLedgerChangeDetectDialog();
 
     const handleHistoryVoucher = (voucher: any) => setHistoryVoucher(voucher);
     const handleAddLink = (voucher: any) => {
@@ -700,6 +704,7 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                                 journalAccountNames={voucherJournalAccountNames}
                                 userNames={vouchersUserNames}
                                 onRowClick={handleEditVoucher}
+                                onInterCompanyChangeDetectedClick={handleInterCompanyChangeDetectedClick}
                                 onHistoryVoucher={handleHistoryVoucher}
                                 onAddLink={handleAddLink}
                                 openingBalance={daybookSummary?.total.yesterday}
@@ -769,6 +774,7 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
             </div>
         ) : null}
         <AddVoucherDialog isOpen={isVoucherDialogOpen} onOpenChange={setIsVoucherDialogOpen} voucher={selectedVoucher} onVoucherCreated={() => setSelectedVoucher(null)} />
+        {interCompanyChangeDetectDialog}
         <HistoryDialog voucher={historyVoucher} isOpen={!!historyVoucher} onOpenChange={(open) => !open && setHistoryVoucher(null)} onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)} />
         <DaybookAccountDayPeekDialog
           open={!!daybookAccountPeek}

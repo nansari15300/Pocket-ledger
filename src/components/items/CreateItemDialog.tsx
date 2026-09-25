@@ -58,6 +58,9 @@ import {
   masterEntityDialogFormWrapperClassName,
 } from "@/lib/masterEntityDialogClasses";
 import { NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN } from "@/lib/dialogShellChrome";
+import { usePersistedResizableDialogSize } from "@/lib/usePersistedResizableDialogSize";
+import { ResizableDialogEdgeHandles } from "@/components/ui/ResizableDialogEdgeHandles";
+import { MasterEntityDialogDragRibbon } from "@/components/ui/MasterEntityDialogDragRibbon";
 import { format } from "date-fns";
 import { toast as sonnerToast } from "sonner";
 
@@ -241,8 +244,14 @@ export function CreateItemDialog({
   const [docSlots, setDocSlots] = useState<(File | string)[]>([]);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const isMobile = useIsMobile();
-
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : false;
+  const {
+    size: dialogSize,
+    position: dialogPosition,
+    handleResizeStart,
+    handleDragStart,
+    resizable: dialogResizable,
+  } = usePersistedResizableDialogSize(isOpen, !isMobile);
   const setIsOpen = parentOnOpenChange !== undefined ? parentOnOpenChange : () => {};
   
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -928,14 +937,41 @@ const capitalizeFirstLetter = (str: string) => {
         {/* Mobile: 85vh height, 98vw width. PC: 90% screen height & width (90vh / 90vw) so dialog uses most of viewport. */}
         <DialogContent
             overlayClassName={NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN}
-            className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-5xl")}
+            className={cn(
+              cnMasterEntityDialogContent(isMobile),
+              "sm:max-w-5xl",
+              dialogResizable &&
+                "relative !flex !max-h-none flex-col overflow-hidden sm:!left-0 sm:!top-0 sm:!h-auto sm:!max-w-none sm:!translate-x-0 sm:!translate-y-0"
+            )}
+            style={
+              dialogResizable
+                ? {
+                    left: dialogPosition.x,
+                    top: dialogPosition.y,
+                    width: dialogSize.w,
+                    height: dialogSize.h,
+                    maxWidth: "98vw",
+                    maxHeight: "92vh",
+                    transform: "none",
+                  }
+                : undefined
+            }
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
-          <DialogHeader className={masterEntityDialogHeaderClassName}>
-            <DialogTitle>Create a New Item</DialogTitle>
-            <DialogDescription>Add a new product or service to your records.</DialogDescription>
-          </DialogHeader>
+          {dialogResizable ? (
+            <MasterEntityDialogDragRibbon onDragStart={handleDragStart}>
+              <DialogHeader className={cn(masterEntityDialogHeaderClassName, "space-y-0.5 p-0 text-left")}>
+                <DialogTitle>Create a New Item</DialogTitle>
+                <DialogDescription>Add a new product or service to your records.</DialogDescription>
+              </DialogHeader>
+            </MasterEntityDialogDragRibbon>
+          ) : (
+            <DialogHeader className={masterEntityDialogHeaderClassName}>
+              <DialogTitle>Create a New Item</DialogTitle>
+              <DialogDescription>Add a new product or service to your records.</DialogDescription>
+            </DialogHeader>
+          )}
           <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
             <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
@@ -1371,7 +1407,7 @@ const capitalizeFirstLetter = (str: string) => {
             </form>
           </Form>
           </div>
-
+          {dialogResizable ? <ResizableDialogEdgeHandles onResizeStart={handleResizeStart} /> : null}
         </DialogContent>
       </Dialog>
       <CreateItemGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} />

@@ -34,6 +34,8 @@ type BsDatePickerBaseProps = {
   showDateConverterButton?: boolean;
   /** Master ledger: "Last 10" clears filter + reloads default FY voucher scope. */
   masterLedgerDatePresets?: boolean;
+  /** With master presets: footer rows/page → 10 on "Last 10". */
+  ledgerPaginationReset?: import("@/lib/ledgerLast10View").LedgerPaginationResetHandlers | null;
 };
 
 type BsDatePickerConditionalProps =
@@ -80,6 +82,7 @@ export default function BsDatePicker({
   popoverAlign,
   showDateConverterButton = true,
   masterLedgerDatePresets = false,
+  ledgerPaginationReset,
 }: BsDatePickerProps) {
   const [open, setOpen] = React.useState(false);
   const { formatDateBS } = useDate();
@@ -199,6 +202,7 @@ export default function BsDatePicker({
                       <MasterLedgerDateRangePresetRow
                         disabled={disabled}
                         country={company?.country}
+                        ledgerPaginationReset={ledgerPaginationReset}
                         onDateRangeChange={(range) => {
                           (onChangeAD as (date?: DateRange | undefined) => void)(range);
                         }}

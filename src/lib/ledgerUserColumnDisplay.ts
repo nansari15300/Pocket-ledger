@@ -34,6 +34,15 @@ export function mergeLedgerUserDisplayNameMaps(
   return out;
 }
 
+/** Admin Panel Company — cloud subscription mirror (sale / receipt). */
+export function isAdminPanelSubscriptionMirrorVoucherForLedgerUserDisplay(t: unknown): boolean {
+  const o = t as { kind?: string; systemGenerated?: boolean } | null | undefined;
+  if (!o || typeof o !== "object") return false;
+  if (o.systemGenerated !== true) return false;
+  const kind = String(o.kind ?? "").trim();
+  return kind === "subscription-payment" || kind === "subscription-receipt";
+}
+
 /** BS-month recurring auto row — User cell me scheduler ki jagah "Auto" (sirf `recurringMeta`). */
 export function isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(t: unknown): boolean {
   const o = t as { recurringMeta?: { generationKind?: string } } | null | undefined;
@@ -90,6 +99,7 @@ export function resolveLedgerTransactionUserDisplayName(
   opts?: { currentUserUid?: string | null; currentUserDisplayName?: string | null }
 ): string {
   if (!transaction) return "N/A";
+  if (isAdminPanelSubscriptionMirrorVoucherForLedgerUserDisplay(transaction)) return "Auto";
   if (isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(transaction)) return "Auto";
 
   const uid = String(transaction.userId || "").trim();

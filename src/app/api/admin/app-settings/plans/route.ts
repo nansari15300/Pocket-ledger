@@ -16,7 +16,7 @@ import {
   sanitizePlanForFirestoreWrite,
 } from "@/lib/mergeAppSettingsPlans";
 import {
-  buildDeviceUserAddOnOfferWritePatch,
+  deviceUserAddOnOfferForFirestoreWrite,
   sanitizeDeviceUserAddOnOffer,
   type DeviceUserAddOnOffer,
 } from "@/lib/planAddOns";
@@ -175,9 +175,13 @@ export async function POST(req: NextRequest) {
 
     if (body?.deviceUserAddOns != null) {
       const nextOffer = sanitizeDeviceUserAddOnOffer(body.deviceUserAddOns);
+      const deviceUserAddOns = deviceUserAddOnOfferForFirestoreWrite(nextOffer);
       await ref.set(
         {
-          ...buildDeviceUserAddOnOfferWritePatch(nextOffer),
+          deviceUserAddOns: {
+            ...deviceUserAddOns,
+            hiddenFromBilling: admin.firestore.FieldValue.delete(),
+          },
           entitlementCapConvention: "zero_means_none",
         },
         { merge: true }

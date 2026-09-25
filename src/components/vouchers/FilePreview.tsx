@@ -44,7 +44,7 @@ import { tryResolveInterCompanyPeerAttachmentUrl } from "@/lib/interCompany/inte
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { canResolveLocalFileRefsOnThisDevice } from "@/lib/canResolveLocalFileRefs";
-import { isWebBrowserAttachmentLazyLoad } from "@/lib/webAttachmentLazyLoadPolicy";
+import { shouldUseAttachmentLazyLoad } from "@/lib/webAttachmentLazyLoadPolicy";
 import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import {
   useAttachmentHoldPointer,
@@ -1911,7 +1911,7 @@ export function FilePreview({
               let probe = await getOfflineCachedAttachmentBlob(file);
               // 2) Cache miss + online: network se hydrate (EXE/APK). Web browser: tile mount pe
               //    full Firebase download mat — Files tick ON hone se bhi (edit save hang / refresh stall).
-              const webLazyNoNetwork = isWebBrowserAttachmentLazyLoad();
+              const webLazyNoNetwork = shouldUseAttachmentLazyLoad(company);
               if (
                 (!probe || probe.size === 0) &&
                 !localLedgerOnly &&

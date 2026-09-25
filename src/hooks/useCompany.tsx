@@ -114,6 +114,10 @@ import {
   resolveMirrorUserEmail,
 } from "@/lib/mirrorOnlineCompaniesFromFirestore";
 import { clearSelectedCompanyId, pinBootSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
+import {
+  isAdminPanelCompanyLedgerMode,
+  isAdminPanelCompanyLocalId,
+} from "@/lib/adminPanelCompany/ledgerMode";
 import { shouldSuppressTransientCompanyClear, shouldDeferMissingCompanyRedirectNative } from "@/lib/apkLedgerRouteShield";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
 import { ensureCompanyInterCompanyAcNo } from "@/lib/interCompany/ensureCompanyInterCompanyAcNo";
@@ -691,6 +695,7 @@ function getBrowserPathname(): string {
  * NOTE: `if (t === "/") return true` harek candidate ma hataeko — mix `["/","/settings"]` ma settings miss hunthyo.
  */
 function pathExemptFromAutoSelectCompanyPush(t: string): boolean {
+  if (isAdminPanelCompanyLedgerMode()) return true;
   const p = normalizeAppPath(t);
   if (p === "/not-authorized") return true;
   if (p.startsWith("/company") || p.startsWith("/admin") || p.startsWith("/settings")) return true;
@@ -1195,6 +1200,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
   const clearCompanyId = useCallback((opts?: { force?: boolean; reason?: string }) => {
     const liveId = String(companyIdLiveRef.current || "").trim();
+    if (
+      !opts?.force &&
+      isAdminPanelCompanyLedgerMode() &&
+      isAdminPanelCompanyLocalId(liveId)
+    ) {
+      return;
+    }
     if (
       !opts?.force &&
       liveId &&

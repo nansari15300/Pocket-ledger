@@ -10,6 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { chromeProPillCn } from "@/lib/chromePillButton";
 import { proDashboardRibbonClass } from "@/lib/proTheme";
 import { DASHBOARD_VIEW_DETAILS_TABLE_CN } from "@/lib/dashboardViewDetailsTableClass";
 import {
@@ -63,9 +64,9 @@ import {
     type RpCategoryFilter,
 } from "@/lib/receivablesPayablesDialogUi";
 import { ReceivablesPayablesDialogFooter } from "@/components/reports/ReceivablesPayablesDialogFooter";
-import { ReceivablesPayablesDialogEntityList, RP_DIALOG_DIM_GREEN_BORDER, rpDialogListScrollHandlers } from "@/components/reports/ReceivablesPayablesDialogEntityList";
+import { ReceivablesPayablesMobileSidePills } from "@/components/reports/ReceivablesPayablesMobileSidePills";
+import { ReceivablesPayablesDialogEntityList, rpDialogListScrollHandlers, RP_DIALOG_SHELL_ATTR, RP_DIALOG_HEADER_DIVIDER_CN } from "@/components/reports/ReceivablesPayablesDialogEntityList";
 import { useReceivablesPayablesLedgerPopup } from "@/components/reports/ReceivablesPayablesLedgerPopup";
-import { ReceivablesPayablesEntitySettings } from "@/components/reports/ReceivablesPayablesEntitySettings";
 import {
     DaybookAccountDayPeekDialog,
     daybookSummaryAccountRowCn,
@@ -3037,6 +3038,9 @@ export function FinancialSummaryCards({
                             <div className={topSummaryCardFooterClass}>
                                 <Dialog open={receivablesPayablesOpen} onOpenChange={(open) => {
                                     setReceivablesPayablesOpen(open);
+                                    if (open) {
+                                        setReceivablePayableFilter("all");
+                                    }
                                     if (!open) {
                                         setReceivablesPayablesTab('both');
                                         rpLedgerPopup.resetDialogInteraction();
@@ -3045,60 +3049,123 @@ export function FinancialSummaryCards({
                                     <DialogTrigger asChild>
                                         <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
                                     </DialogTrigger>
-                                    <DialogContent overlayClassName="bg-black/45 backdrop-blur-none" className="dashboard-financial-popup max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col overflow-hidden">
-                                        <DialogHeader className="shrink-0 p-4 border-b flex flex-col space-y-3">
-                                            <DialogTitle className="whitespace-nowrap text-base md:text-lg">Receivables & Payables Details</DialogTitle>
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                                <div className="flex bg-muted rounded-md p-1 space-x-1 h-9 flex-wrap">
-                                                    {RP_DIALOG_FILTER_OPTIONS.map(({ id, label }) => (
-                                                        <button 
-                                                            key={id} 
-                                                            type="button"
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                setReceivablePayableFilter(id);
-                                                            }} 
-                                                            className={cn("h-full px-2.5 text-xs rounded-sm transition-all font-medium flex items-center justify-center whitespace-nowrap", receivablePayableFilter === id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
-                                                        >
-                                                            {label}
-                                                        </button>
-                                                    ))}
+                                    <DialogContent overlayClassName="bg-black/45 backdrop-blur-none" className="dashboard-financial-popup max-w-6xl gap-0 p-0 h-[90vh] rounded-lg flex flex-col overflow-hidden" {...RP_DIALOG_SHELL_ATTR}>
+                                        <DialogHeader className={cn("shrink-0 flex flex-col border-0", isMobile ? "space-y-0 px-3 pb-1.5 pt-1.5" : "space-y-2 p-4 pb-3")}>
+                                            <DialogTitle className={cn("whitespace-nowrap text-base md:text-lg", isMobile && "sr-only")}>
+                                                Receivables & Payables Details
+                                            </DialogTitle>
+                                            {isMobile ? (
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <ReceivablesPayablesMobileSidePills
+                                                        tab={receivablesPayablesTab}
+                                                        receivablesCount={receivablesDialogCount}
+                                                        payablesCount={payablesDialogCount}
+                                                        onSelect={setReceivablesPayablesTab}
+                                                    />
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handlePrint();
+                                                        }}
+                                                        className={cn(
+                                                            "data-pl-rp-side-pill pl-chrome-btn-drop flex items-center gap-1.5 border border-solid !border-[1px] !border-blue-300",
+                                                            chromeProPillCn,
+                                                            LEDGER_HEADER_PILL_CN
+                                                        )}
+                                                    >
+                                                        Print <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
+                                                    </Button>
                                                 </div>
-                                                <ReceivablesPayablesEntitySettings
-                                                    hiddenCategories={rpHiddenCategories}
-                                                    canEdit={canEditRpVisibility}
-                                                    onSave={saveRpHiddenCategories}
-                                                />
-                                                <Button 
-                                                    variant="outline" 
-                                                    size="sm" 
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        handlePrint();
-                                                    }} 
-                                                    className="h-9 flex items-center gap-2"
-                                                >
-                                                    Print <Printer className="h-4 w-4" />
-                                                </Button>
-                                            </div>
-                                            <Tabs 
-                                                value={receivablesPayablesTab === 'both' ? 'receivables' : receivablesPayablesTab} 
-                                                onValueChange={(v) => setReceivablesPayablesTab(v as 'receivables' | 'payables')} 
-                                                className="w-full"
-                                            >
-                                                <TabsList className="grid w-full grid-cols-2">
-                                                    <TabsTrigger value="receivables">Receivables</TabsTrigger>
-                                                    <TabsTrigger value="payables">Payables</TabsTrigger>
-                                                </TabsList>
-                                            </Tabs>
+                                            ) : (
+                                                <div className="flex w-full items-center gap-2">
+                                                    <Tabs
+                                                        value={receivablesPayablesTab === "both" ? "receivables" : receivablesPayablesTab}
+                                                        onValueChange={(v) => setReceivablesPayablesTab(v as "receivables" | "payables")}
+                                                        className="min-w-0 flex-1"
+                                                    >
+                                                        <TabsList className="inline-flex h-auto w-auto gap-1 rounded-full bg-transparent p-0">
+                                                            <TabsTrigger
+                                                                value="receivables"
+                                                                className={cn(
+                                                                    "data-pl-rp-side-pill pl-chrome-btn-drop rounded-full border border-solid px-2.5 py-0.5 text-xs shadow-none",
+                                                                    "data-[state=active]:!border-[1px] data-[state=active]:!border-green-600",
+                                                                    "data-[state=inactive]:!border-[1px] data-[state=inactive]:!border-blue-300",
+                                                                    chromeProPillCn,
+                                                                    LEDGER_HEADER_PILL_CN
+                                                                )}
+                                                            >
+                                                                Receivables ({receivablesDialogCount})
+                                                            </TabsTrigger>
+                                                            <TabsTrigger
+                                                                value="payables"
+                                                                className={cn(
+                                                                    "data-pl-rp-side-pill pl-chrome-btn-drop rounded-full border border-solid px-2.5 py-0.5 text-xs shadow-none",
+                                                                    "data-[state=active]:!border-[1px] data-[state=active]:!border-green-600",
+                                                                    "data-[state=inactive]:!border-[1px] data-[state=inactive]:!border-blue-300",
+                                                                    chromeProPillCn,
+                                                                    LEDGER_HEADER_PILL_CN
+                                                                )}
+                                                            >
+                                                                Payables ({payablesDialogCount})
+                                                            </TabsTrigger>
+                                                        </TabsList>
+                                                    </Tabs>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handlePrint();
+                                                        }}
+                                                        className={cn(
+                                                            "data-pl-rp-side-pill pl-chrome-btn-drop shrink-0 flex items-center gap-1.5 border border-solid !border-[1px] !border-blue-300",
+                                                            chromeProPillCn,
+                                                            LEDGER_HEADER_PILL_CN
+                                                        )}
+                                                    >
+                                                        Print <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
+                                                    </Button>
+                                                </div>
+                                            )}
                                         </DialogHeader>
-                                        <div className="flex-1 min-h-0 overflow-hidden flex flex-col px-2 pt-0">
-                                            {isMobile && receivablesPayablesTab === "both" ? (
-                                                <div className={cn("flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 pb-2", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
-                                                    <div className="flex flex-col min-h-0">
-                                                        <h3 className="text-lg font-semibold mb-0.5 text-green-600 mt-0 shrink-0">Receivables ({receivablesDialogCount})</h3>
-                                                        <div className={cn("rounded-lg bg-emerald-50/20 dark:bg-emerald-950/10 p-1.5 border", RP_DIALOG_DIM_GREEN_BORDER)}>
+                                        <div className={RP_DIALOG_HEADER_DIVIDER_CN} aria-hidden />
+                                        <div className="flex-1 min-h-0 overflow-hidden flex flex-col px-2 pt-[3px] pb-0">
+                                            {isMobile ? (
+                                                <div className={cn("flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-0", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
+                                                    {(receivablesPayablesTab === "receivables" || receivablesPayablesTab === "both") && (
+                                                            <ReceivablesPayablesDialogEntityList
+                                                                sections={receivablesDialogSections}
+                                                                side="receivables"
+                                                                formatAmount={formatRpDialogAmount}
+                                                                isMobile={isMobile}
+                                                                listMotion={rpListMotion}
+                                                                selectedKey={rpLedgerPopup.selectedKey}
+                                                                onSelectRow={rpLedgerPopup.selectRow}
+                                                                onOpenRow={rpLedgerPopup.openRowLedger}
+                                                            />
+                                                    )}
+                                                    {receivablesPayablesTab === "payables" && (
+                                                            <ReceivablesPayablesDialogEntityList
+                                                                sections={payablesDialogSections}
+                                                                side="payables"
+                                                                formatAmount={formatRpDialogAmount}
+                                                                isMobile={isMobile}
+                                                                listMotion={rpListMotion}
+                                                                selectedKey={rpLedgerPopup.selectedKey}
+                                                                onSelectRow={rpLedgerPopup.selectRow}
+                                                                onOpenRow={rpLedgerPopup.openRowLedger}
+                                                            />
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <div className="grid flex-1 min-h-0 min-w-0 grid-cols-2 gap-4">
+                                                    <div className="flex flex-col min-h-0 h-full">
+                                                        <h3 className="text-lg font-semibold mb-0.5 text-green-600 shrink-0">Receivables ({receivablesDialogCount})</h3>
+                                                        <div className={cn("flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-0.5", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
                                                             <ReceivablesPayablesDialogEntityList
                                                                 sections={receivablesDialogSections}
                                                                 side="receivables"
@@ -3111,9 +3178,9 @@ export function FinancialSummaryCards({
                                                             />
                                                         </div>
                                                     </div>
-                                                    <div className="flex flex-col min-h-0">
+                                                    <div className="flex flex-col min-h-0 h-full">
                                                         <h3 className="text-lg font-semibold mb-0.5 text-red-600 shrink-0">Payables ({payablesDialogCount})</h3>
-                                                        <div className={cn("rounded-lg bg-emerald-50/20 dark:bg-emerald-950/10 p-1.5 border", RP_DIALOG_DIM_GREEN_BORDER)}>
+                                                        <div className={cn("flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-0.5", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
                                                             <ReceivablesPayablesDialogEntityList
                                                                 sections={payablesDialogSections}
                                                                 side="payables"
@@ -3127,49 +3194,13 @@ export function FinancialSummaryCards({
                                                         </div>
                                                     </div>
                                                 </div>
-                                            ) : (
-                                                <div className={cn("flex-1 min-h-0 gap-4", !isMobile ? "grid grid-cols-2" : "flex flex-col")}>
-                                                    {(!isMobile || receivablesPayablesTab === "receivables") && (
-                                                        <div className="flex flex-col min-h-0 h-full">
-                                                            <h3 className="text-lg font-semibold mb-0.5 text-green-600 shrink-0">Receivables ({receivablesDialogCount})</h3>
-                                                            <div className={cn("flex-1 min-h-0 rounded-lg bg-emerald-50/20 dark:bg-emerald-950/10 p-1.5 overflow-y-auto overflow-x-hidden border", RP_DIALOG_DIM_GREEN_BORDER, RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
-                                                                <ReceivablesPayablesDialogEntityList
-                                                                    sections={receivablesDialogSections}
-                                                                    side="receivables"
-                                                                    formatAmount={formatRpDialogAmount}
-                                                                    isMobile={isMobile}
-                                                                    listMotion={rpListMotion}
-                                                                    selectedKey={rpLedgerPopup.selectedKey}
-                                                                    onSelectRow={rpLedgerPopup.selectRow}
-                                                                    onOpenRow={rpLedgerPopup.openRowLedger}
-                                                                />
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                    {(!isMobile || receivablesPayablesTab === "payables") && (
-                                                        <div className="flex flex-col min-h-0 h-full">
-                                                            <h3 className="text-lg font-semibold mb-0.5 text-red-600 shrink-0">Payables ({payablesDialogCount})</h3>
-                                                            <div className={cn("flex-1 min-h-0 rounded-lg bg-emerald-50/20 dark:bg-emerald-950/10 p-1.5 overflow-y-auto overflow-x-hidden border", RP_DIALOG_DIM_GREEN_BORDER, RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
-                                                                <ReceivablesPayablesDialogEntityList
-                                                                    sections={payablesDialogSections}
-                                                                    side="payables"
-                                                                    formatAmount={formatRpDialogAmount}
-                                                                    isMobile={isMobile}
-                                                                    listMotion={rpListMotion}
-                                                                    selectedKey={rpLedgerPopup.selectedKey}
-                                                                    onSelectRow={rpLedgerPopup.selectRow}
-                                                                    onOpenRow={rpLedgerPopup.openRowLedger}
-                                                                />
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </div>
                                             )}
                                         </div>
                                         <ReceivablesPayablesDialogFooter
                                             receivableSum={receivablesPayablesDialogListTotals.receivableSum}
                                             payableSum={receivablesPayablesDialogListTotals.payableSum}
                                             balance={receivablesPayablesDialogBalance}
+                                            isMobile={isMobile}
                                             formatAmount={(amount) =>
                                                 formatCurrency(amount, { noSuffix: true, context: "transaction" })
                                             }

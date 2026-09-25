@@ -160,7 +160,7 @@ export const interCompanyPanelScrollOuterSimpleClass = cn(
 export const interCompanyPanelScrollInnerClass = cn(
   "inter-company-panel-x-scroll-inner",
   "flex w-max min-w-full flex-col gap-3 px-3 pt-3 pb-2",
-  "min-w-[34rem]"
+  "min-w-[40rem]"
 );
 
 /** Simple view — panel andar fit; horizontal scroll band */
@@ -172,28 +172,49 @@ export const interCompanyPanelScrollInnerSimpleClass = cn(
 /** Company row — simple view: sirf company naam */
 export const interCompanyCompanyFieldsRowSimpleClass = "grid w-full min-w-0 grid-cols-1 items-end gap-2";
 
-/** Account row — simple view: Type + Account name fit in panel */
+/** Account row — simple view: Type + Account name hamesha ek hi row (source/target narrow panel) */
 export const interCompanyAccountFieldsRowSimpleClass = cn(
   "ic-account-lookup-simple-row",
-  "grid w-full min-w-0 grid-cols-[minmax(6.5rem,8.5rem)_minmax(0,1fr)] items-end gap-2"
+  "flex w-full min-w-0 flex-row items-end gap-2"
 );
 
-/** Simple view + other charge — Type | Account name | Bank out total */
+/** Simple view + other charge — Type | Account name | Bank out total (same row) */
 export const interCompanyAccountFieldsRowSimpleWithTotalClass = cn(
   "ic-account-lookup-simple-row",
-  "grid w-full min-w-0 grid-cols-[minmax(6.5rem,8.5rem)_minmax(0,1fr)_minmax(6rem,8rem)] items-end gap-2"
+  "flex w-full min-w-0 flex-row flex-wrap items-end gap-2 sm:flex-nowrap"
 );
 
-/** Company row: naam | Code | A/c | PAN | Mobile */
+/** Simple row — Type dropdown (fixed chhota box) */
+export const interCompanyAccountTypeFieldColClass = cn(
+  "flex w-[7.25rem] shrink-0 min-w-0 flex-col items-stretch justify-end gap-1"
+);
+
+/** Simple row — Account name (baaki width) */
+export const interCompanyAccountNameFieldColSimpleClass = cn(
+  "flex min-w-0 flex-1 flex-col gap-1"
+);
+
+/** Simple row — total amount (width grows with formatted text) */
+export const interCompanyAccountSimpleTotalColClass = cn(
+  "flex min-w-0 max-w-full shrink-0 flex-col items-stretch justify-end gap-1"
+);
+
+/** Company row: naam | Code | A/c | PAN | Mobile — ek row; panel scroll jab jagah kam */
 export const interCompanyCompanyFieldsRowClass = cn(
-  "grid w-full items-end gap-2",
+  "ic-company-fields-row",
+  "grid w-full min-w-[40rem] max-w-full items-end gap-2",
   "grid-cols-[minmax(8.5rem,1fr)_minmax(6.5rem,8rem)_minmax(7rem,9rem)_minmax(6.5rem,8rem)_minmax(7rem,9.5rem)]"
 );
 
-/** Account row: Type | naam | A/c | Mobile — text ke hisaab se width; horizontal scroll parent par */
+/** Account row: Type | naam | A/c | PAN | Mobile — full view me sab ek hi row */
 export const interCompanyAccountFieldsRowClass = cn(
-  "flex w-max min-w-full flex-nowrap items-end gap-2"
+  "ic-account-lookup-row",
+  "grid w-full min-w-[40rem] max-w-full items-end gap-2",
+  "grid-cols-[minmax(7.25rem,8rem)_minmax(9rem,1fr)_minmax(6.25rem,7.5rem)_minmax(6.25rem,7.5rem)_minmax(6.25rem,7.5rem)]"
 );
+
+/** Full-view account row — inputs/combobox column width bharne ke liye */
+export const interCompanyAccountGridFieldInputClass = "w-full min-w-0 max-w-full";
 
 /** Chhote screen: 20ch ke baad … ; sm+ par poora text (width content se) */
 export const interCompanyIcResponsiveLabelClass =
@@ -202,15 +223,15 @@ export const interCompanyIcResponsiveLabelClass =
 /** Type Select — fixed grid column nahi; label truncate sirf narrow screen par */
 export const interCompanyIcTypeSelectTriggerClass = cn(
   interCompanySelectTriggerClass,
-  "h-9 w-auto shrink-0 px-2",
-  "[&>span]:max-w-[20ch] [&>span]:truncate sm:[&>span]:max-w-none sm:[&>span]:overflow-visible"
+  "h-9 w-full min-w-0 max-w-full px-2",
+  "[&>span]:min-w-0 [&>span]:truncate"
 );
 
-/** Account naam Combobox — w-auto; chhote screen par label 20ch ke baad … */
+/** Account naam Combobox — column width ke andar truncate */
 export const interCompanyIcAccountComboboxTriggerClass = cn(
   interCompanyComboboxTriggerClass,
-  "h-9 !w-auto shrink-0 px-2",
-  "max-sm:[&>span>span]:max-w-[20ch] max-sm:[&>span>span]:truncate sm:[&>span>span]:max-w-none sm:[&>span>span]:overflow-visible"
+  "h-9 w-full min-w-0 max-w-full px-2",
+  "[&>span]:min-w-0 [&>span>span]:block [&>span>span]:truncate"
 );
 
 /** A/c No / Mobile — content width; chhote screen par 20ch cap */
@@ -223,8 +244,8 @@ export const interCompanyFieldColClass = "shrink-0 space-y-0.5";
 
 /** Account row columns — label upar, control niche (flex-col) */
 export const interCompanyAccountFieldColClass = cn(
-  "flex min-w-0 shrink flex-col items-stretch justify-end gap-1"
+  "flex min-w-0 w-full flex-col items-stretch justify-end gap-1"
 );
 
 /** Account naam — label hamesha combobox ke upar (side-by-side na ho) */
-export const interCompanyAccountNameFieldColClass = "flex w-auto min-w-0 flex-col gap-1";
+export const interCompanyAccountNameFieldColClass = "flex w-full min-w-0 flex-col gap-1";

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo } from "react";
 import { prewarmVisibleAttachmentRefsForInstantOpen } from "@/components/vouchers/attachmentHoverPreviewBody";
+import type { Company } from "@/hooks/useCompany";
 import { shouldSkipVisibleRowFullIdlePrewarmOnWeb } from "@/lib/webAttachmentLazyLoadPolicy";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
@@ -9,7 +10,8 @@ import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 /** Visible master-list / page rows — idle par attachment bytes + hover LRU warm (staff PlServer `local:` included). */
 export function usePrewarmVisibleAttachments(
   urls: readonly string[],
-  companyId?: string | null
+  companyId?: string | null,
+  company?: Company | null
 ): void {
   const stableKey = useMemo(
     () =>
@@ -27,7 +29,7 @@ export function usePrewarmVisibleAttachments(
       const all = urls.map((u) => String(u || "").trim()).filter(Boolean);
       // Web Firebase billing: skip idle HTTPS warm — but PL-server `local:` / Drive must still warm
       // (gallery next-page otherwise waits on serial /__pl_attachment).
-      const targets = shouldSkipVisibleRowFullIdlePrewarmOnWeb()
+      const targets = shouldSkipVisibleRowFullIdlePrewarmOnWeb(company)
         ? all.filter((u) => isLocalFileRef(u) || isDriveFileRef(u))
         : all;
       if (targets.length === 0) return;
@@ -49,5 +51,5 @@ export function usePrewarmVisibleAttachments(
       ac.abort();
       clearTimeout(t);
     };
-  }, [stableKey, companyId, urls]);
+  }, [stableKey, companyId, company, urls]);
 }

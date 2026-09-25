@@ -1,6 +1,9 @@
 export const DOWNLOAD_PLATFORMS = ["windows", "android", "play"] as const;
 export type WebsiteDownloadPlatform = (typeof DOWNLOAD_PLATFORMS)[number];
 
+export const DOWNLOAD_EVENT_KINDS = ["new", "update"] as const;
+export type WebsiteDownloadEventKind = (typeof DOWNLOAD_EVENT_KINDS)[number];
+
 export type WebsiteDownloadEvent = {
   id: string;
   platform: WebsiteDownloadPlatform;
@@ -9,6 +12,8 @@ export type WebsiteDownloadEvent = {
   version?: string;
   fileName?: string;
   source?: string;
+  /** `new` = public Downloads page; `update` = in-app / EXE / APK update install. */
+  eventKind?: WebsiteDownloadEventKind;
   userId?: string;
   userEmail?: string;
   createdAtMs: number;
@@ -22,7 +27,16 @@ export type WebsiteDownloadStats = {
 };
 
 export const DOWNLOAD_STATS_DOC = "app_settings/download_stats";
+export const DOWNLOAD_STATS_UPDATE_DOC = "app_settings/download_stats_update";
 export const DOWNLOAD_EVENTS_COLLECTION = "download_events";
+
+export function isWebsiteDownloadEventKind(raw: unknown): raw is WebsiteDownloadEventKind {
+  return (DOWNLOAD_EVENT_KINDS as readonly string[]).includes(String(raw || "").trim());
+}
+
+export function normalizeDownloadEventKind(raw: unknown): WebsiteDownloadEventKind {
+  return isWebsiteDownloadEventKind(raw) ? raw : "new";
+}
 
 export function isWebsiteDownloadPlatform(raw: unknown): raw is WebsiteDownloadPlatform {
   return (DOWNLOAD_PLATFORMS as readonly string[]).includes(String(raw || "").trim());

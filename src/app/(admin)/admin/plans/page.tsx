@@ -333,29 +333,61 @@ export default function PlansPage() {
             toast({ variant: "destructive", title: "Not signed in", description: "Login required to save add-ons." });
             return false;
         }
+        const sanitized = sanitizeDeviceUserAddOnOffer(offer);
+        const writeClientOnly = async () => {
+            await setDoc(doc(db, "app_settings", "plans"), buildDeviceUserAddOnOfferWritePatch(sanitized), {
+                merge: true,
+            });
+        };
+        const refreshAddonsFromServer = async () => {
+            const snap = await getDocFromServer(doc(db, "app_settings", "plans"));
+            if (!snap.exists()) return;
+            const data = snap.data() as Record<string, unknown>;
+            setDeviceUserAddOns(readDeviceUserAddOnOfferFromPlansDoc(data));
+            serverHydratedRef.current = true;
+        };
         try {
             const token = await user.getIdToken();
-            const sanitized = sanitizeDeviceUserAddOnOffer(offer);
             const res = await fetch(ADMIN_PLANS_API, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
                 body: JSON.stringify({ deviceUserAddOns: sanitized }),
             });
-            if (!res.ok) {
-                await setDoc(doc(db, "app_settings", "plans"), buildDeviceUserAddOnOfferWritePatch(sanitized), {
-                    merge: true,
-                });
+            const j = (await res.json().catch(() => ({}))) as { error?: string };
+            if (res.ok) {
+                await refreshAddonsFromServer();
+                toast({ title: "Saved", description: "Add-on service updated." });
+                return true;
             }
-            setDeviceUserAddOns(sanitized);
-            toast({ title: "Saved", description: "Add-on service updated." });
+            if (res.status === 401) {
+                toast({
+                    variant: "destructive",
+                    title: "Add-on save failed",
+                    description: j?.error ?? "Invalid session — sign in again.",
+                });
+                return false;
+            }
+            await writeClientOnly();
+            await refreshAddonsFromServer();
+            toast({ title: "Saved", description: "Add-on service updated (direct Firestore)." });
             return true;
-        } catch (e: unknown) {
-            toast({
-                variant: "destructive",
-                title: "Add-on save failed",
-                description: e instanceof Error ? e.message : String(e),
-            });
-            return false;
+        } catch {
+            try {
+                await writeClientOnly();
+                await refreshAddonsFromServer();
+                toast({
+                    title: "Saved",
+                    description: "Add-on service updated (API unreachable — saved to Firestore).",
+                });
+                return true;
+            } catch (clientErr: unknown) {
+                toast({
+                    variant: "destructive",
+                    title: "Add-on save failed",
+                    description: clientErr instanceof Error ? clientErr.message : String(clientErr),
+                });
+                return false;
+            }
         }
     };
 

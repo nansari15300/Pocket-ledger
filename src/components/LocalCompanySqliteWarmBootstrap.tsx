@@ -65,7 +65,7 @@ export function LocalCompanySqliteWarmBootstrap() {
       // EXE/APK: attachment warm offlineWarmSyncManager / first-login overlay karte hain — duplicate CPU avoid.
       if (isEmbeddedOfflinePreloadClient()) return;
       // Web Chrome: billing — company-wide Firebase full prefetch mat chalao (visible thumb / hover only).
-      if (shouldSkipCompanyWideAttachmentPrefetchOnWeb()) return;
+      if (shouldSkipCompanyWideAttachmentPrefetchOnWeb(c)) return;
 
       const urls = [...(await scrapeLocalMirrorAttachmentUrls(cid))];
       if (urls.length > 0) {

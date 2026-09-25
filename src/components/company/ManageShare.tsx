@@ -2,7 +2,20 @@
 "use client";
 
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { doc, onSnapshot, updateDoc, arrayRemove, getDoc, collection, query, where, getDocs, serverTimestamp } from "firebase/firestore";
+import {
+  doc,
+  onSnapshot,
+  updateDoc,
+  arrayRemove,
+  getDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+  serverTimestamp,
+} from "firebase/firestore";
+import { useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
+import { countAccountScopedDevicesForUser } from "@/lib/accountScopedDeviceCount";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
@@ -54,17 +67,30 @@ import { isOfflineCompanyStorage, isCloudLinkedCompanyStorage } from "@/lib/comp
 import { isLocalCompanyHostShareable } from "@/lib/listShareableLocalCompaniesForHost";
 import { isElectronLocalServerApiAvailable } from "@/lib/electronLocalServer";
 import { LocalPlServerSharePanel } from "@/components/settings/LocalPlServerSharePanel";
-import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { resolveAccountPlanIdForEntitlements } from "@/lib/accountPlanForOwner";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
-import { getNextPaidUpgrade, numericEntitlement, companyStorageIsLocal, isUnlimitedEntitlementCap, isAtOrOverEntitlementCap, formatEntitlementCapLabel, type PlanId } from "@/config/plans";
-import { collectAccountWideShareMemberEmails } from "@/lib/accountShareUserCap";
 import {
-  EMPTY_PURCHASED_PLAN_ADDONS,
+  getNextPaidUpgrade,
+  numericEntitlement,
+  isAtOrOverEntitlementCap,
+  isUnlimitedEntitlementCap,
+  formatEntitlementCapLabel,
+  type PlanId,
+} from "@/config/plans";
+import {
+  bucketForCompanyUserCap,
+  collectAccountBucketShareMemberEmails,
+  companyUsesLocalMaxUsersCap,
+  mergeCompanyShareCapRow,
+  resolveCompanyShareUserCap,
+  type CompanyShareCapRow,
+} from "@/lib/accountShareUserCap";
+import {
   parsePurchasedPlanAddOns,
-  planUserCapWithAddOns,
-  type PurchasedPlanAddOns,
+  planDeviceCapBreakdown,
+  planUserCapBreakdown,
 } from "@/lib/planAddOns";
 import {
   COMPANY_PERMISSION_ROLE_OPTIONS,
@@ -73,10 +99,10 @@ import {
 } from "@/lib/localCompanyAppRoles";
 import {
   companyProfileChromeRoot,
-  companyProfileGreenZone,
   companyProfilePageBg,
   companyProfileTabsList3,
   companyProfileTabsTrigger,
+  settingsDetailCardBodyClass,
   settingsDetailCardShell,
 } from "@/lib/companyProfileChrome";
 
@@ -89,6 +115,115 @@ type SharedUser = {
 };
 
 const normalizeEmail = (email?: string) => (email || "").trim().toLowerCase();
+
+/** EXE SQLite `sharedWith` can lag Firestore — merge by email; cloud row wins for role/name. */
+function mergeSharedUsersForManageSharing(
+  localRows: SharedUser[] | undefined,
+  firestoreRows: SharedUser[] | undefined,
+  firestoreHydrated: boolean
+): SharedUser[] {
+  const local = Array.isArray(localRows) ? localRows : [];
+  const remote = Array.isArray(firestoreRows) ? firestoreRows : [];
+  if (!firestoreHydrated) {
+    return local.length > 0 ? local : remote;
+  }
+  if (remote.length === 0) {
+    return local;
+  }
+  const byEmail = new Map<string, SharedUser>();
+  for (const u of local) {
+    const key = normalizeEmail(u.email);
+    if (key) byEmail.set(key, u);
+  }
+  for (const u of remote) {
+    const key = normalizeEmail(u.email);
+    if (!key) continue;
+    const prev = byEmail.get(key);
+    byEmail.set(key, prev ? { ...prev, ...u, role: u.role ?? prev.role } : u);
+  }
+  return Array.from(byEmail.values());
+}
+
+function formatShareLimitIncludes(planBase: number, extraSlots: number): string {
+  if (extraSlots > 0) return `Plan ${planBase} + ${extraSlots} add-on`;
+  return `Plan ${planBase}`;
+}
+
+function ShareAccountLimitsTable({
+  bucketLabel,
+  userCount,
+  userMax,
+  userBreakdown,
+  deviceCount,
+  deviceMax,
+  deviceBreakdown,
+  userLimitReached,
+  deviceLimitReached,
+}: {
+  bucketLabel: "online" | "local";
+  userCount: number;
+  userMax: number;
+  userBreakdown: { planBase: number; extraSlots: number } | null;
+  deviceCount: number;
+  deviceMax: number;
+  deviceBreakdown: { planBase: number; extraSlots: number } | null;
+  userLimitReached: boolean;
+  deviceLimitReached: boolean;
+}) {
+  const scope = bucketLabel === "local" ? "Local" : "Online";
+  const limitsGridCell = "border-r border-border last:border-r-0";
+  return (
+    <div className="w-full min-w-[280px] max-w-md rounded-md border border-border bg-background/80 text-xs overflow-hidden">
+      <Table
+        className={cn(
+          "[&_tbody_tr]:!border-b-[1px] [&_tbody_tr]:!border-border [&_tbody_tr:last-child]:!border-b-0",
+          "[&_thead_tr]:!border-b-[1px] [&_thead_tr]:!border-black"
+        )}
+      >
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className={cn("h-8 px-2 py-1 font-medium", limitsGridCell)}>Resource</TableHead>
+            <TableHead className={cn("h-8 px-2 py-1 text-right font-medium", limitsGridCell)}>Used</TableHead>
+            <TableHead className={cn("h-8 px-2 py-1 text-right font-medium", limitsGridCell)}>Max</TableHead>
+            <TableHead className={cn("h-8 px-2 py-1 font-medium", limitsGridCell)}>Includes</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow className={cn(userLimitReached && "bg-amber-500/5")}>
+            <TableCell className={cn("px-2 py-1.5 font-medium whitespace-nowrap", limitsGridCell)}>
+              Users ({scope})
+            </TableCell>
+            <TableCell className={cn("px-2 py-1.5 text-right tabular-nums", limitsGridCell)}>{userCount}</TableCell>
+            <TableCell className={cn("px-2 py-1.5 text-right tabular-nums", limitsGridCell)}>
+              {formatEntitlementCapLabel(userMax)}
+            </TableCell>
+            <TableCell className={cn("px-2 py-1.5 text-muted-foreground", limitsGridCell)}>
+              {userBreakdown
+                ? formatShareLimitIncludes(userBreakdown.planBase, userBreakdown.extraSlots)
+                : "—"}
+            </TableCell>
+          </TableRow>
+          <TableRow className={cn(deviceLimitReached && "bg-amber-500/5", "!border-b-0")}>
+            <TableCell className={cn("px-2 py-1.5 font-medium whitespace-nowrap", limitsGridCell)}>
+              <Link href="/settings?view=devices" className="hover:underline">
+                Devices ({scope})
+              </Link>
+            </TableCell>
+            <TableCell className={cn("px-2 py-1.5 text-right tabular-nums", limitsGridCell)}>{deviceCount}</TableCell>
+            <TableCell className={cn("px-2 py-1.5 text-right tabular-nums", limitsGridCell)}>
+              {formatEntitlementCapLabel(deviceMax)}
+            </TableCell>
+            <TableCell className={cn("px-2 py-1.5 text-muted-foreground", limitsGridCell)}>
+              {deviceBreakdown
+                ? formatShareLimitIncludes(deviceBreakdown.planBase, deviceBreakdown.extraSlots)
+                : "—"}
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
 
 const getAvatarUrl = (email: string, photoURL?: string) => {
   if (photoURL && photoURL.trim()) return photoURL;
@@ -203,7 +338,8 @@ function normalizePermissionConfigForSave(config: PermissionConfig): PermissionC
 
 export function ManageShare() {
   const { company: companyData, companyId, allCompanies, allCompaniesRegistry, reloadLocalCompanyRegistry, triggerSync, localCompanyRegistryEpoch } = useCompany();
-  const { user } = useAuth();
+  const { user, customUser } = useAuth();
+  const { deviceCount: liveOwnerDeviceCount, refreshDeviceCheck } = useDeviceLimitContext();
   const { toast } = useToast();
   const { can } = usePermissions();
   const livePlans = useLivePlans();
@@ -235,7 +371,11 @@ export function ManageShare() {
     sharedWith: SharedUser[];
     ownerEmail?: string;
   } | null>(null);
+  /** SQLite row can stay `storageOption: local` while Firestore company is online — cap uses cloud doc. */
+  const [firestoreCompanyCapRow, setFirestoreCompanyCapRow] = useState<CompanyShareCapRow | null>(null);
   const [firestoreShareResolved, setFirestoreShareResolved] = useState(false);
+  /** Role save ke baad SQLite/context stale ho sakta hai — Select flicker na ho. */
+  const [optimisticUserRoles, setOptimisticUserRoles] = useState<Record<string, UserRole>>({});
   const hostShareableCompanyIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -268,20 +408,43 @@ export function ManageShare() {
     };
   }, [companyId, companyData, allCompanies, allCompaniesRegistry, localCompanyRegistryEpoch]);
 
+  useEffect(() => {
+    setOptimisticUserRoles({});
+  }, [companyId]);
+
   const sharingCompanyData = useMemo(() => {
     if (!companyData) return null;
-    const sharedWith =
-      (companyData.sharedWith?.length ?? 0) > 0
-        ? companyData.sharedWith!
-        : firestoreShareRow?.sharedWith ?? companyData.sharedWith ?? [];
+    const sharedWith = mergeSharedUsersForManageSharing(
+      companyData.sharedWith as SharedUser[] | undefined,
+      firestoreShareRow?.sharedWith,
+      firestoreShareResolved
+    );
     const ownerEmail = companyData.ownerEmail || firestoreShareRow?.ownerEmail;
     return { ...companyData, sharedWith, ownerEmail };
-  }, [companyData, firestoreShareRow]);
+  }, [companyData, firestoreShareRow, firestoreShareResolved]);
+
+  useEffect(() => {
+    setOptimisticUserRoles((prev) => {
+      if (!Object.keys(prev).length) return prev;
+      const sw = sharingCompanyData?.sharedWith ?? [];
+      const next: Record<string, UserRole> = { ...prev };
+      let changed = false;
+      for (const emailKey of Object.keys(prev)) {
+        const server = sw.find((u) => normalizeEmail(u.email) === emailKey);
+        if (server && String(server.role || "").toLowerCase() === String(prev[emailKey]).toLowerCase()) {
+          delete next[emailKey];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [sharingCompanyData?.sharedWith]);
 
   useEffect(() => {
     const cid = String(companyId || "").trim();
     if (!cid || !companyData) {
       setFirestoreShareRow(null);
+      setFirestoreCompanyCapRow(null);
       setFirestoreShareResolved(false);
       return;
     }
@@ -292,6 +455,7 @@ export function ManageShare() {
         (isOfflineCompanyStorage(companyData) && Boolean(companyData.ownerId)));
     if (!hydrateFromFirestore) {
       setFirestoreShareRow(null);
+      setFirestoreCompanyCapRow(null);
       setFirestoreShareResolved(true);
       return;
     }
@@ -302,18 +466,51 @@ export function ManageShare() {
       (snap) => {
         if (!snap.exists()) {
           setFirestoreShareRow(null);
+          setFirestoreCompanyCapRow(null);
         } else {
           const data = snap.data();
           setFirestoreShareRow({
             sharedWith: Array.isArray(data.sharedWith) ? (data.sharedWith as SharedUser[]) : [],
             ownerEmail: typeof data.ownerEmail === "string" ? data.ownerEmail : undefined,
           });
+          setFirestoreCompanyCapRow({
+            storageOption: typeof data.storageOption === "string" ? data.storageOption : undefined,
+            syncedFromCloud: data.syncedFromCloud === true,
+            syncPolicy: typeof data.syncPolicy === "string" ? data.syncPolicy : undefined,
+            authoritativeCompanyId:
+              typeof data.authoritativeCompanyId === "string" ? data.authoritativeCompanyId : undefined,
+            plServerShared: data.plServerShared === true,
+          });
         }
         setFirestoreShareResolved(true);
       },
       () => {
-        setFirestoreShareRow(null);
-        setFirestoreShareResolved(true);
+        void getDoc(ref)
+          .then((snap) => {
+            if (!snap.exists()) {
+              setFirestoreShareRow(null);
+              setFirestoreCompanyCapRow(null);
+              return;
+            }
+            const data = snap.data();
+            setFirestoreShareRow({
+              sharedWith: Array.isArray(data.sharedWith) ? (data.sharedWith as SharedUser[]) : [],
+              ownerEmail: typeof data.ownerEmail === "string" ? data.ownerEmail : undefined,
+            });
+            setFirestoreCompanyCapRow({
+              storageOption: typeof data.storageOption === "string" ? data.storageOption : undefined,
+              syncedFromCloud: data.syncedFromCloud === true,
+              syncPolicy: typeof data.syncPolicy === "string" ? data.syncPolicy : undefined,
+              authoritativeCompanyId:
+                typeof data.authoritativeCompanyId === "string" ? data.authoritativeCompanyId : undefined,
+              plServerShared: data.plServerShared === true,
+            });
+          })
+          .catch(() => {
+            setFirestoreShareRow(null);
+            setFirestoreCompanyCapRow(null);
+          })
+          .finally(() => setFirestoreShareResolved(true));
       }
     );
     return () => unsub();
@@ -488,36 +685,74 @@ export function ManageShare() {
   const dateLimitsForSelectedRole = editablePermissionConfig.dateLimits?.[selectedRoleForPermissions] || { entryDays: 0, editDays: 0, deleteDays: 0 };
   const fileAttachmentLimitsForSelectedRole = editablePermissionConfig.fileAttachmentLimits?.[selectedRoleForPermissions] || { maxFileCount: 0, allowImage: false, allowPDF: false, allowDelete: false };
   const allowAttachmentsGlobal = editablePermissionConfig.allowAttachments !== false;
-  // Local row ka `planId` aksar "basic" rehta jabki account pe advance ho — file caps galat 0 dikhte the; header/billing jaisa aggregate use karo.
-  const effectivePlanId = useMemo(
-    () => resolveEffectiveAccountPlanId(allCompanies, user?.uid, companyData?.planId),
-    [allCompanies, user?.uid, companyData?.planId]
-  );
-  const activePlan = useMemo(() => getPlanFromPlans(livePlans, effectivePlanId), [livePlans, effectivePlanId]);
-  const [ownerAddons, setOwnerAddons] = useState<PurchasedPlanAddOns>(EMPTY_PURCHASED_PLAN_ADDONS);
+  const [ownerUserDataForCap, setOwnerUserDataForCap] = useState<Record<string, unknown> | null>(null);
   const [accountWideUserCount, setAccountWideUserCount] = useState(0);
+  const [accountWideDeviceCount, setAccountWideDeviceCount] = useState(0);
   useEffect(() => {
     const ownerUid = String(companyData?.ownerId || user?.uid || "").trim();
     if (!ownerUid) {
-      setOwnerAddons(EMPTY_PURCHASED_PLAN_ADDONS);
+      setOwnerUserDataForCap(null);
       setAccountWideUserCount(0);
       return;
     }
     const unsub = onSnapshot(
       doc(firestore, "users", ownerUid),
       (snap) => {
-        setOwnerAddons(parsePurchasedPlanAddOns(snap.exists() ? (snap.data() as Record<string, unknown>) : null));
+        const data = snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+        setOwnerUserDataForCap(data);
       },
-      () => setOwnerAddons(EMPTY_PURCHASED_PLAN_ADDONS)
+      () => {
+        setOwnerUserDataForCap(null);
+      }
     );
     return () => unsub();
   }, [companyData?.ownerId, user?.uid]);
+  // Local row ka `planId` aksar "basic" rehta — billing jaisa owner `accountCanonicalPlanId` use karo.
+  const ownerUidForPlan = String(companyData?.ownerId || user?.uid || "").trim();
+  const effectivePlanId = useMemo(
+    () =>
+      resolveAccountPlanIdForEntitlements(
+        ownerUserDataForCap,
+        allCompanies,
+        ownerUidForPlan,
+        companyData?.planId,
+        customUser?.accountCanonicalPlanId
+      ),
+    [
+      allCompanies,
+      ownerUidForPlan,
+      companyData?.planId,
+      ownerUserDataForCap,
+      customUser?.accountCanonicalPlanId,
+    ]
+  );
+  const activePlan = useMemo(() => getPlanFromPlans(livePlans, effectivePlanId), [livePlans, effectivePlanId]);
+  const companyForUserCap = useMemo((): CompanyShareCapRow | null => {
+    if (!companyData) return null;
+    const fromContext: CompanyShareCapRow = {
+      storageOption: companyData.storageOption,
+      syncedFromCloud: companyData.syncedFromCloud,
+      syncPolicy: (companyData as { syncPolicy?: string }).syncPolicy,
+      authoritativeCompanyId: (companyData as { authoritativeCompanyId?: string }).authoritativeCompanyId,
+      plServerShared: (companyData as { plServerShared?: boolean }).plServerShared,
+    };
+    return mergeCompanyShareCapRow(fromContext, firestoreCompanyCapRow);
+  }, [companyData, firestoreCompanyCapRow]);
+  const shareUserCapBucket = useMemo(
+    () => bucketForCompanyUserCap(companyForUserCap),
+    [companyForUserCap]
+  );
+  const localRegistryForUserCap = useMemo(
+    () => (allCompaniesRegistry?.length ? allCompaniesRegistry : allCompanies) ?? [],
+    [allCompaniesRegistry, allCompanies, localCompanyRegistryEpoch]
+  );
   useEffect(() => {
     const ownerUid = String(companyData?.ownerId || user?.uid || "").trim();
-    if (!ownerUid) {
+    if (!ownerUid || !companyData) {
       setAccountWideUserCount(0);
       return;
     }
+    const bucket = shareUserCapBucket;
     let cancelled = false;
     void (async () => {
       try {
@@ -525,11 +760,24 @@ export function ManageShare() {
           query(collection(firestore, "companies"), where("ownerId", "==", ownerUid))
         );
         if (cancelled) return;
-        const memberEmails = collectAccountWideShareMemberEmails({
-          ownerEmail: companyData?.ownerEmail,
-          ownedCompanyRows: ownedSnap.docs.map((row) =>
-            row.data() as { sharedWithEmails?: unknown; ownerEmail?: unknown }
-          ),
+        const ownedRows = ownedSnap.docs.map((row) => {
+          const data = row.data() as {
+            sharedWithEmails?: unknown;
+            ownerEmail?: unknown;
+            storageOption?: string | null;
+            syncedFromCloud?: boolean;
+            syncPolicy?: string | null;
+            authoritativeCompanyId?: string | null;
+            plServerShared?: boolean;
+          };
+          return data;
+        });
+        const memberEmails = collectAccountBucketShareMemberEmails({
+          ownerEmail: companyData.ownerEmail,
+          ownerUid,
+          bucket,
+          firestoreOwnedCompanyRows: ownedRows,
+          localRegistryRows: localRegistryForUserCap,
         });
         setAccountWideUserCount(memberEmails.size);
       } catch {
@@ -539,17 +787,107 @@ export function ManageShare() {
     return () => {
       cancelled = true;
     };
-  }, [companyData?.ownerId, companyData?.ownerEmail, user?.uid, companyData?.sharedWithEmails]);
+  }, [
+    companyData,
+    companyData?.ownerId,
+    companyData?.ownerEmail,
+    companyData?.storageOption,
+    companyData?.syncedFromCloud,
+    companyData?.sharedWithEmails,
+    user?.uid,
+    shareUserCapBucket,
+    localRegistryForUserCap,
+    firestoreCompanyCapRow,
+  ]);
+  const ownerUidForDevices = String(companyData?.ownerId || user?.uid || "").trim();
+  const viewerIsDeviceOwner = Boolean(user?.uid && ownerUidForDevices && user.uid === ownerUidForDevices);
+  const refreshAccountWideDeviceCount = useCallback(async () => {
+    const ownerUid = ownerUidForDevices;
+    if (!ownerUid) {
+      setAccountWideDeviceCount(0);
+      return;
+    }
+    try {
+      const ownedSnap = await getDocs(
+        query(collection(firestore, "companies"), where("ownerId", "==", ownerUid))
+      );
+      const ownedIds = ownedSnap.docs.map((row) => row.id);
+      const count = await countAccountScopedDevicesForUser({
+        firebaseUid: ownerUid,
+        ownedFirestoreCompanyIds: ownedIds,
+        registryRows: localRegistryForUserCap,
+        viewerUid: user?.uid ?? null,
+      });
+      setAccountWideDeviceCount(count);
+    } catch {
+      setAccountWideDeviceCount(0);
+    }
+  }, [ownerUidForDevices, localRegistryForUserCap, user?.uid]);
+  useEffect(() => {
+    if (!ownerUidForDevices) {
+      setAccountWideDeviceCount(0);
+      return;
+    }
+    let cancelled = false;
+    void refreshAccountWideDeviceCount().then(() => {
+      if (cancelled) return;
+    });
+    const cid = String(companyId || "").trim();
+    const capRow = companyForUserCap;
+    const listenFirestoreDevices =
+      Boolean(cid) &&
+      Boolean(capRow) &&
+      (isCloudLinkedCompanyStorage(capRow) ||
+        (isOfflineCompanyStorage(companyData) && Boolean(companyData?.ownerId)));
+    const unsubDevices =
+      listenFirestoreDevices && cid
+        ? onSnapshot(collection(firestore, "companies", cid, "devices"), () => {
+            if (!cancelled) void refreshAccountWideDeviceCount();
+          })
+        : undefined;
+    return () => {
+      cancelled = true;
+      unsubDevices?.();
+    };
+  }, [
+    ownerUidForDevices,
+    companyId,
+    companyData,
+    companyForUserCap,
+    refreshAccountWideDeviceCount,
+  ]);
+  useEffect(() => {
+    if (!viewerIsDeviceOwner) return;
+    refreshDeviceCheck();
+  }, [viewerIsDeviceOwner, companyId, refreshDeviceCheck]);
+  const effectiveAccountWideDeviceCount = useMemo(() => {
+    if (!viewerIsDeviceOwner) return accountWideDeviceCount;
+    return Math.max(accountWideDeviceCount, liveOwnerDeviceCount);
+  }, [accountWideDeviceCount, liveOwnerDeviceCount, viewerIsDeviceOwner]);
   const planAllowsFileAttachment = activePlan.entitlements.canAddFileImagePdf === true;
   const planMaxFilesPerVoucher = Math.max(0, Number(activePlan.entitlements.maxVoucherFileCount) || 0);
-  const maxUsersPerPlanRaw = planUserCapWithAddOns(
-    activePlan,
-    companyStorageIsLocal(companyData?.storageOption),
-    ownerAddons
-  );
-  const maxUsersPerPlan = isUnlimitedEntitlementCap(maxUsersPerPlanRaw)
-    ? Number.POSITIVE_INFINITY
-    : Math.max(0, maxUsersPerPlanRaw);
+  const maxUsersPerPlan = resolveCompanyShareUserCap(activePlan, companyForUserCap, ownerUserDataForCap);
+  const shareUserCapBreakdown = useMemo(() => {
+    if (!companyForUserCap) return null;
+    const localBucket = companyUsesLocalMaxUsersCap(companyForUserCap);
+    const addons = parsePurchasedPlanAddOns(ownerUserDataForCap);
+    return { ...planUserCapBreakdown(activePlan, localBucket, addons), localBucket };
+  }, [activePlan, companyForUserCap, ownerUserDataForCap]);
+  const shareDeviceCapBreakdown = useMemo(() => {
+    if (!companyForUserCap) return null;
+    const localBucket = companyUsesLocalMaxUsersCap(companyForUserCap);
+    const addons = parsePurchasedPlanAddOns(ownerUserDataForCap);
+    const hasMultiDevice = activePlan.entitlements.hasMultiDeviceSync === true;
+    const breakdown = planDeviceCapBreakdown(activePlan, localBucket, addons);
+    const total = hasMultiDevice ? breakdown.total : 1;
+    const maxDevices = isUnlimitedEntitlementCap(total)
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, total);
+    return { ...breakdown, localBucket, hasMultiDevice, maxDevices };
+  }, [activePlan, companyForUserCap, ownerUserDataForCap]);
+  const isDeviceLimitReached =
+    shareDeviceCapBreakdown != null &&
+    isAtOrOverEntitlementCap(effectiveAccountWideDeviceCount, shareDeviceCapBreakdown.maxDevices);
   const roleMaxFilesRaw = Number(fileAttachmentLimitsForSelectedRole.maxFileCount) || 0;
   const effectiveRoleMaxFiles = planAllowsFileAttachment
     ? Math.min(roleMaxFilesRaw, planMaxFilesPerVoucher)
@@ -902,6 +1240,16 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
       );
 
       await updateDoc(companyRef, { sharedWith: updatedSharedWith, updatedAt: serverTimestamp() });
+      const emailKey = normalizeEmail(email);
+      setOptimisticUserRoles((prev) => ({ ...prev, [emailKey]: normalizedRole }));
+      setFirestoreShareRow((prev) =>
+        prev
+          ? {
+              ...prev,
+              sharedWith: mergeSharedUsersForManageSharing(prev.sharedWith, updatedSharedWith, true),
+            }
+          : { sharedWith: updatedSharedWith, ownerEmail: companyData?.ownerEmail }
+      );
       reloadLocalCompanyRegistry();
       triggerSync();
       toast({ title: "Success", description: `Role for ${email} has been updated to ${normalizedRole}.` });
@@ -1102,8 +1450,11 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
       )
       .forEach((user) => {
         const userInfo = allAppUsers.find((u) => normalizeEmail(u.email) === normalizeEmail(user.email));
+        const emailKey = normalizeEmail(user.email);
+        const roleOverride = optimisticUserRoles[emailKey];
         uniqueUsers.set(user.email, {
           ...user,
+          role: roleOverride ?? user.role,
           name: userInfo?.displayName || user.name || "User",
           isOnline: isUserOnline(userInfo),
           id: userInfo?.id,
@@ -1112,7 +1463,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
       });
     
     return Array.from(uniqueUsers.values());
-}, [sharingCompanyData, allAppUsers, optimisticRevokedEmails]);
+}, [sharingCompanyData, allAppUsers, optimisticRevokedEmails, optimisticUserRoles]);
 
 
   if (loading) {
@@ -1154,10 +1505,13 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
   /** SQLite / device-only: email-based Firestore share yahan support nahi — Company login + Local users. */
   const isDeviceLocalCompany = isOfflineCompanyStorage(companyData);
+  const mergedSharedWithCount = sharingCompanyData?.sharedWith?.length ?? 0;
   const showOnlineFirestoreSharing =
     isCloudLinkedCompanyStorage(companyData) ||
-    (companyData.sharedWith?.length ?? 0) > 0 ||
-    firestoreShareRow !== null;
+    mergedSharedWithCount > 0 ||
+    firestoreShareRow !== null ||
+    Boolean(companyData.ownerId) ||
+    (companyData.sharedWithEmails?.length ?? 0) > 0;
   const firestoreShareHydratePending =
     isDeviceLocalCompany &&
     !showOnlineFirestoreSharing &&
@@ -1188,7 +1542,12 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
     <div className="space-y-8">
         {isPlServerHostShare && companyData && companyId ? (
           <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
-            <CardHeader className={cn(companyProfilePageBg, "flex flex-row flex-wrap items-start justify-between gap-4")}>
+            <CardHeader
+              className={cn(
+                companyProfilePageBg,
+                "flex flex-row flex-wrap items-start justify-between gap-4 border-b border-black pb-4"
+              )}
+            >
               <div>
                 <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span>Manage Sharing</span>
@@ -1202,7 +1561,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                 </CardDescription>
               </div>
             </CardHeader>
-            <CardContent className={`p-4 ${companyProfileGreenZone}`}>
+            <CardContent className={settingsDetailCardBodyClass}>
               <LocalPlServerSharePanel
                 companyId={companyId}
                 companyName={companyData.name}
@@ -1213,14 +1572,43 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
           </Card>
         ) : isDeviceLocalCompany && !showOnlineFirestoreSharing && companyData && companyId ? (
           <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
+            <CardHeader className={cn(companyProfilePageBg, "flex flex-row flex-wrap items-start justify-between gap-4 pb-2")}>
+              <CardTitle className="text-base">Local company users</CardTitle>
+              {shareDeviceCapBreakdown ? (
+                <ShareAccountLimitsTable
+                  bucketLabel="local"
+                  userCount={accountWideUserCount}
+                  userMax={maxUsersPerPlan}
+                  userBreakdown={shareUserCapBreakdown}
+                  deviceCount={effectiveAccountWideDeviceCount}
+                  deviceMax={shareDeviceCapBreakdown.maxDevices}
+                  deviceBreakdown={shareDeviceCapBreakdown}
+                  userLimitReached={isUserLimitReached}
+                  deviceLimitReached={isDeviceLimitReached}
+                />
+              ) : null}
+            </CardHeader>
             <CardContent className="p-4 text-sm text-muted-foreground">
               Local company login users are managed in{" "}
               <strong>Settings → Company Profile</strong> (Add company user section).
+              {isUserLimitReached ? (
+                <p className="mt-2 text-amber-700">
+                  User limit reached for local companies.{" "}
+                  <Link href="/billing?addon=user" className="underline font-medium hover:no-underline">
+                    Buy user add-on
+                  </Link>
+                </p>
+              ) : null}
             </CardContent>
           </Card>
         ) : (
           <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
-            <CardHeader className={cn(companyProfilePageBg, "flex flex-row flex-wrap items-start justify-between gap-4")}>
+            <CardHeader
+              className={cn(
+                companyProfilePageBg,
+                "flex flex-row flex-wrap items-start justify-between gap-4 border-b border-black pb-4"
+              )}
+            >
                 <div>
                     <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span>Manage Sharing</span>
@@ -1239,11 +1627,21 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                     </CardDescription>
                 </div>
                 <div className="flex flex-col items-end gap-2">
-                  <span className="text-xs text-muted-foreground">
-                    Users: {accountWideUserCount}/{formatEntitlementCapLabel(maxUsersPerPlan)}
-                  </span>
-                  {isUserLimitReached && (
-                    <span className="text-xs text-amber-700">
+                  {shareDeviceCapBreakdown ? (
+                    <ShareAccountLimitsTable
+                      bucketLabel={shareUserCapBreakdown?.localBucket ? "local" : "online"}
+                      userCount={accountWideUserCount}
+                      userMax={maxUsersPerPlan}
+                      userBreakdown={shareUserCapBreakdown}
+                      deviceCount={effectiveAccountWideDeviceCount}
+                      deviceMax={shareDeviceCapBreakdown.maxDevices}
+                      deviceBreakdown={shareDeviceCapBreakdown}
+                      userLimitReached={isUserLimitReached}
+                      deviceLimitReached={isDeviceLimitReached}
+                    />
+                  ) : null}
+                  {isUserLimitReached ? (
+                    <span className="text-xs text-amber-700 text-right">
                       User limit reached.{" "}
                       <Link
                         href={nextPaidUpgradePlanId ? "/billing" : "/billing?addon=user"}
@@ -1252,23 +1650,23 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                         {nextPaidUpgradePlanId ? "Update plan" : "Buy user add-on"}
                       </Link>
                     </span>
-                  )}
-                  <ShareCompanyDialog company={companyData}>
-                      <Button variant="outline" disabled={isUserLimitReached}>
-                          <PlusCircle className="mr-2 h-4 w-4" />
-                          Add Person
-                      </Button>
-                  </ShareCompanyDialog>
+                  ) : null}
                 </div>
             </CardHeader>
-            <CardContent className={`p-4 ${companyProfileGreenZone}`}>
-            <Table>
+            <CardContent className={cn(settingsDetailCardBodyClass, "!pb-0")}>
+            <Table
+              className={cn(
+                "[&_tr]:!border-b-[1px] [&_tr]:!border-border",
+                "[&_thead_tr]:!border-b-[1px] [&_thead_tr]:!border-border",
+                "[&_tbody>tr:last-child]:!border-b-0"
+              )}
+            >
                 <TableHeader>
                     <TableRow>
                         <TableHead className="w-2/5">Email</TableHead>
                         <TableHead className="w-1/4">Name</TableHead>
                         <TableHead>Role</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
+                        <TableHead className="text-right w-[120px]">Actions</TableHead>
                     </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1382,6 +1780,24 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                             </TableCell>
                         </TableRow>
                     ))}
+                    <TableRow className="hover:bg-transparent border-b-0">
+                      <TableCell colSpan={3} className="p-0" />
+                      <TableCell className="text-right align-top px-1 py-2">
+                        <div className="flex flex-col items-end gap-1">
+                          <ShareCompanyDialog company={companyData}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={isUserLimitReached}
+                              className="h-7 min-h-7 px-2 text-[11px] leading-tight gap-1"
+                            >
+                              <PlusCircle className="h-3 w-3 shrink-0" />
+                              Add Person
+                            </Button>
+                          </ShareCompanyDialog>
+                        </div>
+                      </TableCell>
+                    </TableRow>
                 </TableBody>
             </Table>
             {allUsers.length === 1 && (
@@ -1419,7 +1835,12 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         </Dialog>
 
         <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
-             <CardHeader className={cn(companyProfilePageBg, "flex flex-col md:flex-row justify-between md:items-start gap-4")}>
+             <CardHeader
+               className={cn(
+                 companyProfilePageBg,
+                 "flex flex-col border-b border-black md:flex-row md:items-start md:justify-between gap-4 pb-4"
+               )}
+             >
                 <div className="flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <CardTitle>Role Permissions</CardTitle>
@@ -1434,7 +1855,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                     <div className="text-red-600 border rounded-lg p-2 flex items-center">Disabled: {disabledPermissions}</div>
                 </div>
             </CardHeader>
-            <CardContent className={cn("space-y-4 p-4", companyProfileGreenZone)}>
+            <CardContent className={cn(settingsDetailCardBodyClass, "space-y-4")}>
                 {/* Top Button */}
                 <div className="flex justify-end pb-4 border-b">
                     <Button onClick={handleSavePermissions} disabled={isSavingPermissions || !hasUnsavedChanges}>

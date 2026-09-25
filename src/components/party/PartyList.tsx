@@ -153,6 +153,7 @@ export const PartyList = React.memo(({
   quickFilter: quickFilterProp,
   onQuickFilterChange,
   hideQuickFilterBar = false,
+  resolvePartyTitleLines,
 }: {
   parties: Party[];
   selectedParty: Party | null;
@@ -171,6 +172,8 @@ export const PartyList = React.memo(({
   quickFilter?: EntityListQuickFilter;
   onQuickFilterChange?: (next: EntityListQuickFilter) => void;
   hideQuickFilterBar?: boolean;
+  /** Admin subscribers etc. — primary name + secondary email under title. */
+  resolvePartyTitleLines?: (party: Party) => { primary: string; secondary?: string | null };
 }) => {
   const { formatCurrency } = useDate();
   const { company } = useCompany();
@@ -256,16 +259,18 @@ export const PartyList = React.memo(({
                   (!selectedIcMemberAccountId || isIcClearingAccount);
                 const href = getItemHref?.(party);
                 const attachmentPreviewUrl = trimEntityFileUrlForPreview(party.fileUrl);
-                const titleLines = isIcPeerCompanyGroup
-                  ? icPeerCompanyGroupListTitleLines(party)
-                  : isIcClearingAccount
-                    ? {
-                        primary: interCompanyClearingAccountDisplayName(party),
-                        secondary: icPartyListFlatSecondaryLabel(
-                          party.interCompanyPeerCompanyName || ""
-                        ),
-                      }
-                    : getInterCompanyPartyListTitleLines(party);
+                const titleLines = resolvePartyTitleLines
+                  ? resolvePartyTitleLines(party)
+                  : isIcPeerCompanyGroup
+                    ? icPeerCompanyGroupListTitleLines(party)
+                    : isIcClearingAccount
+                      ? {
+                          primary: interCompanyClearingAccountDisplayName(party),
+                          secondary: icPartyListFlatSecondaryLabel(
+                            party.interCompanyPeerCompanyName || ""
+                          ),
+                        }
+                      : getInterCompanyPartyListTitleLines(party);
                 const pendingApprovalCount =
                   (party.icMemberParties?.reduce(
                     (sum, member) => sum + (pendingApprovalByPartyId[member.id] ?? 0),

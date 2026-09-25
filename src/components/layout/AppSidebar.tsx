@@ -93,6 +93,10 @@ import { collectInterCompanyIdsForPendingApproval } from "@/lib/interCompany/int
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isAdminPanelNavVisible } from "@/lib/adminDevPreview";
+import {
+  isAdminPanelCompanyLedgerMode,
+  leaveAdminPanelCompanyLedgerMode,
+} from "@/lib/adminPanelCompany/ledgerMode";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { disarmDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
@@ -536,7 +540,18 @@ export function AppSidebar() {
   const isAdmin = customUser?.role === "SuperAdmin" || isSuperAdminByEmail;
   /** Static EXE/APK: `/admin` bundle me nahi; localhost `npm run dev` par test ke liye dikhao */
   const showAdminNavLink = isAdminPanelNavVisible(isAdmin, isStaticAppBuild());
-  
+  const [adminPanelLedgerMode, setAdminPanelLedgerMode] = useState(false);
+  useEffect(() => {
+    const sync = () => setAdminPanelLedgerMode(isAdminPanelCompanyLedgerMode());
+    sync();
+    window.addEventListener("pl-admin-panel-company-mode", sync);
+    window.addEventListener("pl-company-switched", sync);
+    return () => {
+      window.removeEventListener("pl-admin-panel-company-mode", sync);
+      window.removeEventListener("pl-company-switched", sync);
+    };
+  }, []);
+
   // Default to showing when not explicitly off (so ticked/default = show without needing save). Alerts only for company owner.
   const transactionAlerts = effectiveNotificationSettings?.transactionAlerts;
   const includeAlertsInSidebar = transactionAlerts?.on !== false && transactionAlerts?.onEntity !== false && company?.isOwned === true;
@@ -861,37 +876,74 @@ export function AppSidebar() {
                         ) : null}
                       </React.Fragment>
                     ))}
-                    {showAdminNavLink && (
+                    {adminPanelLedgerMode && showAdminNavLink ? (
                       <SidebarMenuItem>
                         {useEmbeddedClientNav ? (
                           <button
                             type="button"
                             className="w-full text-left appearance-none bg-transparent p-0 border-0 cursor-pointer"
-                            onClick={() => navigateSidebarHref("/admin")}
+                            onClick={() => {
+                              leaveAdminPanelCompanyLedgerMode();
+                              navigateSidebarHref("/admin");
+                            }}
                           >
-                            <SidebarMenuButton
-                              isActive={pathname.startsWith("/admin".replace(/\/$/, ""))}
-                              tooltip="Admin Panel"
-                              data-theme-nav="admin"
-                            >
+                            <SidebarMenuButton tooltip="Back to Admin Panel" data-theme-nav="admin">
                               <Shield />
-                              {isOpen && <span>Admin Panel</span>}
+                              {isOpen && <span>Back to Admin Panel</span>}
                             </SidebarMenuButton>
                           </button>
                         ) : (
-                          <Link prefetch={false} href={appNavHref("/admin")} onClick={(e) => onNavLinkClick(e, "/admin")}>
-                            <SidebarMenuButton
-                              isActive={pathname.startsWith("/admin".replace(/\/$/, ""))}
-                              tooltip="Admin Panel"
-                              data-theme-nav="admin"
-                            >
+                          <Link
+                            prefetch={false}
+                            href={appNavHref("/admin")}
+                            onClick={(e) => {
+                              leaveAdminPanelCompanyLedgerMode();
+                              onNavLinkClick(e, "/admin");
+                            }}
+                          >
+                            <SidebarMenuButton tooltip="Back to Admin Panel" data-theme-nav="admin">
                               <Shield />
-                              {isOpen && <span>Admin Panel</span>}
+                              {isOpen && <span>Back to Admin Panel</span>}
                             </SidebarMenuButton>
                           </Link>
                         )}
                       </SidebarMenuItem>
-                    )}
+                    ) : null}
+                    {showAdminNavLink && !adminPanelLedgerMode ? (
+                      <SidebarMenuItem>
+                        {useEmbeddedClientNav ? (
+                          <button
+                            type="button"
+                            className="w-full text-left appearance-none bg-transparent p-0 border-0 cursor-pointer"
+                            onClick={() => navigateSidebarHref("/admin/company")}
+                          >
+                            <SidebarMenuButton
+                              isActive={pathname.startsWith("/admin".replace(/\/$/, ""))}
+                              tooltip="Admin Panel Company"
+                              data-theme-nav="admin"
+                            >
+                              <Shield />
+                              {isOpen && <span>Admin Panel Company</span>}
+                            </SidebarMenuButton>
+                          </button>
+                        ) : (
+                          <Link
+                            prefetch={false}
+                            href={appNavHref("/admin/company")}
+                            onClick={(e) => onNavLinkClick(e, "/admin/company")}
+                          >
+                            <SidebarMenuButton
+                              isActive={pathname.startsWith("/admin/company")}
+                              tooltip="Admin Panel Company"
+                              data-theme-nav="admin"
+                            >
+                              <Shield />
+                              {isOpen && <span>Admin Panel Company</span>}
+                            </SidebarMenuButton>
+                          </Link>
+                        )}
+                      </SidebarMenuItem>
+                    ) : null}
                   </SidebarMenu>
                 </div>
               )}

@@ -232,6 +232,7 @@
         version: (extras && extras.version) || "",
         fileName: (extras && extras.fileName) || "",
         source: (extras && extras.source) || "",
+        eventKind: "new",
       }),
       keepalive: true,
       cache: "no-store",

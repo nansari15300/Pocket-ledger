@@ -104,6 +104,7 @@ import {
   displayNameFromUserFirestoreDoc,
 } from "@/lib/batchFetchUserDisplayNames";
 import { buildPartyLedgerAggregateMap } from "@/lib/partyListLedgerBalance";
+import { filterVouchersForAdminSubscriberPartyLedger } from "@/lib/adminPanelCompany/adminPanelPartyLedger";
 
 /** Offline company: vouchers me `userId` aksar owner ka Firebase uid ya `local` — sirf `user.uid` match se shared user ko 0 rows. */
 function localCompanyRoleAllowsViewAll(role: string | undefined): boolean {
@@ -2968,7 +2969,11 @@ export const VoucherProvider = ({
   // This replaces the nested loops. We loop vouchers once and build Maps.
   const voucherAggregates = useMemo(() => {
     const partyIdSet = new Set((parties || []).map((p) => p.id));
-    const partyMap = buildPartyLedgerAggregateMap(vouchersForDisplay, partyIdSet);
+    const partyVouchersForBalance = filterVouchersForAdminSubscriberPartyLedger(
+      companyId,
+      vouchersForDisplay
+    );
+    const partyMap = buildPartyLedgerAggregateMap(partyVouchersForBalance, partyIdSet);
     const staffMap = new Map<string, { debit: number; credit: number }>();
     const accountMap = new Map<string, { debit: number; credit: number }>();
     const taxMap = new Map<string, { debit: number; credit: number }>();
@@ -3209,7 +3214,7 @@ export const VoucherProvider = ({
     });
 
     return { partyMap, staffMap, accountMap, taxMap, expenseMap, itemMap };
-  }, [vouchersForDisplay, items, staff, parties]); // parties: ledger-aligned partyMap
+  }, [vouchersForDisplay, items, staff, parties, companyId]); // parties: ledger-aligned partyMap
 
 
  const processedParties: ProcessedParty[] = useMemo(() => {

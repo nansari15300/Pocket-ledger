@@ -114,6 +114,17 @@ import type { DriveSharedJoinCompleteSource } from "@/lib/localCloudSync/driveSh
 import { listLocalCompanies, localCompanyRowIsDeleted, getLocalCompanyById } from "@/lib/localCompanyStore";
 import { JoinSharedLocalCompanyPanel } from "@/components/company/JoinSharedLocalCompanyPanel";
 import {
+  omitAdminPanelCompanyFromTabLists,
+  useAdminPanelCompanyListFilter,
+} from "@/lib/adminPanelCompany/companyListFilter";
+import { AdminPanelCompanySelectorSection } from "@/adminPanelCompany/components/AdminPanelCompanySelectorSection";
+import {
+  selectAdminPanelCompanyInApp,
+  withAdminPanelCompanyInSelectorList,
+  buildAdminPanelCompanySelectorRow,
+} from "@/lib/adminPanelCompany/ensureAdminPanelCompany";
+import { isAdminPanelCompanyLocalId } from "@/lib/adminPanelCompany/ledgerMode";
+import {
   getPlServerContextGateId,
   mergePlServerSharedCompaniesIntoRegistry,
   PL_SERVER_ACCESS_CONTEXT_EVENT,
@@ -513,6 +524,8 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     () => visibleCompanySelectorTabs(featureConfig),
     [featureConfig]
   );
+  const { adminLedgerMode, applyFilter: applyAdminPanelCompanyListFilter } =
+    useAdminPanelCompanyListFilter();
   const isSuperAdminByEmail = useMemo(() => {
     const e = (user?.email || "").toLowerCase().trim();
     if (!e) return false;
@@ -883,6 +896,26 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     company: CompanyData,
     options?: { forceUnlockPrompt?: boolean }
   ) => {
+    if (isAdminPanelCompanyLocalId(company.id)) {
+      if (!user?.uid) {
+        toast({
+          variant: "destructive",
+          title: "Sign in required",
+          description: "Sign in as SuperAdmin to open Admin Panel Company.",
+        });
+        return;
+      }
+      try {
+        await selectAdminPanelCompanyInApp(user.uid, user.email, setCompanyId);
+      } catch (e) {
+        toast({
+          variant: "destructive",
+          title: "Admin Panel Company",
+          description: e instanceof Error ? e.message : "Could not select company.",
+        });
+      }
+      return;
+    }
     activateGateForServerCompanyIfNeeded(company);
     if (!isServerGateCompany(company)) {
       if (tryNavigateBackToAppHubForLocalOnlineCompany(company.id)) return;
@@ -1138,12 +1171,31 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     );
   }, [companies, user, isSuperAdminUser, pathname]);
 
+  const showAdminPanelInSelector = adminLedgerMode;
+
   const selectorCompanies = useMemo(() => {
     const base = usePlServerCompanyMerge
       ? allCompanies
       : allCompanies.filter((c) => !isServerGateCompany(c));
-    return usePlServerCompanyMerge ? mergePlServerSharedCompaniesIntoRegistry(base) : base;
-  }, [allCompanies, usePlServerCompanyMerge]);
+    const merged = usePlServerCompanyMerge ? mergePlServerSharedCompaniesIntoRegistry(base) : base;
+    const filtered = applyAdminPanelCompanyListFilter(merged);
+    return withAdminPanelCompanyInSelectorList(filtered, {
+      include: showAdminPanelInSelector,
+      ownerId: user?.uid,
+      ownerEmail: user?.email,
+    });
+  }, [
+    allCompanies,
+    usePlServerCompanyMerge,
+    applyAdminPanelCompanyListFilter,
+    showAdminPanelInSelector,
+    user?.uid,
+    user?.email,
+  ]);
+  const selectorCompaniesForTabs = useMemo(
+    () => omitAdminPanelCompanyFromTabLists(selectorCompanies, adminLedgerMode),
+    [selectorCompanies, adminLedgerMode]
+  );
   const unlockPickerCompanies = useMemo(() => {
     if (selectorCompanies.length > 0) return selectorCompanies;
     if (companyToUnlock) return [companyToUnlock];
@@ -1156,8 +1208,8 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     return () => window.removeEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onServerCtx);
   }, []);
   const buckets = useMemo(
-    () => partitionCompaniesForSelector(selectorCompanies),
-    [selectorCompanies, serverContextEpoch, originReady]
+    () => partitionCompaniesForSelector(selectorCompaniesForTabs),
+    [selectorCompaniesForTabs, serverContextEpoch, originReady]
   );
   const {
     localTabCompanies,
@@ -1427,6 +1479,14 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
             </div>
           </CardHeader>
           <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden pr-1">
+            {showAdminPanelInSelector ? (
+              <AdminPanelCompanySelectorSection
+                selectedCompanyId={companyId}
+                onSelect={(c) => void handleSelectCompany(c)}
+              />
+            ) : null}
+            {!adminLedgerMode ? (
+            <>
             <Tabs
               value={listTab}
               onValueChange={(v) => handleListTabChange(v as CompanyListTab)}
@@ -1729,6 +1789,8 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                 ) : null}
               </div>
             ) : null}
+            </>
+            ) : null}
           </CardContent>
         </Card>
       </div>
@@ -2009,6 +2071,8 @@ export function CompanyActions({
     () => visibleCompanySelectorTabs(featureConfig),
     [featureConfig]
   );
+  const { adminLedgerMode, applyFilter: applyAdminPanelCompanyListFilter } =
+    useAdminPanelCompanyListFilter();
   const { companyId, setCompanyId, clearCompanyId, triggerSync, reloadLocalCompanyRegistry, company: contextCompany, allCompaniesRegistry } = useCompany();
   const handleLogoutCompany = useCallback((id: string) => {
     logoutFromCompanyOnThisDevice(id, user);
@@ -2201,6 +2265,27 @@ export function CompanyActions({
   );
 
   const handleSelectCompany = async (selectedCompany: CompanyData) => {
+    if (isAdminPanelCompanyLocalId(selectedCompany.id)) {
+      if (!user?.uid) {
+        toast({
+          variant: "destructive",
+          title: "Sign in required",
+          description: "Sign in as SuperAdmin to open Admin Panel Company.",
+        });
+        return;
+      }
+      try {
+        await selectAdminPanelCompanyInApp(user.uid, user.email, setCompanyId);
+        setMenuOpen(false);
+      } catch (e) {
+        toast({
+          variant: "destructive",
+          title: "Admin Panel Company",
+          description: e instanceof Error ? e.message : "Could not select company.",
+        });
+      }
+      return;
+    }
     activateGateForServerCompanyIfNeeded(selectedCompany);
     if (!isServerGateCompany(selectedCompany)) {
       if (tryNavigateBackToAppHubForLocalOnlineCompany(selectedCompany.id)) return;
@@ -2430,12 +2515,32 @@ export function CompanyActions({
     window.addEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onServerCtx);
     return () => window.removeEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onServerCtx);
   }, []);
+  const showAdminPanelInSelector = adminLedgerMode;
+
   const selectorCompanies = useMemo(() => {
     const base = usePlServerCompanyMerge
       ? companies
       : companies.filter((c) => !isServerGateCompany(c));
-    return usePlServerCompanyMerge ? mergePlServerSharedCompaniesIntoRegistry(base) : base;
-  }, [companies, usePlServerCompanyMerge, serverContextEpoch]);
+    const merged = usePlServerCompanyMerge ? mergePlServerSharedCompaniesIntoRegistry(base) : base;
+    const filtered = applyAdminPanelCompanyListFilter(merged);
+    return withAdminPanelCompanyInSelectorList(filtered, {
+      include: showAdminPanelInSelector,
+      ownerId: user?.uid,
+      ownerEmail: user?.email,
+    });
+  }, [
+    companies,
+    usePlServerCompanyMerge,
+    serverContextEpoch,
+    applyAdminPanelCompanyListFilter,
+    showAdminPanelInSelector,
+    user?.uid,
+    user?.email,
+  ]);
+  const selectorCompaniesForTabs = useMemo(
+    () => omitAdminPanelCompanyFromTabLists(selectorCompanies, adminLedgerMode),
+    [selectorCompanies, adminLedgerMode]
+  );
   const unlockPickerCompanies = useMemo(() => {
     if (selectorCompanies.length > 0) return selectorCompanies;
     const registry = (allCompaniesRegistry ?? companies).filter(isCompanyVisibleInSelector);
@@ -2444,8 +2549,8 @@ export function CompanyActions({
     return [];
   }, [selectorCompanies, allCompaniesRegistry, companies, companyToUnlock]);
   const buckets = useMemo(
-    () => partitionCompaniesForSelector(selectorCompanies),
-    [selectorCompanies, serverContextEpoch, originReady]
+    () => partitionCompaniesForSelector(selectorCompaniesForTabs),
+    [selectorCompaniesForTabs, serverContextEpoch, originReady]
   );
   const {
     localTabCompanies,
@@ -2566,10 +2671,15 @@ export function CompanyActions({
     [companyId, selectorCompanies]
   );
   const activeCompany =
-    (selectedCompanyIsVisible && contextCompany?.id === companyId ? contextCompany : null) ||
+    (companyId && contextCompany && companyRowMatchesSelectionId(contextCompany, companyId)
+      ? contextCompany
+      : null) ||
     (companyId
       ? (selectorCompanies.find((c) => c.id === companyId) ??
         selectorCompanies.find((c) => companyRowMatchesSelectionId(c, companyId)))
+      : null) ||
+    (isAdminPanelCompanyLocalId(companyId)
+      ? buildAdminPanelCompanySelectorRow(user?.uid, user?.email)
       : null) ||
     (!companyId ? selectorCompanies[0] : null);
   const [listTab, setListTab] = useState<CompanyListTab>(() => defaultSelectorTab(companyId, buckets));
@@ -2719,6 +2829,15 @@ export function CompanyActions({
         <DropdownMenuPortal>
         <DropdownMenuContent className="w-[min(96vw,560px)] max-h-[min(70vh,520px)] overflow-x-auto overflow-y-auto">
           <DropdownMenuGroup className="p-2">
+              {showAdminPanelInSelector ? (
+                <AdminPanelCompanySelectorSection
+                  compact
+                  selectedCompanyId={companyId}
+                  onSelect={(c) => void handleSelectCompany(c)}
+                />
+              ) : null}
+              {!adminLedgerMode ? (
+              <>
               <CompanySelectorTabBar
                 compact
                 value={listTab}
@@ -2988,7 +3107,11 @@ export function CompanyActions({
                   />
                 </div>
               )}
+              </>
+              ) : null}
             </DropdownMenuGroup>
+          {!adminLedgerMode ? (
+          <>
           <DropdownMenuSeparator />
           {canCreateAnyCompany ? (
             <DropdownMenuGroup>
@@ -3024,6 +3147,8 @@ export function CompanyActions({
                 </DropdownMenuItem>
               )}
           </DropdownMenuGroup>
+          </>
+          ) : null}
         </DropdownMenuContent>
         </DropdownMenuPortal>
       </DropdownMenu>

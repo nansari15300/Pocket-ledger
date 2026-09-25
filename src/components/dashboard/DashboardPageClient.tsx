@@ -107,6 +107,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { adToBs, bsToAd, getBSMonthDays } from "@/lib/bs-date";
 import { motion, AnimatePresence } from 'framer-motion';
 import { AddVoucherDialog } from '@/components/vouchers/AddVoucherDialog';
+import { useInterCompanyLedgerChangeDetectDialog } from '@/hooks/useInterCompanyLedgerChangeDetectDialog';
 import { HistoryDialog } from '@/components/vouchers/HistoryDialog';
 import { LinkAdvancesToVoucherDialog } from '@/components/vouchers/LinkAdvancesToVoucherDialog';
 import { LinkPaymentToTxnsDialog } from '@/components/vouchers/LinkPaymentToTxnsDialog';
@@ -698,6 +699,8 @@ export function DashboardPageContent() {
   const [historyVoucher, setHistoryVoucher] = React.useState<any>(null);
   const [linkAdvancesVoucher, setLinkAdvancesVoucher] = React.useState<any>(null);
   const [linkPaymentVoucher, setLinkPaymentVoucher] = React.useState<any>(null);
+  const { handleInterCompanyChangeDetectedClick, interCompanyChangeDetectDialog } =
+    useInterCompanyLedgerChangeDetectDialog();
   const { visibleCard, setVisibleCard } = useDashboard();
   /** Chart se wapas: jis tab par user tha (All/Summary/…) — doosra Chart click pe wahi restore, warna state same reh jata tha. */
   const visibleCardBeforeChartsRef = useRef<string>("financial-summaries");
@@ -2003,6 +2006,7 @@ export function DashboardPageContent() {
             setSelectedVoucher(v);
             setIsVoucherDialogOpen(true);
           }}
+          onInterCompanyChangeDetectedClick={handleInterCompanyChangeDetectedClick}
           onHistoryVoucher={(v) => setHistoryVoucher(v)}
           onAddLink={(v) => {
             const isPaymentType = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(v?.type);
@@ -2369,6 +2373,7 @@ export function DashboardPageContent() {
           voucher={selectedVoucher}
           onVoucherAction={() => setSelectedVoucher(null)}
        />
+       {interCompanyChangeDetectDialog}
        <HistoryDialog voucher={historyVoucher} isOpen={!!historyVoucher} onOpenChange={(open) => !open && setHistoryVoucher(null)} onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)} />
        {linkAdvancesVoucher && (
          <LinkAdvancesToVoucherDialog

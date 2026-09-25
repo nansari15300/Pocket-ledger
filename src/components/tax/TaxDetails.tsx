@@ -81,6 +81,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
 import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
+import { useLedgerPaginationReset } from "@/hooks/useLedgerPaginationReset";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { Checkbox } from "../ui/checkbox";
@@ -304,6 +305,7 @@ export function TaxDetails({
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerPaginationReset = useLedgerPaginationReset(setRowsPerPage, setCurrentPage);
   const ledgerViewMode: LedgerDetailViewMode =
     balanceMode === "bill_wise" ? "bill_wise" : "statement";
   const ledgerSessionKey = useMemo(
@@ -1112,6 +1114,7 @@ export function TaxDetails({
                   <NepaliCalendar
                     rangePresetSlot={
                       <MasterLedgerDateRangePresetRow
+                        ledgerPaginationReset={ledgerPaginationReset}
                         country={company?.country}
                         onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
@@ -1132,6 +1135,7 @@ export function TaxDetails({
                     <AdCalendar
                       rangePresetSlot={
                         <MasterLedgerDateRangePresetRow
+                          ledgerPaginationReset={ledgerPaginationReset}
                           country={company?.country}
                           onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
@@ -1192,6 +1196,7 @@ export function TaxDetails({
                   <NepaliCalendar
                     rangePresetSlot={
                       <MasterLedgerDateRangePresetRow
+                        ledgerPaginationReset={ledgerPaginationReset}
                         country={company?.country}
                         onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {
@@ -1212,6 +1217,7 @@ export function TaxDetails({
                     <AdCalendar
                       rangePresetSlot={
                         <MasterLedgerDateRangePresetRow
+                          ledgerPaginationReset={ledgerPaginationReset}
                           country={company?.country}
                           onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
@@ -1360,6 +1366,7 @@ export function TaxDetails({
                 <BsDatePicker
                   isRange
                   masterLedgerDatePresets
+                  ledgerPaginationReset={ledgerPaginationReset}
                   valueAD={dateRange}
                   onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                   transactionDates={transactionDates}
@@ -1393,6 +1400,7 @@ export function TaxDetails({
                     <AdCalendar
                       rangePresetSlot={
                         <MasterLedgerDateRangePresetRow
+                          ledgerPaginationReset={ledgerPaginationReset}
                           country={company?.country}
                           onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {

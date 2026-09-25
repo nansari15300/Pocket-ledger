@@ -6,6 +6,7 @@ import { normalizePlanIdForClient, type PlanId } from "@/config/plans";
 import { PAID_PLAN_IDS } from "@/lib/payments/stripeCheckoutFulfill";
 import { findOwnedCompanyIdForUser } from "@/lib/payments/resolveStripeFirestoreCompany";
 import { grantAccountCanonicalPlan } from "@/lib/server/accountCanonicalPlan";
+import { mirrorSubscriptionPaymentToAdminCompany } from "@/lib/adminPanelAccounting/mirrorSubscriptionPayment";
 import { termDurationMs, type SubscriptionTermKey } from "@/lib/subscriptionPlanMath";
 import type { VerifiedLocalPlanApplyPayload } from "@/lib/payments/localStripePlanApplyTypes";
 
@@ -204,6 +205,29 @@ export async function applyNewSubscriptionCheckoutToFirestore(
       paymentId,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+
+  const cdataFull = companySnap.data() as Record<string, unknown> | undefined;
+  let userName: string | null = null;
+  let userEmail: string | null = null;
+  const userSnap = await db.collection("users").doc(userId).get();
+  if (userSnap.exists) {
+    const u = userSnap.data() as Record<string, unknown>;
+    userName = String(u.displayName ?? u.name ?? u.email ?? "").trim() || null;
+    userEmail = String(u.email ?? "").trim() || null;
+  }
+
+  await mirrorSubscriptionPaymentToAdminCompany(db, {
+    paymentId,
+    userId,
+    userName,
+    userEmail,
+    amountNpr,
+    gateway,
+    planId: targetPlanId,
+    customerCompanyId: effectiveCompanyId,
+    customerCompanyName: String(cdataFull?.name ?? cdataFull?.companyName ?? "").trim() || null,
+    subscriptionTermKey,
+  });
 
   return {
     ok: true,

@@ -18,6 +18,7 @@ import {
 } from "@/lib/fyPagination/ledgerOpeningMeta";
 import { hasFullLocalLedgerVoucherMirror } from "@/lib/fyPagination/fiscalMergeFullVoucherScope";
 import { useCompany } from "./useCompany";
+import { filterVouchersForAdminSubscriberPartyLedger } from "@/lib/adminPanelCompany/adminPanelPartyLedger";
 import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { type Context } from "@/components/vouchers/TransactionsTable";
@@ -482,9 +483,20 @@ export const getTransactionAmounts = (
                         }
                     }
                     else if (transaction.partyId && memberIdsInGroup.has(transaction.partyId)) {
-                        if (["sale", "payment_out", "direct_income"].includes(transaction.type)) debit += amount;
-                        if (["purchase", "payment_in", "direct_expense"].includes(transaction.type)) credit += amount;
-                    } 
+                        if (["sale", "sale_service", "direct_income"].includes(transaction.type)) debit += amount;
+                        if (transaction.type === "payment_out") debit += paymentOutPayeeAmount;
+                        if (["purchase", "purchase_service", "payment_in"].includes(transaction.type)) credit += amount;
+                        if (transaction.type === "direct_expense") credit += directExpenseMainAmount;
+                    }
+                    if (transaction.type === "payment_out" && memberIdsInGroup.has(transaction.otherChargeAccountId)) {
+                        debit += paymentOutOtherChargeAmount;
+                    }
+                    if (transaction.type === "direct_expense" && memberIdsInGroup.has(transaction.otherChargeAccountId)) {
+                        debit += directExpenseOtherChargeAmount;
+                    }
+                    if (transaction.type === "contra" && memberIdsInGroup.has(transaction.otherChargeAccountId)) {
+                        debit += contraOtherChargeAmount;
+                    }
                     else if (transaction.accountId && memberIdsInGroup.has(transaction.accountId)) {
                         if (["payment_in", "direct_income", "sale"].includes(transaction.type)) debit += amount;
                         if (["payment_out", "direct_expense", "purchase"].includes(transaction.type)) credit += amount;
@@ -851,7 +863,7 @@ export function useTransactions(
     daybookUserIdFilter?: string | null
 ) {
     const { vouchers, processedTaxes } = useVouchers();
-    const { company } = useCompany();
+    const { company, companyId } = useCompany();
     const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
     const fy = useFyVoucherScope();
 
@@ -883,10 +895,16 @@ export function useTransactions(
             entity.id === "all" &&
             Array.isArray(passedTransactions) &&
             (Boolean(transactionContext) || isReportAllAccountView);
-        const transactionsToProcess = shouldUseScopedPassedTransactions
+        let transactionsToProcess = shouldUseScopedPassedTransactions
             ? (passedTransactions ?? [])
             : (vouchers ?? []);
-        
+        if (context === "party" && !shouldUseScopedPassedTransactions) {
+            transactionsToProcess = filterVouchersForAdminSubscriberPartyLedger(
+                companyId,
+                transactionsToProcess
+            );
+        }
+
         let entityTransactions: any[] = [];
         
         if (transactionContext && entity.id === 'all') {
@@ -1433,6 +1451,58 @@ export function useTransactions(
               openingBalanceForPeriod = snapOb;
             }
         }
+
+        /** FY merge / full SQLite mirror: books running balance = walk all entity txns (filters don't reset chain). */
+        const fullBooksBalanceByVoucherId = new Map<string, number>();
+        if (fullLocalVoucherMirror && sorted.length > 0) {
+          let booksRunning = Number(initialOpeningBalance) || 0;
+          for (const t of sorted) {
+            const transactionDate = safeToDate(t.date);
+            if (
+              openingBalanceDateForEntity &&
+              transactionDate &&
+              transactionDate < openingBalanceDateForEntity
+            ) {
+              continue;
+            }
+            if (
+              context === "daybook" &&
+              daybookUserIdFilter &&
+              String((t as any).userId || "") !== String(daybookUserIdFilter)
+            ) {
+              continue;
+            }
+            const amounts = getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes);
+            if (
+              context !== "daybook" &&
+              context !== "other" &&
+              amounts.debit === 0 &&
+              amounts.credit === 0 &&
+              t.type !== "note"
+            ) {
+              const entityIdForIc =
+                entity && typeof entity === "object" && "id" in entity
+                  ? String((entity as { id?: string }).id || "")
+                  : "";
+              const keepIcPlaceholder =
+                entityIdForIc &&
+                keepUnapprovedInterCompanyLedgerPlaceholderRow(
+                  t as Record<string, unknown>,
+                  context,
+                  entityIdForIc
+                );
+              if (!keepIcPlaceholder) continue;
+            }
+            if (t.type === "inter_company" && (t as { isApproved?: boolean }).isApproved !== true) {
+              const id = String(t.id || "");
+              if (id) fullBooksBalanceByVoucherId.set(id, booksRunning);
+              continue;
+            }
+            booksRunning += amounts.debit - amounts.credit;
+            const id = String(t.id || "");
+            if (id) fullBooksBalanceByVoucherId.set(id, booksRunning);
+          }
+        }
         
         let runningBalance = openingBalanceForPeriod;
         // For journal "all" view, calculate cumulative balance differently
@@ -1558,7 +1628,10 @@ export function useTransactions(
                     if (!keepIcPlaceholder) return null;
                 }
                 
-                if (isJournalAllView && (t.type === 'journal' || t.type === 'adjustment')) {
+                const booksBalance = fullBooksBalanceByVoucherId.get(String(t.id || ""));
+                if (booksBalance != null && Number.isFinite(booksBalance)) {
+                  runningBalance = booksBalance;
+                } else if (isJournalAllView && (t.type === 'journal' || t.type === 'adjustment')) {
                     // For journal transactions in "all" view, running balance should remain at opening balance
                     // Since journals balance (debit = credit), debit - credit = 0, so balance doesn't change
                     runningBalance += amounts.debit - amounts.credit; // This will be 0 for balanced journal entries
@@ -2308,7 +2381,7 @@ export function useTransactions(
             periodOpeningLoading,
         };
 
-  }, [entity, context, vouchers, dateRange, stockView, entityList, transactionContext, filters, voucherTypes, formatDate, formatDateBS, journalAccountNames, userNames, formatCurrency, daybookUserIdFilter, company, fy.enabled, fy.activeScope, fy.openingBalances, fy.openingBalancesLoadStatus]);
+  }, [entity, context, vouchers, companyId, dateRange, stockView, entityList, transactionContext, filters, voucherTypes, formatDate, formatDateBS, journalAccountNames, userNames, formatCurrency, daybookUserIdFilter, company, fy.enabled, fy.activeScope, fy.openingBalances, fy.openingBalancesLoadStatus]);
 
   return result;
 }

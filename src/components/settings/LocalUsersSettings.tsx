@@ -16,7 +16,8 @@ import {
 } from "@/lib/localCompanyUsers";
 import { Loader2, UserPlus } from "lucide-react";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
-import { numericEntitlement, companyStorageIsLocal, isAtOrOverEntitlementCap, formatEntitlementCapLabel, type PlanId } from "@/config/plans";
+import { numericEntitlement, isAtOrOverEntitlementCap, formatEntitlementCapLabel, type PlanId } from "@/config/plans";
+import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import { doc, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { updateCompanyDocRoot } from "@/lib/companyDocsClient";
@@ -36,7 +37,11 @@ export function LocalUsersSettings() {
   const [error, setError] = useState("");
 
   const plan = getPlanFromPlans(livePlans, (company?.planId as PlanId) || "basic");
-  const maxUsersCap = numericEntitlement(plan.entitlements, "maxUsers", companyStorageIsLocal(company?.storageOption));
+  const maxUsersCap = numericEntitlement(
+    plan.entitlements,
+    "maxUsers",
+    !isCloudLinkedCompanyStorage(company ?? {})
+  );
   const ownerPlusShared = 1 + (company?.sharedWithEmails?.length ?? 0);
   const totalAfterAdd = users.length + 1 + ownerPlusShared;
   const atLimit = isAtOrOverEntitlementCap(totalAfterAdd, maxUsersCap);

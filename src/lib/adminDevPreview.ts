@@ -39,7 +39,17 @@ export function isAdminPanelDevPreview(): boolean {
   return isLocalhostDevPreview();
 }
 
+/** EXE/APK/static bundles omit `(admin)` routes — never show sidebar link in retail shells. */
+function isAdminPanelExcludedFromRetailBuild(isStaticAppBundle: boolean): boolean {
+  if (isStaticAppBundle) return true;
+  if (isCapacitorNativeApp()) return true;
+  const shell = getEmbeddedLockShellKind();
+  if (shell === "exe" || shell === "apk") return true;
+  return isElectronPackagedShell();
+}
+
 export function isAdminPanelNavVisible(isSuperAdminUser: boolean, isStaticAppBundle: boolean): boolean {
   if (isAdminPanelDevPreview()) return true;
+  if (isAdminPanelExcludedFromRetailBuild(isStaticAppBundle)) return false;
   return isSuperAdminUser;
 }

@@ -69,7 +69,7 @@ export function useAttachmentThumbDisplayUrl(
     filesNetworkAllowed?: boolean;
   }
 ): string | null {
-  const { companyId: shellCid } = useCompany();
+  const { companyId: shellCid, company } = useCompany();
   const companyId = companyIdProp ?? shellCid;
   const url = String(rawUrl || "").trim();
   const fallbackClientFileUrlsKey =
@@ -210,6 +210,7 @@ export function useAttachmentThumbDisplayUrl(
               if (!blob?.size) {
                 blob = await getRemoteAttachmentBlobPreferOfflineCache(remoteUrl, undefined, {
                   companyId: companyId ?? undefined,
+                  company,
                 });
               }
               if (blob?.size) {
@@ -236,6 +237,7 @@ export function useAttachmentThumbDisplayUrl(
         if (!blob?.size) {
           blob = await getRemoteAttachmentBlobPreferOfflineCache(url, undefined, {
             companyId: companyId ?? undefined,
+            company,
           });
         }
         if (cancelled || !blob?.size) return;

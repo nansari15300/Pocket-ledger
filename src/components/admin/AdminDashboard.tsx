@@ -28,7 +28,6 @@ import {
   AlertTriangle,
   ArrowUp,
   ArrowDown,
-  Calendar as CalendarIcon,
   BarChart2,
   Trash2,
   FileClock,
@@ -44,15 +43,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
-import { useCalendarMonths } from "@/hooks/use-mobile";
-import { startOfDay, endOfDay, format } from 'date-fns';
+import type { DateRange } from "@/components/ui/ad-calendar";
+import { startOfDay, endOfDay } from 'date-fns';
+import { AdminPanelDateRangePicker } from "@/components/admin/AdminPanelDateRangePicker";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
 import { Badge } from "@/components/ui/badge";
-import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 
@@ -593,8 +589,7 @@ export default function AdminDashboard() {
   useAdminAccess(['SuperAdmin', 'CompanyAdmin']);
   // Default: koi date filter nahi — saare vouchers/counts (BS range mismatch se 0 na ho jayein)
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
-  const { dateSystem } = useDate();
-  const calendarMonths = useCalendarMonths();
+  useDate();
 
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allCompanies, setAllCompanies] = useState<any[]>([]);
@@ -718,58 +713,11 @@ export default function AdminDashboard() {
   return (
     <div className="p-4 md:p-6 space-y-6 h-full overflow-y-auto">
         <div className="flex flex-wrap justify-end items-center gap-2">
-            {dateRadixReady ? (
-              <>
-            {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                <BsDatePicker isRange valueAD={dateRange} onChangeAD={(range) => setDateRange(range as DateRange | undefined)} />
-            )}
-            {(dateSystem === 'AD' || dateSystem === 'Both') && (
-                 <Popover>
-                    <PopoverTrigger asChild>
-                    <Button
-                        id="date"
-                        variant={"outline"}
-                        className={cn("w-auto justify-start text-left font-normal", !dateRange && "text-muted-foreground")}
-                    >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {dateRange?.from ? (
-                        dateRange.to ? (
-                            <>
-                            {format(dateRange.from, "LLL dd, y")} -{" "}
-                            {format(dateRange.to, "LLL dd, y")}
-                            </>
-                        ) : (
-                            format(dateRange.from, "LLL dd, y")
-                        )
-                        ) : (
-                        <span>Pick a date range</span>
-                        )}
-                    </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="end">
-                        <Calendar
-                            initialFocus
-                            mode="range"
-                            defaultMonth={dateRange?.from}
-                            selected={asCalendarRange(dateRange)}
-                            onSelect={setDateRange}
-                            numberOfMonths={calendarMonths}
-                        />
-                    </PopoverContent>
-                </Popover>
-            )}
-            {dateRange?.from && (
-              <Button type="button" variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setDateRange(undefined)}>
-                Clear range (all time)
-              </Button>
-            )}
-              </>
-            ) : (
-              <Button type="button" variant="outline" disabled className="pointer-events-none opacity-90 min-w-[200px] justify-start" aria-hidden>
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                <span>Loading date filters…</span>
-              </Button>
-            )}
+            <AdminPanelDateRangePicker
+              value={dateRange}
+              onChange={setDateRange}
+              ready={dateRadixReady}
+            />
         </div>
         <div className="grid gap-4 grid-cols-1 md:grid-cols-[35fr_65fr]">
             <UserStatsCard users={allUsers} loading={loading} />

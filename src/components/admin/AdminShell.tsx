@@ -18,30 +18,15 @@ import {
   useSidebar
 } from '../ui/sidebar'
 import { cn } from '@/lib/utils'
-import { isAdminPanelDevPreview } from '@/lib/adminDevPreview'
 
 const AdminHeader = dynamic(() => import("./AdminHeader").then((m) => m.AdminHeader), {
   loading: () => <header className="sticky top-0 z-30 h-16 border-b bg-background" />,
   ssr: false,
 });
 
-const AdminPanelCompanyShell = dynamic(
-  () =>
-    import("@/adminPanelCompany/components/AdminPanelCompanyShell").then((m) => m.AdminPanelCompanyShell),
-  {
-    loading: () => (
-      <div className="flex h-screen items-center justify-center text-sm text-muted-foreground">
-        Loading Admin Panel Company…
-      </div>
-    ),
-  }
-);
-
 export default function AdminShell({ children }: { children: React.ReactNode }) {
-  const devPreview = isAdminPanelDevPreview();
   const pathname = usePathname()
   const { isOpen, isMobile, setIsOpen } = useSidebar()
-  const isAdminPanelCompanyRoute = pathname === "/admin/company" || pathname.startsWith("/admin/company/");
 
   // Local/static app me global Firestore network band hota hai — admin sirf online server data use kare.
   useEffect(() => {
@@ -89,19 +74,9 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
     );
   }
 
-  // Isolated Admin Panel Company intentionally does not mount normal company/dashboard code.
-  if (isAdminPanelCompanyRoute) {
-    return <AdminPanelCompanyShell>{children}</AdminPanelCompanyShell>;
-  }
-
   // Admin borders/tables: `AdminRouteChrome` → `html.pl-admin-route` (globals.css), yahan extra class zaroori nahi.
   return (
     <div className="flex h-screen flex-col bg-background">
-      {devPreview ? (
-        <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm text-amber-950">
-          Localhost dev preview — Admin APIs still need SuperAdmin + Firebase. Production rules unchanged.
-        </div>
-      ) : null}
       <div className="flex min-h-0 flex-1">
       <Sidebar className="border-r">
         <SidebarHeader>

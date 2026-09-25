@@ -4,8 +4,8 @@ export const ROWS_PER_PAGE_OPTIONS_DEFAULT = [10, 15, 20, 30, 50] as const;
 /** Mobile pager: default options + 100. */
 export const ROWS_PER_PAGE_OPTIONS_MOBILE = [10, 15, 20, 30, 50, 100] as const;
 
-/** Staff ledger pagination dropdown options. */
-export const ROWS_PER_PAGE_OPTIONS_STAFF = [15, 30, 50, 100] as const;
+/** Staff ledger pagination dropdown — same tail options as party (10 & 20 included). */
+export const ROWS_PER_PAGE_OPTIONS_STAFF = [10, 15, 20, 30, 50, 100] as const;
 
 export function rowsPerPageSelectValue(
   rowsPerPage: number,

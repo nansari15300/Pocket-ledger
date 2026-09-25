@@ -11,7 +11,7 @@ type BuildVoucherLineItemOptionsArgs = {
   filteredItems: Array<{ id: string; name: string }>;
   allProcessedItems: Array<{ id: string; displayStockQty?: number; unitConversions?: unknown[] }>;
   items: Array<{ id: string; name: string; isDeleted?: boolean }>;
-  watchedLineItems: Array<{ itemId?: string } | undefined> | undefined;
+  watchedLineItems: Array<{ itemId?: string; name?: string } | undefined> | undefined;
 };
 
 /** Sale/Purchase line grid: None + tab-filtered items + saved rows (filter se bahar). */
@@ -44,7 +44,9 @@ export function buildVoucherLineItemComboboxOptions(
     const id = String(li?.itemId || "").trim();
     if (!id || byId.has(id)) return;
     const item = (items || []).find((i) => i.id === id && !i.isDeleted);
-    if (!item) return;
+    const savedName = String(li?.name ?? "").trim();
+    const displayName = item?.name || savedName;
+    if (!displayName) return;
     const stock = allProcessedItems.find((p) => p.id === id);
     const stockQty = stock?.displayStockQty ?? 0;
     const stockUnit =
@@ -53,7 +55,9 @@ export function buildVoucherLineItemComboboxOptions(
       ]?.toUnit || "";
     byId.set(id, {
       value: id,
-      label: `${item.name} (Stock: ${stockQty.toFixed(2)} ${stockUnit})`,
+      label: item
+        ? `${item.name} (Stock: ${stockQty.toFixed(2)} ${stockUnit})`
+        : displayName,
       isSpecial: stockQty <= 0,
     });
   });

@@ -50,6 +50,7 @@ import { auth } from "@/lib/firebase";
 import { markEmbeddedFullWarmSucceeded } from "@/lib/embeddedWarmBootstrapFlags";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 import { isDeviceLocalCompany, isServerGateCompany, shouldReadLedgerFromSqliteOnly } from "@/lib/companyStorageKind";
+import { shouldUseAttachmentLazyLoad } from "@/lib/webAttachmentLazyLoadPolicy";
 
 /** `_firestore_company_root` SQLite row — authoritative company snapshot for offline dashboards */
 export const COMPANY_ROOT_MIRROR_COLLECTION = "_firestore_company_root";
@@ -368,8 +369,8 @@ export async function runOfflineFullWarmSync(options: {
 
   if (signal?.aborted) return result;
 
-  if (!includeAttachmentPrefetch) {
-    // Explicit startup policy: skip global attachment crawl/download and mark stage complete.
+  if (!includeAttachmentPrefetch || shouldUseAttachmentLazyLoad(company)) {
+    // Explicit startup policy / online lazy: skip global attachment crawl/download.
     result.attachmentUrlsSeen = 0;
     result.prefetchCachedNew = 0;
     result.prefetchSkippedCache = 0;
@@ -508,6 +509,11 @@ export async function runEmbeddedAttachmentPrefetchPhase(args: {
       });
     }
     return null;
+  }
+
+  if (shouldUseAttachmentLazyLoad(company)) {
+    onProgressPercent?.(100);
+    return { attachmentUrlsSeen: 0, prefetchCachedNew: 0, prefetchSkippedCache: 0, prefetchFailures: 0 };
   }
 
   const isEmbeddedClient =

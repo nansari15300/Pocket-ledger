@@ -1,36 +1,55 @@
 "use client";
 
 /**
- * Web Chrome billing: company-wide Firebase attachment full prefetch OFF.
- * Visible page thumbs only; hover/click/edit-thumb-click → full bytes → permanent IDB.
- * EXE / APK / static embedded keep existing full warm (`isEmbeddedOfflinePreloadClient`).
+ * Attachment lazy load: visible-page + hover/click grant (web + EXE/APK online companies).
+ * Local / PL Server embedded shells keep company-wide warm for `local:` refs.
  */
 
+import type { Company } from "@/hooks/useCompany";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import { readFirebaseLedgerCompanySyncPrefs } from "@/lib/firebaseLedgerCompanySyncPrefs";
+import { companyUsesOnlineSelectorSyncTicks } from "@/lib/onlineCompanySelectorSyncPolicy";
 
-/** True for normal browser web (not EXE / APK / static embedded shell). */
-export function isWebBrowserAttachmentLazyLoad(): boolean {
+/** Web browser, or embedded Online (Company Selector) company — same lazy rules. */
+export function shouldUseAttachmentLazyLoad(
+  company?: Company | null,
+  companyId?: string | null
+): boolean {
   if (typeof window === "undefined") return false;
-  return !isEmbeddedOfflinePreloadClient();
+  if (!isEmbeddedOfflinePreloadClient()) return true;
+  if (company != null) return companyUsesOnlineSelectorSyncTicks(company);
+  const id = String(companyId || "").trim();
+  if (!id) return false;
+  try {
+    const prefs = readFirebaseLedgerCompanySyncPrefs();
+    return Object.prototype.hasOwnProperty.call(prefs.companies, id);
+  } catch {
+    return false;
+  }
 }
 
-/** Web: skip company-wide scrape / header % full-file prefetch. */
-export function shouldSkipCompanyWideAttachmentPrefetchOnWeb(): boolean {
-  return isWebBrowserAttachmentLazyLoad();
+/** @deprecated Prefer `shouldUseAttachmentLazyLoad(company)` when company row is available. */
+export function isWebBrowserAttachmentLazyLoad(company?: Company | null): boolean {
+  return shouldUseAttachmentLazyLoad(company);
+}
+
+/** Skip company-wide scrape / header % full-file prefetch. */
+export function shouldSkipCompanyWideAttachmentPrefetchOnWeb(company?: Company | null): boolean {
+  return shouldUseAttachmentLazyLoad(company);
 }
 
 /**
- * Web: idle list warm must not pull full blobs for every visible URL again
+ * Idle list warm must not pull full blobs for every visible URL again
  * (thumb path already caches permanently when preview loads).
  */
-export function shouldSkipVisibleRowFullIdlePrewarmOnWeb(): boolean {
-  return isWebBrowserAttachmentLazyLoad();
+export function shouldSkipVisibleRowFullIdlePrewarmOnWeb(company?: Company | null): boolean {
+  return shouldUseAttachmentLazyLoad(company);
 }
 
 /**
- * Web: green-tick / ready queue must not force Firebase download —
+ * Green-tick / ready queue must not force Firebase download —
  * cache hit or URL presence is enough; full bytes on hover/click/thumb path.
  */
-export function shouldSkipForcedAttachmentWarmQueueOnWeb(): boolean {
-  return isWebBrowserAttachmentLazyLoad();
+export function shouldSkipForcedAttachmentWarmQueueOnWeb(company?: Company | null): boolean {
+  return shouldUseAttachmentLazyLoad(company);
 }

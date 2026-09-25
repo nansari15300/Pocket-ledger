@@ -14,6 +14,37 @@ import { firestore } from "@/lib/firebase";
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
 import { isPureLocalInterCompanyCompany } from "@/lib/interCompany/localInterCompanyPolicy";
 
+function normalizeConnectUserEmail(email: string | null | undefined): string {
+  return String(email || "").trim().toLowerCase();
+}
+
+/** Manage Sharing invite list (not owner) — Connect User hide rules inapplicable jab ye true ho. */
+export function isEmailOnCompanyManageSharingList(
+  company:
+    | {
+        ownerEmail?: string | null;
+        sharedWith?: Array<{ email?: string | null }>;
+        sharedWithEmails?: unknown;
+      }
+    | null
+    | undefined,
+  email: string | null | undefined
+): boolean {
+  const normalized = normalizeConnectUserEmail(email);
+  if (!normalized || !company) return false;
+  const owner = normalizeConnectUserEmail(company.ownerEmail);
+  if (owner && normalized === owner) return false;
+  if (Array.isArray(company.sharedWith)) {
+    for (const entry of company.sharedWith) {
+      if (normalizeConnectUserEmail(entry?.email) === normalized) return true;
+    }
+  }
+  for (const raw of Array.isArray(company.sharedWithEmails) ? company.sharedWithEmails : []) {
+    if (normalizeConnectUserEmail(String(raw || "")) === normalized) return true;
+  }
+  return false;
+}
+
 export type InterCompanyConnectMasterKind = InterCompanyEntityKind;
 
 export type InterCompanyConnectMasterVisibility = Record<InterCompanyConnectMasterKind, boolean>;
@@ -331,11 +362,14 @@ export function resolveInterCompanyConnectUserAccess(args: {
   isCompanyOwnerOrAdmin: boolean;
   userEmail: string | null | undefined;
   connectUsers: InterCompanyConnectUserEntry[];
+  /** Manage Sharing listed user — full masters (Connect User restrictions lose). */
+  isManageSharingMember?: boolean;
   /** Host target grant — source company owner/admin par bhi connect list apply karo */
   ignoreOwnerAdminBypass?: boolean;
 }): InterCompanyConnectUserAccess {
   const full = fullInterCompanyConnectUserAccess();
   if (args.isCompanyOwnerOrAdmin && !args.ignoreOwnerAdminBypass) return full;
+  if (args.isManageSharingMember) return full;
   const entry = findInterCompanyConnectUserEntry(args.connectUsers, args.userEmail);
   if (!entry) return full;
   return connectAccessFromConnectUserEntry(entry);

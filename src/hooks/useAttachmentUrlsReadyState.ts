@@ -13,7 +13,7 @@ import { shouldSkipForcedAttachmentWarmQueueOnWeb } from "@/lib/webAttachmentLaz
 
 /** Transaction / entity file column — spinner jab load ho raha ho, green tick jab bytes ready. */
 export function useAttachmentUrlsReadyState(urls: readonly string[]): "loading" | "ready" {
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
   const stableKey = useMemo(
     () =>
       [...new Set(urls.map((u) => String(u || "").trim()).filter(Boolean))]
@@ -32,7 +32,7 @@ export function useAttachmentUrlsReadyState(urls: readonly string[]): "loading" 
     if (!stableKey) return;
     let cancelled = false;
     const cid = companyId?.trim() || undefined;
-    const webLazy = shouldSkipForcedAttachmentWarmQueueOnWeb();
+    const webLazy = shouldSkipForcedAttachmentWarmQueueOnWeb(company);
     void (async () => {
       for (const u of urls) {
         if (cancelled) break;
@@ -52,7 +52,7 @@ export function useAttachmentUrlsReadyState(urls: readonly string[]): "loading" 
     return () => {
       cancelled = true;
     };
-  }, [stableKey, urls, companyId]);
+  }, [stableKey, urls, companyId, company]);
 
   return state;
 }

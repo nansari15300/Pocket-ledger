@@ -8,8 +8,8 @@
 import { collection, getDoc, getDocs, query, Timestamp, where, doc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { saveVoucher } from "@/lib/voucherActionsClient";
-import { getVoucherLedgerDebitCreditForAccount } from "@/lib/journalLedgerAmounts";
 import { voucherTouchesPartyLedger } from "@/lib/voucherTouchesPartyLedger";
+import { getRpLedgerDebitCredit, type RpLedgerContext } from "@/lib/receivablesPayablesLedgerAmounts";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
@@ -41,6 +41,8 @@ export type CopyLedgerComparisonRow = {
   id: string;
   voucherNumber: string;
   type: string;
+  /** Journal add_salary etc. — ledger Type column ke liye (`getDisplayType`). */
+  subType?: string;
   rawDate?: unknown;
   dateLabel: string;
   narration: string;
@@ -285,6 +287,63 @@ export function ledgerNarrationFromVoucher(v: Record<string, unknown>): string {
   return narration || "-";
 }
 
+/** Sync ledger compare popup — entity bucket → same Dr/Cr rules as party/staff/bank detail ledger. */
+export type CopyCompareLedgerContext = RpLedgerContext | "auto";
+
+const COPY_COMPARE_AUTO_CONTEXTS: RpLedgerContext[] = ["party", "staff", "account", "tax", "expense"];
+
+export function copyCompareBucketToLedgerContext(
+  bucket: "all" | "party" | "bank" | "staff" | "tax" | "income_expense"
+): CopyCompareLedgerContext {
+  switch (bucket) {
+    case "party":
+      return "party";
+    case "staff":
+      return "staff";
+    case "bank":
+      return "account";
+    case "tax":
+      return "tax";
+    case "income_expense":
+      return "expense";
+    default:
+      return "auto";
+  }
+}
+
+export function reconciliationCollectionToLedgerContext(collection: string): RpLedgerContext {
+  switch (String(collection || "").trim()) {
+    case "bank_accounts":
+      return "account";
+    case "staff":
+      return "staff";
+    case "taxes":
+      return "tax";
+    case "expense_accounts":
+      return "expense";
+    default:
+      return "party";
+  }
+}
+
+/** Detail ledger jaisa is entity ki leg — payment_out party/staff par Dr, bank par Cr, etc. */
+export function resolveCopyCompareLedgerDebitCredit(
+  v: Record<string, unknown>,
+  entityId: string,
+  context: CopyCompareLedgerContext = "party"
+): { debit: number; credit: number } {
+  const id = String(entityId || "").trim();
+  if (!id || !v) return { debit: 0, credit: 0 };
+  if (context !== "auto") {
+    return getRpLedgerDebitCredit(v, id, context);
+  }
+  for (const ctx of COPY_COMPARE_AUTO_CONTEXTS) {
+    const r = getRpLedgerDebitCredit(v, id, ctx);
+    if (r.debit > 0 || r.credit > 0) return r;
+  }
+  return getRpLedgerDebitCredit(v, id, "party");
+}
+
 /**
  * Compare list builder: selected vouchers ke liye missing target references + dr/cr check metadata.
  * `targetKnownIds` me woh ids do jo target company me valid hain (e.g. target parties ids).
@@ -295,8 +354,9 @@ export function buildCopyLedgerComparison(params: {
   selectedVoucherIds?: string[];
   idMap?: Record<string, string>;
   targetKnownIds: Set<string>;
+  ledgerContext?: CopyCompareLedgerContext;
 }): { rows: CopyLedgerComparisonRow[]; unresolvedIds: string[] } {
-  const { vouchers, sourcePartyId, selectedVoucherIds, idMap, targetKnownIds } = params;
+  const { vouchers, sourcePartyId, selectedVoucherIds, idMap, targetKnownIds, ledgerContext = "party" } = params;
   const selectedSet = new Set((selectedVoucherIds || []).map((x) => String(x)));
   const effectiveMap = { ...(idMap || {}) };
   const unresolved = new Set<string>();
@@ -316,8 +376,8 @@ export function buildCopyLedgerComparison(params: {
         unresolved.add(srcId);
       }
     }
-    // Is ledger account ki leg — journal me voucher total nahi (recon flip: remote Dr → owned Cr).
-    const legAmounts = getVoucherLedgerDebitCreditForAccount(v, sourcePartyId);
+    // Is ledger account ki leg — party/staff/bank detail ledger ke same Dr/Cr rules.
+    const legAmounts = resolveCopyCompareLedgerDebitCredit(v, sourcePartyId, ledgerContext);
     let debit = legAmounts.debit;
     let credit = legAmounts.credit;
     const amount = toAmount(Math.max(debit, credit, toAmount(v.total ?? v.amount ?? 0)));
@@ -326,10 +386,12 @@ export function buildCopyLedgerComparison(params: {
       crefRaw?.companyId && crefRaw?.voucherId
         ? { companyId: String(crefRaw.companyId), voucherId: String(crefRaw.voucherId) }
         : undefined;
+    const subTypeRaw = v.subType;
     rows.push({
       id,
       voucherNumber: String(v.voucherNumber || "—"),
       type: String(v.type || "voucher"),
+      subType: subTypeRaw != null && String(subTypeRaw).trim() !== "" ? String(subTypeRaw) : undefined,
       rawDate: v.date,
       dateLabel: toDateLabel(v.date),
       narration: ledgerNarrationFromVoucher(v),

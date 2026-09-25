@@ -25,7 +25,8 @@ import {
   interCompanyDropdownContentClass,
   interCompanyAccountFieldsRowClass,
   interCompanyAccountFieldsRowSimpleClass,
-  interCompanyAccountNameFieldColClass,
+  interCompanyAccountNameFieldColSimpleClass,
+  interCompanyAccountTypeFieldColClass,
   interCompanyFieldColClass,
   interCompanyIcReadonlyFieldClass,
   interCompanyInputClass,
@@ -250,7 +251,7 @@ export function InterCompanySourcePaySection({
                 simpleView ? interCompanyAccountFieldsRowSimpleClass : interCompanyAccountFieldsRowClass
               )}
             >
-              <div className={interCompanyFieldColClass}>
+              <div className={interCompanyAccountTypeFieldColClass}>
                 <Label className="text-xs text-muted-foreground">Type</Label>
                 <Input
                   readOnly
@@ -258,7 +259,7 @@ export function InterCompanySourcePaySection({
                   className={cn(interCompanyInputClass, interCompanyIcReadonlyFieldClass, "text-muted-foreground")}
                 />
               </div>
-              <div className={cn(interCompanyAccountNameFieldColClass, "min-w-0 flex-1")}>
+              <div className={interCompanyAccountNameFieldColSimpleClass}>
                 <Label className="text-xs text-muted-foreground">Account name</Label>
                 {accountNameHint ? (
                   <p className="text-[11px] leading-snug text-amber-800 dark:text-amber-200">{accountNameHint}</p>

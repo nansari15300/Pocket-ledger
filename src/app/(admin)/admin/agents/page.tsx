@@ -9,19 +9,16 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Loader2, Check, X, Search, User, Filter, Calendar as CalendarIcon, Wallet, Edit } from "lucide-react";
+import { Loader2, Check, X, Search, User, Filter, Wallet, Edit } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { formatDistanceToNow, format } from "date-fns";
+import { formatDistanceToNow } from "date-fns";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
-import BsDatePicker from "@/components/ui/BsDatePicker";
-import { useCalendarMonths } from "@/hooks/use-mobile";
-import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
+import type { DateRange } from "@/components/ui/ad-calendar";
+import { AdminPanelDateRangePicker } from "@/components/admin/AdminPanelDateRangePicker";
 import { CommissionPayoutDialog } from "@/components/admin/CommissionPayoutDialog";
 import { DistributorApplicationDialog } from "@/components/admin/DistributorApplicationDialog";
 import { FilePreview } from "@/components/vouchers/FilePreview";
@@ -57,7 +54,6 @@ export default function AgentsPage() {
   const [activeTab, setActiveTab] = useState<'approved' | 'pending' | 'rejected'>('approved');
   const [searchTerm, setSearchTerm] = useState('');
   const { formatCurrency, dateSystem, formatDate, formatDateBS } = useDate();
-  const calendarMonths = useCalendarMonths();
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [isPayoutOpen, setIsPayoutOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
@@ -253,46 +249,7 @@ export default function AgentsPage() {
                          <div className="border-t pt-8">
                             <div className="flex justify-between items-center mb-4">
                                 <h3 className="text-lg font-semibold">Distributor Commission Details</h3>
-                                <div className="flex items-center gap-2">
-                                     {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                                        <BsDatePicker isRange valueAD={dateRange} onChangeAD={(range) => setDateRange(range)} />
-                                    )}
-                                    {(dateSystem === 'AD' || dateSystem === 'Both') && (
-                                        <Popover>
-                                            <PopoverTrigger asChild>
-                                            <Button
-                                                id="date"
-                                                variant={"outline"}
-                                                className={cn("w-auto justify-start text-left font-normal", !dateRange && "text-muted-foreground")}
-                                            >
-                                                <CalendarIcon className="mr-2 h-4 w-4" />
-                                                {dateRange?.from ? (
-                                                dateRange.to ? (
-                                                    <>
-                                                    {format(dateRange.from, "LLL dd, y")} -{" "}
-                                                    {format(dateRange.to, "LLL dd, y")}
-                                                    </>
-                                                ) : (
-                                                    format(dateRange.from, "LLL dd, y")
-                                                )
-                                                ) : (
-                                                <span>Pick a date range</span>
-                                                )}
-                                            </Button>
-                                            </PopoverTrigger>
-                                            <PopoverContent className="w-auto p-0" align="end">
-                                                <Calendar
-                                                    initialFocus
-                                                    mode="range"
-                                                    defaultMonth={dateRange?.from}
-                                                    selected={asCalendarRange(dateRange)}
-                                                    onSelect={setDateRange}
-                                                    numberOfMonths={calendarMonths}
-                                                />
-                                            </PopoverContent>
-                                        </Popover>
-                                    )}
-                                </div>
+                                <AdminPanelDateRangePicker value={dateRange} onChange={setDateRange} />
                             </div>
                                 <Table>
                                     <TableHeader>

@@ -59,7 +59,8 @@ import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { createMasterEntityGroupMoveHandler } from "@/lib/createMasterEntityGroupMoveHandler";
 import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
-import { ITEM_GROUP_LIST_CONFIG } from "@/lib/masterGroupListConfigs";
+import { isAdminPanelCompanyLocalId } from "@/lib/adminPanelCompany/ledgerMode";
+import { resolveItemGroupListConfigForCompany } from "@/lib/adminPanelCompany/resolveItemGroupListConfig";
 import { computeMasterGroupListSearchVisibleCount } from "@/lib/masterGroupListTree";
 import { itemGroupTreeMove } from "@/lib/masterEntityGroupTreeMoveHelpers";
 import { itemGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
@@ -239,6 +240,11 @@ function ItemsPageContent() {
   const itemsMasterDetailTitle = activeView === "groups" ? "Item Groups" : "Items";
   useSyncMasterDetailHeaderId("items", selectedItem?.id ?? selectedItemGroupRaw?.id ?? null);
 
+  const itemGroupListConfig = useMemo(
+    () => resolveItemGroupListConfigForCompany(companyId),
+    [companyId]
+  );
+
   const processedItemGroups = useMemo(() => {
     const userGroups = initialProcessedItemGroups.filter((g) => {
       const anyG = g as any;
@@ -247,6 +253,9 @@ function ItemsPageContent() {
       if (isSystemParentGroup("item_groups", anyG.id)) return false;
       return true;
     });
+    if (isAdminPanelCompanyLocalId(companyId)) {
+      return userGroups;
+    }
     return appendMasterEntitySystemBranchGroups(
       userGroups,
       ITEM_ENTITY_GROUP_PRESET,
@@ -493,7 +502,7 @@ function ItemsPageContent() {
   const filteredGroupCount = useMemo(() => {
     return computeMasterGroupListSearchVisibleCount({
       groups: processedItemGroupsForList || [],
-      config: ITEM_GROUP_LIST_CONFIG,
+      config: itemGroupListConfig,
       searchTerm,
       quickFilter: groupListQuickFilter,
       groupMembersByGroupId: itemGroupMembersByGroupId,
@@ -509,6 +518,7 @@ function ItemsPageContent() {
     searchTerm,
     groupListQuickFilter,
     itemGroupMembersByGroupId,
+    itemGroupListConfig,
   ]);
 
   const handleSelect = useCallback((item: Item | ItemGroup, options?: GroupListSelectOptions) => {
@@ -561,10 +571,10 @@ function ItemsPageContent() {
         company,
         groupsForName: processedItemGroups,
         allGroups: initialProcessedItemGroups,
-        config: ITEM_GROUP_LIST_CONFIG,
+        config: itemGroupListConfig,
         moveHelpers: itemGroupTreeMove,
       })(sourceGroupId, targetGroupId),
-    [companyId, company, processedItemGroups, initialProcessedItemGroups]
+    [companyId, company, processedItemGroups, initialProcessedItemGroups, itemGroupListConfig]
   );
 
   if (!companyId) {

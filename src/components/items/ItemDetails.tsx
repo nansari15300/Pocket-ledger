@@ -100,6 +100,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useDateRangeTimestamps } from "@/hooks/useLedgerDetailDateRange";
+import { useLedgerPaginationReset } from "@/hooks/useLedgerPaginationReset";
 import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { Dialog, DialogHeader, DialogTitle, DialogContent, DialogDescription } from "@/components/ui/dialog";
@@ -247,6 +248,7 @@ export default function ItemDetails({
   useFyLoadOnDateRangeChange(dateRange);
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerPaginationReset = useLedgerPaginationReset(setRowsPerPage, setCurrentPage);
   const ledgerViewMode: LedgerDetailViewMode =
     balanceMode === "bill_wise" ? "bill_wise" : "statement";
   const ledgerSessionKey = useMemo(
@@ -1032,6 +1034,7 @@ export default function ItemDetails({
                        <NepaliCalendar
                           rangePresetSlot={
                             <MasterLedgerDateRangePresetRow
+                              ledgerPaginationReset={ledgerPaginationReset}
                               country={company?.country}
                               onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                               onApply={(r) => {
@@ -1052,6 +1055,7 @@ export default function ItemDetails({
                         <AdCalendar
                           rangePresetSlot={
                             <MasterLedgerDateRangePresetRow
+                              ledgerPaginationReset={ledgerPaginationReset}
                               country={company?.country}
                               onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                               onApply={(r) => {
@@ -1145,6 +1149,7 @@ export default function ItemDetails({
               <BsDatePicker
                 isRange
                 masterLedgerDatePresets
+                ledgerPaginationReset={ledgerPaginationReset}
                 valueAD={dateRange}
                 onChangeAD={handleBsDateRangeChange}
                 transactionDates={transactionDates}
@@ -1170,6 +1175,7 @@ export default function ItemDetails({
                   <AdCalendar
                     rangePresetSlot={
                       <MasterLedgerDateRangePresetRow
+                        ledgerPaginationReset={ledgerPaginationReset}
                         country={company?.country}
                         onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                         onApply={(r) => {

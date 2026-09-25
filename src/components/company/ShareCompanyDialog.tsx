@@ -21,10 +21,12 @@ import {
 } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { type PlanId } from "@/config/plans";
+import { resolveAccountPlanIdForEntitlements } from "@/lib/accountPlanForOwner";
 import {
-  collectAccountWideShareMemberEmails,
+  bucketForCompanyUserCap,
+  collectAccountBucketShareMemberEmails,
   formatShareUserCapMessage,
-  resolveAccountShareUserCap,
+  resolveCompanyShareUserCap,
   wouldBlockNewShareInvite,
 } from "@/lib/accountShareUserCap";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
@@ -77,7 +79,7 @@ export function ShareCompanyDialog({
   const { toast } = useToast();
   const [showPassword, setShowPassword] = useState(false);
   const livePlans = useLivePlans();
-  const { reloadLocalCompanyRegistry, triggerSync } = useCompany();
+  const { reloadLocalCompanyRegistry, triggerSync, allCompanies, allCompaniesRegistry } = useCompany();
   const { user, customUser } = useAuth();
 
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : internalIsOpen;
@@ -234,35 +236,48 @@ export function ShareCompanyDialog({
               return;
             }
 
-            // Users are an account-wide allowance: count unique invitees across every company
-            // owned by this account, not only the currently selected company.
+            // Account-wide bucket cap: all online companies share maxUsers; all local share maxUsersLocal.
             const ownerUid = String(currentData?.ownerId || company.ownerId || user?.uid || "").trim();
-            const [ownerUserSnap, ownedCompaniesSnap] = await Promise.all([
-              ownerUid ? getDoc(doc(firestore, "users", ownerUid)) : Promise.resolve(null),
-              ownerUid
-                ? getDocs(query(collection(firestore, "companies"), where("ownerId", "==", ownerUid)))
-                : Promise.resolve(null),
-            ]);
+            const ownerUserSnap = ownerUid
+              ? await getDoc(doc(firestore, "users", ownerUid))
+              : null;
             const ownerUserData = ownerUserSnap?.exists()
               ? (ownerUserSnap.data() as Record<string, unknown>)
               : null;
-            const accountPlanId = String(
-              ownerUserData?.accountCanonicalPlanId ||
-                (ownerUid === user?.uid ? customUser?.accountCanonicalPlanId : "") ||
-                company.planId ||
-                "basic"
+            const accountPlanId = resolveAccountPlanIdForEntitlements(
+              ownerUserData,
+              allCompanies,
+              ownerUid,
+              company.planId,
+              customUser?.accountCanonicalPlanId
             ) as PlanId;
             const plan = getPlanFromPlans(livePlans, accountPlanId);
-            const maxUsers = resolveAccountShareUserCap(
-              plan,
-              company.storageOption,
-              ownerUserData
-            );
-            const memberEmails = collectAccountWideShareMemberEmails({
+            const capCompany = {
+              storageOption: currentData?.storageOption ?? company.storageOption,
+              syncedFromCloud:
+                currentData?.syncedFromCloud ?? (company as { syncedFromCloud?: boolean }).syncedFromCloud,
+            };
+            const maxUsers = resolveCompanyShareUserCap(plan, capCompany, ownerUserData);
+            const bucket = bucketForCompanyUserCap(capCompany);
+            const ownedSnap = ownerUid
+              ? await getDocs(query(collection(firestore, "companies"), where("ownerId", "==", ownerUid)))
+              : null;
+            const ownedRows = (ownedSnap?.docs ?? []).map((row) => {
+              const data = row.data() as {
+                sharedWithEmails?: unknown;
+                ownerEmail?: unknown;
+                storageOption?: string | null;
+                syncedFromCloud?: boolean;
+              };
+              return data;
+            });
+            const localRegistry = allCompaniesRegistry?.length ? allCompaniesRegistry : allCompanies;
+            const memberEmails = collectAccountBucketShareMemberEmails({
               ownerEmail: String(currentData?.ownerEmail || company.ownerEmail || ""),
-              ownedCompanyRows: (ownedCompaniesSnap?.docs ?? []).map((row) =>
-                row.data() as { sharedWithEmails?: unknown; ownerEmail?: unknown }
-              ),
+              ownerUid,
+              bucket,
+              firestoreOwnedCompanyRows: ownedRows,
+              localRegistryRows: localRegistry ?? [],
             });
             if (
               wouldBlockNewShareInvite({

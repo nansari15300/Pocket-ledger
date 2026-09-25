@@ -17,14 +17,32 @@ import {
   useMasterListRowMotion,
 } from "@/hooks/useMasterListRowMotion";
 import { GROUP_LIST_CHILD_INDENT_CLASS } from "@/lib/groupListExpand";
-import type { RpDialogRow, RpDialogSection } from "@/lib/receivablesPayablesDialogUi";
+import type { RpDialogRow, RpDialogSection, RpEntityKind } from "@/lib/receivablesPayablesDialogUi";
 import { rpDialogRowSelectionKey } from "@/lib/receivablesPayablesDialogUi";
 import { DIALOG_DIM_GREEN_BORDER } from "@/lib/dialogShellChrome";
+import { chromeProPillCn, chromeProPillTextCn } from "@/lib/chromePillButton";
 
 export type RpDialogListMotion = ReturnType<typeof useMasterListRowMotion>;
 
 /** R/P dialog inner boxes — same dim green as popup shell. */
 export const RP_DIALOG_DIM_GREEN_BORDER = DIALOG_DIM_GREEN_BORDER;
+
+const RP_RIBBON_HEIGHT_CN = "h-[27px] min-h-[27px]";
+
+/** R/P popup shell — globals.css scoped borders (dashboard-financial-popup 0.4px override se bachne). */
+export const RP_DIALOG_SHELL_ATTR = { "data-pl-rp-dialog-shell": "" } as const;
+export const RP_DIALOG_HEADER_DIVIDER_CN =
+  "data-pl-rp-header-divider shrink-0 w-full border-t border-gray-300 dark:border-gray-600";
+export const RP_DIALOG_GROUP_DIVIDER_CN =
+  "data-pl-rp-group-divider my-[3px] w-full border-t border-gray-300 dark:border-gray-600";
+
+/** Print pill jaisa — charo taraf blue border. */
+const RP_CATEGORY_RIBBON_BAR_CN = cn(
+  chromeProPillCn,
+  RP_RIBBON_HEIGHT_CN,
+  "flex min-w-0 items-center rounded-md px-2 hover:bg-blue-100/80",
+  "!border-[1px] !border-blue-300"
+);
 
 export function rpDialogListScrollHandlers(motion: RpDialogListMotion) {
   return {
@@ -484,6 +502,9 @@ export function ReceivablesPayablesDialogEntityList({
   const { animatePresenceMode, rowMotionProps, isRowAnimationEnabled, layoutHoldMs } = listMotion;
   const amountClass = side === "receivables" ? "text-green-600 dark:text-green-500" : "text-red-600 dark:text-red-500";
   const [expandedIcCompanyIds, setExpandedIcCompanyIds] = useState<Set<string>>(() => new Set());
+  const [expandedSectionKinds, setExpandedSectionKinds] = useState<Set<RpEntityKind>>(
+    () => new Set(["party"])
+  );
   const [listFilter, setListFilter] = useState("");
   const { formatCurrencyForPrint } = useDate();
   const formatAmountText = useCallback(
@@ -537,63 +558,128 @@ export function ReceivablesPayablesDialogEntityList({
     });
   };
 
+  const toggleSectionExpanded = (kind: RpEntityKind) => {
+    setExpandedSectionKinds((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  };
+
+  const isSectionExpanded = (kind: RpEntityKind, sectionHasRows: boolean) => {
+    if (highlightQuery && sectionHasRows) return true;
+    return expandedSectionKinds.has(kind);
+  };
+
+  const mobileSearchSectionKind = useMemo((): RpEntityKind | null => {
+    if (!isMobile) return null;
+    if (filteredSections.some((s) => s.kind === "party")) return "party";
+    return filteredSections[0]?.kind ?? null;
+  }, [filteredSections, isMobile]);
+
+  const renderListSearch = (compact: boolean) => (
+    <div
+      className={cn("relative min-w-0", compact ? "w-full" : "flex-1")}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <Input
+        value={listFilter}
+        onChange={(e) => setListFilter(e.target.value)}
+        placeholder="Name or amount"
+        className={cn(
+          compact
+            ? cn(
+                RP_RIBBON_HEIGHT_CN,
+                "w-full rounded-md border-blue-300 bg-white text-xs font-normal normal-case tracking-normal text-foreground shadow-none placeholder:text-muted-foreground dark:bg-white/95"
+              )
+            : "h-9 min-w-0 w-full text-sm shadow-sm",
+          listFilter && (compact ? "pr-8" : "pr-9")
+        )}
+      />
+      {listFilter ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "absolute right-0.5 top-1/2 -translate-y-1/2 rounded-full text-muted-foreground",
+            compact ? "h-6 w-6 hover:bg-white/80 hover:text-foreground" : "h-7 w-7"
+          )}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setListFilter("");
+          }}
+          aria-label="Clear search"
+        >
+          <X className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
+        </Button>
+      ) : null}
+    </div>
+  );
+
   return (
     <div
-      data-pl-master-list-chrome
       data-pl-rp-dialog=""
       data-theme-list="account-list"
-      className="min-w-0 space-y-3 px-0.5 pb-1"
+      className="min-w-0 space-y-0 px-0 pb-1"
     >
-      {filteredSections.map((section) =>
-        section.rows.length > 0 ? (
-          <div
-            key={section.kind}
-            data-pl-rp-category=""
+      {!isMobile ? (
+        <div className="relative min-w-0">{renderListSearch(false)}</div>
+      ) : null}
+      {filteredSections.map((section, sectionIndex) => {
+        if (section.rows.length === 0) return null;
+        const sectionExpanded = isSectionExpanded(section.kind, section.rows.length > 0);
+        const showMobileSearch = isMobile && mobileSearchSectionKind === section.kind;
+        const ribbonToggle = (
+          <button
+            type="button"
+            aria-expanded={sectionExpanded}
+            onClick={() => toggleSectionExpanded(section.kind)}
             className={cn(
-              "min-w-0 overflow-hidden rounded-lg border bg-emerald-50/25 shadow-sm dark:bg-emerald-950/10",
-              RP_DIALOG_DIM_GREEN_BORDER
+              "flex h-full min-w-0 w-full items-center gap-2 text-left text-xs font-semibold uppercase tracking-wide",
+              chromeProPillTextCn
             )}
           >
-            <div
-              data-pl-rp-category-header=""
+            <ChevronDown
               className={cn(
-                "flex min-w-0 items-center gap-2 border-b bg-gradient-to-r from-emerald-600/75 via-emerald-600/70 to-emerald-700/65 px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wide text-white/90",
-                "border-emerald-400/35 dark:border-emerald-800/40 dark:from-emerald-900/70 dark:via-emerald-900/60 dark:to-emerald-950/55 dark:text-emerald-50/90"
+                "h-4 w-4 shrink-0 transition-transform duration-200",
+                sectionExpanded ? "rotate-180" : "rotate-0"
               )}
-            >
-              <span className="shrink-0 whitespace-nowrap">
-                {section.label} ({section.rowCount ?? section.rows.length})
-              </span>
-              <div className="relative min-w-0 flex-1">
-                <Input
-                  value={listFilter}
-                  onChange={(e) => setListFilter(e.target.value)}
-                  placeholder="Name or amount"
-                  className={cn(
-                    "h-7 min-w-0 w-full border-white/35 bg-white/95 text-xs font-normal normal-case tracking-normal text-foreground shadow-sm placeholder:text-muted-foreground dark:bg-white/90",
-                    listFilter && "pr-8"
-                  )}
-                  onClick={(e) => e.stopPropagation()}
-                />
-                {listFilter ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="absolute right-0.5 top-1/2 h-6 w-6 -translate-y-1/2 rounded-full text-muted-foreground hover:bg-white/80 hover:text-foreground"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setListFilter("");
-                    }}
-                    aria-label="Clear search"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
-                ) : null}
+            />
+            <span className="truncate">
+              {section.label} ({section.rowCount ?? section.rows.length})
+            </span>
+          </button>
+        );
+        return (
+          <div key={section.kind} data-pl-rp-category="" className="min-w-0">
+            {sectionIndex > 0 ? (
+              <div
+                className={cn(
+                  RP_DIALOG_GROUP_DIVIDER_CN,
+                  isMobile && "-mx-2 w-[calc(100%+1rem)]"
+                )}
+                aria-hidden
+              />
+            ) : null}
+            {showMobileSearch ? (
+              <div className="mb-0 grid min-w-0 grid-cols-2 gap-[3px]">
+                <div data-pl-rp-category-header="" className={cn(RP_CATEGORY_RIBBON_BAR_CN, "mb-0 min-w-0 w-full")}>
+                  {ribbonToggle}
+                </div>
+                <div data-pl-rp-list-search="" className="min-w-0 w-full">
+                  {renderListSearch(true)}
+                </div>
               </div>
-            </div>
-            <ul className="pl-master-list-ul min-w-0 space-y-[3px] p-1.5">
+            ) : (
+              <div data-pl-rp-category-header="" className={cn(RP_CATEGORY_RIBBON_BAR_CN, "mb-0 w-full")}>
+                {ribbonToggle}
+              </div>
+            )}
+            {sectionExpanded ? (
+            <ul className="pl-master-list-ul min-w-0 space-y-[3px] pb-0">
               <AnimatePresence mode={animatePresenceMode}>
                 {section.rows.map((row) => {
                   const rowKey = `${section.kind}-${row.entityId || row.party}`;
@@ -642,9 +728,10 @@ export function ReceivablesPayablesDialogEntityList({
                 })}
               </AnimatePresence>
             </ul>
+            ) : null}
           </div>
-        ) : null
-      )}
+        );
+      })}
     </div>
   );
 }

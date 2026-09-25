@@ -23,6 +23,18 @@ import { appendLocalCompanyUserClient, parseLocalCompanyUserRows, upsertUserInLi
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import type { Company } from "@/hooks/useCompany";
+import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
+import { doc, getDoc } from "firebase/firestore";
+import { firestore } from "@/lib/firebase";
+import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
+import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import {
+  collectLocalBucketShareMemberEmails,
+  formatShareUserCapMessage,
+  resolveCompanyShareUserCap,
+  wouldBlockNewShareInvite,
+} from "@/lib/accountShareUserCap";
 import { addDriveShareUserToLocalCompany } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import { LOCAL_COMPANY_APP_ROLES, normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
@@ -55,6 +67,9 @@ export function AddLocalCompanyUserDialog({
   companyName,
 }: Props) {
   const isDriveShare = variant === "driveShare";
+  const { user } = useAuth();
+  const { allCompanies, allCompaniesRegistry } = useCompany();
+  const livePlans = useLivePlans();
   const [displayName, setDisplayName] = useState("");
   const [loginUsername, setLoginUsername] = useState("");
   const [shareGmail, setShareGmail] = useState("");
@@ -136,6 +151,36 @@ export function AddLocalCompanyUserDialog({
         description: "Enter a valid Gmail to share this company folder on Google Drive.",
       });
       return;
+    }
+
+    const ownerUid = String(company.ownerId || user?.uid || "").trim();
+    if (ownerUid) {
+      try {
+        const ownerSnap = await getDoc(doc(firestore, "users", ownerUid));
+        const ownerUserData = ownerSnap.exists()
+          ? (ownerSnap.data() as Record<string, unknown>)
+          : null;
+        const planId = resolveEffectiveAccountPlanId(allCompanies, ownerUid, company.planId);
+        const plan = getPlanFromPlans(livePlans, planId);
+        const maxUsers = resolveCompanyShareUserCap(plan, company, ownerUserData);
+        const registry = allCompaniesRegistry?.length ? allCompaniesRegistry : allCompanies;
+        const memberEmails = collectLocalBucketShareMemberEmails({
+          ownerEmail: company.ownerEmail,
+          ownerUid,
+          localRegistryRows: registry ?? [],
+        });
+        const inviteKey = (isDriveShare ? gmail : u).trim().toLowerCase();
+        if (wouldBlockNewShareInvite({ memberEmails, inviteEmail: inviteKey, maxUsers })) {
+          toast({
+            variant: "destructive",
+            title: "Plan limit reached",
+            description: formatShareUserCapMessage(maxUsers),
+          });
+          return;
+        }
+      } catch {
+        /* cap check optional — save still allowed if Firestore unavailable */
+      }
     }
 
     setLoading(true);

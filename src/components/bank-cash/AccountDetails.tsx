@@ -116,6 +116,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { useInterCompanyLedgerChangeDetectDialog } from "@/hooks/useInterCompanyLedgerChangeDetectDialog";
 import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillLabel";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
@@ -127,6 +128,7 @@ import { readMasterAccountFrozen } from "@/lib/masterAccountFreeze/types";
 import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { useLedgerPaginationReset } from "@/hooks/useLedgerPaginationReset";
 import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
@@ -241,6 +243,7 @@ export function AccountDetails({
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerPaginationReset = useLedgerPaginationReset(setRowsPerPage, setCurrentPage);
   // Radix rows Select — value list me honi chahiye (LedgerDesktopFooter pagination)
   const { selectValue: rowsPerPageSelectValue, onSelectValueChange: handleRowsPerPageChange } =
     useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_DEFAULT, "10");
@@ -455,6 +458,9 @@ export function AccountDetails({
   const handleTransactionOpen = useCallback((voucher: any) => {
     handleEditVoucher(voucher);
   }, [handleEditVoucher]);
+
+  const { handleInterCompanyChangeDetectedClick, interCompanyChangeDetectDialog } =
+    useInterCompanyLedgerChangeDetectDialog(() => onAccountUpdated(account));
   
   let { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(account, 'account', dateRange, undefined, allAccounts, transactions, undefined, filters, undefined, undefined, userNames);
   const { processedTransactions: allProcessedTransactions } = useTransactions(account, 'account', undefined, undefined, allAccounts, transactions, undefined, filters, undefined, undefined, userNames);
@@ -1712,6 +1718,7 @@ export function AccountDetails({
             userNames={userNames}
             accountNames={accountNamesMap}
             onRowClick={handleTransactionOpen}
+            onInterCompanyChangeDetectedClick={handleInterCompanyChangeDetectedClick}
             filters={filters}
             setFilters={setFilters}
             activeFilter={activeFilter}
@@ -1797,6 +1804,7 @@ export function AccountDetails({
                        <NepaliCalendar
                           rangePresetSlot={
                             <MasterLedgerDateRangePresetRow
+                              ledgerPaginationReset={ledgerPaginationReset}
                               country={company?.country}
                               onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                               onApply={(r) => {
@@ -1817,6 +1825,7 @@ export function AccountDetails({
                         <AdCalendar
                           rangePresetSlot={
                             <MasterLedgerDateRangePresetRow
+                              ledgerPaginationReset={ledgerPaginationReset}
                               country={company?.country}
                               onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                               onApply={(r) => {
@@ -1922,6 +1931,7 @@ export function AccountDetails({
                 <BsDatePicker
                   isRange
                   masterLedgerDatePresets
+                  ledgerPaginationReset={ledgerPaginationReset}
                   valueAD={dateRange}
                   onChangeAD={onDateRangeChangeWithUnapprovedReset}
                   transactionDates={transactionDates}
@@ -1956,6 +1966,7 @@ export function AccountDetails({
                     <AdCalendar
                       rangePresetSlot={
                         <MasterLedgerDateRangePresetRow
+                          ledgerPaginationReset={ledgerPaginationReset}
                           country={company?.country}
                           onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
                           onApply={(r) => {
@@ -2063,6 +2074,7 @@ export function AccountDetails({
               userNames={userNames}
               accountNames={accountNamesMap}
               onRowClick={handleTransactionOpen}
+              onInterCompanyChangeDetectedClick={handleInterCompanyChangeDetectedClick}
               filters={filters}
               setFilters={setFilters}
               activeFilter={activeFilter}
@@ -2276,6 +2288,7 @@ export function AccountDetails({
         onVoucherUpdated={() => setSelectedVoucher(null)}
         ledgerEntityId={account?.id}
       />
+      {interCompanyChangeDetectDialog}
     </>
   );
 }

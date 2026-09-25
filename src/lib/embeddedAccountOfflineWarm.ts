@@ -14,6 +14,7 @@ import {
   type AttachmentPrefetchOverrides,
   type EmbeddedAttachmentPrefetchSummary,
 } from "@/lib/offlineFullWarmSync";
+import { shouldUseAttachmentLazyLoad } from "@/lib/webAttachmentLazyLoadPolicy";
 
 /** Pehli company ke baad agli — APK memory / bandwidth ke liye serial gap. */
 export const EMBEDDED_ACCOUNT_WARM_GAP_MS = 750;
@@ -64,6 +65,16 @@ export async function runEmbeddedCompanyFullPreload(args: {
 
   if (args.signal?.aborted) return null;
   if (!prefetchEligible) return null;
+
+  // Online EXE/APK: mirror + Firestore data only — attachments like web (visible FY / click).
+  if (shouldUseAttachmentLazyLoad(args.company)) {
+    return {
+      attachmentUrlsSeen: 0,
+      prefetchCachedNew: 0,
+      prefetchSkippedCache: 0,
+      prefetchFailures: 0,
+    };
+  }
 
   const { pending } = await countPendingAttachmentDownloadsForCompany(localId);
   if (pending <= 0) {

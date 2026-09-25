@@ -45,8 +45,6 @@ export function CompanyAttachmentOfflineBackfillManager() {
     if (isFirebaseLedgerDataSyncDisabled()) return;
     // EXE: `OfflineWarmSyncManager` already serial warm chalata hai — duplicate prefetch + header % flicker avoid.
     if (isElectronDesktopApp()) return;
-    // Web: visible-page thumbs + hover/click only — company-wide full preload billing hit.
-    if (shouldSkipCompanyWideAttachmentPrefetchOnWeb()) return;
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
@@ -56,6 +54,8 @@ export function CompanyAttachmentOfflineBackfillManager() {
 
     const c = companyRef.current;
     if (!user || loading || !companyId?.trim() || !c) return;
+    // Web / online EXE/APK: visible-page thumbs + hover/click only — company-wide full preload band.
+    if (shouldSkipCompanyWideAttachmentPrefetchOnWeb(c)) return;
     if (!shouldPrefetchAttachmentsForCompany(c as Company)) return;
     if (gateActive) return;
     const cid = companyId.trim();

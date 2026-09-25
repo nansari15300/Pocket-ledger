@@ -1,17 +1,7 @@
-
 "use client";
 
-import { PlaceholderPage } from "@/components/layout/PlaceholderPage";
+import { QuotationsPage } from "@/modules/quotations";
 
-export default function QuotationsPage() {
-  return (
-    <div className="h-full">
-      <PlaceholderPage
-        title="Quotations"
-        description="This page is under construction. You will be able to create and manage sales quotations here soon."
-      />
-    </div>
-  );
+export default function QuotationsRoutePage() {
+  return <QuotationsPage />;
 }
-
-    

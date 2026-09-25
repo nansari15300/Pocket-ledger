@@ -14,6 +14,7 @@ import {
 } from "@/lib/payments/addonCheckoutApply";
 import { findOwnedCompanyIdForUser } from "@/lib/payments/resolveStripeFirestoreCompany";
 import { grantAccountCanonicalPlan } from "@/lib/server/accountCanonicalPlan";
+import { mirrorSubscriptionPaymentWithUserLookup } from "@/lib/adminPanelAccounting/mirrorSubscriptionPayment";
 import type { VerifiedLocalPlanApplyPayload } from "@/lib/payments/localStripePlanApplyTypes";
 import {
   SUBSCRIPTION_TERM_KEYS_FOR_CHECKOUT,
@@ -356,6 +357,17 @@ export async function fulfillStripeCheckoutSessionCompleted(
       },
       { merge: true }
     );
+    await mirrorSubscriptionPaymentWithUserLookup(db, {
+      paymentId: session.id,
+      userId,
+      amountNpr: session.amount_total != null ? session.amount_total / 100 : 0,
+      gateway: "stripe",
+      planId,
+      customerCompanyId: null,
+      customerCompanyName: null,
+      subscriptionTermKey:
+        typeof metadata.subscriptionTermKey === "string" ? metadata.subscriptionTermKey : null,
+    });
     return { ok: true as const };
   }
 
@@ -471,6 +483,21 @@ export async function fulfillStripeCheckoutSessionCompleted(
     }
   } else {
     await companyRef.update(patch);
+  }
+
+  if (planId && PAID_PLAN_IDS.has(planId as PlanId)) {
+    const coDataFull = companySnap.data() as Record<string, unknown> | undefined;
+    await mirrorSubscriptionPaymentWithUserLookup(db, {
+      paymentId: session.id,
+      userId: userId || ownerId || null,
+      amountNpr: session.amount_total != null ? session.amount_total / 100 : 0,
+      gateway: "stripe",
+      planId,
+      customerCompanyId: effectiveCompanyId,
+      customerCompanyName: String(coDataFull?.name ?? coDataFull?.companyName ?? "").trim() || null,
+      subscriptionTermKey:
+        typeof metadata.subscriptionTermKey === "string" ? metadata.subscriptionTermKey : null,
+    });
   }
 
   const planExpiryMsForMirror = planExpiryMs ?? (planExpiry ? planExpiry.toMillis() : null);

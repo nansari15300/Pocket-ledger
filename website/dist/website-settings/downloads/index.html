@@ -543,6 +543,37 @@
       color: var(--muted);
       font-size: 0.88rem;
     }
+    .dl-analytics-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 0.85rem;
+    }
+    .dl-analytics-tab {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 0.35rem 0.9rem;
+      font-size: 0.88rem;
+      font-weight: 600;
+      background: #fff;
+      cursor: pointer;
+    }
+    .dl-analytics-tab.is-active {
+      border-color: #2563eb;
+      background: #dbeafe;
+      color: #1e3a8a;
+    }
+    .dl-update-version-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin: -0.25rem 0 0.85rem;
+      font-size: 0.88rem;
+    }
+    .dl-update-version-wrap label {
+      font-weight: 600;
+      color: var(--muted);
+    }
   </style>
 </head>
 <body class="website-settings-page" data-ws-active="downloads">
@@ -565,7 +596,7 @@
       <section class="page-hero">
         <div class="wrap">
           <h1>Download analytics</h1>
-          <p>EXE / APK / Play Store clicks from the public Downloads page.</p>
+          <p>New installs from the Downloads page; Updates when users install a newer EXE/APK from the app.</p>
         </div>
       </section>
       <section class="section">
@@ -575,6 +606,16 @@
             <button type="button" class="btn btn-primary" id="googleBtn">Sign in with Google</button>
           </div>
           <div class="content-block" id="adminBox" hidden>
+            <div class="dl-analytics-tabs" role="tablist" aria-label="Download analytics views">
+              <button type="button" class="dl-analytics-tab is-active" data-dl-analytics-tab="new" role="tab" aria-selected="true">New downloads</button>
+              <button type="button" class="dl-analytics-tab" data-dl-analytics-tab="update" role="tab" aria-selected="false">Updates</button>
+            </div>
+            <div class="dl-update-version-wrap" id="updateVersionFilterWrap" hidden>
+              <label for="updateVersionFilter">Version</label>
+              <select id="updateVersionFilter" class="chart-range-select" aria-label="Filter by release version">
+                <option value="all">All versions</option>
+              </select>
+            </div>
             <div class="chart-card">
               <h3>Downloads chart</h3>
               <div class="chart-grid">

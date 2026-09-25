@@ -124,6 +124,7 @@ import { firestore } from "@/lib/firebase";
 import usePermissions from "@/hooks/usePermissions";
 import { useAuth } from "@/hooks/useAuth";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { useLedgerPaginationReset } from "@/hooks/useLedgerPaginationReset";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -247,6 +248,7 @@ export function AccountGroupDetails({
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerPaginationReset = useLedgerPaginationReset(setRowsPerPage, setCurrentPage);
   const ledgerViewMode: LedgerDetailViewMode = spendWiseView ? "spend_wise" : "statement";
   const ledgerSessionKey = useMemo(
     () =>
@@ -1766,6 +1768,7 @@ export function AccountGroupDetails({
                 <BsDatePicker
                   isRange
                   masterLedgerDatePresets
+                  ledgerPaginationReset={ledgerPaginationReset}
                   valueAD={dateRange}
                   onChangeAD={handleBsDateRangeChange}
                   transactionDates={transactionDates}

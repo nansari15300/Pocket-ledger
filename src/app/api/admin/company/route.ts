@@ -8,6 +8,7 @@ import {
   ADMIN_PANEL_DEFAULT_LEDGER_ACCOUNTS,
   CLOUD_ADMIN_PANEL_TENANT_ID,
 } from "@/lib/adminPanelCompany/constants";
+import { seedAdminPanelCompanyDefaultMasters } from "@/lib/adminPanelCompany/seedDefaultMasters";
 
 async function requireSuperAdmin(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
@@ -33,12 +34,45 @@ export async function GET(req: NextRequest) {
   const db = getAdminDb();
   const companyRef = db.collection(ADMIN_PANEL_COMPANIES_COLLECTION).doc(CLOUD_ADMIN_PANEL_TENANT_ID);
   const snap = await companyRef.get();
+  if (snap.exists) {
+    await seedAdminPanelCompanyDefaultMasters(db).catch((e) =>
+      console.warn("[admin/company] seed masters", e)
+    );
+  }
 
   return NextResponse.json({
     exists: snap.exists,
     tenantId: CLOUD_ADMIN_PANEL_TENANT_ID,
     company: snap.exists ? snap.data() : null,
   });
+}
+
+export async function PATCH(req: NextRequest) {
+  const auth = await requireSuperAdmin(req);
+  if ("error" in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
+
+  const db = getAdminDb();
+  const companyRef = db.collection(ADMIN_PANEL_COMPANIES_COLLECTION).doc(CLOUD_ADMIN_PANEL_TENANT_ID);
+  if (!(await companyRef.get()).exists) {
+    return NextResponse.json({ error: "Create Admin Panel Company first" }, { status: 409 });
+  }
+
+  const body = (await req.json()) as Record<string, unknown>;
+  const patch: Record<string, unknown> = {
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  for (const key of ["name", "address", "phone", "email", "pan"] as const) {
+    if (typeof body[key] === "string") {
+      patch[key] = body[key].trim().slice(0, 500);
+    }
+  }
+  if (Object.keys(patch).length <= 1) {
+    return NextResponse.json({ error: "No fields to update" }, { status: 400 });
+  }
+
+  await companyRef.set(patch, { merge: true });
+  const snap = await companyRef.get();
+  return NextResponse.json({ company: snap.data() });
 }
 
 /**
@@ -95,6 +129,9 @@ export async function POST(req: NextRequest) {
   }
 
   await batch.commit();
+  await seedAdminPanelCompanyDefaultMasters(db).catch((e) =>
+    console.warn("[admin/company] seed masters after create", e)
+  );
 
   return NextResponse.json({
     created: true,

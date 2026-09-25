@@ -1,5 +1,5 @@
-import { AdminPanelCompanyHome } from "@/adminPanelCompany/components/AdminPanelCompanyHome";
+import { AdminPanelCompanyOpenNormalApp } from "@/adminPanelCompany/components/AdminPanelCompanyOpenNormalApp";
 
 export default function AdminCompanyPage() {
-  return <AdminPanelCompanyHome />;
+  return <AdminPanelCompanyOpenNormalApp />;
 }
