@@ -27,6 +27,11 @@ import {
   type InterCompanyTargetPostMode,
 } from "@/lib/interCompany/interCompanyPostingLegs";
 import { getNextInterCompanyVoucherNumber } from "@/lib/interCompany/nextInterCompanyVoucherNumber";
+import { fetchInterCompanyEntitiesForCompany } from "@/lib/interCompany/fetchInterCompanyEntities";
+import {
+  interCompanyOtherChargeKindToEntityKind,
+  resolveInterCompanyOtherChargeKind,
+} from "@/lib/interCompany/resolveInterCompanyOtherChargeKind";
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const IC_PATCH_SQLITE_FIRST = { forceSqliteFirst: true as const };
@@ -694,6 +699,21 @@ export async function saveInterCompanyVoucherPair(
     resolvedOtherChargeAccountId = "";
     resolvedOtherChargeAmount = 0;
     resolvedOtherChargeKind = null;
+  }
+
+  if (
+    resolvedOtherChargeAccountId &&
+    resolvedOtherChargeAmount > 0 &&
+    !resolvedOtherChargeKind
+  ) {
+    const masters = await fetchInterCompanyEntitiesForCompany(input.sourceCompanyId);
+    resolvedOtherChargeKind = interCompanyOtherChargeKindToEntityKind(
+      resolveInterCompanyOtherChargeKind({
+        accountId: resolvedOtherChargeAccountId,
+        entities: masters,
+        storedKind: input.otherChargeKind,
+      })
+    );
   }
 
   const sourceLegs = existingSourceApproved

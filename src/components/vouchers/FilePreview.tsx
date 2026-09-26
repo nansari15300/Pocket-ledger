@@ -2819,6 +2819,39 @@ export function FilePreview({
   const pointerOpenGuardRef = useRef<{ x: number; y: number; pointerType: string; at: number } | null>(null);
   const skipNextClickOpenRef = useRef(false);
 
+  const portalShareMeta = React.useMemo(() => {
+    const rawRef =
+      typeof normalizedPreviewFile === "string"
+        ? normalizeAttachmentUrlForDevicePreview(normalizedPreviewFile)
+        : "";
+    const underlyingLocalRef =
+      typeof normalizedPreviewFile === "string" && isLocalFileRef(normalizedPreviewFile)
+        ? normalizedPreviewFile
+        : "";
+    const isPdfAttachment =
+      viewFileInfo.formatLabel === "PDF" || viewFileInfo.type === "pdf";
+    const url = isPdfAttachment
+      ? underlyingLocalRef ||
+        (rawRef && !rawRef.startsWith("blob:") ? rawRef : "") ||
+        (viewFileInfo.url && !String(viewFileInfo.url).startsWith("blob:") ? String(viewFileInfo.url) : "") ||
+        rawRef ||
+        String(viewFileInfo.url || "")
+      : underlyingLocalRef ||
+        (rawRef && !rawRef.startsWith("blob:") ? rawRef : "") ||
+        (viewFileInfo.url && !String(viewFileInfo.url).startsWith("blob:") ? String(viewFileInfo.url) : "") ||
+        rawRef ||
+        String(viewFileInfo.url || "");
+    const trimmed = String(url).trim();
+    if (!trimmed) return null;
+    return { url: trimmed, name: viewFileInfo.name || "attachment" };
+  }, [
+    normalizedPreviewFile,
+    viewFileInfo.formatLabel,
+    viewFileInfo.type,
+    viewFileInfo.url,
+    viewFileInfo.name,
+  ]);
+
   const openAttachmentFromFileInfo = useCallback(() => {
     // Files tick OFF: openAttachmentInApp still opens device cache; blocks download.
     const rawRef =
@@ -3609,6 +3642,11 @@ export function FilePreview({
         <AttachmentHoverPortal
           triggerClassName="h-full w-full min-h-0 min-w-0"
           openOnHover={tapInteractionMode}
+          galleryUrls={
+            attachmentGallery && attachmentGallery.urls.length > 1 ? attachmentGallery.urls : undefined
+          }
+          shareAttachmentUrl={portalShareMeta?.url}
+          shareFileName={portalShareMeta?.name}
           onPreviewDoubleClick={
             viewFileInfo.type === "pdf" && viewFileInfo.url
               ? (e) => {

@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { collection, limit, onSnapshot, orderBy, query } from "firebase/firestore";
-import { usePathname } from "next/navigation";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
@@ -21,47 +20,18 @@ import {
 import {
   shouldBindFirebaseLedgerChangeFeed,
 } from "@/lib/firebaseLedgerSyncPolicy";
-import { notifyBrowserDbCollectionUpdated } from "@/lib/localCompanyDocMirror";
+import { getCompanyDocFromBrowserDb, notifyBrowserDbCollectionUpdated } from "@/lib/localCompanyDocMirror";
 import { LEDGER_STATEMENT_CHECKS_COLLECTION } from "@/lib/ledgerStatementCheckPersist";
+import { VOUCHER_FORM_MASTER_COLLECTION_PATHS } from "@/lib/ledgerActiveMasterCollections";
+import { dispatchMasterLivePatch, isMasterLivePatchCollection } from "@/lib/masterEntityLivePatch";
 
-const VOUCHER_FORM_MASTER_COLLECTION_PATHS = new Set([
-  "vouchers",
-  "parties",
-  "staff",
-  "bank_accounts",
-  "taxes",
-  "expense_accounts",
-  "items",
-  "item_groups",
-  "groups",
-  "account_groups",
-  "staff_groups",
-  "tax_groups",
-  "expense_groups",
+/** Cross-device master live: route se independent — voucher forms ko har screen par fresh masters chahiye. */
+const FIREBASE_DELTA_MASTER_COLLECTIONS = new Set([
+  ...VOUCHER_FORM_MASTER_COLLECTION_PATHS,
   LEDGER_STATEMENT_CHECKS_COLLECTION,
 ]);
 
-function ledgerRouteCollections(...collections: string[]): Set<string> {
-  return new Set([...collections, LEDGER_STATEMENT_CHECKS_COLLECTION]);
-}
-
-function activeDeltaCollectionsForRoute(pathname: string): Set<string> {
-  const route = String(pathname || "").trim().toLowerCase();
-  if (route.startsWith("/bank-cash")) return ledgerRouteCollections("vouchers", "bank_accounts", "account_groups");
-  if (route.startsWith("/party")) return ledgerRouteCollections("vouchers", "parties", "groups", "expense_accounts");
-  if (route.startsWith("/staff")) return ledgerRouteCollections("vouchers", "staff", "staff_groups");
-  if (route.startsWith("/loans")) return ledgerRouteCollections("vouchers", "staff", "staff_groups", "bank_accounts", "account_groups", "expense_accounts", "expense_groups", "loans", "loan_schedules", "loan_transactions", "loan_rate_history", "loan_charges", "loan_audit_logs", "loan_settings", "loan_documents");
-  if (route.startsWith("/tax")) return ledgerRouteCollections("vouchers", "taxes", "tax_groups");
-  if (route.startsWith("/items")) return ledgerRouteCollections("vouchers", "items", "item_groups");
-  if (route.startsWith("/incomes")) return ledgerRouteCollections("vouchers", "expense_accounts", "expense_groups");
-  if (route.startsWith("/company") || route.startsWith("/admin") || route === "/" || route === "") {
-    return new Set();
-  }
-  return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
-}
-
 export function FirebaseLedgerDeltaSyncManager() {
-  const pathname = usePathname() || "";
   const { companyId, company } = useCompany();
   const [policyTick, setPolicyTick] = useState(0);
   const policyDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -93,7 +63,7 @@ export function FirebaseLedgerDeltaSyncManager() {
     };
   }, []);
 
-  const activeCollections = useMemo(() => activeDeltaCollectionsForRoute(pathname), [pathname]);
+  const activeCollections = FIREBASE_DELTA_MASTER_COLLECTIONS;
 
   useEffect(() => {
     // Single live feed in deltaa — no collection onSnapshot (web/EXE/APK/iOS).
@@ -137,10 +107,22 @@ export function FirebaseLedgerDeltaSyncManager() {
             company,
             { op: String(data.op || "") }
           )
-            .then(() => {
+            .then(async () => {
               seenChangeIdsRef.current.add(changeId);
               if (seenChangeIdsRef.current.size > 300) {
                 seenChangeIdsRef.current = new Set([...seenChangeIdsRef.current].slice(-150));
+              }
+              if (isMasterLivePatchCollection(collectionName)) {
+                const row = await getCompanyDocFromBrowserDb(localCompanyId, collectionName, docId);
+                if (row && (row as { isDeleted?: boolean }).isDeleted !== true) {
+                  dispatchMasterLivePatch(
+                    localCompanyId,
+                    collectionName,
+                    docId,
+                    { ...(row as Record<string, unknown>), id: docId },
+                    { insertIfMissing: String(data.op || "") === "create" }
+                  );
+                }
               }
               notifyBrowserDbCollectionUpdated(localCompanyId, collectionName, {
                 immediate: true,

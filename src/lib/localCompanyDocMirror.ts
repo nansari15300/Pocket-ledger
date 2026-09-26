@@ -1044,6 +1044,19 @@ export async function upsertCompanyDocInBrowserDb(
         if (collectionName === "vouchers" && shouldNotify) {
           const { dispatchVoucherLivePatch } = await import("@/lib/voucherFormAttachmentSave");
           dispatchVoucherLivePatch(companyId, docId, { ...out.stampedData, id: docId });
+        } else if (shouldNotify) {
+          const { dispatchMasterLivePatch, isMasterLivePatchCollection } = await import(
+            "@/lib/masterEntityLivePatch"
+          );
+          if (isMasterLivePatchCollection(collectionName)) {
+            dispatchMasterLivePatch(
+              companyId,
+              collectionName,
+              docId,
+              { ...out.stampedData, id: docId },
+              { insertIfMissing: true }
+            );
+          }
         }
         if (shouldNotify) {
           try {
@@ -1071,6 +1084,19 @@ export async function upsertCompanyDocInBrowserDb(
       if (collectionName === "vouchers" && shouldNotify) {
         const { dispatchVoucherLivePatch } = await import("@/lib/voucherFormAttachmentSave");
         dispatchVoucherLivePatch(companyId, docId, { ...out.stampedData, id: docId });
+      } else if (shouldNotify) {
+        const { dispatchMasterLivePatch, isMasterLivePatchCollection } = await import(
+          "@/lib/masterEntityLivePatch"
+        );
+        if (isMasterLivePatchCollection(collectionName)) {
+          dispatchMasterLivePatch(
+            companyId,
+            collectionName,
+            docId,
+            { ...out.stampedData, id: docId },
+            { insertIfMissing: true }
+          );
+        }
       }
       scheduleCompanyDocAuthoritativeDispatchAfterLocalCommit(
         companyId,

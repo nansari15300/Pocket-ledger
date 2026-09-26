@@ -42,6 +42,7 @@ export function EntityFileAttachmentHover({ fileUrl, children, triggerClassName 
       openOnHover={globalPreviewMode !== "off"}
       triggerClassName={triggerClassName ?? "inline-flex"}
       onPreviewDoubleClick={onPdfDbl}
+      shareAttachmentUrl={u}
       preview={<SingleAttachmentHoverPreviewBody url={u} />}
     >
       {children}

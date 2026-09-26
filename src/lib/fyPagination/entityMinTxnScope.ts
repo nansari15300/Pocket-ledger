@@ -6,6 +6,7 @@ import type { useFyVoucherScope } from "@/contexts/FyVoucherScopeContext";
 import { voucherTouchesLedger } from "@/lib/billWiseSettledUnlinkedDetector";
 import { MASTER_LEDGER_DEFAULT_TXN_COUNT } from "@/lib/ledgerMasterDefaultView";
 import { voucherTouchesPartyLedger } from "@/lib/voucherTouchesPartyLedger";
+import { voucherTouchesExpenseAccountLedger } from "@/lib/voucherTouchesExpenseLedger";
 import {
   hydrateLedgerHistoryBeforeMs,
   hydrateLedgerOpeningBalances,
@@ -90,9 +91,7 @@ export function countEntityVouchersInList(
       continue;
     }
     if (kind === "expense") {
-      if (ledgerIdEq(v.expenseAccountId, id) || ledgerIdEq(v.accountId, id)) {
-        n++;
-      }
+      if (voucherTouchesExpenseAccountLedger(v, id)) n++;
       continue;
     }
     if (kind === "item") {

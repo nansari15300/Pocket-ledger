@@ -14,6 +14,7 @@ import {
   readInterCompanyCompanyBankId,
   readInterCompanyLink,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
+import { resolveInterCompanyOtherChargeKindFromVoucher } from "@/lib/interCompany/resolveInterCompanyOtherChargeKind";
 
 function voucherHasInterCompanyPeerPending(voucher: Record<string, unknown>): boolean {
   const raw = voucher.interCompanyPeerPending;
@@ -589,24 +590,11 @@ export function getInterCompanyLegAmounts(
       otherCharge.amount > 0 &&
       otherCharge.accountId === id
     ) {
-      const storedKind = String(voucher.otherChargeKind || "").trim() as InterCompanyEntityKind;
+      const resolvedKind = resolveInterCompanyOtherChargeKindFromVoucher(voucher);
       let ocCtx: typeof context | null = null;
-      if (storedKind === "party") ocCtx = "party";
-      else if (storedKind === "staff") ocCtx = "staff";
-      else if (storedKind === "expense") ocCtx = "expense";
-      else {
-        const storedLegs = resolveInterCompanyLegsForVoucher(voucher);
-        const leg = storedLegs.find(
-          (row) =>
-            String(row.accountId) === id &&
-            row.debit > 0 &&
-            (row.kind === "party" || row.kind === "staff" || row.kind === "expense")
-        );
-        if (leg) {
-          ocCtx =
-            leg.kind === "staff" ? "staff" : leg.kind === "expense" ? "expense" : "party";
-        }
-      }
+      if (resolvedKind === "party") ocCtx = "party";
+      else if (resolvedKind === "staff") ocCtx = "staff";
+      else if (resolvedKind === "expense") ocCtx = "expense";
       if (ocCtx === context) {
         return unapprovedPlaceholder();
       }
@@ -706,7 +694,32 @@ export function getInterCompanyLegAmounts(
     debit += leg.debit;
     credit += leg.credit;
   }
-  if (debit <= 0 && credit <= 0) return empty;
+  if (debit <= 0 && credit <= 0) {
+    if (
+      isInterCompanyVoucherApproved(voucher) &&
+      side === "source" &&
+      otherCharge.amount > 0 &&
+      otherCharge.accountId === id
+    ) {
+      const resolvedKind = resolveInterCompanyOtherChargeKindFromVoucher(voucher);
+      const ocCtx =
+        resolvedKind === "party"
+          ? "party"
+          : resolvedKind === "staff"
+            ? "staff"
+            : resolvedKind === "expense"
+              ? "expense"
+              : null;
+      if (ocCtx === context) {
+        return finalizeIcLegAmounts(voucher, {
+          touched: true,
+          debit: otherCharge.amount,
+          credit: 0,
+        });
+      }
+    }
+    return empty;
+  }
   return finalizeIcLegAmounts(voucher, {
     touched: true,
     debit: round2(debit),

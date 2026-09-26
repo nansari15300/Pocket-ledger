@@ -64,6 +64,11 @@ import {
   subscribeVoucherLivePatch,
   voucherAttachmentUiFingerprint,
 } from "@/lib/voucherFormAttachmentSave";
+import { subscribeMasterLivePatch } from "@/lib/masterEntityLivePatch";
+import {
+  activeMasterCollectionPathsForRoute,
+  VOUCHER_FORM_MASTER_COLLECTION_PATHS,
+} from "@/lib/ledgerActiveMasterCollections";
 import { normalizeVoucherRowAttachmentsForUi, getVoucherAttachmentUrlsForUi, stripTransientVoucherAttachmentFields } from "@/lib/voucherAttachmentNormalize";
 import { protectClearedAttachmentsFromStalePatch, resolveUrlsAgainstAttachmentIntent, shouldPreserveIntendedVoucherAttachments, logAttachWipe } from "@/lib/attachmentDeleteTrace";
 import {
@@ -97,6 +102,7 @@ import {
   readInterCompanyCompanyBankId,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { getInterCompanyLedgerAmounts } from "@/lib/interCompany/interCompanyLedgerAmounts";
+import { resolveInterCompanyOtherChargeKindFromVoucher } from "@/lib/interCompany/resolveInterCompanyOtherChargeKind";
 import { isRecurringAutoUserDisplayLabel } from "@/lib/interCompany/interCompanyVoucherHistory";
 import { backfillInterCompanySourceApprovedFlags } from "@/lib/interCompany/interCompanyVisibilityBackfill";
 import {
@@ -713,51 +719,6 @@ function shouldSkipHeavyVoucherBootstrap(pathname: string): boolean {
   return HEAVY_LEDGER_SKIP_ROUTE_PREFIXES.some((prefix) => route.startsWith(prefix));
 }
 
-/** Voucher forms (sale/purchase lines) ke liye zaroori sab master collections — route filter bypass. */
-const VOUCHER_FORM_MASTER_COLLECTION_PATHS = new Set([
-  "vouchers",
-  "parties",
-  "staff",
-  "bank_accounts",
-  "taxes",
-  "expense_accounts",
-  "items",
-  "item_groups",
-  "groups",
-  "account_groups",
-  "staff_groups",
-  "tax_groups",
-  "expense_groups",
-]);
-
-/** Active page route → sirf required collections live listen/prefetch; baki page inactive par idle. */
-function activeMasterCollectionPathsForRoute(
-  pathname: string,
-  /** Nested copy-to dialog: party/bank route par bhi taxes/items load — sale/pur tax dropdown khali na ho. */
-  voucherFormMasterScope = false
-): Set<string> {
-  if (voucherFormMasterScope) return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
-  const route = String(pathname || "").trim().toLowerCase();
-  if (route.startsWith("/bank-cash")) return new Set(["vouchers", "bank_accounts", "account_groups"]);
-  if (route.startsWith("/party")) return new Set(["vouchers", "parties", "groups", "expense_accounts"]);
-  if (route.startsWith("/staff")) return new Set(["vouchers", "staff", "staff_groups"]);
-  if (route.startsWith("/loans")) return new Set(["vouchers", "staff", "staff_groups", "bank_accounts", "account_groups", "expense_accounts", "expense_groups"]);
-  if (route.startsWith("/tax")) return new Set(["vouchers", "taxes", "tax_groups"]);
-  if (route.startsWith("/items")) return new Set(["vouchers", "items", "item_groups"]);
-  if (route.startsWith("/incomes")) return new Set(["vouchers", "expense_accounts", "expense_groups"]);
-  // Gallery / Reports hub: Party/Bank jaisa — sirf vouchers; click pe saari masters mat lao.
-  if (route.startsWith("/gallery")) return new Set(["vouchers"]);
-  if (route === "/reports" || route === "/reports/") return new Set(["vouchers"]);
-  if (route.startsWith("/reports/")) {
-    // Individual report routes may need masters; keep full set.
-    return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
-  }
-  // Dashboard: pehle vouchers (Recent/daybook); baaki masters idle background warm se.
-  if (route.startsWith("/dashboard")) return new Set(["vouchers"]);
-  // Voucher forms / reconciliation jaise shared pages par full master dataset chahiye.
-  return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
-}
-
 /*
  * FREEZE: Dashboard boot — SQLite-first voucher load, idle full merge, no UI freeze.
  * See AGENTS.md "Freeze: Dashboard boot — SQLite-first, no UI freeze".
@@ -1221,7 +1182,12 @@ export const VoucherProvider = ({
 
   /** Entity edit save — turant raw masters state patch (list fingerprint + processed recompute). */
   const patchMasterEntity = useCallback(
-    (collection: MasterEntityPatchCollection, id: string, patch: Record<string, unknown>) => {
+    (
+      collection: MasterEntityPatchCollection,
+      id: string,
+      patch: Record<string, unknown>,
+      opts?: { insertIfMissing?: boolean }
+    ) => {
       if (!id?.trim()) return;
       // Avatar clear: `null`/`undefined` → `""` taaki snapshot revive detect ho sake.
       const safePatch = { ...patch };
@@ -1237,7 +1203,12 @@ export const VoucherProvider = ({
         setter((prev) => {
           const idx = prev.findIndex((row) => String(row.id) === String(id));
           if (idx < 0) {
-            if (isServerGateCompanyContext && collection === "bank_accounts" && safePatch.accountName) {
+            const allowInsert =
+              opts?.insertIfMissing === true ||
+              (isServerGateCompanyContext && collection === "bank_accounts" && safePatch.accountName);
+            if (allowInsert) {
+              const label = String(safePatch.name ?? safePatch.accountName ?? "").trim();
+              if (!label && collection !== "items") return prev;
               const inserted = { ...safePatch, id } as T;
               return [...prev, inserted];
             }
@@ -1277,6 +1248,17 @@ export const VoucherProvider = ({
     },
     [isServerGateCompanyContext]
   );
+
+  // Master add/edit — same-tab + cross-tab/EXE live patch (voucher jaisa).
+  useEffect(() => {
+    if (!companyId) return;
+    return subscribeMasterLivePatch((detail) => {
+      if (detail.companyId !== companyId) return;
+      patchMasterEntity(detail.collection, detail.docId, detail.patch, {
+        insertIfMissing: detail.insertIfMissing,
+      });
+    });
+  }, [companyId, patchMasterEntity]);
 
   /** Stale-deps se effect storm na ho: async name fetch closure me fresh cache (plan limits unrelated hang fix). */
   const journalAccountNamesRef = useRef<Record<string, string>>({});
@@ -3087,6 +3069,18 @@ export const VoucherProvider = ({
                     if (icBank.credit > 0) addVal(accountMap, bankId, "credit", icBank.credit);
                 }
             }
+            const ocAmt = Math.round((Number(icVoucher.otherChargeAmount) || 0) * 100) / 100;
+            const ocId = String(icVoucher.otherChargeAccountId || "").trim();
+            const hasOtherChargeLeg =
+              ocId &&
+              ocAmt > 0 &&
+              legs.some(
+                (leg) =>
+                  String(leg.accountId) === ocId &&
+                  leg.debit > 0 &&
+                  (leg.kind === "party" || leg.kind === "staff" || leg.kind === "expense")
+              );
+
             if (legs.length > 0) {
                 legs.forEach((leg) => {
                     if (leg.kind === "party") return;
@@ -3126,6 +3120,30 @@ export const VoucherProvider = ({
                     if (icEntity.debit > 0) addVal(map, leg.accountId, "debit", icEntity.debit);
                     if (icEntity.credit > 0) addVal(map, leg.accountId, "credit", icEntity.credit);
                 });
+            }
+            if (!hasOtherChargeLeg && ocId && ocAmt > 0) {
+                const resolvedOcKind = resolveInterCompanyOtherChargeKindFromVoucher(icVoucher);
+                const context =
+                    resolvedOcKind === "staff"
+                        ? ("staff" as const)
+                        : resolvedOcKind === "expense"
+                          ? ("expense" as const)
+                          : resolvedOcKind === "party"
+                            ? ("party" as const)
+                            : null;
+                if (context) {
+                    const icEntity = getInterCompanyLedgerAmounts(icVoucher, context, ocId, amount);
+                    if (icEntity.touched) {
+                        const map =
+                            context === "staff"
+                                ? staffMap
+                                : context === "expense"
+                                  ? expenseMap
+                                  : partyMap;
+                        if (icEntity.debit > 0) addVal(map, ocId, "debit", icEntity.debit);
+                        if (icEntity.credit > 0) addVal(map, ocId, "credit", icEntity.credit);
+                    }
+                }
             }
             }
         }

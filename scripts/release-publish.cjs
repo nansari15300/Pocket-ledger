@@ -225,6 +225,12 @@ async function uploadStagedRelease(date) {
 }
 
 async function main() {
+  if (process.argv.includes("--upload-only")) {
+    await uploadStagedRelease(process.env.RELEASE_DATE || todayStamp());
+    console.log("\n[release-publish] Upload only done.");
+    return;
+  }
+
   const skipStatic = process.argv.includes("--skip-static");
   const skipUpload = process.argv.includes("--skip-upload");
   const noBump = process.argv.includes("--no-bump");
@@ -250,7 +256,15 @@ async function main() {
   if (!skipUpload) {
     await uploadStagedRelease(process.env.RELEASE_DATE || todayStamp());
     run("npm", ["run", "website:build"]);
-    run("firebase", ["deploy", "--only", "hosting", "--project", "studio-5452513410-a3f5b"]);
+    run("npx", [
+      "--yes",
+      "firebase-tools",
+      "deploy",
+      "--only",
+      "hosting",
+      "--project",
+      "studio-5452513410-a3f5b",
+    ]);
   }
 
   console.log("\n[release-publish] Done.");

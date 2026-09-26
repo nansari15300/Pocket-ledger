@@ -17,6 +17,7 @@ import {
   readInterCompanyCompanyBankId,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { isInterCompanyPeerPendingChange } from "@/lib/interCompany/interCompanyPeerPending";
+import { resolveInterCompanyOtherChargeKindFromVoucher } from "@/lib/interCompany/resolveInterCompanyOtherChargeKind";
 
 const PAYEE_FIELD: Record<InterCompanyEntityKind, string> = {
   party: "partyId",
@@ -102,7 +103,9 @@ export function interCompanyVoucherTouchesEntity(
     const ocId = String(transaction.otherChargeAccountId || "").trim();
     const ocAmt = Number(transaction.otherChargeAmount || 0);
     if (ocAmt > 0 && ocId === id) {
-      const ocKind = normKind(transaction.otherChargeKind);
+      const ocKind =
+        normKind(transaction.otherChargeKind) ||
+        resolveInterCompanyOtherChargeKindFromVoucher(transaction);
       if (ocKind === kind) return true;
     }
   }

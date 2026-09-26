@@ -22,6 +22,15 @@ export const calendarPanelClassName = cn(
 /** Radix Select month list ya year shell ke liye — panel jaisi border */
 export const calendarSelectContentClassName = cn(CALENDAR_CHROME_BORDER, "shadow-md");
 
+/**
+ * Month/year wheel popover — date calendar popover (`z-[200]` Date Converter, `z-[102]` voucher) se upar;
+ * do calendars ek saath khule hon to list panel ke peeche na chhupe.
+ */
+export const calendarMonthYearPopoverContentClassName = cn(
+  calendarSelectContentClassName,
+  "z-[260]"
+);
+
 /** Dusre popovers (year list width) ke liye base surface */
 export const calendarPopoverSurfaceClassName = cn(CALENDAR_CHROME_BORDER, "shadow-md");
 

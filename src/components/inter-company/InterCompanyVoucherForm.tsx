@@ -72,6 +72,7 @@ import {
   deleteInterCompanyVoucherLocalCopyOnly,
   saveInterCompanyVoucherPair,
 } from "@/lib/interCompany/saveInterCompanyVoucherPair";
+import { resolveInterCompanyOtherChargeKind } from "@/lib/interCompany/resolveInterCompanyOtherChargeKind";
 import {
   mergeInterCompanyPeerPendingIntoValues,
   peerPendingProposedFieldKeys,
@@ -2374,13 +2375,24 @@ export function InterCompanyVoucherForm({
         const ocAmt = Math.round((Number(values.otherChargeAmount) || 0) * 100) / 100;
         const ocId = String(values.otherChargeAccountId || "").trim();
         if (ocAmt > 0 && ocId) {
-          const ocEntity = sourceEntities.find((e) => e.id === ocId);
-          const kind = ocEntity?.kind;
-          if (kind === "party" || kind === "staff" || kind === "expense") {
-            saveOtherChargeAccountId = ocId;
-            saveOtherChargeAmount = ocAmt;
-            saveOtherChargeKind = kind;
+          const ocLabel =
+            pendingOtherChargeOption?.value === ocId
+              ? pendingOtherChargeOption.label
+              : otherChargeAccountOptions.find((option) => option.value === ocId)?.label;
+          const kind = resolveInterCompanyOtherChargeKind({
+            accountId: ocId,
+            entities: sourceEntities,
+            accountLabel: ocLabel,
+          });
+          if (!kind) {
+            toast.dismiss(toastId);
+            setIsLoading(false);
+            toast.error("Other charge account resolve nahi hua. Account dubara select karein.");
+            return;
           }
+          saveOtherChargeAccountId = ocId;
+          saveOtherChargeAmount = ocAmt;
+          saveOtherChargeKind = kind;
         }
       }
 

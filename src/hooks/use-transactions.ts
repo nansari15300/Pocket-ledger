@@ -1068,6 +1068,8 @@ export function useTransactions(
                 v.incomeAccountId === entity.id ||
                 v.salesAccountId === entity.id ||
                 v.purchaseAccountId === entity.id ||
+                (v.type === "payment_out" && v.otherChargeAccountId === entity.id) ||
+                (v.type === "direct_expense" && v.otherChargeAccountId === entity.id) ||
                 (Array.isArray(v.lineItems) && v.lineItems.some((li: any) => li.itemId === entity.id || li.taxAccountId === entity.id)) ||
                 v.items?.some((li: any) => li.itemId === entity.id) || 
                 (Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId === entity.id)) ||
@@ -1524,7 +1526,8 @@ export function useTransactions(
         const allocatedFromJournal = (isBillWiseContext || isTaxContext || isExpenseContext) ? getAllocatedByVoucherIdFromJournal(vouchers) : new Map<string, number>();
         const entityIdForLinks = entity && 'id' in entity ? (entity as any).id : undefined;
         // Keep Journal link visibility entity-aware (party/staff/account), same behavior users expect from payment in/out flow.
-        const shouldScopeJournalLinksByEntity = context === 'party' || context === 'staff' || context === 'account';
+        const shouldScopeJournalLinksByEntity =
+          context === 'party' || context === 'staff' || context === 'account' || context === 'expense';
         // Match a linked voucher against current ledger entity so voucher nos don't leak into unrelated account rows.
         const isVoucherForCurrentEntity = (v: any) => {
             if (!shouldScopeJournalLinksByEntity || !entityIdForLinks) return true;
@@ -1561,6 +1564,27 @@ export function useTransactions(
                     (isJournalLikeVoucher(v as any) &&
                         (v as any).entries.some((e: any) => String(e?.accountId ?? '') === currentId))
                 );
+            }
+            if (context === 'expense') {
+                if (String((v as any)?.expenseAccountId ?? '') === currentId) return true;
+                if (String((v as any)?.incomeAccountId ?? '') === currentId) return true;
+                if (
+                  (v as any)?.type === 'payment_out' &&
+                  String((v as any)?.otherChargeAccountId ?? '') === currentId
+                ) {
+                  return true;
+                }
+                if (
+                  (v as any)?.type === 'direct_expense' &&
+                  String((v as any)?.otherChargeAccountId ?? '') === currentId
+                ) {
+                  return true;
+                }
+                if ((v as any)?.type === 'inter_company' && interCompanyVoucherTouchesEntity(v, currentId, 'expense'))
+                  return true;
+                if (isJournalLikeVoucher(v as any))
+                  return (v as any).entries.some((e: any) => String(e?.accountId ?? '') === currentId);
+                return false;
             }
             return true;
         };

@@ -8,7 +8,7 @@ import * as React from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { calendarSelectContentClassName } from "@/lib/calendarChrome";
+import { calendarMonthYearPopoverContentClassName } from "@/lib/calendarChrome";
 import { Check, ChevronDown } from "lucide-react";
 
 const ITEM_H = 40;
@@ -374,7 +374,7 @@ export function CalendarMonthWheel({
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        className={cn("p-0 z-[120] w-[min(180px,85vw)]", calendarSelectContentClassName)}
+        className={cn("p-0 w-[min(180px,85vw)]", calendarMonthYearPopoverContentClassName)}
         align="start"
         onOpenAutoFocus={(e) => e.preventDefault()}
       >

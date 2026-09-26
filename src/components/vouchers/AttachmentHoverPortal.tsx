@@ -2,9 +2,12 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { ZoomIn, ZoomOut, ChevronLeft, ChevronRight } from "lucide-react";
+import { ZoomIn, ZoomOut, ChevronLeft, ChevronRight, Share2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
+import { peekHoverCachedBlobUrl } from "@/lib/attachmentHoverBlobCache";
+import { shareAttachmentFromPreviewSrc, sanitizeAttachmentShareFileName } from "@/lib/shareAttachmentBlob";
 import { useFileHoverPreview } from "@/contexts/FileHoverPreviewContext";
 import { AttachmentPreviewGalleryContext } from "@/components/vouchers/attachmentPreviewGalleryContext";
 import { registerImperativeDialogBack } from "@/contexts/DialogBackHandlerContext";
@@ -279,7 +282,42 @@ type AttachmentHoverPortalProps = {
   clickOpensPreview?: boolean;
   /** Multi-file: PC modal ke left/right arrows se file badle (preview body context se index leta hai) */
   galleryUrls?: readonly string[];
+  /** Single-file portal (no multi gallery): canonical attachment ref for Share */
+  shareAttachmentUrl?: string;
+  /** Optional display name — Share filename */
+  shareFileName?: string;
 };
+
+function portalShareFileNameFromUrl(url: string, explicitName?: string): string {
+  const explicit = String(explicitName || "").trim();
+  if (explicit && !explicit.startsWith("local:")) {
+    return sanitizeAttachmentShareFileName(explicit);
+  }
+  const href = String(url || "").trim();
+  if (/^https?:\/\//i.test(href)) {
+    try {
+      const base = decodeURIComponent(new URL(href).pathname.split("/").pop()?.split("?")[0] || "");
+      if (base) return sanitizeAttachmentShareFileName(base);
+    } catch {
+      /* fall through */
+    }
+  }
+  const label = getAttachmentFormatLabel(href);
+  if (label === "PDF") return "attachment.pdf";
+  if (label && label !== "FILE" && label !== "OTHER") {
+    const ext = label.toLowerCase().replace("jpeg", "jpg");
+    return sanitizeAttachmentShareFileName(`attachment.${ext}`);
+  }
+  return sanitizeAttachmentShareFileName("attachment");
+}
+
+function resolvePortalSharePreviewSrc(canonicalUrl: string): string {
+  const canonical = String(canonicalUrl || "").trim();
+  if (!canonical) return "";
+  if (getAttachmentFormatLabel(canonical) === "PDF") return canonical;
+  const cached = peekHoverCachedBlobUrl(canonical);
+  return cached && (cached.startsWith("blob:") || cached.startsWith("data:")) ? cached : canonical;
+}
 
 export function AttachmentHoverPortal({
   children,
@@ -291,6 +329,8 @@ export function AttachmentHoverPortal({
   onPreviewDoubleClick,
   clickOpensPreview = false,
   galleryUrls,
+  shareAttachmentUrl,
+  shareFileName,
 }: AttachmentHoverPortalProps) {
   const { mode: globalPreviewMode } = useFileHoverPreview();
   const effectiveDisabled = disabled || globalPreviewMode === "off";
@@ -324,6 +364,12 @@ export function AttachmentHoverPortal({
   const activeGalleryUrl = galleryActive
     ? normalizedGalleryUrls[Math.min(Math.max(galleryIndex, 0), Math.max(normalizedGalleryUrls.length - 1, 0))]
     : "";
+  const activeShareCanonicalUrl = React.useMemo(() => {
+    if (galleryActive && activeGalleryUrl) return activeGalleryUrl;
+    if (normalizedGalleryUrls.length === 1) return normalizedGalleryUrls[0]!;
+    return String(shareAttachmentUrl || "").trim();
+  }, [galleryActive, activeGalleryUrl, normalizedGalleryUrls, shareAttachmentUrl]);
+  const [shareBusy, setShareBusy] = React.useState(false);
   const galleryState = React.useMemo(
     () => ({
       urls: normalizedGalleryUrls,
@@ -1302,6 +1348,49 @@ export function AttachmentHoverPortal({
             >
               Height
             </Button>
+            {activeShareCanonicalUrl ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 shrink-0 gap-1.5 px-2.5 text-xs sm:px-3"
+                aria-label="Share file"
+                disabled={shareBusy}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (shareBusy) return;
+                  const src = resolvePortalSharePreviewSrc(activeShareCanonicalUrl);
+                  if (!src) return;
+                  const fileName = portalShareFileNameFromUrl(
+                    activeShareCanonicalUrl,
+                    galleryActive ? undefined : shareFileName
+                  );
+                  setShareBusy(true);
+                  void shareAttachmentFromPreviewSrc(src, fileName, { dialogTitle: "Share file" })
+                    .catch((err) => {
+                      const name = (err as Error)?.name;
+                      if (name === "AbortError") return;
+                      console.warn("[AttachmentHoverPortal] share failed", err);
+                      if (typeof window !== "undefined") {
+                        window.alert(
+                          "Could not share this file. Try opening the full preview or download from there."
+                        );
+                      }
+                    })
+                    .finally(() => {
+                      setShareBusy(false);
+                    });
+                }}
+              >
+                <Share2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                Share
+              </Button>
+            ) : null}
             {/* Sirf label — header X se overlap avoid; icon hata user request */}
             <Button
               type="button"

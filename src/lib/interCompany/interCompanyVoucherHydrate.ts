@@ -310,6 +310,10 @@ export function collectInterCompanyIdsForPendingApproval(
     add(v.taxAccountId);
   } else if (kind === "expense") {
     add(v.expenseAccountId);
+    const ocId = String(v.otherChargeAccountId || "").trim();
+    const ocAmt = Number(v.otherChargeAmount || 0);
+    const ocKind = String(v.otherChargeKind || "").trim();
+    if (ocAmt > 0 && ocId && ocKind === "expense") add(ocId);
   } else if (kind === "bank") {
     add(v.accountId);
     add(v.companyBankAccountId);
