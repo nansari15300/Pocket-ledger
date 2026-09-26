@@ -587,6 +587,7 @@ export function ExpenseAccountDetails({
     ledgerOpeningForRunning: openingBalanceForPeriod,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
+    company,
   });
 
   useLedgerDetailSessionMemory({
@@ -1183,7 +1184,6 @@ export function ExpenseAccountDetails({
             <>
             <div
               className={mdc.reportTxnScrollBody}
-              style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
             >
               <div className="pb-2">
                 <MasterAccountFreezeTxnShell

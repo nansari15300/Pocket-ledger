@@ -56,6 +56,12 @@ import {
   transactionRowHasFileAttachment,
   OpeningBalanceFileCellContent,
   voucherTypePillClassName,
+  getStatusLabels,
+  getStatusBadgeOutlineClassName,
+  getStatusDetailVouchers,
+  LinkedVouchersColoredCollapsible,
+  transactionIsOverdueStatus,
+  STATUS_LABEL_PARTIAL_OVERDUE,
   type FileColumnDisplayMode,
 } from "@/components/vouchers/transactionTableShared";
 import {
@@ -341,9 +347,13 @@ export function OverdueAccountView({
     if (statusQ) {
       list = list.filter((t) => {
         const days = getOverdueDays(t.dueDate);
-        return ["overdue", days > 0 ? `${days} ${days === 1 ? "day" : "days"}` : ""].some((value) =>
-          value.toLowerCase().includes(statusQ)
-        );
+        const labels = getStatusLabels(t);
+        return [
+          ...labels,
+          "overdue",
+          "partial/overdue",
+          days > 0 ? `${days} ${days === 1 ? "day" : "days"}` : "",
+        ].some((value) => value.toLowerCase().includes(statusQ));
       });
     }
     if (hasStatusDaysFilter) {
@@ -380,18 +390,23 @@ export function OverdueAccountView({
     const totalPagesLocal = rowsPerPage > 0 ? Math.max(1, Math.ceil(total / rowsPerPage)) : 1;
     const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
     if (rowsPerPage <= 0) {
-      return { totalPages: 1, pageRows: sortTransactions(sortedRows, sortBy, sortOrder), beforeCount: 0, afterCount: 0 };
+      return {
+        totalPages: 1,
+        pageRows: sortTransactionsWithFiscalMergeForCompany(sortedRows, sortBy, sortOrder, undefined, company),
+        beforeCount: 0,
+        afterCount: 0,
+      };
     }
     const end = total - (safePage - 1) * rowsPerPage;
     const start = Math.max(0, end - rowsPerPage);
     const pageSlice = sortedRows.slice(start, end);
     return {
       totalPages: totalPagesLocal,
-      pageRows: sortTransactions(pageSlice, sortBy, sortOrder),
+      pageRows: sortTransactionsWithFiscalMergeForCompany(pageSlice, sortBy, sortOrder, undefined, company),
       beforeCount: start,
       afterCount: Math.max(0, total - end),
     };
-  }, [sortedRows, currentPage, rowsPerPage, sortBy, sortOrder]);
+  }, [sortedRows, currentPage, rowsPerPage, sortBy, sortOrder, company]);
 
   const totalPages = overduePaging.totalPages;
   const paginatedRows = overduePaging.pageRows;
@@ -784,7 +799,6 @@ export function OverdueAccountView({
         {/* scroll-touch + inline style for APK/WebView touch scroll */}
         <CardContent
           className="flex-1 min-h-0 overflow-auto scroll-touch p-0 py-4"
-          style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
         >
           <div
             ref={tableContainerRef}
@@ -905,21 +919,56 @@ export function OverdueAccountView({
                     )}
                     {visibleColumns.status && (
                       <TableCell className="text-center align-middle">
-                        {/* Overdue days hamesha yahi — pehle sirf "Show Narration" row me tha; static/APK par narration off ho to blank lagta tha */}
-                        <div className="flex flex-col items-center justify-center gap-0.5">
-                          <Badge variant="outline" className="text-red-600 border-red-600/50 inline-flex h-[22px] font-semibold shrink-0">
-                            {hl("Overdue")}
-                          </Badge>
-                          {(() => {
-                            const overdueDays = getOverdueDays(t.dueDate);
-                            if (overdueDays <= 0) return null;
-                            return (
-                              <span className="text-[10px] text-red-600 font-medium leading-tight">
-                                {hl(`${overdueDays} ${overdueDays === 1 ? "day" : "days"}`)}
-                              </span>
-                            );
-                          })()}
-                        </div>
+                        {(() => {
+                          const statusLabels = getStatusLabels(t);
+                          const statusDetailVouchersForRow = getStatusDetailVouchers(t, { billWiseOnly: true });
+                          const isOverdueRow =
+                            statusLabels.includes("Overdue") ||
+                            statusLabels.includes(STATUS_LABEL_PARTIAL_OVERDUE) ||
+                            transactionIsOverdueStatus(t);
+                          const overdueDays = isOverdueRow ? getOverdueDays(t.dueDate) : 0;
+                          return (
+                            <div className="flex flex-col items-center justify-center gap-0.5 leading-tight">
+                              {statusLabels.length > 0 ? (
+                                statusLabels.map((statusLabel) => (
+                                  <Badge
+                                    key={statusLabel}
+                                    variant="outline"
+                                    className={cn(
+                                      "inline-flex h-[22px] font-semibold shrink-0",
+                                      getStatusBadgeOutlineClassName(statusLabel, t, {
+                                        debit: t.debit,
+                                        credit: t.credit,
+                                      })
+                                    )}
+                                  >
+                                    {hl(statusLabel)}
+                                  </Badge>
+                                ))
+                              ) : (
+                                <Badge
+                                  variant="outline"
+                                  className="text-red-600 border-red-600/50 inline-flex h-[22px] font-semibold shrink-0"
+                                >
+                                  {hl("Overdue")}
+                                </Badge>
+                              )}
+                              {statusDetailVouchersForRow.length > 0 && (
+                                <LinkedVouchersColoredCollapsible
+                                  vouchers={statusDetailVouchersForRow}
+                                  align="center"
+                                  billWisePink
+                                  className="text-[10px] leading-tight"
+                                />
+                              )}
+                              {overdueDays > 0 && (
+                                <span className="text-[10px] text-red-600 font-medium leading-tight text-center">
+                                  {hl(`${overdueDays} ${overdueDays === 1 ? "day" : "days"}`)}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                     )}
                     {visibleColumns.netBalance && (

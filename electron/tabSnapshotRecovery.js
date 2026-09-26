@@ -34,8 +34,8 @@ function contentBounds(win, state) {
 function snapshotHtml(dataUrl) {
   const src = String(dataUrl || "").replace(/"/g, "&quot;");
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-html,body{margin:0;height:100%;background:#f6f9fc;overflow:hidden}
-img{width:100%;height:100%;object-fit:cover;object-position:top center;display:block}
+html,body{margin:0;height:100%;background:#f6f9fc;overflow:hidden;pointer-events:none}
+img{width:100%;height:100%;object-fit:cover;object-position:top center;display:block;pointer-events:none}
 </style></head><body><img alt="" src="${src}"/></body></html>`;
 }
 
@@ -222,6 +222,7 @@ async function recoverTabContent(win, view, reason) {
       }, HIDE_OVERLAY_DELAY_MS);
       plTraceLog.traceLog("PL-TAB-RECOVER", "recover_ok", { reason: finishReason });
     } else {
+      hideSnapshotOverlay(win, finishReason);
       plTraceLog.traceLog("PL-TAB-RECOVER", "recover_failed", { reason: finishReason });
     }
   };
@@ -352,6 +353,11 @@ function onWindowForeground(win, reason) {
   const state = rec.getState();
   if (!state || state.activeIndex < 0) return;
   const view = state.tabs[state.activeIndex];
+  const wc = view?.webContents;
+  const meta = wc ? tabRecovery.get(wc) : null;
+  if (!meta?.recovering) {
+    hideSnapshotOverlay(win, "foreground_stale_overlay");
+  }
   if (view) scheduleCapture(view, reason || "foreground");
   setTimeout(() => {
     void checkActiveTabHealth(win);

@@ -324,6 +324,7 @@ export function PayeeDetails({
     ledgerOpeningForRunning: openingBalanceForPeriod,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
+    company,
   });
 
   useLedgerDetailSessionMemory({

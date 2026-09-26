@@ -254,7 +254,12 @@ export function NoteDetails({
     const totalPagesLocal = rowsPerPage > 0 ? Math.max(1, Math.ceil(total / rowsPerPage)) : 1;
     const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
     if (rowsPerPage <= 0) {
-      return { totalPages: 1, pageTransactions: sortTransactions(list, sortBy, sortOrder), before: 0, after: 0 };
+      return {
+        totalPages: 1,
+        pageTransactions: sortTransactionsWithFiscalMergeForCompany(list, sortBy, sortOrder, undefined, company),
+        before: 0,
+        after: 0,
+      };
     }
     if (useTailPaging) {
       const end = total - (safePage - 1) * rowsPerPage;
@@ -262,7 +267,7 @@ export function NoteDetails({
       const pageSlice = list.slice(start, end);
       return {
         totalPages: totalPagesLocal,
-        pageTransactions: sortTransactions(pageSlice, sortBy, sortOrder),
+        pageTransactions: sortTransactionsWithFiscalMergeForCompany(pageSlice, sortBy, sortOrder, undefined, company),
         before: start,
         after: Math.max(0, total - end),
       };
@@ -272,11 +277,11 @@ export function NoteDetails({
     const pageSlice = list.slice(start, end);
     return {
       totalPages: totalPagesLocal,
-      pageTransactions: sortTransactions(pageSlice, sortBy, sortOrder),
+      pageTransactions: sortTransactionsWithFiscalMergeForCompany(pageSlice, sortBy, sortOrder, undefined, company),
       before: start,
       after: Math.max(0, total - end),
     };
-  }, [transactionsForPaging, currentPage, rowsPerPage, useTailPaging, sortBy, sortOrder]);
+  }, [transactionsForPaging, currentPage, rowsPerPage, useTailPaging, sortBy, sortOrder, company]);
 
   const paginatedTransactions = notePagingWindow.pageTransactions;
   const totalPages = notePagingWindow.totalPages;
@@ -386,7 +391,6 @@ export function NoteDetails({
           </MobileDetailSummaryCollapsible>
           <div
             className={mobileTxnScrollBodyClass(isReportMobileChrome)}
-            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
             <div className="pb-2 px-0.5">
               {paginatedTransactions.length > 0 ? (

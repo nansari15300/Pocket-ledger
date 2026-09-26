@@ -568,8 +568,8 @@ export function getLinkedAmountsToVoucher(
 
   const paymentTypes =
     type === "sale"
-      ? ["payment_in", "direct_income", "purchase", "purchase_service", "journal"]
-      : ["payment_out", "direct_expense", "sale", "sale_service", "journal"];
+      ? ["payment_in", "direct_income", "purchase", "purchase_service", "journal", "adjustment", "inter_company"]
+      : ["payment_out", "direct_expense", "sale", "sale_service", "journal", "adjustment", "inter_company"];
 
   const rows: LinkedAmountRow[] = [];
 
@@ -778,4 +778,27 @@ export function hasSpendWiseLinks(voucherData: any, allVouchers: any[]): boolean
     );
   }
   return false;
+}
+
+/** Sale/purchase bill-wise status: incoming payment/allocation voucher nos + outgoing opposite-bill links. */
+export function getSalePurchaseBillWiseLinkNos(
+  vouchers: any[],
+  bill: { id: string; type: string }
+): {
+  linkedFromVoucherNos: string[];
+  linkedToVoucherNos: string[];
+  linkedFromVoucherNosBillWise: string[];
+  linkedToVoucherNosBillWise: string[];
+} {
+  const billType = bill.type === "sale" ? "sale" : "purchase";
+  const fromRows = getLinkedAmountsToVoucher(vouchers, bill.id, billType);
+  const toRows = getOutgoingLinkedAmountRows(vouchers, bill.id, billType);
+  const linkedFromVoucherNos = Array.from(new Set(fromRows.map((r) => r.voucherNumber).filter(Boolean)));
+  const linkedToVoucherNos = Array.from(new Set(toRows.map((r) => r.voucherNumber).filter(Boolean)));
+  return {
+    linkedFromVoucherNos,
+    linkedToVoucherNos,
+    linkedFromVoucherNosBillWise: linkedFromVoucherNos,
+    linkedToVoucherNosBillWise: linkedToVoucherNos,
+  };
 }

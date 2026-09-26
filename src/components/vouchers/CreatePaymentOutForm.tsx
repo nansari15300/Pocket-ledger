@@ -3382,6 +3382,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         file={file}
                         attachmentCompanyId={companyId || undefined}
                         attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
+                        attachmentGallery={
+                          attachmentClientFileUrlsForPreview.length > 1
+                            ? { urls: attachmentClientFileUrlsForPreview, startIndex: index }
+                            : undefined
+                        }
                         attachmentReusePlaceKey={(voucher?.id || savedVoucherId) ? `vouchers/${voucher?.id || savedVoucherId}` : null}
                         onRemove={
                           allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete

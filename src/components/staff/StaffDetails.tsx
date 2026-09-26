@@ -695,6 +695,7 @@ export function StaffDetails({
     ledgerOpeningForRunning,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
+    company,
   });
 
   useLedgerDetailSessionMemory({
@@ -1285,7 +1286,6 @@ export function StaffDetails({
       {/* scroll-touch + inline style for APK/WebView touch scroll */}
       <div
         className={mobileTxnScrollBodyClass(isReportMobileChrome)}
-        style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
       >
         <div className={isReportMobileChrome ? "pb-2" : "pb-36"}>
         {isReportMobileChrome && mobileReportView === "chart" ? (

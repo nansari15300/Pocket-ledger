@@ -282,6 +282,8 @@ type AttachmentHoverPortalProps = {
   clickOpensPreview?: boolean;
   /** Multi-file: PC modal ke left/right arrows se file badle (preview body context se index leta hai) */
   galleryUrls?: readonly string[];
+  /** Kis thumb se portal khula — gallery index (alag FilePreview tiles par 0 na atke) */
+  galleryStartIndex?: number;
   /** Single-file portal (no multi gallery): canonical attachment ref for Share */
   shareAttachmentUrl?: string;
   /** Optional display name — Share filename */
@@ -329,6 +331,7 @@ export function AttachmentHoverPortal({
   onPreviewDoubleClick,
   clickOpensPreview = false,
   galleryUrls,
+  galleryStartIndex = 0,
   shareAttachmentUrl,
   shareFileName,
 }: AttachmentHoverPortalProps) {
@@ -613,12 +616,16 @@ export function AttachmentHoverPortal({
     cancelClose();
     setClickPinnedOpen(false);
     setStickOpen(false);
-    if (galleryActive && initialGalleryIndex != null) {
-      setGalleryIndex(clampGalleryIndex(initialGalleryIndex));
+    if (galleryActive) {
+      setGalleryIndex(
+        clampGalleryIndex(
+          initialGalleryIndex != null ? initialGalleryIndex : galleryStartIndex
+        )
+      );
     }
     updatePosition();
     setOpen(true);
-  }, [effectiveDisabled, cancelClose, updatePosition, galleryActive, clampGalleryIndex]);
+  }, [effectiveDisabled, cancelClose, updatePosition, galleryActive, clampGalleryIndex, galleryStartIndex]);
 
   /** FilePreview: Preview button se bina hover ke panel kholna */
   React.useEffect(() => {
@@ -662,8 +669,12 @@ export function AttachmentHoverPortal({
   }, [open, updatePosition, clickOrTapOpenMode]);
 
   React.useEffect(() => {
-    setGalleryIndex(0);
-  }, [normalizedGalleryUrls.join("\x1e")]);
+    if (!galleryActive) {
+      setGalleryIndex(0);
+      return;
+    }
+    setGalleryIndex(clampGalleryIndex(galleryStartIndex));
+  }, [normalizedGalleryUrls.join("\x1e"), galleryActive, galleryStartIndex, clampGalleryIndex]);
 
   /** Gallery file badalne par purane image ka zoom/panel size carry na ho. */
   React.useLayoutEffect(() => {
@@ -1074,8 +1085,12 @@ export function AttachmentHoverPortal({
       }
       setClickPinnedOpen(true);
       setStickOpen(false);
-      if (galleryActive && targetIndex != null) {
-        setGalleryIndex(clampGalleryIndex(targetIndex));
+      if (galleryActive) {
+        const idx =
+          targetIndex != null
+            ? clampGalleryIndex(targetIndex)
+            : clampGalleryIndex(galleryStartIndex);
+        setGalleryIndex(idx);
       }
       updatePosition();
       return true;

@@ -12,7 +12,9 @@ import { Smartphone } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { formatEntitlementCapLabel, getNextPaidUpgrade } from "@/config/plans";
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, forwardRef } from "react";
+import { MobilePagePullRefreshProvider } from "@/contexts/MobilePagePullRefreshContext";
+import { MobilePagePullRefresh } from "@/components/layout/MobilePagePullRefresh";
 import { useAuth } from "@/hooks/useAuth";
 import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
 import { useToast } from "@/hooks/use-toast";
@@ -820,26 +822,24 @@ function GlobalLeftEdgeOpenAppMenuSwipe() {
 }
 
 /** Mobile: `touch-pan-y` vertical scroll; baen swipe ab `GlobalLeftEdgeOpenAppMenuSwipe` document par */
-function DashboardMainShell({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
+const DashboardMainShell = forwardRef<
+  HTMLElement,
+  { children: React.ReactNode; className?: string }
+>(function DashboardMainShell({ children, className }, ref) {
   const isMobile = useIsMobile();
   return (
-    <main className={cn(isMobile && "touch-pan-y", className)}>
+    <main ref={ref} className={cn("relative", isMobile && "touch-pan-y", className)}>
       {children}
     </main>
   );
-}
+});
 
 function LayoutContent({ children }: { children: React.ReactNode }) {
     const isMobile = useIsMobile();
     const pathname = usePathname();
     const router = useRouter();
     const { user } = useAuth();
+    const dashboardMainScrollRef = useRef<HTMLElement>(null);
 
     // Settings / gallery / billing / loans: body scroll band — andar panel scroll (outer chain `min-h-0`).
     useEffect(() => {
@@ -959,19 +959,23 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       <PlServerAuthoritativePendingBanner />
                       <PlServerReadSyncHealthBanner />
                       <ApkCloudOnlineSyncToast />
-                      <DashboardMainShell
-                        className={cn(
-                          "flex min-h-0 flex-1 flex-col",
-                          pathname?.startsWith("/settings") ||
-                            pathname?.startsWith("/gallery") ||
-                            pathname?.startsWith("/billing/statement") ||
-                            pathname?.startsWith("/loans")
-                            ? "overflow-hidden"
-                            : "overflow-y-auto"
-                        )}
-                      >
-                        {children}
-                      </DashboardMainShell>
+                      <MobilePagePullRefreshProvider>
+                        <DashboardMainShell
+                          ref={dashboardMainScrollRef}
+                          className={cn(
+                            "flex min-h-0 flex-1 flex-col",
+                            pathname?.startsWith("/settings") ||
+                              pathname?.startsWith("/gallery") ||
+                              pathname?.startsWith("/billing/statement") ||
+                              pathname?.startsWith("/loans")
+                              ? "overflow-hidden"
+                              : "overflow-y-auto"
+                          )}
+                        >
+                          <MobilePagePullRefresh scrollRef={dashboardMainScrollRef} />
+                          {children}
+                        </DashboardMainShell>
+                      </MobilePagePullRefreshProvider>
                       <MobileFloatingButton />
                       {/* Mobile reports detail: PanelRight sheet trigger — footer daen */}
                       <ReportsMobileReportListFab />

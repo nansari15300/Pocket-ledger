@@ -661,6 +661,7 @@ export function AccountGroupDetails({
     ledgerOpeningForRunning: openingBalanceForPeriod,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
+    company,
   });
 
   const spendWisePaging = useMemo(() => {

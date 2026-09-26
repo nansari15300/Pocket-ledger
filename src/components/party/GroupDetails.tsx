@@ -950,6 +950,7 @@ export function GroupDetails({
     ledgerOpeningForRunning: openingBalanceForPeriod,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
+    company,
   });
 
   useLedgerDetailSessionMemory({
@@ -1370,7 +1371,6 @@ export function GroupDetails({
         {/* scroll-touch + inline style for APK/WebView touch scroll */}
         <div
           className="flex-1 min-h-0 overflow-auto scroll-touch"
-          style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
         >
           <div className="pb-2">
           <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>

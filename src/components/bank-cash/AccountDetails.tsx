@@ -143,6 +143,7 @@ import {
   sortAndRebalancePageTransactions,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
+import { getFiscalMergePartitionsFromCompany } from "@/lib/fiscalPartitionRows";
 import { applyStatementCheckModeHiddenToLedgerList } from "@/lib/statementCheckModeLedger";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { SpendWiseBlinkInfoDialog } from "../vouchers/SpendWiseBlinkInfoDialog";
@@ -757,6 +758,10 @@ export function AccountDetails({
   // Sort only in statement view; spend-wise keeps group order
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const fiscalPartitionAts = useMemo(
+    () => getFiscalMergePartitionsFromCompany(company),
+    [company?.fiscalSplitMode, company?.fiscalMergePartitionAt, company?.fiscalMergePartitionAtIsos]
+  );
   const sortedTransactions = useMemo(() => {
     const rows = spendWiseView
       ? filterSpendWiseUnapprovedOnly(displayTransactions, unapprovedOnly)
@@ -851,7 +856,7 @@ export function AccountDetails({
         totalPages: 1,
         paginatedTransactions: spendWiseView
           ? all
-          : sortAndRebalancePageTransactions(all, openingBalanceForPeriod, sortBy, sortOrder),
+          : sortAndRebalancePageTransactions(all, openingBalanceForPeriod, sortBy, sortOrder, fiscalPartitionAts),
         desktopLedgerSliceFlatStart: 0,
       };
     }
@@ -870,7 +875,13 @@ export function AccountDetails({
       const openingForPage = openingBeforeFlatIndex(ledgerSortedTransactions as any[], flatStart);
       return {
         totalPages,
-        paginatedTransactions: sortAndRebalancePageTransactions(pageFlat, openingForPage, sortBy, sortOrder),
+        paginatedTransactions: sortAndRebalancePageTransactions(
+          pageFlat,
+          openingForPage,
+          sortBy,
+          sortOrder,
+          fiscalPartitionAts
+        ),
         desktopLedgerSliceFlatStart: flatStart,
       };
     }
@@ -888,7 +899,17 @@ export function AccountDetails({
       paginatedTransactions: list as any[],
       desktopLedgerSliceFlatStart: start,
     };
-  }, [ledgerSortedTransactions, displayBlocks, spendWiseView, rowsPerPage, currentPage, sortBy, sortOrder, openingBalanceForPeriod]);
+  }, [
+    ledgerSortedTransactions,
+    displayBlocks,
+    spendWiseView,
+    rowsPerPage,
+    currentPage,
+    sortBy,
+    sortOrder,
+    openingBalanceForPeriod,
+    fiscalPartitionAts,
+  ]);
 
   useLedgerDetailSessionMemory({
     companyId: companyId ?? undefined,
@@ -1688,7 +1709,6 @@ export function AccountDetails({
       {/* scroll-touch + inline style for APK/WebView touch scroll */}
       <div
         className={cn("flex-1 min-h-0 overflow-auto scroll-touch", spendWiseView && "p-[2px]")}
-        style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
       >
         <div className="pb-24">
           {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}

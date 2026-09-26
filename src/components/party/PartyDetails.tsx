@@ -1044,6 +1044,7 @@ export function PartyDetails({
     ledgerOpeningForRunning,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
+    company,
   });
 
   /** Default tail view page 1 = newest rows — footer shows full ledger closing, not slice math. */
@@ -1649,7 +1650,6 @@ export function PartyDetails({
           {/* Transaction list â€” report: table + pager ek scroll (100/All par gap fix); ledger: pager bahar */}
           <div
             className={mobileTxnScrollBodyClass(isReportMobileChrome)}
-            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
             <div className="pb-2">
             {isOpeningBalanceLedger ? (

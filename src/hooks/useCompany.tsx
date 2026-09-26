@@ -1186,6 +1186,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         // Refresh boot: sirf is tab pin — global `companyId` mat likho (doosri tab ka selection overwrite na ho).
         pinBootSelectedCompanyId(pinned);
         setCompanyIdState(pinned);
+        // `loading` true rehne par voucher route master prefetch `if (loading) return` — party list empty (dev refresh).
+        setLoading(false);
       } else {
         setLoading(false);
       }
@@ -3106,6 +3108,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     });
     if (companyFromList && isCompanyVisibleInMainApp(companyFromList)) {
       setCompanyFrom("listRecovery:tick:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, companyFromList));
+      setLoading(false);
       listRecoverySyncForIdRef.current = null;
       listRecoveryDeferPulseCountRef.current = 0;
       return;
@@ -3175,6 +3178,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         }
         plDbgCompanyRecovery("listRecovery:sqliteMergeIntoList", { companyId });
         setCompanyFrom("listRecovery:sqliteMergeIntoList:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
+        setLoading(false);
         setAllCompanies((prev) => {
           if (prev.some((c) => c.id === companyId)) return prev;
           return [...prev, normalized];
@@ -3195,6 +3199,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
               if (isCompanyVisibleInMainApp(normalized)) {
                 plDbgCompanyRecovery("listRecovery:firestoreFallbackMerge", { companyId });
                 setCompanyFrom("listRecovery:firestoreFallbackMerge:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
+                setLoading(false);
                 setAllCompanies((prev) => {
                   if (prev.some((c) => c.id === companyId)) return prev;
                   return [...prev, normalized];

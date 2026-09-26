@@ -107,7 +107,7 @@ export function MobileTransactionCardColorPicker({
   const cardClassFor = (sample: MobileTransactionCardPreview) => {
     const tone = draftTones[sample.id] ?? sample.tone;
     if (draftValue === "violet" && tone === "pink") {
-      return "!border-0 !bg-[#A6A5A0] !text-white";
+      return "!border-0 !bg-gray-200 !text-black";
     }
     if (draftValue === "blue" && tone === "pink") {
       return "!border-gray-500 !bg-gray-200 !text-black";

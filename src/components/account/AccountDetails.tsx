@@ -322,6 +322,7 @@ export function AccountDetails({
     ledgerOpeningForRunning: openingBalanceForPeriod,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
+    company,
   });
 
   const ledgerPageStats = {
@@ -820,7 +821,6 @@ export function AccountDetails({
 
           <div
             className={mdc.reportTxnScrollBody}
-            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
             <div className="pb-2">
               {mobileReportView === "chart" ? (

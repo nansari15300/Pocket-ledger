@@ -22,6 +22,7 @@ import { CapacitorDriveOAuthReturnHandler } from "@/components/CapacitorDriveOAu
 import { DriveOAuthReturnBootstrap } from "@/components/DriveOAuthReturnBootstrap";
 import { PendingRestoreCloudPushManager } from "@/components/PendingRestoreCloudPushManager";
 import { StaticFastResumeSyncManager } from "@/components/StaticFastResumeSyncManager";
+import { ElectronForegroundUiWake } from "@/components/ElectronForegroundUiWake";
 import { OnlineResumeRouteShield } from "@/components/OnlineResumeRouteShield";
 import { OfflineWarmSyncManager } from "@/components/OfflineWarmSyncManager";
 import { CompanyAttachmentOfflineBackfillManager } from "@/components/CompanyAttachmentOfflineBackfillManager";
@@ -157,6 +158,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <AppUiZoomBootstrap />
                 <WebAppBasePathUrlGuard />
                 <StaticFastResumeSyncManager />
+                <ElectronForegroundUiWake />
                 {/* Offline→online: dashboard/company silent jump block; sync background me chale */}
                 <OnlineResumeRouteShield />
                 {/* Online par masters/vouchers/plans SQLite + IndexedDB attachments preload */}

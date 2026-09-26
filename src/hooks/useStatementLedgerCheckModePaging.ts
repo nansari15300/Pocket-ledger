@@ -16,6 +16,7 @@ import type {
   TransactionSortBy,
   TransactionSortOrder,
 } from "@/components/vouchers/TransactionTableSortDropdown";
+import { getFiscalMergePartitionsFromCompany } from "@/lib/fiscalPartitionRows";
 
 type Args = {
   companyId: string | undefined;
@@ -30,6 +31,12 @@ type Args = {
   /** Footer sort: sirf current page rows par apply — poori list reorder nahi. */
   pageSortBy?: TransactionSortBy;
   pageSortOrder?: TransactionSortOrder;
+  /** Merge FY partitions — non-date page sort har segment ke andar. */
+  company?: {
+    fiscalSplitMode?: string;
+    fiscalMergePartitionAt?: unknown;
+    fiscalMergePartitionAtIsos?: string[] | null;
+  } | null;
 };
 
 /**
@@ -47,7 +54,12 @@ export function useStatementLedgerCheckModePaging({
   ledgerOpeningForRunning,
   pageSortBy = "date",
   pageSortOrder = DEFAULT_TRANSACTION_SORT_ORDER,
+  company,
 }: Args) {
+  const fiscalPartitionAts = useMemo(
+    () => getFiscalMergePartitionsFromCompany(company),
+    [company?.fiscalSplitMode, company?.fiscalMergePartitionAt, company?.fiscalMergePartitionAtIsos]
+  );
   // Current page rows — ↑↓/Space isi list par (paging ke baad sync; hook order circular na ho).
   const [keyboardNavList, setKeyboardNavList] = useState<
     ReadonlyArray<{ id?: string; _rowKey?: string }>
@@ -94,7 +106,13 @@ export function useStatementLedgerCheckModePaging({
       const pageDr = list.reduce((sum, t) => sum + (Number(t?.debit) || 0), 0);
       const pageCr = list.reduce((sum, t) => sum + (Number(t?.credit) || 0), 0);
       const openingForPage = ledgerOpeningForRunning;
-      const displayAll = sortAndRebalancePageTransactions(list, openingForPage, pageSortBy, pageSortOrder);
+      const displayAll = sortAndRebalancePageTransactions(
+        list,
+        openingForPage,
+        pageSortBy,
+        pageSortOrder,
+        fiscalPartitionAts
+      );
       const adjusted = statementCheck.adjustPeriodTotals(displayAll, openingForPage);
       const totalPagesLocal = 1;
       return {
@@ -132,7 +150,8 @@ export function useStatementLedgerCheckModePaging({
       pageTransactions,
       openingForPage,
       pageSortBy,
-      pageSortOrder
+      pageSortOrder,
+      fiscalPartitionAts
     );
     let periodDrForPage = displayPageTransactions.reduce((sum, t) => sum + (Number(t?.debit) || 0), 0);
     let periodCrForPage = displayPageTransactions.reduce((sum, t) => sum + (Number(t?.credit) || 0), 0);
@@ -162,6 +181,7 @@ export function useStatementLedgerCheckModePaging({
     statementCheck.adjustPeriodTotals,
     pageSortBy,
     pageSortOrder,
+    fiscalPartitionAts,
   ]);
 
   const totalPages =

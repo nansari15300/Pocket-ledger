@@ -48,7 +48,7 @@ function mobileCardSurfaceColors(
   const unapproved = tone === "pink";
   if (color === "violet") {
     return unapproved
-      ? { backgroundColor: "#a6a5a0", borderColor: "#a6a5a0" }
+      ? { backgroundColor: "#e5e7eb", borderColor: "#d1d5db" }
       : { backgroundColor: "#ffffff", borderColor: "#ffffff" };
   }
   if (color === "blue") {
@@ -82,7 +82,7 @@ export function mobileCardInnerPillClass(
   const unapproved = tone === "pink";
   if (color === "violet") {
     return unapproved
-      ? "!border-2 !border-[#a6a5a0] !bg-[#a6a5a0]"
+      ? "!border-2 !border-gray-300 !bg-gray-200"
       : "!border-2 !border-white !bg-white";
   }
   if (color === "blue") {

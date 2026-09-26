@@ -418,10 +418,12 @@ function PartyPageContent() {
         partyId: row.partyId,
         debit: row.debit,
         credit: row.credit,
+        total: row.total,
         outstanding: out,
         runningBalance: signedOut,
         balance: signedOut,
         paymentStatus: row.paymentStatus,
+        isOverdue: row.isOverdue,
         userId: row.userId,
         userName: row.userName,
         narration: row.narration,
@@ -431,6 +433,10 @@ function PartyPageContent() {
         dueDate: row.dueDate,
         isApproved: v?.isApproved,
         partyName: row.partyName,
+        linkedFromVoucherNos: row.linkedFromVoucherNos,
+        linkedToVoucherNos: row.linkedToVoucherNos,
+        linkedFromVoucherNosBillWise: row.linkedFromVoucherNosBillWise,
+        linkedToVoucherNosBillWise: row.linkedToVoucherNosBillWise,
       };
     });
   }, [overdueTransactionsForView, vouchers]);
@@ -1766,7 +1772,7 @@ function PartyPageContent() {
           {/* Transaction list – mobile cards; scroll-touch + inline for APK/WebView touch scroll */}
           <div
             className="flex-1 min-h-0 overflow-auto scroll-touch"
-            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+            data-pl-mobile-pull-scroll=""
           >
             <TransactionsTable
               transactions={mobileFilteredOverdue}

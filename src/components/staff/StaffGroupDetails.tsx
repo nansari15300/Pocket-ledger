@@ -538,6 +538,7 @@ export function StaffGroupDetails({
     ledgerOpeningForRunning: openingBalanceForPeriod,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
+    company,
   });
 
   useLedgerDetailSessionMemory({

@@ -44,6 +44,8 @@ import {
   getOppositeAccountLabel,
   getParticularsText,
   getStatusLabel,
+  getStatusLabels,
+  transactionIsOverdueStatus,
   getStatusBadgeOutlineClassName,
   getStatusDetail,
   getStatusDetailVouchers,
@@ -2353,7 +2355,9 @@ export function TransactionsTable({
         )}
         {showCol("status") && !hideStatusColumn && (
           <TableCell className={cn("text-center align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
-            {openingBalanceOutstanding != null ? (
+            {topLedgerOpeningPillKind === "fy" ? (
+              <span className="font-semibold">-</span>
+            ) : openingBalanceOutstanding != null ? (
               <div className="flex flex-col items-center gap-[1px] leading-tight">
                 <Badge
                   variant="outline"
@@ -2405,8 +2409,8 @@ export function TransactionsTable({
         return {
           borderWidth: 0,
           borderColor: "transparent",
-          backgroundColor: unapproved ? "#a6a5a0" : "#fff",
-          color: unapproved ? "#fff" : "#000",
+          backgroundColor: unapproved ? "#e5e7eb" : "#fff",
+          color: "#000",
         };
       }
       if (mobileCardColor === "blue") return { borderColor: unapproved ? "#9ca3af" : "#93c5fd", backgroundColor: unapproved ? "#e5e7eb" : "#dbeafe", color: "#000" };
@@ -2416,7 +2420,7 @@ export function TransactionsTable({
     };
     const mobileCardPaletteClass = (tone: "green" | "pink" | "blue") => {
       const unapproved = tone === "pink";
-      if (mobileCardColor === "violet") return unapproved ? "!border-0 !bg-[#a6a5a0] !text-white" : "!border-0 !bg-white !text-black";
+      if (mobileCardColor === "violet") return unapproved ? "!border-0 !bg-[#e5e7eb] !text-black" : "!border-0 !bg-white !text-black";
       if (mobileCardColor === "blue") return unapproved ? "!border-gray-400 !bg-gray-200 !text-black" : "!border-blue-300 !bg-blue-100 !text-black";
       if (mobileCardColor === "pink") return unapproved ? "!border-amber-400 !bg-amber-100 !text-black" : "!border-pink-300 !bg-pink-100 !text-black";
       if (mobileCardColor === "amber") return unapproved ? "!border-[#ffa500] !bg-[#ffa500] !text-black" : "!border-amber-300 !bg-amber-100 !text-black";
@@ -2455,7 +2459,8 @@ export function TransactionsTable({
             className="w-full rounded-lg border border-t-2 border-t-black border-blue-400/60 bg-blue-50/80 px-3 py-2.5 text-sm dark:bg-blue-950/40"
             onDoubleClick={() => toast.message("This row cannot be edit", { duration: 2000 })}
           >
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="shrink-0 text-sm font-medium text-foreground whitespace-nowrap">{dateLabel}</span>
               <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                 <FyOpeningPillFormatPill>
                   <span
@@ -2480,12 +2485,12 @@ export function TransactionsTable({
                   </FyOpeningPillFormatPill>
                 ) : null}
               </div>
-              <span className="text-xs text-muted-foreground shrink-0">{dateLabel}</span>
-            </div>
-            <div className="mt-1 flex justify-between text-sm">
-              <span className="text-green-700">{signed > 0 ? formatCurrency(Math.abs(signed), { noSuffix: true, context: "transaction" }) : "-"}</span>
-              <span className="text-red-700">{signed < 0 ? formatCurrency(Math.abs(signed), { noSuffix: true, context: "transaction" }) : "-"}</span>
-              <span className={signed >= 0 ? "text-green-700" : "text-red-700"}>
+              <span
+                className={cn(
+                  "ml-auto shrink-0 text-sm font-bold whitespace-nowrap",
+                  signed >= 0 ? "text-green-700" : "text-red-700"
+                )}
+              >
                 {formatFooterBalance(signed)}
               </span>
             </div>
@@ -2612,12 +2617,12 @@ export function TransactionsTable({
       };
       const groupAccountName = context === "group" ? getGroupAccountName() : "";
       const showStatusInCard = isBillWiseCardContext;
-      const statusLabel = showStatusInCard ? getStatusLabel(t, context) : "";
+      const statusLabels = showStatusInCard ? getStatusLabels(t, context) : [];
       const statusDetailVouchers = showStatusInCard ? getStatusDetailVouchers(t, { billWiseOnly: statusBillWiseOnly }) : [];
       const showStatusDetailInCard = statusDetailVouchers.length > 0;
       // Mobile parity with desktop: show overdue age below "Overdue" badge.
       const overdueDaysInCard = (() => {
-        if (!(statusLabel === "Overdue" || (t as any).isOverdue || (t as any).paymentStatus === "overdue")) return 0;
+        if (!transactionIsOverdueStatus(t)) return 0;
         const due = parseFirestoreDateFieldToJsDate((t as any).dueDate);
         if (!due) return 0;
         const today = new Date();
@@ -2823,10 +2828,11 @@ export function TransactionsTable({
               <span className="font-semibold">{mobileNarrationLabel} : </span>
               {hl(mobileNarrationValue)}
             </p>
-            {showStatusInCard && (statusLabel || showStatusDetailInCard) ? (
+            {showStatusInCard && (statusLabels.length > 0 || showStatusDetailInCard) ? (
               <div className="shrink-0 flex flex-col items-end gap-0.5">
-                {statusLabel ? (
+                {statusLabels.map((statusLabel) => (
                   <Badge
+                    key={statusLabel}
                     variant="outline"
                     className={cn(
                       "text-xs font-semibold h-[22px]",
@@ -2835,7 +2841,7 @@ export function TransactionsTable({
                   >
                     {hl(statusLabel)}
                   </Badge>
-                ) : null}
+                ))}
                 {overdueDaysInCard > 0 ? (
                   <span className="text-[10px] font-medium text-red-600">
                     {hl(

@@ -1020,6 +1020,51 @@ export const getStatusLabel = (t: any, context?: string) => {
   return "";
 };
 
+function transactionHasPartialPayment(t: any): boolean {
+  const ps = String((t as any).paymentStatus || "");
+  if (ps === "partially_paid") return true;
+  if (ps === "paid") return false;
+  const out = Number((t as any).outstanding);
+  if (Number.isFinite(out) && out > 0) {
+    const total =
+      Number(t.total ?? t.amount ?? ((t.subTotal ?? 0) - (t.discount ?? 0) + (t.tax ?? 0))) || 0;
+    if (total > 0 && out < total - 1e-6) return true;
+  }
+  const allocations = ((t as any).allocations as any[] | undefined) || [];
+  if (allocations.length > 0) {
+    const amount = Number(t.amount ?? t.total ?? t.debit ?? t.credit ?? 0) || 0;
+    if (amount > 0) {
+      const totalLinked = allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+      if (totalLinked > 0 && totalLinked < amount - 1e-6) return true;
+    }
+  }
+  return false;
+}
+
+export function transactionIsOverdueStatus(t: any): boolean {
+  if ((t as any).isOverdue || (t as any).paymentStatus === "overdue") return true;
+  const out = Number((t as any).outstanding);
+  if (!(Number.isFinite(out) && out > 0)) return false;
+  const due = safeToDate((t as any).dueDate);
+  if (!due) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dueOnly = new Date(due);
+  dueOnly.setHours(0, 0, 0, 0);
+  return today > dueOnly;
+}
+
+/** Bill-wise: partial + overdue → ek hi pill. */
+export const STATUS_LABEL_PARTIAL_OVERDUE = "Partial/Overdue";
+
+export function getStatusLabels(t: any, context?: string): string[] {
+  const overdue = transactionIsOverdueStatus(t);
+  const partial = transactionHasPartialPayment(t);
+  if (overdue && partial) return [STATUS_LABEL_PARTIAL_OVERDUE];
+  const single = getStatusLabel(t, context);
+  return single ? [single] : [];
+}
+
 /** Status pill outline colors — Adjustment: Dr green, Cr red (party bill-wise ledger). */
 export function getStatusBadgeOutlineClassName(
   statusLabel: string,
@@ -1042,6 +1087,7 @@ export function getStatusBadgeOutlineClassName(
   }
 
   if (
+    statusLabel === STATUS_LABEL_PARTIAL_OVERDUE ||
     statusLabel === "Partial" ||
     statusLabel === "Unpaid" ||
     statusLabel === "Overdue" ||
@@ -1058,7 +1104,7 @@ export function getStatusBadgeOutlineClassName(
 
 /** Days overdue (today - dueDate). Returns 0 if not overdue or no dueDate. */
 const getOverdueDays = (t: any): number => {
-  if (!(t.isOverdue || t.paymentStatus === "overdue")) return 0;
+  if (!transactionIsOverdueStatus(t)) return 0;
   const due = safeToDate(t.dueDate);
   if (!due) return 0;
   const today = new Date();
@@ -1878,39 +1924,57 @@ export const TransactionRow = React.memo(
         )}
         {showCol("status") && !hideStatusColumn &&
           (() => {
+            if (isFyOpeningRow) {
+              return (
+                <TableCell className={cn("text-center align-middle", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+                  <span className="font-semibold text-muted-foreground">-</span>
+                </TableCell>
+              );
+            }
             const isDashboardAddSalary =
               context === "daybook" &&
               transaction.type === "journal" &&
               transaction.subType === "add_salary";
-            let statusLabel = isDashboardAddSalary ? "Salary" : getStatusLabel(transaction, context);
-            const fyOpeningZeroBalance =
-              isFyOpeningRow && !isBalanceMasked && Math.abs(balance) < 1e-6;
-            if (fyOpeningZeroBalance) {
-              statusLabel = "Settled";
-            }
+            const statusLabels = isDashboardAddSalary
+              ? ["Salary"]
+              : getStatusLabels(transaction, context);
             const statusDetailText = getStatusDetail(transaction, { billWiseOnly: statusBillWiseOnly });
             const statusDetailVouchersForRow = getStatusDetailVouchers(transaction, { billWiseOnly: statusBillWiseOnly });
             // Keep status voucher-link text tied to the shared "Show Narration" toggle.
             const showStatusDetailText = showNarration && !!statusDetailText;
             // Bill-wise: linked voucher nos directly under status pill (Adjustment / Journal / Paid etc.).
             const showStatusDetailUnderBadge = isBillWise && statusDetailVouchersForRow.length > 0;
-            const isOverdueRow = statusLabel === "Overdue" || (transaction as any).isOverdue || (transaction as any).paymentStatus === "overdue";
+            const isOverdueRow =
+              statusLabels.includes("Overdue") ||
+              statusLabels.includes(STATUS_LABEL_PARTIAL_OVERDUE) ||
+              transactionIsOverdueStatus(transaction);
             const overdueDays = isOverdueRow ? getOverdueDays(transaction) : 0;
             // Keep status badge vertically centered like amount cells in every view.
             return (
               <TableCell className={cn("text-center align-middle", ensureMinGaps && "min-w-[95px] px-[5px]")}>
                 {/* In bill-wise mode, switch to vertical stack only when detail text is visible. */}
-                <div className={cn("flex min-h-6 items-center justify-center gap-[1px] leading-tight", (!isBillWise || showStatusDetailUnderBadge) && "flex-col")}>
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      // Keep status pill dimensions aligned with Type pill so it doesn't touch row lines.
-                      "inline-flex h-6 items-center rounded-xl px-2.5 font-medium leading-none shrink-0",
-                      getStatusBadgeOutlineClassName(statusLabel, transaction, { debit, credit })
-                    )}
-                  >
-                    {hlForColumn("status")(statusLabel || "-")}
-                  </Badge>
+                <div className="flex min-h-6 flex-col items-center justify-center gap-0.5 leading-tight">
+                  {statusLabels.length > 0 ? (
+                    statusLabels.map((statusLabel) => (
+                      <Badge
+                        key={statusLabel}
+                        variant="outline"
+                        className={cn(
+                          "inline-flex h-6 items-center rounded-xl px-2.5 font-medium leading-none shrink-0",
+                          getStatusBadgeOutlineClassName(statusLabel, transaction, { debit, credit })
+                        )}
+                      >
+                        {hlForColumn("status")(statusLabel)}
+                      </Badge>
+                    ))
+                  ) : (
+                    <Badge
+                      variant="outline"
+                      className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium leading-none shrink-0 text-muted-foreground"
+                    >
+                      {hlForColumn("status")("-")}
+                    </Badge>
+                  )}
                   {showStatusDetailUnderBadge && (
                     <LinkedVouchersColoredCollapsible
                       vouchers={statusDetailVouchersForRow}
@@ -1919,9 +1983,8 @@ export const TransactionRow = React.memo(
                       className="text-[10px] leading-tight"
                     />
                   )}
-                  {/* When narration is hidden, keep overdue hint under status badge. */}
-                  {!showNarration && !isBillWise && isOverdueRow && overdueDays > 0 && (
-                    <span className="text-[10px] text-red-600 font-medium">
+                  {isOverdueRow && overdueDays > 0 && (
+                    <span className="text-[10px] text-red-600 font-medium leading-tight text-center">
                       {hlForColumn("status")(`${overdueDays} ${overdueDays === 1 ? "day" : "days"}`)}
                     </span>
                   )}
@@ -2098,7 +2161,11 @@ export const TransactionRow = React.memo(
     const statusDetailVouchers = getStatusDetailVouchers(transaction, { billWiseOnly: statusBillWiseOnly });
     const showNarrationRow =
       (showNarration && narrationText) ||
-      (!isBillWise && showCol("status") && !hideStatusColumn && statusDetailVouchers.length > 0);
+      (!isBillWise &&
+        !isFyOpeningRow &&
+        showCol("status") &&
+        !hideStatusColumn &&
+        statusDetailVouchers.length > 0);
     const spendWiseBorderLast = useRowSpendBorders && effSpendBottom && !showNarrationRow && cn(
       "[&>td]:border-b-2 [&>td]:border-solid [&>td]:pb-1",
       !effSpendTop && "[&>td]:border-t-0",
@@ -2270,13 +2337,11 @@ export const TransactionRow = React.memo(
       </motion.tr>
     );
 
-    const isOverdueForSubRow = (() => {
-      const lbl = getStatusLabel(transaction, context);
-      return lbl === "Overdue" || (transaction as any).isOverdue || (transaction as any).paymentStatus === "overdue";
-    })();
+    const isOverdueForSubRow = transactionIsOverdueStatus(transaction);
     const overdueDaysForSubRow = isOverdueForSubRow ? getOverdueDays(transaction) : 0;
     // Keep voucher-link + overdue helper beside narration in same row.
-    const overdueSubText = showNarration && overdueDaysForSubRow > 0 ? `${overdueDaysForSubRow} day${overdueDaysForSubRow === 1 ? "" : "s"}` : "";
+    // Overdue age sits under the status pill on the main row (Overdue page parity) — not in narration sub-row.
+    const overdueSubText = "";
     const NarrationRow = showNarrationRow ? (
       <motion.tr
         layout={animateLayout ? "position" : false}

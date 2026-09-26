@@ -13,6 +13,7 @@ import {
 import { shouldSkipEmbeddedStartupAuthChurn, embeddedClientPrefersQuietBackgroundSync } from "@/lib/embeddedWarmBootstrapFlags";
 import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
 import { useCompany } from "@/hooks/useCompany";
+import { nudgeElectronRendererUiWake } from "@/lib/electronUiWake";
 
 /** APK/EXE + web local-first: resume par outbox flush; `online`/foreground par registry/token mat chhedo — reload/dashboard jump kam. */
 export function StaticFastResumeSyncManager() {
@@ -38,8 +39,14 @@ export function StaticFastResumeSyncManager() {
           reason === "focus" ||
           (reason === "visible" && hiddenMs >= ELECTRON_FOREGROUND_RESUME_MIN_HIDDEN_MS));
       // Standby se rapid duplicate events (visibility + Capacitor + online) aate hain; one small burst enough.
-      if (now - lastRunRef.current < 2500) return;
+      const longIdleMs = 10 * 60 * 1000;
+      const debounceMs = hiddenMs >= longIdleMs ? 0 : 2500;
+      if (now - lastRunRef.current < debounceMs) return;
       lastRunRef.current = now;
+
+      if (electronForegroundResume) {
+        nudgeElectronRendererUiWake(reason);
+      }
 
       window.setTimeout(() => {
         if (cancelled) return;

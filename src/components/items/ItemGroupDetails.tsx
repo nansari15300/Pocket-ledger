@@ -509,6 +509,31 @@ export function ItemGroupDetails({
       ),
     [displayTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
   );
+
+  const filteredMobileTransactions = useMemo(() => {
+    if (!mobileSearchTerm) return sortedTransactions;
+    const lowerCaseSearch = mobileSearchTerm.toLowerCase();
+    return sortedTransactions.filter((t: any) => {
+      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+      const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
+      return (
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, "group", group.id, "item").includes(lowerCaseSearch) ||
+        formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
+        formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.debit).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.credit).toLowerCase().includes(lowerCaseSearch) ||
+        String(debitCreditAmount).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.balance).toLowerCase().includes(lowerCaseSearch)
+      );
+    });
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, group.id]);
+
+  const ledgerPagingTransactions = useMemo(
+    () => (isMobile ? filteredMobileTransactions : sortedTransactions),
+    [isMobile, filteredMobileTransactions, sortedTransactions]
+  );
+
   // Statement check mode + desktop tail paging (PC footer Check mode pill)
   const {
     statementCheck,
@@ -520,12 +545,13 @@ export function ItemGroupDetails({
     context: "group",
     contextId: group?.id,
     viewMode: "statement",
-    searchFilteredTransactions: sortedTransactions,
+    searchFilteredTransactions: ledgerPagingTransactions,
     rowsPerPage,
     currentPage,
     ledgerOpeningForRunning: openingBalanceForPeriod,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
+    company,
   });
 
   useLedgerDetailSessionMemory({
@@ -574,50 +600,17 @@ export function ItemGroupDetails({
     return `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
   }, [dateRange, dateSystem, formatDateBS, rowsPerPage]);
 
-  const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return processedTransactions;
-    const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return processedTransactions.filter((t: any) => {
-      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-      const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
-      return (
-        getTransactionQuickSearchHaystack(t, mobileSearchNames, "group", group.id, "item").includes(lowerCaseSearch) ||
-        formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
-        formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.debit).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.credit).toLowerCase().includes(lowerCaseSearch) ||
-        String(debitCreditAmount).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.balance).toLowerCase().includes(lowerCaseSearch)
-      );
-    });
-  }, [processedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, group.id]);
-
-  const mobileDisplayTransactions = useMemo(() => {
-    const list = filteredMobileTransactions;
-    if (rowsPerPage <= 0) return list;
-    const total = list.length;
-    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
-    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    const end = total - (safePage - 1) * rowsPerPage;
-    const start = Math.max(0, end - rowsPerPage);
-    return list.slice(start, Math.max(start, end));
-  }, [filteredMobileTransactions, currentPage, rowsPerPage]);
   const mobilePagerEdgeCounts = useMemo(() => {
-    const total = filteredMobileTransactions.length;
     if (rowsPerPage <= 0) return { before: 0, after: 0 };
-    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
-    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    const end = total - (safePage - 1) * rowsPerPage;
-    const start = Math.max(0, end - rowsPerPage);
-    return { before: start, after: Math.max(0, total - end) };
-  }, [filteredMobileTransactions.length, currentPage, rowsPerPage]);
+    return {
+      before: desktopPaginationMeta.beforeCount ?? 0,
+      after: desktopPaginationMeta.afterCount ?? 0,
+    };
+  }, [rowsPerPage, desktopPaginationMeta.beforeCount, desktopPaginationMeta.afterCount]);
 
   useEffect(() => {
-    const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
-    const safeTotal = Math.max(1, total);
-    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
-  }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), totalPages));
+  }, [ledgerPagingTransactions.length, totalPages, dateRange, rowsPerPage]);
 
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     const range = dateRange;
@@ -637,55 +630,29 @@ export function ItemGroupDetails({
     [allGroups]
   );
 
-  const getOppositeLabel = (t: any) => {
-    if (t.type === 'sale' || t.type === 'purchase') {
-      return processedParties?.find((p: any) => p.id === t.partyId)?.name || 'N/A';
-    }
-    return '';
+  const itemGroupTransactionsTableProps = {
+    transactions: paginatedTransactions,
+    context: "group" as const,
+    groupEntityType: "item" as const,
+    contextId: group.id,
+    showItemPartyColumn: showPartyColumn,
+    showNarration,
+    visibleColumns: { ...visibleColumns, status: false },
+    openingBalance: desktopPaginationMeta.openingForPage,
+    openingBalanceDate: (group as any).openingBalanceDate,
+    userNames,
+    accountNames: partyNamesMap,
+    onRowClick: handleEditVoucher,
+    filters,
+    setFilters,
+    activeFilter,
+    setActiveFilter,
+    periodDr: desktopPaginationMeta.periodDrForPage,
+    periodCr: desktopPaginationMeta.periodCrForPage,
+    closingBalance: desktopPaginationMeta.closingForPage,
+    highlightPendingApproval: true,
+    ...statementCheck.tableProps,
   };
-
-  const MobileTransactionRow = React.memo(({ transaction }: { transaction: any }) => {
-    const d = transaction.date?.toDate ? transaction.date.toDate() : (transaction.date ? new Date(transaction.date) : null);
-    if (!d) return <Card className="p-2.5"><p className="text-red-500">Invalid date</p></Card>;
-    const displayDate = () => {
-      switch (dateSystem) {
-        case "AD": return formatDate(d);
-        case "BS": return formatDateBS(d);
-        case "Both": return `${formatDateBS(d)} (${formatDate(d)})`;
-        default: return formatDateBS(d);
-      }
-    };
-    const userName = userNames?.[transaction.userId] || "N/A";
-    const firstName = userName.split(" ")[0];
-    const amount = transaction.debit > 0 ? transaction.debit : transaction.credit;
-    const oppositeLabel = getOppositeLabel(transaction);
-    return (
-      <Card
-        className="p-2.5 min-w-0 w-full overflow-hidden bg-card border border-border/80 shadow-sm cursor-pointer hover:bg-muted/30 transition-colors"
-        onClick={() => handleEditVoucher(transaction)}
-      >
-        <div className="flex justify-between items-start gap-2 min-w-0">
-          <div className="min-w-0 flex-1 overflow-hidden">
-            <p className="font-bold text-sm truncate">{transaction.voucherNumber}{oppositeLabel ? ` - ${oppositeLabel}` : ''}</p>
-            <p className="text-xs text-muted-foreground truncate mt-0.5">{transaction.narration || "No narration"}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {displayDate()} • {formatVoucherEntryTimeLocal(transaction as Record<string, unknown>)}
-            </p>
-          </div>
-          <div className="text-right shrink-0 flex flex-col items-end gap-0.5 flex-shrink-0">
-            <p className={cn("font-bold text-sm", transaction.debit > 0 ? "text-red-600" : "text-green-600")}>
-              {formatCurrency(amount)}
-            </p>
-            <Badge variant="secondary" className={cn("text-xs font-semibold px-1.5 py-0 whitespace-nowrap", transaction.balance >= 0 ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800")}>
-              Bal: {formatCurrency(transaction.balance)}
-            </Badge>
-            <p className="text-[10px] text-muted-foreground truncate max-w-[120px]">User: {firstName}</p>
-          </div>
-        </div>
-      </Card>
-    );
-  });
-  MobileTransactionRow.displayName = "MobileTransactionRow";
 
   const handlePrint = () => {
     if (!company) return;
@@ -818,31 +785,16 @@ export function ItemGroupDetails({
             </div>
           </div>
           </MobileDetailSummaryCollapsible>
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y"
-              style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
-            >
-            <div className="w-full min-w-0 px-0.5 space-y-px pb-2">
-              {openingBalanceForPeriod !== 0 && (
-                <Card className="p-2.5 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
-                  <div className="flex items-center justify-between gap-2 min-w-0">
-                    <p className="font-semibold text-muted-foreground text-sm flex-shrink-0">Opening Stock:</p>
-                    <Badge variant="secondary" className={cn("font-normal flex-shrink-0 text-xs", openingBalanceForPeriod >= 0 ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800")}>
-                      {formatCurrency(openingBalanceForPeriod, { showDrCr: true })}
-                    </Badge>
-                  </div>
-                </Card>
-              )}
-              {mobileDisplayTransactions.map((t: any) => (
-                <MobileTransactionRow key={t.id} transaction={t} />
-              ))}
-            </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="flex-1 min-h-0 overflow-auto scroll-touch">
+              <div className="pb-2">
+                <TransactionsTable {...itemGroupTransactionsTableProps} scrollOnlyTransactions />
+              </div>
             </div>
             <MobileTransactionsPager
-              className="mt-auto shrink-0 mb-12"
+              className="flex-shrink-0 mb-12"
               currentPage={currentPage}
-              totalItems={filteredMobileTransactions.length}
+              totalItems={ledgerPagingTransactions.length}
               rowsPerPage={rowsPerPage}
               onRowsPerPageChange={(nextRows) => {
                 setRowsPerPage(nextRows);

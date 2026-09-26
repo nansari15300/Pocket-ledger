@@ -2579,11 +2579,18 @@ function notifyLiveSyncResume(reason, targetWindow) {
     if (!win || win.isDestroyed()) continue;
     const state = windowTabs.get(win.id);
     if (!state) continue;
-    for (const tab of state.tabs) {
+    const activeIndex = state.activeIndex;
+    for (let i = 0; i < state.tabs.length; i++) {
+      const tab = state.tabs[i];
       if (!tab?.webContents || tab.webContents.isDestroyed()) continue;
       try {
         tab.webContents.send("pl-live-sync-resume", { reason: String(reason || "resume") });
       } catch (_) {}
+      if (i === activeIndex) {
+        try {
+          tab.webContents.focus();
+        } catch (_) {}
+      }
     }
   }
 }

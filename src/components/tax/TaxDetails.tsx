@@ -639,6 +639,7 @@ export function TaxDetails({
     ledgerOpeningForRunning: openingBalanceForPeriod,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
+    company,
   });
 
   useLedgerDetailSessionMemory({
@@ -977,7 +978,6 @@ export function TaxDetails({
           {/* scroll-touch + inline style for APK/WebView touch scroll */}
           <div
             className={mobileTxnScrollBodyClass(isReportMobileChrome)}
-            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
             <div className={isReportMobileChrome ? "pb-2" : "pb-24"}>
             <MasterAccountFreezeTxnShell

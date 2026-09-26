@@ -5,7 +5,10 @@
 
 import { startOfDay } from "date-fns";
 import type { TransactionSortBy, TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import { getFiscalMergePartitionDateFromCompany, FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
+import {
+  getFiscalMergePartitionsFromCompany,
+  FISCAL_YEAR_PARTITION_ROW_TYPE,
+} from "@/lib/fiscalPartitionRows";
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 
 /** Party/Bank/Staff/… statement footer: default `sortBy === "date"` ke saath ascending = purani date upar, nayi neeche. */
@@ -121,10 +124,14 @@ export function sortAndRebalancePageTransactions<T = any>(
   pageRows: T[],
   openingForPage: number,
   sortBy: TransactionSortBy,
-  sortOrder: TransactionSortOrder
+  sortOrder: TransactionSortOrder,
+  fiscalPartitionAts?: Date[]
 ): T[] {
   if (!pageRows?.length) return pageRows ?? [];
-  const sorted = sortTransactions(pageRows, sortBy, sortOrder);
+  const sorted =
+    fiscalPartitionAts?.length
+      ? sortTransactionsWithFiscalSegments(pageRows, sortBy, sortOrder, undefined, fiscalPartitionAts)
+      : sortTransactions(pageRows, sortBy, sortOrder);
   return recomputeRunningBalanceTopToBottom(sorted, openingForPage);
 }
 
@@ -140,25 +147,33 @@ function transactionDayStartMs(t: any): number | null {
 }
 
 /**
- * Merge mode + amount/voucher/bill-wise keys: globally sort se FY lines mix ho kar neela divider jump karta tha.
- * Pehle purana period block (partition se pehle), phir naya — har block ke andar chosen sort.
+ * Non-date sorts: reorder within each fiscal segment only (partition boundaries fixed).
+ * Merge mode + amount/voucher/bill-wise: rows FY divider cross nahi karte.
  * `date` sort pura list par hi (timeline).
  */
-export function sortTransactionsWithFiscalMerge<T = any>(
+export function sortTransactionsWithFiscalSegments<T = any>(
   list: T[],
   sortBy: TransactionSortBy,
   sortOrder: TransactionSortOrder,
   options: SortTransactionsOptions | undefined,
-  partitionAt: Date | null | undefined
+  partitionAts: Date[]
 ): T[] {
   if (!list.length) return list;
-  if (!partitionAt || isNaN(partitionAt.getTime()) || sortBy === "date") {
+  if (sortBy === "date" || !partitionAts.length) {
     return sortTransactions(list, sortBy, sortOrder, options);
   }
-  const boundary = startOfDay(partitionAt).getTime();
+  const boundaries = partitionAts
+    .map((d) => startOfDay(d).getTime())
+    .filter((ms) => Number.isFinite(ms))
+    .sort((a, b) => a - b);
+  if (!boundaries.length) {
+    return sortTransactions(list, sortBy, sortOrder, options);
+  }
+
+  const segmentCount = boundaries.length + 1;
+  const segments: T[][] = Array.from({ length: segmentCount }, () => []);
   const noDay: T[] = [];
-  const before: T[] = [];
-  const after: T[] = [];
+
   for (const row of list) {
     const t = row as any;
     if (t?.type === FISCAL_YEAR_PARTITION_ROW_TYPE) continue;
@@ -167,11 +182,32 @@ export function sortTransactionsWithFiscalMerge<T = any>(
       noDay.push(row);
       continue;
     }
-    if (day < boundary) before.push(row);
-    else after.push(row);
+    let seg = boundaries.length;
+    for (let i = 0; i < boundaries.length; i++) {
+      if (day < boundaries[i]) {
+        seg = i;
+        break;
+      }
+    }
+    segments[seg].push(row);
   }
+
   const sortSeg = (seg: T[]) => sortTransactions(seg, sortBy, sortOrder, options);
-  return [...noDay, ...sortSeg(before), ...sortSeg(after)];
+  return [...noDay, ...segments.flatMap(sortSeg)];
+}
+
+export function sortTransactionsWithFiscalMerge<T = any>(
+  list: T[],
+  sortBy: TransactionSortBy,
+  sortOrder: TransactionSortOrder,
+  options: SortTransactionsOptions | undefined,
+  partitionAt: Date | null | undefined
+): T[] {
+  if (!list.length) return list;
+  if (!partitionAt || isNaN(partitionAt.getTime())) {
+    return sortTransactions(list, sortBy, sortOrder, options);
+  }
+  return sortTransactionsWithFiscalSegments(list, sortBy, sortOrder, options, [partitionAt]);
 }
 
 type FiscalCompanyLike = {
@@ -187,8 +223,8 @@ export function sortTransactionsWithFiscalMergeForCompany<T = any>(
   options: SortTransactionsOptions | undefined,
   company: FiscalCompanyLike | null | undefined
 ): T[] {
-  const at = getFiscalMergePartitionDateFromCompany(company);
-  return sortTransactionsWithFiscalMerge(list, sortBy, sortOrder, options, at);
+  const parts = getFiscalMergePartitionsFromCompany(company);
+  return sortTransactionsWithFiscalSegments(list, sortBy, sortOrder, options, parts);
 }
 
 /** Preserve books running balance when UI filters/sorts rows — match by voucher id (incl. contra `-out`/`-in` legs). */

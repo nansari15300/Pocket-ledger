@@ -2570,15 +2570,30 @@ button.day_selected.is-today.has-transactions {
     background: rgba(0, 0, 0, 0.45);
   }
 
-  /* Touch-friendly scroll for Capacitor/Android WebView – APK mein details/group details pages pe scroll kaam kare */
+  /* Touch-friendly scroll for Capacitor/Android WebView – auto = touch scroll without forced scrollbar track */
   .scroll-touch {
     -webkit-overflow-scrolling: touch;
-    overflow-y: scroll !important;
+    overflow-y: auto !important;
     overflow-x: auto;
     touch-action: pan-y;
     overscroll-behavior-y: contain;
     /* Android WebView: scroll container ko explicit height constraint */
     min-height: 0;
+  }
+
+  /* APK / embedded WebView: ledger mobile lists scroll karein, vertical scrollbar na dikhe */
+  html[data-pl-embedded-shell] .scroll-touch,
+  html[data-pl-embedded-shell] [data-pl-mobile-pull-scroll],
+  html[data-pl-embedded-shell] main .pl-ledger-txn-scroll-native {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  html[data-pl-embedded-shell] .scroll-touch::-webkit-scrollbar,
+  html[data-pl-embedded-shell] [data-pl-mobile-pull-scroll]::-webkit-scrollbar,
+  html[data-pl-embedded-shell] main .pl-ledger-txn-scroll-native::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
   }
 
   /* Extra thin, dim scrollbar */
@@ -8601,8 +8616,8 @@ html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"] 
   color: #000000 !important;
 }
 html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"][data-pl-mobile-transaction-card="pink"] {
-  background-color: #a6a5a0 !important;
-  color: #ffffff !important;
+  background-color: #e5e7eb !important;
+  color: #000000 !important;
 }
 html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="default"] {
   border-color: rgb(134 239 172) !important;
@@ -8704,8 +8719,8 @@ html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-transaction-card] 
   color: #000000 !important;
 }
 html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-transaction-card="pink"] {
-  background: #a6a5a0 !important;
-  color: #ffffff !important;
+  background: #e5e7eb !important;
+  color: #000000 !important;
 }
 html[data-pl-mobile-card-color="blue"] body [data-pl-mobile-transaction-card] {
   border-width: 1px !important;
@@ -8743,8 +8758,8 @@ html body [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-
   color: #000000 !important;
 }
 html body [data-pl-mobile-card-page-color="violet"] [data-pl-mobile-transaction-card="pink"] {
-  background: #a6a5a0 !important;
-  color: #ffffff !important;
+  background: #e5e7eb !important;
+  color: #000000 !important;
 }
 html body [data-pl-mobile-card-page-color="default"] [data-pl-mobile-transaction-card] {
   border-width: 1px !important;
@@ -8798,8 +8813,8 @@ html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"] 
   color: #000000 !important;
 }
 html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"][data-pl-mobile-transaction-card="pink"] {
-  background-color: #a6a5a0 !important;
-  color: #ffffff !important;
+  background-color: #e5e7eb !important;
+  color: #000000 !important;
 }
 html body [data-pl-mobile-transaction-card][data-pl-mobile-card-color="default"] {
   border-width: 1px !important;
@@ -8845,8 +8860,8 @@ html body[class*="theme-"] main .relative.rounded-lg.border.bg-card.border-2.sha
   border: 0 !important;
   outline: none !important;
   box-shadow: none !important;
-  background-color: #a6a5a0 !important;
-  color: #ffffff !important;
+  background-color: #e5e7eb !important;
+  color: #000000 !important;
 }
 html body[class*="theme-"] main .relative.rounded-lg.border.bg-card.border-2.shadow-sm[data-pl-mobile-transaction-card][data-pl-mobile-card-color="default"][data-pl-mobile-transaction-card="pink"] {
   border: 1px solid rgb(244 114 182) !important;
@@ -8885,8 +8900,8 @@ html body [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="vi
   background-color: #ffffff !important;
 }
 html body [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="violet"] [data-pl-mobile-card-inner-pill] {
-  border: 2px solid #a6a5a0 !important;
-  background-color: #a6a5a0 !important;
+  border: 2px solid #d1d5db !important;
+  background-color: #e5e7eb !important;
 }
 html body [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="default"] [data-pl-mobile-card-inner-pill],
 html body [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="default"] [data-pl-mobile-card-inner-pill] {
@@ -9073,7 +9088,7 @@ html[data-pl-mobile-card-color="violet"] body [data-pl-mobile-card-color-picker]
   color: #000000 !important;
 }
 html body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card][data-pl-mobile-card-color="violet"][data-pl-mobile-transaction-card="pink"] {
-  color: #ffffff !important;
+  color: #000000 !important;
 }
 html body [data-pl-mobile-card-color-picker] [data-pl-mobile-transaction-card] [class*="text-red-600"] {
   color: rgb(220 38 38) !important;

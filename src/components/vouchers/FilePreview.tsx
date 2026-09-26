@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { AttachmentHoverPortal, useTapInteractionMode } from "@/components/vouchers/AttachmentHoverPortal";
+import { MultiAttachmentPortalPreview } from "@/components/vouchers/attachmentHoverPreviewBody";
 import { storage } from "@/lib/firebase";
 import { ref, getBlob, getMetadata } from "firebase/storage";
 import {
@@ -3071,6 +3072,33 @@ export function FilePreview({
     !viewIsLoading &&
     (viewFileInfo.type === "image" || viewFileInfo.type === "pdf");
 
+  const hoverPortalGalleryUrls = React.useMemo(() => {
+    const fromGallery = attachmentGallery?.urls
+      ?.map((u) => String(u || "").trim())
+      .filter(Boolean);
+    if (fromGallery && fromGallery.length > 1) return fromGallery;
+    const fromClient = attachmentClientFileUrls
+      ?.map((u) => String(u || "").trim())
+      .filter(Boolean);
+    if (fromClient && fromClient.length > 1) return [...new Set(fromClient)];
+    return null;
+  }, [attachmentGallery, attachmentClientFileUrls, attachmentGalleryFingerprint, attachmentClientUrlsFingerprint]);
+
+  const hoverPortalGalleryStartIndex = React.useMemo(() => {
+    if (attachmentGallery && attachmentGallery.urls.length > 1) {
+      return Math.min(
+        Math.max(attachmentGallery.startIndex, 0),
+        attachmentGallery.urls.length - 1
+      );
+    }
+    if (!hoverPortalGalleryUrls) return 0;
+    const self =
+      typeof normalizedPreviewFile === "string" ? String(normalizedPreviewFile).trim() : "";
+    if (!self) return 0;
+    const idx = hoverPortalGalleryUrls.findIndex((u) => u === self);
+    return idx >= 0 ? idx : 0;
+  }, [attachmentGallery, hoverPortalGalleryUrls, normalizedPreviewFile]);
+
   /** Image already painted (browser downloaded) → KB badge without remount storm. */
   const applyThumbSizeAfterImagePaint = useCallback(
     (displayUrl: string | null | undefined) => {
@@ -3642,9 +3670,8 @@ export function FilePreview({
         <AttachmentHoverPortal
           triggerClassName="h-full w-full min-h-0 min-w-0"
           openOnHover={tapInteractionMode}
-          galleryUrls={
-            attachmentGallery && attachmentGallery.urls.length > 1 ? attachmentGallery.urls : undefined
-          }
+          galleryUrls={hoverPortalGalleryUrls ?? undefined}
+          galleryStartIndex={hoverPortalGalleryStartIndex}
           shareAttachmentUrl={portalShareMeta?.url}
           shareFileName={portalShareMeta?.name}
           onPreviewDoubleClick={
@@ -3656,12 +3683,20 @@ export function FilePreview({
               : undefined
           }
           preview={
-            <>
-              {hoverPanel}
-              <p className="pt-1 text-center text-[10px] font-semibold text-muted-foreground">
-                {viewFileInfo.formatLabel}
-              </p>
-            </>
+            hoverPortalGalleryUrls && hoverPortalGalleryUrls.length > 1 ? (
+              <MultiAttachmentPortalPreview
+                urls={hoverPortalGalleryUrls}
+                companyId={pathCompanyId || attachmentCompanyId}
+                voucherId={voucherAttachmentFb?.voucherId}
+              />
+            ) : (
+              <>
+                {hoverPanel}
+                <p className="pt-1 text-center text-[10px] font-semibold text-muted-foreground">
+                  {viewFileInfo.formatLabel}
+                </p>
+              </>
+            )
           }
         >
           <div className="relative h-full w-full min-h-0 min-w-0">

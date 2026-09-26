@@ -69,6 +69,11 @@ import {
   activeMasterCollectionPathsForRoute,
   VOUCHER_FORM_MASTER_COLLECTION_PATHS,
 } from "@/lib/ledgerActiveMasterCollections";
+import {
+  collectionsForMobileRoutePullRefresh,
+  MOBILE_ROUTE_PULL_REFRESH_EVENT,
+  type MobileRoutePullRefreshDetail,
+} from "@/lib/mobileRoutePullRefresh";
 import { normalizeVoucherRowAttachmentsForUi, getVoucherAttachmentUrlsForUi, stripTransientVoucherAttachmentFields } from "@/lib/voucherAttachmentNormalize";
 import { protectClearedAttachmentsFromStalePatch, resolveUrlsAgainstAttachmentIntent, shouldPreserveIntendedVoucherAttachments, logAttachWipe } from "@/lib/attachmentDeleteTrace";
 import {
@@ -78,7 +83,12 @@ import {
 } from "@/lib/ledgerPendingApproval";
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
-import { getBillWiseAllocatedToTarget, getPaymentStatus as getPaymentStatusResult, isSaleOrPurchaseBillVoucherType } from "@/lib/payment-allocation-utils";
+import {
+  getBillWiseAllocatedToTarget,
+  getPaymentStatus as getPaymentStatusResult,
+  getSalePurchaseBillWiseLinkNos,
+  isSaleOrPurchaseBillVoucherType,
+} from "@/lib/payment-allocation-utils";
 import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
 import { isCurrentUserSharedOnCompanyRow } from "@/lib/companyOnlineIntegrity";
 import {
@@ -164,7 +174,34 @@ type VoucherContextType = {
   journalAccountNames: Record<string, string>;
   userNames: Record<string, string>;
   /** Overdue sale/purchase transactions across all parties (for "Overdue Vouchers" view). */
-  overdueTransactions: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; overdueImportant?: boolean; userId?: string; userName?: string; narration?: string; fileUrls?: string[]; unassignedFile?: unknown; createdAt?: any; lastEditedAt?: any; updatedAt?: any }>;
+  overdueTransactions: Array<{
+    id: string;
+    type: string;
+    date: any;
+    voucherNumber: string;
+    partyId: string;
+    partyName: string;
+    total: number;
+    outstanding: number;
+    debit: number;
+    credit: number;
+    dueDate?: any;
+    isOverdue: boolean;
+    paymentStatus: string;
+    overdueImportant?: boolean;
+    userId?: string;
+    userName?: string;
+    narration?: string;
+    fileUrls?: string[];
+    unassignedFile?: unknown;
+    createdAt?: any;
+    lastEditedAt?: any;
+    updatedAt?: any;
+    linkedFromVoucherNos?: string[];
+    linkedToVoucherNos?: string[];
+    linkedFromVoucherNosBillWise?: string[];
+    linkedToVoucherNosBillWise?: string[];
+  }>;
   hasOverdueTransactions: boolean;
   /** Entity profile edit save — turant list/detail UI update (Firestore snapshot se pehle). */
   patchMasterEntity: (
@@ -1083,6 +1120,28 @@ export const VoucherProvider = ({
   const [expenseGroups, setExpenseGroups] = useState<ExpenseGroup[]>([]);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [journalAccountNames, setJournalAccountNames] = useState<Record<string, string>>({});
+  /** Warm SQLite path set but in-memory list empty → route/bootstrap must re-read (dev refresh / dashboard→party). */
+  const masterListCountsRef = useRef<Record<string, number>>({});
+  masterListCountsRef.current = {
+    vouchers: vouchers.length,
+    parties: parties.length,
+    staff: staff.length,
+    bank_accounts: accounts.length,
+    taxes: taxes.length,
+    expense_accounts: unprocessedExpenseAccounts.length,
+    items: items.length,
+    item_groups: itemGroups.length,
+    groups: groups.length,
+    account_groups: accountGroups.length,
+    staff_groups: staffGroups.length,
+    tax_groups: taxGroups.length,
+    expense_groups: expenseGroups.length,
+  };
+  const sqliteCollectionWarmWithRows = (path: string): boolean => {
+    if (!warmSqliteCollectionPathsRef.current.has(path)) return false;
+    const n = masterListCountsRef.current[path];
+    return n === undefined ? true : n > 0;
+  };
   const staffModuleSystemGroupsEnsuredRef = useRef("");
 
   useEffect(() => {
@@ -1567,7 +1626,7 @@ export const VoucherProvider = ({
     const loadEpoch = companyDataLoadEpochRef.current;
 
     const skipWarmSqlitePath = (path: string) =>
-      keepWarmUi && warmSqliteCollectionPathsRef.current.has(path);
+      keepWarmUi && sqliteCollectionWarmWithRows(path);
 
     const applySqliteRows = <T,>(
       setter: StateSetter<T>,
@@ -2203,7 +2262,7 @@ export const VoucherProvider = ({
 
   // Sidebar/route change: pehle se warm company pe missing masters hi SQLite se — full teardown/spinner mat.
   useEffect(() => {
-    if (authLoading || loading || !companyId || !user) return;
+    if (authLoading || !companyId || !user) return;
     if (!ledgerBootstrapActive) return;
     if (lastCompanyIdRef.current !== companyId) return;
 
@@ -2224,7 +2283,7 @@ export const VoucherProvider = ({
     ];
     const needed = activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope);
     const missing = allCollectionsToPrefetch.filter(
-      (c) => needed.has(c.path) && !warmSqliteCollectionPathsRef.current.has(c.path)
+      (c) => needed.has(c.path) && !sqliteCollectionWarmWithRows(c.path)
     );
     if (!missing.length) return;
 
@@ -2324,14 +2383,15 @@ export const VoucherProvider = ({
     voucherFormMasterScope,
     companyId,
     authLoading,
-    loading,
+    parties.length,
+    groups.length,
     user?.uid,
     ledgerBootstrapActive,
   ]);
 
   // Party/Bank pe rehte hue bhi dashboard masters idle me warm — Dashboard/Reports/Gallery click pe missing load freeze na ho.
   useEffect(() => {
-    if (authLoading || loading || !companyId || !user) return;
+    if (authLoading || !companyId || !user) return;
     if (!ledgerBootstrapActive) return;
     if (lastCompanyIdRef.current !== companyId) return;
     if (!hasWarmLedgerDataRef.current) return;
@@ -2352,9 +2412,7 @@ export const VoucherProvider = ({
       { path: "expense_groups", setter: setExpenseGroups },
     ];
     const missing = allCollectionsToPrefetch.filter(
-      (c) =>
-        VOUCHER_FORM_MASTER_COLLECTION_PATHS.has(c.path) &&
-        !warmSqliteCollectionPathsRef.current.has(c.path)
+      (c) => VOUCHER_FORM_MASTER_COLLECTION_PATHS.has(c.path) && !sqliteCollectionWarmWithRows(c.path)
     );
     if (!missing.length) return;
 
@@ -2395,7 +2453,7 @@ export const VoucherProvider = ({
     const run = async () => {
       for (const { path, setter, orderByField } of missing) {
         if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return;
-        if (warmSqliteCollectionPathsRef.current.has(path)) continue;
+        if (sqliteCollectionWarmWithRows(path)) continue;
         try {
           if (path === "vouchers") {
             const cached = await listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true });
@@ -2743,6 +2801,80 @@ export const VoucherProvider = ({
     sqliteLedgerRouteHint.usesSqlite,
     isServerGateCompanyContext,
   ]);
+
+  /** Mobile pull-to-refresh: route-scoped SQLite + server (no global date / full master storm). */
+  useEffect(() => {
+    if (!companyId) return;
+
+    const onMobilePull = async (ev: Event) => {
+      const detail = (ev as CustomEvent<MobileRoutePullRefreshDetail>).detail;
+      const refreshPath = detail?.pathname || pathname;
+      const collections = collectionsForMobileRoutePullRefresh(refreshPath);
+      const cid = String(companyId || "").trim();
+      if (!cid || !collections.length) {
+        detail?.resolve?.();
+        return;
+      }
+
+      try {
+        if (isServerGateCompanyContext) {
+          const { refreshPlServerDisplayCacheCompany } = await import("@/lib/plServerDisplayCache");
+          const result = await refreshPlServerDisplayCacheCompany(cid, {
+            pullFullLedger: false,
+            focusCollections: collections,
+          });
+          const bumpCols = result.changedCollections.length ? result.changedCollections : collections;
+          for (const coll of bumpCols) {
+            notifyBrowserDbCollectionUpdated(cid, coll, {
+              immediate: true,
+              source: "mobile_pull_refresh",
+            });
+          }
+          detail?.resolve?.();
+          return;
+        }
+
+        const co = company as CloudBackedCompanyShape | null | undefined;
+        const online = typeof navigator === "undefined" || navigator.onLine !== false;
+        const cloudLedgerSyncAllowed = isOnlineCompanyLedgerCloudSyncAllowed(
+          cid,
+          company as Parameters<typeof isOnlineCompanyLedgerCloudSyncAllowed>[1]
+        );
+        const storageOptionLocal = String(co?.storageOption || "").toLowerCase() === "local";
+        const fsCompanyId = storageOptionLocal
+          ? cid
+          : String(co?.authoritativeCompanyId || cid).trim() || cid;
+        const tryFirestore =
+          cloudLedgerSyncAllowed && online && co && isCloudBackedCompany(co);
+
+        for (const coll of collections) {
+          if (tryFirestore) {
+            try {
+              await pullCompanySubcollectionFromFirestoreToLocalDb(
+                fsCompanyId,
+                cid,
+                coll,
+                company,
+                coll === "vouchers" ? "date" : undefined
+              );
+            } catch {
+              /* offline / tick off — still merge local sqlite */
+            }
+          }
+          notifyBrowserDbCollectionUpdated(cid, coll, {
+            immediate: true,
+            source: "mobile_pull_refresh",
+          });
+        }
+        detail?.resolve?.();
+      } catch (e) {
+        detail?.reject?.(e);
+      }
+    };
+
+    window.addEventListener(MOBILE_ROUTE_PULL_REFRESH_EVENT, onMobilePull);
+    return () => window.removeEventListener(MOBILE_ROUTE_PULL_REFRESH_EVENT, onMobilePull);
+  }, [companyId, company, pathname, isServerGateCompanyContext]);
 
   /** Voucher/account/user display names: masters se pehle, bounded Firestore chunk — `collection('users')` full scan hata (400+ vouchers / large user base = hang). */
   useEffect(() => {
@@ -3283,8 +3415,18 @@ export const VoucherProvider = ({
   );
 
   const { overdueTransactions, hasOverdueTransactions } = useMemo(() => {
+    const cid = String(companyId || "").trim();
+    if (
+      cid &&
+      !isOnlineCompanyLedgerCloudSyncAllowed(
+        cid,
+        company as Parameters<typeof isOnlineCompanyLedgerCloudSyncAllowed>[1]
+      )
+    ) {
+      return { overdueTransactions: [], hasOverdueTransactions: false };
+    }
     const partyNameById = new Map(processedParties.map((p) => [p.id, p.name]));
-    const list: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; overdueImportant?: boolean; userId?: string; userName?: string; narration?: string; fileUrls?: string[]; unassignedFile?: unknown; createdAt?: any; lastEditedAt?: any; updatedAt?: any }> = [];
+    const list: VoucherContextType["overdueTransactions"] = [];
     for (const v of vouchersForDisplay) {
       if (!isSaleOrPurchaseBillVoucherType(v.type) || !v.partyId) continue;
       const total = Number(v.total ?? v.amount ?? ((v.subTotal ?? 0) - (v.discount ?? 0) + (v.tax ?? 0))) || 0;
@@ -3293,8 +3435,9 @@ export const VoucherProvider = ({
       if (!result.isOverdue) continue;
       const partyName = partyNameById.get(v.partyId) ?? v.partyId;
       const outstanding = result.outstanding;
-      const debit = v.type === "sale" ? outstanding : 0;
-      const credit = v.type === "purchase" ? outstanding : 0;
+      const debit = v.type === "sale" ? total : 0;
+      const credit = v.type === "purchase" ? total : 0;
+      const linkNos = getSalePurchaseBillWiseLinkNos(vouchersForDisplay, { id: v.id, type: v.type });
       const fallbackUserId =
         v.userId ||
         v.createdBy ||
@@ -3320,7 +3463,8 @@ export const VoucherProvider = ({
         credit,
         dueDate: v.dueDate,
         isOverdue: true,
-        paymentStatus: "overdue",
+        paymentStatus: result.status === "partially_paid" ? "partially_paid" : "overdue",
+        ...linkNos,
         overdueImportant: (v as { overdueImportant?: boolean }).overdueImportant === true,
         userId: fallbackUserId,
         userName: fallbackUserName,
@@ -3333,7 +3477,7 @@ export const VoucherProvider = ({
       });
     }
     return { overdueTransactions: list, hasOverdueTransactions: list.length > 0 };
-  }, [vouchersForDisplay, processedParties]);
+  }, [vouchersForDisplay, processedParties, companyId, company, onlineSyncPrefsEpoch]);
 
   const processedStaff: ProcessedStaff[] = useMemo(() => {
     return staff.map(s => {

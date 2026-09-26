@@ -676,6 +676,7 @@ export default function ItemDetails({
     ledgerOpeningForRunning,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
+    company,
   });
 
   useLedgerDetailSessionMemory({
@@ -972,7 +973,6 @@ export default function ItemDetails({
       {/* scroll-touch + inline style for APK/WebView touch scroll */}
       <div
         className="flex-1 min-h-0 overflow-auto scroll-touch"
-        style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
       >
         <div className="pb-2">
           <TransactionsTable {...itemTransactionsTableProps} scrollOnlyTransactions />
