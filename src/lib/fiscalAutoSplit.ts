@@ -141,7 +141,9 @@ export function runFiscalAutoSplitDailyCheck(options: {
   company?: FiscalAutoSplitCompany | null;
   country?: string;
   companyDates?: CompanyFiscalYearDates | null;
-  vouchers: Array<{ date?: unknown }>;
+  /** Prefer FY index keys — avoids scanning all in-memory vouchers on company open. */
+  fyKeys?: string[];
+  vouchers?: Array<{ date?: unknown }>;
   today?: Date;
 }): boolean {
   const today = options.today ?? new Date();
@@ -163,12 +165,25 @@ export function runFiscalAutoSplitDailyCheck(options: {
   }
 
   const { fyKey: runningFyKey } = getRunningFyElapsedDays(options.country, today, options.companyDates);
-  const fyRows = listFiscalYearMergeRowsForAutoSplit(
-    options.vouchers,
-    options.country,
-    today,
-    options.companyDates
-  );
+  const fyRows =
+    options.fyKeys && options.fyKeys.length
+      ? (() => {
+          const voucherKeys = new Set(options.fyKeys);
+          const keys = new Set(voucherKeys);
+          keys.add(runningFyKey);
+          return listFiscalYearMergeRowsFromFyKeySet(
+            keys,
+            options.country,
+            voucherKeys,
+            options.companyDates
+          );
+        })()
+      : listFiscalYearMergeRowsForAutoSplit(
+          options.vouchers ?? [],
+          options.country,
+          today,
+          options.companyDates
+        );
   if (!fyRows.length) {
     writeLocalFiscalSplit(options.companyId, afterCheck);
     return false;

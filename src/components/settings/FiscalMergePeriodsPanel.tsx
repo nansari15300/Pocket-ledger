@@ -3,7 +3,8 @@
 import { cn } from "@/lib/utils";
 import {
   buildFiscalMergePeriods,
-  formatFiscalYearMergeBoundaryDate,
+  formatFiscalYearMergeRangeLabel,
+  type FiscalMergeDateSystem,
   type FiscalYearMergeRow,
 } from "@/lib/fiscalMergeFySelection";
 
@@ -13,6 +14,8 @@ type Props = {
   fyRows: FiscalYearMergeRow[];
   tickedFyKeys: Set<string>;
   country?: string;
+  dateSystem?: FiscalMergeDateSystem | boolean;
+  /** @deprecated use dateSystem */
   preferBs?: boolean;
   /** Parent renders S/N | FY row (full-width merged header layout). */
   hideHeader?: boolean;
@@ -23,11 +26,13 @@ export function FiscalMergePeriodsPanel({
   fyRows,
   tickedFyKeys,
   country,
+  dateSystem,
   preferBs = false,
   hideHeader = false,
   className,
 }: Props) {
   const periods = buildFiscalMergePeriods(fyRows, tickedFyKeys);
+  const system = dateSystem ?? preferBs;
 
   if (!periods.length) return null;
 
@@ -41,14 +46,11 @@ export function FiscalMergePeriodsPanel({
       )}
       <div className="divide-y divide-emerald-400/45">
         {periods.map((period) => {
-          const startText = formatFiscalYearMergeBoundaryDate(country, period.start, preferBs);
-          const endText = formatFiscalYearMergeBoundaryDate(country, period.end, preferBs);
+          const rangeText = formatFiscalYearMergeRangeLabel(country, period.start, period.end, system);
           return (
             <div key={period.fyKeys.join("__")} className={cn(TABLE_GRID, "py-2 text-sm leading-snug")}>
               <span className="tabular-nums text-muted-foreground">{period.serial}</span>
-              <span className="font-semibold text-foreground">
-                {startText} To {endText}
-              </span>
+              <span className="font-semibold text-foreground">{rangeText}</span>
             </div>
           );
         })}

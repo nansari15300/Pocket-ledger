@@ -11,10 +11,14 @@ import {
 export function useFiscalSplitFyRows() {
   const { company, companyId } = useCompany();
   const [fyRows, setFyRows] = useState<FiscalYearMergeRow[]>([]);
+  const [voucherDateFrom, setVoucherDateFrom] = useState<Date | null>(null);
+  const [voucherDateTo, setVoucherDateTo] = useState<Date | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState<FiscalSplitFyLoadSource | null>(null);
   const [firestoreScanned, setFirestoreScanned] = useState(0);
+  const [sqliteScanned, setSqliteScanned] = useState(0);
+  const [sqliteTotal, setSqliteTotal] = useState(0);
   const companyRef = useRef(company);
   companyRef.current = company;
   const loadGenRef = useRef(0);
@@ -24,6 +28,8 @@ export function useFiscalSplitFyRows() {
     const row = companyRef.current;
     if (!cid || !row) {
       setFyRows([]);
+      setVoucherDateFrom(null);
+      setVoucherDateTo(null);
       setSource(null);
       setLoading(false);
       return;
@@ -32,6 +38,8 @@ export function useFiscalSplitFyRows() {
     setLoading(true);
     setError(null);
     setFirestoreScanned(0);
+    setSqliteScanned(0);
+    setSqliteTotal(0);
     try {
       const result = await loadFiscalSplitFyRows({
         companyId: cid,
@@ -39,15 +47,24 @@ export function useFiscalSplitFyRows() {
         onFirestoreProgress: (n) => {
           if (gen === loadGenRef.current) setFirestoreScanned(n);
         },
+        onSqliteProgress: (scanned, total) => {
+          if (gen !== loadGenRef.current) return;
+          setSqliteScanned(scanned);
+          setSqliteTotal(total);
+        },
       });
       if (gen !== loadGenRef.current) return;
       setFyRows(result.rows);
+      setVoucherDateFrom(result.voucherDateFrom);
+      setVoucherDateTo(result.voucherDateTo);
       setSource(result.source);
     } catch (err) {
       if (gen !== loadGenRef.current) return;
       console.warn("[useFiscalSplitFyRows] load failed", err);
       setError(err instanceof Error ? err.message : "Could not load fiscal years.");
       setFyRows([]);
+      setVoucherDateFrom(null);
+      setVoucherDateTo(null);
       setSource(null);
     } finally {
       if (gen === loadGenRef.current) setLoading(false);
@@ -55,15 +72,35 @@ export function useFiscalSplitFyRows() {
   }, [companyId]);
 
   useEffect(() => {
-    void reload();
+    // Paint spinner first, then start scan (keeps click responsive).
+    let cancelled = false;
+    const start = () => {
+      if (!cancelled) void reload();
+    };
+    const raf =
+      typeof window !== "undefined" && typeof window.requestAnimationFrame === "function"
+        ? window.requestAnimationFrame(() => {
+            window.setTimeout(start, 0);
+          })
+        : null;
+    const t = raf == null ? window.setTimeout(start, 0) : null;
+    return () => {
+      cancelled = true;
+      if (raf != null) window.cancelAnimationFrame(raf);
+      if (t != null) window.clearTimeout(t);
+    };
   }, [reload]);
 
   return {
     fyRows,
+    voucherDateFrom,
+    voucherDateTo,
     loading,
     error,
     source,
     firestoreScanned,
+    sqliteScanned,
+    sqliteTotal,
     reload,
   };
 }

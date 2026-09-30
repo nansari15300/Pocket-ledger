@@ -94,6 +94,33 @@ export function getFiscalRangeForFyKey(
   }
   const [startY, endY] = parts;
   const normalized = (country || "").trim().toLowerCase();
+
+  // Nepal FY keys are BS years (e.g. 2082-2083). Never feed those into `new Date(y, m, d)` —
+  // that treats BS years as Gregorian and yields ~2139 AD after adToBs.
+  if (normalized === "nepal") {
+    let startM = 4;
+    let startD = 1;
+    let endM = 3;
+    let endD = getBSMonthDays(endY)[2] || 32;
+    if (
+      companyDates?.fiscalYearStart instanceof Date &&
+      !Number.isNaN(companyDates.fiscalYearStart.getTime()) &&
+      companyDates?.fiscalYearEnd instanceof Date &&
+      !Number.isNaN(companyDates.fiscalYearEnd.getTime())
+    ) {
+      const startBs = adToBs(companyDates.fiscalYearStart);
+      const endBs = adToBs(companyDates.fiscalYearEnd);
+      startM = startBs.m;
+      startD = startBs.d;
+      endM = endBs.m;
+      endD = endBs.d;
+    }
+    return {
+      start: bsToAd({ y: startY, m: startM, d: startD }),
+      end: bsToAd({ y: endY, m: endM, d: endD }),
+    };
+  }
+
   const companyTemplate = fiscalTemplateFromCompanyDates(
     companyDates?.fiscalYearStart,
     companyDates?.fiscalYearEnd
@@ -106,13 +133,6 @@ export function getFiscalRangeForFyKey(
     return {
       start: new Date(startY, companyTemplate.startMonth, companyTemplate.startDay),
       end: new Date(isCrossYear ? endY : startY, companyTemplate.endMonth, companyTemplate.endDay),
-    };
-  }
-  if (normalized === "nepal") {
-    const asarDays = getBSMonthDays(endY)[2] || 32;
-    return {
-      start: bsToAd({ y: startY, m: 4, d: 1 }),
-      end: bsToAd({ y: endY, m: 3, d: asarDays }),
     };
   }
   const template = getFiscalTemplateForCountry(country);

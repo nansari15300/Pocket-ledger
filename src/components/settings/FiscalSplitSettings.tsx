@@ -20,7 +20,7 @@ import {
   buildFiscalMergePeriodsByRowIndex,
   buildFiscalMergeRowVisuals,
   defaultTickedFyKeys,
-  formatFiscalYearMergeBoundaryDate,
+  formatFiscalYearMergeRangeLabel,
   inferTickedFyKeysFromPartitions,
   isFiscalYearMergeRowTickable,
   mergePartitionDatesFromTickedFyKeys,
@@ -37,6 +37,7 @@ import { writeLocalFiscalSplit, getLocalFiscalSplitOrDefaults, type FiscalSplitM
 import { persistFiscalSplitSettingsToCompany } from "@/lib/persistFiscalSplitSettings";
 import { SettingsInfoTip } from "@/components/settings/SettingsInfoTip";
 import { cn } from "@/lib/utils";
+import { Loader2 } from "lucide-react";
 
 /** `pl-dashboard-tone-card` — globals.css black `border #000` override se bachne ke liye (line ~5531). */
 const FISCAL_INNER_CARD_CN =
@@ -57,13 +58,22 @@ const FISCAL_SPLIT_INFO_DESCRIPTION = (
 
 export function FiscalSplitSettings() {
   const { company, companyId } = useCompany();
-  const { fyRows, loading: fyRowsLoading, error: fyRowsError, firestoreScanned } = useFiscalSplitFyRows();
+  const {
+    fyRows,
+    loading: fyRowsLoading,
+    error: fyRowsError,
+    firestoreScanned,
+    sqliteScanned,
+    sqliteTotal,
+    voucherDateFrom,
+    voucherDateTo,
+  } = useFiscalSplitFyRows();
   const { dateSystem } = useDate();
   const { toast } = useToast();
   const [mode, setMode] = useState<FiscalSplitMode>("merge");
   const [tickedFyKeys, setTickedFyKeys] = useState<Set<string>>(() => new Set());
 
-  const preferBs = dateSystem === "BS" || dateSystem === "Both" || company?.country === "Nepal";
+  // System date AD / BS / Both — Nepal country no longer forces BS when user chose AD.
 
   const loadTickedFromLocal = useCallback(() => {
     if (!companyId) return;
@@ -132,9 +142,12 @@ export function FiscalSplitSettings() {
             fyRows,
             mergedPeriodCount: mode === "merge" ? mergedPeriodCountForSuggestion : null,
             allFySplitted,
+            alwaysShow: true,
+            voucherDateFromOverride: voucherDateFrom,
+            voucherDateToOverride: voucherDateTo,
           })
         : null,
-    [company, fyRows, mode, mergedPeriodCountForSuggestion, allFySplitted]
+    [company, fyRows, mode, mergedPeriodCountForSuggestion, allFySplitted, voucherDateFrom, voucherDateTo]
   );
 
   const toggleFyTick = (fyKey: string, checked: boolean) => {
@@ -207,9 +220,16 @@ export function FiscalSplitSettings() {
     <Card className={FISCAL_MAIN_CARD_CN}>
       <CardHeader>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex items-center gap-[10px] shrink-0">
-            <CardTitle className="mb-0">Fiscal year & split</CardTitle>
-            <SettingsInfoTip label="Fiscal year & split" description={FISCAL_SPLIT_INFO_DESCRIPTION} />
+          <div className="flex min-w-0 flex-wrap items-center gap-x-[10px] gap-y-1">
+            <div className="flex items-center gap-[10px] shrink-0">
+              <CardTitle className="mb-0">Fiscal year & split</CardTitle>
+              <SettingsInfoTip label="Fiscal year & split" description={FISCAL_SPLIT_INFO_DESCRIPTION} />
+            </div>
+            {company.name ? (
+              <span className="truncate text-sm font-semibold text-foreground/80 sm:text-base" title={company.name}>
+                {company.name}
+              </span>
+            ) : null}
           </div>
           {fyVoucherSuggestion ? (
             <CompanyFyVoucherSuggestionCard
@@ -268,11 +288,26 @@ export function FiscalSplitSettings() {
                   <div className="space-y-2 pt-2">
                     <Label className="text-xs">Fiscal years from your vouchers</Label>
                     {fyRowsLoading ? (
-                      <p className="text-sm text-muted-foreground">
-                        {firestoreScanned > 0
-                          ? `Building FY index (first time) — ${firestoreScanned.toLocaleString()} vouchers scanned…`
-                          : "Loading fiscal years…"}
-                      </p>
+                      <div
+                        className="flex items-start gap-3 rounded-md border border-emerald-400/50 bg-emerald-50/60 px-3 py-3 text-sm text-foreground"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-emerald-700" />
+                        <div className="min-w-0 space-y-0.5">
+                          <p className="font-medium">Scanning is running — please wait…</p>
+                          <p className="text-xs text-muted-foreground">
+                            {firestoreScanned > 0
+                              ? `Cloud voucher scan — ${firestoreScanned.toLocaleString()} checked`
+                              : sqliteTotal > 0
+                                ? `Checking fiscal years — ${sqliteScanned}/${sqliteTotal}`
+                                : "Building fiscal-year list from local data…"}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            You can keep using other menus; this page will fill when the scan finishes.
+                          </p>
+                        </div>
+                      </div>
                     ) : fyRowsError ? (
                       <p className="text-sm text-destructive">{fyRowsError}</p>
                     ) : fyRows.length === 0 ? (
@@ -302,11 +337,8 @@ export function FiscalSplitSettings() {
                             const checked = tickedFyKeys.has(row.fyKey);
                             const visual = fyMergeRowVisuals[index];
                             const period = mergePeriodByRowIndex.get(index);
-                            const periodStartText = period
-                              ? formatFiscalYearMergeBoundaryDate(company.country, period.start, preferBs)
-                              : null;
-                            const periodEndText = period
-                              ? formatFiscalYearMergeBoundaryDate(company.country, period.end, preferBs)
+                            const periodRangeText = period
+                              ? formatFiscalYearMergeRangeLabel(company.country, period.start, period.end, dateSystem)
                               : null;
                             return (
                               <div key={row.fyKey} className={FISCAL_FY_ROW_GRID_CN}>
@@ -329,7 +361,7 @@ export function FiscalSplitSettings() {
                                       row={row}
                                       visual={visual}
                                       country={company.country}
-                                      preferBs={preferBs}
+                                      dateSystem={dateSystem}
                                     />
                                   </Label>
                                 </div>
@@ -340,7 +372,7 @@ export function FiscalSplitSettings() {
                                     <div className={cn(FISCAL_MERGE_PERIOD_GRID_CN, "text-sm leading-snug")}>
                                       <span className="tabular-nums text-muted-foreground">{period.serial}</span>
                                       <span className="font-semibold text-foreground">
-                                        {periodStartText} To {periodEndText}
+                                        {periodRangeText}
                                       </span>
                                     </div>
                                   ) : null}

@@ -3,6 +3,7 @@
 import { startOfDay } from "date-fns";
 import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import type { CompanyStorageRow } from "@/lib/companyStorageKind";
+import type { CompanyFiscalYearDates } from "@/lib/fiscalRange";
 import { listFyKeysWithVouchersInSqlite } from "@/lib/fyPagination/archiveBootstrap";
 import { resolveCompanyFiscalYearDates } from "@/lib/companyFyVoucherSuggestion";
 import { getAnusuchi13FyKey } from "@/lib/reports/anusuchi13Confirmation";
@@ -72,9 +73,13 @@ async function readVoucherDateSpanFromSqliteProjection(companyId: string): Promi
 
 async function rebuildIndexFromSqliteProjection(
   companyId: string,
-  country?: string
+  country?: string,
+  companyDates?: CompanyFiscalYearDates | null,
+  onProgress?: (scanned: number, total: number) => void
 ): Promise<FyVoucherIndex> {
-  const keys = await listFyKeysWithVouchersInSqlite(companyId, country);
+  const keys = await listFyKeysWithVouchersInSqlite(companyId, country, companyDates, (p) => {
+    onProgress?.(p.scanned, p.total);
+  });
   const span = await readVoucherDateSpanFromSqliteProjection(companyId);
   return writeFyVoucherIndexKeysToSqlite(companyId, keys, span.minDateMs, span.maxDateMs);
 }
@@ -112,9 +117,13 @@ export async function ensureFyVoucherIndex(params: {
   companyId: string;
   company: FyScopeCompany;
   onFirestoreScanProgress?: (scanned: number) => void;
+  onSqliteScanProgress?: (scanned: number, total: number) => void;
 }): Promise<EnsureFyVoucherIndexResult> {
-  const { companyId, company, onFirestoreScanProgress } = params;
+  const { companyId, company, onFirestoreScanProgress, onSqliteScanProgress } = params;
   const country = company.country;
+  const companyDates = resolveCompanyFiscalYearDates(
+    company as { fiscalYearStart?: unknown; fiscalYearEnd?: unknown }
+  );
   const online = isCloudLinkedCompanyStorage(company);
   const fsCompanyId = String(company.authoritativeCompanyId || companyId).trim();
 
@@ -131,8 +140,13 @@ export async function ensureFyVoucherIndex(params: {
     }
   }
 
-  // Local projection first — avoids freezing Settings on full Firestore scan.
-  const fromSqlite = await rebuildIndexFromSqliteProjection(companyId, country);
+  // Local projection first — EXISTS-per-FY (not full voucher row scan).
+  const fromSqlite = await rebuildIndexFromSqliteProjection(
+    companyId,
+    country,
+    companyDates,
+    onSqliteScanProgress
+  );
   if (fromSqlite.fyKeys.length) {
     if (online && fsCompanyId) {
       void writeFyVoucherIndexToFirestore(fsCompanyId, fromSqlite).catch((err) => {
@@ -225,7 +239,14 @@ export async function rebuildFyVoucherIndex(params: {
     return { index, source: "firestore_scan", vouchersScanned };
   }
 
-  const index = await rebuildIndexFromSqliteProjection(companyId, company.country);
+  const index = await rebuildIndexFromSqliteProjection(
+    companyId,
+    company.country,
+    resolveCompanyFiscalYearDates(company as { fiscalYearStart?: unknown; fiscalYearEnd?: unknown }),
+    onFirestoreScanProgress
+      ? (scanned, total) => onFirestoreScanProgress(total > 0 ? scanned : 0)
+      : undefined
+  );
   return { index, source: "sqlite_projection", vouchersScanned: 0 };
 }
 
@@ -234,8 +255,10 @@ export function dateSpanFromFyVoucherIndex(index: FyVoucherIndex): {
   from: Date | null;
   to: Date | null;
 } {
-  if (index.minDateMs != null && index.maxDateMs != null) {
-    return { from: new Date(index.minDateMs), to: new Date(index.maxDateMs) };
-  }
+  const from = index.minDateMs != null ? new Date(index.minDateMs) : null;
+  const to = index.maxDateMs != null ? new Date(index.maxDateMs) : null;
+  if (from && to) return { from, to };
+  if (from) return { from, to: from };
+  if (to) return { from: to, to };
   return { from: null, to: null };
 }

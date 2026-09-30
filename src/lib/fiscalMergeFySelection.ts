@@ -66,22 +66,69 @@ function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-/** e.g. Nepal BS: `2078-04-01 To 2079-03-32` */
+/** System calendar for FY merge labels — AD / BS / Both (Both = AD + BS). */
+export type FiscalMergeDateSystem = "AD" | "BS" | "Both";
+
+function formatFiscalBoundaryAd(date: Date): string {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${date.getDate()}`;
+}
+
+function formatFiscalBoundaryBs(date: Date): string {
+  const bs = adToBs(date);
+  return `${bs.y}-${pad2(bs.m)}-${bs.d}`;
+}
+
+function resolveFiscalMergeDateSystem(
+  dateSystem: FiscalMergeDateSystem | boolean | undefined,
+  country?: string
+): FiscalMergeDateSystem {
+  if (dateSystem === "AD" || dateSystem === "BS" || dateSystem === "Both") return dateSystem;
+  // Legacy boolean preferBs
+  if (dateSystem === true) return "BS";
+  if (dateSystem === false) return "AD";
+  return (country || "").trim().toLowerCase() === "nepal" ? "BS" : "AD";
+}
+
+/** e.g. Nepal BS: `2078-04-01 To 2079-03-32`; Both: `BS To BS / AD To AD` */
 export function formatFiscalYearMergeRowLabel(
   country: string | undefined,
   start: Date,
   end: Date,
-  preferBs = false
+  dateSystem: FiscalMergeDateSystem | boolean = false
 ): string {
-  const nepalish = preferBs || (country || "").trim().toLowerCase() === "nepal";
-  if (nepalish) {
-    const s = adToBs(start);
-    const e = adToBs(end);
-    return `${s.y}-${pad2(s.m)}-${s.d} To ${e.y}-${pad2(e.m)}-${e.d}`;
+  return formatFiscalYearMergeRangeLabel(country, start, end, dateSystem);
+}
+
+/** Single boundary — Both still returns one calendar pair (`AD / BS`) for rare single-date use. */
+export function formatFiscalYearMergeBoundaryDate(
+  country: string | undefined,
+  date: Date,
+  dateSystem: FiscalMergeDateSystem | boolean = false
+): string {
+  const system = resolveFiscalMergeDateSystem(dateSystem, country);
+  if (system === "BS") return formatFiscalBoundaryBs(date);
+  if (system === "Both") return `${formatFiscalBoundaryBs(date)} / ${formatFiscalBoundaryAd(date)}`;
+  return formatFiscalBoundaryAd(date);
+}
+
+/**
+ * FY row / merged period range label.
+ * Both → `BS start To BS end / AD start To AD end` (not interleaved per boundary).
+ */
+export function formatFiscalYearMergeRangeLabel(
+  country: string | undefined,
+  start: Date,
+  end: Date,
+  dateSystem: FiscalMergeDateSystem | boolean = false
+): string {
+  const system = resolveFiscalMergeDateSystem(dateSystem, country);
+  if (system === "Both") {
+    return `${formatFiscalBoundaryBs(start)} To ${formatFiscalBoundaryBs(end)} / ${formatFiscalBoundaryAd(start)} To ${formatFiscalBoundaryAd(end)}`;
   }
-  const fmt = (d: Date) =>
-    `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${d.getDate()}`;
-  return `${fmt(start)} To ${fmt(end)}`;
+  if (system === "BS") {
+    return `${formatFiscalBoundaryBs(start)} To ${formatFiscalBoundaryBs(end)}`;
+  }
+  return `${formatFiscalBoundaryAd(start)} To ${formatFiscalBoundaryAd(end)}`;
 }
 
 /** FY keys oldest → newest; gaps filled; `transactionKeys` marks voucher-backed rows. */
@@ -318,17 +365,4 @@ export function buildFiscalMergePeriodsByRowIndex(
     }
   }
   return map;
-}
-
-export function formatFiscalYearMergeBoundaryDate(
-  country: string | undefined,
-  date: Date,
-  preferBs = false
-): string {
-  const nepalish = preferBs || (country || "").trim().toLowerCase() === "nepal";
-  if (nepalish) {
-    const bs = adToBs(date);
-    return `${bs.y}-${pad2(bs.m)}-${bs.d}`;
-  }
-  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${date.getDate()}`;
 }

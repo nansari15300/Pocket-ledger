@@ -18,6 +18,11 @@ export type CompanyFyVoucherSuggestion = {
   voucherDateTo: Date;
   /** Merge split: har FY alag period — amber card shows splitted message. */
   allFySplitted?: boolean;
+  /**
+   * When false, amber card shows only first/last voucher dates
+   * (FY & split page always-on corner).
+   */
+  showFyHint?: boolean;
 };
 
 function isValidDate(d: unknown): boolean {
@@ -155,6 +160,9 @@ function resolveFySuggestionCount(rawFyCount: number, mergedPeriodCount?: number
  *
  * When merge split is active, `mergedPeriodCount` reflects remaining merged blocks
  * (e.g. 5 voucher FY rows → 2 merged periods → shows 2).
+ *
+ * Fiscal year & split page: pass `alwaysShow: true` so first/last voucher dates
+ * stay visible even when company FY is set / already fully split.
  */
 export function buildCompanyFyVoucherSuggestion(params: {
   country?: string;
@@ -165,10 +173,26 @@ export function buildCompanyFyVoucherSuggestion(params: {
   fyRows?: FiscalYearMergeRow[];
   mergedPeriodCount?: number | null;
   allFySplitted?: boolean;
+  /** FY & split corner: always return first/last dates when vouchers exist. */
+  alwaysShow?: boolean;
+  /** Prefer actual voucher min/max (FY index) over calendar FY bounds. */
+  voucherDateFromOverride?: Date | null;
+  voucherDateToOverride?: Date | null;
 }): CompanyFyVoucherSuggestion | null {
-  const { country, fiscalYearStart, fiscalYearEnd, vouchers, fyRows, mergedPeriodCount, allFySplitted } =
-    params;
-  if (!isCompanyFiscalYearUnset(fiscalYearStart, fiscalYearEnd)) return null;
+  const {
+    country,
+    fiscalYearStart,
+    fiscalYearEnd,
+    vouchers,
+    fyRows,
+    mergedPeriodCount,
+    allFySplitted,
+    alwaysShow,
+    voucherDateFromOverride,
+    voucherDateToOverride,
+  } = params;
+  const fyUnset = isCompanyFiscalYearUnset(fiscalYearStart, fiscalYearEnd);
+  if (!alwaysShow && !fyUnset) return null;
 
   let sortedKeys: string[] = [];
   let voucherDateFrom: Date | null = null;
@@ -195,12 +219,35 @@ export function buildCompanyFyVoucherSuggestion(params: {
     });
     voucherDateFrom = span.from;
     voucherDateTo = span.to ?? span.from;
+  } else if (
+    alwaysShow &&
+    voucherDateFromOverride &&
+    isValidDate(voucherDateFromOverride)
+  ) {
+    voucherDateFrom = voucherDateFromOverride;
+    voucherDateTo =
+      voucherDateToOverride && isValidDate(voucherDateToOverride)
+        ? voucherDateToOverride
+        : voucherDateFromOverride;
   } else {
     return null;
   }
 
-  const fyCount = resolveFySuggestionCount(sortedKeys.length, mergedPeriodCount);
-  if (fyCount == null || !voucherDateFrom) return null;
+  if (voucherDateFromOverride && isValidDate(voucherDateFromOverride)) {
+    voucherDateFrom = voucherDateFromOverride;
+    voucherDateTo =
+      voucherDateToOverride && isValidDate(voucherDateToOverride)
+        ? voucherDateToOverride
+        : voucherDateFromOverride;
+  }
+
+  if (!voucherDateFrom) return null;
+
+  const fyCountResolved = resolveFySuggestionCount(sortedKeys.length, mergedPeriodCount);
+  if (!alwaysShow && fyCountResolved == null) return null;
+
+  const fyCount = fyCountResolved ?? Math.max(1, sortedKeys.length);
+  const showFyHint = fyUnset || allFySplitted === true;
 
   return {
     fyCount,
@@ -209,5 +256,6 @@ export function buildCompanyFyVoucherSuggestion(params: {
     voucherDateFrom,
     voucherDateTo: voucherDateTo ?? voucherDateFrom,
     allFySplitted: allFySplitted === true,
+    showFyHint,
   };
 }
