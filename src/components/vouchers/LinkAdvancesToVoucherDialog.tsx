@@ -13,7 +13,7 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useAdvancesForSale, useAdvancesForPurchase } from "@/hooks/useAdvancesForVoucher";
 import { useCompany } from "@/hooks/useCompany";
 import { useDate } from "@/hooks/useDate";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc, Timestamp } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { cn } from "@/lib/utils";
 import {
@@ -29,7 +29,11 @@ import { getTaxFromAllocation, getNetFromAllocation, getAllocationTotal, autoLin
 import { patchVoucherFields } from "@/lib/voucherActionsClient";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { isAdminPanelCompanyLocalId } from "@/lib/adminPanelCompany/ledgerMode";
 import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
+import { dispatchVoucherLivePatch } from "@/lib/voucherFormAttachmentSave";
+import { markLedgerVouchersLocalBillWiseLinked } from "@/lib/ledgerPendingBillWiseLinks";
+import { scheduleVoucherLinkOutboxFlush } from "@/lib/localVoucherOutbox";
 
 const safeToDate = (date: unknown): Date | null => {
   if (!date) return null;
@@ -41,8 +45,10 @@ const safeToDate = (date: unknown): Date | null => {
 };
 
 async function readVoucherDoc(companyId: string, voucherId: string): Promise<any | null> {
-  // Local-only mode me voucher doc browser DB se read karo, warna Firestore se.
-  if (isLocalOnlyMode()) return await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
+  // Admin Panel Company + local-only: vouchers live in SQLite mirror, not `companies/{id}` Firestore.
+  if (isLocalOnlyMode() || isAdminPanelCompanyLocalId(companyId)) {
+    return await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
+  }
   const snap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, voucherId));
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
@@ -96,14 +102,14 @@ export async function applyAdvancesAllocationsToServer(params: ApplyAdvancesAllo
 
   if (updates.length === 0 && toRemove.length === 0 && !showOBRow) return;
   if (showOBRow || obAmountToSave > 0) {
-    await patchVoucherFields(companyId, targetVoucherId, { openingBalanceAllocated: obAmountToSave });
+    await patchVoucherFields(companyId, targetVoucherId, { openingBalanceAllocated: obAmountToSave }, { forceSqliteFirst: true });
   }
   for (const sourceVoucherId of toRemove) {
     const data = await readVoucherDoc(companyId, sourceVoucherId);
     if (!data) continue;
     const allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
     const filtered = allocations.filter((a) => a.voucherId !== targetVoucherId);
-    await patchVoucherFields(companyId, sourceVoucherId, { allocations: filtered });
+    await patchVoucherFields(companyId, sourceVoucherId, { allocations: filtered }, { forceSqliteFirst: true });
   }
   // Bilateral unlink: remove from target voucher’s allocations so opposite voucher (Sale/Pur) shows unlinked after Save
   if (toRemove.length > 0 && targetDoc) {
@@ -112,7 +118,7 @@ export async function applyAdvancesAllocationsToServer(params: ApplyAdvancesAllo
     const toRemoveSet = new Set(toRemove);
     const filteredTarget = currentTargetAllocations.filter((a) => !toRemoveSet.has(a.voucherId));
     if (filteredTarget.length !== currentTargetAllocations.length) {
-      await patchVoucherFields(companyId, targetVoucherId, { allocations: filteredTarget });
+      await patchVoucherFields(companyId, targetVoucherId, { allocations: filteredTarget }, { forceSqliteFirst: true });
     }
   }
   for (const [sourceVoucherId, amount] of updates) {
@@ -134,7 +140,34 @@ export async function applyAdvancesAllocationsToServer(params: ApplyAdvancesAllo
     }
     if (idx >= 0) allocations[idx] = newEntry;
     else allocations.push(newEntry);
-    await patchVoucherFields(companyId, sourceVoucherId, { allocations });
+    await patchVoucherFields(companyId, sourceVoucherId, { allocations }, { forceSqliteFirst: true });
+  }
+
+  // EXE/full_online: live Paid/Partial + hold + priority outbox (stale onSnapshot wipe avoid).
+  const affectedIds = new Set<string>([targetVoucherId, ...toRemove, ...updates.map(([id]) => id)]);
+  affectedIds.delete(OPENING_BALANCE_VOUCHER_ID);
+  const nowTs = Timestamp.now();
+  const liveEntries: { id: string; allocations: Allocation[] }[] = [];
+  for (const vid of affectedIds) {
+    if (!vid || vid === OPENING_BALANCE_VOUCHER_ID) continue;
+    const data = await getCompanyDocFromBrowserDb(companyId, "vouchers", vid).catch(() => null);
+    if (!data) continue;
+    const allocations = Array.isArray((data as { allocations?: Allocation[] }).allocations)
+      ? ([...((data as { allocations: Allocation[] }).allocations)] as Allocation[])
+      : [];
+    liveEntries.push({ id: vid, allocations });
+    dispatchVoucherLivePatch(companyId, vid, {
+      allocations,
+      updatedAt: nowTs,
+      lastEditedAt: nowTs,
+    });
+  }
+  if (liveEntries.length) {
+    markLedgerVouchersLocalBillWiseLinked(liveEntries);
+    scheduleVoucherLinkOutboxFlush(
+      companyId,
+      liveEntries.map((e) => e.id)
+    );
   }
 }
 
@@ -362,7 +395,8 @@ export function LinkAdvancesToVoucherDialog({
       return;
     }
     setSaving(true);
-    try {
+    const { runWithVoucherLinkSaveProgress } = await import("@/lib/voucherSaveUi");
+    const result = await runWithVoucherLinkSaveProgress(async () => {
       // Always persist opening balance allocation when user entered an amount (target is sale/purchase)
       if (showOBRow || obAmountToSave > 0) {
         await patchVoucherFields(companyId, targetVoucherId, { openingBalanceAllocated: obAmountToSave });
@@ -404,15 +438,13 @@ export function LinkAdvancesToVoucherDialog({
         else allocations.push(newEntry);
         await patchVoucherFields(companyId, sourceVoucherId, { allocations });
       }
-      toast.success("Advances linked successfully.");
       onDone?.();
       onOpenChange(false);
-    } catch (e) {
-      console.error(e);
+    }, { successTitle: "Advances linked successfully" });
+    if (!result.ok) {
       toast.error("Failed to link advances.");
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   };
 
   const title = mode === "sale" ? "Link Sale to Linkable Cr Txns" : "Link Purchase to Linkable Dr Txns";

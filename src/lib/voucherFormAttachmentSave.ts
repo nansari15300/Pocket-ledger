@@ -1,6 +1,9 @@
 "use client";
 
-import { markLedgerVouchersLocallyApproved } from "@/lib/ledgerPendingApproval";
+import {
+  clearLedgerVouchersLocallyApproved,
+  markLedgerVouchersLocallyApproved,
+} from "@/lib/ledgerPendingApproval";
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 import { isLocalFileRef, getBlobFromLocalFileRef } from "@/lib/localPendingFiles";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
@@ -355,6 +358,8 @@ export function dispatchVoucherLivePatch(
   if (typeof window === "undefined" || !companyId?.trim() || !voucherId?.trim()) return;
   if (patch?.isApproved === true) {
     markLedgerVouchersLocallyApproved([voucherId.trim()]);
+  } else if (patch?.isApproved === false) {
+    clearLedgerVouchersLocallyApproved([voucherId.trim()]);
   }
   const detail: VoucherLivePatchDetail = {
     companyId: companyId.trim(),
@@ -397,6 +402,8 @@ export function dispatchVoucherLivePatchMany(
   if (typeof window === "undefined" || !companyId?.trim() || !ids.length) return;
   if (patch?.isApproved === true) {
     markLedgerVouchersLocallyApproved(ids);
+  } else if (patch?.isApproved === false) {
+    clearLedgerVouchersLocallyApproved(ids);
   }
   const detail: VoucherLivePatchDetail = {
     companyId: companyId.trim(),

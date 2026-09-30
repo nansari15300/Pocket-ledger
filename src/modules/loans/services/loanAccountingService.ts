@@ -60,6 +60,7 @@ export async function postLoanJournal(params: {
       companyId: params.companyId,
       companyDoc: params.companyDoc,
       voucherLike: numberingLike,
+      voucherDate: parseIsoDate(params.dateIso),
     }));
 
   const saved = await saveVoucher(

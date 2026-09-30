@@ -24,6 +24,17 @@ export async function findOwnedCompanyIdForUser(
   const rows = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
   const pref = preferredCompanyId?.trim();
   if (pref && rows.some((r) => r.id === pref)) return pref;
+
+  const now = Date.now();
+  const activePaid = rows.filter((r) => {
+    const ms = typeof r.data.planExpiryMs === "number" ? r.data.planExpiryMs : 0;
+    return ms > now;
+  });
+  if (activePaid.length > 0) {
+    activePaid.sort((a, b) => docTimeMs(b.data) - docTimeMs(a.data));
+    return activePaid[0].id;
+  }
+
   rows.sort((a, b) => docTimeMs(b.data) - docTimeMs(a.data));
   return rows[0]?.id ?? null;
 }

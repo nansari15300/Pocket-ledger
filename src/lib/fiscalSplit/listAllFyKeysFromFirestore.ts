@@ -76,6 +76,8 @@ export async function listAllFyKeysFromFirestore(params: {
     onProgress?.({ pages, vouchersScanned });
     lastDoc = snap.docs[snap.docs.length - 1] ?? null;
     if (snap.docs.length < pageSize) break;
+    // Keep Settings UI responsive during multi-page FY bootstrap scan.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
 
   const sorted = [...fyKeys].sort((a, b) => {

@@ -102,9 +102,16 @@ export async function mirrorSubscriptionPaymentToAdminCompany(
 
     const companySnap = await companyRef.get();
 
-    if (!companySnap.exists) return;
-
-
+    if (!companySnap.exists) {
+      const { ensureCloudAdminPanelCompanyDoc } = await import(
+        "@/lib/adminPanelCompany/ensureCloudAdminPanelCompanyDoc"
+      );
+      const ready = await ensureCloudAdminPanelCompanyDoc(db, {
+        uid: input.userId,
+        email: input.userEmail,
+      });
+      if (!ready) return;
+    }
 
     const settingsSnap = await companyRef.collection("settings").doc("accounting").get();
 
@@ -204,15 +211,19 @@ export async function mirrorSubscriptionPaymentToAdminCompany(
 
 
 
-    const narrationParts = [
-
-      `Subscription ${input.planId}`,
-
-      input.gateway ? `via ${input.gateway}` : null,
-
-      input.customerCompanyName ? `(${input.customerCompanyName})` : null,
-
-    ].filter(Boolean);
+    const billingIntentNorm = String(input.billingIntent ?? "").trim().toLowerCase();
+    const narrationParts =
+      billingIntentNorm === "addon_bundle"
+        ? [
+            "Add-on purchase",
+            input.gateway ? `via ${input.gateway}` : null,
+            input.customerCompanyName ? `(${input.customerCompanyName})` : null,
+          ].filter(Boolean)
+        : [
+            `Subscription ${input.planId}`,
+            input.gateway ? `via ${input.gateway}` : null,
+            input.customerCompanyName ? `(${input.customerCompanyName})` : null,
+          ].filter(Boolean);
 
     const narration = narrationParts.join(" ");
 

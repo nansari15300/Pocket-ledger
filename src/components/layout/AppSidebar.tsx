@@ -538,7 +538,7 @@ export function AppSidebar() {
     return getSuperAdminEmails().some((x) => (x || "").toLowerCase().trim() === e);
   }, [user?.email]);
   const isAdmin = customUser?.role === "SuperAdmin" || isSuperAdminByEmail;
-  /** Static EXE/APK: `/admin` bundle me nahi; localhost `npm run dev` par test ke liye dikhao */
+  /** SuperAdmin email/role only — localhost/dev pe bhi ordinary users ko mat dikhao */
   const showAdminNavLink = isAdminPanelNavVisible(isAdmin, isStaticAppBuild());
   const [adminPanelLedgerMode, setAdminPanelLedgerMode] = useState(false);
   useEffect(() => {
@@ -919,11 +919,11 @@ export function AppSidebar() {
                           >
                             <SidebarMenuButton
                               isActive={pathname.startsWith("/admin".replace(/\/$/, ""))}
-                              tooltip="Admin Panel Company"
+                              tooltip="Admin Panel"
                               data-theme-nav="admin"
                             >
                               <Shield />
-                              {isOpen && <span>Admin Panel Company</span>}
+                              {isOpen && <span>Admin Panel</span>}
                             </SidebarMenuButton>
                           </button>
                         ) : (
@@ -934,11 +934,11 @@ export function AppSidebar() {
                           >
                             <SidebarMenuButton
                               isActive={pathname.startsWith("/admin/company")}
-                              tooltip="Admin Panel Company"
+                              tooltip="Admin Panel"
                               data-theme-nav="admin"
                             >
                               <Shield />
-                              {isOpen && <span>Admin Panel Company</span>}
+                              {isOpen && <span>Admin Panel</span>}
                             </SidebarMenuButton>
                           </Link>
                         )}

@@ -4,6 +4,8 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { resolveCompanyVoucherPrefixList } from "@/lib/nextVoucherNumber";
+import { repairAutoVoucherNumbers } from "@/lib/repairAutoVoucherNumbers";
+import { FY_OPENING_PILL_FORMAT_OPTIONS } from "@/lib/fyOpeningPillFormat";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -210,6 +212,9 @@ const voucherSettingsSchema = z.object({
   // Recurring: company master toggle + app-open run scope (per-user rights → Manage Sharing).
   recurringVoucherSettingsEnabled: z.boolean(),
   recurringVoucherRunScope: z.enum(["owner_only", "all_users"]),
+  /** Default ON — auto nos include FY span (e.g. PUR-82-83-002) even when ledger FY split is off. */
+  autoVoucherIncludeFy: z.boolean(),
+  voucherNumberFyFormat: z.enum(["short", "mixed", "full"]),
 });
 
 type VoucherSettingsValues = z.infer<typeof voucherSettingsSchema>;
@@ -226,6 +231,7 @@ export function VoucherSettings() {
   // Company recurring master — sirf `configure_recurring_auto_company` (owner ko role se sab true).
   const canConfigureRecurringCompany = can("configure_recurring_auto_company");
   const [isLoading, setIsLoading] = useState(false);
+  const [repairRunning, setRepairRunning] = useState(false);
   const [planHistoryLimit, setPlanHistoryLimit] = useState<number>(10);
    const [newPrefixValues, setNewPrefixValues] = useState<Record<keyof VoucherPrefixValues, string>>(
       Object.keys(defaultPrefixes).reduce((acc, key) => ({ ...acc, [key]: "" }), {} as any)
@@ -265,6 +271,8 @@ export function VoucherSettings() {
         voucherHistoryFullBehavior: 'allow_edit_delete_last' as const,
         recurringVoucherSettingsEnabled: true, // naya form: recurring generation default ON
         recurringVoucherRunScope: "owner_only",
+        autoVoucherIncludeFy: true,
+        voucherNumberFyFormat: "short",
     },
   });
 
@@ -337,6 +345,11 @@ export function VoucherSettings() {
           if (raw === "all_users") return "all_users";
           return "owner_only";
         })(),
+        autoVoucherIncludeFy: (company as any).autoVoucherIncludeFy !== false,
+        voucherNumberFyFormat:
+          (company as any).voucherNumberFyFormat === "mixed" || (company as any).voucherNumberFyFormat === "full"
+            ? (company as any).voucherNumberFyFormat
+            : "short",
     });
     }
   }, [company, form, planHistoryLimit]);
@@ -392,6 +405,8 @@ export function VoucherSettings() {
           enabled: data.recurringVoucherSettingsEnabled,
           runScope: data.recurringVoucherRunScope,
         },
+        autoVoucherIncludeFy: data.autoVoucherIncludeFy,
+        voucherNumberFyFormat: data.voucherNumberFyFormat,
       };
       await persistCompanyRootSettingsPatch({
         companyId,
@@ -762,6 +777,101 @@ export function VoucherSettings() {
                 </Card>
               </div>
             )}
+
+            <Card className={cn("p-4", VS_CARD_BORDER, isProTheme && proDashboardRibbonClass(0))}>
+              <CardTitle className="text-base mb-2">Fiscal year in auto voucher numbers</CardTitle>
+              <CardDescription className="mb-4 text-xs">
+                When auto numbering is on, new numbers can include the FY span from the voucher date (e.g. PUR-82-83-002).
+                This is independent of ledger FY split / divider settings.
+              </CardDescription>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="autoVoucherIncludeFy"
+                  render={({ field }: any) => (
+                    <FormItem className="flex flex-row items-center justify-between rounded border p-3">
+                      <div>
+                        <FormLabel>Include FY in auto numbers</FormLabel>
+                        <FormDescription className="text-xs">Default on for all voucher types with auto number enabled.</FormDescription>
+                      </div>
+                      <FormControl>
+                        <Switch checked={field.value} onCheckedChange={field.onChange} />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="voucherNumberFyFormat"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>FY span style</FormLabel>
+                      <Select value={field.value} onValueChange={field.onChange} disabled={!form.watch("autoVoucherIncludeFy")}>
+                        <FormControl>
+                          <SelectTrigger className={VS_FIELD_OUTLINE}>
+                            <SelectValue />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {FY_OPENING_PILL_FORMAT_OPTIONS.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label} (e.g. {opt.sampleAd.replace("fy ", "").replace(" opening", "")})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-3 border-t">
+                <p className="text-xs text-muted-foreground max-w-xl">
+                  Repair renumbers existing vouchers (auto types only) by date within each prefix and FY bucket.
+                  Save settings first if you changed FY options.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={repairRunning || !companyId || !company}
+                  onClick={() => {
+                    if (!companyId || !company) return;
+                    const ok = window.confirm(
+                      "Repair all auto voucher numbers for this company? Numbers will be reassigned by voucher date within each FY and prefix. This cannot be undone automatically."
+                    );
+                    if (!ok) return;
+                    setRepairRunning(true);
+                    void repairAutoVoucherNumbers({
+                      companyId,
+                      companyDoc: company as Record<string, unknown>,
+                      onProgress: ({ done, total }) => {
+                        if (total > 0 && done === total) {
+                          toast({ title: "Repair complete", description: `Updated ${done} voucher(s).` });
+                        }
+                      },
+                    })
+                      .then(({ updated }) => {
+                        toast({
+                          title: "Voucher numbers repaired",
+                          description: updated > 0 ? `${updated} voucher(s) updated.` : "No changes were needed.",
+                        });
+                        void triggerSync?.();
+                      })
+                      .catch((e) => {
+                        console.error(e);
+                        toast({
+                          variant: "destructive",
+                          title: "Repair failed",
+                          description: "Could not repair voucher numbers. Try again after sync.",
+                        });
+                      })
+                      .finally(() => setRepairRunning(false));
+                  }}
+                >
+                  {repairRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                  Repair all auto voucher numbers
+                </Button>
+              </div>
+            </Card>
 
             {/* Auto Numbering */}
              <div className="space-y-4">

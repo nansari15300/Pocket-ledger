@@ -103,6 +103,10 @@ async function rebuildIndexFromFirestoreScan(params: {
 /**
  * Fiscal split settings: prefer cached index (1 Firestore doc / SQLite row).
  * Full voucher scan only when cache missing (one-time bootstrap per company).
+ *
+ * Order (responsive): SQLite cache → Firestore 1-doc cache → SQLite projection →
+ * Firestore full scan last (yields between pages). Never block Settings on cloud scan
+ * when local projection already has FY keys.
  */
 export async function ensureFyVoucherIndex(params: {
   companyId: string;
@@ -114,12 +118,31 @@ export async function ensureFyVoucherIndex(params: {
   const online = isCloudLinkedCompanyStorage(company);
   const fsCompanyId = String(company.authoritativeCompanyId || companyId).trim();
 
+  const localCache = await readFyVoucherIndexFromSqlite(companyId);
+  if (localCache?.fyKeys.length) {
+    return { index: localCache, source: "sqlite_cache", vouchersScanned: 0 };
+  }
+
   if (online && fsCompanyId) {
     const cloud = await readFyVoucherIndexFromFirestore(fsCompanyId);
     if (cloud?.fyKeys.length) {
       await writeFyVoucherIndexToSqlite(companyId, cloud).catch(() => {});
       return { index: cloud, source: "firestore_cache", vouchersScanned: 0 };
     }
+  }
+
+  // Local projection first — avoids freezing Settings on full Firestore scan.
+  const fromSqlite = await rebuildIndexFromSqliteProjection(companyId, country);
+  if (fromSqlite.fyKeys.length) {
+    if (online && fsCompanyId) {
+      void writeFyVoucherIndexToFirestore(fsCompanyId, fromSqlite).catch((err) => {
+        console.warn("[ensureFyVoucherIndex] cloud seed from sqlite", err);
+      });
+    }
+    return { index: fromSqlite, source: "sqlite_projection", vouchersScanned: 0 };
+  }
+
+  if (online && fsCompanyId) {
     const { index, vouchersScanned } = await rebuildIndexFromFirestoreScan({
       fsCompanyId,
       companyId,
@@ -129,13 +152,7 @@ export async function ensureFyVoucherIndex(params: {
     return { index, source: "firestore_scan", vouchersScanned };
   }
 
-  const localCache = await readFyVoucherIndexFromSqlite(companyId);
-  if (localCache?.fyKeys.length) {
-    return { index: localCache, source: "sqlite_cache", vouchersScanned: 0 };
-  }
-
-  const index = await rebuildIndexFromSqliteProjection(companyId, country);
-  return { index, source: "sqlite_projection", vouchersScanned: 0 };
+  return { index: fromSqlite, source: "sqlite_projection", vouchersScanned: 0 };
 }
 
 /** Voucher save: add FY key to index (local + cloud). Skip if key already present. */

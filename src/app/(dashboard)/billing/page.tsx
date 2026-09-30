@@ -54,6 +54,12 @@ import { useBillingRegionPricing } from "@/hooks/useBillingRegionPricing";
 import { PlanPricingBreakdown, PlanPricingLineCell } from "@/components/billing/PlanPricingBreakdown";
 import { BillingFeatureLabelWithInfo } from "@/components/billing/BillingFeatureInfoButton";
 import { BillingAddOnPurchaseCard } from "@/components/billing/BillingAddOnPurchaseCard";
+import {
+  BillingRenewTermExplainDialog,
+  billingTermOptionLabel,
+} from "@/components/billing/BillingRenewTermExplainDialog";
+import { isAdminPanelCompanyLocalId } from "@/lib/adminPanelCompany/ledgerMode";
+import { readAccountPlanLocalCache } from "@/lib/accountPlanLocalCache";
 import { AdBillingPointsCard } from "@/components/ads/AdBillingPointsCard";
 import { CountrySearchCombobox } from "@/components/shared/CountrySearchCombobox";
 import type { BillingRegionId } from "@/lib/billingRegions";
@@ -78,10 +84,17 @@ import {
   usageNprAccruedSinceCurrentTierStart,
   upgradeTargetCreditDaysCarried,
   daysLeftRounded,
+  daysLeftPrecise,
+  remainingPaidTimeValueNpr,
   termDurationMs,
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
-import { getBillingApiUrl } from "@/lib/billingApiOrigin";
+import { getBillingApiUrl, getLocalDevAwareBillingApiUrl } from "@/lib/billingApiOrigin";
+
+/** Dev localhost: plan-change must hit local Next API (stackOnExpiry fix). Hosted still has old zero-net. */
+function planChangeCheckoutApiUrl(): string {
+  return getLocalDevAwareBillingApiUrl("/api/payments/plan-change-checkout");
+}
 import { downloadBillingStatementPdf, openBillingStatementPdfPreview } from "@/lib/billingStatementPdf";
 import { mergeAppSettingsPlansDoc } from "@/lib/mergeAppSettingsPlans";
 import {
@@ -253,6 +266,19 @@ const MS_DAY_PRORATION = 86400000;
 /** Dropdown term se kitne din add honge — total expiry (730) nahi, sirf is term ka block (e.g. 365). */
 function termAddedDaysRounded(term: SubscriptionTermKey): number {
   return Math.round(termDurationMs(term) / MS_DAY_PRORATION);
+}
+
+/** Renew column Balance / Usage — already-bought time; must not move when term dropdown changes. */
+function renewColumnLiveBalance(args: {
+  nowMs: number;
+  expiryMs: number | null;
+  planYearly: number;
+  remainingMs: number;
+}): { balanceNpr: number; balanceDays: number } {
+  return {
+    balanceNpr: remainingPaidTimeValueNpr(args.remainingMs, args.planYearly),
+    balanceDays: daysLeftPrecise(args.nowMs, args.expiryMs),
+  };
 }
 
 /** Paid user + Basic column band: expiry ke baad auto Basic notice — current-plan “Switch to Basic” link bhi hata diya. */
@@ -771,10 +797,26 @@ function BillingPageInner() {
 
   // `/api/payments/*` + `/api/company/*` Firestore `companies/{docId}` padhte hain — restore/merge me SQLite row `id` ≠ cloud doc ho to `authoritativeCompanyId` sahi doc khulta hai.
   const billingFirestoreCompanyId = useMemo(() => {
-    const sel = String(companyId || "").trim();
-    const auth = String(company?.authoritativeCompanyId || "").trim();
-    return auth || sel;
-  }, [companyId, company?.authoritativeCompanyId]);
+    const uid = String(user?.uid || "").trim();
+    const pickId = (row: CompanyRow | null | undefined) => {
+      const auth = String(row?.authoritativeCompanyId || "").trim();
+      const id = String(row?.id || "").trim();
+      if (auth) return auth;
+      if (id && !isAdminPanelCompanyLocalId(id)) return id;
+      return "";
+    };
+    const fromSelected = pickId(company as CompanyRow | null);
+    if (fromSelected) return fromSelected;
+    if (!uid || !allCompanies?.length) return String(companyId || "").trim();
+    const owned = allCompanies.filter(
+      (c) => c.isOwned === true || String(c.ownerId || "").trim() === uid
+    );
+    for (const row of owned) {
+      const fid = pickId(row);
+      if (fid) return fid;
+    }
+    return String(companyId || "").trim();
+  }, [companyId, company, allCompanies, user?.uid]);
   // dateFormatBS: BS display key — formatBsFromAD mirrors NepaliDate.format + datex-bs for long AD expiries.
   const { dateSystem, formatDate, formatDateBS, dateFormatBS } = useDate();
   // Statement PDF “When” / plan expiry strings — shared hook with `/billing/statement` so Print matches.
@@ -804,6 +846,11 @@ function BillingPageInner() {
   const [gatewayAvailability, setGatewayAvailability] = useState<BillingGatewayAvailability | null>(null);
   /** "Just change plan" pehle AlertDialog — seedha Stripe/page na khule (user request). */
   const [planChangeOnlyTargetId, setPlanChangeOnlyTargetId] = useState<PlanId | null>(null);
+  /** Paid term dropdown: explain proration table before applying term. */
+  const [termExplainDialog, setTermExplainDialog] = useState<{
+    planId: PlanId;
+    term: SubscriptionTermKey;
+  } | null>(null);
   /** Browser network — paid checkout / plan-change APIs online; offline par cached plan dikhta rahe + buttons band. */
   const [billingNavigatorOnline, setBillingNavigatorOnline] = useState(
     () => typeof window !== "undefined" && navigator.onLine
@@ -1042,6 +1089,15 @@ function BillingPageInner() {
   }, [company, allCompanies, user?.uid]);
 
   const expiryDate = useMemo(() => {
+    const accountMs =
+      typeof customUser?.accountCanonicalPlanExpiryMs === "number" &&
+      Number.isFinite(customUser.accountCanonicalPlanExpiryMs)
+        ? customUser.accountCanonicalPlanExpiryMs
+        : readAccountPlanLocalCache(user?.uid)?.planExpiryMs ?? null;
+    if (accountMs != null && Number.isFinite(accountMs)) {
+      const d = new Date(accountMs);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
     // Firestore `planExpiry` + legacy keys; SQLite mirror aksar sirf `planExpiryMs` rakhta hai — bina iske billing par "N/A".
     const fromTs =
       toSafeDate(company?.planExpiry) ??
@@ -1055,7 +1111,7 @@ function BillingPageInner() {
       return Number.isNaN(d.getTime()) ? null : d;
     }
     return null;
-  }, [company]);
+  }, [company, customUser?.accountCanonicalPlanExpiryMs, user?.uid]);
 
   /** Stripe sub active + Firestore expiry miss — server se `current_period_end` backfill (ek baar / mount). */
   const repairExpiryAttemptedRef = useRef(false);
@@ -1254,6 +1310,53 @@ function BillingPageInner() {
     () => (expiryMs != null ? daysLeftRounded(Date.now(), expiryMs) : null),
     [expiryMs]
   );
+
+  const termExplainDialogPreview = useMemo(() => {
+    if (!termExplainDialog) return null;
+    const tgt = plans.find((x) => x.id === termExplainDialog.planId);
+    const curRow = plans.find((x) => x.id === currentPlanId);
+    if (!tgt || tgt.isFree || !curRow || curRow.isFree) return null;
+    const nowMs = Date.now();
+    const term = termExplainDialog.term;
+    const q = quotePaidPlanPurchase({
+      nowMs,
+      currentExpiryMs: expiryMs,
+      currentYearly: curRow.price.yearly,
+      targetMonthly: tgt.price.monthly,
+      targetYearly: tgt.price.yearly,
+      term,
+      subtractUnusedCredit: false,
+    });
+    const stackFromMs = Math.max(nowMs, expiryMs ?? nowMs);
+    const currentExpiryLabel =
+      expiryMs != null && Number.isFinite(expiryMs)
+        ? formatBillingExpiry(new Date(expiryMs))
+        : formatBillingExpiry(new Date(stackFromMs));
+    return {
+      planName: tgt.name,
+      selectedTermLabel: billingTermOptionLabel(term),
+      termDays: termAddedDaysRounded(term),
+      currentExpiryLabel,
+      newExpiryLabel: formatBillingExpiry(new Date(q.newExpiryMs)),
+      chargeNpr: q.grossNpr,
+    };
+  }, [termExplainDialog, plans, currentPlanId, expiryMs, formatBillingExpiry]);
+
+  const requestPaidTermChange = useCallback(
+    (planId: PlanId, term: SubscriptionTermKey) => {
+      if (colTerms[planId] === term) return;
+      setSelectedPlanId(planId);
+      setTermExplainDialog({ planId, term });
+    },
+    [colTerms]
+  );
+
+  const confirmTermExplainDialog = useCallback(() => {
+    if (!termExplainDialog) return;
+    const { planId, term } = termExplainDialog;
+    setColTerms((prev) => ({ ...prev, [planId]: term }));
+    setTermExplainDialog(null);
+  }, [termExplainDialog]);
   /** True when expiry is in the past (not "0 days" due to same-day rounding). */
   const planExpiredByClock = expiryMs != null && expiryMs <= Date.now();
 
@@ -1270,6 +1373,7 @@ function BillingPageInner() {
       return;
     }
     const term = termOverride ?? colTerms[targetPlanId];
+    const stackOnExpiry = term !== "plan_change_only";
     // `plan_change_only` + paid downgrade: API 400 — neeche tier sirf Downgrade button (ya admin ne band kiya ho).
     if (term === "plan_change_only") {
       const ck = classifyPlanChange(currentPlanId, targetPlanId);
@@ -1296,7 +1400,7 @@ function BillingPageInner() {
     setProrationLoading(loadKey);
     try {
       const token = await user.getIdToken();
-      const res = await fetch(getBillingApiUrl("/api/payments/plan-change-checkout"), {
+      const res = await fetch(planChangeCheckoutApiUrl(), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -1305,6 +1409,7 @@ function BillingPageInner() {
           term,
           gateway: prorationGateway,
           billingRegion,
+          stackOnExpiry,
         }),
       });
       const data = await res.json();
@@ -1322,7 +1427,10 @@ function BillingPageInner() {
             description = "Tier changed — subscription end date unchanged. No charge.";
           }
         } else {
-          description = "No payment was charged — unused time covered this change.";
+          // Paid term must open gateway — silent date add = bug (unused-credit zero-net on hosted API).
+          throw new Error(
+            "Payment gateway did not open (server returned free apply). On localhost this should use the local API — hard-refresh and try again. If you still see this, restart `npm run dev`."
+          );
         }
         await refreshAuthoritativePlan();
         toast({ title: "Plan updated", description });
@@ -2105,10 +2213,7 @@ function BillingPageInner() {
                       <div className="space-y-2">
                         <BillingTermSelectWithInfo
                           value={colTerms[p.id]}
-                          onValueChange={(v) => {
-                            setSelectedPlanId(p.id);
-                            setColTerms((prev) => ({ ...prev, [p.id]: v }));
-                          }}
+                          onValueChange={(v) => requestPaidTermChange(p.id, v)}
                           tip={billingTermStackTip(p.name, colTerms[p.id])}
                         />
                         {/* Mobile: ek hi column dikhta hai — credit / net yahin (desktop jaisa breakdown). */}
@@ -2116,14 +2221,6 @@ function BillingPageInner() {
                           const curRow = plans.find((x) => x.id === currentPlanId);
                           if (!curRow || curRow.isFree) return null;
                           const nowMs = Date.now();
-                          const q = quotePaidPlanPurchase({
-                            nowMs,
-                            currentExpiryMs: expiryMs,
-                            currentYearly: curRow.price.yearly,
-                            targetMonthly: p.price.monthly,
-                            targetYearly: p.price.yearly,
-                            term: colTerms[p.id],
-                          });
                           const remainingMsRenew =
                             expiryMs != null && Number.isFinite(expiryMs) ? Math.max(0, expiryMs - nowMs) : 0;
                           const renewLedger = renewColumnFrozenUsageAndCreditDaysLeft({
@@ -2132,9 +2229,12 @@ function BillingPageInner() {
                             planYearly: curRow.price.yearly,
                             remainingMs: remainingMsRenew,
                           });
-                          // Pink Credit din = isi `q.creditNpr` par yearly map — `renewLedger.creditDaysLeft` calendar−usage hai, kabhi 0 dikha kar रु mismatch.
-                          const creditDaysPinkFromQuote = creditDaysEquivalentAtTargetYearly(q.creditNpr, curRow.price.yearly);
-                          // Chhoda hua neeche tier freeze ho to Pro par Usage 0 se din ke sath (desktop table jaisa).
+                          const liveBalance = renewColumnLiveBalance({
+                            nowMs,
+                            expiryMs,
+                            planYearly: curRow.price.yearly,
+                            remainingMs: remainingMsRenew,
+                          });
                           const usageNprRenewMobileCur = frozenLowerPaidTierInLedger
                             ? usageNprAccruedSinceCurrentTierStart({
                                 nowMs,
@@ -2142,16 +2242,17 @@ function BillingPageInner() {
                                 planYearly: curRow.price.yearly,
                               })
                             : renewLedger.frozenUsageNpr;
+                          const yearlyGross = curRow.price.yearly;
                           return (
                             <>
                               <div className="flex flex-col items-center gap-1.5">
                                 <div className={PRORATION_PILL_CREDIT_CLASS}>
                                   <span>
-                                    Balance ≈ {displaySymbol}{" "}{q.creditNpr.toFixed(2)} ·{" "}
+                                    Balance ≈ {displaySymbol}{" "}{liveBalance.balanceNpr.toFixed(2)} ·{" "}
                                     <strong className="font-semibold text-pink-950 dark:text-pink-50">
-                                      {formatCreditPillDaysLeftDisplay(creditDaysPinkFromQuote)}
+                                      {formatCreditPillDaysLeftDisplay(liveBalance.balanceDays)}
                                     </strong>{" "}
-                                    {creditPillAdjustedDayWord(creditDaysPinkFromQuote)} left
+                                    {creditPillAdjustedDayWord(liveBalance.balanceDays)} left
                                   </span>
                                 </div>
                                 <div className={PRORATION_PILL_USAGE_CLASS}>
@@ -2159,8 +2260,8 @@ function BillingPageInner() {
                                     Usage: {displaySymbol}{" "}{usageNprRenewMobileCur.toFixed(2)}
                                     {formatUsageLineSuffix(
                                       usageNprRenewMobileCur,
-                                      curRow.price.yearly,
-                                      q.grossNpr
+                                      yearlyGross,
+                                      yearlyGross
                                     )}
                                   </span>
                                 </div>
@@ -2312,25 +2413,18 @@ function BillingPageInner() {
                       <div className="space-y-2">
                         <BillingTermSelectWithInfo
                           value={colTerms[p.id]}
-                          onValueChange={(v) => {
-                            setSelectedPlanId(p.id);
-                            setColTerms((prev) => ({ ...prev, [p.id]: v }));
-                          }}
+                          onValueChange={(v) => requestPaidTermChange(p.id, v)}
                           tip={billingTermStackTip(p.name, colTerms[p.id])}
                         />
                         {(() => {
                           const curRow = plans.find((x) => x.id === currentPlanId);
                           if (!curRow || curRow.isFree) return null;
                           const nowMs = Date.now();
-                          const q = quotePaidPlanPurchase({
-                            nowMs,
-                            currentExpiryMs: expiryMs,
-                            currentYearly: curRow.price.yearly,
-                            targetMonthly: p.price.monthly,
-                            targetYearly: p.price.yearly,
-                            term: colTerms[p.id],
-                          });
                           const remainingMsMob = expiryMs != null && Number.isFinite(expiryMs) ? Math.max(0, expiryMs - nowMs) : 0;
+                          const remainingValueNprMob = remainingPaidTimeValueNpr(
+                            remainingMsMob,
+                            curRow.price.yearly
+                          );
                           const renewLedgerMob = renewColumnFrozenUsageAndCreditDaysLeft({
                             nowMs,
                             currentExpiryMs: expiryMs,
@@ -2339,10 +2433,16 @@ function BillingPageInner() {
                           });
                           const creditDaysCarriedMob =
                             change === "upgrade" && p.price.yearly > 0
-                              ? upgradeTargetCreditDaysCarried(q.creditNpr, p.price.yearly)
+                              ? upgradeTargetCreditDaysCarried(remainingValueNprMob, p.price.yearly)
                               : 0;
-                          // Renew branch: Credit रु ke saath din `q.creditNpr` se (desktop table jaisa).
-                          const creditDaysPinkRenewMob = creditDaysEquivalentAtTargetYearly(q.creditNpr, curRow.price.yearly);
+                          const liveBalanceMob = renewColumnLiveBalance({
+                            nowMs,
+                            expiryMs,
+                            planYearly: curRow.price.yearly,
+                            remainingMs: remainingMsMob,
+                          });
+                          const yearlyGrossMob = curRow.price.yearly;
+                          const targetYearlyMob = p.price.yearly;
                           return (
                             <>
                               {billingShowUpgradePathParagraph(change) ? (
@@ -2360,7 +2460,7 @@ function BillingPageInner() {
                                 <div className="flex flex-col items-center gap-1.5">
                                   <div className={PRORATION_PILL_CREDIT_CLASS}>
                                     <span>
-                                      Balance ≈ {displaySymbol}{" "}{q.creditNpr.toFixed(2)} · ≈{" "}
+                                      Balance ≈ {displaySymbol}{" "}{remainingValueNprMob.toFixed(2)} · ≈{" "}
                                       <strong className="font-semibold text-pink-950 dark:text-pink-50">
                                         {creditDaysCarriedMob.toFixed(2)}
                                       </strong>{" "}
@@ -2370,7 +2470,7 @@ function BillingPageInner() {
                                   <div className={PRORATION_PILL_USAGE_CLASS}>
                                     <span>
                                       Usage: {displaySymbol}{" "}{(0).toFixed(2)}
-                                      {formatUsageLineSuffix(0, p.price.yearly, q.grossNpr)}
+                                      {formatUsageLineSuffix(0, targetYearlyMob, targetYearlyMob)}
                                     </span>
                                   </div>
                                   {/* Upgrade: "Pay now" net Stripe line mat dikhao — primary flow zero-wala "Just change plan" (bacha credit → din). */}
@@ -2379,11 +2479,11 @@ function BillingPageInner() {
                                 <div className="flex flex-col items-center gap-1.5">
                                   <div className={PRORATION_PILL_CREDIT_CLASS}>
                                     <span>
-                                      Balance ≈ {displaySymbol}{" "}{q.creditNpr.toFixed(2)} ·{" "}
+                                      Balance ≈ {displaySymbol}{" "}{liveBalanceMob.balanceNpr.toFixed(2)} ·{" "}
                                       <strong className="font-semibold text-pink-950 dark:text-pink-50">
-                                        {formatCreditPillDaysLeftDisplay(creditDaysPinkRenewMob)}
+                                        {formatCreditPillDaysLeftDisplay(liveBalanceMob.balanceDays)}
                                       </strong>{" "}
-                                      {creditPillAdjustedDayWord(creditDaysPinkRenewMob)} left
+                                      {creditPillAdjustedDayWord(liveBalanceMob.balanceDays)} left
                                     </span>
                                   </div>
                                   <div className={PRORATION_PILL_USAGE_CLASS}>
@@ -2391,8 +2491,8 @@ function BillingPageInner() {
                                       Usage: {displaySymbol}{" "}{renewLedgerMob.frozenUsageNpr.toFixed(2)}
                                       {formatUsageLineSuffix(
                                         renewLedgerMob.frozenUsageNpr,
-                                        curRow.price.yearly,
-                                        q.grossNpr
+                                        yearlyGrossMob,
+                                        yearlyGrossMob
                                       )}
                                     </span>
                                   </div>
@@ -2732,19 +2832,15 @@ function BillingPageInner() {
                       isPaidCompany && change !== "downgrade" && !p.isFree && curPlanRow && !curPlanRow.isFree ? (
                         (() => {
                           const nowMs = Date.now();
-                          const q = quotePaidPlanPurchase({
-                            nowMs,
-                            currentExpiryMs: expiryMs,
-                            currentYearly: curPlanRow.price.yearly,
-                            targetMonthly: p.price.monthly,
-                            targetYearly: p.price.yearly,
-                            term: colTerms[p.id],
-                          });
                           // Current plan column: hamesha apni Credit/Usage dikhao — warna Pro select karte hi Advance ki pills gayab (user confusion).
                           const showLiveProrationAmounts = p.id === selectedPlanId || p.id === currentPlanId;
                           const daysLeftCurrentPlan = daysLeftRounded(nowMs, expiryMs);
                           const remainingMsForPills =
                             expiryMs != null && Number.isFinite(expiryMs) ? Math.max(0, expiryMs - nowMs) : 0;
+                          const remainingValueNprDesk = remainingPaidTimeValueNpr(
+                            remainingMsForPills,
+                            curPlanRow.price.yearly
+                          );
                           const renewLedgerDesk = renewColumnFrozenUsageAndCreditDaysLeft({
                             nowMs,
                             currentExpiryMs: expiryMs,
@@ -2753,13 +2849,16 @@ function BillingPageInner() {
                           });
                           const creditCarriedDesk =
                             change === "upgrade" && p.price.yearly > 0
-                              ? upgradeTargetCreditDaysCarried(q.creditNpr, p.price.yearly)
+                              ? upgradeTargetCreditDaysCarried(remainingValueNprDesk, p.price.yearly)
                               : 0;
-                          // Renew / same-tier column: pink din = checkout `q.creditNpr` — warna trailing-year usage se 0.00 + positive रु.
-                          const creditDaysPinkRenewDesk = creditDaysEquivalentAtTargetYearly(
-                            q.creditNpr,
-                            curPlanRow.price.yearly
-                          );
+                          const liveBalanceDesk = renewColumnLiveBalance({
+                            nowMs,
+                            expiryMs,
+                            planYearly: curPlanRow.price.yearly,
+                            remainingMs: remainingMsForPills,
+                          });
+                          const yearlyGrossDesk = curPlanRow.price.yearly;
+                          const targetYearlyDesk = p.price.yearly;
                           const usageNprRenewDesk = frozenLowerPaidTierInLedger
                             ? usageNprAccruedSinceCurrentTierStart({
                                 nowMs,
@@ -2786,7 +2885,7 @@ function BillingPageInner() {
                                   <div className="flex flex-col items-center gap-1.5 max-w-[280px] mx-auto">
                                     <div className={PRORATION_PILL_CREDIT_CLASS}>
                                       <span>
-                                        Balance ≈ {displaySymbol}{" "}{q.creditNpr.toFixed(2)} · ≈{" "}
+                                        Balance ≈ {displaySymbol}{" "}{remainingValueNprDesk.toFixed(2)} · ≈{" "}
                                         <strong className="font-semibold text-pink-950 dark:text-pink-50">
                                           {creditCarriedDesk.toFixed(2)}
                                         </strong>{" "}
@@ -2796,7 +2895,7 @@ function BillingPageInner() {
                                     <div className={PRORATION_PILL_USAGE_CLASS}>
                                       <span>
                                         Usage: {displaySymbol}{" "}{(0).toFixed(2)}
-                                        {formatUsageLineSuffix(0, p.price.yearly, q.grossNpr)}
+                                        {formatUsageLineSuffix(0, targetYearlyDesk, targetYearlyDesk)}
                                       </span>
                                     </div>
                                     {/* Upgrade: Stripe net breakdown hide — user ko sirf credit/days + "Just change plan" dikhana hai. */}
@@ -2805,11 +2904,11 @@ function BillingPageInner() {
                                   <div className="flex flex-col items-center gap-1.5">
                                     <div className={PRORATION_PILL_CREDIT_CLASS}>
                                       <span>
-                                        Balance ≈ {displaySymbol}{" "}{q.creditNpr.toFixed(2)} ·{" "}
+                                        Balance ≈ {displaySymbol}{" "}{liveBalanceDesk.balanceNpr.toFixed(2)} ·{" "}
                                         <strong className="font-semibold text-pink-950 dark:text-pink-50">
-                                          {formatCreditPillDaysLeftDisplay(creditDaysPinkRenewDesk)}
+                                          {formatCreditPillDaysLeftDisplay(liveBalanceDesk.balanceDays)}
                                         </strong>{" "}
-                                        {creditPillAdjustedDayWord(creditDaysPinkRenewDesk)} left
+                                        {creditPillAdjustedDayWord(liveBalanceDesk.balanceDays)} left
                                       </span>
                                     </div>
                                     <div className={PRORATION_PILL_USAGE_CLASS}>
@@ -2817,8 +2916,8 @@ function BillingPageInner() {
                                         Usage: {displaySymbol}{" "}{usageNprRenewDesk.toFixed(2)}
                                         {formatUsageLineSuffix(
                                           usageNprRenewDesk,
-                                          curPlanRow.price.yearly,
-                                          q.grossNpr
+                                          yearlyGrossDesk,
+                                          yearlyGrossDesk
                                         )}
                                       </span>
                                     </div>
@@ -2872,10 +2971,7 @@ function BillingPageInner() {
                           <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">
                             <BillingTermSelectWithInfo
                               value={colTerms[p.id]}
-                              onValueChange={(v) => {
-                                setSelectedPlanId(p.id);
-                                setColTerms((prev) => ({ ...prev, [p.id]: v }));
-                              }}
+                              onValueChange={(v) => requestPaidTermChange(p.id, v)}
                               tip={billingTermStackTip(p.name, colTerms[p.id])}
                             />
                             {prorationHint}
@@ -3046,10 +3142,7 @@ function BillingPageInner() {
                         <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">
                           <BillingTermSelectWithInfo
                             value={colTerms[p.id]}
-                            onValueChange={(v) => {
-                              setSelectedPlanId(p.id);
-                              setColTerms((prev) => ({ ...prev, [p.id]: v }));
-                            }}
+                            onValueChange={(v) => requestPaidTermChange(p.id, v)}
                             tip={billingTermStackTip(p.name, colTerms[p.id])}
                           />
                           {prorationHint}
@@ -3245,6 +3338,19 @@ function BillingPageInner() {
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+
+          {termExplainDialogPreview ? (
+            <BillingRenewTermExplainDialog
+              open={termExplainDialog != null}
+              onOpenChange={(open) => {
+                if (!open) setTermExplainDialog(null);
+              }}
+              preview={termExplainDialogPreview}
+              daysLeftOnPlan={daysLeftOnPlan}
+              currencySymbol={displaySymbol}
+              onConfirm={confirmTermExplainDialog}
+            />
+          ) : null}
         </CardContent>
       </Card>
 

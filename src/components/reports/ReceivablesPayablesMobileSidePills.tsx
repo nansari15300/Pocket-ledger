@@ -4,11 +4,14 @@ import { cn } from "@/lib/utils";
 import { chromeProPillCn } from "@/lib/chromePillButton";
 import { LEDGER_HEADER_PILL_CN } from "@/lib/ledgerHeaderChrome";
 
+export type ReceivablesPayablesSideTab = "receivables" | "payables" | "deadline";
+
 type ReceivablesPayablesMobileSidePillsProps = {
-  tab: "receivables" | "payables" | "both";
+  tab: ReceivablesPayablesSideTab | "both";
   receivablesCount: number;
   payablesCount: number;
-  onSelect: (tab: "receivables" | "payables") => void;
+  deadlineCount: number;
+  onSelect: (tab: ReceivablesPayablesSideTab) => void;
 };
 
 const pillBtn = cn(
@@ -25,6 +28,7 @@ export function ReceivablesPayablesMobileSidePills({
   tab,
   receivablesCount,
   payablesCount,
+  deadlineCount,
   onSelect,
 }: ReceivablesPayablesMobileSidePillsProps) {
   const receivablesActive = tab === "receivables" || tab === "both";
@@ -45,6 +49,14 @@ export function ReceivablesPayablesMobileSidePills({
         className={cn(pillBtn, tab === "payables" ? pillActiveBorder : pillInactiveBorder)}
       >
         Payables ({payablesCount})
+      </button>
+      <button
+        type="button"
+        onClick={() => onSelect("deadline")}
+        data-pl-rp-side-pill-active={tab === "deadline" ? "" : undefined}
+        className={cn(pillBtn, tab === "deadline" ? pillActiveBorder : pillInactiveBorder)}
+      >
+        Deadline ({deadlineCount})
       </button>
     </div>
   );

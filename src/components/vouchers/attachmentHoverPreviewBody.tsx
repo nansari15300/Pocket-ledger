@@ -136,8 +136,43 @@ export async function prewarmVisibleAttachmentRefsForInstantOpen(
 const EMBEDDED_PREVIEW_DOWNLOAD_TIMEOUT_MS = 28_000;
 const PDF_HOVER_RASTER_TIMEOUT_MS = 45_000;
 
+/** Full-quality portal raster only — never `::cell-thumb` (tiny Fit-window 100%). */
 function pdfPortalCacheKey(url: string): string {
   return `${url}::pdf-portal-v2`;
+}
+
+function pdfPortalCacheKeyLegacy(url: string): string {
+  return `${url}::pdf-portal`;
+}
+
+function peekPdfPortalCachedBlobUrl(url: string): string | null {
+  return (
+    peekHoverCachedBlobUrl(pdfPortalCacheKey(url)) ||
+    peekHoverCachedBlobUrl(pdfPortalCacheKeyLegacy(url)) ||
+    null
+  );
+}
+
+async function peekPersistedPdfPortalBlob(url: string): Promise<Blob | null> {
+  try {
+    const { tryOfflineCachedAttachmentBlobMultiKey } = await import("@/lib/offlineAttachmentUrlCache");
+    return (
+      (await tryOfflineCachedAttachmentBlobMultiKey(pdfPortalCacheKey(url))) ||
+      (await tryOfflineCachedAttachmentBlobMultiKey(pdfPortalCacheKeyLegacy(url))) ||
+      null
+    );
+  } catch {
+    return null;
+  }
+}
+
+function rememberPdfPortalRaster(urlKey: string, rasterUrl: string, rasterBlob?: Blob | null): void {
+  rememberHoverBlobUrl(pdfPortalCacheKey(urlKey), rasterUrl);
+  rememberHoverBlobUrl(pdfPortalCacheKeyLegacy(urlKey), rasterUrl);
+  if (rasterBlob && rasterBlob.size > 0) {
+    void seedOfflineAttachmentCacheFromBlob(pdfPortalCacheKey(urlKey), rasterBlob);
+    void seedOfflineAttachmentCacheFromBlob(pdfPortalCacheKeyLegacy(urlKey), rasterBlob);
+  }
 }
 
 type PortalPdfRasterMeta = { pageCount: number; onePageHeightPx: number };
@@ -148,6 +183,7 @@ function rememberPortalPdfMeta(urlKey: string, meta: PortalPdfRasterMeta | undef
   if (!meta || meta.pageCount <= 1 || meta.onePageHeightPx < 1) return;
   const key = pdfPortalCacheKey(urlKey);
   portalPdfMetaByCacheKey.set(key, meta);
+  portalPdfMetaByCacheKey.set(pdfPortalCacheKeyLegacy(urlKey), meta);
   try {
     sessionStorage.setItem(`pl-portal-pdf-meta:${key}`, JSON.stringify(meta));
   } catch {
@@ -157,7 +193,8 @@ function rememberPortalPdfMeta(urlKey: string, meta: PortalPdfRasterMeta | undef
 
 function peekPortalPdfMeta(urlKey: string): PortalPdfRasterMeta | undefined {
   const key = pdfPortalCacheKey(urlKey);
-  const mem = portalPdfMetaByCacheKey.get(key);
+  const mem =
+    portalPdfMetaByCacheKey.get(key) || portalPdfMetaByCacheKey.get(pdfPortalCacheKeyLegacy(urlKey));
   if (mem) return mem;
   try {
     const raw = sessionStorage.getItem(`pl-portal-pdf-meta:${key}`);
@@ -535,9 +572,7 @@ function HttpsPdfPortalHoverPreview({
     if (companyId) grantExplicitAttachmentNetworkFetch(effectiveUrl, companyId);
   }, [effectiveUrl, companyId]);
 
-  const portalCached = peekHoverCachedBlobUrl(pdfPortalCacheKey(effectiveUrl));
-  const cellThumb = peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`);
-
+  const portalCached = peekPdfPortalCachedBlobUrl(effectiveUrl);
   if (portalCached) {
     return (
       <PdfPortalRasterImg
@@ -548,6 +583,16 @@ function HttpsPdfPortalHoverPreview({
     );
   }
 
+  const cellThumb = peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`);
+  // STRICT (parked): cell-thumb mat pass — portal pe tiny thumb freeze.
+  // return (
+  //   <LocalPdfBlobHoverPreview
+  //     sourceUrl={effectiveUrl}
+  //     onOpen={onOpen}
+  //     companyId={companyId}
+  //     portalCacheKey={effectiveUrl}
+  //   />
+  // );
   return (
     <LocalPdfBlobHoverPreview
       sourceUrl={effectiveUrl}
@@ -559,6 +604,10 @@ function HttpsPdfPortalHoverPreview({
   );
 }
 
+/**
+ * Portal PDF raster. STRICT (parked): cell-thumb kabhi final nahi.
+ * Filhal: instantThumbUrl se pehle paint, phir full portal upgrade.
+ */
 function LocalPdfBlobHoverPreview({
   sourceUrl,
   blob,
@@ -570,23 +619,20 @@ function LocalPdfBlobHoverPreview({
   sourceUrl: string;
   blob?: Blob | null;
   onOpen: () => void;
-  /** Cell/hover JPEG already warm — show immediately while pdf.js optional upgrade runs. */
   instantThumbUrl?: string | null;
   companyId?: string | null;
   portalCacheKey?: string;
 }) {
-  const [thumbUrl, setThumbUrl] = React.useState<string | null>(() =>
-    String(instantThumbUrl || "").trim() || null
+  const cacheKey = portalCacheKey || sourceUrl;
+  // STRICT (parked): only peekPdfPortalCachedBlobUrl — no instantThumbUrl initial.
+  // const [thumbUrl, setThumbUrl] = React.useState<string | null>(() => peekPdfPortalCachedBlobUrl(cacheKey));
+  // const [loading, setLoading] = React.useState(() => !peekPdfPortalCachedBlobUrl(cacheKey));
+  const [thumbUrl, setThumbUrl] = React.useState<string | null>(
+    () => peekPdfPortalCachedBlobUrl(cacheKey) || instantThumbUrl || null
   );
-  const [loading, setLoading] = React.useState(() => !String(instantThumbUrl || "").trim());
-
-  React.useEffect(() => {
-    const warm = String(instantThumbUrl || "").trim();
-    if (warm) {
-      setThumbUrl(warm);
-      setLoading(false);
-    }
-  }, [instantThumbUrl]);
+  const [loading, setLoading] = React.useState(
+    () => !peekPdfPortalCachedBlobUrl(cacheKey) && !instantThumbUrl
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -594,13 +640,51 @@ function LocalPdfBlobHoverPreview({
     const timeoutId = window.setTimeout(() => ac.abort(), PDF_HOVER_RASTER_TIMEOUT_MS);
     void (async () => {
       try {
-        if (!String(instantThumbUrl || "").trim()) setLoading(true);
+        const already = peekPdfPortalCachedBlobUrl(cacheKey);
+        if (already) {
+          if (!cancelled) {
+            setThumbUrl(already);
+            setLoading(false);
+          }
+          return;
+        }
+        // STRICT (parked): setLoading(true); setThumbUrl(null);
+        if (!instantThumbUrl) {
+          setLoading(true);
+          setThumbUrl(null);
+        }
+
+        const persisted = await peekPersistedPdfPortalBlob(cacheKey);
+        if (persisted?.size && !cancelled) {
+          const portalUrl = URL.createObjectURL(persisted);
+          rememberPdfPortalRaster(cacheKey, portalUrl, persisted);
+          setThumbUrl(portalUrl);
+          setLoading(false);
+          return;
+        }
+
         let pdfBlob = blob && blob.size > 0 ? blob : null;
-        const cacheKey = portalCacheKey || sourceUrl;
         if (!pdfBlob?.size) {
           pdfBlob = await getRemoteAttachmentBlobPreferOfflineCache(sourceUrl, ac.signal, {
             companyId: companyId ?? undefined,
             explicitUserRequest: true,
+          });
+        }
+        if (!pdfBlob?.size) {
+          try {
+            const { getBlobFromAttachmentRefPreferLocalFirst } = await import(
+              "@/lib/attachmentPreviewResolve"
+            );
+            pdfBlob = await getBlobFromAttachmentRefPreferLocalFirst(sourceUrl, {
+              companyId: companyId ?? undefined,
+            });
+          } catch {
+            /* optional */
+          }
+        }
+        if (!pdfBlob?.size && isLocalFileRef(sourceUrl)) {
+          pdfBlob = await getBlobFromLocalFileRef(sourceUrl, {
+            companyId: companyId ?? undefined,
           });
         }
         if (!pdfBlob?.size && (sourceUrl.startsWith("blob:") || sourceUrl.startsWith("data:"))) {
@@ -609,6 +693,7 @@ function LocalPdfBlobHoverPreview({
         if (ac.signal.aborted || cancelled) return;
         if (!pdfBlob?.size) throw new Error("empty_pdf");
         const kind = await sniffBlobKindForPreview(pdfBlob);
+        // Offline cache kabhi cell-thumb JPEG ko full URL pe store karta hai — reject.
         if (kind !== "pdf") throw new Error("not_pdf");
         if (pdfBlob.type !== "application/pdf") {
           pdfBlob = new Blob([await pdfBlob.arrayBuffer()], { type: "application/pdf" });
@@ -623,12 +708,11 @@ function LocalPdfBlobHoverPreview({
           URL.revokeObjectURL(result.thumbnailUrl);
           return;
         }
-        rememberHoverBlobUrl(pdfPortalCacheKey(cacheKey), result.thumbnailUrl);
+        rememberPdfPortalRaster(cacheKey, result.thumbnailUrl, result.thumbnailBlob);
         rememberPortalPdfMeta(cacheKey, result.portalMeta);
-        void seedOfflineAttachmentCacheFromBlob(pdfPortalCacheKey(cacheKey), result.thumbnailBlob);
         setThumbUrl(result.thumbnailUrl);
       } catch {
-        if (!cancelled && !String(instantThumbUrl || "").trim()) setThumbUrl(null);
+        if (!cancelled && !instantThumbUrl) setThumbUrl(null);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -638,26 +722,26 @@ function LocalPdfBlobHoverPreview({
       window.clearTimeout(timeoutId);
       ac.abort();
     };
-  }, [sourceUrl, blob, instantThumbUrl, companyId, portalCacheKey]);
+  }, [sourceUrl, blob, companyId, cacheKey, instantThumbUrl]);
 
   if (loading && !thumbUrl) {
     return (
-      <div className="flex min-h-[280px] min-w-[220px] items-center justify-center p-6">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-label="Loading PDF preview" />
+      <div className="flex min-h-[280px] min-w-[280px] items-center justify-center p-6">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-label="Loading full PDF preview" />
       </div>
     );
   }
   if (!thumbUrl) {
     return (
       <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
-        <span>PDF preview could not load — try Open</span>
+        <span>PDF full preview could not load — Open for full size</span>
         <Button type="button" size="sm" variant="secondary" onClick={onOpen}>
           Open PDF
         </Button>
       </div>
     );
   }
-  return <PdfPortalRasterImg src={thumbUrl} portalMeta={peekPortalPdfMeta(portalCacheKey || sourceUrl)} onOpen={onOpen} />;
+  return <PdfPortalRasterImg src={thumbUrl} portalMeta={peekPortalPdfMeta(cacheKey)} onOpen={onOpen} />;
 }
 
 /** `local:` / `drive:` / `PL_ATTACH_V1` — PC hover preview: local/pending pehle, phir Drive (HTTPS image path alag). */
@@ -684,13 +768,19 @@ export function LocalFileRefTooltipPreview({
     gallery && gallery.urls.length > 1 ? `${gallery.startIndex}:${galleryUrlsKey}` : galleryUrlsKey;
 
   const initialCached = React.useMemo(() => {
-    const pdfPortal = peekHoverCachedBlobUrl(pdfPortalCacheKey(effectiveUrl));
+    const pdfPortal = peekPdfPortalCachedBlobUrl(effectiveUrl);
     if (pdfPortal) return { objectUrl: pdfPortal, mime: "image/jpeg" as const, fromCellThumb: false };
-    const cellThumb = peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`);
     const full = peekHoverCachedBlobUrl(effectiveUrl);
     const fmt = getAttachmentFormatLabel(effectiveUrl);
+    // STRICT (parked): PDF pe cell-thumb initial mat.
+    // if (fmt === "PDF") {
+    //   if (full) return { objectUrl: full, mime: "application/pdf" as const, fromCellThumb: false };
+    //   return null;
+    // }
+    // if (full) return { objectUrl: full, mime: "image/jpeg" as const, fromCellThumb: false };
+    // return null;
     if (fmt === "PDF" && !full) return null;
-    // Full bytes pehle — cell-thumb sirf instant paint (blurry 300% zoom avoid).
+    const cellThumb = peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`);
     const cachedPreviewUrl = full || cellThumb;
     if (!cachedPreviewUrl) return null;
     if (full) {
@@ -699,7 +789,6 @@ export function LocalFileRefTooltipPreview({
       }
       return { objectUrl: full, mime: "image/jpeg" as const, fromCellThumb: false };
     }
-    // Cell thumb = JPEG raster (incl. PDF first page). `local:` URL label is often "FILE".
     return { objectUrl: cellThumb!, mime: "image/jpeg" as const, fromCellThumb: true };
   }, [effectiveUrl]);
 
@@ -727,7 +816,7 @@ export function LocalFileRefTooltipPreview({
     const cid = companyId ?? readActiveAttachmentCompanyId() ?? undefined;
 
     const cellThumb = peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`);
-    const pdfPortal = peekHoverCachedBlobUrl(pdfPortalCacheKey(effectiveUrl));
+    const pdfPortal = peekPdfPortalCachedBlobUrl(effectiveUrl);
     const fullCached = peekHoverCachedBlobUrl(effectiveUrl);
     if (pdfPortal) {
       setState({ status: "ready", objectUrl: pdfPortal, mime: "image/jpeg", fromCellThumb: false });
@@ -739,11 +828,11 @@ export function LocalFileRefTooltipPreview({
     }
     void (async () => {
       try {
-        const persistedPortal = await tryOfflineCachedAttachmentBlobMultiKey(pdfPortalCacheKey(effectiveUrl));
+        const persistedPortal = await peekPersistedPdfPortalBlob(effectiveUrl);
         if (cancelled || !persistedPortal?.size) return;
         const portalUrl = URL.createObjectURL(persistedPortal);
         urlRef.current = portalUrl;
-        rememberHoverBlobUrl(pdfPortalCacheKey(effectiveUrl), portalUrl);
+        rememberPdfPortalRaster(effectiveUrl, portalUrl, persistedPortal);
         setState({ status: "ready", objectUrl: portalUrl, mime: "image/jpeg", fromCellThumb: false });
         window.clearTimeout(timeoutId);
       } catch {
@@ -772,6 +861,7 @@ export function LocalFileRefTooltipPreview({
       // Instant paint from cell thumb, then continue async to upgrade to full bytes.
       setState({ status: "ready", objectUrl: cellThumb, mime: "image/jpeg", fromCellThumb: true });
     } else {
+      // STRICT (parked): cell-thumb se portal ready mat.
       setState({ status: "loading" });
     }
 
@@ -877,9 +967,8 @@ export function LocalFileRefTooltipPreview({
             return;
           }
           urlRef.current = result.thumbnailUrl;
-          rememberHoverBlobUrl(pdfPortalCacheKey(effectiveUrl), result.thumbnailUrl);
+          rememberPdfPortalRaster(effectiveUrl, result.thumbnailUrl, result.thumbnailBlob);
           rememberPortalPdfMeta(effectiveUrl, result.portalMeta);
-          void seedOfflineAttachmentCacheFromBlob(pdfPortalCacheKey(effectiveUrl), result.thumbnailBlob);
           setState({ status: "ready", objectUrl: result.thumbnailUrl, mime: "image/jpeg", fromCellThumb: false });
           return;
         }
@@ -912,6 +1001,13 @@ export function LocalFileRefTooltipPreview({
   }, [url, effectiveUrl, galleryDepKey, companyId, reloadKey]);
 
   const openAttachment = React.useCallback(() => {
+    // STRICT (parked): URL PDF label → hamesha pdf open.
+    // const labelIsPdf = getAttachmentFormatLabel(effectiveUrl) === "PDF";
+    // const kind: "pdf" | "image" | "other" = labelIsPdf
+    //   ? "pdf"
+    //   : state.status === "ready" && state.mime.startsWith("image/")
+    //     ? "image"
+    //     : ...
     const kind: "pdf" | "image" | "other" =
       state.status === "ready" && state.mime.startsWith("image/")
         ? "image"
@@ -922,6 +1018,8 @@ export function LocalFileRefTooltipPreview({
             : "other";
     const multi =
       gallery && gallery.urls.length > 1 ? { urls: gallery.urls, startIndex: gallery.startIndex } : undefined;
+    // STRICT (parked): localLedgerOnly + https serverFallback
+    // const localLedgerOnly = ...
     const serverFallback =
       companyId &&
       (isLocalFileRef(effectiveUrl) || voucherAttachmentFb?.interCompanyPeer)
@@ -986,6 +1084,7 @@ export function LocalFileRefTooltipPreview({
     isImage &&
     (portalPdfMeta != null ||
       peekHoverCachedBlobUrl(pdfPortalCacheKey(effectiveUrl)) === objectUrl);
+  // STRICT (parked): labelIsPdf || isPdf || isPortalPdfRaster → LocalPdfBlobHoverPreview, no cell-thumb img.
 
   /** Voucher FilePreview hover jaisa — max-w-full / center flex mat (AttachmentHoverPortal width-fit + scroll) */
   return (
@@ -1000,7 +1099,6 @@ export function LocalFileRefTooltipPreview({
           draggable={false}
           className="block h-auto w-auto max-h-none max-w-none object-contain"
           loading="eager"
-          /* Single-click = portal scroll/drag; double-click = open (browser / app) */
           onDoubleClick={(e) => {
             e.stopPropagation();
             openAttachment();
@@ -1150,6 +1248,7 @@ export function SingleAttachmentHoverPreviewBody({
       cleanUrl.endsWith(".pdf") ||
       effectiveUrl.toLowerCase().includes(".pdf") ||
       pathLower.includes(".pdf"));
+  // STRICT (parked): cell-thumb / full hover se IMAGE mat decide.
   // Firebase signed URLs aksar bina `.jpg` ke aate hain — File column thumb IMAGE dikhata hai, portal FILE sochta tha.
   const isImage =
     !usesDeviceBlobPreview &&
@@ -1169,6 +1268,7 @@ export function SingleAttachmentHoverPreviewBody({
   const galleryOpts = gallery;
   const openAtt = () =>
     void openAttachmentInApp(effectiveUrl, {
+      // STRICT (parked): kind: isPdf ? "pdf" first
       kind: isImage || tryHttpsBlobPreview ? "image" : isPdf ? "pdf" : "other",
       localLedgerOnly,
       gateCompany: company,

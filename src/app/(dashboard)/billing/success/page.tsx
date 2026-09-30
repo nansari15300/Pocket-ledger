@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
-import { getBillingApiUrl } from "@/lib/billingApiOrigin";
+import { getLocalDevAwareBillingApiUrl } from "@/lib/billingApiOrigin";
 import { applyVerifiedStripePayloadToLocalCompany } from "@/lib/applyStripePlanToLocalCompany";
 import type { VerifiedLocalPlanApplyPayload } from "@/lib/payments/localStripePlanApplyTypes";
 import { writePlanAuthoritativeSyncTimestamp } from "@/lib/companyPlanServerSync";
@@ -16,6 +16,7 @@ type SyncState = "idle" | "syncing" | "ok" | "error";
 
 /**
  * Stripe redirects here with session_id; webhooks may miss localhost — sync route applies plan via Admin + Stripe API.
+ * Localhost must call same-origin `/app/api/...` (not pocket-ledger.com) or Admin Panel books never post.
  */
 function BillingSuccessInner() {
   const searchParams = useSearchParams();
@@ -39,7 +40,7 @@ function BillingSuccessInner() {
 
       const runSync = async (): Promise<{ ok: boolean; detail: string | null }> => {
         const idToken = await user.getIdToken();
-        const res = await fetch(getBillingApiUrl("/api/payments/sync-stripe-session"), {
+        const res = await fetch(getLocalDevAwareBillingApiUrl("/api/payments/sync-stripe-session"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

@@ -2495,6 +2495,7 @@ export function AddVoucherDialog(props: any) {
           subType: typeof row?.subType === "string" ? row.subType : undefined,
           lineItems: Array.isArray(row?.lineItems) ? (row.lineItems as Array<{ type?: string }>) : undefined,
         },
+        voucherDate: row?.date,
       });
       if (cancelled || !String(nextVoucherNumber || "").trim()) return;
       setMissingEditVoucherNumber({ voucherId, voucherNumber: nextVoucherNumber });
@@ -2894,6 +2895,7 @@ export function AddVoucherDialog(props: any) {
           subType: sourceDoc.subType,
           lineItems: sourceDoc.lineItems,
         },
+        voucherDate: sourceDoc.date,
       });
       const cleaned = resetCrossLinksForCopy(sourceDoc);
       const { remapped, unmatchedNames, unmatchedCategories } = await remapVoucherReferencesByName(

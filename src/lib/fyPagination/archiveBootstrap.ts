@@ -5,6 +5,18 @@ import { getAnusuchi13FyKey } from "@/lib/reports/anusuchi13Confirmation";
 import { markFyArchived, listArchivedFyKeys } from "@/lib/fyPagination/archiveStore";
 import { runningFyKey } from "@/lib/fyPagination/periodBounds";
 
+const FY_KEY_SCAN_YIELD_EVERY = 1500;
+
+function yieldToUi(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
+
 /** Distinct FY keys present in voucher projection index. */
 export async function listFyKeysWithVouchersInSqlite(
   companyId: string,
@@ -21,10 +33,15 @@ export async function listFyKeysWithVouchersInSqlite(
       )
       .all(companyId) as Array<{ doc_date_ms?: number }>;
     const keys = new Set<string>();
-    for (const row of rows) {
-      const ms = Number(row.doc_date_ms);
-      if (!Number.isFinite(ms)) continue;
-      keys.add(getAnusuchi13FyKey(country, new Date(ms)));
+    for (let i = 0; i < rows.length; i++) {
+      const ms = Number(rows[i]?.doc_date_ms);
+      if (Number.isFinite(ms)) {
+        keys.add(getAnusuchi13FyKey(country, new Date(ms)));
+      }
+      // Large ledgers: yield so Settings → Fiscal year UI stays responsive.
+      if (i > 0 && i % FY_KEY_SCAN_YIELD_EVERY === 0) {
+        await yieldToUi();
+      }
     }
     return [...keys].sort();
   } catch {

@@ -4,7 +4,7 @@ import * as React from "react";
 import { TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, Pencil, History, CheckCircle, CheckCheck, CheckSquare, Printer, MousePointerClick, RefreshCw, Loader2 } from "lucide-react";
+import { MoreVertical, Pencil, History, CheckCircle, CheckCheck, CheckSquare, Printer, MousePointerClick, RefreshCw, Loader2, CircleOff } from "lucide-react";
 import { StatementCheckedRowMessageLabel } from "@/components/vouchers/StatementCheckedRowMessageLabel";
 import { statementCheckedMessageColumn } from "@/lib/statementCheckRowMessage";
 import { VoucherAttachmentFileIndicator } from "@/components/vouchers/VoucherAttachmentFileIndicator";
@@ -1185,6 +1185,8 @@ export function LinkedVouchersColored({
   billWisePink = false,
   /** Print parity: inline " + " separators with flex-wrap across Status+Balance width. */
   wrapInline = false,
+  onVoucherClick,
+  activeVoucherNo,
 }: {
   vouchers: string[];
   vouchersPerLine?: number;
@@ -1193,7 +1195,34 @@ export function LinkedVouchersColored({
   /** Bill-wise: use pink instead of gray for voucher details below status. */
   billWisePink?: boolean;
   wrapInline?: boolean;
+  /** Bill-wise status: temporary link-preview grouping (session only). */
+  onVoucherClick?: (voucherNo: string, e: React.MouseEvent) => void;
+  activeVoucherNo?: string | null;
 }) {
+  const activeNorm = activeVoucherNo ? String(activeVoucherNo).trim().toLowerCase() : "";
+  const renderVoucher = (v: string, globalIdx: number, colorClass: string) => {
+    const isActive = activeNorm && v.trim().toLowerCase() === activeNorm;
+    if (!onVoucherClick) {
+      return <span className={colorClass}>{v}</span>;
+    }
+    return (
+      <button
+        type="button"
+        className={cn(
+          colorClass,
+          "font-inherit text-inherit p-0 border-0 bg-transparent cursor-pointer hover:underline",
+          isActive && "underline font-bold ring-1 ring-blue-400/60 rounded-sm"
+        )}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          onVoucherClick(v, e);
+        }}
+      >
+        {v}
+      </button>
+    );
+  };
   if (!vouchers?.length) return null;
   if (wrapInline) {
     const justifyClass =
@@ -1207,7 +1236,7 @@ export function LinkedVouchersColored({
           return (
             <React.Fragment key={globalIdx}>
               {globalIdx > 0 ? <span className="text-black"> + </span> : null}
-              <span className={colorClass}>{v}</span>
+              {renderVoucher(v, globalIdx, colorClass)}
             </React.Fragment>
           );
         })}
@@ -1229,7 +1258,7 @@ export function LinkedVouchersColored({
             return (
               <React.Fragment key={globalIdx}>
                 {j > 0 ? ", " : null}
-                <span className={colorClass}>{v}</span>
+                {renderVoucher(v, globalIdx, colorClass)}
               </React.Fragment>
             );
           })}
@@ -1248,6 +1277,8 @@ type LinkedVouchersColoredProps = {
   align?: "start" | "center" | "end";
   billWisePink?: boolean;
   wrapInline?: boolean;
+  onVoucherClick?: (voucherNo: string, e: React.MouseEvent) => void;
+  activeVoucherNo?: string | null;
 };
 
 /** Bill-wise status: pehle 2 linked voucher nos, baaki "Show more" / "Show less". */
@@ -1367,6 +1398,7 @@ export const TransactionRow = React.memo(
     onAddLink,
     onHistoryVoucher,
     onApproveVoucher,
+    onUnapproveVoucher,
     onApproveAllVisible,
     showApproveAll = false,
     onRowSelect,
@@ -1422,6 +1454,10 @@ export const TransactionRow = React.memo(
     onInterCompanyChangeDetectedClick,
     /** Enabled recurring templates se active trigger ids — switch sirf in par (dashboard jaisa). */
     activeRecurringTriggerVoucherIds = null,
+    showOpeningBalanceAmount = true,
+    onToggleOpeningBalanceAmount,
+    onStatusLinkedVoucherClick,
+    statusLinkedVoucherPreviewActive,
   }: any) => {
     const { company } = useCompany();
     const { format: fyOpeningPillFormat } = useFyOpeningPillFormat();
@@ -1559,6 +1595,7 @@ export const TransactionRow = React.memo(
       ? resolveTxnDrCrSide(debit, credit, balance) ?? (Number(balance) >= 0 ? "dr" : "cr")
       : null;
 
+
     // Blink animation: Dr/Cr/Balance numerals + Dr/Cr suffix only — not group border / full cell (see MainRow, no row-level animate).
     const activeBlinkModes = Array.isArray(blinkMode) ? blinkMode : [];
     const shouldBlinkByAll =
@@ -1628,6 +1665,52 @@ export const TransactionRow = React.memo(
       typeof formatted === "string" || typeof formatted === "number"
         ? hlForColumn(columnKey)(String(formatted))
         : formatted;
+
+    const renderFyOpeningDrCrCell = (side: "dr" | "cr") => {
+      const colKey: "debit" | "credit" = side === "dr" ? "debit" : "credit";
+      const drAmt = Number(debit) || 0;
+      const crAmt = Number(credit) || 0;
+      const amount = side === "dr" ? drAmt : crAmt;
+      if (!onToggleOpeningBalanceAmount) {
+        return amount > 0 ? renderHlDrCr(formatAmountCell(amount), colKey) : renderHlDrCr("-", colKey);
+      }
+      if (!showOpeningBalanceAmount) {
+        return side === "dr" ? (
+          <button
+            type="button"
+            className="text-xs font-medium text-primary hover:underline whitespace-nowrap"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleOpeningBalanceAmount(e);
+            }}
+          >
+            Show Amount
+          </button>
+        ) : (
+          renderHlDrCr("-", colKey)
+        );
+      }
+      if (amount > 0) return renderHlDrCr(formatAmountCell(amount), colKey);
+      const showHideToggle =
+        (side === "cr" && drAmt > 0) ||
+        (side === "dr" && crAmt > 0) ||
+        (side === "dr" && drAmt <= 0 && crAmt <= 0);
+      if (showHideToggle) {
+        return (
+          <button
+            type="button"
+            className="text-xs font-medium text-primary hover:underline whitespace-nowrap"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleOpeningBalanceAmount(e);
+            }}
+          >
+            Hide Amount
+          </button>
+        );
+      }
+      return renderHlDrCr("-", colKey);
+    };
 
     // User column — recurring BS-month = Auto; "Auto" snapshot se IC/payment flicker na ho
     const displayName = resolveLedgerTransactionUserDisplayName(transaction, userNames, {
@@ -1906,7 +1989,9 @@ export const TransactionRow = React.memo(
         )}
         {showCol("dr") && (
           <TableCell className={cn("text-right font-semibold tabular-nums text-green-700", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {isStatementChecked && statementCheckedMessageColumn(debit, credit) === "debit" ? (
+            {isFyOpeningRow ? (
+              renderFyOpeningDrCrCell("dr")
+            ) : isStatementChecked && statementCheckedMessageColumn(debit, credit) === "debit" ? (
               <StatementCheckedRowMessageLabel className="w-full" align="end" />
             ) : (
               renderHlDrCr(formatAmountCell(debit), "debit")
@@ -1915,7 +2000,9 @@ export const TransactionRow = React.memo(
         )}
         {showCol("cr") && (
           <TableCell className={cn("text-right font-semibold tabular-nums text-red-700", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {isStatementChecked && statementCheckedMessageColumn(debit, credit) === "credit" ? (
+            {isFyOpeningRow ? (
+              renderFyOpeningDrCrCell("cr")
+            ) : isStatementChecked && statementCheckedMessageColumn(debit, credit) === "credit" ? (
               <StatementCheckedRowMessageLabel className="w-full" align="end" />
             ) : (
               renderHlDrCr(formatAmountCell(credit), "credit")
@@ -1981,6 +2068,8 @@ export const TransactionRow = React.memo(
                       align="center"
                       billWisePink={isBillWise}
                       className="text-[10px] leading-tight"
+                      onVoucherClick={onStatusLinkedVoucherClick}
+                      activeVoucherNo={statusLinkedVoucherPreviewActive}
                     />
                   )}
                   {isOverdueRow && overdueDays > 0 && (
@@ -1994,6 +2083,20 @@ export const TransactionRow = React.memo(
           })()}
         {showCol("runningBalance") && !hideBalanceColumn &&
           (() => {
+            const fyOpeningSignedBalance =
+              isFyOpeningRow
+                ? useOutstandingForBalance &&
+                  typeof (transaction as any)._billWiseOpeningSigned === "number" &&
+                  Number.isFinite((transaction as any)._billWiseOpeningSigned)
+                  ? (transaction as any)._billWiseOpeningSigned
+                  : Math.abs(balance) > 1e-6
+                    ? balance
+                    : debit > 0
+                      ? debit
+                      : credit > 0
+                        ? -credit
+                        : 0
+                : null;
             const out = Number((transaction as any).outstanding) || 0;
             const hasDrAmount = (Number(debit) || 0) > 0;
             const isStaffPaymentOut = (context === "staff" || context === "group") && (transaction.type === "payment_out" || transaction.type === "direct_expense");
@@ -2005,14 +2108,21 @@ export const TransactionRow = React.memo(
             const journalOutstandingSigned = isJournalWithOutstanding ? (debit > 0 ? out : -out) : 0;
             // When useOutstandingForBalance: Dr amount → Dr balance, Cr amount → Cr balance (match amount column).
             const displayValue =
-              useOutstandingForBalance && isJournalWithOutstanding
+              fyOpeningSignedBalance != null
+                ? fyOpeningSignedBalance
+                : useOutstandingForBalance && isJournalWithOutstanding
                 ? journalOutstandingSigned
                 : useOutstandingForBalance
                 ? (isTaxContext ? (hasDrAmount ? out : -out) : (isStaffPaymentOut ? out : (hasDrAmount ? out : -out)))
                 : balance;
             // When balance/outstanding is 0 show "Settled" (running balance and bill-wise both)
-            const valueToShow = useOutstandingForBalance ? displayValue : balance;
-            const isZeroBalance = !isBalanceMasked && (typeof valueToShow === "number" && Math.abs(valueToShow) < 1e-6);
+            const valueToShow = fyOpeningSignedBalance != null ? fyOpeningSignedBalance : useOutstandingForBalance ? displayValue : balance;
+            const isZeroBalance =
+              !isBalanceMasked &&
+              !(isFyOpeningRow && !showOpeningBalanceAmount) &&
+              fyOpeningSignedBalance == null &&
+              typeof valueToShow === "number" &&
+              Math.abs(valueToShow) < 1e-6;
             return (
               <TableCell
                 className={cn(
@@ -2024,6 +2134,8 @@ export const TransactionRow = React.memo(
               >
                 {isBalanceMasked ? (
                   "*****"
+                ) : isFyOpeningRow && !showOpeningBalanceAmount ? (
+                  "-"
                 ) : isZeroBalance ? (
                   <span
                     className={cn(
@@ -2100,6 +2212,16 @@ export const TransactionRow = React.memo(
                   <DropdownMenuItem onClick={() => onApproveVoucher?.(transaction)} className="flex items-center gap-2">
                     <CheckCircle className="h-3.5 w-3.5" />
                     Approve
+                  </DropdownMenuItem>
+                )}
+              {!isFyOpeningRow &&
+                can("approve_transactions") &&
+                effectiveNotificationSettings?.approve?.on !== false &&
+                effectiveNotificationSettings?.approve?.onTransaction !== false &&
+                (transaction as any).isApproved === true && (
+                  <DropdownMenuItem onClick={() => onUnapproveVoucher?.(transaction)} className="flex items-center gap-2">
+                    <CircleOff className="h-3.5 w-3.5" />
+                    Mark as unapproved
                   </DropdownMenuItem>
                 )}
               {can("approve_transactions") &&
@@ -2458,7 +2580,13 @@ export const TransactionRow = React.memo(
                 )}
               >
                 <div className="flex flex-col items-center gap-[1px]">
-                  <LinkedVouchersColoredCollapsible vouchers={statusDetailVouchers} align="center" billWisePink={isBillWise} />
+                  <LinkedVouchersColoredCollapsible
+                    vouchers={statusDetailVouchers}
+                    align="center"
+                    billWisePink={isBillWise}
+                    onVoucherClick={onStatusLinkedVoucherClick}
+                    activeVoucherNo={statusLinkedVoucherPreviewActive}
+                  />
                   {overdueSubText ? (
                     <span className="block font-medium text-red-600">{hl(overdueSubText)}</span>
                   ) : null}

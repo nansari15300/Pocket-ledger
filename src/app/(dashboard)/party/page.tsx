@@ -1864,12 +1864,17 @@ function PartyPageContent() {
             partyOpeningBalance={processedParties?.find((p) => p.id === linkPaymentVoucher.partyId)?.openingBalance ?? 0}
             onDone={async (allocations, _amount) => {
               if (!companyId || !linkPaymentVoucher?.id) return;
-              try {
+              const { runWithVoucherLinkSaveProgress } = await import("@/lib/voucherSaveUi");
+              const result = await runWithVoucherLinkSaveProgress(async () => {
                 await applyPaymentBillWiseLinkAllocations(companyId, linkPaymentVoucher, allocations);
-                toast.success("Allocations updated.");
                 setLinkPaymentVoucher(null);
-              } catch (e: any) {
-                toast.error(e?.message || "Failed to update allocations.");
+              }, { successTitle: "Allocations updated" });
+              if (!result.ok) {
+                toast.error(
+                  result.error instanceof Error
+                    ? result.error.message
+                    : "Failed to update allocations."
+                );
               }
             }}
           />
@@ -1959,12 +1964,17 @@ function PartyPageContent() {
           partyOpeningBalance={processedParties?.find((p) => p.id === linkPaymentVoucher.partyId)?.openingBalance ?? 0}
           onDone={async (allocations, _amount) => {
             if (!companyId || !linkPaymentVoucher?.id) return;
-            try {
+            const { runWithVoucherLinkSaveProgress } = await import("@/lib/voucherSaveUi");
+            const result = await runWithVoucherLinkSaveProgress(async () => {
               await applyPaymentBillWiseLinkAllocations(companyId, linkPaymentVoucher, allocations);
-              toast.success("Allocations updated.");
               setLinkPaymentVoucher(null);
-            } catch (e: any) {
-              toast.error(e?.message || "Failed to update allocations.");
+            }, { successTitle: "Allocations updated" });
+            if (!result.ok) {
+              toast.error(
+                result.error instanceof Error
+                  ? result.error.message
+                  : "Failed to update allocations."
+              );
             }
           }}
         />

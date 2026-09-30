@@ -7,7 +7,17 @@ import { firestore } from "@/lib/firebase";
 import { apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
-import { formatVoucherNumber, normalizePrefix, parseVoucherNumberPart } from "@/lib/voucherNumberFormat";
+import {
+  formatVoucherNumber,
+  formatVoucherNumberWithFy,
+  normalizePrefix,
+  parseFySegmentFromVoucherNumber,
+  parseVoucherNumberPart,
+  parseVoucherSerial,
+} from "@/lib/voucherNumberFormat";
+import { voucherFySegmentForDate } from "@/lib/fiscalYearLabel";
+import { parseFyOpeningPillFormat, type FyOpeningPillFormat } from "@/lib/fyOpeningPillFormat";
+import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 
 export const DEFAULT_VOUCHER_PREFIX_LABELS: Record<string, string> = {
   sale: "Sale Inv",
@@ -94,11 +104,18 @@ export function voucherSerialPrefixAliases(prefixKey: string, prefix: string): s
   return [resolved];
 }
 
-function parseStandardVoucherSerial(voucherNo: string, prefixAliases: string[]): number {
+function parseStandardVoucherSerial(
+  voucherNo: string,
+  prefixAliases: string[],
+  fySegment: string | null
+): number {
   let best = NaN;
   for (const p of prefixAliases) {
     if (!voucherNo.startsWith(p) && !voucherNo.startsWith(normalizePrefix(p))) continue;
-    const parsed = parseVoucherNumberPart(voucherNo, p);
+    let parsed = fySegment ? parseVoucherSerial(voucherNo, p, fySegment) : parseVoucherNumberPart(voucherNo, p);
+    if (fySegment && !Number.isFinite(parsed) && !parseFySegmentFromVoucherNumber(voucherNo, p)) {
+      parsed = parseVoucherNumberPart(voucherNo, p);
+    }
     if (Number.isFinite(parsed) && (!Number.isFinite(best) || parsed > best)) best = parsed;
   }
   return best;
@@ -139,11 +156,22 @@ function maxSerialForPrefix(
   rows: Array<Record<string, unknown>>,
   prefix: string,
   voucherType: string | undefined,
-  prefixKey?: string
+  prefixKey?: string,
+  fySegment: string | null = null,
+  companyDoc?: Record<string, unknown> | null,
+  fyFormat?: FyOpeningPillFormat
 ): number {
   const prefixAliases = prefixKey ? voucherSerialPrefixAliases(prefixKey, prefix) : [prefix];
   let maxNo = 0;
   for (const row of rows) {
+    if (fySegment && companyDoc) {
+      const rowFy = voucherFySegmentForDate(
+        companyDoc as { country?: string; fiscalYearStart?: unknown },
+        resolveVoucherDateForFy(row.date),
+        fyFormat || "short"
+      );
+      if (rowFy !== fySegment) continue;
+    }
     const voucherCandidates =
       voucherType === "contra"
         ? [
@@ -159,11 +187,28 @@ function maxSerialForPrefix(
       const parsed =
         voucherType === "contra"
           ? parseContraVoucherSerial(voucherNo, prefix)
-          : parseStandardVoucherSerial(voucherNo, prefixAliases);
+          : parseStandardVoucherSerial(voucherNo, prefixAliases, fySegment);
       if (Number.isFinite(parsed) && parsed > maxNo) maxNo = parsed;
     }
   }
   return maxNo;
+}
+
+/** Default ON: auto voucher nos include FY span even when fiscal split is off. */
+export function autoVoucherIncludesFySegment(companyDoc: Record<string, unknown> | null | undefined): boolean {
+  return companyDoc?.autoVoucherIncludeFy !== false;
+}
+
+export function resolveVoucherNumberFyFormat(
+  companyDoc: Record<string, unknown> | null | undefined
+): FyOpeningPillFormat {
+  const raw = companyDoc?.voucherNumberFyFormat;
+  return parseFyOpeningPillFormat(raw);
+}
+
+function resolveVoucherDateForFy(raw: unknown): Date {
+  const d = parseFirestoreDateFieldToJsDate(raw);
+  return d && !isNaN(d.getTime()) ? d : new Date();
 }
 
 function dedupeVoucherRowsById(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
@@ -185,11 +230,13 @@ export type GetNextVoucherNumberParams = {
   };
   /** Form prefix dropdown se override */
   selectedPrefix?: string;
+  /** Voucher date — FY segment is derived from this (defaults to today). */
+  voucherDate?: unknown;
 };
 
 /** Local SQLite + cloud merge se agla formatted voucher number (e.g. `JRNL - 002`). */
 export async function getNextVoucherNumberForCompany(params: GetNextVoucherNumberParams): Promise<string> {
-  const { companyId, companyDoc, voucherLike, selectedPrefix } = params;
+  const { companyId, companyDoc, voucherLike, selectedPrefix, voucherDate } = params;
   const prefixKey = getVoucherPrefixKeyFromLike(voucherLike);
   const configured = (companyDoc?.voucherPrefixes as Record<string, string[] | undefined> | undefined)?.[prefixKey];
   const rawPrefix =
@@ -226,6 +273,40 @@ export async function getNextVoucherNumberForCompany(params: GetNextVoucherNumbe
     dedupeVoucherRowsById([...fsRows, ...localRows]),
     voucherLike
   );
-  const maxNo = maxSerialForPrefix(mergedRows, prefix, voucherLike.type, prefixKey);
-  return formatVoucherNumber(prefix, maxNo + 1);
+  const includeFy = autoVoucherIncludesFySegment(companyDoc);
+  const fyFormat = resolveVoucherNumberFyFormat(companyDoc);
+  const fySegment = includeFy
+    ? voucherFySegmentForDate(
+        companyDoc as { country?: string; fiscalYearStart?: unknown },
+        resolveVoucherDateForFy(voucherDate),
+        fyFormat
+      )
+    : null;
+  const maxNo = maxSerialForPrefix(
+    mergedRows,
+    prefix,
+    voucherLike.type,
+    prefixKey,
+    fySegment || null,
+    companyDoc,
+    fyFormat
+  );
+  return formatVoucherNumberWithFy(prefix, fySegment, maxNo + 1);
+}
+
+export function formatContraVoucherNumbersFromSerial(
+  companyPrefixes: Record<string, string[] | undefined> | undefined,
+  selectedPrefix: string,
+  serial: number,
+  fySegment: string | null
+): { voucherNumber: string; voucherNumberOut: string; voucherNumberIn: string } {
+  const VOUCHER_PREFIX = selectedPrefix;
+  const rawBase = Array.isArray(companyPrefixes?.contra) && companyPrefixes.contra[0]
+    ? companyPrefixes.contra[0]
+    : DEFAULT_VOUCHER_PREFIX_LABELS.contra;
+  const base = normalizePrefix(rawBase) || "CNTR";
+  const mainVal = formatVoucherNumberWithFy(VOUCHER_PREFIX, fySegment, serial);
+  const outVal = formatVoucherNumber(`${base} Out`, serial);
+  const inVal = formatVoucherNumber(`${base} In`, serial);
+  return { voucherNumber: mainVal, voucherNumberOut: outVal, voucherNumberIn: inVal };
 }

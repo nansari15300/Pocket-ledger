@@ -1,22 +1,19 @@
 import { isAdminPanelCompanyLocalId } from "@/lib/adminPanelCompany/ledgerMode";
 
-/** Bank-side subscription receipt — hide from subscriber party ledger (sale stays on party). */
+/** Mirrored subscription Payment In (`kind: subscription-receipt`) — same party as sale; must show on subscriber ledger for receivable balance. */
 export function isAdminPanelSubscriptionReceiptVoucher(v: {
   kind?: unknown;
   voucherType?: unknown;
 }): boolean {
   const kind = String(v?.kind ?? "").trim();
-  if (kind === "subscription-receipt") return true;
-  return (
-    kind === "subscription-receipt" &&
-    String(v?.voucherType ?? "").trim().toLowerCase() === "payment_in"
-  );
+  return kind === "subscription-receipt";
 }
 
+/** Admin Panel subscriber party ledger: include sale + mirrored Payment In (no bank-only hide). */
 export function filterVouchersForAdminSubscriberPartyLedger<T>(
   companyId: string | null | undefined,
   vouchers: readonly T[]
 ): T[] {
   if (!isAdminPanelCompanyLocalId(companyId)) return [...vouchers];
-  return vouchers.filter((v) => !isAdminPanelSubscriptionReceiptVoucher(v as { kind?: unknown }));
+  return [...vouchers];
 }

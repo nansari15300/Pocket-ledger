@@ -96,13 +96,14 @@ export function LoanPaymentDialog({
           companyDoc: company as unknown as Record<string, unknown>,
           voucherLike: { type: "journal", subType: "pay_emi" },
           selectedPrefix: prefix,
+          voucherDate: paymentDate,
         });
         setVoucherNumber(nextNo);
       } catch {
         /* ignore */
       }
     },
-    [companyId, company, isAutoVoucherEnabled]
+    [companyId, company, isAutoVoucherEnabled, paymentDate]
   );
 
   const autoPaySettings = useMemo(() => mergeLoanAutoPayEmiSettings(localLoan), [localLoan]);
@@ -239,6 +240,7 @@ export function LoanPaymentDialog({
               companyDoc: company as unknown as Record<string, unknown>,
               voucherLike: { type: "journal", subType: "pay_emi" },
               selectedPrefix: selectedPrefix,
+              voucherDate: draft.paymentDate,
             });
             setVoucherNumber(vn);
           } catch {

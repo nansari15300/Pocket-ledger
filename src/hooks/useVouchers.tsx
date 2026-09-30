@@ -81,6 +81,11 @@ import {
   applyLocalApprovalHoldToVoucherList,
   mergeVoucherRowKeepingLocalApproval,
 } from "@/lib/ledgerPendingApproval";
+import {
+  applyLocalBillWiseLinkHoldToRows,
+  applyLocalBillWiseLinkHoldToVoucherList,
+  voucherBillWiseAllocationsUiFingerprint,
+} from "@/lib/ledgerPendingBillWiseLinks";
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import {
@@ -429,7 +434,7 @@ function entityListUiFingerprint(rows: readonly any[]): string {
     };
     parts += `\x1f${id}\x1e${tsField(r.updatedAt)}\x1e${tsField(r.lastEditedAt)}\x1e${tsField(r.createdAt)}\x1e${tsField(r.date)}\x1e${
       r.isApproved === true ? 1 : 0
-    }\x1e${tsField(r.approvedAt)}\x1e${masterEntityProfileUiFields(r)}`;
+    }\x1e${tsField(r.approvedAt)}\x1e${masterEntityProfileUiFields(r)}\x1e${voucherBillWiseAllocationsUiFingerprint(r)}`;
     if (String(r.type || "") === "inter_company") {
       const legs = Array.isArray(r.interCompanyLegs) ? r.interCompanyLegs.length : 0;
       parts += `\x1e${legs}\x1e${r.interCompanySourceApproved === true ? 1 : 0}`;
@@ -548,10 +553,19 @@ function commitEntityListSetter<T>(setter: StateSetter<T>, next: T[]): void {
 }
 
 /** FREEZE: low-priority voucher list updates — dashboard boot freeze; see AGENTS.md. */
+function applyLocalLedgerHoldsToVoucherList(prev: any[], next: any[]): any[] {
+  const heldApprove = applyLocalApprovalHoldToVoucherList(prev as any[], next as any[]);
+  return applyLocalBillWiseLinkHoldToVoucherList(prev as any[], heldApprove as any[]) as any[];
+}
+
+function applyLocalLedgerHoldsToRows(rows: any[]): any[] {
+  return applyLocalBillWiseLinkHoldToRows(applyLocalApprovalHoldToRows(rows as any[]) as any[]) as any[];
+}
+
 function commitVouchersSetter(setter: StateSetter<any>, next: any[]): void {
   startTransition(() => {
     setter((prev) => {
-      const held = applyLocalApprovalHoldToVoucherList(prev as any[], next as any[]);
+      const held = applyLocalLedgerHoldsToVoucherList(prev as any[], next as any[]);
       const preserved = preserveClearedAttachmentsInList(
         prev as any[],
         held as any[],
@@ -562,6 +576,11 @@ function commitVouchersSetter(setter: StateSetter<any>, next: any[]): void {
         : preserved;
     });
   });
+}
+
+function commitCollectionListSetter(path: string, setter: StateSetter<any>, next: any[]): void {
+  if (path === "vouchers") commitVouchersSetter(setter, next);
+  else commitEntityListSetter(setter, next);
 }
 
 function mergeEntityListsByIdOrKeepPrev(prev: any[], cached: any[], orderByField?: string): any[] {
@@ -1040,7 +1059,7 @@ export const VoucherProvider = ({
   const vouchersForDisplay = useMemo(() => {
     // Defensive guard: agar stale source se deleted voucher aa bhi gaya, view layer se hata do.
     // Approve All hold: stale reload row ko unapproved dikhaye to bhi pink wapas na aaye.
-    const activeVouchers = applyLocalApprovalHoldToRows((vouchers || []).filter(isAliveDoc));
+    const activeVouchers = applyLocalLedgerHoldsToRows((vouchers || []).filter(isAliveDoc));
     const applyTargetIcVisibility = <T extends { type?: string }>(list: T[]): T[] =>
       list.filter((v) => {
         if (String(v?.type || "") !== "inter_company") return true;
@@ -1642,11 +1661,11 @@ export const VoucherProvider = ({
         if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return prev;
         const prevAlive = (prev as any[]).filter(isAliveDoc);
         if (!prevAlive.length || !hasWarmLedgerDataRef.current) {
-          return applyLocalApprovalHoldToVoucherList(prevAlive, next as any[]) as any;
+          return applyLocalLedgerHoldsToVoucherList(prevAlive, next as any[]) as any;
         }
         const merged = mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any[];
         // Warm sqlite/lite projection `isApproved` drop karta tha — party approve ke baad bank/staff pink reh jata.
-        return applyLocalApprovalHoldToVoucherList(prevAlive, merged) as any;
+        return applyLocalLedgerHoldsToVoucherList(prevAlive, merged) as any;
       });
       if (collectionPath && !cancelled && loadEpoch === companyDataLoadEpochRef.current) {
         warmSqliteCollectionPathsRef.current.add(collectionPath);
@@ -1831,7 +1850,8 @@ export const VoucherProvider = ({
                     orderByField
                   );
                   if (cancelled || !remoteData.length) return;
-                  commitEntityListSetter(
+                  commitCollectionListSetter(
+                    path,
                     setter,
                     sqliteCachedRowsForSetter(remoteData, orderByField) as any[]
                   );
@@ -1893,7 +1913,8 @@ export const VoucherProvider = ({
                   );
                   if (!remoteData.length) return;
                   if (!cancelled) {
-                    commitEntityListSetter(
+                    commitCollectionListSetter(
+                      path,
                       setter,
                       sqliteCachedRowsForSetter(remoteData, orderByField) as any[]
                     );
@@ -2009,9 +2030,9 @@ export const VoucherProvider = ({
                 try {
                   const cached = await listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true });
                   const alive = (cached as any[]).filter((x) => x?.isDeleted !== true);
-                  commitEntityListSetter(setter, sqliteCachedRowsForSetter(alive, orderByField));
+                  commitCollectionListSetter(path, setter, sqliteCachedRowsForSetter(alive, orderByField));
                 } catch {
-                  commitEntityListSetter(setter, rowsForSetter);
+                  commitCollectionListSetter(path, setter, rowsForSetter);
                 }
               };
               if (embeddedClientPrefersQuietBackgroundSync()) {
@@ -2025,7 +2046,7 @@ export const VoucherProvider = ({
               }
             } else {
               // Snapshot = puri subcollection (Recent / dashboard dono ke liye sahi totals) — web hybrid default.
-              commitEntityListSetter(setter, rowsForSetter);
+              commitCollectionListSetter(path, setter, rowsForSetter);
               if (persistSqliteFromSnap) {
                 const debounceKey = `${companyId}::${path}`;
                 clearTimeout(mirrorSnapshotTimersRef.current[debounceKey]);
@@ -2301,11 +2322,11 @@ export const VoucherProvider = ({
         if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return prev;
         const prevAlive = (prev as any[]).filter(isAliveDoc);
         if (!prevAlive.length || !hasWarmLedgerDataRef.current) {
-          return applyLocalApprovalHoldToVoucherList(prevAlive, next as any[]) as any;
+          return applyLocalLedgerHoldsToVoucherList(prevAlive, next as any[]) as any;
         }
         const merged = mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any[];
         // Warm sqlite/lite projection `isApproved` drop karta tha — party approve ke baad bank/staff pink reh jata.
-        return applyLocalApprovalHoldToVoucherList(prevAlive, merged) as any;
+        return applyLocalLedgerHoldsToVoucherList(prevAlive, merged) as any;
       });
       if (collectionPath && !cancelled && loadEpoch === companyDataLoadEpochRef.current) {
         warmSqliteCollectionPathsRef.current.add(collectionPath);
@@ -2430,11 +2451,11 @@ export const VoucherProvider = ({
         if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return prev;
         const prevAlive = (prev as any[]).filter(isAliveDoc);
         if (!prevAlive.length || !hasWarmLedgerDataRef.current) {
-          return applyLocalApprovalHoldToVoucherList(prevAlive, next as any[]) as any;
+          return applyLocalLedgerHoldsToVoucherList(prevAlive, next as any[]) as any;
         }
         const merged = mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any[];
         // Warm sqlite/lite projection `isApproved` drop karta tha — party approve ke baad bank/staff pink reh jata.
-        return applyLocalApprovalHoldToVoucherList(prevAlive, merged) as any;
+        return applyLocalLedgerHoldsToVoucherList(prevAlive, merged) as any;
       });
       if (collectionPath && !cancelled && loadEpoch === companyDataLoadEpochRef.current) {
         warmSqliteCollectionPathsRef.current.add(collectionPath);
@@ -3649,7 +3670,7 @@ export const VoucherProvider = ({
     const currentData = {
         vouchers: vouchersForDisplay,
         // `vouchersAll` bhi alive-only rakho; reports/status logic me deleted voucher leak na ho.
-        vouchersAll: applyLocalApprovalHoldToRows(vouchers.filter(isAliveDoc)),
+        vouchersAll: applyLocalLedgerHoldsToRows(vouchers.filter(isAliveDoc)),
         loading,
         processedParties, 
         processedPartiesForSelection, 

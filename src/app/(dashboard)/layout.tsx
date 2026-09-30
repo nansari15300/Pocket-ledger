@@ -33,6 +33,7 @@ import {
   type EdgeSwipeDocumentOptions,
 } from "@/hooks/useMobileEdgeSwipe";
 import { AlarmPopup } from "@/components/messages/AlarmPopup";
+import { RpOutstandingDialogProvider } from "@/contexts/RpOutstandingDialogContext";
 import { DeviceLimitProvider, useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
 import { DEFAULT_PLANS, type PlanId } from "@/config/plans";
@@ -917,6 +918,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
          <>
             <GlobalLeftEdgeOpenAppMenuSwipe />
             <AlarmPopup />
+            <RpOutstandingDialogProvider>
             {/* Month-end recurring vouchers: app-open trigger runner (company settings + user scope aware). */}
             <RecurringVoucherAutoRunner />
             <PendingAttachmentSyncBridge />
@@ -986,6 +988,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
               </ReportPartyViewProvider>
               </SettingsListProvider>
             </ReportListProvider>
+            </RpOutstandingDialogProvider>
         </>
     )
 }

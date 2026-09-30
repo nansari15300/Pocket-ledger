@@ -28,6 +28,7 @@ import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronEnvironment } from "@/hooks/use-mobile";
 import { clearEmbeddedSessionUnlock } from "@/lib/embeddedDeviceLock";
 import { writeAccountPlanLocalCache } from "@/lib/accountPlanLocalCache";
+import { applyAccountCanonicalPlanToAllLocalCompanies } from "@/lib/applyAccountCanonicalPlanToLocalCompanies";
 import { writeCurrentAppAccountIdentity } from "@/lib/appAccountIdentity";
 import { clearSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 
@@ -286,12 +287,23 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
             const u = snap.data() as Record<string, unknown>;
             const planId = typeof u.accountCanonicalPlanId === "string" ? u.accountCanonicalPlanId : "";
             if (!planId.trim()) return;
+            const planExpiryMs =
+              typeof u.accountCanonicalPlanExpiryMs === "number" && Number.isFinite(u.accountCanonicalPlanExpiryMs)
+                ? u.accountCanonicalPlanExpiryMs
+                : null;
             writeAccountPlanLocalCache(firebaseUser.uid, {
               planId,
-              planExpiryMs:
-                typeof u.accountCanonicalPlanExpiryMs === "number" && Number.isFinite(u.accountCanonicalPlanExpiryMs)
-                  ? u.accountCanonicalPlanExpiryMs
+              planExpiryMs,
+              stripeCustomerId:
+                typeof u.accountCanonicalStripeCustomerId === "string" ? u.accountCanonicalStripeCustomerId : null,
+              stripeSubscriptionId:
+                typeof u.accountCanonicalStripeSubscriptionId === "string"
+                  ? u.accountCanonicalStripeSubscriptionId
                   : null,
+            });
+            void applyAccountCanonicalPlanToAllLocalCompanies(firebaseUser.uid, {
+              planId,
+              planExpiryMs,
               stripeCustomerId:
                 typeof u.accountCanonicalStripeCustomerId === "string" ? u.accountCanonicalStripeCustomerId : null,
               stripeSubscriptionId:
@@ -524,6 +536,12 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
 
             if (newCustomUser.accountCanonicalPlanId) {
               writeAccountPlanLocalCache(firebaseUser.uid, {
+                planId: newCustomUser.accountCanonicalPlanId,
+                planExpiryMs: newCustomUser.accountCanonicalPlanExpiryMs,
+                stripeCustomerId: newCustomUser.accountCanonicalStripeCustomerId,
+                stripeSubscriptionId: newCustomUser.accountCanonicalStripeSubscriptionId,
+              });
+              void applyAccountCanonicalPlanToAllLocalCompanies(firebaseUser.uid, {
                 planId: newCustomUser.accountCanonicalPlanId,
                 planExpiryMs: newCustomUser.accountCanonicalPlanExpiryMs,
                 stripeCustomerId: newCustomUser.accountCanonicalStripeCustomerId,

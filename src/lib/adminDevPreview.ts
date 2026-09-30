@@ -48,8 +48,9 @@ function isAdminPanelExcludedFromRetailBuild(isStaticAppBundle: boolean): boolea
   return isElectronPackagedShell();
 }
 
+/** Sidebar / chrome: Admin Panel link — SuperAdmin email/role only (dev server included; no open preview). */
 export function isAdminPanelNavVisible(isSuperAdminUser: boolean, isStaticAppBundle: boolean): boolean {
-  if (isAdminPanelDevPreview()) return true;
+  if (!isSuperAdminUser) return false;
   if (isAdminPanelExcludedFromRetailBuild(isStaticAppBundle)) return false;
-  return isSuperAdminUser;
+  return true;
 }

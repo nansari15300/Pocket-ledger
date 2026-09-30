@@ -5,8 +5,10 @@ import { useCallback, useMemo, useState } from "react";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
 import { useDate } from "@/hooks/useDate";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, X } from "lucide-react";
+import { CheckCircle2, ChevronDown, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import BsDatePicker from "@/components/ui/BsDatePicker";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { MasterListRow } from "@/components/ui/master-list-row";
@@ -17,8 +19,12 @@ import {
   useMasterListRowMotion,
 } from "@/hooks/useMasterListRowMotion";
 import { GROUP_LIST_CHILD_INDENT_CLASS } from "@/lib/groupListExpand";
-import type { RpDialogRow, RpDialogSection, RpEntityKind } from "@/lib/receivablesPayablesDialogUi";
-import { rpDialogRowSelectionKey } from "@/lib/receivablesPayablesDialogUi";
+import type { RpDeadlinesMap, RpDialogRow, RpDialogSection, RpEntityKind } from "@/lib/receivablesPayablesDialogUi";
+import {
+  formatRpDeadlineYmd,
+  parseRpDeadlineYmd,
+  rpDialogRowSelectionKey,
+} from "@/lib/receivablesPayablesDialogUi";
 import { DIALOG_DIM_GREEN_BORDER } from "@/lib/dialogShellChrome";
 import { chromeProPillCn, chromeProPillTextCn } from "@/lib/chromePillButton";
 
@@ -49,6 +55,21 @@ export function rpDialogListScrollHandlers(motion: RpDialogListMotion) {
     onScroll: motion.markListScrolling,
     onTouchMove: motion.markListScrolling,
   } as const;
+}
+
+/** Outstanding dialog: portal popover / calendar par click se poora dialog band na ho. */
+export function rpDialogPreventDismissForNestedPopover(e: {
+  target: EventTarget | null;
+  preventDefault: () => void;
+}) {
+  const target = e.target as HTMLElement | null;
+  if (
+    target?.closest("[data-radix-popover-content]") ||
+    target?.closest("[data-radix-popper-content-wrapper]") ||
+    target?.closest("[data-pl-rp-deadline-btn]")
+  ) {
+    e.preventDefault();
+  }
 }
 
 function normalizeRpAmountQuery(q: string): string {
@@ -222,7 +243,94 @@ type ReceivablesPayablesDialogEntityListProps = {
   selectedKey?: string | null;
   onSelectRow?: (side: "receivables" | "payables", row: RpDialogRow) => void;
   onOpenRow?: (side: "receivables" | "payables", row: RpDialogRow) => void;
+  deadlines?: RpDeadlinesMap;
+  onDeadlineChange?: (side: "receivables" | "payables", row: RpDialogRow, ymd: string | null) => void;
+  showDeadlineControls?: boolean;
 };
+
+function RpRowDeadlineControl({
+  side,
+  row,
+  deadlines,
+  onDeadlineChange,
+}: {
+  side: "receivables" | "payables";
+  row: RpDialogRow;
+  deadlines?: RpDeadlinesMap;
+  onDeadlineChange?: (side: "receivables" | "payables", row: RpDialogRow, ymd: string | null) => void;
+}) {
+  const { formatDateBySystem } = useDate();
+  const [open, setOpen] = useState(false);
+  const rowKey = rpDialogRowSelectionKey(side, row);
+  const storedYmd = deadlines?.[rowKey];
+  const deadlineDate = storedYmd ? parseRpDeadlineYmd(storedYmd) : null;
+  const hoverTitle = deadlineDate ? `Deadline: ${formatDateBySystem(deadlineDate)}` : "Set collection deadline";
+
+  if (!onDeadlineChange) return null;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen} modal>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-pl-rp-deadline-btn=""
+          aria-label={hoverTitle}
+          title={hoverTitle}
+          className="inline-flex h-5 w-7 shrink-0 items-center justify-center self-center rounded p-0 text-foreground touch-manipulation hover:bg-muted/60"
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
+          {deadlineDate ? (
+            <CheckCircle2
+              className="h-[17px] w-[17px] text-green-600 dark:text-green-500"
+              strokeWidth={2.5}
+              aria-hidden
+            />
+          ) : (
+            <Plus className="h-[17px] w-[17px]" strokeWidth={3} aria-hidden />
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="z-[110] w-auto p-2"
+        align="end"
+        side="bottom"
+        collisionPadding={12}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="mb-2 text-xs font-medium text-muted-foreground">Collection deadline</p>
+        <BsDatePicker
+          valueAD={deadlineDate ?? undefined}
+          onChangeAD={(d) => {
+            if (!d) return;
+            d.setHours(12, 0, 0, 0);
+            onDeadlineChange(side, row, formatRpDeadlineYmd(d));
+            setOpen(false);
+          }}
+          isRange={false}
+          className="h-9 text-xs w-full min-w-[220px]"
+          popoverContentClassName="z-[120]"
+        />
+        {deadlineDate ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="mt-2 h-8 w-full text-xs"
+            onClick={() => {
+              onDeadlineChange(side, row, null);
+              setOpen(false);
+            }}
+          >
+            Clear deadline
+          </Button>
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 const icCompanyRowProps = { "data-pl-ic-company-row": "" } as const;
 
@@ -241,6 +349,9 @@ function RpDialogEntityRow({
   onOpen,
   highlightQuery = "",
   formatAmountText,
+  deadlines,
+  onDeadlineChange,
+  showDeadlineControls,
 }: {
   row: RpDialogRow;
   side: "receivables" | "payables";
@@ -257,6 +368,9 @@ function RpDialogEntityRow({
   onSelect?: () => void;
   onOpen?: () => void;
   highlightQuery?: string;
+  deadlines?: RpDeadlinesMap;
+  onDeadlineChange?: (side: "receivables" | "payables", row: RpDialogRow, ymd: string | null) => void;
+  showDeadlineControls?: boolean;
 }) {
   const amountText = formatAmountText(row.balance);
   const amountDisplay = highlightQuery
@@ -270,7 +384,10 @@ function RpDialogEntityRow({
     >
       <MasterListRow
         selected={selected}
-        className={cn(masterListRowUnselectedCn(selected), "cursor-pointer select-none")}
+        className={cn(
+          masterListRowUnselectedCn(selected),
+          "cursor-pointer select-none !border-[1px]"
+        )}
         {...(icAccountRow ? icCompanyRowProps : {})}
         onClick={onSelect}
         onDoubleClick={onOpen}
@@ -286,12 +403,22 @@ function RpDialogEntityRow({
               </p>
             ) : null}
           </div>
-          <p
-            data-pl-list-balance={side === "receivables" ? "dr" : "cr"}
-            className={cn("pl-master-list-row-amount", amountClass)}
-          >
-            {amountDisplay}
-          </p>
+          <div className="flex shrink-0 items-center gap-0.5">
+            {showDeadlineControls ? (
+              <RpRowDeadlineControl
+                side={side}
+                row={row}
+                deadlines={deadlines}
+                onDeadlineChange={onDeadlineChange}
+              />
+            ) : null}
+            <p
+              data-pl-list-balance={side === "receivables" ? "dr" : "cr"}
+              className={cn("pl-master-list-row-amount", amountClass)}
+            >
+              {amountDisplay}
+            </p>
+          </div>
         </div>
       </MasterListRow>
     </motion.li>
@@ -355,7 +482,10 @@ function RpIcCompanyHeaderRow({
   return (
     <MasterListRow
       selected={selected}
-      className={cn(masterListRowUnselectedCn(selected), "cursor-pointer select-none")}
+      className={cn(
+        masterListRowUnselectedCn(selected),
+        "cursor-pointer select-none !border-[1px]"
+      )}
       {...icCompanyRowProps}
       onClick={onSelect}
       onDoubleClick={(e) => {
@@ -408,6 +538,9 @@ function RpIcCompanyGroupRow({
   onOpenRow,
   highlightQuery = "",
   formatAmountText,
+  deadlines,
+  onDeadlineChange,
+  showDeadlineControls,
 }: {
   row: RpDialogRow;
   side: "receivables" | "payables";
@@ -424,6 +557,9 @@ function RpIcCompanyGroupRow({
   onSelectRow?: (side: "receivables" | "payables", row: RpDialogRow) => void;
   onOpenRow?: (side: "receivables" | "payables", row: RpDialogRow) => void;
   highlightQuery?: string;
+  deadlines?: RpDeadlinesMap;
+  onDeadlineChange?: (side: "receivables" | "payables", row: RpDialogRow, ymd: string | null) => void;
+  showDeadlineControls?: boolean;
 }) {
   const children = row.icChildren ?? [];
   const childOrderKey = useMemo(
@@ -473,6 +609,9 @@ function RpIcCompanyGroupRow({
                     onSelect={() => onSelectRow?.(side, child)}
                     onOpen={() => onOpenRow?.(side, child)}
                     highlightQuery={highlightQuery}
+                    deadlines={deadlines}
+                    onDeadlineChange={onDeadlineChange}
+                    showDeadlineControls={showDeadlineControls}
                   />
                 );
               })}
@@ -496,6 +635,9 @@ export function ReceivablesPayablesDialogEntityList({
   selectedKey,
   onSelectRow,
   onOpenRow,
+  deadlines,
+  onDeadlineChange,
+  showDeadlineControls = true,
 }: ReceivablesPayablesDialogEntityListProps) {
   const internalMotion = useMasterListRowMotion();
   const listMotion = listMotionProp ?? internalMotion;
@@ -572,11 +714,11 @@ export function ReceivablesPayablesDialogEntityList({
     return expandedSectionKinds.has(kind);
   };
 
-  const mobileSearchSectionKind = useMemo((): RpEntityKind | null => {
-    if (!isMobile) return null;
+  /** Party (ya pehli section) ribbon ke saath search — mobile + desktop same row. */
+  const ribbonInlineSearchSectionKind = useMemo((): RpEntityKind | null => {
     if (filteredSections.some((s) => s.kind === "party")) return "party";
     return filteredSections[0]?.kind ?? null;
-  }, [filteredSections, isMobile]);
+  }, [filteredSections]);
 
   const renderListSearch = (compact: boolean) => (
     <div
@@ -625,13 +767,10 @@ export function ReceivablesPayablesDialogEntityList({
       data-theme-list="account-list"
       className="min-w-0 space-y-0 px-0 pb-1"
     >
-      {!isMobile ? (
-        <div className="relative min-w-0">{renderListSearch(false)}</div>
-      ) : null}
       {filteredSections.map((section, sectionIndex) => {
         if (section.rows.length === 0) return null;
         const sectionExpanded = isSectionExpanded(section.kind, section.rows.length > 0);
-        const showMobileSearch = isMobile && mobileSearchSectionKind === section.kind;
+        const showRibbonInlineSearch = ribbonInlineSearchSectionKind === section.kind;
         const ribbonToggle = (
           <button
             type="button"
@@ -664,7 +803,7 @@ export function ReceivablesPayablesDialogEntityList({
                 aria-hidden
               />
             ) : null}
-            {showMobileSearch ? (
+            {showRibbonInlineSearch ? (
               <div className="mb-0 grid min-w-0 grid-cols-2 gap-[3px]">
                 <div data-pl-rp-category-header="" className={cn(RP_CATEGORY_RIBBON_BAR_CN, "mb-0 min-w-0 w-full")}>
                   {ribbonToggle}
@@ -705,6 +844,9 @@ export function ReceivablesPayablesDialogEntityList({
                         onOpenRow={onOpenRow}
                         highlightQuery={highlightQuery}
                         formatAmountText={formatAmountText}
+                        deadlines={deadlines}
+                        onDeadlineChange={onDeadlineChange}
+                        showDeadlineControls={showDeadlineControls}
                       />
                     );
                   }
@@ -723,6 +865,9 @@ export function ReceivablesPayablesDialogEntityList({
                       onSelect={() => onSelectRow?.(side, row)}
                       onOpen={() => onOpenRow?.(side, row)}
                       highlightQuery={highlightQuery}
+                      deadlines={deadlines}
+                      onDeadlineChange={onDeadlineChange}
+                      showDeadlineControls={showDeadlineControls}
                     />
                   );
                 })}

@@ -82,6 +82,15 @@ import usePermissions from "@/hooks/usePermissions";
 import { openPrintDirect } from "@/lib/printDirect";
 import { toast } from "sonner";
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
+import {
+  buildFiscalMergePartitionEntriesFromCompany,
+  insertFiscalPartitionRowsMulti,
+  FISCAL_YEAR_PARTITION_ROW_TYPE,
+} from "@/lib/fiscalPartitionRows";
+import {
+  buildFiscalMergePartitionBannerLabelForDateSystem,
+  parseFiscalPartitionBoundaryMs,
+} from "@/lib/fiscalYearLabel";
 
 export type OverdueColumnKey = "date" | "type" | "voucherNo" | "party" | "user" | "file" | "debit" | "credit" | "status" | "netBalance";
 const OVERDUE_COLUMN_LABELS: Record<OverdueColumnKey, string> = {
@@ -379,20 +388,35 @@ export function OverdueAccountView({
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
-  const sortedRows = useMemo(
-    () => sortTransactionsWithFiscalMergeForCompany(filteredRows, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
-    [filteredRows, company]
+  const fiscalMergePartitions = useMemo(
+    () => buildFiscalMergePartitionEntriesFromCompany(company),
+    [company?.fiscalSplitMode, company?.fiscalMergePartitionAt, company?.fiscalMergePartitionAtIsos, company?.fiscalPartitionLabel, company?.country, company?.fiscalYearStart]
   );
+  const sortedRows = useMemo(
+    () => sortTransactionsWithFiscalMergeForCompany(filteredRows, sortBy, sortOrder, undefined, company),
+    [filteredRows, sortBy, sortOrder, company]
+  );
+  const overdueTableColSpan = useMemo(() => {
+    let span = 1;
+    (Object.keys(visibleColumns) as OverdueColumnKey[]).forEach((key) => {
+      if (visibleColumns[key]) span += 1;
+    });
+    return span;
+  }, [visibleColumns]);
 
   // Tail paging — page 1 = latest overdue (Party ledger / global footer jaisa)
   const overduePaging = useMemo(() => {
     const total = sortedRows.length;
     const totalPagesLocal = rowsPerPage > 0 ? Math.max(1, Math.ceil(total / rowsPerPage)) : 1;
     const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const withFyDividersOnPage = (slice: OverdueTransactionRow[]) => {
+      if (!fiscalMergePartitions.length) return slice;
+      return insertFiscalPartitionRowsMulti(slice as any[], fiscalMergePartitions) as OverdueTransactionRow[];
+    };
     if (rowsPerPage <= 0) {
       return {
         totalPages: 1,
-        pageRows: sortTransactionsWithFiscalMergeForCompany(sortedRows, sortBy, sortOrder, undefined, company),
+        pageRows: withFyDividersOnPage(sortedRows),
         beforeCount: 0,
         afterCount: 0,
       };
@@ -402,11 +426,11 @@ export function OverdueAccountView({
     const pageSlice = sortedRows.slice(start, end);
     return {
       totalPages: totalPagesLocal,
-      pageRows: sortTransactionsWithFiscalMergeForCompany(pageSlice, sortBy, sortOrder, undefined, company),
+      pageRows: withFyDividersOnPage(pageSlice),
       beforeCount: start,
       afterCount: Math.max(0, total - end),
     };
-  }, [sortedRows, currentPage, rowsPerPage, sortBy, sortOrder, company]);
+  }, [sortedRows, currentPage, rowsPerPage, fiscalMergePartitions]);
 
   const totalPages = overduePaging.totalPages;
   const paginatedRows = overduePaging.pageRows;
@@ -829,6 +853,35 @@ export function OverdueAccountView({
             <TableBody>
               <AnimatePresence>
               {paginatedRows.map((t, rowIndex) => {
+                if ((t as any).type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
+                  const boundaryMs = parseFiscalPartitionBoundaryMs(t as { id?: string });
+                  const partitionDate = boundaryMs != null ? new Date(boundaryMs) : null;
+                  const label =
+                    partitionDate && !Number.isNaN(partitionDate.getTime())
+                      ? buildFiscalMergePartitionBannerLabelForDateSystem(
+                          company,
+                          partitionDate,
+                          dateSystem,
+                          formatDate,
+                          company?.fiscalPartitionLabel ?? null
+                        )
+                      : typeof (t as any)._partitionLabel === "string" && (t as any)._partitionLabel
+                        ? (t as any)._partitionLabel
+                        : "── Closing fiscal period · New fiscal period ──";
+                  return (
+                    <TableRow
+                      key={(t as any).id || `fy-partition-${rowIndex}`}
+                      className="cursor-default border-y-2 border-blue-600/55 bg-blue-50/90 hover:!bg-blue-50/90 dark:bg-blue-950/45 dark:hover:!bg-blue-950/45"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <TableCell colSpan={overdueTableColSpan} className="py-2.5 px-3 text-center align-middle">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-blue-900 dark:text-blue-100">
+                          {label}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  );
+                }
                 const d = safeToDate(t.date);
                 const dateStr = d ? (dateSystem === "BS" ? formatDateBS(d) : formatDate(d)) : "—";
                 const entryClock = formatVoucherEntryTimeLocal(t as unknown as Record<string, unknown>);

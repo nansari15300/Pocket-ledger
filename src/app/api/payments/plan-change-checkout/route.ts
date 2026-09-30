@@ -94,6 +94,8 @@ type Body = {
   /** Defaults to stripe; Khalti/eSewa use pending_plan_changes + `/api/payments/complete-plan-change-*`. */
   gateway?: ProrationGateway;
   billingRegion?: BillingRegionId;
+  /** Full term price; purchased days stack on current plan end (no unused-time credit). */
+  stackOnExpiry?: boolean;
 };
 
 function normalizeProrationGateway(raw: unknown): ProrationGateway {
@@ -247,6 +249,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Paid term renew/upgrade: always stack full list price on current end date.
+    // Do not trust client `stackOnExpiry` alone — missing flag used to apply unused-time credit
+    // and silently zero-net (no Stripe, no Admin Panel payment) when balance ≫ term price.
+    const stackOnExpiry = term !== "plan_change_only";
     const quote = quotePaidPlanPurchase({
       nowMs,
       currentExpiryMs,
@@ -254,6 +260,7 @@ export async function POST(req: NextRequest) {
       targetMonthly: tgtPrices.monthly,
       targetYearly: tgtPrices.yearly,
       term,
+      subtractUnusedCredit: stackOnExpiry ? false : true,
     });
 
     const previousDaysLeft = daysLeftRounded(nowMs, currentExpiryMs);
@@ -273,8 +280,19 @@ export async function POST(req: NextRequest) {
       changeKind,
     };
 
-    // Zero net must run before alternate gateways (no Khalti/eSewa session for NPR 0).
+    // Zero net: only “Just change plan” (tier remap, charge 0). Paid term must open gateway.
     if (quote.netNpr <= 0) {
+      if (stackOnExpiry) {
+        return NextResponse.json(
+          {
+            error:
+              quote.grossNpr <= 0
+                ? "Plan price is missing or zero — cannot start checkout. Check Admin → Plans pricing."
+                : "Term purchase must be charged (stack on expiry). Refresh billing and try again.",
+          },
+          { status: 400 }
+        );
+      }
       const paymentDocId = `plan_change_${uuidv4()}`;
       const paymentRef = companyRef.collection("payments").doc(paymentDocId);
       const batch = db.batch();

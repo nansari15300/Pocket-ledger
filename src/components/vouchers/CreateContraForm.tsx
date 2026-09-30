@@ -52,11 +52,10 @@ import {
 import { applyVoucherAttachmentsAfterFormSave, finalizeVoucherAttachmentsAfterFormSave, uploadVoucherAttachmentFileToFirebase, voucherAttachmentFieldsForSave, voucherAttachmentLockSaveOpts} from "@/lib/voucherFormAttachmentSave";
 import { toast as sonnerToast } from "sonner";
 import {
-  completeVoucherBackgroundProgress,
   replaceVoucherSaveLoadingWithShortSuccess,
-  showVoucherBackgroundProgress,
   beginVoucherSaveLoadingOrBlock,
   voucherSaveErrorToast,
+  runWithVoucherLinkSaveProgress,
 } from "@/lib/voucherSaveUi";
 import BsDatePicker from "../ui/BsDatePicker";
 import { Combobox } from "@/components/ui/combobox";
@@ -79,8 +78,18 @@ import {
   voucherRecycleBinDeletedAt,
   updateVoucherSpendWiseLinks,
 } from "@/lib/voucherActionsClient";
-import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
-import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
+import {
+  formatVoucherNumber,
+  normalizePrefix,
+  parseFySegmentFromVoucherNumber,
+  parseVoucherNumberPart,
+  parseVoucherSerial,
+} from "@/lib/voucherNumberFormat";
+import {
+  formatContraVoucherNumbersFromSerial,
+  getNextVoucherNumberForCompany,
+} from "@/lib/nextVoucherNumber";
+import { syncAutoVoucherNumberToDate } from "@/lib/syncAutoVoucherNumberToDate";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 /** Copy chip → From vs To source account alag — sirf types (runtime circular avoid). */
 import type { CopyMissingMasterOpts, CopyMasterDraftRequestPayload } from "@/components/vouchers/AddVoucherDialog";
@@ -786,7 +795,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (!companyId || !company || !isAutoVoucherEnabled) return;
     const prefixes = company?.voucherPrefixes?.contra || [getVoucherPrefix(company.voucherPrefixes as Record<string, string[]> | undefined)];
     const VOUCHER_PREFIX = selectedPrefix || prefixes[0];
-    const base = getContraBasePrefix(company.voucherPrefixes as Record<string, string[]> | undefined);
 
     try {
       const nextNo = await getNextVoucherNumberForCompany({
@@ -794,14 +802,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         companyDoc: company as Record<string, unknown>,
         voucherLike: { type: "contra" },
         selectedPrefix,
+        voucherDate: form.getValues("date"),
       });
+      const fySeg = parseFySegmentFromVoucherNumber(nextNo, VOUCHER_PREFIX);
       const parsed =
+        parseVoucherSerial(nextNo, VOUCHER_PREFIX, fySeg) ||
         parseVoucherNumberPart(nextNo, VOUCHER_PREFIX) ||
         parseVoucherNumberPart(nextNo, normalizePrefix(VOUCHER_PREFIX));
       const nextNum = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-      const mainVal = formatVoucherNumber(VOUCHER_PREFIX, nextNum);
-      const outVal = formatVoucherNumber(`${base} Out`, nextNum);
-      const inVal = formatVoucherNumber(`${base} In`, nextNum);
+      const { voucherNumber: mainVal, voucherNumberOut: outVal, voucherNumberIn: inVal } =
+        formatContraVoucherNumbersFromSerial(
+          company.voucherPrefixes as Record<string, string[] | undefined>,
+          VOUCHER_PREFIX,
+          nextNum,
+          fySeg
+        );
       if (!opts?.force) {
         const cur = form.getValues();
         if (cur.voucherNumberOut === outVal && cur.voucherNumberIn === inVal) return;
@@ -904,6 +919,57 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     autoVoucherNumberFetchKeyRef.current = null;
     void fetchVoucherNumber(undefined, { force: true });
   }, [copySaveTargetCompanyId, voucher?.id, fetchVoucherNumber, isAutoVoucherEnabled]);
+
+  const watchedContraDate = form.watch("date");
+  useEffect(() => {
+    if (!companyId || !company || !isAutoVoucherEnabled) return;
+    if (savedVoucherId && !isEditingAndConverting) {
+      const prefixes =
+        company?.voucherPrefixes?.contra ||
+        [getVoucherPrefix(company.voucherPrefixes as Record<string, string[]> | undefined)];
+      const VOUCHER_PREFIX = prefixes[0];
+      const main = syncAutoVoucherNumberToDate({
+        companyDoc: company as Record<string, unknown>,
+        prefix: VOUCHER_PREFIX,
+        currentVoucherNumber: String(form.getValues("voucherNumber") || ""),
+        voucherDate: watchedContraDate,
+      });
+      const fySeg = parseFySegmentFromVoucherNumber(main, VOUCHER_PREFIX);
+      const parsed =
+        parseVoucherSerial(main, VOUCHER_PREFIX, fySeg) ||
+        parseVoucherNumberPart(main, VOUCHER_PREFIX) ||
+        parseVoucherNumberPart(main, normalizePrefix(VOUCHER_PREFIX));
+      const nextNum = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+      const nums = formatContraVoucherNumbersFromSerial(
+        company.voucherPrefixes as Record<string, string[] | undefined>,
+        VOUCHER_PREFIX,
+        nextNum,
+        fySeg
+      );
+      const cur = form.getValues();
+      if (
+        cur.voucherNumber === nums.voucherNumber &&
+        cur.voucherNumberOut === nums.voucherNumberOut &&
+        cur.voucherNumberIn === nums.voucherNumberIn
+      ) {
+        return;
+      }
+      form.setValue("voucherNumber", nums.voucherNumber, { shouldDirty: true });
+      form.setValue("voucherNumberOut", nums.voucherNumberOut, { shouldDirty: true });
+      form.setValue("voucherNumberIn", nums.voucherNumberIn, { shouldDirty: true });
+      return;
+    }
+    void fetchVoucherNumber();
+  }, [
+    watchedContraDate,
+    companyId,
+    company,
+    isAutoVoucherEnabled,
+    savedVoucherId,
+    isEditingAndConverting,
+    fetchVoucherNumber,
+    form,
+  ]);
 
   const handleAccountCreated = (newAccountId: string) => {
     if (targetFieldForNewAccount) {
@@ -1287,59 +1353,48 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           }
         }
 
-        const bgProgressId = needsBackgroundSync ? showVoucherBackgroundProgress("Saving links…") : null;
-
         const postSaveTail = async () => {
-          let bgSyncPartialFailure = false;
-          try {
-            if (spendWisePending && user?.uid) {
-              const contraId = docId;
-              const previouslyLinkedIds = new Set(spendWiseLinkedRowIds);
-              const allToUpdate = new Set([...previouslyLinkedIds, ...spendWisePending.ids]);
-              for (const poId of allToUpdate) {
-                if (poId === SPEND_WISE_OPENING_BALANCE_ID) continue;
-                const v = allVouchers?.find((x: any) => x.id === poId);
-                if (!v) continue;
-                const existingIds = Array.isArray(v.linkedPaymentInIds) ? [...v.linkedPaymentInIds] : [];
-                const existingAmounts =
-                  v.linkedPaymentInAmounts && typeof v.linkedPaymentInAmounts === "object"
-                    ? { ...v.linkedPaymentInAmounts }
-                    : {};
-                const newIds = existingIds.filter((id) => id !== contraId);
-                delete existingAmounts[contraId];
-                if (spendWisePending.ids.includes(poId)) {
-                  const amt = spendWisePending.amountsByVoucherId[poId] ?? 0;
-                  if (amt > 0) {
-                    newIds.push(contraId);
-                    existingAmounts[contraId] = amt;
+          if (needsBackgroundSync) {
+            const linkResult = await runWithVoucherLinkSaveProgress(async () => {
+              if (spendWisePending && user?.uid) {
+                const contraId = docId;
+                const previouslyLinkedIds = new Set(spendWiseLinkedRowIds);
+                const allToUpdate = new Set([...previouslyLinkedIds, ...spendWisePending.ids]);
+                for (const poId of allToUpdate) {
+                  if (poId === SPEND_WISE_OPENING_BALANCE_ID) continue;
+                  const v = allVouchers?.find((x: any) => x.id === poId);
+                  if (!v) continue;
+                  const existingIds = Array.isArray(v.linkedPaymentInIds) ? [...v.linkedPaymentInIds] : [];
+                  const existingAmounts =
+                    v.linkedPaymentInAmounts && typeof v.linkedPaymentInAmounts === "object"
+                      ? { ...v.linkedPaymentInAmounts }
+                      : {};
+                  const newIds = existingIds.filter((id) => id !== contraId);
+                  delete existingAmounts[contraId];
+                  if (spendWisePending.ids.includes(poId)) {
+                    const amt = spendWisePending.amountsByVoucherId[poId] ?? 0;
+                    if (amt > 0) {
+                      newIds.push(contraId);
+                      existingAmounts[contraId] = amt;
+                    }
                   }
+                  await updateVoucherSpendWiseLinks(companyId, poId, newIds, existingAmounts, user.uid);
                 }
-                await updateVoucherSpendWiseLinks(companyId, poId, newIds, existingAmounts, user.uid);
+                const openingLinked =
+                  Number(spendWisePending.amountsByVoucherId[SPEND_WISE_OPENING_BALANCE_ID] ?? 0) || 0;
+                await patchVoucherFields(companyId, contraId, {
+                  linkedOpeningBalanceAmount: openingLinked,
+                  linkedOpeningBalanceAccountId: openingLinked > 0 ? spendWiseOutAccountId : null,
+                });
+                setPendingLinkedPaymentOut(null);
               }
-              const openingLinked =
-                Number(spendWisePending.amountsByVoucherId[SPEND_WISE_OPENING_BALANCE_ID] ?? 0) || 0;
-              await patchVoucherFields(companyId, contraId, {
-                linkedOpeningBalanceAmount: openingLinked,
-                linkedOpeningBalanceAccountId: openingLinked > 0 ? spendWiseOutAccountId : null,
-              });
-              setPendingLinkedPaymentOut(null);
-            }
-
-            if (bgProgressId) {
-              completeVoucherBackgroundProgress(bgProgressId, {
-                ok: !bgSyncPartialFailure,
-                title: bgSyncPartialFailure ? "Some links could not be saved" : "Links saved",
+            });
+            if (!linkResult.ok) {
+              sonnerToast.error("Link sync failed", {
+                description: linkResult.error instanceof Error ? linkResult.error.message : undefined,
+                duration: 5000,
               });
             }
-          } catch (err) {
-            if (bgProgressId) {
-              completeVoucherBackgroundProgress(bgProgressId, {
-                ok: false,
-                title: "Link sync failed",
-                description: err instanceof Error ? err.message : undefined,
-              });
-            }
-            throw err;
           }
 
           // New create: saveVoucher(approveAfterSave) already set isApproved — skip second approve lookup.

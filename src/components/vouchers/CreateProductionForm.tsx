@@ -30,6 +30,8 @@ import { listCompanyDocsFromBrowserDb, BROWSER_DB_COLLECTION_BUMP } from "@/lib/
 import { saveVoucher, isVoucherLimitError, patchVoucherFields, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
+import { useAutoVoucherNumberFyDateSync } from "@/hooks/useAutoVoucherNumberFyDateSync";
+import { resolvePrefixFromVoucherNumber } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
@@ -281,6 +283,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         companyDoc: company as Record<string, unknown>,
         voucherLike: { type: "production" },
         selectedPrefix: prefix,
+        voucherDate: form.getValues("date"),
       });
       form.setValue("productionNumber", nextNo);
     } catch (error) {
@@ -330,6 +333,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       fetchVoucherNumber();
     }
   }, [isEditing, isEditingAndConverting, fetchVoucherNumber]);
+
+  useAutoVoucherNumberFyDateSync({
+    form,
+    company: company as Record<string, unknown>,
+    isAutoVoucherEnabled,
+    editingSavedVoucher: Boolean(voucher?.id && !isEditingAndConverting),
+    shouldFetchNextOnDateChange: Boolean((!voucher?.id || isEditingAndConverting) && isAutoVoucherEnabled),
+    fetchVoucherNumber,
+    numberField: "productionNumber",
+    resolvePrefix: () =>
+      resolvePrefixFromVoucherNumber(
+        String(form.getValues("productionNumber") || ""),
+        voucherPrefixes,
+        voucherPrefixes[0]
+      ),
+  });
 
   const watchedRawMaterials = useWatch({ control: form.control, name: "rawMaterials" });
   const watchedFinishedGoods = useWatch({ control: form.control, name: "finishedGoods" });

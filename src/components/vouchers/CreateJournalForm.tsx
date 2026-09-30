@@ -42,7 +42,7 @@ import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, A
 import { cn } from "@/lib/utils";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
-import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
+import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast, runWithVoucherLinkSaveProgress } from "@/lib/voucherSaveUi";
 
 import { useToast } from "@/hooks/use-toast";
 import { useCompany } from "@/hooks/useCompany";
@@ -59,6 +59,8 @@ import {
 } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
+import { useAutoVoucherNumberFyDateSync } from "@/hooks/useAutoVoucherNumberFyDateSync";
+import { resolvePrefixFromVoucherNumber } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { loadVoucherDataForDeletePreCheck, resolveVoucherDeleteBackdateDate } from "@/lib/voucherDeletePreCheck";
 import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
@@ -578,6 +580,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         companyDoc: company as Record<string, unknown>,
         voucherLike: { type: "journal", subType: voucher?.subType },
         selectedPrefix,
+        voucherDate: form.getValues("date"),
       });
       form.setValue("voucherNumber", nextNo);
     } catch (error) {
@@ -731,6 +734,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (voucher?.id) return;
     fetchVoucherNumber();
   }, [copySaveTargetCompanyId, voucher?.id, fetchVoucherNumber, isAutoVoucherEnabled]);
+
+  useAutoVoucherNumberFyDateSync({
+    form,
+    company: company as Record<string, unknown>,
+    isAutoVoucherEnabled,
+    editingSavedVoucher: Boolean(isEditing && savedVoucherId && !isEditingAndConverting),
+    shouldFetchNextOnDateChange: Boolean((!isEditing || isEditingAndConverting) && isAutoVoucherEnabled),
+    fetchVoucherNumber,
+    resolvePrefix: () =>
+      resolvePrefixFromVoucherNumber(
+        String(form.getValues("voucherNumber") || ""),
+        voucherPrefixes,
+        voucherPrefixes[0]
+      ),
+  });
+
   // Keep a single label lookup so bill-wise card can show the exact account row user opened from.
   const accountLabelById = useMemo(() => {
     const map = new Map<string, string>();
@@ -1706,12 +1725,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         ...(initialJournalAllocationsRef.current.debit || []),
         ...(initialJournalAllocationsRef.current.credit || []),
       ];
-      await applyJournalBillWiseLinkAllocations(companyId, vid, merged, previous, removedIds);
-      initialJournalAllocationsRef.current = {
-        debit: [...nextBySide.debit],
-        credit: [...nextBySide.credit],
-      };
-      journalIncomingLinksToClearRef.current.clear();
+      await runWithVoucherLinkSaveProgress(
+        async () => {
+          await applyJournalBillWiseLinkAllocations(companyId, vid, merged, previous, removedIds);
+          initialJournalAllocationsRef.current = {
+            debit: [...nextBySide.debit],
+            credit: [...nextBySide.credit],
+          };
+          journalIncomingLinksToClearRef.current.clear();
+        },
+        { successTitle: "Links saved" }
+      );
     },
     [companyId, journalVoucherId]
   );
@@ -2053,7 +2077,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
         const postSaveTail = async () => {
           if (companyId && docId && (needsBillWiseLinkSync || needsIncomingLinkClear)) {
-            try {
+            const { runWithVoucherLinkSaveProgress } = await import("@/lib/voucherSaveUi");
+            const linkResult = await runWithVoucherLinkSaveProgress(async () => {
               await applyJournalBillWiseLinkAllocations(
                 companyId,
                 docId,
@@ -2063,10 +2088,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               );
               initialJournalAllocationsRef.current = capturedSideAllocations;
               journalIncomingLinksToClearRef.current.clear();
-            } catch (e) {
-              console.error("[CreateJournalForm] bill-wise link sync", e);
+            });
+            if (!linkResult.ok) {
               sonnerToast.error("Journal saved but bill-wise link sync failed.", {
-                description: e instanceof Error ? e.message : "Try opening Link for bill wise again.",
+                description:
+                  linkResult.error instanceof Error
+                    ? linkResult.error.message
+                    : "Try opening Link for bill wise again.",
               });
             }
           } else if (companyId && docId) {

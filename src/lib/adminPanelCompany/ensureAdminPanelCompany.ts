@@ -72,13 +72,24 @@ export function withAdminPanelCompanyInSelectorList<T extends { id?: string; kin
   return [row as unknown as T, ...list];
 }
 
-/** Online tenant + local SQLite registry row for normal app UI. */
+/**
+ * Online tenant (best-effort) + local SQLite registry row for normal app UI.
+ * Cloud may 403 on localhost/dev preview for non–SuperAdmin — still open local mirror.
+ */
 export async function ensureAdminPanelCompanyReady(
   ownerId: string,
   ownerEmail?: string | null
-): Promise<void> {
-  await ensureAdminPanelCompanyCloud();
+): Promise<{ cloudOk: boolean; cloudError?: string }> {
+  let cloudOk = false;
+  let cloudError: string | undefined;
+  try {
+    await ensureAdminPanelCompanyCloud();
+    cloudOk = true;
+  } catch (e) {
+    cloudError = e instanceof Error ? e.message : "Could not load Admin Panel Company cloud";
+  }
   await activateAdminPanelCompanyLedgerMode(ownerId, ownerEmail);
+  return { cloudOk, cloudError };
 }
 
 /** Cloud + SQLite row + React company context (header name, vouchers, party). */
@@ -86,8 +97,9 @@ export async function selectAdminPanelCompanyInApp(
   ownerId: string,
   ownerEmail: string | null | undefined,
   setCompanyId: (id: string) => void
-): Promise<void> {
-  await ensureAdminPanelCompanyReady(ownerId, ownerEmail);
+): Promise<{ cloudOk: boolean; cloudError?: string }> {
+  const ready = await ensureAdminPanelCompanyReady(ownerId, ownerEmail);
   grantOpenLocalCompanySession(ADMIN_PANEL_COMPANY_LOCAL_ID, { role: "owner" });
   setCompanyId(ADMIN_PANEL_COMPANY_LOCAL_ID);
+  return ready;
 }

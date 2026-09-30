@@ -26,6 +26,7 @@ import {
 } from "@/lib/planAddOns";
 import { mergeAppSettingsPlansDoc } from "@/lib/mergeAppSettingsPlans";
 import { planAllowsFirebaseOnline } from "@/lib/planSyncEntitlements";
+import { resolveOwnerActivePaidSubscription } from "@/lib/server/resolveOwnerSubscriptionBilling";
 
 type BodyItem = { kind?: AddonKind | string; quantity?: number };
 
@@ -77,8 +78,8 @@ export async function POST(req: NextRequest) {
     const items = parseCheckoutItems(body);
     const gateway = body.gateway === "khalti" || body.gateway === "esewa" ? body.gateway : "stripe";
 
-    if (!userId || !companyId) {
-      return NextResponse.json({ error: "userId and companyId required" }, { status: 400 });
+    if (!userId) {
+      return NextResponse.json({ error: "userId required" }, { status: 400 });
     }
     if (items.length === 0) {
       return NextResponse.json(
@@ -88,36 +89,15 @@ export async function POST(req: NextRequest) {
     }
 
     const db = getAdminDb();
-    const companySnap = await db.collection("companies").doc(companyId).get();
-    if (!companySnap.exists) {
-      return NextResponse.json({ error: "Company not found" }, { status: 404 });
+    const sub = await resolveOwnerActivePaidSubscription(db, userId, companyId || null);
+    if (sub.ok === false) {
+      return NextResponse.json({ error: sub.error }, { status: sub.status });
     }
-    const cdata = companySnap.data() as {
-      ownerId?: string;
-      planId?: string;
-      planExpiryMs?: number;
-    };
-    if (String(cdata.ownerId || "").trim() !== userId) {
-      return NextResponse.json({ error: "Only the company owner can buy add-ons" }, { status: 403 });
-    }
-    const expiryMs = typeof cdata.planExpiryMs === "number" ? cdata.planExpiryMs : null;
-    if (expiryMs == null || expiryMs <= Date.now()) {
-      return NextResponse.json(
-        { error: "Active paid plan period required before buying add-ons" },
-        { status: 400 }
-      );
-    }
+    const { planId: accountPlanId, expiryMs, paymentCompanyId } = sub.subscription;
+    const effectiveCompanyId = paymentCompanyId || companyId || "";
 
     const plansSnap = await db.doc("app_settings/plans").get();
     const plansRaw = plansSnap.exists ? (plansSnap.data() as Record<string, unknown>) : undefined;
-    const accountUserSnap = await db.collection("users").doc(userId).get();
-    const accountPlanId = String(
-      (accountUserSnap.exists ? accountUserSnap.data()?.accountCanonicalPlanId : "") ||
-        cdata.planId ||
-        "basic"
-    )
-      .trim()
-      .toLowerCase();
     const accountPlan = mergeAppSettingsPlansDoc(plansRaw).find((plan) => plan.id === accountPlanId);
     const containsOnlineAddOn = items.some((item) => item.kind.endsWith("-online"));
     if (containsOnlineAddOn && !planAllowsFirebaseOnline(accountPlanId, accountPlan)) {
@@ -173,7 +153,7 @@ export async function POST(req: NextRequest) {
       const expiresAt = admin.firestore.Timestamp.fromMillis(Date.now() + PENDING_ADDON_PURCHASE_TTL_MS);
       const pendingRef = db.collection(PENDING_ADDON_PURCHASES_COLLECTION).doc(pendingId);
       await pendingRef.set({
-        companyId,
+        companyId: effectiveCompanyId || null,
         userId,
         items,
         addonItemsPacked,
@@ -252,7 +232,7 @@ export async function POST(req: NextRequest) {
         addonItems: addonItemsPacked,
         addonKind: items[0].kind,
         addonQuantity: String(items[0].quantity),
-        companyId,
+        companyId: effectiveCompanyId || userId,
         userId,
         billingIntent: "addon_bundle",
         amountNpr: String(amountNpr),

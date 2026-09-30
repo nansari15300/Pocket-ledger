@@ -257,7 +257,8 @@ export function BillWiseAutoLinkPromptDialog({
     onOpenChange(false);
 
     void (async () => {
-      try {
+      const { runWithVoucherLinkSaveProgress } = await import("@/lib/voucherSaveUi");
+      const result = await runWithVoucherLinkSaveProgress(async () => {
         let unlinked = 0;
         if (unlinkIds.length) {
           unlinked = await applyLedgerBillWiseUnlinks({
@@ -288,13 +289,16 @@ export function BillWiseAutoLinkPromptDialog({
             `linked ${selected.length} allocation${selected.length === 1 ? "" : "s"}`
           );
         }
-        toast.success(parts.join("; ") + ".");
+        return parts.join("; ") + ".";
+      }, { successTitle: "Bill-wise links updated" });
+      if (result.ok) {
         onApplied?.();
-      } catch (e: any) {
-        toast.error(e?.message || "Failed to save bill-wise changes.");
-      } finally {
-        setSaving(false);
+      } else {
+        toast.error(
+          result.error instanceof Error ? result.error.message : "Failed to save bill-wise changes."
+        );
       }
+      setSaving(false);
     })();
   };
 

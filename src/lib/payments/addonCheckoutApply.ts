@@ -5,8 +5,10 @@
  */
 import "server-only";
 import * as admin from "firebase-admin";
-import { findOwnedCompanyIdForUser } from "@/lib/payments/resolveStripeFirestoreCompany";
+import { resolveOwnerActivePaidSubscription } from "@/lib/server/resolveOwnerSubscriptionBilling";
 import { normalizeAddonKind, type AddonKind } from "@/lib/planAddOns";
+import { packAddonItemsForStorage } from "@/lib/payments/addonItemsPacked";
+import { mirrorAddonPurchaseToAdminCompany } from "@/lib/payments/mirrorAddonPurchaseToAdminCompany";
 
 export const PENDING_ADDON_PURCHASES_COLLECTION = "pending_addon_purchases";
 export const PENDING_ADDON_PURCHASE_TTL_MS = 60 * 60 * 1000;
@@ -99,43 +101,38 @@ export async function applyAddonPurchaseToFirestore(
   if (!userId.trim()) return { ok: false, reason: "missing_userId" };
   if (items.length === 0) return { ok: false, reason: "empty_addon_items" };
 
-  let effectiveCompanyId = companyId;
-  let companySnap = await db.collection("companies").doc(companyId).get();
-  if (!companySnap.exists) {
-    const resolved = await findOwnedCompanyIdForUser(db, userId, companyId);
-    if (resolved) {
-      effectiveCompanyId = resolved;
-      companySnap = await db.collection("companies").doc(resolved).get();
-    }
+  const sub = await resolveOwnerActivePaidSubscription(db, userId, companyId || null);
+  if (sub.ok === false) {
+    return {
+      ok: false,
+      reason: sub.status === 403 ? "owner_only" : "no_active_paid_period",
+    };
   }
-  if (!companySnap.exists) return { ok: false, reason: "company_not_found" };
+  const { expiryMs, paymentCompanyId } = sub.subscription;
+  const effectiveCompanyId = paymentCompanyId || companyId?.trim() || "";
+  const ownerId = userId.trim();
 
-  const cdata = companySnap.data() as {
-    ownerId?: string;
-    planExpiryMs?: number;
-    planExpiry?: { toMillis?: () => number };
-  };
-  const ownerId = String(cdata.ownerId || userId).trim();
-  if (ownerId !== userId.trim()) {
-    return { ok: false, reason: "owner_only" };
-  }
-
-  let expiryMs: number | null =
-    typeof cdata.planExpiryMs === "number" && Number.isFinite(cdata.planExpiryMs)
-      ? cdata.planExpiryMs
-      : null;
-  if (expiryMs == null && cdata.planExpiry && typeof cdata.planExpiry.toMillis === "function") {
-    expiryMs = cdata.planExpiry.toMillis();
-  }
-  if (expiryMs == null || expiryMs <= Date.now()) {
-    return { ok: false, reason: "no_active_paid_period" };
-  }
-
-  const payRef = db.collection("companies").doc(effectiveCompanyId).collection("payments").doc(paymentId);
+  const payRef = effectiveCompanyId
+    ? db.collection("companies").doc(effectiveCompanyId).collection("payments").doc(paymentId)
+    : db.collection("users").doc(ownerId).collection("billing_payments").doc(paymentId);
   const paySnap = await payRef.get();
   if (paySnap.exists && (paySnap.data() as { addonFulfillComplete?: boolean }).addonFulfillComplete === true) {
+    try {
+      await mirrorAddonPurchaseToAdminCompany(db, {
+        paymentId,
+        userId,
+        companyId: effectiveCompanyId || userId,
+        amount,
+        gateway,
+        items,
+      });
+    } catch (err) {
+      console.error("[addonCheckoutApply] admin panel mirror retry failed", err);
+    }
     return { ok: true };
   }
+
+  const addonItemsPacked = packAddonItemsForStorage(items);
 
   const userRef = db.collection("users").doc(ownerId);
   await db.runTransaction(async (tx) => {
@@ -161,7 +158,8 @@ export async function applyAddonPurchaseToFirestore(
         gateway,
         status: "completed",
         billingIntent: `addon_bundle`,
-        addonItems: items,
+        addonItems: addonItemsPacked,
+        addonItemsPacked,
         addonKind: items[0]?.kind,
         addonQuantity: items.reduce((s, i) => s + i.quantity, 0),
         addonFulfillComplete: true,
@@ -170,6 +168,19 @@ export async function applyAddonPurchaseToFirestore(
       { merge: true }
     );
   });
+
+  try {
+    await mirrorAddonPurchaseToAdminCompany(db, {
+      paymentId,
+      userId,
+      companyId: effectiveCompanyId || userId,
+      amount,
+      gateway,
+      items,
+    });
+  } catch (err) {
+    console.error("[addonCheckoutApply] admin panel mirror failed", err);
+  }
 
   return { ok: true };
 }

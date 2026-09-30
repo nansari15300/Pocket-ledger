@@ -55,6 +55,54 @@ async function postReconcileOwnerPlanFromAdmin(
   }
 }
 
+/**
+ * Admin plan/expiry write Stripe nahi kholta — Admin Panel Company books + subscriber list
+ * ke liye mirror (gateway: admin_manual). Real renew user /billing se payment gateway se.
+ */
+async function postAdminPlanGrantMirror(
+  firebaseUser: import("firebase/auth").User | null,
+  args: {
+    ownerId: string;
+    companyId: string;
+    planId: string;
+    planExpiryMs: number | null;
+    previousExpiryMs: number | null;
+    reason: "admin_plan" | "admin_expiry";
+  }
+): Promise<{ amountNpr?: number; mirroredSale?: boolean; note?: string } | null> {
+  const oid = args.ownerId.trim();
+  if (!oid || !firebaseUser || !args.companyId.trim()) return null;
+  try {
+    const token = await firebaseUser.getIdToken();
+    const res = await fetch(appApiUrl("/api/admin/company-plan-grant-mirror"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        ownerId: oid,
+        companyId: args.companyId,
+        planId: args.planId,
+        planExpiryMs: args.planExpiryMs,
+        previousExpiryMs: args.previousExpiryMs,
+        reason: args.reason,
+      }),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      amountNpr?: number;
+      mirroredSale?: boolean;
+      note?: string;
+    };
+    if (!res.ok) {
+      console.warn("[CompanyDetails] company-plan-grant-mirror", res.status, data.error);
+      return null;
+    }
+    return data;
+  } catch (e) {
+    console.warn("[CompanyDetails] company-plan-grant-mirror", e);
+    return null;
+  }
+}
+
 
 // Get all possible entitlement keys from the default plans
 const ALL_ENTITLEMENT_KEYS = Array.from(
@@ -224,6 +272,15 @@ export function CompanyDetails({
             await batch.commit();
             const ownerIdForReconcile = String((targets[0]?.ownerId ?? company.ownerId) ?? "").trim();
             await postReconcileOwnerPlanFromAdmin(firebaseUser, ownerIdForReconcile);
+            const prevExp = company.planExpiry?.toMillis?.() ?? null;
+            const mirror = await postAdminPlanGrantMirror(firebaseUser, {
+              ownerId: ownerIdForReconcile,
+              companyId: company.id,
+              planId,
+              planExpiryMs: prevExp,
+              previousExpiryMs: prevExp,
+              reason: "admin_plan",
+            });
             onSeveralCompaniesUpdated(patched);
             triggerSync();
             toast({
@@ -233,6 +290,19 @@ export function CompanyDetails({
                         ? `Plan "${planId}" — is owner ki ${targets.length} companies par sync ho gaya.`
                         : "Company plan updated.",
             });
+            if (mirror?.mirroredSale) {
+                toast({
+                    title: "Admin Panel Company",
+                    description: `Subscriber + sale mirrored (Rs ${Number(mirror.amountNpr ?? 0).toFixed(0)}, admin_manual — Stripe open nahi hota).`,
+                });
+            } else if (planId !== "basic") {
+                toast({
+                    title: "Note",
+                    description:
+                        mirror?.note ||
+                        "Subscriber list update try hua. Real payment ke liye user /billing pe Renew/Pay use kare.",
+                });
+            }
         } catch (error) {
             console.error(error);
             toast({ variant: "destructive", title: "Error", description: "Failed to update plan." });
@@ -246,6 +316,8 @@ export function CompanyDetails({
         setIsUpdating(true);
         try {
             const at = Timestamp.fromDate(new Date(isoDate));
+            const expiryMs = at.toMillis();
+            const previousExpiryMs = company.planExpiry?.toMillis?.() ?? null;
             const targets =
                 sameOwnerCompanies.length > 0
                     ? sameOwnerCompanies
@@ -253,12 +325,23 @@ export function CompanyDetails({
             const batch = writeBatch(db);
             const patched: Company[] = [];
             for (const c of targets) {
-                batch.update(doc(db, "companies", c.id), { planExpiry: at });
-                patched.push({ ...c, planExpiry: at });
+                batch.update(doc(db, "companies", c.id), {
+                    planExpiry: at,
+                    planExpiryMs: expiryMs,
+                });
+                patched.push({ ...c, planExpiry: at, planExpiryMs: expiryMs } as Company);
             }
             await batch.commit();
             const ownerIdForReconcile = String((targets[0]?.ownerId ?? company.ownerId) ?? "").trim();
             await postReconcileOwnerPlanFromAdmin(firebaseUser, ownerIdForReconcile);
+            const mirror = await postAdminPlanGrantMirror(firebaseUser, {
+              ownerId: ownerIdForReconcile,
+              companyId: company.id,
+              planId: String(company.planId || "basic"),
+              planExpiryMs: expiryMs,
+              previousExpiryMs,
+              reason: "admin_expiry",
+            });
             onSeveralCompaniesUpdated(patched);
             reloadLocalCompanyRegistry();
             triggerSync();
@@ -269,6 +352,18 @@ export function CompanyDetails({
                         ? `Plan expiry — is owner ki ${targets.length} companies par sync ho gaya.`
                         : "Plan expiry updated.",
             });
+            if (mirror?.mirroredSale) {
+                toast({
+                    title: "Admin Panel Company",
+                    description: `Sale mirrored for added days (Rs ${Number(mirror.amountNpr ?? 0).toFixed(0)}, admin_manual). Stripe gateway admin date se open nahi hota — paid renew /billing se.`,
+                });
+            } else {
+                toast({
+                    title: "Note",
+                    description:
+                        "Yeh admin grant hai — payment gateway open nahi hota. Paid renew ke liye user Billing → Renew use kare.",
+                });
+            }
         } catch (error) {
             console.error(error);
             toast({ variant: "destructive", title: "Error", description: "Failed to update expiry." });

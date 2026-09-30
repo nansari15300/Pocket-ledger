@@ -68,6 +68,16 @@ export function getPublicAppOriginForPaymentRedirects(req: NextRequest): string 
  * Hosted web: `/app`. Capacitor/EXE static shells: ``. Next dev on :3000 with basePath: `/app`.
  */
 export function getPaymentReturnPathPrefix(req: NextRequest, appOrigin: string): string {
+  // Request pehle check — localhost:3000 pe bhi `/app/api/...` se aaya to return `/app/billing/...`.
+  // Pehle sirf env se decide hota tha; env miss → success_url `/billing/success` (bina /app) → Stripe
+  // redirect 404 / blank, checkout page pe checkmark atka rehta hai.
+  try {
+    const pathname = req.nextUrl?.pathname || "";
+    if (pathname === "/app" || pathname.startsWith("/app/")) return "/app";
+  } catch {
+    /* fall through */
+  }
+
   try {
     const u = new URL(appOrigin);
     if (u.protocol === "capacitor:" || u.protocol === "ionic:") return "";
@@ -80,16 +90,21 @@ export function getPaymentReturnPathPrefix(req: NextRequest, appOrigin: string):
       if (port === "3000" || port === "3001") {
         const env = String(process.env.NEXT_PUBLIC_WEB_APP_BASE_PATH || "").trim();
         if (env === "/app") return "/app";
+        // Referer often has /app/billing when checkout started from the app UI.
+        try {
+          const ref = req.headers.get("referer") || req.headers.get("referrer") || "";
+          if (ref) {
+            const ru = new URL(ref);
+            if (ru.pathname === "/app" || ru.pathname.startsWith("/app/")) return "/app";
+          }
+        } catch {
+          /* ignore */
+        }
+        // Dev Next app is almost always under /app on :3000 — prefer /app over bare /billing.
+        return "/app";
       }
       return "";
     }
-  } catch {
-    /* fall through */
-  }
-
-  try {
-    const pathname = req.nextUrl?.pathname || "";
-    if (pathname === "/app" || pathname.startsWith("/app/")) return "/app";
   } catch {
     /* fall through */
   }

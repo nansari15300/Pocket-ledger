@@ -69,11 +69,10 @@ import {
 import { useVoucherAttachmentPostSaveSync } from "@/hooks/useVoucherAttachmentPostSaveSync";
 import { toast as sonnerToast } from "sonner";
 import {
-  completeVoucherBackgroundProgress,
   replaceVoucherSaveLoadingWithShortSuccess,
-  showVoucherBackgroundProgress,
   beginVoucherSaveLoadingOrBlock,
   voucherSaveErrorToast,
+  runWithVoucherLinkSaveProgress,
 } from "@/lib/voucherSaveUi";
 import type { CopyMasterDraftRequestPayload } from "./AddVoucherDialog";
 import BsDatePicker from "../ui/BsDatePicker";
@@ -101,6 +100,8 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { saveVoucher, isVoucherLimitError, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
+import { useAutoVoucherNumberFyDateSync } from "@/hooks/useAutoVoucherNumberFyDateSync";
+import { resolvePrefixFromVoucherNumber } from "@/lib/voucherNumberFormat";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
@@ -1250,6 +1251,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         companyDoc: company as Record<string, unknown>,
         voucherLike: { type: voucherType, subType: voucher?.subType },
         selectedPrefix,
+        voucherDate: form.getValues("date"),
       });
       form.setValue("voucherNumber", nextNo);
     } catch (error) {
@@ -1351,6 +1353,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       fetchVoucherNumber();
     }
   }, [isAutoVoucherEnabled, savedVoucherId, fetchVoucherNumber, isEditingAndConverting, payeeType]);
+
+  useAutoVoucherNumberFyDateSync({
+    form,
+    company: company as Record<string, unknown>,
+    isAutoVoucherEnabled,
+    editingSavedVoucher: Boolean(voucher?.id && savedVoucherId && !isEditingAndConverting),
+    shouldFetchNextOnDateChange: Boolean((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled),
+    fetchVoucherNumber,
+    resolvePrefix: () => {
+      const list = company?.voucherPrefixes?.[voucherType] || [getVoucherPrefix()];
+      return resolvePrefixFromVoucherNumber(String(form.getValues("voucherNumber") || ""), list, list[0]);
+    },
+  });
 
   useEffect(() => {
     if (voucherType === 'payment_out' && !['party', 'staff', 'tax'].includes(payeeType)) {
@@ -1737,7 +1752,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const needsBillWiseLinkSync =
           !!(billWiseAllocations && companyId && docId) &&
           hasBillWiseAllocationSyncWork(billWiseAllocations, previousAllocationsForSync);
-        const needsBackgroundSync = needsBillWiseLinkSync;
 
         if (approveBanner) {
           replaceVoucherSaveLoadingWithShortSuccess(
@@ -1774,46 +1788,30 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           }
         }
 
-        const bgProgressId = needsBackgroundSync ? showVoucherBackgroundProgress("Saving links…") : null;
-
         const postSaveTail = async () => {
-          let bgSyncPartialFailure = false;
-          try {
-            if (needsBillWiseLinkSync && billWiseAllocations && companyId && docId) {
-              try {
-                await syncBillWiseAllocationsToTargetVouchers(
-                  companyId,
-                  docId,
-                  billWiseAllocations,
-                  previousAllocationsForSync
-                );
-              } catch (e) {
-                console.error(e);
-                bgSyncPartialFailure = true;
-                sonnerToast.error("Payment saved but bill-wise link sync to target vouchers failed.");
+          if (needsBillWiseLinkSync && billWiseAllocations && companyId && docId) {
+            const linkResult = await runWithVoucherLinkSaveProgress(async () => {
+              await syncBillWiseAllocationsToTargetVouchers(
+                companyId,
+                docId,
+                billWiseAllocations,
+                previousAllocationsForSync
+              );
+              if (voucherType === "payment_out" && billWiseAllocations) {
+                initialAllocationsRef.current = billWiseAllocations.map((a: any) => ({
+                  voucherId: a.voucherId,
+                  amount: getAllocationTotal(a),
+                }));
               }
+            });
+            if (!linkResult.ok) {
+              sonnerToast.error("Payment saved but bill-wise link sync to target vouchers failed.");
             }
-            if (voucherType === "payment_out" && billWiseAllocations) {
-              initialAllocationsRef.current = billWiseAllocations.map((a: any) => ({
-                voucherId: a.voucherId,
-                amount: getAllocationTotal(a),
-              }));
-            }
-            if (bgProgressId) {
-              completeVoucherBackgroundProgress(bgProgressId, {
-                ok: !bgSyncPartialFailure,
-                title: bgSyncPartialFailure ? "Some links could not be saved" : "Links saved",
-              });
-            }
-          } catch (err) {
-            if (bgProgressId) {
-              completeVoucherBackgroundProgress(bgProgressId, {
-                ok: false,
-                title: "Link sync failed",
-                description: err instanceof Error ? err.message : undefined,
-              });
-            }
-            throw err;
+          } else if (voucherType === "payment_out" && billWiseAllocations) {
+            initialAllocationsRef.current = billWiseAllocations.map((a: any) => ({
+              voucherId: a.voucherId,
+              amount: getAllocationTotal(a),
+            }));
           }
 
           // New create: saveVoucher(approveAfterSave) already set isApproved — skip second approve lookup.

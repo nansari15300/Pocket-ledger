@@ -66,6 +66,8 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { shouldReadLedgerFromSqliteOnly } from "@/lib/companyStorageKind";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
+import { useAutoVoucherNumberFyDateSync } from "@/hooks/useAutoVoucherNumberFyDateSync";
+import { resolvePrefixFromVoucherNumber } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import {
   appendLocalOnlyVoucherFilesToUrls,
@@ -545,6 +547,7 @@ export function SalaryForm({
           selectedPrefix ||
           company?.voucherPrefixes?.[typeKey]?.[0] ||
           getVoucherPrefix(company?.voucherPrefixes, isPaymentMode),
+        voucherDate: form.getValues("date"),
       });
       form.setValue("voucherNumber", nextNo);
     } catch (error) {
@@ -612,6 +615,20 @@ export function SalaryForm({
     return () => { isMounted = false };
   }, [voucher, companyId, fetchVoucherNumber, isEditingAndConverting]);
 
+  useAutoVoucherNumberFyDateSync({
+    form,
+    company: company as Record<string, unknown>,
+    isAutoVoucherEnabled,
+    editingSavedVoucher: Boolean(voucher?.id && savedVoucherIdRef && !isEditingAndConverting),
+    shouldFetchNextOnDateChange: Boolean((!voucher?.id || isEditingAndConverting) && isAutoVoucherEnabled),
+    fetchVoucherNumber,
+    resolvePrefix: () =>
+      resolvePrefixFromVoucherNumber(
+        String(form.getValues("voucherNumber") || ""),
+        voucherPrefixes,
+        voucherPrefixes[0]
+      ),
+  });
 
   const handleSelectAllStaff = () => {
     const currentStaffIds = new Set(form.getValues("lineItems").map((l) => l.staffId));

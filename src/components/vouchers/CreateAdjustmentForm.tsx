@@ -37,7 +37,9 @@ import { useVouchers } from "@/hooks/useVouchers";
 import usePermissions from "@/hooks/usePermissions";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { assertCan, assertCanPerformBackdated, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
-import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
+import { DEFAULT_VOUCHER_PREFIX_LABELS, getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
+import { useAutoVoucherNumberFyDateSync } from "@/hooks/useAutoVoucherNumberFyDateSync";
+import { resolvePrefixFromVoucherNumber } from "@/lib/voucherNumberFormat";
 import { saveVoucher, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherActionsClient";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
@@ -244,14 +246,37 @@ export function CreateAdjustmentForm({
     },
   });
 
+  const isAutoVoucherEnabled = company?.autoVoucherNumbering?.adjustment ?? true;
+  const fetchAdjustmentVoucherNumber = React.useCallback(async () => {
+    if (!companyId || !company || !isAutoVoucherEnabled) return;
+    const n = await getNextVoucherNumberForCompany({
+      companyId,
+      companyDoc: company as Record<string, unknown>,
+      voucherLike: { type: "adjustment" },
+      voucherDate: form.getValues("date"),
+    });
+    form.setValue("voucherNumber", n);
+  }, [companyId, company, form, isAutoVoucherEnabled]);
+
   useEffect(() => {
     if (!companyId || form.getValues("voucherNumber")) return;
-    void getNextVoucherNumberForCompany({
-      companyId,
-      companyDoc: company as any,
-      voucherLike: { type: "adjustment" },
-    }).then((n) => form.setValue("voucherNumber", n));
-  }, [companyId, company, form]);
+    void fetchAdjustmentVoucherNumber();
+  }, [companyId, company, form, fetchAdjustmentVoucherNumber]);
+
+  useAutoVoucherNumberFyDateSync({
+    form,
+    company: company as Record<string, unknown>,
+    isAutoVoucherEnabled,
+    editingSavedVoucher: Boolean(voucher?.id && savedVoucherId),
+    shouldFetchNextOnDateChange: Boolean(!voucher?.id && isAutoVoucherEnabled),
+    fetchVoucherNumber: fetchAdjustmentVoucherNumber,
+    resolvePrefix: () => {
+      const list =
+        (company?.voucherPrefixes as Record<string, string[] | undefined> | undefined)?.adjustment ||
+        [DEFAULT_VOUCHER_PREFIX_LABELS.adjustment];
+      return resolvePrefixFromVoucherNumber(String(form.getValues("voucherNumber") || ""), list, list[0]);
+    },
+  });
 
   useEffect(() => {
     const next = (defaultVoucherData?.adjustmentTarget || voucher?.adjustmentTarget) as AdjustmentTarget | undefined;

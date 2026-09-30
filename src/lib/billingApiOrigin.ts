@@ -15,7 +15,7 @@
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { joinPocketLedgerOriginAndPath } from "@/lib/webAppBasePath";
+import { appApiUrl, joinPocketLedgerOriginAndPath } from "@/lib/webAppBasePath";
 
 /** Static export par env miss ho to plan/checkout POST yahi production origin par jaayein. */
 export const POCKET_LEDGER_HOSTED_API_ORIGIN = "https://pocket-ledger.com";
@@ -75,6 +75,18 @@ export function getBillingApiBaseOrigin(): string {
   if (shouldUseHostedBillingApiInWebDev()) {
     const fromEnv =
       typeof process !== "undefined" ? String(process.env.NEXT_PUBLIC_BILLING_API_ORIGIN ?? "").trim() : "";
+    // Explicit local override for testing payment/checkout fixes against `npm run dev` API.
+    // Set NEXT_PUBLIC_BILLING_USE_LOCAL_API=1 (and optionally NEXT_PUBLIC_BILLING_API_ORIGIN=http://127.0.0.1:3000).
+    const useLocalApi =
+      typeof process !== "undefined" &&
+      String(process.env.NEXT_PUBLIC_BILLING_USE_LOCAL_API ?? "").trim() === "1";
+    if (useLocalApi) {
+      if (fromEnv) return normalizeDevLoopbackBillingOrigin(fromEnv);
+      if (typeof window !== "undefined" && window.location?.origin) {
+        return normalizeDevLoopbackBillingOrigin(window.location.origin);
+      }
+      return "";
+    }
     if (fromEnv && !isLoopbackBillingOrigin(fromEnv)) {
       return normalizeBillingOrigin(fromEnv);
     }
@@ -151,4 +163,20 @@ export function resolveHostedApiAbsoluteUrl(apiPathOrUrl: string): string {
 
 export function getBillingApiUrl(apiPath: string): string {
   return resolveHostedApiAbsoluteUrl(apiPath);
+}
+
+/**
+ * Localhost Next web: Stripe checkout/sync must hit the **same** origin that created the session
+ * (`/app/api/...`). Default `getBillingApiUrl` points at pocket-ledger.com in webdev — fulfill
+ * + Admin Panel mirror never run for local test payments.
+ */
+export function getLocalDevAwareBillingApiUrl(apiPath: string): string {
+  if (typeof window !== "undefined") {
+    const h = window.location.hostname.toLowerCase();
+    if (h === "localhost" || h === "127.0.0.1" || h === "[::1]") {
+      const path = String(apiPath || "").startsWith("/") ? String(apiPath) : `/${String(apiPath || "")}`;
+      return appApiUrl(path);
+    }
+  }
+  return getBillingApiUrl(apiPath);
 }

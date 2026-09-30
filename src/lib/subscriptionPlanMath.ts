@@ -102,6 +102,11 @@ export function quotePaidPlanPurchase(args: {
   targetMonthly: number;
   targetYearly: number;
   term: SubscriptionTermKey;
+  /**
+   * Default true: unused paid time subtracts from gross (proration).
+   * false: stack renew — charge full term list price; new days add on current end date.
+   */
+  subtractUnusedCredit?: boolean;
 }): { grossNpr: number; creditNpr: number; netNpr: number; newExpiryMs: number } {
   // “Just change plan”: **charge 0** — naya paid term add nahi.
   if (args.term === "plan_change_only") {
@@ -134,7 +139,10 @@ export function quotePaidPlanPurchase(args: {
   const grossNpr = grossPriceNpr(args.term, args.targetMonthly, args.targetYearly);
   const prevExp = args.currentExpiryMs ?? args.nowMs;
   const remainingMs = Math.max(0, prevExp - args.nowMs);
-  const creditNpr = Math.min(grossNpr, (remainingMs / MS_YEAR) * args.currentYearly);
+  const applyCredit = args.subtractUnusedCredit !== false;
+  const creditNpr = applyCredit
+    ? Math.min(grossNpr, (remainingMs / MS_YEAR) * args.currentYearly)
+    : 0;
   const netNpr = Math.max(0, Math.round((grossNpr - creditNpr) * 100) / 100);
   const newExpiryMs = Math.max(args.nowMs, prevExp) + termDurationMs(args.term);
   return { grossNpr, creditNpr, netNpr, newExpiryMs };
@@ -170,6 +178,12 @@ export function quoteDowngradeNewExpiry(args: {
 export function daysLeftRounded(nowMs: number, expiryMs: number | null): number {
   if (expiryMs == null || !Number.isFinite(expiryMs)) return 0;
   return Math.max(0, Math.round((expiryMs - nowMs) / MS_DAY));
+}
+
+/** Remaining paid time as NPR at **current** plan yearly — independent of checkout term dropdown. */
+export function remainingPaidTimeValueNpr(remainingMs: number, currentYearly: number): number {
+  if (currentYearly <= 0) return 0;
+  return Math.round((Math.max(0, remainingMs) / MS_YEAR) * currentYearly * 100) / 100;
 }
 
 /**

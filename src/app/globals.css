@@ -613,6 +613,11 @@ html[data-pl-app-ui-zoom-shell="android-zoom"] .min-h-dvh {
     border-style: solid !important;
     border-color: rgb(22 163 74) !important;
   }
+  body.theme-pro main [data-pl-rp-dialog] [data-pl-list-row],
+  body[class*="theme-"] main [data-pl-rp-dialog] [data-pl-list-row] {
+    border-width: 1px !important;
+    border-style: solid !important;
+  }
   body.theme-pro main [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]),
   body[class*="theme-"] main [data-pl-rp-dialog] [data-pl-list-row]:not([data-pl-ic-company-row]):not([data-pl-list-selected]) {
     border-width: 1px !important;

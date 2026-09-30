@@ -155,6 +155,11 @@ export function dismissAttachmentCompressionProgressToast(): void {
 }
 
 export function finishAttachmentCompressionProgress(): void {
+  // Already at 100%: turant hatáo — warna "Saving…" ke saath spinner 100% chipak jata hai.
+  if (compressionProgressPercent >= 100) {
+    dismissAttachmentCompressionProgressToast();
+    return;
+  }
   const elapsed = compressionProgressShownAt ? Date.now() - compressionProgressShownAt : 0;
   const wait = Math.max(0, COMPRESSION_PROGRESS_MIN_VISIBLE_MS - elapsed);
   if (compressionFinishTimer) clearTimeout(compressionFinishTimer);

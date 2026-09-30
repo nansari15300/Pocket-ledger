@@ -59,6 +59,8 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
+import { useAutoVoucherNumberFyDateSync } from "@/hooks/useAutoVoucherNumberFyDateSync";
+import { resolvePrefixFromVoucherNumber } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
@@ -269,6 +271,7 @@ export function CreateNoteForm({
         companyDoc: company as Record<string, unknown>,
         voucherLike: { type: "note" },
         selectedPrefix,
+        voucherDate: form.getValues("date"),
       });
       form.setValue("voucherNumber", nextNo);
       form.trigger();
@@ -281,6 +284,21 @@ export function CreateNoteForm({
     // Convert mode me `voucher.id` present hota hai, phir bhi target note ka fresh prefix-number chahiye.
     if (!voucher?.id || isEditingAndConverting) fetchVoucherNumber();
   }, [voucher?.id, isEditingAndConverting, fetchVoucherNumber]);
+
+  useAutoVoucherNumberFyDateSync({
+    form,
+    company: company as Record<string, unknown>,
+    isAutoVoucherEnabled,
+    editingSavedVoucher: Boolean(voucher?.id && savedVoucherId && !isEditingAndConverting),
+    shouldFetchNextOnDateChange: Boolean((!voucher?.id || isEditingAndConverting) && isAutoVoucherEnabled),
+    fetchVoucherNumber,
+    resolvePrefix: () =>
+      resolvePrefixFromVoucherNumber(
+        String(form.getValues("voucherNumber") || ""),
+        voucherPrefixes,
+        voucherPrefixes[0]
+      ),
+  });
 
   useEffect(() => {
     if (!voucher) {

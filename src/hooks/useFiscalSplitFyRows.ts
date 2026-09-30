@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useCompany } from "@/hooks/useCompany";
 import type { FiscalYearMergeRow } from "@/lib/fiscalMergeFySelection";
 import {
@@ -15,34 +15,44 @@ export function useFiscalSplitFyRows() {
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState<FiscalSplitFyLoadSource | null>(null);
   const [firestoreScanned, setFirestoreScanned] = useState(0);
+  const companyRef = useRef(company);
+  companyRef.current = company;
+  const loadGenRef = useRef(0);
 
   const reload = useCallback(async () => {
     const cid = String(companyId || "").trim();
-    if (!cid || !company) {
+    const row = companyRef.current;
+    if (!cid || !row) {
       setFyRows([]);
       setSource(null);
+      setLoading(false);
       return;
     }
+    const gen = ++loadGenRef.current;
     setLoading(true);
     setError(null);
     setFirestoreScanned(0);
     try {
       const result = await loadFiscalSplitFyRows({
         companyId: cid,
-        company,
-        onFirestoreProgress: (n) => setFirestoreScanned(n),
+        company: row,
+        onFirestoreProgress: (n) => {
+          if (gen === loadGenRef.current) setFirestoreScanned(n);
+        },
       });
+      if (gen !== loadGenRef.current) return;
       setFyRows(result.rows);
       setSource(result.source);
     } catch (err) {
+      if (gen !== loadGenRef.current) return;
       console.warn("[useFiscalSplitFyRows] load failed", err);
       setError(err instanceof Error ? err.message : "Could not load fiscal years.");
       setFyRows([]);
       setSource(null);
     } finally {
-      setLoading(false);
+      if (gen === loadGenRef.current) setLoading(false);
     }
-  }, [companyId, company]);
+  }, [companyId]);
 
   useEffect(() => {
     void reload();

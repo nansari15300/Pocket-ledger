@@ -65,6 +65,8 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
+import { useAutoVoucherNumberFyDateSync } from "@/hooks/useAutoVoucherNumberFyDateSync";
+import { resolvePrefixFromVoucherNumber } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { loadVoucherDataForDeletePreCheck, resolveVoucherDeleteBackdateDate } from "@/lib/voucherDeletePreCheck";
 import { assertCanPerformBackdated, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
@@ -294,6 +296,7 @@ export function CreatePaymentInForm({
         companyDoc: company as Record<string, unknown>,
         voucherLike: { type: voucherType },
         selectedPrefix,
+        voucherDate: form.getValues("date"),
       });
       form.setValue("voucherNumber", nextNo);
     } catch (error) {
@@ -322,6 +325,19 @@ export function CreatePaymentInForm({
       fetchVoucherNumber();
     }
   }, [isAutoVoucherEnabled, savedVoucherId, fetchVoucherNumber, isEditingAndConverting, payeeType]);
+
+  useAutoVoucherNumberFyDateSync({
+    form,
+    company: company as Record<string, unknown>,
+    isAutoVoucherEnabled,
+    editingSavedVoucher: Boolean(voucher?.id && savedVoucherId && !isEditingAndConverting),
+    shouldFetchNextOnDateChange: Boolean((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled),
+    fetchVoucherNumber,
+    resolvePrefix: () => {
+      const list = company?.voucherPrefixes?.[voucherType] || [getVoucherPrefix()];
+      return resolvePrefixFromVoucherNumber(String(form.getValues("voucherNumber") || ""), list, list[0]);
+    },
+  });
 
   useEffect(() => {
     if (voucherType === 'payment_in' && !['party', 'staff', 'tax'].includes(payeeType)) {

@@ -90,11 +90,11 @@ export async function applyPlanChangeOneTimeToFirestore(input: ApplyPlanChangeOn
 
   const paymentRef = companyRef.collection("payments").doc(paymentId);
   const paySnap = await paymentRef.get();
-  // Idempotent retries (webhook + client sync): do not duplicate `subscription_history` rows.
-  if (paySnap.exists && paySnap.get("planChangeFulfillComplete") === true) {
-    return { ok: true };
-  }
+  // Idempotent retries (webhook + client sync): do not duplicate `subscription_history` rows —
+  // lekin Admin Panel mirror hamesha try (pehli baar mirror fail ho to dubara pe books banen).
+  const alreadyFulfilled = paySnap.exists && paySnap.get("planChangeFulfillComplete") === true;
 
+  if (!alreadyFulfilled) {
   await paymentRef.set(
     {
       paymentId,
@@ -191,6 +191,7 @@ export async function applyPlanChangeOneTimeToFirestore(input: ApplyPlanChangeOn
     ...(historyExtra ?? {}),
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
+  }
 
   let userName: string | null = null;
   let userEmail: string | null = null;
@@ -203,6 +204,7 @@ export async function applyPlanChangeOneTimeToFirestore(input: ApplyPlanChangeOn
     }
   }
 
+  // Always (re)try Admin Panel Company books — mirror is idempotent by paymentId.
   await mirrorSubscriptionPaymentToAdminCompany(db, {
     paymentId,
     userId,

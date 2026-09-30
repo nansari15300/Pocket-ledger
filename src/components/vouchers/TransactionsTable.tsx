@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import type { StockView, Item } from "@/components/items/types";
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Filter, MoreVertical, CheckSquare, MousePointerClick, Printer, Pencil, History, X, CheckCircle, CheckCheck } from "lucide-react";
+import { Filter, MoreVertical, CheckSquare, MousePointerClick, Printer, Pencil, History, X, CheckCircle, CheckCheck, CircleOff } from "lucide-react";
 import { txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import { scrollTransactionSelectedRowIntoView } from "@/lib/ledgerScrollToSelection";
 import {
@@ -80,7 +80,11 @@ import type { SpendWiseBlinkMode } from "@/components/vouchers/transactionColumn
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import usePermissions from "@/hooks/usePermissions";
-import { approveVoucherWithHistory, approveVouchersWithHistoryBatch } from "@/lib/voucherActionsClient";
+import {
+  approveVoucherWithHistory,
+  approveVouchersWithHistoryBatch,
+  unapproveVoucherWithHistory,
+} from "@/lib/writeGateway/voucherActionsClient";
 import {
   type MobileTransactionCardColor,
   MOBILE_TRANSACTION_CARD_COLOR_CHANGED_EVENT,
@@ -126,9 +130,25 @@ import { useFyOpeningPillFormat } from "@/hooks/useFyOpeningPillFormat";
 import { FyOpeningPillFormatPill } from "@/components/vouchers/FyOpeningPillFormatPill";
 import { useFyVoucherScope } from "@/contexts/FyVoucherScopeContext";
 import {
-  readShowOpeningBalanceAmount,
-  writeShowOpeningBalanceAmount,
+  LEDGER_OB_BOOK_KEY,
+  LEDGER_OB_DATED_KEY,
+  ledgerFyOpeningAmountKey,
+  readHiddenLedgerOpeningAmountKeys,
+  writeHiddenLedgerOpeningAmountKeys,
 } from "@/lib/ledgerOpeningAmountVisibility";
+import { LEDGER_OPENING_HIDE_AMOUNT_ENABLED } from "@/lib/ledgerOpeningHideAmountFreeze";
+import {
+  applyBillWiseLinkPreviewGrouping,
+  ledgerRowStableId,
+  type BillWiseLinkPreviewSelection,
+} from "@/lib/billWiseLinkPreviewGroup";
+import {
+  applyHiddenLedgerOpeningAmountAdjustments,
+  patchFyOpeningRowsBillWiseBalances,
+  signedFyOpeningRowAmount,
+  signedToOpeningDrCr,
+  sumBillWiseOutstandingBeforeFirstFyDelimiter,
+} from "@/lib/billWiseOpeningBalanceSum";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
 import { resolveLedgerTransactionUserDisplayName, buildActiveRecurringTriggerVoucherIdSet } from "@/lib/ledgerUserColumnDisplay";
 import { isRecurringVoucherGenerationEnabled } from "@/lib/recurringVoucherSettings";
@@ -279,6 +299,7 @@ interface TransactionsTableProps {
   onHistoryVoucher?: (transaction: any) => void;
   onAddLink?: (transaction: any) => void;
   onApproveVoucher?: (transaction: any) => void;
+  onUnapproveVoucher?: (transaction: any) => void;
   scrollOnlyTransactions?: boolean;
   /** Status filter for bill-wise Status header dropdown */
   statusFilter?: { paid: boolean; unpaid: boolean; partial: boolean; overdue: boolean };
@@ -389,6 +410,7 @@ export function TransactionsTable({
   onHistoryVoucher,
   onAddLink,
   onApproveVoucher,
+  onUnapproveVoucher,
   scrollOnlyTransactions,
   statusFilter,
   statusFilterAllChecked,
@@ -711,15 +733,23 @@ export function TransactionsTable({
   const { balanceMode } = useBalanceMode();
   // Allow pages like Bank/Cash to stay on statement layout even if the shared balance-mode preference is bill-wise.
   const resolvedBalanceMode = forceBalanceMode ?? balanceMode;
-  const [showOpeningBalanceAmount, setShowOpeningBalanceAmount] = useState(true);
+  const [hiddenOpeningAmountKeys, setHiddenOpeningAmountKeys] = useState<Set<string>>(() => new Set());
   useEffect(() => {
-    setShowOpeningBalanceAmount(readShowOpeningBalanceAmount());
+    setHiddenOpeningAmountKeys(readHiddenLedgerOpeningAmountKeys());
   }, []);
-  const toggleOpeningBalanceAmount = useCallback((e?: React.MouseEvent) => {
+  const isLedgerOpeningAmountVisible = useCallback(
+    (key: string) =>
+      LEDGER_OPENING_HIDE_AMOUNT_ENABLED ? !hiddenOpeningAmountKeys.has(key) : true,
+    [hiddenOpeningAmountKeys]
+  );
+  const toggleLedgerOpeningAmountVisible = useCallback((key: string, e?: React.MouseEvent) => {
+    if (!LEDGER_OPENING_HIDE_AMOUNT_ENABLED) return;
     e?.stopPropagation();
-    setShowOpeningBalanceAmount((prev) => {
-      const next = !prev;
-      writeShowOpeningBalanceAmount(next);
+    setHiddenOpeningAmountKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      writeHiddenLedgerOpeningAmountKeys(next);
       return next;
     });
   }, []);
@@ -747,6 +777,30 @@ export function TransactionsTable({
     ]
   );
   const effectiveOnApproveVoucher = onApproveVoucher ?? handleApproveVoucherDefault;
+  const handleUnapproveVoucherDefault = useCallback(
+    async (transaction: any) => {
+      if ((transaction as any)?.type === FISCAL_YEAR_PARTITION_ROW_TYPE || (transaction as any)?.type === FY_OPENING_ROW_TYPE) return;
+      if (!companyId || !transaction?.id || !user?.uid) return;
+      try {
+        const actorName = customUser?.displayName || user?.displayName || user?.email || user.uid;
+        await unapproveVoucherWithHistory(companyId, transaction.id, user.uid, actorName);
+        refreshPendingOutboxVoucherIds();
+        toast.success("Transaction marked as unapproved.");
+      } catch (e) {
+        const message = e instanceof Error && e.message ? e.message : "Failed to mark transaction as unapproved.";
+        toast.error(message);
+      }
+    },
+    [
+      companyId,
+      user?.uid,
+      user?.displayName,
+      user?.email,
+      customUser?.displayName,
+      refreshPendingOutboxVoucherIds,
+    ]
+  );
+  const effectiveOnUnapproveVoucher = onUnapproveVoucher ?? handleUnapproveVoucherDefault;
   /** Current page slice — pagination 10/20/30 pe jo rows table me hain. */
   const pageUnapprovedVouchers = useMemo(() => {
     const seen = new Set<string>();
@@ -818,6 +872,25 @@ export function TransactionsTable({
     (context === "party" ||
       context === "staff" ||
       (context === "group" && (groupEntityType === "party" || groupEntityType === "staff")));
+  const billWiseLinkPreviewEnabled = isBillWiseMode && shouldUseOutstandingBalance;
+  const [billWiseLinkPreview, setBillWiseLinkPreview] = useState<BillWiseLinkPreviewSelection | null>(null);
+  const fyPatchedLedgerRows = useMemo(() => {
+    return patchFyOpeningRowsBillWiseBalances(
+      tableTransactions as any[],
+      context,
+      groupEntityType,
+      shouldUseOutstandingBalance
+    );
+  }, [tableTransactions, context, groupEntityType, shouldUseOutstandingBalance]);
+  const billWisePreFySegmentSum = useMemo(() => {
+    if (!shouldUseOutstandingBalance) return null;
+    return sumBillWiseOutstandingBeforeFirstFyDelimiter(fyPatchedLedgerRows, context, groupEntityType);
+  }, [fyPatchedLedgerRows, shouldUseOutstandingBalance, context, groupEntityType]);
+  /** Bill-wise carry belongs on FY opening rows — not duplicated on Book Opening when FY merge rows are present. */
+  const hasFyOpeningRowsInLedger = useMemo(
+    () => fyPatchedLedgerRows.some((r) => r?.type === FY_OPENING_ROW_TYPE),
+    [fyPatchedLedgerRows]
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [fileDisplayMode, setFileDisplayMode] = useState<FileColumnDisplayMode>(
     () => readSavedFileColumnViewPrefs().displayMode
@@ -1247,7 +1320,11 @@ export function TransactionsTable({
           : "";
     return `${prefix}-filter-${fromMs}-${toMs}-${tableTransactions.length}`;
   }, [hasSpendWiseGroups, ledgerDateFilterActive, dateRange?.from, dateRange?.to, tableTransactions.length]);
-  
+
+  useEffect(() => {
+    setBillWiseLinkPreview(null);
+  }, [ledgerListAnimateKey]);
+
   const getDisplayValue = useCallback((value: number) => {
     if (getDisplayValueProp) return getDisplayValueProp(value);
     return formatCurrency(value, {noSuffix: true, context: 'transaction'});
@@ -1533,6 +1610,7 @@ export function TransactionsTable({
     booksObScaled != null && Math.abs(safeOpeningBalance - booksObScaled) > 1e-7;
   const useGrossBooksForBillWiseObRow =
     !fyStartDateFilterActive &&
+    !hasFyOpeningRowsInLedger &&
     isBillWiseMode &&
     (context === "party" || context === "staff") &&
     openingBalanceOutstanding != null &&
@@ -1560,6 +1638,7 @@ export function TransactionsTable({
   // (tax, bank, expense, item, …) always use period ledger opening — never the bill-wise outstanding field.
   const useOutstandingForOpeningRowBalance =
     !fyStartDateFilterActive &&
+    !hasFyOpeningRowsInLedger &&
     isBillWiseMode &&
     (context === "party" || context === "staff") &&
     obOutstandingDisplay != null &&
@@ -1570,6 +1649,13 @@ export function TransactionsTable({
     : useBooksObForRowDrCr && !isBillWiseMode
       ? displayOpeningForDrCr
       : displayOpeningBalance;
+  const billWiseDatedOpeningBalance =
+    shouldUseOutstandingBalance && billWisePreFySegmentSum != null && !hasFyOpeningRowsInLedger
+      ? billWisePreFySegmentSum
+      : displayOpeningBalanceForRow;
+  const billWiseDatedOpeningDrCr = signedToOpeningDrCr(
+    shouldUseOutstandingBalance ? billWiseDatedOpeningBalance : displayOpeningForDrCr
+  );
   const obAmount = Math.abs(displayOpeningForDrCr);
   const obStatusLabel = obOutstandingDisplay != null
     ? (obOutstandingDisplay <= 0 ? "Paid" : obOutstandingDisplay >= obAmount ? "Unpaid" : "Partial")
@@ -1584,20 +1670,8 @@ export function TransactionsTable({
   const displayTotalDr = (displayPeriodDr || 0) + displayOpeningBalanceDr;
   const displayTotalCr = (displayPeriodCr || 0) + displayOpeningBalanceCr;
   /** Hide opening Dr/Cr from footer + running balance chain (User column toggle). */
-  const ledgerRunningBalanceOffset = showOpeningBalanceAmount ? 0 : displayOpeningBalance;
-  const footerTotalDr = showOpeningBalanceAmount ? displayTotalDr : displayPeriodDr || 0;
-  const footerTotalCr = showOpeningBalanceAmount ? displayTotalCr : displayPeriodCr || 0;
-  const footerClosingBalance = showOpeningBalanceAmount
-    ? displayClosingBalance
-    : displayClosingBalance - ledgerRunningBalanceOffset;
-  const adjustLedgerRunningBalance = useCallback(
-    (raw: number | null | undefined) => {
-      if (raw == null || !Number.isFinite(raw)) return raw;
-      if (showOpeningBalanceAmount) return raw;
-      return raw - ledgerRunningBalanceOffset;
-    },
-    [showOpeningBalanceAmount, ledgerRunningBalanceOffset]
-  );
+  const datedOpeningAmountVisible = isLedgerOpeningAmountVisible(LEDGER_OB_DATED_KEY);
+  const bookOpeningAmountVisible = isLedgerOpeningAmountVisible(LEDGER_OB_BOOK_KEY);
 
   // Ledger contexts: Type pill — master books OB = "Book Opening"; pagination/date-filter carry = "Dated Opening".
   const ledgerOpeningPillsEnabled =
@@ -1605,13 +1679,37 @@ export function TransactionsTable({
     ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context);
   const BOOK_OB_EPS = SHARED_BOOK_OB_EPS;
   const masterBookSignedScaled = booksObScaled ?? 0;
-  const bookRowOpeningDr = masterBookSignedScaled > 0 ? masterBookSignedScaled : 0;
-  const bookRowOpeningCr = masterBookSignedScaled < 0 ? Math.abs(masterBookSignedScaled) : 0;
+  const billWiseBookOpeningBalance = useOutstandingForOpeningRowBalance
+    ? displayOpeningBalanceForRow
+    : hasFyOpeningRowsInLedger
+      ? masterBookSignedScaled
+      : shouldUseOutstandingBalance && billWisePreFySegmentSum != null
+        ? billWisePreFySegmentSum
+        : masterBookSignedScaled;
+  const billWiseBookOpeningDrCr = signedToOpeningDrCr(billWiseBookOpeningBalance);
+  const bookRowOpeningDr =
+    shouldUseOutstandingBalance && !useOutstandingForOpeningRowBalance && !hasFyOpeningRowsInLedger
+      ? billWiseBookOpeningDrCr.debit
+      : masterBookSignedScaled > 0
+        ? masterBookSignedScaled
+        : 0;
+  const bookRowOpeningCr =
+    shouldUseOutstandingBalance && !useOutstandingForOpeningRowBalance && !hasFyOpeningRowsInLedger
+      ? billWiseBookOpeningDrCr.credit
+      : masterBookSignedScaled < 0
+        ? Math.abs(masterBookSignedScaled)
+        : 0;
   /** Spend-wise dated opening row — statement period carry (Book Opening row alag stacked row me books OB). */
   const spendWiseDatedOpeningRowSigned = displayOpeningForDrCr;
-  const spendWiseBookOpeningRowDr = displayOpeningBalanceDr;
-  const spendWiseBookOpeningRowCr = displayOpeningBalanceCr;
-  const spendWiseBookOpeningBalanceForRow = displayOpeningBalanceForRow;
+  const spendWiseBookOpeningRowDr = shouldUseOutstandingBalance
+    ? billWiseDatedOpeningDrCr.debit
+    : displayOpeningBalanceDr;
+  const spendWiseBookOpeningRowCr = shouldUseOutstandingBalance
+    ? billWiseDatedOpeningDrCr.credit
+    : displayOpeningBalanceCr;
+  const spendWiseBookOpeningBalanceForRow = shouldUseOutstandingBalance
+    ? billWiseDatedOpeningBalance
+    : displayOpeningBalanceForRow;
 
   // Footer Formatters (Same Logic as Row). When balance is 0 show "Settled" (opening row + closing balance).
   const formatFooterBalance = (value: number) => {
@@ -1792,6 +1890,108 @@ export function TransactionsTable({
       periodOpeningBalance: displayOpeningBalance,
       masterOpeningDateWithinLedgerRange,
     });
+  const datedOpeningHiddenSigned = datedOpeningAmountVisible ? 0 : displayOpeningBalance;
+  const bookOpeningHiddenSigned =
+    bookOpeningAmountVisible || !showBookOpeningAboveDatedRow
+      ? 0
+      : shouldUseOutstandingBalance
+        ? billWiseBookOpeningBalance
+        : masterBookSignedScaled;
+  const ledgerHiddenOpeningSignedTotal = useMemo(() => {
+    let total = datedOpeningHiddenSigned + bookOpeningHiddenSigned;
+    for (const row of fyPatchedLedgerRows) {
+      if (row?.type !== FY_OPENING_ROW_TYPE) continue;
+      const key = ledgerFyOpeningAmountKey(String((row as { id?: string }).id || ""));
+      if (!hiddenOpeningAmountKeys.has(key)) continue;
+      total += signedFyOpeningRowAmount(row, shouldUseOutstandingBalance);
+    }
+    return total;
+  }, [
+    fyPatchedLedgerRows,
+    hiddenOpeningAmountKeys,
+    datedOpeningHiddenSigned,
+    bookOpeningHiddenSigned,
+    shouldUseOutstandingBalance,
+  ]);
+  const ledgerTableRows = useMemo(() => {
+    if (!LEDGER_OPENING_HIDE_AMOUNT_ENABLED) return fyPatchedLedgerRows;
+    return applyHiddenLedgerOpeningAmountAdjustments(fyPatchedLedgerRows, {
+      hiddenKeys: hiddenOpeningAmountKeys,
+      fyOpeningKey: ledgerFyOpeningAmountKey,
+      datedOpeningHiddenSigned,
+      bookOpeningHiddenSigned,
+      billWisePartyStaff: shouldUseOutstandingBalance,
+    });
+  }, [
+    fyPatchedLedgerRows,
+    hiddenOpeningAmountKeys,
+    datedOpeningHiddenSigned,
+    bookOpeningHiddenSigned,
+    shouldUseOutstandingBalance,
+  ]);
+  const displayLedgerRows = useMemo(
+    () =>
+      billWiseLinkPreviewEnabled
+        ? applyBillWiseLinkPreviewGrouping(ledgerTableRows, billWiseLinkPreview)
+        : ledgerTableRows,
+    [ledgerTableRows, billWiseLinkPreview, billWiseLinkPreviewEnabled]
+  );
+  const handleBillWiseStatusLinkedVoucherClick = useCallback(
+    (transaction: any, voucherNo: string) => {
+      if (!billWiseLinkPreviewEnabled) return;
+      const anchorRowId = ledgerRowStableId(transaction);
+      const no = String(voucherNo || "").trim();
+      if (!anchorRowId || !no) return;
+      setBillWiseLinkPreview((prev) =>
+        prev?.anchorRowId === anchorRowId && prev.linkedVoucherNo === no
+          ? null
+          : { anchorRowId, linkedVoucherNo: no }
+      );
+    },
+    [billWiseLinkPreviewEnabled]
+  );
+  const getBillWiseLinkPreviewRowProps = useCallback(
+    (t: any) => {
+      if (!billWiseLinkPreviewEnabled) return {};
+      const id = ledgerRowStableId(t);
+      if (!id || id !== billWiseLinkPreview?.anchorRowId) return {};
+      return {
+        onStatusLinkedVoucherClick: (voucherNo: string) =>
+          handleBillWiseStatusLinkedVoucherClick(t, voucherNo),
+        statusLinkedVoucherPreviewActive: billWiseLinkPreview?.linkedVoucherNo ?? null,
+      };
+    },
+    [billWiseLinkPreviewEnabled, billWiseLinkPreview, handleBillWiseStatusLinkedVoucherClick]
+  );
+  const footerTotalDr = useMemo(() => {
+    let dr = displayPeriodDr || 0;
+    if (datedOpeningAmountVisible) dr += displayOpeningBalanceDr;
+    if (showBookOpeningAboveDatedRow && bookOpeningAmountVisible) dr += bookRowOpeningDr;
+    return dr;
+  }, [
+    displayPeriodDr,
+    datedOpeningAmountVisible,
+    displayOpeningBalanceDr,
+    showBookOpeningAboveDatedRow,
+    bookOpeningAmountVisible,
+    bookRowOpeningDr,
+  ]);
+  const footerTotalCr = useMemo(() => {
+    let cr = displayPeriodCr || 0;
+    if (datedOpeningAmountVisible) cr += displayOpeningBalanceCr;
+    if (showBookOpeningAboveDatedRow && bookOpeningAmountVisible) cr += bookRowOpeningCr;
+    return cr;
+  }, [
+    displayPeriodCr,
+    datedOpeningAmountVisible,
+    displayOpeningBalanceCr,
+    showBookOpeningAboveDatedRow,
+    bookOpeningAmountVisible,
+    bookRowOpeningCr,
+  ]);
+  const footerClosingBalance = LEDGER_OPENING_HIDE_AMOUNT_ENABLED
+    ? displayClosingBalance - ledgerHiddenOpeningSignedTotal
+    : displayClosingBalance;
   /** Stacked / single dated row: master book pill vs period/pagination carry pill. */
   const bookOpeningRowPillText = ledgerOpeningPillsEnabled ? "Book Opening" : openingBalanceLabel;
   const entitySnapshotOpening = useMemo(
@@ -1858,7 +2058,7 @@ export function TransactionsTable({
     : periodOpeningUnavailable
       ? "Opening unavailable"
       : primaryOpeningRowPillText;
-  const showDatedOpeningAmounts = showOpeningBalanceAmount && !authoritativeOpeningPending;
+  const showDatedOpeningAmounts = datedOpeningAmountVisible && !authoritativeOpeningPending;
 
   /** Narration sub-row: date se credit tak — `transactionTableShared` colsThroughCredit jaisa */
   const openingBalanceNarrationColSpan =
@@ -1983,16 +2183,48 @@ export function TransactionsTable({
 
   const renderOpeningBalanceUserCell = () =>
     showCol("user") && context !== "note" ? (
-      <TableCell className={ensureMinGaps ? "min-w-[148px] px-[5px] align-top" : "align-top"}>
+      <TableCell className={ensureMinGaps ? "min-w-[148px] px-[5px] align-top" : "align-top"} />
+    ) : null;
+
+  const renderOpeningBalanceDrCrCell = (
+    side: "dr" | "cr",
+    drAmount: number,
+    crAmount: number,
+    rowKey: string
+  ): React.ReactNode => {
+    const amount = side === "dr" ? drAmount : crAmount;
+    const rowVisible = isLedgerOpeningAmountVisible(rowKey);
+    if (!rowVisible) {
+      return side === "dr" ? (
         <button
           type="button"
           className="text-xs font-medium text-primary hover:underline whitespace-nowrap"
-          onClick={toggleOpeningBalanceAmount}
+          onClick={(e) => toggleLedgerOpeningAmountVisible(rowKey, e)}
         >
-          {showOpeningBalanceAmount ? "Hide Amount" : "Show Amount"}
+          Show Amount
         </button>
-      </TableCell>
-    ) : null;
+      ) : (
+        "-"
+      );
+    }
+    if (amount > 0) return formatFooterAmount(amount);
+    const showHideToggle =
+      (side === "cr" && drAmount > 0) ||
+      (side === "dr" && crAmount > 0) ||
+      (side === "dr" && drAmount <= 0 && crAmount <= 0);
+    if (showHideToggle && LEDGER_OPENING_HIDE_AMOUNT_ENABLED) {
+      return (
+        <button
+          type="button"
+          className="text-xs font-medium text-primary hover:underline whitespace-nowrap"
+          onClick={(e) => toggleLedgerOpeningAmountVisible(rowKey, e)}
+        >
+          Hide Amount
+        </button>
+      );
+    }
+    return "-";
+  };
 
   /** Bill-wise OB linked voucher detail — narration sub-row ya alag linked-only row par */
   const hasObLinkedVoucherDetail =
@@ -2101,18 +2333,37 @@ export function TransactionsTable({
     if (!useMobileCardView) return [];
     const blocks: MobileBlock[] = [];
     let i = 0;
-    while (i < tableTransactions.length) {
-      const t = tableTransactions[i] as any;
+    while (i < displayLedgerRows.length) {
+      const t = displayLedgerRows[i] as any;
       if (t._spendWiseSpacer) {
         blocks.push({ type: "spacer" });
         i++;
         continue;
       }
+      if (t._billWiseLinkPreviewGroupFirst === true) {
+        const colorIndex =
+          typeof t._billWiseLinkPreviewGroupColorIndex === "number" ? t._billWiseLinkPreviewGroupColorIndex : 0;
+        const items: any[] = [];
+        while (i < displayLedgerRows.length) {
+          const cur = displayLedgerRows[i] as any;
+          if (cur._spendWiseSpacer) break;
+          items.push(cur);
+          if (cur._billWiseLinkPreviewGroupLast === true) {
+            i++;
+            break;
+          }
+          i++;
+        }
+        if (items.length > 0) {
+          blocks.push({ type: "group", colorIndex, items });
+        }
+        continue;
+      }
       if (t._spendWiseGroupFirst === true) {
         const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
         const items: any[] = [];
-        while (i < tableTransactions.length) {
-          const cur = tableTransactions[i] as any;
+        while (i < displayLedgerRows.length) {
+          const cur = displayLedgerRows[i] as any;
           if (cur._spendWiseSpacer) break;
           items.push(cur);
           if (cur._spendWiseGroupLast === true) {
@@ -2131,10 +2382,14 @@ export function TransactionsTable({
       i++;
     }
     return blocks;
-  }, [useMobileCardView, tableTransactions]);
+  }, [useMobileCardView, displayLedgerRows]);
+
+  const hasBillWiseLinkPreviewGroups =
+    billWiseLinkPreviewEnabled && billWiseLinkPreview != null && displayLedgerRows.some((r) => r?._billWiseLinkPreviewGroupId);
+  const useLedgerGroupCardLayout = hasSpendWiseGroups || hasBillWiseLinkPreviewGroups;
 
   const spendWiseColWidths = useMemo((): number[] => {
-    if (!hasSpendWiseGroups) return [];
+    if (!useLedgerGroupCardLayout) return [];
     const w: number[] = [];
     if (showCol("syncStatus")) w.push(78);
     if (showCol("date")) {
@@ -2157,7 +2412,7 @@ export function TransactionsTable({
     w.push(40);
     return w;
   }, [
-    hasSpendWiseGroups,
+    useLedgerGroupCardLayout,
     dateSystem,
     context,
     groupEntityType,
@@ -2172,22 +2427,40 @@ export function TransactionsTable({
   ]);
 
   const tableBlocks = useMemo((): TableBlock[] | null => {
-    if (!hasSpendWiseGroups || !tableTransactions?.length) return null;
+    if (!useLedgerGroupCardLayout || !displayLedgerRows?.length) return null;
     const blocks: TableBlock[] = [];
     let i = 0;
-    while (i < tableTransactions.length) {
-      const t = tableTransactions[i] as any;
+    while (i < displayLedgerRows.length) {
+      const t = displayLedgerRows[i] as any;
       if (t._spendWiseSpacer) {
         blocks.push({ type: "spacer", id: t.id ?? (t._rowKey ?? `spacer-${i}`) });
         i++;
         continue;
       }
+      const linkPreviewGroupId =
+        typeof t._billWiseLinkPreviewGroupId === "string" ? t._billWiseLinkPreviewGroupId : "";
+      if (linkPreviewGroupId) {
+        const colorIndex =
+          typeof t._billWiseLinkPreviewGroupColorIndex === "number" ? t._billWiseLinkPreviewGroupColorIndex : 0;
+        const items: any[] = [];
+        while (i < displayLedgerRows.length) {
+          const cur = displayLedgerRows[i] as any;
+          if (cur._spendWiseSpacer) break;
+          if (String(cur._billWiseLinkPreviewGroupId || "") !== linkPreviewGroupId) break;
+          items.push(cur);
+          i++;
+        }
+        if (items.length > 0) {
+          blocks.push({ type: "group", colorIndex, items, clippedTop: false, clippedBottom: false });
+          continue;
+        }
+      }
       const groupId = typeof t._spendWiseGroupId === "string" ? t._spendWiseGroupId : "";
       if (groupId) {
         const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
         const items: any[] = [];
-        while (i < tableTransactions.length) {
-          const cur = tableTransactions[i] as any;
+        while (i < displayLedgerRows.length) {
+          const cur = displayLedgerRows[i] as any;
           if (cur._spendWiseSpacer) break;
           if (String(cur._spendWiseGroupId || "") !== groupId) break;
           items.push(cur);
@@ -2206,8 +2479,8 @@ export function TransactionsTable({
       if (t._spendWiseGroupFirst === true) {
         const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
         const items: any[] = [];
-        while (i < tableTransactions.length) {
-          const cur = tableTransactions[i] as any;
+        while (i < displayLedgerRows.length) {
+          const cur = displayLedgerRows[i] as any;
           if (cur._spendWiseSpacer) break;
           items.push(cur);
           if (cur._spendWiseGroupLast === true) {
@@ -2225,7 +2498,7 @@ export function TransactionsTable({
       i++;
     }
     return blocks;
-  }, [hasSpendWiseGroups, tableTransactions]);
+  }, [useLedgerGroupCardLayout, displayLedgerRows]);
 
   /** Book/Dated opening — spend-wise group ke andar (opening-linked group ya pehla group). */
   const spendWiseOpeningEmbedBlockIndex = useMemo(() => {
@@ -2288,12 +2561,12 @@ export function TransactionsTable({
           )}
           {showCol("dr") && !hideDebitColumn && (
             <TableCell className={cn("text-right font-semibold align-top text-green-700", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-              {showOpeningBalanceAmount && bookRowOpeningDr > 0 ? formatFooterAmount(bookRowOpeningDr) : "-"}
+              {renderOpeningBalanceDrCrCell("dr", bookRowOpeningDr, bookRowOpeningCr, LEDGER_OB_BOOK_KEY)}
             </TableCell>
           )}
           {showCol("cr") && !hideCreditColumn && (
             <TableCell className={cn("text-right font-semibold align-top text-red-700", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-              {showOpeningBalanceAmount && bookRowOpeningCr > 0 ? formatFooterAmount(bookRowOpeningCr) : "-"}
+              {renderOpeningBalanceDrCrCell("cr", bookRowOpeningDr, bookRowOpeningCr, LEDGER_OB_BOOK_KEY)}
             </TableCell>
           )}
           {showCol("status") && !hideStatusColumn && (
@@ -2303,7 +2576,7 @@ export function TransactionsTable({
           )}
           {showCol("runningBalance") && !hideBalanceColumn && (
             <TableCell className={cn("text-right font-semibold align-top", masterBookSignedScaled >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
-              {showOpeningBalanceAmount ? formatFooterBalance(masterBookSignedScaled) : "-"}
+              {bookOpeningAmountVisible ? formatFooterBalance(billWiseBookOpeningBalance) : "-"}
             </TableCell>
           )}
           <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
@@ -2339,17 +2612,25 @@ export function TransactionsTable({
         )}
         {showCol("dr") && !hideDebitColumn && (
           <TableCell className={cn("text-right text-green-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {showDatedOpeningAmounts &&
-            (useSpendWiseOpeningBalanceCard ? spendWiseBookOpeningRowDr : displayOpeningBalanceDr) > 0
-              ? formatFooterAmount(useSpendWiseOpeningBalanceCard ? spendWiseBookOpeningRowDr : displayOpeningBalanceDr)
+            {showDatedOpeningAmounts
+              ? renderOpeningBalanceDrCrCell(
+                  "dr",
+                  useSpendWiseOpeningBalanceCard ? spendWiseBookOpeningRowDr : billWiseDatedOpeningDrCr.debit,
+                  useSpendWiseOpeningBalanceCard ? spendWiseBookOpeningRowCr : billWiseDatedOpeningDrCr.credit,
+                  LEDGER_OB_DATED_KEY
+                )
               : "-"}
           </TableCell>
         )}
         {showCol("cr") && !hideCreditColumn && (
           <TableCell className={cn("text-right text-red-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {showDatedOpeningAmounts &&
-            (useSpendWiseOpeningBalanceCard ? spendWiseBookOpeningRowCr : displayOpeningBalanceCr) > 0
-              ? formatFooterAmount(useSpendWiseOpeningBalanceCard ? spendWiseBookOpeningRowCr : displayOpeningBalanceCr)
+            {showDatedOpeningAmounts
+              ? renderOpeningBalanceDrCrCell(
+                  "cr",
+                  useSpendWiseOpeningBalanceCard ? spendWiseBookOpeningRowDr : billWiseDatedOpeningDrCr.debit,
+                  useSpendWiseOpeningBalanceCard ? spendWiseBookOpeningRowCr : billWiseDatedOpeningDrCr.credit,
+                  LEDGER_OB_DATED_KEY
+                )
               : "-"}
           </TableCell>
         )}
@@ -2357,7 +2638,7 @@ export function TransactionsTable({
           <TableCell className={cn("text-center align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
             {topLedgerOpeningPillKind === "fy" ? (
               <span className="font-semibold">-</span>
-            ) : openingBalanceOutstanding != null ? (
+            ) : openingBalanceOutstanding != null && !(hasFyOpeningRowsInLedger && shouldUseOutstandingBalance) ? (
               <div className="flex flex-col items-center gap-[1px] leading-tight">
                 <Badge
                   variant="outline"
@@ -2485,14 +2766,32 @@ export function TransactionsTable({
                   </FyOpeningPillFormatPill>
                 ) : null}
               </div>
-              <span
-                className={cn(
-                  "ml-auto shrink-0 text-sm font-bold whitespace-nowrap",
-                  signed >= 0 ? "text-green-700" : "text-red-700"
-                )}
-              >
-                {formatFooterBalance(signed)}
-              </span>
+              <div className="ml-auto flex shrink-0 flex-col items-end gap-0.5">
+                {LEDGER_OPENING_HIDE_AMOUNT_ENABLED && showCol("user") ? (
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-primary hover:underline whitespace-nowrap"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleLedgerOpeningAmountVisible(ledgerFyOpeningAmountKey(String(t.id || "")), e);
+                    }}
+                  >
+                    {isLedgerOpeningAmountVisible(ledgerFyOpeningAmountKey(String(t.id || "")))
+                      ? "Hide Amount"
+                      : "Show Amount"}
+                  </button>
+                ) : null}
+                {isLedgerOpeningAmountVisible(ledgerFyOpeningAmountKey(String(t.id || ""))) ? (
+                  <span
+                    className={cn(
+                      "text-sm font-bold whitespace-nowrap",
+                      signed >= 0 ? "text-green-700" : "text-red-700"
+                    )}
+                  >
+                    {formatFooterBalance(signed)}
+                  </span>
+                ) : null}
+              </div>
             </div>
           </div>
         );
@@ -2530,7 +2829,6 @@ export function TransactionsTable({
       } else if (typeof (t as any)._spendWiseRunningBalance === "number") {
         balance = (t as any)._spendWiseRunningBalance;
       }
-      balance = adjustLedgerRunningBalance(balance) ?? balance;
       const spendWiseLinkedAmount = (t as any)._spendWiseLinkedAmount;
       if ((t as any)._spendWiseChild && typeof spendWiseLinkedAmount === "number" && spendWiseLinkedAmount > 0) {
         const isOutflow = (t.type === "payment_out" || t.type === "direct_expense") || (Number(t.credit) > 0);
@@ -2762,6 +3060,19 @@ export function TransactionsTable({
                         Approve
                       </DropdownMenuItem>
                     ) : null}
+                    {!isPendingApproval &&
+                    can("approve_transactions") &&
+                    (t as any).isApproved === true &&
+                    t?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE &&
+                    t?.type !== FY_OPENING_ROW_TYPE ? (
+                      <DropdownMenuItem
+                        onClick={() => effectiveOnUnapproveVoucher?.(t)}
+                        className="flex items-center gap-2"
+                      >
+                        <CircleOff className="h-3.5 w-3.5" />
+                        Mark as unapproved
+                      </DropdownMenuItem>
+                    ) : null}
                     {showApproveAllOnPage ? (
                       <DropdownMenuItem
                         onClick={() => void handleApproveAllVisible()}
@@ -2876,6 +3187,15 @@ export function TransactionsTable({
                 align="start"
                 billWisePink
                 className="max-w-full"
+                onVoucherClick={
+                  getBillWiseLinkPreviewRowProps(t).onStatusLinkedVoucherClick
+                    ? (voucherNo, e) => {
+                        e.stopPropagation();
+                        getBillWiseLinkPreviewRowProps(t).onStatusLinkedVoucherClick?.(voucherNo);
+                      }
+                    : undefined
+                }
+                activeVoucherNo={getBillWiseLinkPreviewRowProps(t).statusLinkedVoucherPreviewActive}
               />
             </div>
           ) : null}
@@ -2996,16 +3316,16 @@ export function TransactionsTable({
                   </div>
                   <div className="shrink-0 flex flex-col items-end gap-0.5">
                     <div className="flex items-center justify-end gap-2 min-w-0 flex-wrap">
-                      {showCol("user") ? (
+                      {LEDGER_OPENING_HIDE_AMOUNT_ENABLED && showCol("user") ? (
                         <button
                           type="button"
                           className="text-xs font-medium text-primary hover:underline whitespace-nowrap shrink-0"
-                          onClick={toggleOpeningBalanceAmount}
+                          onClick={(e) => toggleLedgerOpeningAmountVisible(LEDGER_OB_BOOK_KEY, e)}
                         >
-                          {showOpeningBalanceAmount ? "Hide Amount" : "Show Amount"}
+                          {bookOpeningAmountVisible ? "Hide Amount" : "Show Amount"}
                         </button>
                       ) : null}
-                      {showOpeningBalanceAmount ? (
+                      {bookOpeningAmountVisible ? (
                         <span className={cn(
                           "text-sm font-bold px-2 py-0.5 rounded-md shrink-0",
                           masterBookSignedScaled >= 0 ? "text-green-700 bg-green-100 dark:bg-green-900/40 dark:text-green-200" : "text-red-700 bg-red-100 dark:bg-red-900/40 dark:text-red-200"
@@ -3065,16 +3385,16 @@ export function TransactionsTable({
                 {isBillWiseCardContext && obOutstandingDisplay != null ? (
                   <>
                     <div className="flex items-center justify-end gap-2 min-w-0 flex-wrap">
-                      {showCol("user") ? (
+                      {LEDGER_OPENING_HIDE_AMOUNT_ENABLED && showCol("user") ? (
                         <button
                           type="button"
                           className="text-xs font-medium text-primary hover:underline whitespace-nowrap shrink-0"
-                          onClick={toggleOpeningBalanceAmount}
+                          onClick={(e) => toggleLedgerOpeningAmountVisible(LEDGER_OB_DATED_KEY, e)}
                         >
-                          {showOpeningBalanceAmount ? "Hide Amount" : "Show Amount"}
+                          {datedOpeningAmountVisible ? "Hide Amount" : "Show Amount"}
                         </button>
                       ) : null}
-                      {showOpeningBalanceAmount ? (
+                      {datedOpeningAmountVisible ? (
                         <span className={cn(
                           "text-sm font-bold px-2 py-0.5 rounded-md shrink-0",
                           displayOpeningForDrCr >= 0 ? "text-green-700 bg-green-100 dark:bg-green-900/40 dark:text-green-200" : "text-red-700 bg-red-100 dark:bg-red-900/40 dark:text-red-200"
@@ -3091,7 +3411,7 @@ export function TransactionsTable({
                         </span>
                       ) : null}
                     </div>
-                    {/* Same order as normal transaction: status and link above, running balance (Bal) below */}
+                    {datedOpeningAmountVisible ? (
                     <div className="flex flex-col items-end gap-0.5 mt-0.5">
                       <Badge
                         variant="outline"
@@ -3112,6 +3432,7 @@ export function TransactionsTable({
                         Bal:{formatCurrency(Math.abs(displayOpeningBalanceForRow), { noSuffix: true, context: "transaction" })}{displayOpeningBalanceForRow >= 0 ? " Dr" : " Cr"}
                       </Badge>
                     </div>
+                    ) : null}
                     {/* Bill-wise OB mobile: linked vouchers Status→Balance wrap */}
                     {showNarration && openingBalanceLinkedVoucherNos?.length ? (
                       <div className="mt-0.5 w-full min-w-0 flex justify-end">
@@ -3127,16 +3448,16 @@ export function TransactionsTable({
                   </>
                 ) : (
                   <div className="flex items-center justify-end gap-2 min-w-0 flex-wrap">
-                    {showCol("user") ? (
+                    {LEDGER_OPENING_HIDE_AMOUNT_ENABLED && showCol("user") ? (
                       <button
                         type="button"
                         className="text-xs font-medium text-primary hover:underline whitespace-nowrap shrink-0"
-                        onClick={toggleOpeningBalanceAmount}
+                        onClick={(e) => toggleLedgerOpeningAmountVisible(LEDGER_OB_DATED_KEY, e)}
                       >
-                        {showOpeningBalanceAmount ? "Hide Amount" : "Show Amount"}
+                        {datedOpeningAmountVisible ? "Hide Amount" : "Show Amount"}
                       </button>
                     ) : null}
-                    {showOpeningBalanceAmount ? (
+                    {datedOpeningAmountVisible ? (
                       <span className={cn(
                         "text-sm font-bold px-2 py-0.5 rounded-md shrink-0",
                         (isBillWiseCardContext ? displayOpeningBalanceForRow : displayOpeningForDrCr) >= 0 ? "text-green-700 bg-green-100 dark:bg-green-900/40 dark:text-green-200" : "text-red-700 bg-red-100 dark:bg-red-900/40 dark:text-red-200"
@@ -3376,12 +3697,12 @@ export function TransactionsTable({
                       )}
                       {showCol("dr") && !hideDebitColumn && (
                         <TableCell className={cn("text-right text-green-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-                          {showOpeningBalanceAmount && bookRowOpeningDr > 0 ? formatFooterAmount(bookRowOpeningDr) : "-"}
+                          {renderOpeningBalanceDrCrCell("dr", bookRowOpeningDr, bookRowOpeningCr, LEDGER_OB_BOOK_KEY)}
                         </TableCell>
                       )}
                       {showCol("cr") && !hideCreditColumn && (
                         <TableCell className={cn("text-right text-red-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-                          {showOpeningBalanceAmount && bookRowOpeningCr > 0 ? formatFooterAmount(bookRowOpeningCr) : "-"}
+                          {renderOpeningBalanceDrCrCell("cr", bookRowOpeningDr, bookRowOpeningCr, LEDGER_OB_BOOK_KEY)}
                         </TableCell>
                       )}
                       {showCol("status") && !hideStatusColumn && (
@@ -3391,7 +3712,7 @@ export function TransactionsTable({
                       )}
                       {showCol("runningBalance") && !hideBalanceColumn && (
                         <TableCell className={cn("text-right font-semibold align-top", masterBookSignedScaled >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
-                          {showOpeningBalanceAmount ? formatFooterBalance(masterBookSignedScaled) : "-"}
+                          {bookOpeningAmountVisible ? formatFooterBalance(billWiseBookOpeningBalance) : "-"}
                         </TableCell>
                       )}
                       <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
@@ -3427,15 +3748,23 @@ export function TransactionsTable({
                         />
                       </TableCell>
                     )}
-                    {showCol("dr") && !hideDebitColumn && <TableCell className={cn("text-right text-green-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-                        {showOpeningBalanceAmount && displayOpeningBalanceDr > 0 ? formatFooterAmount(displayOpeningBalanceDr) : '-'}
-                    </TableCell>}
-                    {showCol("cr") && !hideCreditColumn && <TableCell className={cn("text-right text-red-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-                        {showOpeningBalanceAmount && displayOpeningBalanceCr > 0 ? formatFooterAmount(displayOpeningBalanceCr) : '-'}
-                    </TableCell>}
+                    {showCol("dr") && !hideDebitColumn && (
+                      <TableCell className={cn("text-right text-green-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+                        {showDatedOpeningAmounts
+                          ? renderOpeningBalanceDrCrCell("dr", billWiseDatedOpeningDrCr.debit, billWiseDatedOpeningDrCr.credit, LEDGER_OB_DATED_KEY)
+                          : "-"}
+                      </TableCell>
+                    )}
+                    {showCol("cr") && !hideCreditColumn && (
+                      <TableCell className={cn("text-right text-red-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+                        {showDatedOpeningAmounts
+                          ? renderOpeningBalanceDrCrCell("cr", billWiseDatedOpeningDrCr.debit, billWiseDatedOpeningDrCr.credit, LEDGER_OB_DATED_KEY)
+                          : "-"}
+                      </TableCell>
+                    )}
                     {showCol("status") && !hideStatusColumn && (
                       <TableCell className={cn("text-center align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
-                        {openingBalanceOutstanding != null ? (
+                        {openingBalanceOutstanding != null && !(hasFyOpeningRowsInLedger && shouldUseOutstandingBalance) ? (
                           <div className="flex flex-col items-center gap-[1px] leading-tight">
                             <Badge
                               variant="outline"
@@ -3456,8 +3785,8 @@ export function TransactionsTable({
                       </TableCell>
                     )}
                     {showCol("runningBalance") && !hideBalanceColumn && (
-                        <TableCell className={cn("text-right font-semibold align-top", displayOpeningBalanceForRow >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
-                            {showOpeningBalanceAmount ? formatFooterBalance(displayOpeningBalanceForRow) : "-"}
+                        <TableCell className={cn("text-right font-semibold align-top", billWiseDatedOpeningBalance >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
+                            {datedOpeningAmountVisible ? formatFooterBalance(billWiseDatedOpeningBalance) : "-"}
                         </TableCell>
                     )}
                     <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
@@ -3469,7 +3798,7 @@ export function TransactionsTable({
                 </>
               )
             )}
-            {tableTransactions.length > 0 ? (
+            {displayLedgerRows.length > 0 ? (
               tableBlocks ? (
                 <AnimatePresence
                   key={ledgerListAnimateKey}
@@ -3564,14 +3893,25 @@ export function TransactionsTable({
                                           fullRowColSpan={fullRowColSpan}
                                           animateLayout={useTxnRowLayoutAnimation}
                                           layoutTransition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
-                                          isSpendWiseChild={!!(t as any)._spendWiseChild}
-                                          isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}
-                                          isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}
+                                          isSpendWiseChild={
+                                            !!(t as any)._spendWiseChild ||
+                                            !!(t as any)._billWiseLinkPreviewGroupLast
+                                          }
+                                          isSpendWiseGroupFirst={
+                                            !!(t as any)._billWiseLinkPreviewGroupFirst ||
+                                            !!(t as any)._spendWiseGroupFirst
+                                          }
+                                          isSpendWiseGroupLast={
+                                            !!(t as any)._billWiseLinkPreviewGroupLast ||
+                                            !!(t as any)._spendWiseGroupLast
+                                          }
                                           spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
-                                          spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
+                                          spendWiseGroupColorIndex={
+                                            (t as any)._billWiseLinkPreviewGroupColorIndex ??
+                                            (t as any)._spendWiseGroupColorIndex
+                                          }
                                           spendWiseGroupSize={block.items.length}
                                           spendWiseInGroupCard
-                                          ledgerRunningBalanceOffset={ledgerRunningBalanceOffset}
                                           blinkMode={blinkMode}
                                           showNarration={showNarration}
                                           userNames={userNames}
@@ -3588,6 +3928,7 @@ export function TransactionsTable({
                                           onAddLink={onAddLink}
                                           onHistoryVoucher={onHistoryVoucher}
                                           onApproveVoucher={effectiveOnApproveVoucher}
+                                          onUnapproveVoucher={effectiveOnUnapproveVoucher}
                                           onApproveAllVisible={handleApproveAllVisible}
                                           showApproveAll={showApproveAllOnPage}
                                           {...getStatementCheckRowProps(t)}
@@ -3613,6 +3954,24 @@ export function TransactionsTable({
                                           activeRecurringTriggerVoucherIds={activeRecurringTriggerVoucherIds}
                                           textSearchHighlight={rowTextSearchHighlight}
                                           columnFilters={filters}
+                                          showOpeningBalanceAmount={
+                                            (t as any).type === FY_OPENING_ROW_TYPE
+                                              ? isLedgerOpeningAmountVisible(
+                                                  ledgerFyOpeningAmountKey(String((t as any).id || ""))
+                                                )
+                                              : true
+                                          }
+                                          onToggleOpeningBalanceAmount={
+                                            LEDGER_OPENING_HIDE_AMOUNT_ENABLED &&
+                                            (t as any).type === FY_OPENING_ROW_TYPE
+                                              ? (e: React.MouseEvent) =>
+                                                  toggleLedgerOpeningAmountVisible(
+                                                    ledgerFyOpeningAmountKey(String((t as any).id || "")),
+                                                    e
+                                                  )
+                                              : undefined
+                                          }
+                                          {...getBillWiseLinkPreviewRowProps(t)}
                                           {...getSpendWiseRowMenuProps(t)}
                                         />
                                         {/* Card ke andar txn ke beech — alag sep row (zoom-stable border-top) */}
@@ -3649,7 +4008,6 @@ export function TransactionsTable({
                           spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
                           spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
                           spendWiseGroupSize={1}
-                          ledgerRunningBalanceOffset={ledgerRunningBalanceOffset}
                           blinkMode={blinkMode}
                           showNarration={showNarration}
                           userNames={userNames}
@@ -3666,6 +4024,7 @@ export function TransactionsTable({
                           onAddLink={onAddLink}
                           onHistoryVoucher={onHistoryVoucher}
                           onApproveVoucher={effectiveOnApproveVoucher}
+                          onUnapproveVoucher={effectiveOnUnapproveVoucher}
                           onApproveAllVisible={handleApproveAllVisible}
                           showApproveAll={showApproveAllOnPage}
                           {...getStatementCheckRowProps(t)}
@@ -3691,6 +4050,24 @@ export function TransactionsTable({
                           activeRecurringTriggerVoucherIds={activeRecurringTriggerVoucherIds}
                           textSearchHighlight={rowTextSearchHighlight}
                           columnFilters={filters}
+                          showOpeningBalanceAmount={
+                            (t as any).type === FY_OPENING_ROW_TYPE
+                              ? isLedgerOpeningAmountVisible(
+                                  ledgerFyOpeningAmountKey(String((t as any).id || ""))
+                                )
+                              : true
+                          }
+                          onToggleOpeningBalanceAmount={
+                            LEDGER_OPENING_HIDE_AMOUNT_ENABLED &&
+                            (t as any).type === FY_OPENING_ROW_TYPE
+                              ? (e: React.MouseEvent) =>
+                                  toggleLedgerOpeningAmountVisible(
+                                    ledgerFyOpeningAmountKey(String((t as any).id || "")),
+                                    e
+                                  )
+                              : undefined
+                          }
+                          {...getBillWiseLinkPreviewRowProps(t)}
                           {...getSpendWiseRowMenuProps(t)}
                         />
                       </React.Fragment>
@@ -3706,7 +4083,7 @@ export function TransactionsTable({
                 >
                   {(() => {
                     let txnStripeSeq = 0;
-                    return tableTransactions.map((t: any, rowIndex: number) => {
+                    return displayLedgerRows.map((t: any, rowIndex: number) => {
                       const rowKey = (t as any)._rowKey ?? (t as any).id ?? `row-${rowIndex}`;
                       return (t as any)._spendWiseSpacer ? (
                         <motion.tr
@@ -3752,6 +4129,7 @@ export function TransactionsTable({
                           onAddLink={onAddLink}
                           onHistoryVoucher={onHistoryVoucher}
                           onApproveVoucher={effectiveOnApproveVoucher}
+                          onUnapproveVoucher={effectiveOnUnapproveVoucher}
                           onApproveAllVisible={handleApproveAllVisible}
                           showApproveAll={showApproveAllOnPage}
                           {...getStatementCheckRowProps(t)}
@@ -3777,7 +4155,24 @@ export function TransactionsTable({
                           activeRecurringTriggerVoucherIds={activeRecurringTriggerVoucherIds}
                           textSearchHighlight={rowTextSearchHighlight}
                           columnFilters={filters}
-                          ledgerRunningBalanceOffset={ledgerRunningBalanceOffset}
+                          showOpeningBalanceAmount={
+                            (t as any).type === FY_OPENING_ROW_TYPE
+                              ? isLedgerOpeningAmountVisible(
+                                  ledgerFyOpeningAmountKey(String((t as any).id || ""))
+                                )
+                              : true
+                          }
+                          onToggleOpeningBalanceAmount={
+                            LEDGER_OPENING_HIDE_AMOUNT_ENABLED &&
+                            (t as any).type === FY_OPENING_ROW_TYPE
+                              ? (e: React.MouseEvent) =>
+                                  toggleLedgerOpeningAmountVisible(
+                                    ledgerFyOpeningAmountKey(String((t as any).id || "")),
+                                    e
+                                  )
+                              : undefined
+                          }
+                          {...getBillWiseLinkPreviewRowProps(t)}
                           {...getSpendWiseRowMenuProps(t)}
                         />
                       );

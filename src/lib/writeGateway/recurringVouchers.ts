@@ -1704,6 +1704,7 @@ async function getNextVoucherNumberForType(
       companyDoc,
       voucherLike: { type, subType: String(sourceVoucher.subType || "") || undefined },
       selectedPrefix: prefix,
+      voucherDate: sourceVoucher.date,
     });
   } catch {
     /* fall through to Firestore scan */

@@ -300,6 +300,165 @@ export function rpDialogRowSelectionKey(side: "receivables" | "payables", row: R
   return `${side}:${row.kind}:${row.entityId}`;
 }
 
+/** Per-company outstanding collection deadlines — localStorage `YYYY-MM-DD` (local calendar) keyed by `rpDialogRowSelectionKey`. */
+export type RpDeadlinesMap = Record<string, string>;
+
+const RP_DEADLINES_STORAGE_PREFIX = "pl_rp_collection_deadlines_v1_";
+
+export function rpDeadlinesStorageKey(companyId: string): string {
+  return `${RP_DEADLINES_STORAGE_PREFIX}${companyId}`;
+}
+
+export function formatRpDeadlineYmd(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+export function parseRpDeadlineYmd(ymd: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const day = Number(m[3]);
+  if (!y || mo < 1 || mo > 12 || day < 1 || day > 31) return null;
+  return new Date(y, mo - 1, day, 12, 0, 0, 0);
+}
+
+export function readRpDeadlinesFromStorage(companyId: string): RpDeadlinesMap {
+  if (!companyId || typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(rpDeadlinesStorageKey(companyId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: RpDeadlinesMap = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof k === "string" && typeof v === "string" && parseRpDeadlineYmd(v)) out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function writeRpDeadlinesToStorage(companyId: string, map: RpDeadlinesMap): void {
+  if (!companyId || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(rpDeadlinesStorageKey(companyId), JSON.stringify(map));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+const RP_DEADLINE_AUTOSHOW_PREFIX = "pl_rp_deadline_autoshown_v1_";
+
+export function wasRpDeadlineDialogAutoShownToday(companyId: string, today = new Date()): boolean {
+  if (!companyId || typeof window === "undefined") return false;
+  try {
+    return (
+      window.localStorage.getItem(`${RP_DEADLINE_AUTOSHOW_PREFIX}${companyId}`) ===
+      formatRpDeadlineYmd(today)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function markRpDeadlineDialogAutoShownToday(companyId: string, today = new Date()): void {
+  if (!companyId || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(`${RP_DEADLINE_AUTOSHOW_PREFIX}${companyId}`, formatRpDeadlineYmd(today));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+export function rpDialogRowHasOutstandingBalance(row: RpDialogRow): boolean {
+  return Math.abs(Number(row.balance) || 0) > 1e-6;
+}
+
+export function isRpDeadlineDueOnOrBefore(deadlineYmd: string, today: Date): boolean {
+  return deadlineYmd <= formatRpDeadlineYmd(today);
+}
+
+function rpDialogRowMatchesDeadlineDue(
+  side: "receivables" | "payables",
+  row: RpDialogRow,
+  deadlines: RpDeadlinesMap,
+  today: Date
+): boolean {
+  const ymd = deadlines[rpDialogRowSelectionKey(side, row)];
+  if (!ymd) return false;
+  if (!rpDialogRowHasOutstandingBalance(row)) return false;
+  return isRpDeadlineDueOnOrBefore(ymd, today);
+}
+
+export function filterRpDialogRowsForDeadlineDue(
+  rows: RpDialogRow[],
+  side: "receivables" | "payables",
+  deadlines: RpDeadlinesMap,
+  today: Date
+): RpDialogRow[] {
+  const out: RpDialogRow[] = [];
+  for (const row of rows) {
+    if (row.isIcPeerCompanyGroup && row.icChildren?.length) {
+      const filteredChildren = row.icChildren.filter((child) =>
+        rpDialogRowMatchesDeadlineDue(side, child, deadlines, today)
+      );
+      if (filteredChildren.length === 0) continue;
+      const balance = filteredChildren.reduce((sum, child) => sum + (Number(child.balance) || 0), 0);
+      out.push({
+        ...row,
+        icChildren: filteredChildren,
+        balance,
+        secondaryLabel: icPeerCompanyGroupSecondaryLabel(filteredChildren.length),
+      });
+    } else if (rpDialogRowMatchesDeadlineDue(side, row, deadlines, today)) {
+      out.push(row);
+    }
+  }
+  return out;
+}
+
+export function filterRpDialogSectionsForDeadlineDue(
+  sections: RpDialogSection[],
+  side: "receivables" | "payables",
+  deadlines: RpDeadlinesMap,
+  today: Date
+): RpDialogSection[] {
+  return sections
+    .map((section) => {
+      const rows = filterRpDialogRowsForDeadlineDue(section.rows, side, deadlines, today);
+      return {
+        ...section,
+        rows,
+        rowCount: rpDialogLeafCount(rows),
+      };
+    })
+    .filter((section) => section.rows.length > 0);
+}
+
+export function countRpDeadlineDueAccounts(
+  summary: ReceivablesPayablesFinancialSummary,
+  categoryFilter: RpCategoryFilter,
+  deadlines: RpDeadlinesMap,
+  today: Date
+): number {
+  let n = 0;
+  for (const side of ["receivables", "payables"] as const) {
+    const sections = buildRpDialogSections(side, summary, categoryFilter);
+    for (const section of sections) {
+      n += filterRpDialogRowsForDeadlineDue(section.rows, side, deadlines, today).reduce(
+        (sum, row) => sum + rpDialogLeafCount([row]),
+        0
+      );
+    }
+  }
+  return n;
+}
+
 /** Party / Bank / Staff / Tax — Balance Sheet ledger popup. IC company group is not a ledger. */
 export function rpDialogRowCanOpenLedger(row: RpDialogRow): boolean {
   if (row.isIcPeerCompanyGroup) return false;

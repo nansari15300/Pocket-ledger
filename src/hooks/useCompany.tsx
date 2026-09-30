@@ -228,6 +228,9 @@ export type Company = {
     fiscalYearEnd?: Timestamp;
     voucherPrefixes?: Record<string, string[]>;
     autoVoucherNumbering?: Record<string, boolean>;
+    /** Default true — auto voucher nos embed FY span from voucher date (e.g. PUR-82-83-002). */
+    autoVoucherIncludeFy?: boolean;
+    voucherNumberFyFormat?: "short" | "mixed" | "full";
     allowVoucherNumberEditing?: Record<string, boolean>;
     enableVoucherPrefixSelection?: Record<string, boolean>;
     allowRateEditing?: Record<string, boolean>;
@@ -559,6 +562,8 @@ function mergePlHostCompanyMetaFields(prev: Company, next: Company): Company {
     "sharedWith",
     "voucherPrefixes",
     "autoVoucherNumbering",
+    "autoVoucherIncludeFy",
+    "voucherNumberFyFormat",
     "allowVoucherNumberEditing",
     "allowRateEditing",
     "enableVoucherPrefixSelection",

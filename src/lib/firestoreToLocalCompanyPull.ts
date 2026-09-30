@@ -22,7 +22,11 @@ import {
 import { decryptFirestoreCompanyDocIfNeeded, type ServerBackupCryptoContext } from "@/lib/serverBackupEncryption";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { preserveLocalVoucherApprovalOverIncoming } from "@/lib/ledgerPendingApproval";
-import { readPendingApprovalOutboxByVoucherId } from "@/lib/localVoucherOutbox";
+import {
+  readPendingApprovalOutboxByVoucherId,
+  readPendingBillWiseOutboxByVoucherId,
+} from "@/lib/localVoucherOutbox";
+import { preserveLocalVoucherBillWiseOverIncoming } from "@/lib/ledgerPendingBillWiseLinks";
 
 /** Merge options: `storageOption: local` par same doc id pe Firestore purana na jeete (restore / backup). */
 export type MergeRemoteLocalDocsOptions = {
@@ -471,16 +475,24 @@ export async function mergeRemoteSnapshotWithLocalOnlyDocs(
     const pendingApprovalById = isVoucherCollection
       ? await readPendingApprovalOutboxByVoucherId(localCompanyId)
       : new Map<string, Record<string, unknown>>();
+    const pendingBillWiseById = isVoucherCollection
+      ? await readPendingBillWiseOutboxByVoucherId(localCompanyId)
+      : new Map<string, Record<string, unknown>>();
     const preserveVoucherApproval = (
       localRow: Record<string, unknown> | null | undefined,
       incoming: Record<string, unknown>
     ): Record<string, unknown> => {
       if (!isVoucherCollection) return incoming;
       const id = String(incoming?.id || localRow?.id || "").trim();
-      return preserveLocalVoucherApprovalOverIncoming(
+      const withApproval = preserveLocalVoucherApprovalOverIncoming(
         localRow,
         incoming,
         id ? pendingApprovalById.get(id) : undefined
+      );
+      return preserveLocalVoucherBillWiseOverIncoming(
+        localRow,
+        withApproval,
+        id ? pendingBillWiseById.get(id) : undefined
       );
     };
     // Har Firestore snapshot row ko mirror marker lagao taaki purge vs pending-local differentiate ho sake.

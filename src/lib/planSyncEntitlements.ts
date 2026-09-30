@@ -1,5 +1,3 @@
-"use client";
-
 import type { EntitlementKey, Entitlements, Plan, PlanId } from "@/config/plans";
 import { getPlan } from "@/config/plans";
 

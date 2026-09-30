@@ -38,6 +38,7 @@ import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucher
 import { tryResolveInterCompanyPeerAttachmentUrl } from "@/lib/interCompany/interCompanyAttachmentPeerResolve";
 import { resolveStaticAttachmentDisplay } from "@/lib/staticAttachmentDisplayUrl";
 import { sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
+// STRICT (parked) open forcePdfKind: also import getAttachmentFormatLabel
 
 /** UI se pata ho to sniffing kam: pdf / image / unknown */
 export type AttachmentKindHint = "pdf" | "image" | "other";
@@ -360,6 +361,16 @@ export async function openAttachmentInApp(
   // warna isLocalFileRef check miss karta tha aur error dialog dikhta tha.
   const u = normalizeAttachmentUrlForDevicePreview(String(url || "").trim());
   if (!u) return;
+
+  // STRICT (parked): PDF URL / label → hamesha PDF open path (portal JPEG raster se kind:image skip).
+  // const pathOnlyForKind = u.split("?")[0].split("#")[0].toLowerCase();
+  // const forcePdfKind =
+  //   getAttachmentFormatLabel(u) === "PDF" ||
+  //   pathLooksPdf(pathOnlyForKind) ||
+  //   u.toLowerCase().startsWith("data:application/pdf");
+  // if (forcePdfKind && opts?.kind !== "pdf") {
+  //   opts = { ...opts, kind: "pdf" };
+  // }
 
   /**
    * Files tick OFF (Online): no network download.

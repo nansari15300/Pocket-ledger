@@ -696,6 +696,37 @@ export async function readPendingApprovalOutboxByVoucherId(
   return out;
 }
 
+/** Bill-wise link: pending outbox allocations — stale snapshot mirror pe wipe mat karo. */
+export async function readPendingBillWiseOutboxByVoucherId(
+  companyId: string
+): Promise<Map<string, Record<string, unknown>>> {
+  const out = new Map<string, Record<string, unknown>>();
+  try {
+    const cid = companyId.trim();
+    if (!cid) return out;
+    const db = await getBrowserDbForCompanyId(companyId);
+    if (!db) return out;
+    const rows = db
+      .prepare(
+        `SELECT doc_id, payload FROM sync_outbox WHERE company_id = ? AND collection_name = 'vouchers'`
+      )
+      .all(cid) as Array<{ doc_id?: string; payload?: string }>;
+    for (const row of rows) {
+      const id = String(row?.doc_id || "").trim();
+      if (!id) continue;
+      try {
+        const payload = outboxJsonParse(String(row.payload || "{}"));
+        if (Array.isArray(payload.allocations)) out.set(id, payload);
+      } catch {
+        /* skip row */
+      }
+    }
+  } catch {
+    /* empty */
+  }
+  return out;
+}
+
 /** Approve / Approve All: server pe turant push — refresh se pehle Firestore align ho. */
 export function scheduleVoucherApprovalOutboxFlush(companyId: string, voucherIds: string[]): void {
   const cid = String(companyId || "").trim();
@@ -709,6 +740,11 @@ export function scheduleVoucherApprovalOutboxFlush(companyId: string, voucherIds
       });
     }
   })().catch(() => undefined);
+}
+
+/** Bill-wise link: source + targets turant cloud — EXE live snapshot 20–50s wait mat kare. */
+export function scheduleVoucherLinkOutboxFlush(companyId: string, voucherIds: string[]): void {
+  scheduleVoucherApprovalOutboxFlush(companyId, voucherIds);
 }
 
 export async function removeOutboxRowsForCompanyDoc(
@@ -751,23 +787,40 @@ export type FlushVoucherOutboxOptions = {
 let flushVoucherOutboxInFlight: Promise<{ ok: number; failed: number }> | null = null;
 /** Enqueue during an in-flight flush used to join that promise and never send the new row (journal files stuck on EXE). */
 let flushVoucherOutboxQueued = false;
+/**
+ * While a flush is in flight, another caller may enqueue (link/approve). Drop `only` on the
+ * follow-up round so newly queued docs are not stuck waiting 20–50s for a later full flush.
+ */
+let flushVoucherOutboxFollowUpOptions: FlushVoucherOutboxOptions | undefined;
 
 export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): Promise<{ ok: number; failed: number }> {
   if (flushVoucherOutboxInFlight) {
     flushVoucherOutboxQueued = true;
+    flushVoucherOutboxFollowUpOptions = {
+      ...(flushVoucherOutboxFollowUpOptions || {}),
+      ...(options || {}),
+      only: undefined,
+      priority: options?.priority ?? flushVoucherOutboxFollowUpOptions?.priority,
+    };
     return flushVoucherOutboxInFlight;
   }
   flushVoucherOutboxInFlight = (async () => {
     let last = { ok: 0, failed: 0 };
+    let roundOptions = options;
     try {
       do {
         flushVoucherOutboxQueued = false;
-        const round = await flushVoucherOutboxImpl(options);
+        const followUp = flushVoucherOutboxFollowUpOptions;
+        flushVoucherOutboxFollowUpOptions = undefined;
+        const opts = followUp ?? roundOptions;
+        roundOptions = followUp ? { ...followUp, only: undefined } : roundOptions;
+        const round = await flushVoucherOutboxImpl(opts);
         last = { ok: last.ok + round.ok, failed: round.failed };
       } while (flushVoucherOutboxQueued);
       return last;
     } finally {
       flushVoucherOutboxInFlight = null;
+      flushVoucherOutboxFollowUpOptions = undefined;
     }
   })();
   return flushVoucherOutboxInFlight;

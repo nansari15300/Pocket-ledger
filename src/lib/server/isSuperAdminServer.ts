@@ -1,6 +1,7 @@
 import { getAdminDb } from "@/lib/firebaseAdmin";
+import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 
-/** Admin API: SuperAdmin = users role, superAdminEmails, ya hardcoded allowlist. */
+/** Admin API: SuperAdmin = users role, admin_config, env allowlist, ya hardcoded emails. */
 export async function isSuperAdminServer(uid: string, email: string | undefined): Promise<boolean> {
   const db = getAdminDb();
   const normalize = (v: string | undefined | null) => String(v || "").trim().toLowerCase();
@@ -10,8 +11,15 @@ export async function isSuperAdminServer(uid: string, email: string | undefined)
 
   if (email) {
     const normEmail = normalize(email);
-    const byEmail = await db.collection("users").where("email", "==", email).limit(10).get();
-    for (const d of byEmail.docs) {
+    // Client SuperAdmin gate (`getSuperAdminEmails` / NEXT_PUBLIC_SUPER_ADMIN_EMAILS) ke saath align.
+    if (getSuperAdminEmails().map((x) => normalize(x)).includes(normEmail)) return true;
+
+    const byEmailExact = await db.collection("users").where("email", "==", email).limit(10).get();
+    const byEmailLower =
+      normalize(email) !== email
+        ? await db.collection("users").where("email", "==", normalize(email)).limit(10).get()
+        : null;
+    for (const d of [...byEmailExact.docs, ...(byEmailLower?.docs ?? [])]) {
       const role = normalize(String((d.data() as { role?: string })?.role ?? ""));
       if (role === "superadmin") return true;
     }

@@ -28,7 +28,9 @@ import {
   removeOutboxRowsForCompanyDoc,
   flushVoucherOutbox,
   scheduleVoucherApprovalOutboxFlush,
+  scheduleVoucherLinkOutboxFlush,
 } from "@/lib/localVoucherOutbox";
+import { markLedgerVouchersLocalBillWiseLinked } from "@/lib/ledgerPendingBillWiseLinks";
 import { syncPendingFiles } from "@/lib/localPendingFiles";
 import { classifyAttachmentRef, logAttachmentPipeline } from "@/lib/attachmentPipelineDebug";
 import {
@@ -89,6 +91,7 @@ import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
+import { ADMIN_PANEL_COMPANY_LOCAL_ID } from "@/lib/adminPanelCompany/constants";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 import { isFirebaseLedgerCompanyDataSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { isOnlineCompanyLedgerCloudSyncAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
@@ -847,6 +850,25 @@ export async function patchVoucherFields(
     coerceVoucherDocumentDate(payload);
     await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, payload);
     schedulePatchAttachmentCleanup(payload);
+    if (companyId === ADMIN_PANEL_COMPANY_LOCAL_ID) {
+      const adminCloudPatch: Record<string, unknown> = {};
+      if (Object.prototype.hasOwnProperty.call(partial, "allocations")) {
+        adminCloudPatch.allocations = partial.allocations;
+      }
+      if (Object.prototype.hasOwnProperty.call(partial, "openingBalanceAllocated")) {
+        adminCloudPatch.openingBalanceAllocated = partial.openingBalanceAllocated;
+      }
+      if (Object.keys(adminCloudPatch).length > 0) {
+        // Background — await mat karo; N patches × 25s toast "Saving links…" stuck kar deta hai.
+        void import("@/lib/adminPanelCompany/syncVoucherPatchToCloud")
+          .then(({ syncAdminPanelCompanyVoucherFieldsToCloud }) =>
+            syncAdminPanelCompanyVoucherFieldsToCloud(voucherId, adminCloudPatch)
+          )
+          .catch((e) => {
+            console.warn("[patchVoucherFields] admin panel cloud allocation sync failed", e);
+          });
+      }
+    }
     if (isSoftDeleteLedgerPatch(partial)) {
       try {
         const { cancelDriveAttachmentSideEffectsForDoc } = await import(
@@ -1349,6 +1371,57 @@ async function approveVoucherLocalPersist(
     await syncInterCompanySourceApprovedToPeerTarget(payload);
   }
   await approveInterCompanyPeerCopy(payload, approvedByUserId, approvedByName, options);
+}
+
+/** Local mirror pe unapprove persist (approve ka inverse). */
+async function unapproveVoucherLocalPersist(
+  companyId: string,
+  voucherId: string,
+  actorUserId: string,
+  actorName?: string | null,
+  options?: ApproveVoucherHistoryOptions
+): Promise<void> {
+  const resolved = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId);
+  if (!resolved) throw new Error("Voucher not found.");
+  const { voucher, writeCompanyId } = resolved;
+  if ((voucher as Record<string, unknown>)?.["isApproved"] !== true) return;
+  const { enabled: historyEnabled, limit: historyLimit } = isLocalOnlyMode()
+    ? await getEffectiveHistorySettings(companyId)
+    : { enabled: true, limit: 10 };
+  const existingHistory = Array.isArray((voucher as Record<string, unknown>)?.["history"])
+    ? ((voucher as Record<string, unknown>)["history"] as unknown[])
+    : [];
+  const actorLabel = actorName || actorUserId;
+  const previousApprover =
+    (voucher as Record<string, unknown>)?.["approvedByUserName"] ||
+    (voucher as Record<string, unknown>)?.["approvedByUserId"] ||
+    "N/A";
+  const unapproveEntry = {
+    changedAt: new Date(),
+    changedBy: actorUserId,
+    changes: {
+      isApproved: { from: true, to: false },
+      approvedByUserName: { from: (voucher as Record<string, unknown>)?.["approvedByUserName"] || "N/A", to: null },
+      approvedByUserId: { from: (voucher as Record<string, unknown>)?.["approvedByUserId"] || "N/A", to: null },
+      approvedBy: { from: previousApprover, to: "N/A" },
+    },
+  };
+  const newHistory = historyEnabled ? [unapproveEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+  const payload = removeUndefined({
+    ...voucher,
+    id: voucherId,
+    isApproved: false,
+    approvedByUserId: null,
+    approvedByUserName: null,
+    approvedAt: null,
+    history: newHistory,
+  }) as Record<string, unknown>;
+  coerceVoucherDocumentDate(payload);
+  await upsertCompanyDocInBrowserDb(writeCompanyId, "vouchers", voucherId, payload, {
+    notify: options?.skipUiNotify === true ? false : undefined,
+    skipCloudSyncEnqueue: options?.skipUiNotify === true ? true : undefined,
+  });
+  await enqueueVoucherOutbox(writeCompanyId, "update", voucherId, payload);
 }
 
 /**
@@ -2154,11 +2227,14 @@ export async function syncBillWiseAllocationsToTargetVouchers(
       dispatchVoucherLivePatch(companyId, targetId, { allocations });
     }
     if (options?.forceSqliteFirst && shouldAutoFlushOutboxAfterEnqueue()) {
-      void flushVoucherOutbox({
-        priority: { companyId, collectionName: "vouchers", docId: sourceVoucherId },
-      }).catch((e) => {
-        console.warn("[syncBillWiseAllocations] priority outbox flush failed", e);
-      });
+      const flushIds = Array.from(
+        new Set(
+          [...toRemove, ...newAllocations.map((a) => String(a.voucherId || "").trim()), sourceVoucherId].filter(
+            (id) => id && id !== OPENING_BALANCE_VOUCHER_ID
+          )
+        )
+      );
+      scheduleVoucherLinkOutboxFlush(companyId, flushIds);
     }
     return;
   }
@@ -2325,6 +2401,15 @@ export async function applyJournalBillWiseLinkAllocations(
     ? [...((dbJournal as { allocations: Allocation[] }).allocations ?? [])]
     : [...previousAllocations];
   const sanitizedNew = await clampJournalBillWiseAllocationsForSave(companyId, newAllocations);
+
+  const optimisticNow = Timestamp.now();
+  dispatchVoucherLivePatch(companyId, journalVoucherId, {
+    allocations: sanitizedNew,
+    updatedAt: optimisticNow,
+    lastEditedAt: optimisticNow,
+  });
+  markLedgerVouchersLocalBillWiseLinked([{ id: journalVoucherId, allocations: sanitizedNew }]);
+
   await patchVoucherFields(companyId, journalVoucherId, { allocations: sanitizedNew }, { forceSqliteFirst: true });
   await syncBillWiseAllocationsToTargetVouchers(
     companyId,
@@ -2358,20 +2443,37 @@ export async function applyJournalBillWiseLinkAllocations(
     await clearBillWiseAllocationsFromSourcesToTarget(companyId, journalVoucherId, removedIds);
   }
 
-  dispatchVoucherLivePatch(companyId, journalVoucherId, { allocations: sanitizedNew });
-
   const affectedTargetIds = new Set<string>(removedIds);
   for (const a of [...dbPrevious, ...sanitizedNew]) {
     if (a.voucherId && a.voucherId !== OPENING_BALANCE_VOUCHER_ID) affectedTargetIds.add(a.voucherId);
   }
+  const liveEntries: { id: string; allocations: Allocation[] }[] = [
+    { id: journalVoucherId, allocations: sanitizedNew },
+  ];
+  const nowTs = Timestamp.now();
+  dispatchVoucherLivePatch(companyId, journalVoucherId, {
+    allocations: sanitizedNew,
+    updatedAt: nowTs,
+    lastEditedAt: nowTs,
+  });
   for (const targetId of affectedTargetIds) {
     const data = await getCompanyDocFromBrowserDb(companyId, "vouchers", targetId).catch(() => null);
     if (!data) continue;
     const allocations = Array.isArray((data as { allocations?: Allocation[] }).allocations)
       ? (data as { allocations: Allocation[] }).allocations
       : [];
-    dispatchVoucherLivePatch(companyId, targetId, { allocations });
+    liveEntries.push({ id: targetId, allocations });
+    dispatchVoucherLivePatch(companyId, targetId, {
+      allocations,
+      updatedAt: nowTs,
+      lastEditedAt: nowTs,
+    });
   }
+  markLedgerVouchersLocalBillWiseLinked(liveEntries);
+  scheduleVoucherLinkOutboxFlush(
+    companyId,
+    liveEntries.map((e) => e.id)
+  );
 }
 
 /**
@@ -2385,25 +2487,52 @@ export async function applyPaymentBillWiseLinkAllocations(
   if (!companyId || !sourceVoucher?.id) throw new Error("Missing companyId or voucher");
   const sourceId = sourceVoucher.id;
   const previousAllocations = Array.isArray(sourceVoucher.allocations) ? sourceVoucher.allocations : [];
+
+  // Optimistic paint before SQLite — EXE status turant Paid/Partial (stale snapshot hold neeche).
+  const optimisticNow = Timestamp.now();
+  dispatchVoucherLivePatch(companyId, sourceId, {
+    allocations: newAllocations,
+    updatedAt: optimisticNow,
+    lastEditedAt: optimisticNow,
+  });
+  markLedgerVouchersLocalBillWiseLinked([{ id: sourceId, allocations: newAllocations }]);
+
   await patchVoucherFields(companyId, sourceId, { allocations: newAllocations }, { forceSqliteFirst: true });
   await syncBillWiseAllocationsToTargetVouchers(companyId, sourceId, newAllocations, previousAllocations, {
     forceSqliteFirst: true,
   });
 
-  dispatchVoucherLivePatch(companyId, sourceId, { allocations: newAllocations });
-
   const affectedTargetIds = new Set<string>();
   for (const a of [...previousAllocations, ...newAllocations]) {
     if (a.voucherId && a.voucherId !== OPENING_BALANCE_VOUCHER_ID) affectedTargetIds.add(a.voucherId);
   }
+  const liveEntries: { id: string; allocations: Allocation[] }[] = [
+    { id: sourceId, allocations: newAllocations },
+  ];
+  const nowTs = Timestamp.now();
+  dispatchVoucherLivePatch(companyId, sourceId, {
+    allocations: newAllocations,
+    updatedAt: nowTs,
+    lastEditedAt: nowTs,
+  });
   for (const targetId of affectedTargetIds) {
     const data = await getCompanyDocFromBrowserDb(companyId, "vouchers", targetId).catch(() => null);
     if (!data) continue;
     const allocations = Array.isArray((data as { allocations?: Allocation[] }).allocations)
       ? (data as { allocations: Allocation[] }).allocations
       : [];
-    dispatchVoucherLivePatch(companyId, targetId, { allocations });
+    liveEntries.push({ id: targetId, allocations });
+    dispatchVoucherLivePatch(companyId, targetId, {
+      allocations,
+      updatedAt: nowTs,
+      lastEditedAt: nowTs,
+    });
   }
+  markLedgerVouchersLocalBillWiseLinked(liveEntries);
+  scheduleVoucherLinkOutboxFlush(
+    companyId,
+    liveEntries.map((e) => e.id)
+  );
 }
 
 /**
@@ -2573,6 +2702,139 @@ export async function approveVoucherWithHistory(
         companyId,
         voucherId,
         rollbackRow ? { ...rollbackRow, id: voucherId } : { id: voucherId, isApproved: false }
+      );
+    }
+    throw e;
+  }
+}
+
+/**
+ * Mark an approved voucher as unapproved and append history.
+ * Mirrors approve: optimistic live patch → SQLite-first → background outbox flush.
+ */
+export async function unapproveVoucherWithHistory(
+  companyId: string,
+  voucherId: string,
+  actorUserId: string,
+  actorName?: string | null,
+  options?: ApproveVoucherHistoryOptions
+): Promise<void> {
+  if (!companyId || !voucherId || !actorUserId) {
+    throw new Error("Missing required unapprove parameters.");
+  }
+  const skipUiNotify = options?.skipUiNotify === true;
+  const unapproveLivePatch = {
+    id: voucherId,
+    isApproved: false,
+    approvedByUserId: null,
+    approvedByUserName: null,
+    approvedAt: null,
+  };
+
+  const localResolved = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId);
+  const rollbackRow = localResolved?.voucher as Record<string, unknown> | undefined;
+
+  if (!skipUiNotify) {
+    dispatchVoucherLivePatch(companyId, voucherId, unapproveLivePatch);
+  }
+
+  beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
+
+  try {
+    if (localResolved && localResolved.voucher?.isApproved !== true) {
+      return;
+    }
+
+    if (localResolved) {
+      await unapproveVoucherLocalPersist(companyId, voucherId, actorUserId, actorName, {
+        skipUiNotify,
+      });
+      if (!skipUiNotify) {
+        scheduleVoucherApprovalOutboxFlush(companyId, [voucherId]);
+      }
+      return;
+    }
+
+    const authFsId = await resolveAuthoritativeFirestoreCompanyId(companyId);
+    const fsCompanyIds = Array.from(
+      new Set([String(companyId).trim(), String(authFsId || "").trim()].filter(Boolean))
+    );
+    const { enabled: historyEnabled, limit: historyLimit } = await getEffectiveHistorySettings(companyId);
+
+    let unapprovedViaFs = false;
+    for (const fsCompanyId of fsCompanyIds) {
+      const voucherRef = doc(firestore, `companies/${fsCompanyId}/vouchers`, voucherId);
+      try {
+        const preSnap = await getDoc(voucherRef);
+        if (!preSnap.exists()) continue;
+
+        await runTransaction(firestore, async (tx) => {
+          const snap = await tx.get(voucherRef);
+          if (!snap.exists()) throw new Error("Voucher not found.");
+
+          const voucher = snap.data() as any;
+          if (voucher?.isApproved !== true) return;
+
+          const existingHistory = Array.isArray(voucher?.history) ? voucher.history : [];
+          const previousApprover = voucher?.approvedByUserName || voucher?.approvedByUserId || "N/A";
+          const unapproveEntry = {
+            changedAt: new Date(),
+            changedBy: actorUserId,
+            changes: {
+              isApproved: { from: true, to: false },
+              approvedByUserName: { from: voucher?.approvedByUserName || "N/A", to: null },
+              approvedByUserId: { from: voucher?.approvedByUserId || "N/A", to: null },
+              approvedBy: { from: previousApprover, to: "N/A" },
+            },
+          };
+          const newHistory = historyEnabled ? [unapproveEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+
+          tx.update(voucherRef, {
+            isApproved: false,
+            approvedByUserId: null,
+            approvedByUserName: null,
+            approvedAt: null,
+            history: newHistory,
+          });
+        });
+        unapprovedViaFs = true;
+        break;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e || "");
+        if (msg === "Voucher not found.") continue;
+        if (!isLikelyOfflineFirestoreError(e)) throw e;
+        if (!(await allowLocalFirestoreFailureQueue(companyId))) throw e;
+        if (localResolved) {
+          await unapproveVoucherLocalPersist(companyId, voucherId, actorUserId, actorName, { skipUiNotify });
+          if (!skipUiNotify) scheduleVoucherApprovalOutboxFlush(companyId, [voucherId]);
+          return;
+        }
+        throw e;
+      }
+    }
+
+    if (unapprovedViaFs) {
+      if (skipUiNotify) {
+        await mirrorCompanyDocToBrowserDb(companyId, "vouchers", voucherId);
+      } else {
+        await mirrorVoucherDocToBrowserDb(companyId, voucherId);
+      }
+      return;
+    }
+
+    if (localResolved) {
+      await unapproveVoucherLocalPersist(companyId, voucherId, actorUserId, actorName, { skipUiNotify });
+      if (!skipUiNotify) scheduleVoucherApprovalOutboxFlush(companyId, [voucherId]);
+      return;
+    }
+
+    throw new Error("Voucher not found.");
+  } catch (e) {
+    if (!skipUiNotify) {
+      dispatchVoucherLivePatch(
+        companyId,
+        voucherId,
+        rollbackRow ? { ...rollbackRow, id: voucherId } : { id: voucherId, isApproved: true }
       );
     }
     throw e;

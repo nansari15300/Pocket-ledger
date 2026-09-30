@@ -126,22 +126,27 @@ export function BillingAddOnPurchaseCard({
   }, [initialKind]);
 
   useEffect(() => {
-    if (!isAddonScopeVisibleOnBilling(offer, "online") && scope === "online") {
-      setScope("local");
-    } else if (!isAddonScopeVisibleOnBilling(offer, "local") && scope === "local") {
-      setScope("online");
+    const onlineOk = isAddonScopeVisibleOnBilling(offer, "online") && onlineAddOnsAllowed;
+    const localOk = isAddonScopeVisibleOnBilling(offer, "local");
+    if (scope === "online" && !onlineOk) {
+      if (localOk) setScope("local");
+      return;
     }
-  }, [offer, scope]);
+    if (scope === "local" && !localOk) {
+      if (onlineOk) setScope("online");
+    }
+  }, [offer, onlineAddOnsAllowed, scope]);
 
   useEffect(() => {
-    if (!onlineAddOnsAllowed && scope === "online") {
-      setScope("local");
-    }
-  }, [onlineAddOnsAllowed, scope]);
-
-  useEffect(() => {
-    setGateway((prev) => firstAvailableGateway(gatewayAvailability, prev));
-  }, [gatewayAvailability]);
+    setGateway((prev) => {
+      const next = firstAvailableGateway(gatewayAvailability, prev);
+      return next === prev ? prev : next;
+    });
+  }, [
+    gatewayAvailability?.stripe,
+    gatewayAvailability?.khalti,
+    gatewayAvailability?.esewa,
+  ]);
 
   useEffect(() => {
     const unsub = onSnapshot(doc(firestore, "app_settings", "plans"), (snap) => {
@@ -211,8 +216,8 @@ export function BillingAddOnPurchaseCard({
       toast({ variant: "destructive", title: "Offline", description: "Back online to buy add-ons." });
       return;
     }
-    if (!userId.trim() || !companyId.trim()) {
-      toast({ variant: "destructive", title: "Select a company", description: "Choose a company first." });
+    if (!userId.trim()) {
+      toast({ variant: "destructive", title: "Sign in required", description: "Log in to buy add-ons." });
       return;
     }
     if (scope === "online" && !onlineAddOnsAllowed) {
@@ -249,7 +254,7 @@ export function BillingAddOnPurchaseCard({
         body: JSON.stringify({
           gateway,
           userId,
-          companyId,
+          ...(companyId.trim() ? { companyId } : {}),
           items,
         }),
       });

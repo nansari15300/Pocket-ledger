@@ -1,4 +1,5 @@
 import type admin from "firebase-admin";
+import { resolveAddonItemsPackedFromPaymentData } from "@/lib/payments/addonItemsPacked";
 
 export type AdminSubscriptionPaymentRow = {
   paymentId: string;
@@ -99,8 +100,7 @@ export async function listAdminSubscriptionPayments(
       planChangeTo: data.planChangeTo != null ? String(data.planChangeTo) : null,
       planChangeHistory,
       billingIntent: data.billingIntent != null ? String(data.billingIntent) : null,
-      addonItems:
-        String(data.addonItems ?? data.addonItemsPacked ?? "").trim() || null,
+      addonItems: resolveAddonItemsPackedFromPaymentData(data),
       subscriptionTermKey:
         String(data.subscriptionTermKey ?? data.termKey ?? "").trim() || null,
     };

@@ -1252,12 +1252,17 @@ export async function mirrorCollectionDocsToBrowserDbSilent(
   let upserted = 0;
   let skipped = 0;
   let pendingApprovalOutboxById: Map<string, Record<string, unknown>> | null = null;
+  let pendingBillWiseOutboxById: Map<string, Record<string, unknown>> | null = null;
   if (collectionName === "vouchers") {
     try {
-      const { readPendingApprovalOutboxByVoucherId } = await import("@/lib/localVoucherOutbox");
+      const { readPendingApprovalOutboxByVoucherId, readPendingBillWiseOutboxByVoucherId } = await import(
+        "@/lib/localVoucherOutbox"
+      );
       pendingApprovalOutboxById = await readPendingApprovalOutboxByVoucherId(companyId);
+      pendingBillWiseOutboxById = await readPendingBillWiseOutboxByVoucherId(companyId);
     } catch {
       pendingApprovalOutboxById = new Map();
+      pendingBillWiseOutboxById = new Map();
     }
   }
   for (const row of docs) {
@@ -1377,11 +1382,17 @@ export async function mirrorCollectionDocsToBrowserDbSilent(
           sqliteOnly: true,
         });
         const { preserveLocalVoucherApprovalOverIncoming } = await import("@/lib/ledgerPendingApproval");
+        const { preserveLocalVoucherBillWiseOverIncoming } = await import("@/lib/ledgerPendingBillWiseLinks");
         const pending = pendingApprovalOutboxById?.get(id) ?? null;
         payload = preserveLocalVoucherApprovalOverIncoming(
           existingForApproval as Record<string, unknown> | null,
           payload,
           pending
+        );
+        payload = preserveLocalVoucherBillWiseOverIncoming(
+          existingForApproval as Record<string, unknown> | null,
+          payload,
+          pendingBillWiseOutboxById?.get(id) ?? null
         );
       } catch {
         /* optional */
@@ -1474,12 +1485,21 @@ export async function mirrorCompanyDocToBrowserDb(
     if (collectionName === "vouchers") {
       const local = await getCompanyDocFromBrowserDb(companyId, collectionName, docId, { includeDeleted: true });
       const { preserveLocalVoucherApprovalOverIncoming } = await import("@/lib/ledgerPendingApproval");
-      const { readPendingApprovalOutboxByVoucherId } = await import("@/lib/localVoucherOutbox");
+      const { preserveLocalVoucherBillWiseOverIncoming } = await import("@/lib/ledgerPendingBillWiseLinks");
+      const { readPendingApprovalOutboxByVoucherId, readPendingBillWiseOutboxByVoucherId } = await import(
+        "@/lib/localVoucherOutbox"
+      );
       const pending = (await readPendingApprovalOutboxByVoucherId(companyId)).get(docId) ?? null;
+      const pendingBillWise = (await readPendingBillWiseOutboxByVoucherId(companyId)).get(docId) ?? null;
       payload = preserveLocalVoucherApprovalOverIncoming(
         local as Record<string, unknown> | null,
         payload,
         pending
+      );
+      payload = preserveLocalVoucherBillWiseOverIncoming(
+        local as Record<string, unknown> | null,
+        payload,
+        pendingBillWise
       );
     }
     // Server snapshot = trusted read path; voucher plan gate yahan nahi (flush already paid-gated upstream where needed).

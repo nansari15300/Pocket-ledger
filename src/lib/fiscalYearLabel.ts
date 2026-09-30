@@ -131,6 +131,16 @@ function fiscalYearShortYyRange(
   return fiscalYearShortYyRangeAd(company, partitionAt, formatStyle);
 }
 
+/** Auto voucher no FY segment — e.g. `82-83` (country + company FY template). */
+export function voucherFySegmentForDate(
+  company: FiscalCompanyLike | null | undefined,
+  date: Date,
+  formatStyle: FyOpeningPillFormat = "short"
+): string {
+  if (!(date instanceof Date) || isNaN(date.getTime())) return "";
+  return fiscalYearShortYyRange(company, date, formatStyle);
+}
+
 /**
  * FY merge divider row: "FY 2082/83 Start Date 2084-03-31" (BS/AD company ke hisaab se).
  * Settings optional text — suffix mein.

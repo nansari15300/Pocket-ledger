@@ -43,7 +43,12 @@ import { nestedVoucherAlertShell } from "@/lib/dialogShellChrome";
 import { mapPartiesForVoucherCombobox } from "@/lib/masterAccountFreeze/comboboxOptions";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
-import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
+import {
+  replaceVoucherSaveLoadingWithShortSuccess,
+  beginVoucherSaveLoadingOrBlock,
+  voucherSaveErrorToast,
+  runWithVoucherLinkSaveProgress,
+} from "@/lib/voucherSaveUi";
 
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -66,6 +71,8 @@ import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_C
 import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany, resolveCompanyVoucherPrefixList } from "@/lib/nextVoucherNumber";
+import { useAutoVoucherNumberFyDateSync } from "@/hooks/useAutoVoucherNumberFyDateSync";
+import { resolvePrefixFromVoucherNumber } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { loadVoucherDataForDeletePreCheck, resolveVoucherDeleteBackdateDate } from "@/lib/voucherDeletePreCheck";
 import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
@@ -488,7 +495,10 @@ export function CreateSaleForm({
   // Link section visibility: add mode hidden by default; edit mode auto-show only when links already exist.
   const [showLinkSections, setShowLinkSections] = useState(false);
   const [pendingLinkAllocations, setPendingLinkAllocations] = useState<Record<string, number> | null>(null);
+  /** Link dialog Done already persisted — skip post-save apply + dirty flag. */
+  const billWiseLinksPersistedOnDialogRef = useRef(false);
   const resetLinksOnCopyTargetChange = useCallback(() => {
+    billWiseLinksPersistedOnDialogRef.current = false;
     setPendingLinkAllocations(null);
     setShowLinkSections(false);
     setIsLinkAdvancesOpen(false);
@@ -531,7 +541,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     return currentUrls.length !== init.length || currentUrls.some((u: any, i: number) => u !== init[i]);
   })();
   const isFormDirty =
-    _isFormFieldsDirty || _isFileDirty || (pendingLinkAllocations != null) || recurringVoucherAuxiliaryDirty;
+    _isFormFieldsDirty ||
+    _isFileDirty ||
+    (pendingLinkAllocations != null && !billWiseLinksPersistedOnDialogRef.current) ||
+    recurringVoucherAuxiliaryDirty;
   // Effect deps mein isFormDirty mat rakho — file/field dirty hote hi effect dubara chal kar naye voucher template ka khali partyId set kar deta tha
   const watchedLineItems = useWatch({ control: form.control, name: "lineItems", defaultValue: [] });
   const watchedDiscount = useWatch({ control: form.control, name: "discount" });
@@ -639,11 +652,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   useEffect(() => {
     if (!onEffectiveLinksChange) return;
     if (pendingLinkAllocations === null) {
-      onEffectiveLinksChange(undefined);
+      if (!billWiseLinksPersistedOnDialogRef.current) {
+        onEffectiveLinksChange(undefined);
+      }
       return;
     }
     onEffectiveLinksChange(linkedAmountRows.length > 0);
   }, [onEffectiveLinksChange, pendingLinkAllocations, linkedAmountRows.length]);
+
+  useEffect(() => {
+    billWiseLinksPersistedOnDialogRef.current = false;
+  }, [voucher?.id]);
   // Convert to Record for dialog initial state so edit link page shows correct tick (avoids stale vouchers)
   const effectiveLinkedAmountsForDialog = useMemo(() => {
     const r: Record<string, number> = {};
@@ -908,6 +927,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           companyDoc: company as Record<string, unknown>,
           voucherLike: { type: "sale", lineItems: [{ type: liType }] },
           selectedPrefix: prefix,
+          voucherDate: form.getValues("date"),
         });
         form.setValue("voucherNumber", nextNo);
       } catch (err) {
@@ -923,6 +943,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       fetchVoucherNumber();
     }
   }, [voucher?.id, savedVoucherId, isEditingAndConverting, fetchVoucherNumber, primaryLineItemType, company, isAutoVoucherEnabled]);
+
+  useAutoVoucherNumberFyDateSync({
+    form,
+    company: company as Record<string, unknown>,
+    isAutoVoucherEnabled,
+    editingSavedVoucher: Boolean(voucher?.id && savedVoucherId && !isEditingAndConverting),
+    shouldFetchNextOnDateChange: Boolean((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled),
+    fetchVoucherNumber: () => fetchVoucherNumber(),
+    resolvePrefix: () => {
+      const key = primaryLineItemType === "service" ? "sale_service" : "sale";
+      const list = resolveCompanyVoucherPrefixList(key, company?.voucherPrefixes?.[key]);
+      return resolvePrefixFromVoucherNumber(String(form.getValues("voucherNumber") || ""), list, list[0]);
+    },
+  });
 
   /* ---------------------------- TOTALS CALC LOGIC ------------------------- */
 
@@ -1434,14 +1468,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           }
         }
 
+        const needsLinkSyncOnSave =
+          pendingLinkAllocations !== null &&
+          !billWiseLinksPersistedOnDialogRef.current &&
+          !!(companyId && docId && vouchers?.length);
+
         // Baaki linkage / alerts / print background — Save & Close par dialog turant band (Firestore row already persisted).
         const postSaveTail = async () => {
-          if (pendingLinkAllocations && companyId && docId && vouchers?.length) {
+          if (needsLinkSyncOnSave) {
             const partyIdForLink = data.partyId ?? form.getValues("partyId");
             if (partyIdForLink) {
               const partyForOb = processedParties.find((p) => p.id === partyIdForLink);
               const showOBRow = Number(partyForOb?.openingBalance ?? 0) < 0;
-              try {
+              const linkResult = await runWithVoucherLinkSaveProgress(async () => {
                 await applyAdvancesAllocationsToServer({
                   companyId,
                   mode: "sale",
@@ -1452,9 +1491,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   vouchers,
                   showOBRow,
                 });
-                if (isMounted.current) setPendingLinkAllocations(null);
-              } catch (e) {
-                console.error(e);
+                if (isMounted.current) {
+                  setPendingLinkAllocations(null);
+                  billWiseLinksPersistedOnDialogRef.current = false;
+                }
+              });
+              if (!linkResult.ok) {
                 sonnerToast.error("Sale saved but linking advances failed.", { duration: 4500 });
               }
             }
@@ -4254,9 +4296,37 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           targetOutstandingOverride={Math.max(0, (total || 0) - totalLinked)}
           targetTotalAmount={total ?? 0}
           partyOpeningBalance={processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0}
-          onConfirm={(payload) => {
-            setPendingLinkAllocations(payload.linkedAmounts && Object.keys(payload.linkedAmounts).length > 0 ? { ...payload.linkedAmounts } : {});
+          onConfirm={async (payload) => {
+            const linkedAmounts =
+              payload.linkedAmounts && Object.keys(payload.linkedAmounts).length > 0
+                ? { ...payload.linkedAmounts }
+                : {};
+            setPendingLinkAllocations(linkedAmounts);
             setIsLinkAdvancesOpen(false);
+            const docId = voucher?.id ?? savedVoucherId;
+            if (!docId || !companyId || !partyId || !vouchers?.length) return;
+            const partyForOb = processedParties.find((p) => p.id === partyId);
+            const linkResult = await runWithVoucherLinkSaveProgress(async () => {
+              await applyAdvancesAllocationsToServer({
+                companyId,
+                mode: "sale",
+                targetVoucherId: docId,
+                targetPartyId: partyId,
+                balanceKind: "all",
+                linkedAmounts,
+                vouchers,
+                showOBRow: Number(partyForOb?.openingBalance ?? 0) < 0,
+              });
+              billWiseLinksPersistedOnDialogRef.current = true;
+              setPendingLinkAllocations(null);
+              onEffectiveLinksChange?.(false);
+              onVoucherAction?.("saved", false, docId);
+            });
+            if (!linkResult.ok) {
+              sonnerToast.error("Could not update bill-wise links.", {
+                description: "Try again or check connection.",
+              });
+            }
           }}
           initialLinkedAmounts={pendingLinkAllocations ?? effectiveLinkedAmountsForDialog}
         />
