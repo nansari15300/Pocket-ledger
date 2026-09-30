@@ -89,26 +89,37 @@ export async function listFyKeysWithVouchersInSqlite(
 
     await yieldToUi();
 
-    const pageStmt = db.prepare(
-      `SELECT doc_date_ms FROM company_docs_projection
+    const pageSql = `SELECT doc_date_ms FROM company_docs_projection
        WHERE company_id = ? AND collection = 'vouchers' AND doc_date_ms IS NOT NULL
        ORDER BY doc_date_ms ASC
-       LIMIT ? OFFSET ?`
-    );
+       LIMIT ? OFFSET ?`;
 
     const keys = new Set<string>();
     let offset = 0;
     let scanned = 0;
     while (true) {
-      const rows = pageStmt.all(companyId, FY_KEY_SCAN_PAGE, offset) as Array<{
+      // BrowserDbWrapper.prepare().all() frees the sql.js statement in `finally` —
+      // never reuse one prepare() across pages (throws "Statement closed").
+      const liveDb = await getBrowserDbForCompanyId(companyId);
+      if (!liveDb) {
+        fyScanLog("db missing mid-scan", { companyId, offset, scanned });
+        break;
+      }
+      const rows = liveDb.prepare(pageSql).all(companyId, FY_KEY_SCAN_PAGE, offset) as Array<{
         doc_date_ms?: number;
       }>;
       if (!rows.length) break;
 
+      const pageMs: number[] = [];
       for (let i = 0; i < rows.length; i++) {
         const ms = Number(rows[i]?.doc_date_ms);
-        if (!Number.isFinite(ms)) continue;
-        keys.add(getAnusuchi13FyKey(country, new Date(ms), companyDates));
+        if (Number.isFinite(ms)) pageMs.push(ms);
+      }
+
+      for (let i = 0; i < pageMs.length; i++) {
+        keys.add(getAnusuchi13FyKey(country, new Date(pageMs[i]), companyDates));
+        // Yield inside large pages so FY key math does not freeze UI.
+        if (i > 0 && i % 100 === 0) await yieldToUi();
       }
 
       scanned += rows.length;
