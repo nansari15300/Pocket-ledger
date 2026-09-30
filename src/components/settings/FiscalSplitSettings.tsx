@@ -81,7 +81,7 @@ export function FiscalSplitSettings() {
     setMode("merge");
 
     if (!fyRows.length) {
-      setTickedFyKeys(new Set());
+      setTickedFyKeys((prev) => (prev.size === 0 ? prev : new Set()));
       return;
     }
 
@@ -89,7 +89,10 @@ export function FiscalSplitSettings() {
       ? normalizeTickedFyKeys(fyRows, new Set(local.fiscalMergeTickedFyKeys))
       : null;
     if (fromSavedKeys?.size) {
-      setTickedFyKeys(fromSavedKeys);
+      setTickedFyKeys((prev) => {
+        if (prev.size === fromSavedKeys.size && [...fromSavedKeys].every((k) => prev.has(k))) return prev;
+        return fromSavedKeys;
+      });
       return;
     }
 
@@ -97,18 +100,33 @@ export function FiscalSplitSettings() {
       fyRows,
       local.fiscalMergePartitionAtIsos ?? (local.fiscalMergePartitionAtIso ? [local.fiscalMergePartitionAtIso] : null)
     );
-    setTickedFyKeys(normalizeTickedFyKeys(fyRows, fromPartitions));
+    const normalized = normalizeTickedFyKeys(fyRows, fromPartitions);
+    setTickedFyKeys((prev) => {
+      if (prev.size === normalized.size && [...normalized].every((k) => prev.has(k))) return prev;
+      return normalized;
+    });
   }, [companyId, fyRows]);
+
+  const fiscalMergePartitionAtKey =
+    company?.fiscalMergePartitionAt == null
+      ? ""
+      : typeof company.fiscalMergePartitionAt === "string"
+        ? company.fiscalMergePartitionAt
+        : company.fiscalMergePartitionAt instanceof Date
+          ? company.fiscalMergePartitionAt.toISOString()
+          : String(company.fiscalMergePartitionAt);
 
   useEffect(() => {
     loadTickedFromLocal();
-  }, [loadTickedFromLocal, company?.fiscalSplitMode, company?.fiscalMergePartitionAt, company?.fiscalPartitionLabel]);
+  }, [loadTickedFromLocal, company?.fiscalSplitMode, fiscalMergePartitionAtKey, company?.fiscalPartitionLabel]);
 
   useEffect(() => {
     if (mode !== "merge" || !fyRows.length) return;
     setTickedFyKeys((prev) => {
       const normalized = normalizeTickedFyKeys(fyRows, prev);
-      return normalized.size ? normalized : defaultTickedFyKeys(fyRows);
+      const next = normalized.size ? normalized : defaultTickedFyKeys(fyRows);
+      if (prev.size === next.size && [...next].every((k) => prev.has(k))) return prev;
+      return next;
     });
   }, [mode, fyRows]);
 

@@ -140,13 +140,20 @@ export async function ensureFyVoucherIndex(params: {
     }
   }
 
-  // Local projection first — EXISTS-per-FY (not full voucher row scan).
+  // Local projection — paginated date scan (yielded). Never block UI with giant `.all()`.
   const fromSqlite = await rebuildIndexFromSqliteProjection(
     companyId,
     country,
     companyDates,
     onSqliteScanProgress
   );
+  console.info("[FY-SCAN] ensureFyVoucherIndex sqlite projection", {
+    companyId,
+    fyKeyCount: fromSqlite.fyKeys.length,
+    keys: fromSqlite.fyKeys.slice(0, 12),
+    minDateMs: fromSqlite.minDateMs,
+    maxDateMs: fromSqlite.maxDateMs,
+  });
   if (fromSqlite.fyKeys.length) {
     if (online && fsCompanyId) {
       void writeFyVoucherIndexToFirestore(fsCompanyId, fromSqlite).catch((err) => {
@@ -157,6 +164,10 @@ export async function ensureFyVoucherIndex(params: {
   }
 
   if (online && fsCompanyId) {
+    console.info("[FY-SCAN] ensureFyVoucherIndex falling back to Firestore scan", {
+      companyId,
+      fsCompanyId,
+    });
     const { index, vouchersScanned } = await rebuildIndexFromFirestoreScan({
       fsCompanyId,
       companyId,

@@ -1,55 +1,39 @@
 "use client";
 
-import { endOfDay, startOfDay } from "date-fns";
 import { getBrowserDbForCompanyId } from "@/lib/localSqlite";
 import type { CompanyFiscalYearDates } from "@/lib/fiscalRange";
-import { getAnusuchi13FyKey, getFiscalRangeForFyKey } from "@/lib/reports/anusuchi13Confirmation";
+import { getAnusuchi13FyKey } from "@/lib/reports/anusuchi13Confirmation";
 import { markFyArchived, listArchivedFyKeys } from "@/lib/fyPagination/archiveStore";
 import { runningFyKey } from "@/lib/fyPagination/periodBounds";
 
 export type FyKeySqliteScanProgress = {
-  phase: "span" | "fy_probe";
+  phase: "span" | "page_scan";
   scanned: number;
   total: number;
 };
 
+const FY_KEY_SCAN_PAGE = 250;
+/** Safety: never walk more than this many FY steps when filling gaps elsewhere. */
+export const FY_KEY_FILL_MAX_STEPS = 80;
+
 function yieldToUi(): Promise<void> {
   return new Promise((resolve) => {
-    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-      window.requestAnimationFrame(() => resolve());
-      return;
-    }
+    // setTimeout(0) is more reliable than rAF alone when the tab is busy.
     setTimeout(resolve, 0);
   });
 }
 
-function nextFyKey(fyKey: string): string | null {
-  const parts = fyKey.split("-").map((s) => Number(s.trim()));
-  if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) return null;
-  return `${parts[0] + 1}-${parts[1] + 1}`;
-}
-
-function fillFyKeysBetween(sortedVoucherKeys: string[]): string[] {
-  if (!sortedVoucherKeys.length) return [];
-  const out: string[] = [sortedVoucherKeys[0]];
-  for (let i = 1; i < sortedVoucherKeys.length; i++) {
-    const target = sortedVoucherKeys[i];
-    let cursor = out[out.length - 1];
-    while (cursor !== target) {
-      const next = nextFyKey(cursor);
-      if (!next || next === cursor) break;
-      out.push(next);
-      cursor = next;
-    }
-    if (out[out.length - 1] !== target) out.push(target);
+function fyScanLog(...args: unknown[]) {
+  try {
+    console.info("[FY-SCAN]", ...args);
+  } catch {
+    /* ignore */
   }
-  return out;
 }
 
 /**
- * Distinct FY keys with vouchers — O(FY years), not O(all vouchers).
- * MIN/MAX date span → candidate FY keys → EXISTS probe per year (indexed).
- * Yields between probes so Settings / company switch stay responsive.
+ * Distinct FY keys with vouchers — paginated projection scan (not one giant `.all()`).
+ * Yields every page so FY settings / company switch stay clickable.
  */
 export async function listFyKeysWithVouchersInSqlite(
   companyId: string,
@@ -59,64 +43,105 @@ export async function listFyKeysWithVouchersInSqlite(
 ): Promise<string[]> {
   if (typeof window === "undefined" || !companyId) return [];
   const db = await getBrowserDbForCompanyId(companyId);
-  if (!db) return [];
+  if (!db) {
+    fyScanLog("no sqlite db", { companyId });
+    return [];
+  }
   try {
     onProgress?.({ phase: "span", scanned: 0, total: 0 });
     const span = db
       .prepare(
-        `SELECT MIN(doc_date_ms) AS min_ms, MAX(doc_date_ms) AS max_ms
+        `SELECT MIN(doc_date_ms) AS min_ms, MAX(doc_date_ms) AS max_ms, COUNT(*) AS cnt
          FROM company_docs_projection
          WHERE company_id = ? AND collection = 'vouchers' AND doc_date_ms IS NOT NULL`
       )
-      .get(companyId) as { min_ms?: number; max_ms?: number } | undefined;
+      .get(companyId) as { min_ms?: number; max_ms?: number; cnt?: number } | undefined;
 
     const minMs =
       span?.min_ms != null && Number.isFinite(Number(span.min_ms)) ? Number(span.min_ms) : null;
     const maxMs =
       span?.max_ms != null && Number.isFinite(Number(span.max_ms)) ? Number(span.max_ms) : null;
-    if (minMs == null || maxMs == null) return [];
+    const totalApprox = span?.cnt != null && Number.isFinite(Number(span.cnt)) ? Number(span.cnt) : 0;
+
+    fyScanLog("projection span", {
+      companyId,
+      minMs,
+      maxMs,
+      totalApprox,
+      country: country || null,
+      hasCompanyDates: Boolean(companyDates?.fiscalYearStart && companyDates?.fiscalYearEnd),
+    });
+
+    if (minMs == null || maxMs == null || totalApprox <= 0) {
+      // Projection may lag behind full voucher docs — try a light count without date filter.
+      const anyVoucher = db
+        .prepare(
+          `SELECT COUNT(*) AS cnt FROM company_docs_projection
+           WHERE company_id = ? AND collection = 'vouchers'`
+        )
+        .get(companyId) as { cnt?: number } | undefined;
+      fyScanLog("no dated projection rows", {
+        companyId,
+        undatedCount: Number(anyVoucher?.cnt) || 0,
+      });
+      return [];
+    }
 
     await yieldToUi();
 
-    const startKey = getAnusuchi13FyKey(country, new Date(minMs), companyDates);
-    const endKey = getAnusuchi13FyKey(country, new Date(maxMs), companyDates);
-    const candidates = fillFyKeysBetween(
-      [startKey, endKey].sort((a, b) => {
-        const aStart = Number(a.split("-")[0]) || 0;
-        const bStart = Number(b.split("-")[0]) || 0;
-        return aStart - bStart;
-      })
+    const pageStmt = db.prepare(
+      `SELECT doc_date_ms FROM company_docs_projection
+       WHERE company_id = ? AND collection = 'vouchers' AND doc_date_ms IS NOT NULL
+       ORDER BY doc_date_ms ASC
+       LIMIT ? OFFSET ?`
     );
 
-    const existsStmt = db.prepare(
-      `SELECT 1 AS ok
-       FROM company_docs_projection
-       WHERE company_id = ?
-         AND collection = 'vouchers'
-         AND doc_date_ms IS NOT NULL
-         AND doc_date_ms >= ?
-         AND doc_date_ms <= ?
-       LIMIT 1`
-    );
+    const keys = new Set<string>();
+    let offset = 0;
+    let scanned = 0;
+    while (true) {
+      const rows = pageStmt.all(companyId, FY_KEY_SCAN_PAGE, offset) as Array<{
+        doc_date_ms?: number;
+      }>;
+      if (!rows.length) break;
 
-    const withTxn: string[] = [];
-    for (let i = 0; i < candidates.length; i++) {
-      const fyKey = candidates[i];
-      const { start, end } = getFiscalRangeForFyKey(country, fyKey, companyDates);
-      const fromMs = startOfDay(start).getTime();
-      const toMs = endOfDay(end).getTime();
-      const hit = existsStmt.get(companyId, fromMs, toMs) as { ok?: number } | undefined;
-      if (hit) withTxn.push(fyKey);
-      onProgress?.({ phase: "fy_probe", scanned: i + 1, total: candidates.length });
+      for (let i = 0; i < rows.length; i++) {
+        const ms = Number(rows[i]?.doc_date_ms);
+        if (!Number.isFinite(ms)) continue;
+        keys.add(getAnusuchi13FyKey(country, new Date(ms), companyDates));
+      }
+
+      scanned += rows.length;
+      offset += rows.length;
+      onProgress?.({
+        phase: "page_scan",
+        scanned,
+        total: Math.max(totalApprox, scanned),
+      });
       await yieldToUi();
+
+      if (rows.length < FY_KEY_SCAN_PAGE) break;
+      // Hard stop — corrupt offset loops
+      if (offset > totalApprox + FY_KEY_SCAN_PAGE * 2) {
+        fyScanLog("page scan safety break", { offset, totalApprox });
+        break;
+      }
     }
 
-    return withTxn.sort((a, b) => {
+    const sorted = [...keys].sort((a, b) => {
       const aStart = Number(a.split("-")[0]) || 0;
       const bStart = Number(b.split("-")[0]) || 0;
       return aStart - bStart;
     });
-  } catch {
+    fyScanLog("page scan done", {
+      companyId,
+      scanned,
+      distinctFyKeys: sorted.length,
+      keys: sorted.slice(0, 12),
+    });
+    return sorted;
+  } catch (err) {
+    fyScanLog("listFyKeysWithVouchersInSqlite failed", err);
     return [];
   }
 }

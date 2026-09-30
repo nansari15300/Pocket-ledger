@@ -54,6 +54,12 @@ export function useFiscalSplitFyRows() {
         },
       });
       if (gen !== loadGenRef.current) return;
+      console.info("[FY-SCAN] loadFiscalSplitFyRows done", {
+        companyId: cid,
+        source: result.source,
+        rowCount: result.rows.length,
+        vouchersScanned: result.vouchersScanned,
+      });
       setFyRows(result.rows);
       setVoucherDateFrom(result.voucherDateFrom);
       setVoucherDateTo(result.voucherDateTo);
