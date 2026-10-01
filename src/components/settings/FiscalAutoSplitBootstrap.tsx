@@ -2,26 +2,26 @@
 
 /**
  * Company open: once per local calendar day, silently evaluate auto splite (day 46+ of running FY).
- * Must NOT compete with dashboard boot — cheap day-check first; FY index only if apply needed.
+ *
+ * Never rebuild FY voucher index on app/dashboard boot — that froze EXE (~12–20s after open).
+ * Auto-split only needs the running FY key; full FY list is Settings → Fiscal year page only.
  */
 
 import { useEffect, useRef } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { resolveCompanyFiscalYearDates } from "@/lib/companyFyVoucherSuggestion";
+import { getLocalFiscalSplitOrDefaults } from "@/lib/localFiscalSplitStore";
 import {
-  getLocalFiscalSplitOrDefaults,
-  writeLocalFiscalSplit,
-} from "@/lib/localFiscalSplitStore";
+  getAnusuchi13FyKey,
+} from "@/lib/reports/anusuchi13Confirmation";
 import {
   localCalendarDayKey,
   runFiscalAutoSplitDailyCheck,
-  shouldTriggerFiscalAutoSplit,
 } from "@/lib/fiscalAutoSplit";
-import { ensureFyVoucherIndex } from "@/lib/fiscalSplit/fyVoucherIndex";
 
-/** Let dashboard / outstanding paint before any FY index work. */
-const AUTO_SPLIT_DEFER_MS = 12_000;
+/** After dashboard outstanding / vouchers have had time to settle. */
+const AUTO_SPLIT_DEFER_MS = 30_000;
 
 export function FiscalAutoSplitBootstrap() {
   const { user } = useAuth();
@@ -38,7 +38,6 @@ export function FiscalAutoSplitBootstrap() {
     const runKey = `${cid}:${dayKey}`;
     if (ranForKeyRef.current === runKey) return;
 
-    // Fast path: already checked today — zero SQLite / FY work.
     const local = getLocalFiscalSplitOrDefaults(cid);
     if (local.fiscalAutoSplitLastCheckDay === dayKey) {
       ranForKeyRef.current = runKey;
@@ -47,61 +46,24 @@ export function FiscalAutoSplitBootstrap() {
 
     let cancelled = false;
 
-    const run = () => {
+    const timeoutId = window.setTimeout(() => {
       if (cancelled) return;
       const row = companyRef.current;
       if (!row) return;
-
-      void (async () => {
-        try {
-          const companyDates = resolveCompanyFiscalYearDates(row);
-          const latest = getLocalFiscalSplitOrDefaults(cid);
-          if (latest.fiscalAutoSplitLastCheckDay === dayKey) {
-            ranForKeyRef.current = runKey;
-            return;
-          }
-
-          const shouldApply =
-            latest.fiscalAutoSplitEnabled &&
-            !latest.fiscalSplitConfiguredByUser &&
-            shouldTriggerFiscalAutoSplit(row.country, new Date(), companyDates);
-
-          if (!shouldApply) {
-            writeLocalFiscalSplit(cid, {
-              ...latest,
-              fiscalAutoSplitLastCheckDay: dayKey,
-            });
-            ranForKeyRef.current = runKey;
-            return;
-          }
-
-          // Only when auto-split must tick a new FY — build index in background.
-          const { index } = await ensureFyVoucherIndex({
-            companyId: cid,
-            company: row,
-          });
-          if (cancelled) return;
-          ranForKeyRef.current = runKey;
-          runFiscalAutoSplitDailyCheck({
-            companyId: cid,
-            company: row,
-            country: row.country,
-            companyDates,
-            fyKeys: index.fyKeys,
-          });
-        } catch (err) {
-          console.warn("[FiscalAutoSplitBootstrap] deferred check failed", err);
-        }
-      })();
-    };
-
-    // Long defer so EXE dashboard outstanding / vouchers load first.
-    const timeoutId = window.setTimeout(() => {
-      const ric = window.requestIdleCallback;
-      if (typeof ric === "function") {
-        ric.call(window, () => run(), { timeout: 4000 });
-      } else {
-        run();
+      try {
+        const companyDates = resolveCompanyFiscalYearDates(row);
+        const runningKey = getAnusuchi13FyKey(row.country, new Date(), companyDates);
+        ranForKeyRef.current = runKey;
+        // Running FY only — no SQLite projection scan / ensureFyVoucherIndex on boot.
+        runFiscalAutoSplitDailyCheck({
+          companyId: cid,
+          company: row,
+          country: row.country,
+          companyDates,
+          fyKeys: runningKey ? [runningKey] : [],
+        });
+      } catch (err) {
+        console.warn("[FiscalAutoSplitBootstrap] deferred check failed", err);
       }
     }, AUTO_SPLIT_DEFER_MS);
 
@@ -109,7 +71,6 @@ export function FiscalAutoSplitBootstrap() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-    // Intentionally companyId-only — full `company` object churn was restarting FY scans and freezing EXE.
   }, [user, companyId, companyLoading]);
 
   return null;

@@ -107,11 +107,11 @@ function FyScopeLoaderInner() {
           fy,
         });
 
-        // Defer archive FY-key scan — competes with dashboard outstanding on EXE if run immediately.
+        // Very late: archive meta only. Never on dashboard first paint (EXE freeze).
         window.setTimeout(() => {
           if (cancelled) return;
           void bootstrapArchivePriorFyKeys({ companyId, country: company?.country }).catch(() => {});
-        }, 15_000);
+        }, 60_000);
 
         if (!hasFullLocalLedgerVoucherMirror(company, scope)) {
           void hydrateOpeningFromSnapshot(companyId, scope, company)
