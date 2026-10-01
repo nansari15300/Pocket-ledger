@@ -107,7 +107,11 @@ function FyScopeLoaderInner() {
           fy,
         });
 
-        void bootstrapArchivePriorFyKeys({ companyId, country: company?.country }).catch(() => {});
+        // Defer archive FY-key scan — competes with dashboard outstanding on EXE if run immediately.
+        window.setTimeout(() => {
+          if (cancelled) return;
+          void bootstrapArchivePriorFyKeys({ companyId, country: company?.country }).catch(() => {});
+        }, 15_000);
 
         if (!hasFullLocalLedgerVoucherMirror(company, scope)) {
           void hydrateOpeningFromSnapshot(companyId, scope, company)
