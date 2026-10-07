@@ -142,11 +142,12 @@ async function main() {
       return "1.0.0";
     })();
 
+  const { pickStagedReleaseApk } = require("./pickStagedReleaseApk.cjs");
   const files = fs.readdirSync(localDir);
   const exeName =
     files.find((n) => n.toLowerCase().endsWith(".exe") && n.includes(` ${windowsVersion}.exe`)) ||
     files.find((n) => n.toLowerCase().endsWith(".exe"));
-  const apkName = files.find((n) => n.toLowerCase().endsWith(".apk"));
+  const apkName = pickStagedReleaseApk(localDir, androidVersion);
   if (!exeName && !apkName) {
     console.error("[upload-public-releases] No EXE/APK in", localDir);
     process.exit(1);

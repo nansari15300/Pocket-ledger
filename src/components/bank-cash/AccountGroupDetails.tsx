@@ -123,7 +123,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
 import usePermissions from "@/hooks/usePermissions";
 import { useAuth } from "@/hooks/useAuth";
-import { userCanViewSpecialAccountBalance } from "@/lib/specialAccountUsage";
+import { userCanViewSpecialAccountBalance, userIsSpecialAccountOwner } from "@/lib/specialAccountUsage";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useLedgerPaginationReset } from "@/hooks/useLedgerPaginationReset";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
@@ -321,17 +321,19 @@ export function AccountGroupDetails({
         : accounts.some((acc) => acc.isSpecial),
     [accounts, selectedMemberAccount]
   );
+  const isSpecialAccountOwner = userIsSpecialAccountOwner(
+    String(user?.email || user?.uid || ""),
+    company
+  );
   const canViewSpecialBalance = useMemo(() => {
-    if (can("manage_special_bank_accounts")) return true;
-    const roleBal = can("view_special_account_balance");
     const specials = selectedMemberAccount?.isSpecial
       ? [selectedMemberAccount]
       : accounts.filter((acc) => acc.isSpecial);
     if (specials.length === 0) return true;
     return specials.every((acc) =>
-      userCanViewSpecialAccountBalance(acc, user?.email, roleBal)
+      userCanViewSpecialAccountBalance(acc, user?.email, isSpecialAccountOwner)
     );
-  }, [accounts, selectedMemberAccount, can, user?.email]);
+  }, [accounts, selectedMemberAccount, isSpecialAccountOwner, user?.email]);
   const isBalanceMasked = containsSpecialAccount && !canViewSpecialBalance;
 
 

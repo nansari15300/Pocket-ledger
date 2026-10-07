@@ -6,8 +6,10 @@ import { cn } from "@/lib/utils";
 import { SyncedPillPair } from "@/components/ui/synced-pill-pair";
 import { useDate } from "@/hooks/useDate";
 import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
-import usePermissions from "@/hooks/usePermissions";
+import { useAuth } from "@/hooks/useAuth";
+import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
+import { userCanViewSpecialAccountBalance, userIsSpecialAccountOwner } from "@/lib/specialAccountUsage";
 import { flipLedgerSignedBalance } from "@/lib/bankLedgerDrCrPerspective";
 import { getLoanFormIntro } from "../constants/loanFormIntros";
 import { LoanHelpInfo } from "./LoanHelpInfo";
@@ -64,8 +66,13 @@ export function LoanAccountingAccountTile({
 }) {
   const { formatCurrencyForPrint } = useDate();
   const { perspective: bankDrCrPerspective } = useBankLedgerDrCrPerspective();
-  const { can } = usePermissions();
+  const { user } = useAuth();
+  const { company } = useCompany();
   const { processedExpenseAccounts, processedAccounts, processedStaff } = useVouchers();
+  const isSpecialAccountOwner = userIsSpecialAccountOwner(
+    String(user?.email || user?.uid || ""),
+    company
+  );
 
   const optionKey =
     accountOptionIntroKey && getLoanFormIntro(accountOptionIntroKey) ? accountOptionIntroKey : null;
@@ -100,10 +107,15 @@ export function LoanAccountingAccountTile({
 
     if (editKind === "bank") {
       const account = (processedAccounts || []).find((a) => a.id === id) as
-        | { balance?: number; isSpecial?: boolean }
+        | { balance?: number; isSpecial?: boolean; useFor?: unknown }
         | undefined;
       if (!account) return null;
-      if (account.isSpecial && !can("view_special_account_balance")) return null;
+      if (
+        account.isSpecial &&
+        !userCanViewSpecialAccountBalance(account, user?.email, isSpecialAccountOwner)
+      ) {
+        return null;
+      }
       return flipLedgerSignedBalance(Number(account.balance) || 0, bankDrCrPerspective);
     }
     if (editKind === "staff") {
@@ -119,7 +131,8 @@ export function LoanAccountingAccountTile({
     processedStaff,
     processedExpenseAccounts,
     bankDrCrPerspective,
-    can,
+    user?.email,
+    isSpecialAccountOwner,
   ]);
 
   const closingBalanceLabel =

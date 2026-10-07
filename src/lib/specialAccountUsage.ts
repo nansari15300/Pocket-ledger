@@ -285,13 +285,14 @@ export function specialAccountAllowsPaymentOut(
   return specialAccountUseForIncludesUser(usage.out, userEmail || "");
 }
 
-/** Bank list + ledger balance — usage View Balance column only (+ owner). */
+/** Bank list + ledger balance — usage table View Balance tick only (+ owner). Role/manage perms do not apply. */
 export function userCanViewSpecialAccountBalance(
   account: { isSpecial?: boolean; useFor?: Partial<SpecialAccountUseFor> | null },
   userEmail: string | null | undefined,
-  _roleAllowsBalance?: boolean
+  isOwner: boolean
 ): boolean {
   if (!account.isSpecial) return true;
+  if (isOwner) return true;
   const email = String(userEmail || "").trim();
   if (!email) return false;
   const usage = resolvedUseForOnAccount(account);

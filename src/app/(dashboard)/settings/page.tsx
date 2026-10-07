@@ -39,6 +39,7 @@ import { CheckForUpdateSettingsRow } from "@/components/settings/CheckForUpdateS
 import { isLocalAppServerSettingsNavVisible } from "@/lib/localAppServerDevPreview";
 import { settingsViewHref } from "@/lib/appNavHref";
 import type { UserRole } from "@/hooks/usePermissions";
+import { masterListSelectedCn, masterListUnselectedCn } from "@/lib/listSelectionChrome";
 
 /** Settings list horizontal inset — scroll shell par ek hi layer taake left/right dono 4px barabar (ul par duble na ho) */
 const SETTINGS_NAV_INSET_X = "px-[4px]";
@@ -64,10 +65,10 @@ const SETTINGS_LIST_SHEET_RIGHT_EDGE_OPTS: EdgeSwipeDocumentOptions = { edgeWidt
 function settingsNavRowClass(isActive: boolean, isDanger?: boolean) {
   return cn(
     "pl-settings-nav-row pl-dashboard-tone-card pl-dashboard-ribbon-emerald",
-    "min-w-0 max-w-full w-full overflow-hidden rounded-lg border bg-card py-2 px-3 shadow-none",
+    "min-w-0 max-w-full w-full overflow-hidden rounded-lg py-2 px-3",
     "cursor-pointer transition-all duration-200",
     "flex items-center gap-3 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-    isActive ? "font-medium ring-1 ring-inset ring-emerald-500/40" : "hover:brightness-[0.98]",
+    isActive ? cn("font-bold", masterListSelectedCn) : cn(masterListUnselectedCn, "bg-card"),
     isDanger && !isActive && "text-destructive hover:text-destructive",
     isDanger && isActive && "text-destructive"
   );
@@ -480,6 +481,9 @@ function SettingsPageContent() {
                     <li key={item.id}>
                         <button
                             type="button"
+                            data-pl-settings-nav-row=""
+                            data-pl-settings-nav-selected={isActive ? "" : undefined}
+                            aria-current={isActive ? "page" : undefined}
                             className={settingsNavRowClass(isActive, item.isDanger)}
                             onClick={() => {
                                 setActiveViewWithUrl(item.id);
@@ -633,7 +637,10 @@ function SettingsPageContent() {
         if (!activeView) {
             return (
                 // Ek hi shell — pehle baahar grey `px-2` tha; ab poora mobile list sky card jaisa desktop aside
-                <div className={cn("flex h-full min-h-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
+                <div
+                  className={cn("flex h-full min-h-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}
+                  data-pl-settings-list=""
+                >
                     <div className={cn("flex-shrink-0 py-3", SETTINGS_LIST_HEADER_RULE, SETTINGS_NAV_INSET_X)}>
                         {renderSettingsListHeader()}
                     </div>
@@ -711,7 +718,10 @@ function SettingsPageContent() {
                             "[&>button]:hidden"
                         )}
                     >
-                        <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
+                        <div
+                          className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}
+                          data-pl-settings-list=""
+                        >
                             <SheetHeader className={cn("flex-shrink-0 space-y-1 py-3", SETTINGS_LIST_HEADER_RULE, SETTINGS_NAV_INSET_X)}>
                                 <div className="flex items-start justify-between gap-2">
                                     <div className="min-w-0">
@@ -736,7 +746,10 @@ function SettingsPageContent() {
         {/* Baen list column ~30% patla (0.4fr→0.28fr, 300px→210px min); daen content zyada; nav scroll par L/R 4px same */}
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-[5px] overflow-hidden p-2 sm:p-3 md:grid-cols-[minmax(210px,0.28fr)_minmax(0,1fr)] md:p-3">
           <aside className="flex min-h-0 w-full min-w-0 flex-col overflow-hidden">
-            <div className={cn("flex min-h-0 h-full min-w-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
+            <div
+              className={cn("flex min-h-0 h-full min-w-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}
+              data-pl-settings-list=""
+            >
               <div className={cn("flex-shrink-0 pb-3 pt-1", SETTINGS_LIST_HEADER_RULE, SETTINGS_NAV_INSET_X)}>
                 {renderSettingsListHeader()}
               </div>

@@ -14,6 +14,7 @@ const {
   writeLocalReleaseSettings,
   buildReleaseRotation,
 } = require("./release-settings.cjs");
+const { pickStagedReleaseApk } = require("./pickStagedReleaseApk.cjs");
 
 const root = path.join(__dirname, "..");
 
@@ -114,12 +115,6 @@ async function uploadStagedRelease(date) {
 
   const files = fs.readdirSync(localDir);
   const windowsVersion = require(path.join(root, "electron", "package.json")).version || "1.0.0";
-  const exeName =
-    files.find((n) => n.toLowerCase().endsWith(".exe") && n.includes(` ${windowsVersion}.exe`)) ||
-    files.find((n) => n.toLowerCase().endsWith(".exe"));
-  const apkName = files.find((n) => n.toLowerCase().endsWith(".apk"));
-  if (!exeName && !apkName) throw new Error(`No EXE/APK in ${localDir}`);
-
   const androidVersion =
     process.env.ANDROID_RELEASE_VERSION ||
     (() => {
@@ -132,6 +127,14 @@ async function uploadStagedRelease(date) {
       }
       return windowsVersion;
     })();
+  const exeName =
+    files.find((n) => n.toLowerCase().endsWith(".exe") && n.includes(` ${windowsVersion}.exe`)) ||
+    files.find((n) => n.toLowerCase().endsWith(".exe"));
+  const apkName = pickStagedReleaseApk(localDir, androidVersion);
+  if (!exeName && !apkName) throw new Error(`No EXE/APK in ${localDir}`);
+  if (apkName) {
+    console.log("[release-publish] APK pick →", apkName, `(manifest android ${androidVersion})`);
+  }
 
   let prev = null;
   try {

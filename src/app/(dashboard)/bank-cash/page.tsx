@@ -39,7 +39,7 @@ import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { bankAccountDisplayName } from "@/lib/bankAccountDisplayName";
-import { userCanViewSpecialAccountBalance } from "@/lib/specialAccountUsage";
+import { userCanViewSpecialAccountBalance, userIsSpecialAccountOwner } from "@/lib/specialAccountUsage";
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
@@ -266,13 +266,14 @@ function BankCashPageContent() {
     );
   }, [isMobile, selected, activeView]);
   
-   const roleAllowsSpecialBalance = can("view_special_account_balance");
-  const canManageSpecial = can("manage_special_bank_accounts");
+  const isSpecialAccountOwner = userIsSpecialAccountOwner(
+    String(user?.email || user?.uid || ""),
+    company
+  );
   const userCanSeeSpecialAccountBalance = useCallback(
     (acc: Account) =>
-      canManageSpecial ||
-      userCanViewSpecialAccountBalance(acc, user?.email, roleAllowsSpecialBalance),
-    [canManageSpecial, roleAllowsSpecialBalance, user?.email]
+      userCanViewSpecialAccountBalance(acc, user?.email, isSpecialAccountOwner),
+    [isSpecialAccountOwner, user?.email]
   );
 
    const processedAccountGroups = useMemo(() => {

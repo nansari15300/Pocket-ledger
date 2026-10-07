@@ -10,6 +10,7 @@ const {
   readLocalReleaseSettings,
   buildReleaseRotation,
 } = require("./release-settings.cjs");
+const { canonicalAndroidReleaseApkName } = require("./pickStagedReleaseApk.cjs");
 
 const projectRoot = path.join(__dirname, "..");
 const releasesRoot = path.join(projectRoot, "releases");
@@ -134,14 +135,28 @@ if (exe) {
 }
 
 function stageAndroidArtifact(destDir, file) {
-  copyInto(destDir, file);
+  const canonicalName = canonicalAndroidReleaseApkName(androidVersion);
+  fs.mkdirSync(destDir, { recursive: true });
+  const destFull = path.join(destDir, canonicalName);
+  fs.copyFileSync(file.full, destFull);
+  for (const name of fs.readdirSync(destDir)) {
+    if (name.toLowerCase().endsWith(".apk") && name !== canonicalName) {
+      try {
+        fs.unlinkSync(path.join(destDir, name));
+        console.log("[stage-releases] Removed stale APK →", name);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  const st = fs.statSync(destFull);
   const entry = {
-    file: file.name,
-    url: `/releases/${date}/${file.name}`,
+    file: canonicalName,
+    url: `/releases/${date}/${canonicalName}`,
     version: androidVersion,
     format: "apk",
-    bytes: file.size,
-    sizeLabel: bytesLabel(file.size),
+    bytes: st.size,
+    sizeLabel: bytesLabel(st.size),
     source: path.relative(projectRoot, file.full).replace(/\\/g, "/"),
   };
   if (playStoreUrl) entry.playStoreUrl = playStoreUrl;
@@ -150,7 +165,7 @@ function stageAndroidArtifact(destDir, file) {
 
 if (apkFile) {
   manifest.android = stageAndroidArtifact(destDir, apkFile);
-  console.log("[stage-releases] APK  →", path.join(destDir, apkFile.name));
+  console.log("[stage-releases] APK  →", path.join(destDir, manifest.android.file));
 } else {
   console.warn("[stage-releases] No Android APK found (run gradlew assembleRelease).");
 }

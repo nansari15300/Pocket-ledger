@@ -4289,6 +4289,55 @@ body[class*="theme-"].dark main [data-pl-reports-list] [data-pl-list-selected] {
   background-image: none !important;
 }
 
+/* Settings nav list — emerald default row; selected = orange border (Reports list parity). */
+body.theme-pro main [data-pl-settings-list] .pl-settings-nav-row,
+body[class*="theme-"] main [data-pl-settings-list] .pl-settings-nav-row {
+  border-width: 1.5px !important;
+  border-style: solid !important;
+  border-color: rgb(74 222 128) !important;
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(
+    90deg,
+    rgba(236, 253, 245, 0.98) 0%,
+    #ffffff 50%,
+    rgba(209, 250, 229, 0.92) 100%
+  ) !important;
+  box-shadow: none !important;
+  transition: border-color 0.15s ease !important;
+}
+body.theme-pro main [data-pl-settings-list] .pl-settings-nav-row:not([data-pl-settings-nav-selected]):hover,
+body[class*="theme-"] main [data-pl-settings-list] .pl-settings-nav-row:not([data-pl-settings-nav-selected]):hover {
+  border-color: rgb(251 146 60 / 0.5) !important;
+}
+body.theme-pro main [data-pl-settings-list] .pl-settings-nav-row[data-pl-settings-nav-selected],
+body[class*="theme-"] main [data-pl-settings-list] .pl-settings-nav-row[data-pl-settings-nav-selected] {
+  border-color: rgb(251 146 60) !important;
+  background-color: rgb(255 247 237) !important;
+  background-image: none !important;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
+}
+body.theme-pro.dark main [data-pl-settings-list] .pl-settings-nav-row,
+body[class*="theme-"].dark main [data-pl-settings-list] .pl-settings-nav-row {
+  border-color: rgb(34 197 94 / 0.7) !important;
+  background-color: rgb(6 78 59 / 0.22) !important;
+  background-image: linear-gradient(
+    90deg,
+    rgba(6, 78, 59, 0.35) 0%,
+    rgba(15, 23, 42, 0.55) 50%,
+    rgba(6, 95, 70, 0.3) 100%
+  ) !important;
+}
+body.theme-pro.dark main [data-pl-settings-list] .pl-settings-nav-row:not([data-pl-settings-nav-selected]):hover,
+body[class*="theme-"].dark main [data-pl-settings-list] .pl-settings-nav-row:not([data-pl-settings-nav-selected]):hover {
+  border-color: rgb(249 115 22 / 0.5) !important;
+}
+body.theme-pro.dark main [data-pl-settings-list] .pl-settings-nav-row[data-pl-settings-nav-selected],
+body[class*="theme-"].dark main [data-pl-settings-list] .pl-settings-nav-row[data-pl-settings-nav-selected] {
+  border-color: rgb(249 115 22) !important;
+  background-color: rgba(67, 20, 7, 0.4) !important;
+  background-image: none !important;
+}
+
 /* Report register account list — same orange selected row as Reports list (Sales, Notes, etc.). */
 body.theme-pro main [data-pl-report-register-list] [data-pl-list-row]:not([data-pl-list-selected]),
 body.theme-pro main [data-pl-report-register-list] [data-theme-list="account-list"] [data-pl-list-row]:not([data-pl-list-selected]),
@@ -7799,10 +7848,15 @@ body[class*="theme-"] main .pl-dashboard-tone-card.rounded-lg.border.bg-card.pl-
 body.theme-pro main .pl-dashboard-tone-card.rounded-lg.border.bg-card.pl-dashboard-ribbon-emerald,
 body[class*="theme-"] .pl-settings-list-shell.pl-dashboard-tone-card.pl-dashboard-ribbon-emerald,
 body.theme-pro .pl-settings-list-shell.pl-dashboard-tone-card.pl-dashboard-ribbon-emerald,
-body[class*="theme-"] .pl-settings-list-shell .pl-settings-nav-row.pl-dashboard-tone-card.pl-dashboard-ribbon-emerald,
-body.theme-pro .pl-settings-list-shell .pl-settings-nav-row.pl-dashboard-tone-card.pl-dashboard-ribbon-emerald {
+body[class*="theme-"] .pl-settings-list-shell .pl-settings-nav-row.pl-dashboard-tone-card.pl-dashboard-ribbon-emerald:not([data-pl-settings-nav-selected]),
+body.theme-pro .pl-settings-list-shell .pl-settings-nav-row.pl-dashboard-tone-card.pl-dashboard-ribbon-emerald:not([data-pl-settings-nav-selected]) {
   border-color: rgb(16 185 129 / 0.85) !important;
   border-width: 2px !important;
+}
+body[class*="theme-"] .pl-settings-list-shell .pl-settings-nav-row.pl-dashboard-tone-card.pl-dashboard-ribbon-emerald[data-pl-settings-nav-selected],
+body.theme-pro .pl-settings-list-shell .pl-settings-nav-row.pl-dashboard-tone-card.pl-dashboard-ribbon-emerald[data-pl-settings-nav-selected] {
+  border-color: rgb(251 146 60) !important;
+  border-width: 1.5px !important;
 }
 body[class*="theme-"] main .pl-dashboard-tone-card.rounded-lg.border.bg-card.pl-dashboard-ribbon-sky,
 body.theme-pro main .pl-dashboard-tone-card.rounded-lg.border.bg-card.pl-dashboard-ribbon-sky {

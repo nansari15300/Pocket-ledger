@@ -21,7 +21,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import usePermissions from "@/hooks/usePermissions";
 import { useAuth } from "@/hooks/useAuth";
-import { userCanViewSpecialAccountBalance } from "@/lib/specialAccountUsage";
+import { userCanViewSpecialAccountBalance, userIsSpecialAccountOwner } from "@/lib/specialAccountUsage";
 import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
@@ -66,8 +66,10 @@ export function AccountList({
   const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } = useMasterListRowMotion();
   const canViewSpecialAccount = can("view_special_bank_accounts");
   const { user } = useAuth();
-  const canViewSpecialBalanceRole = can("view_special_account_balance");
-  const canManageSpecial = can("manage_special_bank_accounts");
+  const isSpecialAccountOwner = userIsSpecialAccountOwner(
+    String(user?.email || user?.uid || ""),
+    company
+  );
   const highlightSearch = searchTerm.trim();
 
   const filteredAndSortedAccounts = useMemo(() => {
@@ -145,9 +147,11 @@ export function AccountList({
                 Number(account.balance) || 0,
                 bankDrCrPerspective
               );
-              const canViewSpecialBalance =
-                canManageSpecial ||
-                userCanViewSpecialAccountBalance(account, user?.email, canViewSpecialBalanceRole);
+              const canViewSpecialBalance = userCanViewSpecialAccountBalance(
+                account,
+                user?.email,
+                isSpecialAccountOwner
+              );
               const cardContent = (
                 <div className="pl-master-list-row">
                   <div className="pl-master-list-row-leading">

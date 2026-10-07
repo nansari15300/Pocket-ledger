@@ -6,6 +6,10 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, type Resolver, type FieldErrors } from "react-hook-form";
 import { z } from "zod";
 import { isNonClearingVoucherBankAccount } from "@/lib/voucherBankCashAccounts";
+import {
+  specialAccountAllowsPaymentIn,
+  userIsSpecialAccountOwner,
+} from "@/lib/specialAccountUsage";
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -2018,19 +2022,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     tracePaymentInAttach("handleFileChange finished");
   };
   
-  const isOwner = user?.uid === company?.ownerId;
-  const availableAccounts = processedAccounts.filter(acc => {
+  const isOwner = userIsSpecialAccountOwner(String(user?.email || user?.uid || ""), company);
+  const availableAccounts = processedAccounts.filter((acc) => {
     if (!isNonClearingVoucherBankAccount(acc)) return false;
     if (!acc.isSpecial) return true;
-    // Owner/manage can always see special accounts; view-only follows optional `useFor.in` allow-list.
-    if (isOwner || can('manage_special_bank_accounts')) return true;
-    if (can('view_special_bank_accounts')) {
-      const inAllow = (acc as any)?.useFor?.in;
-      if (Array.isArray(inAllow)) return inAllow.includes(user?.email || "");
-      if (typeof inAllow === "string") return inAllow.includes(user?.email || "");
-      return true;
-    }
-    return false;
+    return specialAccountAllowsPaymentIn(acc, user?.email, isOwner);
   });
   const bankComboboxOptions = useMemo(
     () =>

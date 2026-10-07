@@ -167,7 +167,7 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useMasterEntityLivePatch } from "@/hooks/useMasterEntityLivePatch";
 import usePermissions from "@/hooks/usePermissions";
 import { useAuth } from "@/hooks/useAuth";
-import { userCanViewSpecialAccountBalance } from "@/lib/specialAccountUsage";
+import { userCanViewSpecialAccountBalance, userIsSpecialAccountOwner } from "@/lib/specialAccountUsage";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -295,9 +295,15 @@ export function AccountDetails({
     return allAccounts.find(p => p.id === initialAccount.id) || initialAccount;
   }, [allAccounts, initialAccount]);
 
-  const canViewSpecialBalance =
-    can("manage_special_bank_accounts") ||
-    userCanViewSpecialAccountBalance(account, user?.email, can("view_special_account_balance"));
+  const isSpecialAccountOwner = userIsSpecialAccountOwner(
+    String(user?.email || user?.uid || ""),
+    company
+  );
+  const canViewSpecialBalance = userCanViewSpecialAccountBalance(
+    account,
+    user?.email,
+    isSpecialAccountOwner
+  );
   const showMaskedBalance = account.isSpecial && !canViewSpecialBalance;
 
   const ledgerSessionKey = useMemo(
