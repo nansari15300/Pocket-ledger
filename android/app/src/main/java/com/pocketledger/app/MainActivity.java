@@ -17,6 +17,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(BackupSafPlugin.class);
+        registerPlugin(FormFactorPlugin.class);
         registerPlugin(com.pocketledger.app.wedge.shared.WedgePlugin.class);
         clearWebViewCachesAfterApkUpdate();
         super.onCreate(savedInstanceState);

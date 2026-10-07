@@ -32,8 +32,10 @@ export function MasterFormInterCompanyAcNoSlot({
 
   if (mode === "create") {
     return (
-      <FormItem>
-        <FormLabel className="text-xs sm:text-sm">A/c No (Inter Co.)</FormLabel>
+      <FormItem className="flex h-full flex-col">
+        <div className="flex min-h-7 items-center">
+          <FormLabel className="text-xs sm:text-sm">A/c No (Inter Co.)</FormLabel>
+        </div>
         <FormControl>
           <Input
             readOnly
@@ -49,8 +51,10 @@ export function MasterFormInterCompanyAcNoSlot({
   }
 
   return (
-    <FormItem>
-      <FormLabel className="text-xs sm:text-sm">A/c No (Inter Co.)</FormLabel>
+    <FormItem className="flex h-full flex-col">
+      <div className="flex min-h-7 items-center">
+        <FormLabel className="text-xs sm:text-sm">A/c No (Inter Co.)</FormLabel>
+      </div>
       <FormControl>
         <div className="relative">
           <Input

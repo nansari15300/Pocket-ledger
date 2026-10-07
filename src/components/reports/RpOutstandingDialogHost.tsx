@@ -3,7 +3,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { Printer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { chromeProPillCn } from "@/lib/chromePillButton";
@@ -19,17 +21,24 @@ import { openPrintDirect } from "@/lib/printDirect";
 import { computeReceivablesPayablesFinancialSummary } from "@/lib/receivablesPayablesFinancialSummary";
 import {
   buildRpDialogSections,
+  countRpDeadlineAccountsForDate,
   countRpDeadlineDueAccounts,
   countRpDialogSide,
   filterRpDialogSectionsForDeadlineDue,
+  filterRpDialogSectionsForDeadlineDate,
+  formatRpDeadlineYmd,
   normalizeReceivablesPayablesSummary,
   readRpDeadlinesFromStorage,
+  readRpDeadlineNarrationsFromStorage,
   rpDialogRowSelectionKey,
   RP_DIALOG_FILTER_OPTIONS,
   sumRpDialogSide,
   writeRpDeadlinesToStorage,
+  writeRpDeadlineNarrationsToStorage,
   wasRpDeadlineDialogAutoShownToday,
   markRpDeadlineDialogAutoShownToday,
+  parseRpDeadlineYmd,
+  type RpDeadlineNarrationsMap,
   type RpDeadlinesMap,
   type RpDialogRow,
 } from "@/lib/receivablesPayablesDialogUi";
@@ -77,6 +86,16 @@ export function RpOutstandingDialogHost() {
 
   const [receivablesDateRange] = useState<DateRange | undefined>(() => getCurrentMonthDateRange(dateSystem));
   const [rpDeadlines, setRpDeadlines] = useState<RpDeadlinesMap>({});
+  const [rpDeadlineNarrations, setRpDeadlineNarrations] = useState<RpDeadlineNarrationsMap>({});
+  const [autoDeadlineView, setAutoDeadlineView] = useState(false);
+  const [allDeadlineView, setAllDeadlineView] = useState(false);
+  const [deadlineNarrationDraft, setDeadlineNarrationDraft] = useState<{
+    companyId: string;
+    key: string;
+    accountName: string;
+    ymd: string;
+    narration: string;
+  } | null>(null);
 
   const { filterSummary: filterRpSummary } = useReceivablesPayablesEntityVisibility();
   const rpListMotion = useMasterListRowMotion();
@@ -172,9 +191,11 @@ export function RpOutstandingDialogHost() {
     const id = company?.id;
     if (!id) {
       setRpDeadlines({});
+      setRpDeadlineNarrations({});
       return;
     }
     setRpDeadlines(readRpDeadlinesFromStorage(id));
+    setRpDeadlineNarrations(readRpDeadlineNarrationsFromStorage(id));
   }, [company?.id]);
 
   const handleRpDeadlineChange = useCallback(
@@ -189,9 +210,37 @@ export function RpOutstandingDialogHost() {
         writeRpDeadlinesToStorage(id, next);
         return next;
       });
+      if (!ymd) {
+        setRpDeadlineNarrations((prev) => {
+          const next = { ...prev };
+          delete next[key];
+          writeRpDeadlineNarrationsToStorage(id, next);
+          return next;
+        });
+        setDeadlineNarrationDraft((draft) => draft?.key === key ? null : draft);
+        return;
+      }
+      setDeadlineNarrationDraft({
+        companyId: id,
+        key,
+        accountName: row.party,
+        ymd,
+        narration: rpDeadlineNarrations[key] || "Need to call the party to ask payment",
+      });
     },
-    [company?.id]
+    [company?.id, rpDeadlineNarrations]
   );
+
+  const saveRpDeadlineNarration = useCallback(() => {
+    if (!deadlineNarrationDraft) return;
+    const { companyId, key, narration } = deadlineNarrationDraft;
+    setRpDeadlineNarrations((prev) => {
+      const next = { ...prev, [key]: narration.trim() || "Need to call the party to ask payment" };
+      writeRpDeadlineNarrationsToStorage(companyId, next);
+      return next;
+    });
+    setDeadlineNarrationDraft(null);
+  }, [deadlineNarrationDraft]);
 
   const receivablesDialogSections = useMemo(
     () => buildRpDialogSections("receivables", financialSummary, receivablePayableFilter),
@@ -200,6 +249,14 @@ export function RpOutstandingDialogHost() {
   const payablesDialogSections = useMemo(
     () => buildRpDialogSections("payables", financialSummary, receivablePayableFilter),
     [financialSummary, receivablePayableFilter]
+  );
+  const receivablesAllCategorySections = useMemo(
+    () => buildRpDialogSections("receivables", financialSummary, "all"),
+    [financialSummary]
+  );
+  const payablesAllCategorySections = useMemo(
+    () => buildRpDialogSections("payables", financialSummary, "all"),
+    [financialSummary]
   );
   const receivablesDialogCount = useMemo(
     () => countRpDialogSide("receivables", financialSummary, receivablePayableFilter),
@@ -211,8 +268,17 @@ export function RpOutstandingDialogHost() {
   );
 
   const rpDeadlineDueCount = useMemo(
-    () => countRpDeadlineDueAccounts(financialSummary, receivablePayableFilter, rpDeadlines, new Date()),
-    [financialSummary, receivablePayableFilter, rpDeadlines]
+    () => countRpDeadlineDueAccounts(financialSummary, "all", rpDeadlines, new Date()),
+    [financialSummary, rpDeadlines]
+  );
+  const todayDeadlineYmd = formatRpDeadlineYmd(new Date());
+  const rpDeadlineTodayCount = useMemo(
+    () => countRpDeadlineAccountsForDate(financialSummary, "all", rpDeadlines, todayDeadlineYmd),
+    [financialSummary, rpDeadlines, todayDeadlineYmd]
+  );
+  const rpDeadlineAllCount = useMemo(
+    () => countRpDeadlineAccountsForDate(financialSummary, "all", rpDeadlines, null),
+    [financialSummary, rpDeadlines]
   );
 
   const receivablesDeadlineSections = useMemo(
@@ -223,6 +289,32 @@ export function RpOutstandingDialogHost() {
     () => filterRpDialogSectionsForDeadlineDue(payablesDialogSections, "payables", rpDeadlines, new Date()),
     [payablesDialogSections, rpDeadlines]
   );
+  const receivablesTodayDeadlineSections = useMemo(
+    () => filterRpDialogSectionsForDeadlineDate(receivablesAllCategorySections, "receivables", rpDeadlines, todayDeadlineYmd),
+    [receivablesAllCategorySections, rpDeadlines, todayDeadlineYmd]
+  );
+  const payablesTodayDeadlineSections = useMemo(
+    () => filterRpDialogSectionsForDeadlineDate(payablesAllCategorySections, "payables", rpDeadlines, todayDeadlineYmd),
+    [payablesAllCategorySections, rpDeadlines, todayDeadlineYmd]
+  );
+  const receivablesAllDeadlineSections = useMemo(
+    () => filterRpDialogSectionsForDeadlineDate(receivablesAllCategorySections, "receivables", rpDeadlines, null),
+    [receivablesAllCategorySections, rpDeadlines]
+  );
+  const payablesAllDeadlineSections = useMemo(
+    () => filterRpDialogSectionsForDeadlineDate(payablesAllCategorySections, "payables", rpDeadlines, null),
+    [payablesAllCategorySections, rpDeadlines]
+  );
+  const visibleReceivablesDeadlineSections = autoDeadlineView
+    ? receivablesTodayDeadlineSections
+    : allDeadlineView
+      ? receivablesAllDeadlineSections
+      : receivablesDeadlineSections;
+  const visiblePayablesDeadlineSections = autoDeadlineView
+    ? payablesTodayDeadlineSections
+    : allDeadlineView
+      ? payablesAllDeadlineSections
+      : payablesDeadlineSections;
 
   const receivablesPayablesDialogListTotals = useMemo(
     () => ({
@@ -246,26 +338,49 @@ export function RpOutstandingDialogHost() {
       showDrCr: true,
       context: "transaction",
     });
+  const formatRpDeadlineDisplay = useCallback((ymd: string) => {
+    const date = parseRpDeadlineYmd(ymd);
+    if (!date) return ymd;
+    return dateSystem === "BS" ? formatDateBS(date) : formatDate(date);
+  }, [dateSystem, formatDate, formatDateBS]);
 
   const rpDeadlineRowProps = useMemo(
     () => ({
       deadlines: rpDeadlines,
+      deadlineNarrations: rpDeadlineNarrations,
       onDeadlineChange: handleRpDeadlineChange,
       showDeadlineControls: true,
     }),
-    [rpDeadlines, handleRpDeadlineChange]
+    [rpDeadlines, rpDeadlineNarrations, handleRpDeadlineChange]
   );
+
+  const handleSelectTab = useCallback(
+    (nextTab: ReceivablesPayablesSideTab) => {
+      setAutoDeadlineView(false);
+      setAllDeadlineView(false);
+      setOutstandingTab(nextTab);
+    },
+    [setOutstandingTab]
+  );
+
+  const handleShowAllDeadlines = useCallback(() => {
+    setAutoDeadlineView(false);
+    setAllDeadlineView(true);
+    setOutstandingTab("deadline");
+  }, [setOutstandingTab]);
 
   const rpDataReady = !loading && !(preferServerRp && serverRpLoading);
 
   useEffect(() => {
     if (!rpDataReady || !company?.id || !can("view_receivable_payable_summary")) return;
-    if (rpDeadlineDueCount <= 0) return;
+    if (rpDeadlineTodayCount <= 0) return;
     if (wasRpDeadlineDialogAutoShownToday(company.id)) return;
     markRpDeadlineDialogAutoShownToday(company.id);
+    setAutoDeadlineView(true);
+    setAllDeadlineView(false);
     setOutstandingFilter("all");
     openOutstandingDialog("deadline");
-  }, [rpDataReady, company?.id, rpDeadlineDueCount, can, openOutstandingDialog, setOutstandingFilter]);
+  }, [rpDataReady, company?.id, rpDeadlineTodayCount, can, openOutstandingDialog, setOutstandingFilter]);
 
   const handlePrint = () => {
     const filterLabel =
@@ -370,6 +485,46 @@ export function RpOutstandingDialogHost() {
     );
   };
 
+  const printAction = (
+    <Button
+      variant="outline"
+      size="sm"
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        handlePrint();
+      }}
+      className={cn(
+        "data-pl-rp-side-pill pl-chrome-btn-drop shrink-0 flex items-center gap-1.5 border border-solid !border-[1px] !border-blue-300",
+        chromeProPillCn,
+        LEDGER_HEADER_PILL_CN
+      )}
+    >
+      Print <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
+    </Button>
+  );
+  const allDeadlinesAction = (
+    <Button
+      variant="outline"
+      size="sm"
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        handleShowAllDeadlines();
+      }}
+      data-pl-rp-side-pill-active={allDeadlineView ? "" : undefined}
+      className={cn(
+        "data-pl-rp-side-pill pl-chrome-btn-drop shrink-0 border border-solid !border-[1px]",
+        allDeadlineView ? "!border-green-600" : "!border-blue-300",
+        chromeProPillCn,
+        LEDGER_HEADER_PILL_CN
+      )}
+      title="Show all accounts with a collection deadline"
+    >
+      All ({rpDeadlineAllCount})
+    </Button>
+  );
+
   if (!can("view_receivable_payable_summary")) return null;
 
   return (
@@ -379,6 +534,8 @@ export function RpOutstandingDialogHost() {
                                     if (nextOpen) setOutstandingFilter("all");
                                     if (!nextOpen) {
                                         setOutstandingTab("both");
+                                        setAutoDeadlineView(false);
+                                        setAllDeadlineView(false);
                                         rpLedgerPopup.resetDialogInteraction();
                                     }
                                 }}>
@@ -393,31 +550,22 @@ export function RpOutstandingDialogHost() {
                                             <DialogTitle className={cn("whitespace-nowrap text-base md:text-lg", isMobile && "sr-only")}>
                                                 Receivables & Payables Details
                                             </DialogTitle>
-                                            {isMobile ? (
+                                            {autoDeadlineView ? (
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    {printAction}
+                                                    {allDeadlinesAction}
+                                                </div>
+                                            ) : isMobile ? (
                                                 <div className="flex flex-wrap items-center gap-2">
                                                     <ReceivablesPayablesMobileSidePills
                                                         tab={tab}
                                                         receivablesCount={receivablesDialogCount}
                                                         payablesCount={payablesDialogCount}
                                                         deadlineCount={rpDeadlineDueCount}
-                                                        onSelect={setOutstandingTab}
+                                                        onSelect={handleSelectTab}
                                                     />
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        type="button"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            handlePrint();
-                                                        }}
-                                                        className={cn(
-                                                            "data-pl-rp-side-pill pl-chrome-btn-drop flex items-center gap-1.5 border border-solid !border-[1px] !border-blue-300",
-                                                            chromeProPillCn,
-                                                            LEDGER_HEADER_PILL_CN
-                                                        )}
-                                                    >
-                                                        Print <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-                                                    </Button>
+                                                    {printAction}
+                                                    {allDeadlinesAction}
                                                 </div>
                                             ) : (
                                                 <div className="flex w-full items-center gap-2">
@@ -427,9 +575,7 @@ export function RpOutstandingDialogHost() {
                                                                 ? "receivables"
                                                                 : tab
                                                         }
-                                                        onValueChange={(v) =>
-                                                            setOutstandingTab(v as ReceivablesPayablesSideTab)
-                                                        }
+                                                        onValueChange={(v) => handleSelectTab(v as ReceivablesPayablesSideTab)}
                                                         className="min-w-0 flex-1"
                                                     >
                                                         <TabsList className="inline-flex h-auto w-auto gap-1 rounded-full bg-transparent p-0">
@@ -471,29 +617,61 @@ export function RpOutstandingDialogHost() {
                                                             </TabsTrigger>
                                                         </TabsList>
                                                     </Tabs>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        type="button"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            handlePrint();
-                                                        }}
-                                                        className={cn(
-                                                            "data-pl-rp-side-pill pl-chrome-btn-drop shrink-0 flex items-center gap-1.5 border border-solid !border-[1px] !border-blue-300",
-                                                            chromeProPillCn,
-                                                            LEDGER_HEADER_PILL_CN
-                                                        )}
-                                                    >
-                                                        Print <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-                                                    </Button>
+                                                    {printAction}
+                                                    {allDeadlinesAction}
                                                 </div>
                                             )}
                                         </DialogHeader>
                                         <div className={RP_DIALOG_HEADER_DIVIDER_CN} aria-hidden />
                                         <div className="flex-1 min-h-0 overflow-hidden flex flex-col px-2 pt-[3px] pb-0">
-                                            {isMobile ? (
+                                            {isMobile || autoDeadlineView ? (
                                                 <div className={cn("flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-0", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
+                                                    {tab === "deadline" ? (
+                                                        <div className="flex min-h-0 flex-col gap-3">
+                                                            {visibleReceivablesDeadlineSections.length > 0 ? (
+                                                                <div className="min-h-0">
+                                                                    <h3 className="mb-2 text-base font-semibold text-green-600">Receivables</h3>
+                                                                    <ReceivablesPayablesDialogEntityList
+                                                                        sections={visibleReceivablesDeadlineSections}
+                                                                        side="receivables"
+                                                                        formatAmount={formatRpDialogAmount}
+                                                                        isMobile={isMobile}
+                                                                        listMotion={rpListMotion}
+                                                                        selectedKey={rpLedgerPopup.selectedKey}
+                                                                        onSelectRow={rpLedgerPopup.selectRow}
+                                                                        onOpenRow={rpLedgerPopup.openRowLedger}
+                                                                        {...rpDeadlineRowProps}
+                                                                    />
+                                                                </div>
+                                                            ) : null}
+                                                            {visiblePayablesDeadlineSections.length > 0 ? (
+                                                                <div className="min-h-0">
+                                                                    <h3 className="mb-2 text-base font-semibold text-red-600">Payables</h3>
+                                                                    <ReceivablesPayablesDialogEntityList
+                                                                        sections={visiblePayablesDeadlineSections}
+                                                                        side="payables"
+                                                                        formatAmount={formatRpDialogAmount}
+                                                                        isMobile={isMobile}
+                                                                        listMotion={rpListMotion}
+                                                                        selectedKey={rpLedgerPopup.selectedKey}
+                                                                        onSelectRow={rpLedgerPopup.selectRow}
+                                                                        onOpenRow={rpLedgerPopup.openRowLedger}
+                                                                        {...rpDeadlineRowProps}
+                                                                    />
+                                                                </div>
+                                                            ) : null}
+                                                            {visibleReceivablesDeadlineSections.length === 0 &&
+                                                            visiblePayablesDeadlineSections.length === 0 ? (
+                                                                <p className="py-8 text-center text-sm text-muted-foreground">
+                                                                    {autoDeadlineView
+                                                                        ? "No accounts have a payment deadline today."
+                                                                        : allDeadlineView
+                                                                          ? "No accounts have a collection deadline with an outstanding balance."
+                                                                          : "No accounts are due on or before today with an outstanding balance."}
+                                                                </p>
+                                                            ) : null}
+                                                        </div>
+                                                    ) : null}
                                                     {(tab === "receivables" || tab === "both") && (
                                                             <ReceivablesPayablesDialogEntityList
                                                                 sections={receivablesDialogSections}
@@ -520,55 +698,13 @@ export function RpOutstandingDialogHost() {
                                                                 {...rpDeadlineRowProps}
                                                             />
                                                     )}
-                                                    {tab === "deadline" && (
-                                                        <div className="flex min-h-0 flex-col gap-3">
-                                                            {receivablesDeadlineSections.length > 0 ? (
-                                                                <div className="min-h-0">
-                                                                    <h3 className="mb-2 text-base font-semibold text-green-600">Receivables</h3>
-                                                                    <ReceivablesPayablesDialogEntityList
-                                                                        sections={receivablesDeadlineSections}
-                                                                        side="receivables"
-                                                                        formatAmount={formatRpDialogAmount}
-                                                                        isMobile={isMobile}
-                                                                        listMotion={rpListMotion}
-                                                                        selectedKey={rpLedgerPopup.selectedKey}
-                                                                        onSelectRow={rpLedgerPopup.selectRow}
-                                                                        onOpenRow={rpLedgerPopup.openRowLedger}
-                                                                        {...rpDeadlineRowProps}
-                                                                    />
-                                                                </div>
-                                                            ) : null}
-                                                            {payablesDeadlineSections.length > 0 ? (
-                                                                <div className="min-h-0">
-                                                                    <h3 className="mb-2 text-base font-semibold text-red-600">Payables</h3>
-                                                                    <ReceivablesPayablesDialogEntityList
-                                                                        sections={payablesDeadlineSections}
-                                                                        side="payables"
-                                                                        formatAmount={formatRpDialogAmount}
-                                                                        isMobile={isMobile}
-                                                                        listMotion={rpListMotion}
-                                                                        selectedKey={rpLedgerPopup.selectedKey}
-                                                                        onSelectRow={rpLedgerPopup.selectRow}
-                                                                        onOpenRow={rpLedgerPopup.openRowLedger}
-                                                                        {...rpDeadlineRowProps}
-                                                                    />
-                                                                </div>
-                                                            ) : null}
-                                                            {receivablesDeadlineSections.length === 0 &&
-                                                            payablesDeadlineSections.length === 0 ? (
-                                                                <p className="py-8 text-center text-sm text-muted-foreground">
-                                                                    No accounts due on or before today with an outstanding balance.
-                                                                </p>
-                                                            ) : null}
-                                                        </div>
-                                                    )}
                                                 </div>
                                             ) : tab === "deadline" ? (
                                                 <div className={cn("grid min-h-0 flex-1 min-w-0 grid-cols-2 gap-4 overflow-y-auto", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
                                                     <div className="flex min-h-0 flex-col">
                                                         <h3 className="mb-0.5 shrink-0 text-lg font-semibold text-green-600">Receivables</h3>
                                                         <ReceivablesPayablesDialogEntityList
-                                                            sections={receivablesDeadlineSections}
+                                                            sections={visibleReceivablesDeadlineSections}
                                                             side="receivables"
                                                             formatAmount={formatRpDialogAmount}
                                                             isMobile={isMobile}
@@ -582,7 +718,7 @@ export function RpOutstandingDialogHost() {
                                                     <div className="flex min-h-0 flex-col">
                                                         <h3 className="mb-0.5 shrink-0 text-lg font-semibold text-red-600">Payables</h3>
                                                         <ReceivablesPayablesDialogEntityList
-                                                            sections={payablesDeadlineSections}
+                                                            sections={visiblePayablesDeadlineSections}
                                                             side="payables"
                                                             formatAmount={formatRpDialogAmount}
                                                             isMobile={isMobile}
@@ -641,6 +777,50 @@ export function RpOutstandingDialogHost() {
                                             }
                                         />
                                     </DialogContent>
+      </Dialog>
+      <Dialog
+        open={!!deadlineNarrationDraft}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setDeadlineNarrationDraft(null);
+        }}
+      >
+        <DialogContent className="w-[calc(100%-2rem)] max-w-sm gap-4">
+          <DialogHeader>
+            <DialogTitle>Payment call narration</DialogTitle>
+            {deadlineNarrationDraft ? (
+              <p className="truncate text-sm text-muted-foreground">{deadlineNarrationDraft.accountName}</p>
+            ) : null}
+          </DialogHeader>
+          {deadlineNarrationDraft ? (
+            <div className="space-y-3">
+              <label className="block space-y-1 text-sm font-medium">
+                Deadline date <span className="text-xs font-normal text-muted-foreground">(read-only)</span>
+                <Input value={formatRpDeadlineDisplay(deadlineNarrationDraft.ymd)} readOnly />
+              </label>
+              <label className="block space-y-1 text-sm font-medium">
+                Narration
+                <Textarea
+                  rows={3}
+                  value={deadlineNarrationDraft.narration}
+                  onChange={(event) =>
+                    setDeadlineNarrationDraft((draft) =>
+                      draft ? { ...draft, narration: event.target.value } : draft
+                    )
+                  }
+                  placeholder="Need to call the party to ask payment"
+                />
+              </label>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setDeadlineNarrationDraft(null)}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={saveRpDeadlineNarration}>
+                  Save narration
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
       </Dialog>
       {rpLedgerPopup.popup}
     </>

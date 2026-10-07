@@ -24,7 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { MasterDeleteConfirmAlertDialog } from "@/components/common/MasterDeleteConfirmAlertDialog";
 import { permanentDeleteCompanySubdocFromRecycleBin } from "@/lib/recycleBinEntityLifecycle";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
@@ -50,19 +50,19 @@ import {
 import { refineMasterOpeningBalanceDateRequired } from "@/lib/masterOpeningBalanceDateRequired";
 import { useMasterOpeningBalanceDateRequired } from "@/hooks/useMasterOpeningBalanceDateRequired";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
+import { MasterMobileNoField } from "@/components/inter-company/MasterFormLayout";
 import {
-  MasterFormNameAcNoRow,
-  MasterFormTwoColGrid,
-  MasterMobileNoField,
-} from "@/components/inter-company/MasterFormLayout";
+  BankCashFormThreeColGrid,
+  BankCashFormTwoColGrid,
+} from "@/components/bank-cash/bankCashFormLayout";
+import { MasterFormInterCompanyAcNoSlot } from "@/components/inter-company/MasterFormInterCompanyAcNoSlot";
+import { BankCashAccountTypeSpecialRow } from "@/components/bank-cash/BankCashAccountTypeSpecialRow";
 import {
   masterSpecialAccountPanelClassName,
   masterSpecialAccountPanelTitleClassName,
 } from "@/lib/masterFormPillChrome";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { CreateAccountGroupDialog } from "./CreateAccountGroupDialog";
-import { Switch } from "../ui/switch";
 import usePermissions from "@/hooks/usePermissions";
 import { attachmentLockFieldsForFinalUrls, readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
@@ -80,7 +80,8 @@ import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { useAuth } from "@/hooks/useAuth";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
-import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { enqueueCompanyDocOutbox, flushVoucherOutbox } from "@/lib/localVoucherOutbox";
+import { persistSpecialAccountUsagePermissionConfig } from "@/lib/persistSpecialAccountUsagePermissionConfig";
 import {
   finalizeMasterOpeningBalanceSideEffects,
   masterOpeningPatchFromPersisted,
@@ -95,9 +96,14 @@ import { toast as sonnerToast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
 import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
 import {
+  listSpecialAccountAccessUsers,
+  normalizeSpecialAccountUseFor,
+  readSpecialAccountUsageDefaults,
+} from "@/lib/specialAccountUsage";
+import { useSpecialAccountUseForSync } from "@/hooks/useSpecialAccountUseForSync";
+import {
   BANK_SYSTEM_BANK_BRANCH_ID,
   BANK_SYSTEM_CASH_BRANCH_ID,
-  getDefaultSystemGroupId,
   normalizeBankGroupIdForStorage,
 } from "@/lib/masterEntitySystemGroups";
 import { resolveMasterGroupTreeBranchIdForGroup } from "@/lib/masterGroupTreeCombobox";
@@ -139,6 +145,7 @@ const formSchema = z.object({
   useFor: z.object({
     in: z.array(z.string()),
     out: z.array(z.string()),
+    balance: z.array(z.string()),
   }).optional(),
 }).superRefine(refineMasterOpeningBalanceDateRequired);
 
@@ -158,6 +165,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   const { toast } = useToast();
   const { user } = useAuth();
   const { company, companyId } = useCompany();
+  const { syncUsageToCompanyPermissions } = useSpecialAccountUseForSync(companyId, company);
   const navigatorOnline = useNavigatorOnline();
   const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
   /** APK Firebase company: dropdown lists SQLite warm-mirror (`apkCloudEntityMasterReadFromSqliteMirror`). */
@@ -251,10 +259,9 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         isSpecial: account.isSpecial || false,
         allowVoucherMinusBalance: account.allowVoucherMinusBalance === true,
         isClearing: account.isClearing === true,
-        useFor: account.useFor || {
-            in: company?.ownerEmail ? [company.ownerEmail] : [], 
-            out: company?.ownerEmail ? [company.ownerEmail] : [] 
-        },
+        useFor: account.useFor
+          ? normalizeSpecialAccountUseFor(account.useFor)
+          : readSpecialAccountUsageDefaults(company?.permissionConfig),
         openingBalanceNarration: account.openingBalanceNarration ?? "",
     },
   });
@@ -263,40 +270,10 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   
   const accountType = form.watch("accountType");
   const isSpecial = form.watch("isSpecial");
+  const companyLiveRef = useRef(company);
+  companyLiveRef.current = company;
 
-  // ✅ FIX: Use Email as ID (Matches Create Dialog Logic)
-  const usersForAccessControl = useMemo(() => {
-    if (!company) return [];
-
-    const ownerUser = {
-        id: company.ownerEmail, // Use Email as ID
-        email: company.ownerEmail,
-        name: "Owner",
-        photoURL: null,
-        role: 'owner' as const
-    };
-
-    const sharedUsers = (company.sharedWith || []).map(u => ({
-        id: u.email, // Use Email as ID
-        email: u.email,
-        name: u.name || "Unknown",
-        photoURL: u.photoURL || null,
-        role: u.role
-    }));
-    
-    const uniqueUsersMap = new Map<string, any>();
-    if(ownerUser.id) {
-      uniqueUsersMap.set(ownerUser.id, ownerUser);
-    }
-
-    sharedUsers.forEach(u => {
-        if (u.id && !uniqueUsersMap.has(u.id)) {
-            uniqueUsersMap.set(u.id, u);
-        }
-    });
-
-    return Array.from(uniqueUsersMap.values());
-  }, [company]);
+  const usersForAccessControl = useMemo(() => listSpecialAccountAccessUsers(company), [company]);
 
   const handleGroupCreated = (newGroupId: string) => {
     form.setValue('groupId', newGroupId);
@@ -354,44 +331,58 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     return () => unsubscribe();
   }, [isOpen, companyId, processedAccountGroups, sqliteListsOnlyNoSnapshot]);
 
-  useEffect(() => {
-    if (isOpen) {
-      const dateValue = (account as any).openingBalanceDate;
-      let finalDate;
-      if (dateValue?.toDate) {
-          finalDate = dateValue.toDate();
-      } else if (dateValue instanceof Date) {
-          finalDate = dateValue;
-      } else if (dateValue) {
-          finalDate = new Date(dateValue);
-      } else {
-          finalDate = undefined;
-      }
+  const accountResetKey = useMemo(
+    () =>
+      [
+        account.id,
+        account.accountName,
+        account.isSpecial === true ? "1" : "0",
+        JSON.stringify(account.useFor ?? null),
+        String(account.openingBalance ?? ""),
+      ].join("|"),
+    [account]
+  );
 
-      form.reset({
-        accountName: account.accountName,
-        accountType: account.accountType,
-        openingBalance: account.openingBalance,
-        openingBalanceDate: finalDate,
-        bankName: account.bankName || "",
-        accountNumber: account.accountNumber || "",
-        ifscCode: account.ifscCode || "",
-        groupId: normalizeBankAccountEditGroupId(account.groupId, account.accountType),
-        isSpecial: account.isSpecial || false,
-        allowVoucherMinusBalance: account.allowVoucherMinusBalance === true,
-        isClearing: account.isClearing === true,
-        useFor: account.useFor || {
-            in: company?.ownerEmail ? [company.ownerEmail] : [], 
-            out: company?.ownerEmail ? [company.ownerEmail] : [] 
-        },
-        openingBalanceNarration: account.openingBalanceNarration ?? "",
-      });
-      setFile(account.fileUrl || null);
-      setDocSlots(account.documentFileUrls || []);
-      initialFileRef.current = account.fileUrl || null;
-      initialDocUrlsRef.current = account.documentFileUrls || [];
+  useEffect(() => {
+    if (!isOpen) return;
+    const dateValue = (account as any).openingBalanceDate;
+    let finalDate;
+    if (dateValue?.toDate) {
+      finalDate = dateValue.toDate();
+    } else if (dateValue instanceof Date) {
+      finalDate = dateValue;
+    } else if (dateValue) {
+      finalDate = new Date(dateValue);
+    } else {
+      finalDate = undefined;
     }
-  }, [isOpen, account, form, company]); // added company dep
+
+    const liveCompany = companyLiveRef.current;
+    form.reset({
+      accountName: account.accountName,
+      phone: account.phone ?? "",
+      whatsapp: account.whatsapp === true,
+      accountType: account.accountType,
+      openingBalance: account.openingBalance,
+      openingBalanceDate: finalDate,
+      bankName: account.bankName || "",
+      accountNumber: account.accountNumber || "",
+      ifscCode: account.ifscCode || "",
+      groupId: normalizeBankAccountEditGroupId(account.groupId, account.accountType),
+      isSpecial: account.isSpecial || false,
+      allowVoucherMinusBalance: account.allowVoucherMinusBalance === true,
+      isClearing: account.isClearing === true,
+      useFor: account.useFor
+        ? normalizeSpecialAccountUseFor(account.useFor)
+        : readSpecialAccountUsageDefaults(liveCompany?.permissionConfig),
+      openingBalanceNarration: account.openingBalanceNarration ?? "",
+    });
+    setFile(account.fileUrl || null);
+    setDocSlots(account.documentFileUrls || []);
+    initialFileRef.current = account.fileUrl || null;
+    initialDocUrlsRef.current = account.documentFileUrls || [];
+    // Company permissionConfig sync (usage table) must not re-reset this form — wipes unsaved isSpecial / ticks.
+  }, [isOpen, accountResetKey, form]);
 
   function onSubmit(values: FormValues): void {
     if (!companyId) {
@@ -486,7 +477,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           isSpecial: values.isSpecial,
           allowVoucherMinusBalance: values.allowVoucherMinusBalance === true,
           isClearing: values.isClearing === true,
-          useFor: values.useFor ?? { in: [], out: [] },
+          useFor: normalizeSpecialAccountUseFor(values.useFor),
           fileUrl,
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
           ...attachmentLockFieldsForFinalUrls(documentFileUrls, {
@@ -515,30 +506,17 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           const persisted =
             (await getCompanyDocFromBrowserDb(companyId, "bank_accounts", accountRefSnap.id)) ?? payload;
           await enqueueCompanyDocOutbox(companyId, "bank_accounts", "update", accountRefSnap.id, persisted);
-          await syncEntityAttachmentsAfterSave(companyId);
 
-          await finalizeMasterOpeningBalanceSideEffects({
-            company,
-            companyId,
-            collection: "bank_accounts",
-            entityId: accountRefSnap.id,
-            oldOpeningBalance,
-            newOpeningBalance,
-            oldOpeningBalanceDate: (accountRefSnap as any).openingBalanceDate,
-            newOpeningBalanceDate: values.openingBalanceDate,
-          });
-
-          const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+          const showSyncHint =
+            backupSyncEnabled && !isLocalGuestUser && typeof navigator !== "undefined" && !navigator.onLine;
           onAccountUpdated({
             id: accountRefSnap.id,
             ...values,
+            isSpecial: values.isSpecial === true,
             ...masterOpeningPatchFromPersisted(persisted),
             fileUrl: fileUrl || "",
             documentFileUrls,
-            useFor: {
-              in: values.useFor?.in || [],
-              out: values.useFor?.out || [],
-            } as { in: string[]; out: string[] },
+            useFor: normalizeSpecialAccountUseFor(values.useFor),
           });
           initialFileRef.current = fileUrl || null;
           initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
@@ -550,8 +528,42 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           });
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
             id: toastId,
-            description: showSyncHint ? `"${values.accountName}" saved locally.` : `"${values.accountName}" has been successfully updated.`,
+            description: showSyncHint
+              ? `"${values.accountName}" saved locally.`
+              : `"${values.accountName}" has been successfully updated.`,
           });
+
+          void (async () => {
+            try {
+              await persistSpecialAccountUsagePermissionConfig(
+                companyId,
+                company,
+                normalizeSpecialAccountUseFor(values.useFor)
+              );
+              if (typeof navigator !== "undefined" && navigator.onLine) {
+                await flushVoucherOutbox({
+                  priority: {
+                    companyId,
+                    collectionName: "bank_accounts",
+                    docId: accountRefSnap.id,
+                  },
+                });
+              }
+              await syncEntityAttachmentsAfterSave(companyId);
+              await finalizeMasterOpeningBalanceSideEffects({
+                company,
+                companyId,
+                collection: "bank_accounts",
+                entityId: accountRefSnap.id,
+                oldOpeningBalance,
+                newOpeningBalance,
+                oldOpeningBalanceDate: (accountRefSnap as any).openingBalanceDate,
+                newOpeningBalanceDate: values.openingBalanceDate,
+              });
+            } catch (tailErr) {
+              console.warn("[EditAccountDialog] background save tail failed", tailErr);
+            }
+          })();
           return;
         }
 
@@ -564,31 +576,17 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
 
         const accountRef = doc(firestore, `companies/${companyId}/bank_accounts`, accountRefSnap.id);
         await updateDoc(accountRef, updatePayload);
-        await syncEntityAttachmentsAfterSave(companyId);
-
-        await finalizeMasterOpeningBalanceSideEffects({
-          company,
-          companyId,
-          collection: "bank_accounts",
-          entityId: accountRefSnap.id,
-          oldOpeningBalance,
-          newOpeningBalance,
-          oldOpeningBalanceDate: (accountRefSnap as any).openingBalanceDate,
-          newOpeningBalanceDate: values.openingBalanceDate,
-        });
 
         onAccountUpdated({
           id: accountRefSnap.id,
           ...values,
+          isSpecial: values.isSpecial === true,
           openingBalance: newOpeningBalance,
           openingBalanceDate: values.openingBalanceDate,
           openingBalanceNarration: narrationClean ?? "",
           fileUrl: fileUrl || "",
           documentFileUrls,
-          useFor: {
-            in: values.useFor?.in || [],
-            out: values.useFor?.out || [],
-          } as { in: string[]; out: string[] },
+          useFor: normalizeSpecialAccountUseFor(values.useFor),
         });
         initialFileRef.current = fileUrl || null;
         initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
@@ -598,7 +596,33 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           finalUrls: captureEntityFormAttachmentBaseline({ fileUrl, documentFileUrls }),
           oldDocRemoteUrls: attachmentBaselineSnap.filter((u) => /^https?:\/\//i.test(u)),
         });
-        sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.accountName}" has been successfully updated.` });
+        sonnerToast.success("Account Updated!", {
+          id: toastId,
+          description: `"${values.accountName}" has been successfully updated.`,
+        });
+
+        void (async () => {
+          try {
+            await syncEntityAttachmentsAfterSave(companyId);
+            await persistSpecialAccountUsagePermissionConfig(
+              companyId,
+              company,
+              normalizeSpecialAccountUseFor(values.useFor)
+            );
+            await finalizeMasterOpeningBalanceSideEffects({
+              company,
+              companyId,
+              collection: "bank_accounts",
+              entityId: accountRefSnap.id,
+              oldOpeningBalance,
+              newOpeningBalance,
+              oldOpeningBalanceDate: (accountRefSnap as any).openingBalanceDate,
+              newOpeningBalanceDate: values.openingBalanceDate,
+            });
+          } catch (tailErr) {
+            console.warn("[EditAccountDialog] background save tail failed", tailErr);
+          }
+        })();
       } catch (error) {
         console.error("Error updating account:", error);
         sonnerToast.error("Error Updating Account", {
@@ -816,82 +840,75 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
               className="flex min-h-0 flex-1 flex-col"
             >
             <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-2">
-                <FormField
+                <BankCashAccountTypeSpecialRow
                   control={form.control}
-                  name="accountType"
-                  render={({ field }: any) => (
-                    <FormItem>
-                      <FormLabel>Account Type</FormLabel>
-                      <FormControl>
-                        <RadioGroup
-                          className="flex flex-col gap-2 sm:flex-row sm:gap-6"
-                          value={field.value}
-                          onValueChange={(next: "Bank" | "Cash") => {
-                            field.onChange(next);
-                            const currentBranch = resolveMasterGroupTreeBranchIdForGroup(
-                              form.getValues("groupId"),
-                              processedAccountGroups as AccountGroup[],
-                              BANK_ENTITY_GROUP_PRESET
-                            );
-                            const expectedBranch =
-                              next === "Cash" ? BANK_SYSTEM_CASH_BRANCH_ID : BANK_SYSTEM_BANK_BRANCH_ID;
-                            if (currentBranch !== expectedBranch) {
-                              form.setValue(
-                                "groupId",
-                                getDefaultSystemGroupId("bank", { accountType: next }),
-                                { shouldDirty: true }
-                              );
-                            }
-                          }}
-                        >
-                          <FormItem className="flex items-center space-x-2 space-y-0">
-                            <FormControl><RadioGroupItem value="Bank" /></FormControl>
-                            <FormLabel className="cursor-pointer font-normal">Bank Account</FormLabel>
-                          </FormItem>
-                          <FormItem className="flex items-center space-x-2 space-y-0">
-                            <FormControl><RadioGroupItem value="Cash" /></FormControl>
-                            <FormLabel className="cursor-pointer font-normal">Cash in Hand</FormLabel>
-                          </FormItem>
-                        </RadioGroup>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
+                  form={form}
+                  processedAccountGroups={processedAccountGroups as AccountGroup[]}
+                  showSpecialSwitch={can("manage_special_bank_accounts")}
                 />
-                <MasterFormNameAcNoRow
-                  entityKind="bank"
-                  entityId={account.id}
-                  mode="edit"
-                  betweenNameAndAcNoRow={
-                    <BankAccountToggleFlagsRow control={form.control} />
-                  }
-                  nameField={
-                    <FormField
-                      control={form.control}
-                      name="accountName"
-                      render={({ field }: any) => (
-                        <FormItem>
-                          <FormLabel>Account Name</FormLabel>
-                          <FormControl>
-                            <Input placeholder="e.g., Primary Savings" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  }
-                />
-                <MasterMobileNoField control={form.control} />
-                <MasterFormTwoColGrid>
-                <FormField
-                  control={form.control}
-                  name="groupId"
-                  render={({ field }: any) => (
-                    <FormItem>
-                      <FormLabel>Group (Optional)</FormLabel>
-                      <FormControl>
-                        <div className="w-full">
-                           <MasterGroupTreeCombobox
+                {isSpecial && can("manage_special_bank_accounts") && (
+                  <Card className={cn("p-4 -mt-1", masterSpecialAccountPanelClassName)}>
+                    <CardHeader className="p-0 pb-4">
+                      <CardTitle className={masterSpecialAccountPanelTitleClassName}>
+                        Special Account Usage Control
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <SpecialAccountAccessControl
+                        users={usersForAccessControl}
+                        useFor={normalizeSpecialAccountUseFor(form.watch("useFor"))}
+                        onUseForChange={(newUseFor) => {
+                          form.setValue("useFor", newUseFor);
+                          syncUsageToCompanyPermissions(newUseFor);
+                        }}
+                      />
+                    </CardContent>
+                  </Card>
+                )}
+                <BankAccountToggleFlagsRow control={form.control} />
+                <BankCashFormTwoColGrid>
+                  <FormField
+                    control={form.control}
+                    name="accountName"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>Account Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g., Primary Savings" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="accountNumber"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>Account Number</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g., 123456789" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </BankCashFormTwoColGrid>
+                <BankCashFormTwoColGrid>
+                  <MasterFormInterCompanyAcNoSlot entityKind="bank" entityId={account.id} mode="edit" />
+                  <MasterMobileNoField control={form.control} />
+                </BankCashFormTwoColGrid>
+                {accountType === "Bank" ? (
+                <BankCashFormThreeColGrid>
+                  <FormField
+                    control={form.control}
+                    name="groupId"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>Group (Optional)</FormLabel>
+                        <FormControl>
+                          <div className="w-full">
+                            <MasterGroupTreeCombobox
                               preset={BANK_ENTITY_GROUP_PRESET}
                               groups={groups}
                               processedGroups={processedAccountGroups as AccountGroup[]}
@@ -906,39 +923,40 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                                 }
                               }}
                               onChange={(val, newName) => {
-                                  if (val === 'add-new') {
-                                    setIsCreateGroupOpen(true);
-                                    setTimeout(() => {
-                                      document.dispatchEvent(new CustomEvent('prefill-create-account-group-name', { detail: newName }));
-                                    }, 100);
-                                  } else {
-                                    const gid = val === 'none' ? '' : val;
-                                    field.onChange(gid);
-                                    if (gid) {
-                                      const branchId = resolveMasterGroupTreeBranchIdForGroup(
-                                        gid,
-                                        processedAccountGroups as AccountGroup[],
-                                        BANK_ENTITY_GROUP_PRESET
-                                      );
-                                      if (branchId === BANK_SYSTEM_CASH_BRANCH_ID) {
-                                        form.setValue("accountType", "Cash", { shouldDirty: true });
-                                      } else if (branchId === BANK_SYSTEM_BANK_BRANCH_ID) {
-                                        form.setValue("accountType", "Bank", { shouldDirty: true });
-                                      }
+                                if (val === "add-new") {
+                                  setIsCreateGroupOpen(true);
+                                  setTimeout(() => {
+                                    document.dispatchEvent(
+                                      new CustomEvent("prefill-create-account-group-name", { detail: newName })
+                                    );
+                                  }, 100);
+                                } else {
+                                  const gid = val === "none" ? "" : val;
+                                  field.onChange(gid);
+                                  if (gid) {
+                                    const branchId = resolveMasterGroupTreeBranchIdForGroup(
+                                      gid,
+                                      processedAccountGroups as AccountGroup[],
+                                      BANK_ENTITY_GROUP_PRESET
+                                    );
+                                    if (branchId === BANK_SYSTEM_CASH_BRANCH_ID) {
+                                      form.setValue("accountType", "Cash", { shouldDirty: true });
+                                    } else if (branchId === BANK_SYSTEM_BANK_BRANCH_ID) {
+                                      form.setValue("accountType", "Bank", { shouldDirty: true });
                                     }
                                   }
+                                }
                               }}
                               placeholder="Select a group"
                               searchPlaceholder="Search groups..."
                               addNewLabel="Add New Group"
                             />
-                        </div>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                {accountType === "Bank" ? (
+                          </div>
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
                   <FormField
                     control={form.control}
                     name="bankName"
@@ -952,11 +970,82 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                       </FormItem>
                     )}
                   />
+                  <FormField
+                    control={form.control}
+                    name="ifscCode"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>IFSC/SWIFT Code</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g., HBLNPKA..." {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </BankCashFormThreeColGrid>
                 ) : (
-                  <div aria-hidden className="hidden sm:block" />
+                <BankCashFormTwoColGrid>
+                  <FormField
+                    control={form.control}
+                    name="groupId"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>Group (Optional)</FormLabel>
+                        <FormControl>
+                          <div className="w-full">
+                            <MasterGroupTreeCombobox
+                              preset={BANK_ENTITY_GROUP_PRESET}
+                              groups={groups}
+                              processedGroups={processedAccountGroups as AccountGroup[]}
+                              popoverModal={false}
+                              confirmWithOk
+                              value={field.value}
+                              onBranchChange={(branchId) => {
+                                if (branchId === BANK_SYSTEM_BANK_BRANCH_ID) {
+                                  form.setValue("accountType", "Bank", { shouldDirty: true });
+                                } else if (branchId === BANK_SYSTEM_CASH_BRANCH_ID) {
+                                  form.setValue("accountType", "Cash", { shouldDirty: true });
+                                }
+                              }}
+                              onChange={(val, newName) => {
+                                if (val === "add-new") {
+                                  setIsCreateGroupOpen(true);
+                                  setTimeout(() => {
+                                    document.dispatchEvent(
+                                      new CustomEvent("prefill-create-account-group-name", { detail: newName })
+                                    );
+                                  }, 100);
+                                } else {
+                                  const gid = val === "none" ? "" : val;
+                                  field.onChange(gid);
+                                  if (gid) {
+                                    const branchId = resolveMasterGroupTreeBranchIdForGroup(
+                                      gid,
+                                      processedAccountGroups as AccountGroup[],
+                                      BANK_ENTITY_GROUP_PRESET
+                                    );
+                                    if (branchId === BANK_SYSTEM_CASH_BRANCH_ID) {
+                                      form.setValue("accountType", "Cash", { shouldDirty: true });
+                                    } else if (branchId === BANK_SYSTEM_BANK_BRANCH_ID) {
+                                      form.setValue("accountType", "Bank", { shouldDirty: true });
+                                    }
+                                  }
+                                }
+                              }}
+                              placeholder="Select a group"
+                              searchPlaceholder="Search groups..."
+                              addNewLabel="Add New Group"
+                            />
+                          </div>
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </BankCashFormTwoColGrid>
                 )}
-                </MasterFormTwoColGrid>
-                <MasterFormTwoColGrid>
+                <BankCashFormTwoColGrid>
                   <MasterOpeningBalanceAmountField control={form.control} />
                     <FormField
                     control={form.control}
@@ -996,77 +1085,14 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                         </FormItem>
                     )}
                   />
-                </MasterFormTwoColGrid>
+                </BankCashFormTwoColGrid>
 
-              {accountType === "Bank" && (
-                  <MasterFormTwoColGrid>
-                          <FormField
-                            control={form.control}
-                            name="accountNumber"
-                            render={({ field }: any) => (
-                              <FormItem>
-                                <FormLabel>Account Number</FormLabel>
-                                <FormControl>
-                                  <Input placeholder="e.g., 123456789" {...field} />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                          <FormField
-                            control={form.control}
-                            name="ifscCode"
-                            render={({ field }: any) => (
-                              <FormItem>
-                                <FormLabel>IFSC/SWIFT Code</FormLabel>
-                                <FormControl>
-                                  <Input placeholder="e.g., HBLNPKA..." {...field} />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                  </MasterFormTwoColGrid>
-              )}
-                
-                {can('manage_special_bank_accounts') && (
-                 <FormField
+                <EntityOpeningBalanceNarrationField
                   control={form.control}
-                  name="isSpecial"
-                  render={({ field }: any) => (
-                    <FormItem
-                      className={cn(
-                        "flex flex-row items-center justify-between p-3",
-                        masterSpecialAccountPanelClassName
-                      )}
-                    >
-                      <div className="space-y-0.5">
-                        <FormLabel>Mark as Special Account</FormLabel>
-                        <FormDescription>Special accounts have restricted visibility.</FormDescription>
-                      </div>
-                      <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
-                    </FormItem>
-                  )}
+                  name="openingBalanceNarration"
+                  detailLabel="bank/cash account"
                 />
-                )}
-                
-                {isSpecial && can('manage_special_bank_accounts') && (
-                      <Card className={cn("p-4", masterSpecialAccountPanelClassName)}>
-                        <CardHeader className="p-0 pb-4">
-                          <CardTitle className={masterSpecialAccountPanelTitleClassName}>
-                            Special Account Usage Control
-                          </CardTitle>
-                        </CardHeader>
-                        <CardContent className="p-0">
-                           <SpecialAccountAccessControl
-                                users={usersForAccessControl}
-                                useFor={(form.watch('useFor') as { in: string[]; out: string[] }) || { in: [], out: [] }}
-                                onUseForChange={(newUseFor) => form.setValue('useFor', newUseFor)}
-                            />
-                        </CardContent>
-                      </Card>
-                )}
-                
+
                 <FormItem>
                   <FormLabel>Profile photo</FormLabel>
                   {!canAddAvatar ? (
@@ -1171,12 +1197,6 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                     </div>
                   )}
                 </FormItem>
-
-                <EntityOpeningBalanceNarrationField
-                  control={form.control}
-                  name="openingBalanceNarration"
-                  detailLabel="bank/cash account"
-                />
             </div>
 
               <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>

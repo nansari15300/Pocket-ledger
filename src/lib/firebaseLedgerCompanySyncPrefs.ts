@@ -126,25 +126,51 @@ export function replaceFirebaseLedgerCompanySyncEntries(
   return out;
 }
 
+function dataSyncEntryEnabledForIds(registryId: string, authoritativeId?: string): boolean {
+  const registry = String(registryId || "").trim();
+  const auth = String(authoritativeId || "").trim();
+  if (registry && getFirebaseLedgerCompanySyncEntry(registry).data === true) return true;
+  if (auth && auth !== registry && getFirebaseLedgerCompanySyncEntry(auth).data === true) return true;
+  return false;
+}
+
 /** Global switch ON + company Data ticked (after Save). */
-export function isFirebaseLedgerCompanyDataSyncEnabled(companyId: string): boolean {
+export function isFirebaseLedgerCompanyDataSyncEnabled(
+  companyId: string,
+  company?: { authoritativeCompanyId?: string } | null
+): boolean {
   if (isFirebaseLedgerDataSyncDisabled()) return false;
-  return getFirebaseLedgerCompanySyncEntry(companyId).data === true;
+  const registry = String(companyId || "").trim();
+  if (!registry) return false;
+  const auth = String(company?.authoritativeCompanyId || "").trim();
+  return dataSyncEntryEnabledForIds(registry, auth || undefined);
 }
 
 /**
  * Company Selector Files tick — attachment download / prefetch / network fetch of existing cloud files.
  * Untick does NOT block uploading newly added local files (see upload helper).
  */
-export function isFirebaseLedgerCompanyAttachmentSyncEnabled(companyId: string): boolean {
-  if (!isFirebaseLedgerCompanyDataSyncEnabled(companyId)) return false;
-  return getFirebaseLedgerCompanySyncEntry(companyId).attachments === true;
+export function isFirebaseLedgerCompanyAttachmentSyncEnabled(
+  companyId: string,
+  company?: { authoritativeCompanyId?: string } | null
+): boolean {
+  if (!isFirebaseLedgerCompanyDataSyncEnabled(companyId, company)) return false;
+  const registry = String(companyId || "").trim();
+  const auth = String(company?.authoritativeCompanyId || "").trim();
+  if (registry && getFirebaseLedgerCompanySyncEntry(registry).attachments === true) return true;
+  if (auth && auth !== registry && getFirebaseLedgerCompanySyncEntry(auth).attachments === true) {
+    return true;
+  }
+  return false;
 }
 
 /**
  * New/local attachment upload to cloud — requires Data tick only.
  * Files untick stops download; uploads of newly added files still allowed.
  */
-export function isFirebaseLedgerCompanyAttachmentUploadEnabled(companyId: string): boolean {
-  return isFirebaseLedgerCompanyDataSyncEnabled(companyId);
+export function isFirebaseLedgerCompanyAttachmentUploadEnabled(
+  companyId: string,
+  company?: { authoritativeCompanyId?: string } | null
+): boolean {
+  return isFirebaseLedgerCompanyDataSyncEnabled(companyId, company);
 }

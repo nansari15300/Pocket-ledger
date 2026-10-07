@@ -69,7 +69,6 @@ import { isElectronLocalServerApiAvailable } from "@/lib/electronLocalServer";
 import { LocalPlServerSharePanel } from "@/components/settings/LocalPlServerSharePanel";
 import { resolveAccountPlanIdForEntitlements } from "@/lib/accountPlanForOwner";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
 import {
   getNextPaidUpgrade,
@@ -102,9 +101,28 @@ import {
   companyProfilePageBg,
   companyProfileTabsList3,
   companyProfileTabsTrigger,
+  companyProfileSoftDivider,
+  companyProfilePermissionChipShell,
+  companyProfileNestedRosePanel,
+  companyProfileFieldClass,
+  companyProfileManageShareFieldClass,
+  companyProfileManageShareFieldProps,
+  companyProfileInfoBannerClass,
   settingsDetailCardBodyClass,
   settingsDetailCardShell,
 } from "@/lib/companyProfileChrome";
+import { ManageSharingSpecialAccountsSection } from "@/components/company/ManageSharingSpecialAccountsSection";
+import { ShareUserAvatar } from "@/components/company/ShareUserAvatar";
+import {
+  applyBalancePermissionToggleForRole,
+  listSpecialAccountAccessUsers,
+  permissionKeyIndex,
+  roleSpecialAccountSwitchEnabled,
+  syncSpecialAccountPermissionPair,
+  MANAGE_SPECIAL_BANK_ACCOUNTS_PERM,
+  VIEW_SPECIAL_ACCOUNT_BALANCE_PERM,
+  VIEW_SPECIAL_BANK_ACCOUNTS_PERM,
+} from "@/lib/specialAccountUsage";
 
 type SharedUser = {
   email: string;
@@ -171,17 +189,15 @@ function ShareAccountLimitsTable({
   deviceLimitReached: boolean;
 }) {
   const scope = bucketLabel === "local" ? "Local" : "Online";
-  const limitsGridCell = "border-r border-border last:border-r-0";
+  const limitsGridCell = "border-r border-emerald-200/60 last:border-r-0";
   return (
-    <div className="w-full min-w-[280px] max-w-md rounded-md border border-border bg-background/80 text-xs overflow-hidden">
+    <div className={cn("w-full min-w-[280px] max-w-md text-xs overflow-hidden", companyProfileNestedRosePanel)}>
       <Table
-        className={cn(
-          "[&_tbody_tr]:!border-b-[1px] [&_tbody_tr]:!border-border [&_tbody_tr:last-child]:!border-b-0",
-          "[&_thead_tr]:!border-b-[1px] [&_thead_tr]:!border-black"
-        )}
+        data-pl-manage-sharing-limits-table=""
+        className="pl-company-profile-soft-table pl-company-profile-limits-table"
       >
         <TableHeader>
-          <TableRow className="hover:bg-transparent">
+          <TableRow className="border-0 hover:bg-transparent">
             <TableHead className={cn("h-8 px-2 py-1 font-medium", limitsGridCell)}>Resource</TableHead>
             <TableHead className={cn("h-8 px-2 py-1 text-right font-medium", limitsGridCell)}>Used</TableHead>
             <TableHead className={cn("h-8 px-2 py-1 text-right font-medium", limitsGridCell)}>Max</TableHead>
@@ -189,7 +205,7 @@ function ShareAccountLimitsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          <TableRow className={cn(userLimitReached && "bg-amber-500/5")}>
+          <TableRow className={cn("border-0", userLimitReached && "bg-amber-500/5")}>
             <TableCell className={cn("px-2 py-1.5 font-medium whitespace-nowrap", limitsGridCell)}>
               Users ({scope})
             </TableCell>
@@ -203,7 +219,7 @@ function ShareAccountLimitsTable({
                 : "—"}
             </TableCell>
           </TableRow>
-          <TableRow className={cn(deviceLimitReached && "bg-amber-500/5", "!border-b-0")}>
+          <TableRow className={cn("border-0", deviceLimitReached && "bg-amber-500/5")}>
             <TableCell className={cn("px-2 py-1.5 font-medium whitespace-nowrap", limitsGridCell)}>
               <Link href="/settings?view=devices" className="hover:underline">
                 Devices ({scope})
@@ -224,19 +240,6 @@ function ShareAccountLimitsTable({
     </div>
   );
 }
-
-const getAvatarUrl = (email: string, photoURL?: string) => {
-  if (photoURL && photoURL.trim()) return photoURL;
-  // fallback avatar (always works)
-  return `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(email)}`;
-};
-
-const getInitials = (nameOrEmail: string) => {
-  const s = (nameOrEmail || "").trim();
-  if (!s) return "U";
-  const parts = s.includes("@") ? s.split("@")[0].split(/[.\s_-]+/) : s.split(/\s+/);
-  return parts.slice(0, 2).map(p => p[0]?.toUpperCase()).join("") || "U";
-};
 
 /** Permission box — (i) click se English introduction popover */
 function PermissionHelpPopover({ label, description }: { label: string; description: string }) {
@@ -359,7 +362,16 @@ export function ManageShare() {
 
   /** Save ke baad snapshot se editable mat udao; onSnapshot bhi unsaved edits preserve kare */
   const hasUnsavedChangesRef = useRef(false);
+  const pendingSpecialAccountBankUsageRef = useRef<{
+    accountId: string;
+    useFor: import("@/lib/specialAccountUsage").SpecialAccountUseFor;
+    isSpecial: boolean;
+  } | null>(null);
+  const [permissionFormResetNonce, setPermissionFormResetNonce] = useState(0);
   const permissionsCompanyIdRef = useRef<string | null>(null);
+  const permissionsInitialLoadDoneRef = useRef(false);
+  /** Save ke baad Firestore/SQLite snapshot se dubara hydrate — UI blank / hilta na ho */
+  const permissionRemoteApplySuppressRef = useRef(0);
 
   const [allAppUsers, setAllAppUsers] = useState<any[]>([]);
   /** Revoke ke baad context/SQLite stale ho sakta hai — turant list se hatao; `companyData.sharedWith` sync par khud saaf. */
@@ -571,11 +583,17 @@ export function ManageShare() {
 
   /** Firestore / local mirror se config — skeleton sirf company badle tab; save par dubara loading mat */
   const applyPermissionConfigFromServer = useCallback((merged: PermissionConfig) => {
+    if (Date.now() < permissionRemoteApplySuppressRef.current) {
+      setLoading(false);
+      permissionsInitialLoadDoneRef.current = true;
+      return;
+    }
     setFirestorePermissionConfig(merged);
     if (!hasUnsavedChangesRef.current) {
       setEditablePermissionConfig(merged);
     }
     setLoading(false);
+    permissionsInitialLoadDoneRef.current = true;
   }, []);
 
   useEffect(() => {
@@ -682,6 +700,17 @@ export function ManageShare() {
   }, [companyId, localPermissionSyncKey, applyPermissionConfigFromServer]);
   
   const permissionsForSelectedRole = editablePermissionConfig.roles[selectedRoleForPermissions] || Array(flattenedPermissions.length).fill(false);
+  const specialAccountAccessUsers = useMemo(
+    () => listSpecialAccountAccessUsers(companyData),
+    [companyData]
+  );
+  const viewSpecialBankIdx = permissionKeyIndex(VIEW_SPECIAL_BANK_ACCOUNTS_PERM);
+  const specialAccountSwitchOn = roleSpecialAccountSwitchEnabled(
+    selectedRoleForPermissions,
+    permissionsForSelectedRole
+  );
+  const showSpecialAccountUsagePanel =
+    selectedRoleForPermissions === "owner" || specialAccountSwitchOn;
   const dateLimitsForSelectedRole = editablePermissionConfig.dateLimits?.[selectedRoleForPermissions] || { entryDays: 0, editDays: 0, deleteDays: 0 };
   const fileAttachmentLimitsForSelectedRole = editablePermissionConfig.fileAttachmentLimits?.[selectedRoleForPermissions] || { maxFileCount: 0, allowImage: false, allowPDF: false, allowDelete: false };
   const allowAttachmentsGlobal = editablePermissionConfig.allowAttachments !== false;
@@ -1015,6 +1044,25 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
       if (permissionKey === 'create_inter_company_voucher' && !checked && icEditIdx !== -1) {
         newConfig.roles[selectedRoleForPermissions][icEditIdx] = false;
       }
+      if (permissionKey === VIEW_SPECIAL_ACCOUNT_BALANCE_PERM) {
+        return applyBalancePermissionToggleForRole(
+          newConfig,
+          selectedRoleForPermissions,
+          checked,
+          specialAccountAccessUsers
+        );
+      }
+      if (
+        permissionKey === VIEW_SPECIAL_BANK_ACCOUNTS_PERM ||
+        permissionKey === MANAGE_SPECIAL_BANK_ACCOUNTS_PERM
+      ) {
+        return syncSpecialAccountPermissionPair(
+          newConfig,
+          selectedRoleForPermissions,
+          permissionKey,
+          checked
+        );
+      }
       return newConfig;
     });
   };
@@ -1045,10 +1093,9 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
     });
   };
   
-  const handleSavePermissions = async () => {
+  const handleSavePermissions = () => {
     if (!companyId || !hasUnsavedChanges) return;
-    
-    // Permission check: manage users/roles (can is already available from component level)
+
     if (!can("manage_users_roles")) {
       toast({
         variant: "destructive",
@@ -1057,17 +1104,56 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
       });
       return;
     }
-    setIsSavingPermissions(true);
-    try {
-      // Ensure owner role always has all permissions set to true; baaki roles ko full length par pad.
-      const configToSave = normalizePermissionConfigForSave(editablePermissionConfig);
 
-      const commitSavedPermissionConfig = (saved: PermissionConfig) => {
-        hasUnsavedChangesRef.current = false;
-        setFirestorePermissionConfig(saved);
-        setEditablePermissionConfig(saved);
+    const configToSave = normalizePermissionConfigForSave(editablePermissionConfig);
+    const rollbackPermissionConfig = firestorePermissionConfig;
+
+    const commitSavedPermissionConfig = (saved: PermissionConfig) => {
+      hasUnsavedChangesRef.current = false;
+      setFirestorePermissionConfig(saved);
+      setEditablePermissionConfig(saved);
+    };
+
+    const restoreUnsavedAfterFailedSave = () => {
+      permissionRemoteApplySuppressRef.current = 0;
+      hasUnsavedChangesRef.current = true;
+      setFirestorePermissionConfig(rollbackPermissionConfig);
+      setEditablePermissionConfig(configToSave);
+    };
+
+    permissionRemoteApplySuppressRef.current = Date.now() + 6000;
+    commitSavedPermissionConfig(configToSave);
+    setIsSavingPermissions(true);
+
+    void (async () => {
+      try {
+      const flushPendingSpecialAccountBankUsage = async (): Promise<boolean> => {
+        const pending = pendingSpecialAccountBankUsageRef.current;
+        if (!pending?.accountId) return true;
+        try {
+          const { persistBankAccountMasterPatch } = await import("@/lib/persistBankAccountMasterPatch");
+          await persistBankAccountMasterPatch(companyId, companyData, pending.accountId, {
+            useFor: pending.useFor,
+            isSpecial: pending.isSpecial,
+          });
+          pendingSpecialAccountBankUsageRef.current = null;
+          return true;
+        } catch (e) {
+          console.warn("[ManageShare] special account useFor save failed", e);
+          return false;
+        }
       };
-      
+
+      const scheduleRegistryRefreshInBackground = () => {
+        window.setTimeout(() => {
+          try {
+            reloadLocalCompanyRegistry();
+          } catch {
+            /* ignore */
+          }
+        }, 0);
+      };
+
       const { shouldPersistPermissionConfigViaPlServerHost, notifyPlServerHostCompanyMetaSaved } = await import(
         "@/lib/plServerCompanyMetaSync"
       );
@@ -1086,6 +1172,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         try {
           const existing = await getLocalCompanyById(companyId, { includeDeleted: true });
           if (!existing) {
+            restoreUnsavedAfterFailedSave();
             toast({
               variant: "destructive",
               title: "Could not save",
@@ -1119,6 +1206,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
             expectedEditDays: expectedEdit ?? null,
           });
           if (expectedEdit != null && Number(verifiedDays) !== Number(expectedEdit)) {
+            restoreUnsavedAfterFailedSave();
             toast({
               variant: "destructive",
               title: "Save verify failed",
@@ -1126,9 +1214,8 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
             });
             return;
           }
-          // Do NOT call updateCompanyDocRoot here — local API mirror can race / omit fields.
-          commitSavedPermissionConfig(configToSave);
-          reloadLocalCompanyRegistry();
+          const bankUsageOk = await flushPendingSpecialAccountBankUsage();
+          scheduleRegistryRefreshInBackground();
           if (typeof window !== "undefined") {
             const { PL_SERVER_COMPANY_META_UPDATED_EVENT } = await import("@/lib/plServerCompanyMetaSync");
             window.dispatchEvent(
@@ -1140,12 +1227,16 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
             () => undefined
           );
           toast({
-            title: "Success",
-            description: "Permissions saved on this PC — staff clients sync via PL server.",
+            title: bankUsageOk ? "Success" : "Partially saved",
+            description: bankUsageOk
+              ? "Permissions saved on this PC — staff clients sync via PL server."
+              : "Permissions saved, but special account usage on bank/cash could not be saved — try again.",
+            variant: bankUsageOk ? undefined : "destructive",
           });
           return;
         } catch (e) {
           console.error(e);
+          restoreUnsavedAfterFailedSave();
           toast({
             variant: "destructive",
             title: "Could not save",
@@ -1155,8 +1246,8 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         }
       }
 
-      // Online company only — Firebase.
       if (companyUsesDeviceOrPlPermissionConfig(companyData)) {
+        restoreUnsavedAfterFailedSave();
         toast({
           variant: "destructive",
           title: "Could not save",
@@ -1167,19 +1258,38 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
       const companyRef = doc(firestore, "companies", companyId);
       await updateDoc(companyRef, { permissionConfig: configToSave });
-      commitSavedPermissionConfig(configToSave);
-      triggerSync();
-      toast({ title: "Success", description: "Permissions have been saved." });
-      return;
-    } catch (error) {
-      console.error("Error saving permissions:", error);
-      toast({ variant: "destructive", title: "Error", description: isCompanyNotFoundError(error) ? COMPANY_NOT_SYNCED_MESSAGE : "Failed to save permission changes." });
-    } finally {
+      const bankUsageOk = await flushPendingSpecialAccountBankUsage();
+      void triggerSync();
+      toast({
+        title: bankUsageOk ? "Success" : "Partially saved",
+        description: bankUsageOk
+          ? "Permissions have been saved."
+          : "Permissions saved, but special account usage on bank/cash could not be saved — try again.",
+        variant: bankUsageOk ? undefined : "destructive",
+      });
+      } catch (error) {
+        console.error("Error saving permissions:", error);
+        restoreUnsavedAfterFailedSave();
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: isCompanyNotFoundError(error)
+            ? COMPANY_NOT_SYNCED_MESSAGE
+            : "Failed to save permission changes.",
+        });
+      } finally {
         setIsSavingPermissions(false);
-    }
+        window.setTimeout(() => {
+          permissionRemoteApplySuppressRef.current = 0;
+        }, 800);
+      }
+    })();
   }
 
   const handleResetPermissions = () => {
+    pendingSpecialAccountBankUsageRef.current = null;
+    setPermissionFormResetNonce((n) => n + 1);
+    hasUnsavedChangesRef.current = false;
     setEditablePermissionConfig(firestorePermissionConfig);
   }
 
@@ -1466,7 +1576,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 }, [sharingCompanyData, allAppUsers, optimisticRevokedEmails, optimisticUserRoles]);
 
 
-  if (loading) {
+  if (loading && !permissionsInitialLoadDoneRef.current) {
     return (
         <div className="space-y-8">
             <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
@@ -1545,7 +1655,8 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
             <CardHeader
               className={cn(
                 companyProfilePageBg,
-                "flex flex-row flex-wrap items-start justify-between gap-4 border-b border-black pb-4"
+                "flex flex-row flex-wrap items-start justify-between gap-4 border-b pb-4",
+                companyProfileSoftDivider
               )}
             >
               <div>
@@ -1606,7 +1717,8 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
             <CardHeader
               className={cn(
                 companyProfilePageBg,
-                "flex flex-row flex-wrap items-start justify-between gap-4 border-b border-black pb-4"
+                "flex flex-row flex-wrap items-start justify-between gap-4 border-b pb-4",
+                companyProfileSoftDivider
               )}
             >
                 <div>
@@ -1655,14 +1767,11 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
             </CardHeader>
             <CardContent className={cn(settingsDetailCardBodyClass, "!pb-0")}>
             <Table
-              className={cn(
-                "[&_tr]:!border-b-[1px] [&_tr]:!border-border",
-                "[&_thead_tr]:!border-b-[1px] [&_thead_tr]:!border-border",
-                "[&_tbody>tr:last-child]:!border-b-0"
-              )}
+              data-pl-manage-sharing-users-table=""
+              className="pl-company-profile-soft-table"
             >
                 <TableHeader>
-                    <TableRow>
+                    <TableRow className="border-0">
                         <TableHead className="w-2/5">Email</TableHead>
                         <TableHead className="w-1/4">Name</TableHead>
                         <TableHead>Role</TableHead>
@@ -1671,40 +1780,37 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                 </TableHeader>
                 <TableBody>
                     {allUsers.map((sharedUser) => (
-                        <TableRow key={sharedUser.email}>
-                           <TableCell className="font-medium flex items-center gap-3">
-                                <div className={cn(
-                                    "relative rounded-full p-[2px] transition-all duration-500 shrink-0",
-                                    sharedUser.isOnline ? "bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.6)]" : "bg-black"
-                                )}>
-                                    <Avatar className="h-9 w-9 border-2 border-background shrink-0">
-                                        <AvatarImage 
-                                            src={getAvatarUrl(sharedUser.email, sharedUser.photoURL)} 
-                                            className="object-cover rounded-full" 
-                                        />
-                                        <AvatarFallback className="bg-muted text-xs font-bold">
-                                            {getInitials(sharedUser.name)}
-                                        </AvatarFallback>
-                                    </Avatar>
-                                </div>
-                            
+                        <TableRow key={sharedUser.email} className="border-0">
+                           <TableCell className="font-medium">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <ShareUserAvatar
+                                    email={sharedUser.email}
+                                    name={sharedUser.name}
+                                    photoURL={sharedUser.photoURL}
+                                    isOnline={Boolean(sharedUser.isOnline)}
+                                  />
                                 <div className="flex flex-col min-w-0 overflow-hidden">
-                                    <span className="font-semibold text-sm truncate">{sharedUser.email}</span>
+                                    <span className="font-semibold text-sm truncate">
+                                      {sharedUser.email}
+                                    </span>
                                     {sharedUser.email === sharingCompanyData?.ownerEmail && (
                                         <span className="text-[10px] text-amber-600 font-bold flex items-center gap-1">
                                             <Crown className="h-3 w-3" /> OWNER
                                         </span>
                                     )}
                                 </div>
+                                </div>
                             </TableCell>
                             <TableCell>
                                 {sharedUser.email === sharingCompanyData?.ownerEmail ? (
                                     <span>{sharedUser.name}</span>
                                 ) : (
-                                    <Input 
+                                    <Input
+                                        {...companyProfileManageShareFieldProps}
                                         defaultValue={sharedUser.name}
                                         onBlur={(e) => handleNameChange(sharedUser.email, e.target.value)}
                                         disabled={isUpdating === sharedUser.email}
+                                        className={companyProfileManageShareFieldClass}
                                     />
                                 )}
                             </TableCell>
@@ -1721,7 +1827,10 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                     }
                                     disabled={isUpdating === sharedUser.email}
                                   >
-                                    <SelectTrigger className="h-9 w-[140px]">
+                                    <SelectTrigger
+                                      {...companyProfileManageShareFieldProps}
+                                      className={cn("h-9 w-[140px]", companyProfileManageShareFieldClass)}
+                                    >
                                       <SelectValue placeholder="Role" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -1838,21 +1947,23 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
              <CardHeader
                className={cn(
                  companyProfilePageBg,
-                 "flex flex-col border-b border-black md:flex-row md:items-start md:justify-between gap-4 pb-4"
+                 "flex flex-col border-b md:flex-row md:items-start md:justify-between gap-4 pb-4",
+                 companyProfileSoftDivider
                )}
              >
                 <div className="flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <CardTitle>Role Permissions</CardTitle>
+                      <PermissionHelpPopover
+                        label="Role Permissions"
+                        description="Select a role to view and edit its permissions. Open My Role next to Settings to see what this login actually enforces."
+                      />
                     </div>
-                    <CardDescription>
-                      Select a role to view and edit its permissions. Open <strong>My Role</strong> next to Settings to see what this login actually enforces.
-                    </CardDescription>
                 </div>
                  <div className="flex items-center text-base font-bold" style={{gap: '10mm'}}>
-                    <div className="border rounded-lg p-2 flex items-center">Total: {totalPermissions}</div>
-                    <div className="text-green-600 border rounded-lg p-2 flex items-center">Enabled: {enabledPermissions}</div>
-                    <div className="text-red-600 border rounded-lg p-2 flex items-center">Disabled: {disabledPermissions}</div>
+                    <div className={cn("flex items-center p-2", companyProfilePermissionChipShell)}>Total: {totalPermissions}</div>
+                    <div className={cn("flex items-center p-2 text-green-600", companyProfilePermissionChipShell)}>Enabled: {enabledPermissions}</div>
+                    <div className={cn("flex items-center p-2 text-red-600", companyProfilePermissionChipShell)}>Disabled: {disabledPermissions}</div>
                 </div>
             </CardHeader>
             <CardContent className={cn(settingsDetailCardBodyClass, "space-y-4")}>
@@ -1864,9 +1975,16 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                     </Button>
                 </div>
                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div className="flex flex-wrap items-center gap-2 min-w-0">
+                    <div className="pl-manage-sharing-permission-toolbar flex flex-wrap items-center gap-2 min-w-0">
                     <Select value={selectedRoleForPermissions} onValueChange={(value) => setSelectedRoleForPermissions(value as UserRole)}>
-                        <SelectTrigger className="w-[220px]">
+                        <SelectTrigger
+                          {...companyProfileManageShareFieldProps}
+                          data-pl-manage-share-perm-filter=""
+                          className={cn(
+                            "w-[220px] shadow-none focus:ring-0 focus:ring-offset-0 focus-visible:ring-0 focus-visible:ring-offset-0",
+                            companyProfileManageShareFieldClass
+                          )}
+                        >
                             <SelectValue placeholder="Select a role to edit" />
                         </SelectTrigger>
                         <SelectContent>
@@ -1878,7 +1996,14 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                         </SelectContent>
                     </Select>
                     <Select value={permissionCategoryFilter} onValueChange={setPermissionCategoryFilter}>
-                        <SelectTrigger className="w-[220px]">
+                        <SelectTrigger
+                          {...companyProfileManageShareFieldProps}
+                          data-pl-manage-share-perm-filter=""
+                          className={cn(
+                            "w-[220px] shadow-none focus:ring-0 focus:ring-offset-0 focus-visible:ring-0 focus-visible:ring-offset-0",
+                            companyProfileManageShareFieldClass
+                          )}
+                        >
                             <SelectValue placeholder="All Categories" />
                         </SelectTrigger>
                         <SelectContent>
@@ -1892,10 +2017,16 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                     <div className="relative w-full sm:w-[260px]">
                       <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                       <Input
+                        {...companyProfileManageShareFieldProps}
+                        data-pl-manage-share-perm-filter=""
                         value={permissionSearchQuery}
                         onChange={(e) => setPermissionSearchQuery(e.target.value)}
                         placeholder="Search categories & permissions…"
-                        className={cn("pl-8", permissionSearchQuery.trim() ? "pr-9" : "pr-3")}
+                        className={cn(
+                          "pl-8 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0",
+                          companyProfileManageShareFieldClass,
+                          permissionSearchQuery.trim() ? "pr-9" : "pr-3"
+                        )}
                       />
                       {permissionSearchQuery.trim() ? (
                         <Button
@@ -1928,19 +2059,24 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                     </div>
                  </div>
                  {!hasVisiblePermissionSections ? (
-                    <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                    <p
+                      className={cn(
+                        "rounded-lg border border-dashed !border-emerald-300/50 p-6 text-center text-sm text-muted-foreground",
+                        "pl-company-profile-bordered-panel"
+                      )}
+                    >
                       No permissions match your category or search.
                     </p>
                  ) : null}
                  {showDateControlSection ? (
                  <div className="space-y-4 pt-4">
-                    <h3 className="text-lg font-semibold border-b pb-2">Date Control</h3>
+                    <h3 className={cn("border-b pb-2 text-lg font-semibold", companyProfileSoftDivider)}>Date Control</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                         {["Entry", "Edit", "Delete"].map((action) => {
                         const key = `${action.toLowerCase()}Days` as keyof typeof dateLimitsForSelectedRole;
                         const value = dateLimitsForSelectedRole?.[key] ?? 0;
                         return (
-                            <div key={action} className="flex flex-col gap-2 rounded-lg border p-3">
+                            <div key={action} className={cn("flex flex-col gap-2 p-3", companyProfileNestedRosePanel)}>
                             <div className="flex items-center gap-2">
                               <label className="text-sm font-medium">{`Back Date ${action} Days`}</label>
                               <PermissionHelpPopover
@@ -1949,12 +2085,13 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                               />
                             </div>
                              <Input
+                                {...companyProfileManageShareFieldProps}
                                 type="number"
                                 min={0}
                                 value={value}
                                 onChange={(e) => handleDateLimitChange(action.toLowerCase() as any, Number(e.target.value))}
                                 disabled={selectedRoleForPermissions === "owner"}
-                                className="w-full"
+                                className={cn("w-full", companyProfileManageShareFieldClass)}
                               />
                             </div>
                         );
@@ -1965,10 +2102,10 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
                 {showFileAttachmentSection ? (
                 <div className="space-y-4 pt-4">
-                    <h3 className="text-lg font-semibold border-b pb-2">File Attachment Settings</h3>
+                    <h3 className={cn("border-b pb-2 text-lg font-semibold", companyProfileSoftDivider)}>File Attachment Settings</h3>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     {showFileAttachmentUpgradeBanner ? (
-                    <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
+                    <div className="pl-company-profile-bordered-panel rounded-lg border !border-amber-200/70 bg-amber-50 p-3 text-sm">
                         <p className="font-semibold text-amber-900">
                             Your current plan allows max {planMaxFilesPerVoucher} file(s) per voucher.
                         </p>
@@ -1980,13 +2117,13 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                         </p>
                     </div>
                     ) : (
-                    <p className="rounded-lg border border-black bg-muted/30 p-3 text-sm font-semibold text-foreground">
+                    <p className={companyProfileInfoBannerClass}>
                         Your current plan allows max {planMaxFilesPerVoucher} file(s) per voucher.
                     </p>
                     )}
                     
                     {/* Global Toggle */}
-                    <div className="flex items-center justify-between gap-3 rounded-lg border p-4">
+                    <div className={cn("flex items-center justify-between gap-3 p-4", companyProfileNestedRosePanel)}>
                         <div className="flex min-w-0 items-center gap-2">
                             <label className="text-base font-medium">Allow File Attachments</label>
                             <PermissionHelpPopover
@@ -2003,7 +2140,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
                     {/* Role-based File Limits */}
                     {allowAttachmentsGlobal && (
-                        <div className="space-y-4 p-4 border rounded-lg">
+                        <div className={cn("space-y-4 p-4", companyProfileNestedRosePanel)}>
                             <div className="flex flex-wrap items-center gap-2">
                               <h4 className="text-sm font-semibold">File Limits for {companyShareRoleLabel(selectedRoleForPermissions)} Role</h4>
                               {showPlanFileLimitNotice ? (
@@ -2015,7 +2152,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 items-stretch">
                                 {/* Max File Count */}
-                                <div className="flex flex-col justify-center gap-2 rounded-lg border p-3">
+                                <div className={cn("flex flex-col justify-center gap-2 p-3", companyProfileNestedRosePanel)}>
                                     <div className="flex items-center justify-between gap-3">
                                       <div className="flex min-w-0 items-center gap-2">
                                         <label className="text-sm font-medium">Max File Count (0-{planMaxFilesPerVoucher})</label>
@@ -2025,6 +2162,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                         />
                                       </div>
                                       <Input
+                                          {...companyProfileManageShareFieldProps}
                                           type="number"
                                           min={0}
                                           max={planMaxFilesPerVoucher}
@@ -2036,13 +2174,16 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                             )
                                           }
                                           disabled={selectedRoleForPermissions === "owner" || !planAllowsFileAttachment}
-                                          className="h-9 w-16 shrink-0 px-2 text-center"
+                                          className={cn(
+                                            "h-9 w-16 shrink-0 px-2 text-center",
+                                            companyProfileManageShareFieldClass
+                                          )}
                                       />
                                     </div>
                                 </div>
 
                                 {/* Allow Image */}
-                                <div className="flex flex-col justify-center gap-2 rounded-lg border p-3">
+                                <div className={cn("flex flex-col justify-center gap-2 p-3", companyProfileNestedRosePanel)}>
                                     <div className="flex items-center justify-between gap-3">
                                       <div className="flex min-w-0 items-center gap-2">
                                         <label className="text-sm font-medium">Allow Image Files</label>
@@ -2060,7 +2201,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                 </div>
 
                                 {/* Allow PDF */}
-                                <div className="flex flex-col justify-center gap-2 rounded-lg border p-3">
+                                <div className={cn("flex flex-col justify-center gap-2 p-3", companyProfileNestedRosePanel)}>
                                     <div className="flex items-center justify-between gap-3">
                                       <div className="flex min-w-0 items-center gap-2">
                                         <label className="text-sm font-medium">Allow PDF Files</label>
@@ -2078,7 +2219,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                 </div>
 
                                 {/* Allow Delete Uploaded Files */}
-                                <div className="flex flex-col justify-center gap-2 rounded-lg border p-3">
+                                <div className={cn("flex flex-col justify-center gap-2 p-3", companyProfileNestedRosePanel)}>
                                     <div className="flex items-center justify-between gap-3">
                                       <div className="flex min-w-0 items-center gap-2">
                                         <label className="text-sm font-medium">Allow File Delete</label>
@@ -2102,9 +2243,42 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
                 {filteredPermissionGroups.map((group) => (
                     <div key={group.title} className="space-y-4 pt-4">
-                        <h3 className="text-lg font-semibold border-b pb-2">{group.title}</h3>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                        <h3 className={cn("border-b pb-2 text-lg font-semibold", companyProfileSoftDivider)}>
+                          {group.title}
+                        </h3>
+                        {group.title === "Special Accounts" ? (
+                          <ManageSharingSpecialAccountsSection
+                            showUsagePanel={showSpecialAccountUsagePanel}
+                            editablePermissionConfig={editablePermissionConfig}
+                            permissionFormResetNonce={permissionFormResetNonce}
+                            onPermissionConfigChange={(next) => {
+                              hasUnsavedChangesRef.current = true;
+                              setEditablePermissionConfig(next);
+                            }}
+                            onPendingBankAccountUsage={(accountId, useFor, isSpecial) => {
+                              pendingSpecialAccountBankUsageRef.current = {
+                                accountId,
+                                useFor,
+                                isSpecial,
+                              };
+                            }}
+                          />
+                        ) : null}
+                        <div
+                          className={cn(
+                            group.title === "Special Accounts"
+                              ? "flex w-full flex-wrap items-start gap-3"
+                              : "grid w-full grid-cols-1 gap-4 items-start sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
+                          )}
+                        >
                             {group.permissions.map((permission) => {
+                                if (
+                                  group.title === "Special Accounts" &&
+                                  permission.key === VIEW_SPECIAL_ACCOUNT_BALANCE_PERM
+                                ) {
+                                  return null;
+                                }
+
                                 const globalIndex = flattenedPermissions.indexOf(permission.key);
 
                                 if (globalIndex === -1) return null;
@@ -2112,7 +2286,15 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                 const hasPermission = selectedRoleForPermissions === "owner" ? true : permissionsForSelectedRole[globalIndex];
 
                                 return (
-                                    <div key={permission.key} className="flex items-start gap-2 p-2 rounded-md border">
+                                    <div
+                                      key={permission.key}
+                                      className={cn(
+                                        "flex items-start gap-2 p-2",
+                                        companyProfilePermissionChipShell,
+                                        group.title === "Special Accounts" &&
+                                          "w-auto max-w-full shrink-0 items-center"
+                                      )}
+                                    >
                                         <Checkbox
                                             id={`${selectedRoleForPermissions}-${permission.key}`}
                                             checked={hasPermission}
@@ -2124,7 +2306,12 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                         />
                                         <label
                                             htmlFor={`${selectedRoleForPermissions}-${permission.key}`}
-                                            className="min-w-0 flex-1 text-sm font-medium leading-snug peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                                            className={cn(
+                                              "text-sm font-medium leading-snug peer-disabled:cursor-not-allowed peer-disabled:opacity-70",
+                                              group.title === "Special Accounts"
+                                                ? "whitespace-nowrap"
+                                                : "min-w-0 flex-1"
+                                            )}
                                         >
                                             {permission.label}
                                         </label>

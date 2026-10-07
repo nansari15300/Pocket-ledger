@@ -2588,13 +2588,11 @@ button.day_selected.is-today.has-transactions {
 
   /* APK / embedded WebView: ledger mobile lists scroll karein, vertical scrollbar na dikhe */
   html[data-pl-embedded-shell] .scroll-touch,
-  html[data-pl-embedded-shell] [data-pl-mobile-pull-scroll],
   html[data-pl-embedded-shell] main .pl-ledger-txn-scroll-native {
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
   html[data-pl-embedded-shell] .scroll-touch::-webkit-scrollbar,
-  html[data-pl-embedded-shell] [data-pl-mobile-pull-scroll]::-webkit-scrollbar,
   html[data-pl-embedded-shell] main .pl-ledger-txn-scroll-native::-webkit-scrollbar {
     display: none;
     width: 0;
@@ -2757,13 +2755,13 @@ button.day_selected.is-today.has-transactions {
   
   /* Table borders - common in financial apps like transaction tables */
   /* 4K ma lines dherai moto chahiyeko - pure black thick lines */
-  table:not([data-pl-subscription-payments-table]),
-  table:not([data-pl-subscription-payments-table]) td,
-  table:not([data-pl-subscription-payments-table]) th,
-  table:not([data-pl-subscription-payments-table]) tr,
-  table:not([data-pl-subscription-payments-table]) thead th,
-  table:not([data-pl-subscription-payments-table]) tbody td,
-  table:not([data-pl-subscription-payments-table]) tfoot td {
+  table:not([data-pl-subscription-payments-table]):not(.pl-special-account-usage-table):not([data-pl-company-profile-table]),
+  table:not([data-pl-subscription-payments-table]):not(.pl-special-account-usage-table):not([data-pl-company-profile-table]) td,
+  table:not([data-pl-subscription-payments-table]):not(.pl-special-account-usage-table):not([data-pl-company-profile-table]) th,
+  table:not([data-pl-subscription-payments-table]):not(.pl-special-account-usage-table):not([data-pl-company-profile-table]) tr,
+  table:not([data-pl-subscription-payments-table]):not(.pl-special-account-usage-table):not([data-pl-company-profile-table]) thead th,
+  table:not([data-pl-subscription-payments-table]):not(.pl-special-account-usage-table):not([data-pl-company-profile-table]) tbody td,
+  table:not([data-pl-subscription-payments-table]):not(.pl-special-account-usage-table):not([data-pl-company-profile-table]) tfoot td {
     border-width: 3px !important;
     border-color: #000000 !important;
   }
@@ -2841,19 +2839,33 @@ button.day_selected.is-today.has-transactions {
   }
   
   /* Input and form element borders */
-  input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]),
-  textarea:not([data-pl-mlc-search-input]),
-  select,
-  button:not([class*="border-0"]):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]),
-  [type="text"],
-  [type="number"],
-  [type="email"],
-  [type="password"],
-  [type="date"],
-  [type="time"],
-  [type="datetime-local"] {
+  input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+  textarea:not([data-pl-mlc-search-input]):not(.pl-company-profile-field):not([data-pl-manage-share-field]),
+  select:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
+  button:not([class*="border-0"]):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+  [type="text"]:not(.pl-company-profile-field),
+  [type="number"]:not(.pl-company-profile-field),
+  [type="email"]:not(.pl-company-profile-field),
+  [type="password"]:not(.pl-company-profile-field),
+  [type="date"]:not(.pl-company-profile-field),
+  [type="time"]:not(.pl-company-profile-field),
+  [type="datetime-local"]:not(.pl-company-profile-field) {
     border-width: 3px !important;
     border-color: #000000 !important;
+  }
+  [data-pl-company-profile-chrome] input.pl-company-profile-field,
+  [data-pl-company-profile-chrome] input[data-pl-manage-share-field],
+  [data-pl-company-profile-chrome] input[data-pl-manage-share-perm-filter],
+  [data-pl-company-profile-chrome] input[data-pl-manage-share-bank-select],
+  [data-pl-company-profile-chrome] button.pl-company-profile-field,
+  [data-pl-company-profile-chrome] button[data-pl-manage-share-field],
+  [data-pl-company-profile-chrome] button[data-pl-manage-share-perm-filter],
+  [data-pl-company-profile-chrome] button[data-pl-manage-share-bank-select],
+  [data-pl-company-profile-chrome] textarea.pl-company-profile-field,
+  [data-pl-company-profile-chrome] select.pl-company-profile-field {
+    border-width: 1px !important;
+    border-color: rgb(167 243 208 / 0.9) !important;
+    background-color: hsl(var(--background)) !important;
   }
   
   /* Card and container borders */
@@ -3046,13 +3058,13 @@ button.day_selected.is-today.has-transactions {
   
   /* Tailwind border utilities - double thickness (except border-0) */
   /* 4K ma sabai borders moto ra pure black */
-  .border:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon),
-  .border-t:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon),
-  .border-r:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon),
-  .border-b:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon),
-  .border-l:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon),
-  .border-x:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon),
-  .border-y:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon) {
+  .border:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-manage-share-avatar]),
+  .border-t:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+  .border-r:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+  .border-b:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+  .border-l:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+  .border-x:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+  .border-y:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]) {
     border-width: 3px !important;
     border-color: #000000 !important;
   }
@@ -3881,6 +3893,84 @@ button.day_selected.is-today.has-transactions {
     outline: none !important;
     background: transparent !important;
   }
+
+  /* Manage Sharing / Company Profile — 4K global black borders mat (soft emerald) */
+  [data-pl-company-profile-chrome],
+  [data-pl-company-profile-chrome] table,
+  [data-pl-company-profile-chrome] table td,
+  [data-pl-company-profile-chrome] table th,
+  [data-pl-company-profile-chrome] table tr,
+  table.pl-special-account-usage-table,
+  table.pl-special-account-usage-table td,
+  table.pl-special-account-usage-table th,
+  table.pl-special-account-usage-table tr {
+    border-color: rgb(167 243 208 / 0.72) !important;
+  }
+  table.pl-company-profile-soft-table tr,
+  table.pl-special-account-usage-table tr,
+  table[data-pl-manage-sharing-users-table] tr,
+  [data-pl-company-profile-chrome] table.pl-company-profile-soft-table tr,
+  [data-pl-company-profile-chrome] table.pl-special-account-usage-table tr,
+  [data-pl-company-profile-chrome] table[data-pl-manage-sharing-users-table] tr {
+    border: 0 !important;
+    border-width: 0 !important;
+  }
+  table.pl-company-profile-soft-table th,
+  table.pl-company-profile-soft-table td,
+  table.pl-special-account-usage-table th,
+  table.pl-special-account-usage-table td,
+  table[data-pl-manage-sharing-users-table] th,
+  table[data-pl-manage-sharing-users-table] td,
+  [data-pl-company-profile-chrome] table.pl-company-profile-soft-table th,
+  [data-pl-company-profile-chrome] table.pl-company-profile-soft-table td,
+  [data-pl-company-profile-chrome] table.pl-special-account-usage-table th,
+  [data-pl-company-profile-chrome] table.pl-special-account-usage-table td,
+  [data-pl-company-profile-chrome] table[data-pl-manage-sharing-users-table] th,
+  [data-pl-company-profile-chrome] table[data-pl-manage-sharing-users-table] td {
+    border-width: 0 !important;
+    border-bottom-width: 1px !important;
+    border-bottom-color: rgb(167 243 208 / 0.75) !important;
+  }
+  table.pl-company-profile-soft-table tbody tr:last-child > th,
+  table.pl-company-profile-soft-table tbody tr:last-child > td,
+  table.pl-special-account-usage-table tbody tr:last-child > td,
+  table[data-pl-manage-sharing-users-table] tbody tr:last-child > td,
+  [data-pl-company-profile-chrome] table.pl-company-profile-soft-table tbody tr:last-child > th,
+  [data-pl-company-profile-chrome] table.pl-company-profile-soft-table tbody tr:last-child > td,
+  [data-pl-company-profile-chrome] table.pl-special-account-usage-table tbody tr:last-child > td,
+  [data-pl-company-profile-chrome] table[data-pl-manage-sharing-users-table] tbody tr:last-child > td {
+    border-bottom-width: 0 !important;
+  }
+  [data-pl-company-profile-chrome] .border:not(.border-0):not([role="tab"]):not([class*="pl-chrome-tone-"]),
+  [data-pl-company-profile-chrome] .border-b:not(.border-0):not([class*="pl-chrome-tone-"]),
+  [data-pl-company-profile-chrome] .border-t:not(.border-0):not([class*="pl-chrome-tone-"]),
+  [data-pl-company-profile-chrome] .border-r:not(.border-0):not([class*="pl-chrome-tone-"]),
+  [data-pl-company-profile-chrome] .border-l:not(.border-0):not([class*="pl-chrome-tone-"]),
+  [data-pl-company-profile-chrome] [class*="border-border"] {
+    border-width: 1px !important;
+    border-color: rgb(167 243 208 / 0.72) !important;
+  }
+  [data-pl-company-profile-chrome] .pl-chrome-tone-blue,
+  [data-pl-company-profile-chrome] .pl-chrome-tone-blue.border {
+    border-color: rgb(147 197 253 / 0.78) !important;
+  }
+  [data-pl-company-profile-chrome] .pl-chrome-tone-emerald,
+  [data-pl-company-profile-chrome] .pl-chrome-tone-emerald.border {
+    border-color: rgb(167 243 208 / 0.72) !important;
+  }
+  [data-pl-company-profile-chrome] .pl-chrome-tone-rose,
+  [data-pl-company-profile-chrome] .pl-chrome-tone-rose.border {
+    border-color: rgb(226 232 240 / 0.95) !important;
+  }
+  [data-pl-company-profile-chrome] input:not([type="checkbox"]):not([type="radio"]),
+  [data-pl-company-profile-chrome] textarea,
+  [data-pl-company-profile-chrome] select,
+  [data-pl-company-profile-chrome] button[role="combobox"],
+  [data-pl-company-profile-chrome] button[data-theme-detail="date-range"],
+  [data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not([data-pl-settings-list-float]) {
+    border-width: 1px !important;
+    border-color: rgb(134 239 172 / 0.55) !important;
+  }
 }
 
 /* Stock Summary report — table/header/footer lines 1px (ui/table 3px + 4K override se upar) */
@@ -4367,16 +4457,59 @@ body[class*="theme-"].dark main [data-pl-reports-list] [data-pl-list-row] .pl-ma
   box-sizing: border-box !important;
 }
 
-/* Company Profile + Manage Sharing: inputs, dropdown, dates, tabs — black borders + gray fields */
+/* Company Profile + Manage Sharing: soft emerald borders (zone background tone), not black */
 [data-pl-company-profile-chrome],
 body.theme-colorfull main [data-pl-company-profile-chrome],
 body.theme-pro [data-pl-company-profile-chrome] {
-  --border: 0 0% 0% !important;
-  --input: 0 0% 0% !important;
-  --ring: 0 0% 0% !important;
+  --pl-cp-soft-border: rgb(167 243 208 / 0.72);
+  --pl-cp-soft-border-field: rgb(134 239 172 / 0.55);
+  --border: 152 76% 80% !important;
+  --input: 152 76% 78% !important;
+  --ring: 152 55% 65% !important;
   overflow: hidden;
-  border: 1px solid #000 !important;
+  border: 1px solid var(--pl-cp-soft-border) !important;
   border-radius: 0.5rem;
+}
+[data-pl-company-profile-chrome] table:not(.pl-company-profile-soft-table):not(.pl-special-account-usage-table):not([data-pl-manage-sharing-users-table]) td,
+[data-pl-company-profile-chrome] table:not(.pl-company-profile-soft-table):not(.pl-special-account-usage-table):not([data-pl-manage-sharing-users-table]) th {
+  border-width: 0 !important;
+  border-bottom-width: 1px !important;
+  border-bottom-color: rgb(167 243 208 / 0.72) !important;
+}
+[data-pl-company-profile-chrome] table:not(.pl-company-profile-soft-table):not(.pl-special-account-usage-table):not([data-pl-manage-sharing-users-table]) tr {
+  border: 0 !important;
+}
+[data-pl-company-profile-chrome] .border-b {
+  border-bottom-width: 1px !important;
+  border-bottom-color: rgb(167 243 208 / 0.72) !important;
+}
+[data-pl-company-profile-chrome] .border:not(.border-0):not([role="tab"]):not([class*="pl-chrome-tone-"]),
+[data-pl-company-profile-chrome] .border-t:not(.border-0):not([class*="pl-chrome-tone-"]),
+[data-pl-company-profile-chrome] .border-r:not(.border-0):not([class*="pl-chrome-tone-"]),
+[data-pl-company-profile-chrome] .border-l:not(.border-0):not([class*="pl-chrome-tone-"]),
+[data-pl-company-profile-chrome] [class*="border-border"] {
+  border-width: 1px !important;
+  border-color: var(--pl-cp-soft-border) !important;
+}
+[data-pl-company-profile-chrome] .pl-chrome-tone-blue {
+  border-color: rgb(147 197 253 / 0.78) !important;
+}
+[data-pl-company-profile-chrome] .pl-chrome-tone-emerald {
+  border-color: rgb(167 243 208 / 0.72) !important;
+}
+[data-pl-company-profile-chrome] .pl-chrome-tone-rose {
+  border-color: rgb(226 232 240 / 0.95) !important;
+}
+[data-pl-company-profile-chrome] .pl-chrome-tone-violet {
+  border-color: rgb(221 214 254 / 0.82) !important;
+}
+[data-pl-company-profile-chrome] .pl-chrome-tone-amber {
+  border-color: rgb(253 230 138 / 0.82) !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] .border-black,
+body.theme-pro main [data-pl-company-profile-chrome] tr.border-black {
+  border-color: var(--pl-cp-soft-border) !important;
+  border-width: 1px !important;
 }
 [data-pl-company-profile-chrome] > .rounded-b-lg {
   background-clip: padding-box;
@@ -4390,7 +4523,7 @@ body.theme-colorfull main [data-pl-company-profile-chrome] select,
 body.theme-pro [data-pl-company-profile-chrome] input:not([type="checkbox"]):not([type="radio"]),
 body.theme-pro [data-pl-company-profile-chrome] textarea,
 body.theme-pro [data-pl-company-profile-chrome] select {
-  border-color: #000 !important;
+  border-color: var(--pl-cp-soft-border-field) !important;
   border-width: 1px !important;
   /* User request: Company Profile fields gray background */
   background-color: hsl(var(--muted) / 0.72) !important;
@@ -4406,7 +4539,7 @@ body.theme-pro [data-pl-company-profile-chrome] button[data-theme-detail="date-r
 [data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not([data-pl-settings-list-float]),
 body.theme-colorfull main [data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not([data-pl-settings-list-float]),
 body.theme-pro [data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not([data-pl-settings-list-float]) {
-  border-color: #000 !important;
+  border-color: var(--pl-cp-soft-border-field) !important;
   border-width: 1px !important;
   background-color: hsl(var(--muted) / 0.72) !important;
 }
@@ -4434,7 +4567,7 @@ body.theme-colorfull main [data-pl-company-profile-chrome] [role="tablist"],
 body.theme-colorfull main [data-pl-company-profile-chrome] [role="tab"],
 body.theme-pro [data-pl-company-profile-chrome] [role="tablist"],
 body.theme-pro [data-pl-company-profile-chrome] [role="tab"] {
-  border-color: #000 !important;
+  border-color: var(--pl-cp-soft-border) !important;
   border-width: 1px !important;
 }
 /* Company Profile tabs: selected pill blue; list ke andar upar/neeche barabar inset */
@@ -4476,7 +4609,7 @@ body.theme-pro [data-pl-company-profile-chrome] [role="tab"][data-state="active"
 [data-pl-company-profile-chrome] .border-dashed,
 body.theme-colorfull main [data-pl-company-profile-chrome] .border-dashed,
 body.theme-pro [data-pl-company-profile-chrome] .border-dashed {
-  border-color: #000 !important;
+  border-color: var(--pl-cp-soft-border) !important;
 }
 
 /* Master add/edit dialogs — non-Pro: gray pill fields; Pro: row-wise colored pills (header chrome jaisa) */
@@ -4691,6 +4824,88 @@ body.theme-pro .pl-master-entity-form-chrome .pl-master-special-account-panel .p
   border-color: rgb(167 243 208 / 0.65) !important;
   background-color: rgba(255, 255, 255, 0.72) !important;
 }
+/* Special account usage table — scrollbar gutter; light gray thumb (checkbox overlap avoid) */
+.pl-master-special-account-scroll [data-radix-scroll-area-viewport] > div {
+  display: block !important;
+}
+.pl-master-special-account-scroll [data-radix-scroll-area-scrollbar][data-orientation="vertical"] {
+  width: 8px;
+  padding: 2px 1px 2px 0;
+  background: transparent;
+}
+.pl-master-special-account-scroll [data-radix-scroll-area-scrollbar][data-orientation="vertical"] [data-radix-scroll-area-thumb] {
+  background-color: #d1d5db !important;
+}
+.pl-master-special-account-scroll
+  [data-radix-scroll-area-scrollbar][data-orientation="vertical"]
+  [data-radix-scroll-area-thumb]:hover {
+  background-color: #b8bcc4 !important;
+}
+/* Manage Sharing — avatar: 1px ring photo ke bilkul edge par (online green / offline black) */
+[data-pl-manage-share-avatar] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  box-sizing: border-box !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+[data-pl-manage-share-avatar][data-online="true"] {
+  border-color: rgb(34 197 94) !important;
+}
+[data-pl-manage-share-avatar][data-online="false"] {
+  border-color: #000000 !important;
+}
+[data-pl-manage-share-avatar] img {
+  border-radius: 9999px !important;
+}
+
+/* Manage Sharing — inset ring (theme #000 + 4K `.border` se upar) */
+[data-pl-company-profile-chrome] [data-pl-manage-share-field],
+[data-pl-company-profile-chrome] [data-pl-manage-share-perm-filter],
+[data-pl-company-profile-chrome] [data-pl-manage-share-bank-select] {
+  border-width: 0 !important;
+  border-color: transparent !important;
+  background-color: hsl(var(--background)) !important;
+  box-shadow: inset 0 0 0 1px rgb(167 243 208 / 0.92) !important;
+}
+[data-pl-company-profile-chrome] [data-pl-manage-share-field]:focus,
+[data-pl-company-profile-chrome] [data-pl-manage-share-field]:focus-visible,
+[data-pl-company-profile-chrome] [data-pl-manage-share-perm-filter]:focus,
+[data-pl-company-profile-chrome] [data-pl-manage-share-perm-filter]:focus-visible,
+[data-pl-company-profile-chrome] [data-pl-manage-share-bank-select]:focus,
+[data-pl-company-profile-chrome] [data-pl-manage-share-bank-select]:focus-visible,
+[data-pl-company-profile-chrome] button[data-pl-manage-share-field][data-state="open"],
+[data-pl-company-profile-chrome] button[data-pl-manage-share-perm-filter][data-state="open"],
+[data-pl-company-profile-chrome] button[data-pl-manage-share-bank-select][data-state="open"] {
+  outline: none !important;
+  box-shadow: inset 0 0 0 1px rgb(110 231 183 / 0.95) !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+}
+
+/* Usage / Manage Sharing tables — one horizontal line per row (cells only, not tr) */
+.pl-special-account-usage-table-wrap {
+  isolation: isolate;
+}
+.pl-special-account-usage-table-wrap .pl-master-special-account-scroll [data-radix-scroll-area-viewport] {
+  border-radius: inherit;
+  overflow: hidden !important;
+}
+table.pl-company-profile-soft-table,
+table.pl-special-account-usage-table,
+table[data-pl-manage-sharing-users-table] {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+table.pl-special-account-usage-table th {
+  background-color: rgba(236, 253, 245, 0.92);
+}
+table.pl-special-account-usage-table thead th:first-child {
+  border-top-left-radius: 0.5rem;
+}
+table.pl-special-account-usage-table thead th:last-child {
+  border-top-right-radius: 0.5rem;
+}
 body.theme-pro .pl-master-entity-form-chrome .pl-master-special-account-panel thead {
   background-color: rgba(236, 253, 245, 0.75) !important;
 }
@@ -4857,28 +5072,112 @@ body.theme-pro .pl-settings-list-shell {
 }
 
 /* Pro: saare main forms — gray field + black border (Company Profile jaisa) */
-body.theme-pro main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]),
-body.theme-pro main textarea,
-body.theme-pro main select,
-body.theme-pro main button[role="combobox"],
-body.theme-pro main button[data-theme-detail="date-range"]:not(.pl-chrome-btn-drop) {
+body.theme-pro main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+body.theme-pro main textarea:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
+body.theme-pro main select:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
+body.theme-pro main button[role="combobox"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+body.theme-pro main button[data-theme-detail="date-range"]:not(.pl-chrome-btn-drop):not(.pl-company-profile-field) {
   border-color: #000 !important;
   border-width: 1px !important;
   background-color: hsl(var(--muted) / 0.72) !important;
 }
+body.theme-pro main [data-pl-company-profile-chrome] input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro main [data-pl-company-profile-chrome] textarea,
+body.theme-pro main [data-pl-company-profile-chrome] select,
+body.theme-pro main [data-pl-company-profile-chrome] button[role="combobox"],
+body.theme-pro main [data-pl-company-profile-chrome] button[data-theme-detail="date-range"]:not(.pl-chrome-btn-drop) {
+  border-color: rgb(134 239 172 / 0.55) !important;
+  border-width: 1px !important;
+}
 
 /* Pro: global Card shells — nested/settings/grid sab jagah dashboard ribbon; tone cards alag border */
-body.theme-pro main .rounded-lg.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
-body.theme-pro main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]) {
+body.theme-pro main .rounded-lg.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]):not([data-pl-company-profile-chrome]),
+body.theme-pro main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]):not([data-pl-company-profile-chrome]) {
   border-color: #000 !important;
   border-width: 1px !important;
   background-color: #ecfdf5 !important;
   background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
 }
+/* Manage Sharing / Company Profile — Pro theme global black card border override se upar */
+body.theme-pro main [data-pl-company-profile-chrome].rounded-lg.border.bg-card,
+body.theme-pro main [data-pl-company-profile-chrome] .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]),
+body.theme-pro main [data-pl-company-profile-chrome] .rounded-lg.border:not(.border-0),
+body.theme-pro main [data-pl-company-profile-chrome] .rounded-md.border:not(.border-0),
+body.theme-pro main [data-pl-company-profile-chrome] .border:not(.border-0):not([role="tab"]) {
+  border-color: rgb(167 243 208 / 0.72) !important;
+  border-width: 1px !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] .border-b:not(.border-0),
+body.theme-pro main [data-pl-company-profile-chrome] .border-t:not(.border-0) {
+  border-color: rgb(167 243 208 / 0.72) !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] table.pl-company-profile-soft-table tr,
+body.theme-pro main [data-pl-company-profile-chrome] table.pl-special-account-usage-table tr,
+body.theme-pro main [data-pl-company-profile-chrome] table[data-pl-manage-sharing-users-table] tr {
+  border: 0 !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] table.pl-company-profile-soft-table th,
+body.theme-pro main [data-pl-company-profile-chrome] table.pl-company-profile-soft-table td,
+body.theme-pro main [data-pl-company-profile-chrome] table.pl-special-account-usage-table th,
+body.theme-pro main [data-pl-company-profile-chrome] table.pl-special-account-usage-table td,
+body.theme-pro main [data-pl-company-profile-chrome] table[data-pl-manage-sharing-users-table] th,
+body.theme-pro main [data-pl-company-profile-chrome] table[data-pl-manage-sharing-users-table] td {
+  border-color: rgb(167 243 208 / 0.75) !important;
+  border-width: 0 !important;
+  border-bottom-width: 1px !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] table.pl-company-profile-soft-table tbody tr:last-child > td,
+body.theme-pro main [data-pl-company-profile-chrome] table.pl-company-profile-soft-table tbody tr:last-child > th,
+body.theme-pro main [data-pl-company-profile-chrome] table.pl-special-account-usage-table tbody tr:last-child > td,
+body.theme-pro main [data-pl-company-profile-chrome] table[data-pl-manage-sharing-users-table] tbody tr:last-child > td {
+  border-bottom-width: 0 !important;
+}
 body.theme-pro main .rounded-lg.bg-card .rounded-lg.bg-card:not([data-pl-mobile-transaction-card]),
 body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]) {
   background-color: #f0f9ff !important;
   background-image: linear-gradient(90deg, rgba(224, 242, 254, 0.98) 0%, #ffffff 50%, rgba(207, 250, 254, 0.92) 100%) !important;
+}
+/* Company Profile — container border apne background ribbon ke saath match */
+body.theme-pro main [data-pl-company-profile-chrome] .pl-chrome-tone-blue.border,
+body.theme-pro main [data-pl-company-profile-chrome] .pl-chrome-tone-blue.rounded-lg.border.bg-card,
+body.theme-pro main [data-pl-company-profile-chrome] .pl-chrome-tone-blue.rounded-md.border {
+  border-color: rgb(147 197 253 / 0.78) !important;
+  border-width: 1px !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] .pl-chrome-tone-emerald.border,
+body.theme-pro main [data-pl-company-profile-chrome] .pl-chrome-tone-emerald.rounded-lg.border.bg-card,
+body.theme-pro main [data-pl-company-profile-chrome] .pl-master-special-account-panel.pl-chrome-tone-emerald {
+  border-color: rgb(167 243 208 / 0.72) !important;
+  border-width: 1px !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] .pl-chrome-tone-rose.border,
+body.theme-pro main [data-pl-company-profile-chrome] .pl-chrome-tone-rose.rounded-md.border,
+body.theme-pro main [data-pl-company-profile-chrome] .pl-chrome-tone-rose.rounded-lg.border {
+  border-color: rgb(226 232 240 / 0.95) !important;
+  border-width: 1px !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] .pl-chrome-tone-violet.border,
+body.theme-pro main [data-pl-company-profile-chrome] .pl-chrome-tone-violet.rounded-lg.border {
+  border-color: rgb(221 214 254 / 0.82) !important;
+  border-width: 1px !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] .pl-chrome-tone-amber.border,
+body.theme-pro main [data-pl-company-profile-chrome] .pl-chrome-tone-amber.rounded-lg.border {
+  border-color: rgb(253 230 138 / 0.82) !important;
+  border-width: 1px !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] .pl-master-special-account-panel {
+  border: 1px solid rgb(167 243 208 / 0.72) !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] .rounded-lg.border.bg-card .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]) {
+  border-color: rgb(186 230 253 / 0.82) !important;
+  border-width: 1px !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]) {
+  border-color: rgb(221 214 254 / 0.82) !important;
+}
+body.theme-pro main [data-pl-company-profile-chrome] .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]) {
+  border-color: rgb(253 230 138 / 0.82) !important;
 }
 body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]) {
   background-color: #f5f3ff !important;
@@ -5795,10 +6094,10 @@ body.theme-pro [data-theme-table="transactions"]:not([data-pl-txn-table-tone="gr
 }
 
 /* Reconciliation matched pair — dono side green (detail: file end par stripe override ke baad) */
-body[class*="theme-"] main .rounded-lg.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]),
-body[class*="theme-"] main .rounded-md.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]),
-body[class*="theme-"] main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
-body[class*="theme-"] main .rounded-lg.border.bg-card.shadow-sm:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
+body[class*="theme-"] main .rounded-lg.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]):not([data-pl-company-profile-chrome]):not(.pl-company-profile-bordered-panel),
+body[class*="theme-"] main .rounded-md.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]):not([data-pl-company-profile-chrome]):not(.pl-company-profile-bordered-panel),
+body[class*="theme-"] main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]):not([data-pl-company-profile-chrome]):not(.pl-company-profile-bordered-panel),
+body[class*="theme-"] main .rounded-lg.border.bg-card.shadow-sm:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]):not([data-pl-company-profile-chrome]):not(.pl-company-profile-bordered-panel),
 body[class*="theme-"] [data-pl-main-sidebar] .rounded-md.border:not([data-pl-sidebar-brand-icon]):not(.pl-chrome-btn-drop),
 body[class*="theme-"] [data-pl-main-sidebar] .rounded-lg.border:not([data-pl-sidebar-brand-icon]):not(.pl-chrome-btn-drop),
 body[class*="theme-"] header .rounded-lg.border:not([data-pl-header-preview-switch]),
@@ -5956,10 +6255,10 @@ body.theme-pro footer button[data-pl-footer-fresh-info].pl-chrome-btn-drop {
     0 1px 2px rgba(15, 23, 42, 0.06) !important;
 }
 
-body[class*="theme-"] main table,
-body[class*="theme-"] main table th,
-body[class*="theme-"] main table td,
-body[class*="theme-"] main table tr,
+body[class*="theme-"] main table:not([data-pl-manage-sharing-users-table]):not([data-pl-manage-sharing-limits-table]):not(.pl-special-account-usage-table),
+body[class*="theme-"] main table:not([data-pl-manage-sharing-users-table]):not([data-pl-manage-sharing-limits-table]):not(.pl-special-account-usage-table) th,
+body[class*="theme-"] main table:not([data-pl-manage-sharing-users-table]):not([data-pl-manage-sharing-limits-table]):not(.pl-special-account-usage-table) td,
+body[class*="theme-"] main table:not([data-pl-manage-sharing-users-table]):not([data-pl-manage-sharing-limits-table]):not(.pl-special-account-usage-table) tr,
 body[class*="theme-"] [data-theme-table="transactions"] table,
 body[class*="theme-"] [data-theme-table="transactions"] table th,
 body[class*="theme-"] [data-theme-table="transactions"] table td {
@@ -6084,13 +6383,70 @@ body[class*="theme-"] main hr {
   border-color: #000 !important;
 }
 
-body[class*="theme-"] main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]),
-body[class*="theme-"] main textarea,
-body[class*="theme-"] main select,
-body[class*="theme-"] main button[role="combobox"],
-body[class*="theme-"] main button[data-theme-detail="date-range"] {
+body[class*="theme-"] main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+body[class*="theme-"] main textarea:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
+body[class*="theme-"] main select:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
+body[class*="theme-"] main button[role="combobox"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+body[class*="theme-"] main button[data-theme-detail="date-range"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]) {
   border-width: 1px !important;
   border-color: #000 !important;
+}
+
+/*
+ * Company Profile / Manage Sharing — MUST stay after body[class*="theme-"] black border blocks (~6070, ~6358).
+ * Warna outer card, limits table, inputs, combobox phir se #000 ho jate hain.
+ */
+body[class*="theme-"] main [data-pl-company-profile-chrome].rounded-lg.border.bg-card,
+body[class*="theme-"] main [data-pl-company-profile-chrome] .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]),
+body[class*="theme-"] main [data-pl-company-profile-chrome] .rounded-md.border:not(.border-0),
+body[class*="theme-"] main [data-pl-company-profile-chrome] .border:not(.border-0):not([role="tab"]):not([class*="pl-chrome-tone-"]) {
+  border-color: rgb(167 243 208 / 0.72) !important;
+  border-width: 1px !important;
+}
+body[class*="theme-"] main [data-pl-company-profile-chrome] .border-b:not(.border-0),
+body[class*="theme-"] main [data-pl-company-profile-chrome] .border-t:not(.border-0) {
+  border-color: rgb(167 243 208 / 0.72) !important;
+}
+body[class*="theme-"] main [data-pl-company-profile-chrome] input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]),
+body[class*="theme-"] main [data-pl-company-profile-chrome] textarea,
+body[class*="theme-"] main [data-pl-company-profile-chrome] select,
+body[class*="theme-"] main [data-pl-company-profile-chrome] button[role="combobox"],
+body[class*="theme-"] main [data-pl-company-profile-chrome] button[data-theme-detail="date-range"]:not(.pl-chrome-btn-drop) {
+  border-color: rgb(134 239 172 / 0.55) !important;
+  border-width: 1px !important;
+}
+body[class*="theme-"] main [data-pl-company-profile-chrome] table thead tr,
+body[class*="theme-"] main [data-pl-company-profile-chrome] table tbody tr {
+  border-width: 0 !important;
+  border-color: transparent !important;
+}
+body[class*="theme-"] main [data-pl-company-profile-chrome] .pl-chrome-tone-blue.border,
+body[class*="theme-"] main [data-pl-company-profile-chrome] .pl-chrome-tone-blue.rounded-lg.border,
+body[class*="theme-"] main [data-pl-company-profile-chrome] .pl-chrome-tone-blue.rounded-md.border {
+  border-color: rgb(147 197 253 / 0.78) !important;
+}
+body[class*="theme-"] main [data-pl-company-profile-chrome] .pl-chrome-tone-emerald.border,
+body[class*="theme-"] main [data-pl-company-profile-chrome] .pl-chrome-tone-emerald.rounded-lg.border {
+  border-color: rgb(167 243 208 / 0.72) !important;
+}
+body[class*="theme-"] main [data-pl-company-profile-chrome] .pl-chrome-tone-rose.border,
+body[class*="theme-"] main [data-pl-company-profile-chrome] .pl-chrome-tone-rose.rounded-md.border,
+body[class*="theme-"] main [data-pl-company-profile-chrome] .pl-chrome-tone-rose.rounded-lg.border {
+  border-color: rgb(226 232 240 / 0.95) !important;
+}
+body[class*="theme-"] main [data-pl-company-profile-chrome] table.pl-company-profile-soft-table th,
+body[class*="theme-"] main [data-pl-company-profile-chrome] table.pl-company-profile-soft-table td,
+body[class*="theme-"] main [data-pl-company-profile-chrome] table[data-pl-manage-sharing-users-table] th,
+body[class*="theme-"] main [data-pl-company-profile-chrome] table[data-pl-manage-sharing-users-table] td,
+body[class*="theme-"] main [data-pl-company-profile-chrome] table[data-pl-manage-sharing-limits-table] th,
+body[class*="theme-"] main [data-pl-company-profile-chrome] table[data-pl-manage-sharing-limits-table] td {
+  border-color: rgb(167 243 208 / 0.75) !important;
+  border-width: 0 !important;
+  border-bottom-width: 1px !important;
+}
+body[class*="theme-"] main [data-pl-company-profile-chrome] table.pl-company-profile-limits-table th,
+body[class*="theme-"] main [data-pl-company-profile-chrome] table.pl-company-profile-limits-table td {
+  border-right-color: rgb(167 243 208 / 0.55) !important;
 }
 
 /* Light theme: koi fill color nahi — sirf white + 1px black lines (dashboard ribbons bhi white) */
@@ -9256,4 +9612,102 @@ html body [data-pl-dialog-shell][data-pl-rp-dialog-shell] [data-pl-rp-side-pill]
   border-width: 1px !important;
   border-style: solid !important;
   border-color: rgb(147 197 253) !important;
+}
+
+/*
+ * Company Profile chrome — file ke end (theme black + 4K se upar; main/mobile dono).
+ */
+html body[class*="theme-"] [data-pl-company-profile-chrome],
+html body.theme-pro [data-pl-company-profile-chrome] {
+  border-color: rgb(167 243 208 / 0.72) !important;
+  border-width: 1px !important;
+}
+html body[class*="theme-"] [data-pl-company-profile-chrome] .rounded-lg.border,
+html body[class*="theme-"] [data-pl-company-profile-chrome] .rounded-md.border {
+  border-color: rgb(167 243 208 / 0.72) !important;
+  border-width: 1px !important;
+}
+html body[class*="theme-"] [data-pl-company-profile-chrome] .pl-chrome-tone-blue {
+  border-color: rgb(147 197 253 / 0.78) !important;
+}
+html body[class*="theme-"] [data-pl-company-profile-chrome] .pl-chrome-tone-rose,
+html body[class*="theme-"] [data-pl-company-profile-chrome] .pl-company-profile-bordered-panel {
+  border-color: rgb(167 243 208 / 0.72) !important;
+}
+html body[class*="theme-"] [data-pl-company-profile-chrome] .pl-manage-sharing-permission-toolbar [data-pl-manage-share-perm-filter] {
+  border-color: rgb(134 239 172 / 0.55) !important;
+  border-width: 1px !important;
+}
+html body[class*="theme-"] [data-pl-company-profile-chrome] input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]),
+html body[class*="theme-"] [data-pl-company-profile-chrome] textarea,
+html body[class*="theme-"] [data-pl-company-profile-chrome] select,
+html body[class*="theme-"] [data-pl-company-profile-chrome] button[role="combobox"],
+html body[class*="theme-"] [data-pl-company-profile-chrome] button[data-theme-detail="date-range"] {
+  border-color: rgb(134 239 172 / 0.55) !important;
+  border-width: 1px !important;
+}
+html body[class*="theme-"] [data-pl-company-profile-chrome] table[data-pl-manage-sharing-users-table] th,
+html body[class*="theme-"] [data-pl-company-profile-chrome] table[data-pl-manage-sharing-users-table] td,
+html body[class*="theme-"] [data-pl-company-profile-chrome] table[data-pl-manage-sharing-limits-table] th,
+html body[class*="theme-"] [data-pl-company-profile-chrome] table[data-pl-manage-sharing-limits-table] td,
+html body[class*="theme-"] [data-pl-company-profile-chrome] table.pl-company-profile-soft-table th,
+html body[class*="theme-"] [data-pl-company-profile-chrome] table.pl-company-profile-soft-table td {
+  border-color: rgb(167 243 208 / 0.75) !important;
+}
+@media (min-width: 3840px) and (hover: hover) and (pointer: fine) {
+  html body[class*="theme-"] [data-pl-company-profile-chrome] .border:not(.border-0):not([role="tab"]),
+  html body[class*="theme-"] [data-pl-company-profile-chrome] input:not([type="checkbox"]):not([type="radio"]),
+  html body[class*="theme-"] [data-pl-company-profile-chrome] button[role="combobox"] {
+    border-width: 1px !important;
+    border-color: rgb(134 239 172 / 0.55) !important;
+  }
+  html body[class*="theme-"] [data-pl-company-profile-chrome].rounded-lg.border,
+  html body[class*="theme-"] [data-pl-company-profile-chrome] .rounded-lg.border {
+    border-color: rgb(167 243 208 / 0.72) !important;
+  }
+}
+
+/* Company Profile fields — last word (Pro black + 4K 3px se upar) */
+html body.theme-pro main [data-pl-company-profile-chrome] [data-pl-manage-share-field],
+html body.theme-pro main [data-pl-company-profile-chrome] [data-pl-manage-share-perm-filter],
+html body.theme-pro main [data-pl-company-profile-chrome] [data-pl-manage-share-bank-select],
+html body[class*="theme-"] main [data-pl-company-profile-chrome] [data-pl-manage-share-field],
+html body[class*="theme-"] main [data-pl-company-profile-chrome] [data-pl-manage-share-perm-filter],
+html body[class*="theme-"] main [data-pl-company-profile-chrome] [data-pl-manage-share-bank-select],
+html body[class*="theme-"] [data-pl-company-profile-chrome] [data-pl-manage-share-field],
+html body[class*="theme-"] [data-pl-company-profile-chrome] [data-pl-manage-share-perm-filter],
+html body[class*="theme-"] [data-pl-company-profile-chrome] [data-pl-manage-share-bank-select] {
+  border-width: 0 !important;
+  border-color: transparent !important;
+  background-color: hsl(var(--background)) !important;
+  box-shadow: inset 0 0 0 1px rgb(167 243 208 / 0.92) !important;
+}
+@media (min-width: 3840px) and (hover: hover) and (pointer: fine) {
+  html body[class*="theme-"] [data-pl-company-profile-chrome] [data-pl-manage-share-field],
+  html body[class*="theme-"] [data-pl-company-profile-chrome] [data-pl-manage-share-perm-filter],
+  html body[class*="theme-"] [data-pl-company-profile-chrome] [data-pl-manage-share-bank-select] {
+    border-width: 0 !important;
+    box-shadow: inset 0 0 0 1px rgb(167 243 208 / 0.92) !important;
+  }
+}
+
+/* Embedded APK: keep touch scrolling enabled while hiding every scrollbar indicator. */
+html[data-pl-embedded-shell],
+html[data-pl-embedded-shell] * {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+html[data-pl-embedded-shell] *::-webkit-scrollbar,
+html[data-pl-embedded-shell] *::-webkit-scrollbar-thumb,
+html[data-pl-embedded-shell] *::-webkit-scrollbar-track {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+html[data-pl-embedded-shell] [data-radix-scroll-area-scrollbar],
+html[data-pl-embedded-shell] .simplebar-track {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
 }

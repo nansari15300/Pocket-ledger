@@ -1,198 +1,74 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
-import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
-import { useTransactions } from "@/hooks/use-transactions";
-import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
-import { useDate } from "@/hooks/useDate";
-import { cn } from "@/lib/utils";
+import React, { useCallback, useEffect, useState } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AccountDetails } from "@/components/bank-cash/AccountDetails";
 import type { Account } from "@/components/bank-cash/types";
-import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
-import { HistoryDialog } from "@/components/vouchers/HistoryDialog";
-import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
-import {
-  applyBankDrCrPerspectiveToTxnRows,
-  bankLedgerTxnColumnLabels,
-  flipLedgerDrCr,
-  flipLedgerSignedBalance,
-} from "@/lib/bankLedgerDrCrPerspective";
+import type { DateRange } from "@/components/ui/ad-calendar";
+import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
+import { cn } from "@/lib/utils";
 
 type DaybookAccountDayPeekDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   account: Account | null;
   daybookDate: Date | undefined;
-  /** Summary card figures — popup header me quick view */
+  /** Dashboard bank/cash filter to use when the account popup first opens. */
+  initialDateRange?: DateRange;
+  /** Summary card figures are kept for existing callers; AccountDetails calculates the filtered ledger totals. */
   summaryOpening?: number;
   summaryIn?: number;
   summaryOut?: number;
   summaryClosing?: number;
 };
 
-/**
- * Daybook Daily Summary account row double-click —
- * selected din ke liye us bank/cash ka ledger (opening + txns + closing).
- */
+/** Bank/cash row double-click — reuses the Bank ledger UI and its actions. */
 export function DaybookAccountDayPeekDialog({
   open,
   onOpenChange,
   account,
   daybookDate,
-  summaryOpening,
-  summaryIn,
-  summaryOut,
-  summaryClosing,
+  initialDateRange,
 }: DaybookAccountDayPeekDialogProps) {
   const { processedAccounts: allAccounts, userNames } = useFyScopedVouchers();
-  const { formatCurrency, formatDate, formatDateBS, dateSystem } = useDate();
-  const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
-  const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
-  const [historyVoucher, setHistoryVoucher] = useState<any>(null);
-  const { perspective } = useBankLedgerDrCrPerspective();
-
-  const dateRange = useMemo(
-    () => (daybookDate ? { from: daybookDate, to: daybookDate } : undefined),
-    [daybookDate]
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(
+    initialDateRange ?? (daybookDate ? { from: daybookDate, to: daybookDate } : undefined)
   );
+  const handleAccountDeleted = useCallback(() => onOpenChange(false), [onOpenChange]);
 
-  const {
-    processedTransactions,
-    openingBalanceForPeriod,
-    periodDr,
-    periodCr,
-    closingBalance,
-  } = useTransactions(
-    account,
-    "account",
-    dateRange,
-    undefined,
-    allAccounts,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    userNames
-  );
-
-  const dateLabel = !daybookDate
-    ? ""
-    : dateSystem === "BS"
-      ? formatDateBS(daybookDate)
-      : formatDate(daybookDate);
-
-  const opening =
-    typeof openingBalanceForPeriod === "number"
-      ? openingBalanceForPeriod
-      : Number(summaryOpening) || 0;
-  const closing =
-    typeof closingBalance === "number" ? closingBalance : Number(summaryClosing) || 0;
-  const dayIn = typeof periodDr === "number" ? periodDr : Number(summaryIn) || 0;
-  const dayOut = typeof periodCr === "number" ? periodCr : Number(summaryOut) || 0;
-
-  const displayOpening = flipLedgerSignedBalance(opening, perspective);
-  const displayClosing = flipLedgerSignedBalance(closing, perspective);
-  const displayPeriod = flipLedgerDrCr(dayIn, dayOut, perspective);
-  const displayTxns = useMemo(
-    () => applyBankDrCrPerspectiveToTxnRows(processedTransactions || [], perspective),
-    [processedTransactions, perspective]
-  );
-  const bankDepositWithdrawColumnLabels = useMemo(
-    () => bankLedgerTxnColumnLabels(account?.accountType, perspective),
-    [account?.accountType, perspective]
-  );
+  useEffect(() => {
+    if (!open) return;
+    setDateRange(initialDateRange ?? (daybookDate ? { from: daybookDate, to: daybookDate } : undefined));
+  }, [open, account?.id, initialDateRange, daybookDate]);
 
   return (
-    <>
-      <Dialog open={open && !!account} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-[min(96vw,1100px)] w-full max-h-[90vh] flex flex-col gap-3 overflow-hidden p-4 sm:p-6">
-          <DialogHeader className="shrink-0 space-y-1">
-            <DialogTitle className="text-base sm:text-lg truncate">
-              {account?.accountName || "Account"} — {dateLabel || "Day"}
-            </DialogTitle>
-            <DialogDescription className="text-xs sm:text-sm">
-              Daybook date ke hisaab se is account ki filtered transactions (ledger opening / closing).
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="shrink-0 grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
-            <div className="rounded-md border bg-muted/30 px-2.5 py-1.5">
-              <div className="text-[11px] text-muted-foreground">Opening</div>
-              <div className={cn("font-semibold", displayOpening >= 0 ? "text-green-600" : "text-red-600")}>
-                {formatCurrency(displayOpening)}
-              </div>
-            </div>
-            <div className="rounded-md border bg-muted/30 px-2.5 py-1.5">
-              <div className="text-[11px] text-muted-foreground">Today In</div>
-              <div className="font-semibold text-green-600">{formatCurrency(dayIn, { noSuffix: true })}</div>
-            </div>
-            <div className="rounded-md border bg-muted/30 px-2.5 py-1.5">
-              <div className="text-[11px] text-muted-foreground">Today Out</div>
-              <div className="font-semibold text-red-600">{formatCurrency(dayOut, { noSuffix: true })}</div>
-            </div>
-            <div className="rounded-md border bg-muted/30 px-2.5 py-1.5">
-              <div className="text-[11px] text-muted-foreground">Closing</div>
-              <div className={cn("font-semibold", displayClosing >= 0 ? "text-green-600" : "text-red-600")}>
-                {formatCurrency(displayClosing)}
-              </div>
-            </div>
+    <Dialog open={open && !!account} onOpenChange={onOpenChange}>
+      <DialogContent hideCloseButton className="balance-sheet-ledger-popup !left-0 !right-0 !top-0 !bottom-0 !translate-x-0 !translate-y-0 mx-auto my-auto w-[96vw] max-w-[1100px] h-[90vh] max-h-[90vh] !flex flex-col !gap-0 overflow-hidden !p-0 rounded-lg bg-background data-[state=open]:zoom-in-100 data-[state=closed]:zoom-out-100 data-[state=open]:slide-in-from-left-0 data-[state=open]:slide-in-from-top-0 data-[state=closed]:slide-out-to-left-0 data-[state=closed]:slide-out-to-top-0">
+        <DialogHeader className="sr-only">
+          <DialogTitle>{account?.accountName || "Account ledger"}</DialogTitle>
+        </DialogHeader>
+        {account ? (
+          <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            <AccountDetails
+              key={account.id}
+              account={account}
+              allAccounts={allAccounts}
+              userNames={userNames}
+              onAccountUpdated={() => {}}
+              onAccountDeleted={handleAccountDeleted}
+              onBack={() => onOpenChange(false)}
+              onPopupClose={() => onOpenChange(false)}
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+              ledgerPresentationMode="nested-ledger"
+              showPeriodSummaryCards
+            />
           </div>
-
-          <div className="flex-1 min-h-0 overflow-auto rounded-md border">
-            {displayTxns.length > 0 ? (
-              <TransactionsTable
-                transactions={displayTxns}
-                context="account"
-                contextId={account?.id}
-                showNarration={true}
-                journalAccountNames={{}}
-                userNames={userNames}
-                onRowClick={(v) => {
-                  setSelectedVoucher(v);
-                  setIsVoucherDialogOpen(true);
-                }}
-                onHistoryVoucher={(v) => setHistoryVoucher(v)}
-                openingBalance={displayOpening}
-                periodDr={displayPeriod.debit}
-                periodCr={displayPeriod.credit}
-                closingBalance={displayClosing}
-                hideFooter={false}
-                {...bankDepositWithdrawColumnLabels}
-              />
-            ) : (
-              <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
-                No transactions on this date for this account.
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <AddVoucherDialog
-        isOpen={isVoucherDialogOpen}
-        onOpenChange={setIsVoucherDialogOpen}
-        voucher={selectedVoucher}
-        onVoucherCreated={() => setSelectedVoucher(null)}
-      />
-      <HistoryDialog
-        voucher={historyVoucher}
-        isOpen={!!historyVoucher}
-        onOpenChange={(o) => !o && setHistoryVoucher(null)}
-        onHistoryReset={() =>
-          setHistoryVoucher((prev: any) => (prev ? { ...prev, history: [] } : null))
-        }
-      />
-    </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }
-
 /** Daily Summary bank/cash account row — full-width orange hover/select + rounded corners */
 export function daybookSummaryAccountRowCn(selected: boolean) {
   return cn(

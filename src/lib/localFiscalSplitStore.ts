@@ -24,6 +24,8 @@ export type LocalFiscalSplitPayload = {
   fiscalSplitConfiguredByUser: boolean;
   /** Local calendar day (YYYY-MM-DD) when daily auto splite check last ran for this company. */
   fiscalAutoSplitLastCheckDay: string | null;
+  /** Monotonic-by-client version so a newer company-root split reaches other devices. */
+  fiscalSplitUpdatedAtMs?: number | null;
 };
 
 function storageKey(companyId: string): string {
@@ -40,6 +42,7 @@ function defaultPayload(): LocalFiscalSplitPayload {
     fiscalAutoSplitEnabled: true,
     fiscalSplitConfiguredByUser: false,
     fiscalAutoSplitLastCheckDay: null,
+    fiscalSplitUpdatedAtMs: null,
   };
 }
 
@@ -77,6 +80,10 @@ function normalizePayload(raw: unknown): LocalFiscalSplitPayload | null {
     typeof o.fiscalAutoSplitLastCheckDay === "string" && o.fiscalAutoSplitLastCheckDay.trim()
       ? o.fiscalAutoSplitLastCheckDay.trim()
       : null;
+  const fiscalSplitUpdatedAtMs =
+    o.fiscalSplitUpdatedAtMs != null && Number.isFinite(Number(o.fiscalSplitUpdatedAtMs))
+      ? Number(o.fiscalSplitUpdatedAtMs)
+      : null;
   return {
     fiscalSplitMode: mode,
     fiscalMergePartitionAtIso: isos?.[0] ?? iso,
@@ -86,6 +93,7 @@ function normalizePayload(raw: unknown): LocalFiscalSplitPayload | null {
     fiscalAutoSplitEnabled: autoSplitEnabled,
     fiscalSplitConfiguredByUser: configuredByUser,
     fiscalAutoSplitLastCheckDay: lastCheckDay,
+    fiscalSplitUpdatedAtMs,
   };
 }
 
@@ -128,6 +136,10 @@ export function writeLocalFiscalSplit(companyId: string | null | undefined, next
       fiscalAutoSplitLastCheckDay:
         typeof next.fiscalAutoSplitLastCheckDay === "string" && next.fiscalAutoSplitLastCheckDay.trim()
           ? next.fiscalAutoSplitLastCheckDay.trim()
+          : null,
+      fiscalSplitUpdatedAtMs:
+        next.fiscalSplitUpdatedAtMs != null && Number.isFinite(Number(next.fiscalSplitUpdatedAtMs))
+          ? Number(next.fiscalSplitUpdatedAtMs)
           : null,
     };
     localStorage.setItem(storageKey(companyId), JSON.stringify(normalized));

@@ -4,6 +4,8 @@
 import { useMemo } from 'react';
 import { useVouchers } from './useVouchers';
 import usePermissions from './usePermissions';
+import { useAuth } from './useAuth';
+import { userCanViewSpecialAccountBalance } from '@/lib/specialAccountUsage';
 
 /**
  * A custom hook to get an account's balance while respecting permissions for special accounts.
@@ -13,6 +15,7 @@ import usePermissions from './usePermissions';
 export function useAccountBalance(accountId: string | null | undefined) {
   const { processedAccounts } = useVouchers();
   const { can } = usePermissions();
+  const { user } = useAuth();
 
   const accountDetails = useMemo(() => {
     // Firestore / copy-seed ids kabhi trailing space ya number vs string mismatch — strict `===` se row miss ho jati thi.
@@ -27,11 +30,13 @@ export function useAccountBalance(accountId: string | null | undefined) {
       return { account: null, displayBalance: null };
     }
 
-    const canViewBalance = !account.isSpecial || can('view_special_account_balance');
+    const canViewBalance =
+      userCanViewSpecialAccountBalance(account, user?.email, can("view_special_account_balance")) ||
+      can("manage_special_bank_accounts");
     const displayBalance = canViewBalance ? account.balance : null;
 
     return { account, displayBalance };
-  }, [accountId, processedAccounts, can]);
+  }, [accountId, processedAccounts, can, user?.email]);
 
   return accountDetails;
 }

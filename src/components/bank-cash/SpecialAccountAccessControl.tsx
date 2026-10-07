@@ -5,8 +5,13 @@ import * as React from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { useCompany } from "@/hooks/useCompany";
+import {
+  normalizeSpecialAccountUseFor,
+  specialAccountUseForIncludesUser,
+  userIsSpecialAccountOwner,
+  type SpecialAccountUseFor,
+} from "@/lib/specialAccountUsage";
 
 type User = {
     id: string;
@@ -16,20 +21,10 @@ type User = {
     role?: string;
 };
 
-type UseFor = {
-    in: string[];
-    out: string[];
-}
-
 type SpecialAccountAccessControlProps = {
   users: User[];
-  useFor: UseFor;
-  onUseForChange: (newUseFor: UseFor) => void;
-};
-
-const getInitials = (name: string | null | undefined) => {
-    if (!name) return "?";
-    return name.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase();
+  useFor: SpecialAccountUseFor;
+  onUseForChange: (newUseFor: SpecialAccountUseFor) => void;
 };
 
 export function SpecialAccountAccessControl({
@@ -37,80 +32,91 @@ export function SpecialAccountAccessControl({
   useFor,
   onUseForChange,
 }: SpecialAccountAccessControlProps) {
-    
   const { company } = useCompany();
+  const normalized = normalizeSpecialAccountUseFor(useFor);
 
-  const handleCheckChange = (userId: string, type: 'in' | 'out', checked: boolean) => {
-    const currentList = useFor?.[type] || [];
+  const handleCheckChange = (userId: string, type: "in" | "out" | "balance", checked: boolean) => {
+    const currentList = normalized[type] || [];
     let newList: string[];
 
     if (checked) {
-      if (!currentList.includes(userId)) {
-          newList = [...currentList, userId];
-      } else {
-          newList = currentList;
-      }
+      newList = currentList.includes(userId) ? currentList : [...currentList, userId];
     } else {
-      newList = currentList.filter(id => id !== userId);
+      newList = currentList.filter((id) => id !== userId);
     }
-    
-    onUseForChange({ ...useFor, [type]: newList });
+
+    onUseForChange({ ...normalized, [type]: newList });
   };
-  
-  // Parent green panel ke saath table border/bg — `globals.css` `.pl-master-special-account-table`
+
   return (
-    <div className="pl-master-special-account-table overflow-hidden rounded-lg border">
-      <ScrollArea className="h-64">
-        <Table>
-          <TableHeader className="sticky top-0 z-10 backdrop-blur">
-            <TableRow>
+    <div className="pl-master-special-account-table pl-special-account-usage-table-wrap overflow-hidden rounded-lg">
+      <ScrollArea className="h-64 pl-master-special-account-scroll rounded-lg" icVoucherChrome>
+        <div className="min-w-[520px] pr-4">
+        <Table
+          scrollContainer={false}
+          data-pl-company-profile-table=""
+          className="pl-special-account-usage-table pl-company-profile-soft-table"
+        >
+          <TableHeader className="bg-emerald-50/95">
+            <TableRow className="border-0 hover:bg-transparent">
               <TableHead>User</TableHead>
               <TableHead>Role</TableHead>
-              <TableHead className="text-center">Payment In</TableHead>
-              <TableHead className="text-center">Payment Out</TableHead>
+              <TableHead className="w-[5.5rem] min-w-[5.5rem] whitespace-nowrap text-center px-1">
+                Payment In
+              </TableHead>
+              <TableHead className="w-[5.5rem] min-w-[5.5rem] whitespace-nowrap text-center px-1">
+                Payment Out
+              </TableHead>
+              <TableHead className="w-[6.25rem] min-w-[6.25rem] whitespace-nowrap text-center px-1 pr-2">
+                View Balance
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {users.map((user) => {
-                const isOwner = user.id === company?.ownerId;
+                const isOwner = userIsSpecialAccountOwner(user.id, company);
                 const paymentInId = `payment-in-${user.id}`;
                 const paymentOutId = `payment-out-${user.id}`;
+                const viewBalanceId = `view-balance-${user.id}`;
                 return (
-                  <TableRow key={user.id}>
+                  <TableRow key={user.id} className="border-0 hover:bg-muted/30">
                     <TableCell>
-                      <div className="flex items-center gap-2">
-                         <Avatar className="h-8 w-8">
-                            <AvatarImage src={user.photoURL || undefined} alt={user.name || user.email || ''} />
-                            <AvatarFallback>{getInitials(user.name || user.email)}</AvatarFallback>
-                        </Avatar>
-                        <div>
-                            <p className="font-medium">{user.name}</p>
-                            <p className="text-xs text-muted-foreground">{user.email}</p>
-                        </div>
+                      <div className="min-w-0">
+                        <p className="font-medium leading-snug">{user.name}</p>
+                        <p className="text-xs text-muted-foreground leading-snug">{user.email}</p>
                       </div>
                     </TableCell>
                     <TableCell>{user.role}</TableCell>
-                    <TableCell className="text-center">
+                    <TableCell className="text-center px-1">
                        <Checkbox
                         id={paymentInId}
-                        checked={isOwner || (useFor?.in || []).includes(user.id)}
-                        onCheckedChange={(checked) => handleCheckChange(user.id, 'in', !!checked)}
+                        checked={isOwner || specialAccountUseForIncludesUser(normalized.in, user.id)}
+                        onCheckedChange={(checked) => handleCheckChange(user.id, "in", !!checked)}
                         disabled={isOwner}
                       />
                     </TableCell>
-                    <TableCell className="text-center">
+                    <TableCell className="text-center px-1">
                       <Checkbox
                         id={paymentOutId}
-                        checked={isOwner || (useFor?.out || []).includes(user.id)}
-                        onCheckedChange={(checked) => handleCheckChange(user.id, 'out', !!checked)}
+                        checked={isOwner || specialAccountUseForIncludesUser(normalized.out, user.id)}
+                        onCheckedChange={(checked) => handleCheckChange(user.id, "out", !!checked)}
+                        disabled={isOwner}
+                      />
+                    </TableCell>
+                    <TableCell className="text-center px-1 pr-2">
+                      <Checkbox
+                        id={viewBalanceId}
+                        checked={isOwner || specialAccountUseForIncludesUser(normalized.balance, user.id)}
+                        onCheckedChange={(checked) => handleCheckChange(user.id, "balance", !!checked)}
                         disabled={isOwner}
                       />
                     </TableCell>
                   </TableRow>
-                )
+                );
             })}
           </TableBody>
         </Table>
+        </div>
       </ScrollArea>
     </div>
   );

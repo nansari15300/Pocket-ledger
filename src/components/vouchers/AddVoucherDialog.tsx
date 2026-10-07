@@ -1481,13 +1481,57 @@ function VoucherDialogContent({
   );
 }
 
-// Default open size only: max 15" width, 12" height; small screens 90vw × 80vh. Resize is unlimited (no max).
-const DEFAULT_MAX_W_PX = 15 * 96;  // 15in
-const DEFAULT_MAX_H_PX = 12 * 96;  // 12in
 const MIN_DIALOG_W = 420;
 const MIN_DIALOG_H = 320;
+const DIALOG_VIEWPORT_W_RATIO = 0.8;
+const DIALOG_VIEWPORT_H_RATIO = 0.8;
 const VOUCHER_DIALOG_STORAGE_KEY = "pl-voucher-dialog-bounds";
+const VOUCHER_ADJUSTMENT_DIALOG_STORAGE_KEY = "pl-adjustment-dialog-bounds";
 
+type DialogBounds = { x: number; y: number; w: number; h: number };
+
+function defaultViewportDialogBounds(vw: number, vh: number): DialogBounds {
+  const w = Math.max(MIN_DIALOG_W, Math.min(vw * DIALOG_VIEWPORT_W_RATIO, vw));
+  const h = Math.max(MIN_DIALOG_H, Math.min(vh * DIALOG_VIEWPORT_H_RATIO, vh));
+  return { w, h, x: Math.max(0, (vw - w) / 2), y: Math.max(0, (vh - h) / 2) };
+}
+
+function readStoredDialogBounds(storageKey: string, vw: number, vh: number): DialogBounds | null {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    const saved = raw ? JSON.parse(raw) : null;
+    if (
+      !saved ||
+      typeof saved.x !== "number" ||
+      typeof saved.y !== "number" ||
+      typeof saved.w !== "number" ||
+      typeof saved.h !== "number"
+    ) {
+      return null;
+    }
+    const w = Math.max(MIN_DIALOG_W, Math.min(saved.w, vw));
+    const h = Math.max(MIN_DIALOG_H, Math.min(saved.h, vh));
+    return {
+      w,
+      h,
+      x: Math.max(0, Math.min(saved.x, vw - w)),
+      y: Math.max(0, Math.min(saved.y, vh - h)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredDialogBounds(storageKey: string, bounds: DialogBounds) {
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(bounds));
+  } catch {
+    /* ignore */
+  }
+}
+
+const DESKTOP_DIALOG_RESIZE_HANDLE_CN =
+  "pointer-events-auto z-[35] hover:bg-primary/25 transition-colors";
 export function AddVoucherDialog(props: any) {
   const isAttachmentProcessing = useVoucherAttachmentProcessing();
   /** Compare-before-sync jaisi jagah nested stack: `false` se parent non-modal Compare band hone par saath na band ho. */
@@ -1499,6 +1543,8 @@ export function AddVoucherDialog(props: any) {
     defaultVoucherData,
     dialogRootModal = true,
     editCompanyId,
+    defaultTab: defaultTabProp,
+    allowedTabs,
     /** Recycle bin / audit: poora form read-only — Save/Copy/Delete band. */
     forceViewOnly = false,
     /** Recycle bin view: ribbon + Restore (parent restore ke baad `forceViewOnly` hatao). */
@@ -1511,7 +1557,8 @@ export function AddVoucherDialog(props: any) {
     ledgerBooksOpeningBalanceSigned,
     ...rest
   } = props;
-  const isAdjustmentOnlyDialog = false;
+  const isAdjustmentOnlyDialog =
+    Array.isArray(allowedTabs) && allowedTabs.length === 1 && allowedTabs[0] === "adjustment";
   const [internalOpen, setInternalOpen] = useState(false);
   const dialogOpen = typeof isOpen === "boolean" ? isOpen : internalOpen;
   const setDialogOpen = useCallback(
@@ -1690,7 +1737,7 @@ export function AddVoucherDialog(props: any) {
   const [skippingMissedRecurring, setSkippingMissedRecurring] = useState(false);
   /** `VoucherDialogContent` se sync — Inter Company open/edit par header lock turant (child mount se pehle flash na ho). */
   const [voucherFormActiveTab, setVoucherFormActiveTab] = useState<VoucherType>(() =>
-    getVoucherType(voucher, defaultVoucherData, (rest as { defaultTab?: string }).defaultTab ?? "sale")
+    getVoucherType(voucher, defaultVoucherData, defaultTabProp ?? "sale")
   );
   /** Auto recurring UI + Firestore: inner form ka current tab journal ho tab hi. */
   const showVoucherAutoRecurringUi = voucherFormActiveTab === "journal";
@@ -2270,58 +2317,58 @@ export function AddVoucherDialog(props: any) {
 
   // Draggable & resizable (desktop only)
   const [dialogPosition, setDialogPosition] = useState({ x: 0, y: 0 });
-  const [dialogSize, setDialogSize] = useState({ w: DEFAULT_MAX_W_PX, h: DEFAULT_MAX_H_PX });
+  const [dialogSize, setDialogSize] = useState({ w: MIN_DIALOG_W, h: MIN_DIALOG_H });
   const dragRef = useRef<{ startX: number; startY: number; startLeft: number; startTop: number } | null>(null);
   const resizeRef = useRef<{ handle: string; startX: number; startY: number; startW: number; startH: number; startLeft: number; startTop: number } | null>(null);
+  const dialogBoundsStorageKeyRef = useRef(VOUCHER_DIALOG_STORAGE_KEY);
+  const dialogBoundsLiveRef = useRef<DialogBounds>({ x: 0, y: 0, w: MIN_DIALOG_W, h: MIN_DIALOG_H });
+  const persistDialogBoundsRef = useRef<() => void>(() => undefined);
 
   const prevOpenRef = useRef(false);
   useEffect(() => {
     if (!isOpen) setEffectiveHasLinksFromForm(null);
   }, [isOpen, voucher?.id]);
-  // Default open (both Add New & Edit): max 15"×12"; small screen 90vw×80vh. Restore saved size for Edit only (unlimited); New always default.
+  useEffect(() => {
+    dialogBoundsLiveRef.current = {
+      x: dialogPosition.x,
+      y: dialogPosition.y,
+      w: dialogSize.w,
+      h: dialogSize.h,
+    };
+  }, [dialogPosition.x, dialogPosition.y, dialogSize.w, dialogSize.h]);
+
+  const persistDialogBoundsToStorage = useCallback(() => {
+    if (!isDesktop || typeof window === "undefined") return;
+    writeStoredDialogBounds(dialogBoundsStorageKeyRef.current, dialogBoundsLiveRef.current);
+  }, [isDesktop]);
+  persistDialogBoundsRef.current = persistDialogBoundsToStorage;
+
+  // Desktop Add Voucher + Adjust Balance: default 80vw×80vh; user resize/move → localStorage (alag keys).
   useEffect(() => {
     if (!isOpen || !isDesktop || typeof window === "undefined") return;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const isNew = !voucher?.id;
-    if (!isNew) {
-      try {
-        const raw = localStorage.getItem(VOUCHER_DIALOG_STORAGE_KEY);
-        const saved = raw ? JSON.parse(raw) : null;
-        if (saved && typeof saved.x === "number" && typeof saved.y === "number" && typeof saved.w === "number" && typeof saved.h === "number") {
-          const w = Math.max(MIN_DIALOG_W, Math.min(saved.w, vw));
-          const h = Math.max(MIN_DIALOG_H, Math.min(saved.h, vh));
-          const x = Math.max(0, Math.min(saved.x, vw - w));
-          const y = Math.max(0, Math.min(saved.y, vh - h));
-          setDialogSize({ w, h });
-          setDialogPosition({ x, y });
-          return;
-        }
-      } catch {
-        /* ignore */
-      }
+    const storageKey = isAdjustmentOnlyDialog
+      ? VOUCHER_ADJUSTMENT_DIALOG_STORAGE_KEY
+      : VOUCHER_DIALOG_STORAGE_KEY;
+    dialogBoundsStorageKeyRef.current = storageKey;
+    const restored = readStoredDialogBounds(storageKey, vw, vh);
+    if (restored) {
+      setDialogSize({ w: restored.w, h: restored.h });
+      setDialogPosition({ x: restored.x, y: restored.y });
+      return;
     }
-    const maxW = Math.min(DEFAULT_MAX_W_PX, vw * 0.9);
-    const maxH = Math.min(DEFAULT_MAX_H_PX, vh * 0.8);
-    const w = Math.max(MIN_DIALOG_W, Math.min(maxW, vw));
-    const h = Math.max(MIN_DIALOG_H, Math.min(maxH, vh));
-    setDialogSize({ w, h });
-    setDialogPosition({ x: (vw - w) / 2, y: (vh - h) / 2 });
-  }, [isOpen, isDesktop, voucher?.id]);
+    const def = defaultViewportDialogBounds(vw, vh);
+    setDialogSize({ w: def.w, h: def.h });
+    setDialogPosition({ x: def.x, y: def.y });
+  }, [isOpen, isDesktop, isAdjustmentOnlyDialog]);
 
   useEffect(() => {
     if (prevOpenRef.current && !isOpen && isDesktop && typeof window !== "undefined") {
-      try {
-        localStorage.setItem(
-          VOUCHER_DIALOG_STORAGE_KEY,
-          JSON.stringify({ x: dialogPosition.x, y: dialogPosition.y, w: dialogSize.w, h: dialogSize.h })
-        );
-      } catch {
-        /* ignore */
-      }
+      writeStoredDialogBounds(dialogBoundsStorageKeyRef.current, dialogBoundsLiveRef.current);
     }
     prevOpenRef.current = isOpen;
-  }, [isOpen, isDesktop, dialogPosition.x, dialogPosition.y, dialogSize.w, dialogSize.h]);
+  }, [isOpen, isDesktop]);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     if (!isDesktop) return;
@@ -2333,15 +2380,16 @@ export function AddVoucherDialog(props: any) {
     dragRef.current = { startX: e.clientX, startY: e.clientY, startLeft: dialogPosition.x, startTop: dialogPosition.y };
     const onMove = (e: MouseEvent) => {
       if (!dragRef.current) return;
-      setDialogPosition({
-        x: Math.max(0, dragRef.current.startLeft + e.clientX - dragRef.current.startX),
-        y: Math.max(0, dragRef.current.startTop + e.clientY - dragRef.current.startY),
-      });
+      const x = Math.max(0, dragRef.current.startLeft + e.clientX - dragRef.current.startX);
+      const y = Math.max(0, dragRef.current.startTop + e.clientY - dragRef.current.startY);
+      setDialogPosition({ x, y });
+      dialogBoundsLiveRef.current = { ...dialogBoundsLiveRef.current, x, y };
     };
     const onUp = () => {
       dragRef.current = null;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      persistDialogBoundsRef.current();
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -2379,16 +2427,21 @@ export function AddVoucherDialog(props: any) {
         const dh = Math.min(dy, startH - MIN_DIALOG_H);
         hh = Math.max(MIN_DIALOG_H, Math.min(startH - dh, vh));
       }
+      let nextX = startLeft;
+      let nextY = startTop;
+      if (h === "w" || h === "sw" || h === "nw") nextX = startLeft + (startW - w);
+      if (h === "n" || h === "nw" || h === "ne") nextY = startTop + (startH - hh);
       setDialogSize({ w, h: hh });
-      const posUpdate: { x?: number; y?: number } = {};
-      if (h === "w" || h === "sw" || h === "nw") posUpdate.x = startLeft + (startW - w);
-      if (h === "n" || h === "nw" || h === "ne") posUpdate.y = startTop + (startH - hh);
-      if (Object.keys(posUpdate).length) setDialogPosition((prev) => ({ ...prev, ...posUpdate }));
+      if (nextX !== startLeft || nextY !== startTop) {
+        setDialogPosition({ x: nextX, y: nextY });
+      }
+      dialogBoundsLiveRef.current = { x: nextX, y: nextY, w, h: hh };
     };
     const onUp = () => {
       resizeRef.current = null;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      persistDialogBoundsRef.current();
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -4250,7 +4303,7 @@ export function AddVoucherDialog(props: any) {
                         </SelectContent>
                       </Select>
                     ) : null}
-                    <DialogClose className="rounded-sm opacity-70 hover:opacity-100 transition-opacity focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none shrink-0">
+                    <DialogClose className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-500/50 bg-white/60 text-gray-800 shadow-sm opacity-95 transition-colors hover:bg-white hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1">
                       <X className="h-4 w-4" />
                       <span className="sr-only">Close</span>
                     </DialogClose>
@@ -4284,7 +4337,7 @@ export function AddVoucherDialog(props: any) {
                         </SelectContent>
                       </Select>
                     ) : null}
-                    <DialogClose className="rounded-sm opacity-70 hover:opacity-100 transition-opacity focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none shrink-0">
+                    <DialogClose className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-500/50 bg-white/60 text-gray-800 shadow-sm opacity-95 transition-colors hover:bg-white hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1">
                       <X className="h-4 w-4" />
                       <span className="sr-only">Close</span>
                     </DialogClose>
@@ -4655,6 +4708,8 @@ export function AddVoucherDialog(props: any) {
       <>
         <VoucherDialogContent
           {...rest}
+          defaultTab={defaultTabProp}
+          allowedTabs={allowedTabs}
           // Journal / ledger lists: header target company, warna compare-edit `editCompanyId`.
           ledgerScopeCompanyId={targetCompanyId || editCompanyId || undefined}
           ledgerEntityId={ledgerEntityId}
@@ -4760,18 +4815,13 @@ export function AddVoucherDialog(props: any) {
           onFocusOutside={(e) => e.preventDefault()}
           className={cn(
             "z-[81] flex flex-col p-0",
-            isAdjustmentOnlyDialog
-              ? "left-1/2 top-1/2 h-auto max-h-[88vh] w-[min(760px,92vw)] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden"
-              : "md:!left-0 md:!top-0 md:!translate-x-0 md:!translate-y-0 md:w-full md:h-full md:max-w-none md:max-h-none md:border-0 md:bg-transparent md:shadow-none md:rounded-none"
+            "md:!left-0 md:!top-0 md:!translate-x-0 md:!translate-y-0 md:w-full md:h-full md:max-w-none md:max-h-none md:border-0 md:bg-transparent md:shadow-none md:rounded-none"
           )}
         >
           <div
             ref={dialogFrameRef}
-            className={cn(
-              "flex flex-col rounded-lg border bg-background shadow-lg overflow-hidden",
-              isAdjustmentOnlyDialog ? "max-h-[88vh] min-h-0" : "flex-1 min-h-0"
-            )}
-            style={isAdjustmentOnlyDialog ? undefined : {
+            className="flex flex-col rounded-lg border bg-background shadow-lg overflow-hidden flex-1 min-h-0"
+            style={{
               position: "fixed",
               left: dialogPosition.x,
               top: dialogPosition.y,
@@ -4785,56 +4835,71 @@ export function AddVoucherDialog(props: any) {
             <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
               {bodyBlock}
             </div>
-            {/* z-10: ribbon/header z-20 — drag title bar wins over top resize hitbox. */}
-            {/* Resize handle - top edge */}
-            {!isAdjustmentOnlyDialog && <div
-              className="absolute left-0 right-0 top-0 z-10 h-1.5 cursor-row-resize hover:bg-primary/20 transition-colors rounded-t"
+            {/* Top handles z-[35] — ribbon z-20 ke upar; bottom jaisa resize. */}
+            <div
+              className={cn(
+                "absolute left-4 right-4 top-0 h-2 cursor-row-resize rounded-t",
+                DESKTOP_DIALOG_RESIZE_HANDLE_CN
+              )}
               onMouseDown={(e) => handleResizeStart(e, "n")}
               aria-hidden
-            />}
-            {/* Resize handle - top-left corner */}
-            {!isAdjustmentOnlyDialog && <div
-              className="absolute left-0 top-0 z-10 w-4 h-4 cursor-nw-resize hover:bg-primary/20 transition-colors rounded-tl"
+            />
+            <div
+              className={cn(
+                "absolute left-0 top-0 h-4 w-4 cursor-nw-resize rounded-tl",
+                DESKTOP_DIALOG_RESIZE_HANDLE_CN
+              )}
               onMouseDown={(e) => handleResizeStart(e, "nw")}
               aria-hidden
-            />}
-            {/* Resize handle - top-right corner */}
-            {!isAdjustmentOnlyDialog && <div
-              className="absolute right-0 top-0 z-10 w-4 h-4 cursor-ne-resize hover:bg-primary/20 transition-colors rounded-tr"
+            />
+            <div
+              className={cn(
+                "absolute right-0 top-0 h-4 w-4 cursor-ne-resize rounded-tr",
+                DESKTOP_DIALOG_RESIZE_HANDLE_CN
+              )}
               onMouseDown={(e) => handleResizeStart(e, "ne")}
               aria-hidden
-            />}
-            {/* Resize handle - left edge */}
-            {!isAdjustmentOnlyDialog && <div
-              className="absolute left-0 top-0 bottom-0 z-10 w-1.5 cursor-col-resize hover:bg-primary/20 transition-colors rounded-l"
+            />
+            <div
+              className={cn(
+                "absolute bottom-0 left-0 top-4 w-1.5 cursor-col-resize rounded-l",
+                DESKTOP_DIALOG_RESIZE_HANDLE_CN
+              )}
               onMouseDown={(e) => handleResizeStart(e, "w")}
               aria-hidden
-            />}
-            {/* Resize handle - right edge */}
-            {!isAdjustmentOnlyDialog && <div
-              className="absolute right-0 top-0 bottom-0 z-10 w-1.5 cursor-col-resize hover:bg-primary/20 transition-colors rounded-r"
-              style={{ top: 0, bottom: 0 }}
+            />
+            <div
+              className={cn(
+                "absolute bottom-0 right-0 top-4 w-1.5 cursor-col-resize rounded-r",
+                DESKTOP_DIALOG_RESIZE_HANDLE_CN
+              )}
               onMouseDown={(e) => handleResizeStart(e, "e")}
               aria-hidden
-            />}
-            {/* Resize handle - bottom edge */}
-            {!isAdjustmentOnlyDialog && <div
-              className="absolute bottom-0 left-0 right-0 z-10 h-1.5 cursor-row-resize hover:bg-primary/20 transition-colors rounded-b"
+            />
+            <div
+              className={cn(
+                "absolute bottom-0 left-4 right-4 h-2 cursor-row-resize rounded-b",
+                DESKTOP_DIALOG_RESIZE_HANDLE_CN
+              )}
               onMouseDown={(e) => handleResizeStart(e, "s")}
               aria-hidden
-            />}
-            {/* Resize handle - bottom-left corner */}
-            {!isAdjustmentOnlyDialog && <div
-              className="absolute left-0 bottom-0 z-10 w-4 h-4 cursor-sw-resize hover:bg-primary/20 transition-colors rounded-bl"
+            />
+            <div
+              className={cn(
+                "absolute bottom-0 left-0 h-4 w-4 cursor-sw-resize rounded-bl",
+                DESKTOP_DIALOG_RESIZE_HANDLE_CN
+              )}
               onMouseDown={(e) => handleResizeStart(e, "sw")}
               aria-hidden
-            />}
-            {/* Resize handle - bottom-right corner */}
-            {!isAdjustmentOnlyDialog && <div
-              className="absolute right-0 bottom-0 z-10 w-4 h-4 cursor-se-resize hover:bg-primary/20 transition-colors rounded-br"
+            />
+            <div
+              className={cn(
+                "absolute bottom-0 right-0 h-4 w-4 cursor-se-resize rounded-br",
+                DESKTOP_DIALOG_RESIZE_HANDLE_CN
+              )}
               onMouseDown={(e) => handleResizeStart(e, "se")}
               aria-hidden
-            />}
+            />
           </div>
         </DialogContent>
       ) : (
@@ -4845,11 +4910,20 @@ export function AddVoucherDialog(props: any) {
           onFocusOutside={(e) => e.preventDefault()}
           className={cn(
             "z-[81] flex min-h-0 flex-col overflow-hidden p-0 !gap-0",
-            "box-border h-[100dvh] max-h-[100dvh] w-full max-w-none !left-0 !top-0 !translate-x-0 !translate-y-0 rounded-none border-0 shadow-lg",
-            "pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]"
+            isAdjustmentOnlyDialog
+              ? "left-1/2 top-1/2 h-[80dvh] max-h-[80dvh] w-[80vw] max-w-[80vw] -translate-x-1/2 -translate-y-1/2 rounded-lg border shadow-lg"
+              : "box-border h-[100dvh] max-h-[100dvh] w-full max-w-none !left-0 !top-0 !translate-x-0 !translate-y-0 rounded-none border-0 shadow-lg",
+            !isAdjustmentOnlyDialog &&
+              "pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]"
           )}
         >
-          <div ref={dialogFrameRef} className="relative flex min-h-0 flex-1 flex-col">
+          <div
+            ref={dialogFrameRef}
+            className={cn(
+              "relative flex min-h-0 flex-col",
+              isAdjustmentOnlyDialog ? "h-full max-h-full" : "flex-1"
+            )}
+          >
             {headerBlock}
             {/* Header fixed feel: form area scroll; min-h-0 ta flex child shrink ho sake */}
             {/* scrollbar-slim-dim: vertical bar mota default na ho — form ke horizontal jaisa patla */}

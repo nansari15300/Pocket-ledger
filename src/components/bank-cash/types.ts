@@ -13,8 +13,9 @@ export type Account = {
   ifscCode?: string;
   isSpecial?: boolean;
   useFor?: {
-    in: string[]; 
+    in: string[];
     out: string[];
+    balance?: string[];
   };
   balance: number; 
   companyId: string;

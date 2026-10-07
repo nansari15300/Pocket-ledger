@@ -24,7 +24,6 @@ export function useQuotations(companyId: string | null | undefined) {
       setQuotations(await listQuotations(cid));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load quotations");
-      setQuotations([]);
     } finally {
       setLoading(false);
     }

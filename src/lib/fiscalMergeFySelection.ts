@@ -11,9 +11,31 @@ export type FiscalYearMergeRow = {
   hasTransactions: boolean;
 };
 
+const MAX_FY_GAP_FILL_STEPS = 80;
+const MAX_SUPPORTED_FY_YEAR = 99_999;
+
+function parseFyYears(fyKey: string): [number, number] | null {
+  const match = /^(\d{1,5})-(\d{1,5})$/.exec(String(fyKey || "").trim());
+  if (!match) return null;
+  const startYear = Number(match[1]);
+  const endYear = Number(match[2]);
+  if (
+    !Number.isInteger(startYear) ||
+    !Number.isInteger(endYear) ||
+    startYear < 1 ||
+    endYear < 1 ||
+    startYear > MAX_SUPPORTED_FY_YEAR ||
+    endYear > MAX_SUPPORTED_FY_YEAR ||
+    Math.abs(endYear - startYear) > 1
+  ) {
+    return null;
+  }
+  return [startYear, endYear];
+}
+
 function nextFyKey(fyKey: string): string | null {
-  const parts = fyKey.split("-").map((s) => Number(s.trim()));
-  if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) return null;
+  const parts = parseFyYears(fyKey);
+  if (!parts) return null;
   return `${parts[0] + 1}-${parts[1] + 1}`;
 }
 
@@ -23,11 +45,35 @@ function fillFyKeysBetween(sortedVoucherKeys: string[]): string[] {
   for (let i = 1; i < sortedVoucherKeys.length; i++) {
     const target = sortedVoucherKeys[i];
     let cursor = out[out.length - 1];
-    while (cursor !== target) {
+    const cursorYears = parseFyYears(cursor);
+    const targetYears = parseFyYears(target);
+    const yearGap = cursorYears && targetYears ? targetYears[0] - cursorYears[0] : 0;
+    if (!cursorYears || !targetYears || yearGap <= 0 || yearGap > MAX_FY_GAP_FILL_STEPS) {
+      if (yearGap > MAX_FY_GAP_FILL_STEPS) {
+        console.warn("[FY-SCAN] skipped oversized FY gap", {
+          from: cursor,
+          to: target,
+          yearGap,
+          maxSteps: MAX_FY_GAP_FILL_STEPS,
+        });
+      }
+      if (cursor !== target) out.push(target);
+      continue;
+    }
+    let steps = 0;
+    while (cursor !== target && steps < MAX_FY_GAP_FILL_STEPS) {
       const next = nextFyKey(cursor);
       if (!next || next === cursor) break;
       out.push(next);
       cursor = next;
+      steps += 1;
+    }
+    if (cursor !== target && steps >= MAX_FY_GAP_FILL_STEPS) {
+      console.warn("[FY-SCAN] stopped non-converging FY gap", {
+        from: out[out.length - steps - 1] ?? null,
+        to: target,
+        maxSteps: MAX_FY_GAP_FILL_STEPS,
+      });
     }
     if (out[out.length - 1] !== target) out.push(target);
   }
@@ -136,7 +182,8 @@ export function listFiscalYearMergeRowsFromFyKeySet(
   fyKeys: Iterable<string>,
   country?: string,
   transactionKeys?: Set<string>,
-  companyDates?: CompanyFiscalYearDates | null
+  companyDates?: CompanyFiscalYearDates | null,
+  includeGapYears = true
 ): FiscalYearMergeRow[] {
   const sortedVoucherKeys = [...new Set(fyKeys)].sort((a, b) => {
     const aStart = Number(a.split("-")[0]) || 0;
@@ -146,9 +193,9 @@ export function listFiscalYearMergeRowsFromFyKeySet(
   if (!sortedVoucherKeys.length) return [];
 
   const txnKeys = transactionKeys ?? new Set(sortedVoucherKeys);
-  const allKeys = fillFyKeysBetween(sortedVoucherKeys).filter(
-    (fyKey, index, keys) => keys.indexOf(fyKey) === index
-  );
+  const allKeys = includeGapYears
+    ? fillFyKeysBetween(sortedVoucherKeys).filter((fyKey, index, keys) => keys.indexOf(fyKey) === index)
+    : sortedVoucherKeys;
   return allKeys.map((fyKey) => {
     const { start, end } = getFiscalRangeForFyKey(country, fyKey, companyDates);
     return {

@@ -2,8 +2,10 @@
 
 import {
   persistCompanyRootSettingsPatch,
+  companyRootSettingsUseLocalStore,
   type PersistCompanyRootSettingsResult,
 } from "@/lib/persistCompanyRootSettings";
+import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import {
   readLocalFiscalSplit,
   writeLocalFiscalSplit,
@@ -21,6 +23,7 @@ type CompanyLike = {
   syncPolicy?: string | null;
   plServerShared?: boolean;
   authoritativeCompanyId?: string;
+  fiscalSplitUpdatedAtMs?: number | null;
 } | null | undefined;
 
 function normalizeIsoList(raw: unknown): string[] | null {
@@ -45,7 +48,8 @@ export function companyDocHasFiscalMergeSettings(company: CompanyLike): boolean 
 }
 
 export function fiscalSplitPayloadToCompanyPatch(
-  payload: LocalFiscalSplitPayload
+  payload: LocalFiscalSplitPayload,
+  updatedAtMs = payload.fiscalSplitUpdatedAtMs ?? Date.now()
 ): Record<string, unknown> {
   if (payload.fiscalSplitMode !== "merge") {
     return {
@@ -53,6 +57,7 @@ export function fiscalSplitPayloadToCompanyPatch(
       fiscalMergePartitionAtIsos: null,
       fiscalMergeTickedFyKeys: null,
       fiscalPartitionLabel: null,
+      fiscalSplitUpdatedAtMs: updatedAtMs,
     };
   }
   const isos =
@@ -63,6 +68,7 @@ export function fiscalSplitPayloadToCompanyPatch(
     fiscalMergePartitionAtIsos: isos,
     fiscalMergeTickedFyKeys: normalizeFyKeys(payload.fiscalMergeTickedFyKeys),
     fiscalPartitionLabel: payload.fiscalPartitionLabel?.trim() || null,
+    fiscalSplitUpdatedAtMs: updatedAtMs,
   };
 }
 
@@ -70,7 +76,7 @@ function fiscalMergeSettingsEqual(
   company: CompanyLike,
   payload: LocalFiscalSplitPayload
 ): boolean {
-  const patch = fiscalSplitPayloadToCompanyPatch(payload);
+  const patch = fiscalSplitPayloadToCompanyPatch(payload, 0);
   const cloudIsos = normalizeIsoList(company?.fiscalMergePartitionAtIsos);
   const patchIsos = normalizeIsoList(patch.fiscalMergePartitionAtIsos);
   if (String(company?.fiscalSplitMode || "off") !== String(patch.fiscalSplitMode || "off")) {
@@ -95,18 +101,56 @@ export async function persistFiscalSplitSettingsToCompany(opts: {
 }): Promise<PersistCompanyRootSettingsResult | null> {
   const companyId = String(opts.companyId || "").trim();
   if (!companyId) return null;
-  if (fiscalMergeSettingsEqual(opts.company, opts.payload)) return null;
-  return persistCompanyRootSettingsPatch({
-    companyId,
+
+  const hasVersionedCompanySettings = Number(opts.company?.fiscalSplitUpdatedAtMs) > 0;
+  if (fiscalMergeSettingsEqual(opts.company, opts.payload) && hasVersionedCompanySettings) return null;
+
+  const updatedAtMs = Math.max(
+    Date.now(),
+    (Number(opts.company?.fiscalSplitUpdatedAtMs) || 0) + 1,
+    (Number(opts.payload.fiscalSplitUpdatedAtMs) || 0) + 1
+  );
+  const payload = { ...opts.payload, fiscalSplitUpdatedAtMs: updatedAtMs };
+  writeLocalFiscalSplit(companyId, payload);
+
+  const localOnly = companyRootSettingsUseLocalStore(opts.company);
+  const authoritativeId = String(opts.company?.authoritativeCompanyId || "").trim();
+  const rootCompanyId = !localOnly && authoritativeId ? authoritativeId : companyId;
+  const patch = fiscalSplitPayloadToCompanyPatch(payload, updatedAtMs);
+  const result = await persistCompanyRootSettingsPatch({
+    companyId: rootCompanyId,
     company: opts.company,
-    patch: fiscalSplitPayloadToCompanyPatch(opts.payload),
+    patch,
     reloadLocalCompanyRegistry: opts.reloadLocalCompanyRegistry,
     triggerSync: opts.triggerSync,
   });
+
+  if (!localOnly && rootCompanyId !== companyId) {
+    const localRow = await getLocalCompanyById(companyId, { includeDeleted: true }).catch(() => null);
+    if (localRow) {
+      await upsertLocalCompany({
+        ...localRow,
+        ...patch,
+        id: companyId,
+        updatedAt: updatedAtMs,
+      });
+    }
+  }
+
+  console.info("[FY-SPLIT-SYNC] company settings persisted", {
+    localCompanyId: companyId,
+    rootCompanyId,
+    storage: result,
+    mode: payload.fiscalSplitMode,
+    partitionCount: payload.fiscalMergePartitionAtIsos?.length ?? 0,
+    updatedAtMs,
+  });
+  return result;
 }
 
 /**
- * Device-local fiscal merge configured but company doc missing fields — push once so production/other browsers match.
+ * Older local-only fiscal split settings have no root version yet — push once so
+ * the company root becomes the cross-device source of truth.
  */
 export function scheduleBackfillCloudFiscalSplitFromLocal(opts: {
   companyId: string;
@@ -122,8 +166,9 @@ export function scheduleBackfillCloudFiscalSplitFromLocal(opts: {
     normalizeIsoList(opts.payload.fiscalMergePartitionAtIsos) ??
     (opts.payload.fiscalMergePartitionAtIso ? [opts.payload.fiscalMergePartitionAtIso] : null);
   if (!isos?.length) return;
-  if (companyDocHasFiscalMergeSettings(opts.company)) return;
-  if (fiscalMergeSettingsEqual(opts.company, opts.payload)) return;
+  // `useCompany()` exposes merged cloud + local values. Mode/ISO alone therefore
+  // cannot prove that the cloud root contains them; only this root version can.
+  if (Number(opts.company?.fiscalSplitUpdatedAtMs) > 0) return;
 
   void persistFiscalSplitSettingsToCompany(opts).catch((err) => {
     console.warn("[persistFiscalSplitSettings] backfill cloud fiscal split", err);
@@ -136,15 +181,39 @@ export function seedLocalFiscalSplitFromCompanyDocIfNeeded(
   company: CompanyLike
 ): boolean {
   const cid = String(companyId || company?.id || "").trim();
-  if (!cid || !companyDocHasFiscalMergeSettings(company)) return false;
+  if (!cid || !company) return false;
   const existing = readLocalFiscalSplit(cid);
-  if (existing?.fiscalSplitConfiguredByUser) return false;
-  if (existing?.fiscalSplitMode === "merge" && normalizeIsoList(existing.fiscalMergePartitionAtIsos)?.length) {
-    return false;
+  const isos = normalizeIsoList(company?.fiscalMergePartitionAtIsos);
+  const cloudHasMerge = companyDocHasFiscalMergeSettings(company) && Boolean(isos?.length);
+  const cloudVersion = Number(company.fiscalSplitUpdatedAtMs) || 0;
+  const localVersion = Number(existing?.fiscalSplitUpdatedAtMs) || 0;
+
+  if (cloudVersion > localVersion) {
+    writeLocalFiscalSplit(cid, {
+      fiscalSplitMode: cloudHasMerge ? "merge" : "off",
+      fiscalMergePartitionAtIso: cloudHasMerge ? isos?.[0] ?? null : null,
+      fiscalMergePartitionAtIsos: cloudHasMerge ? isos : null,
+      fiscalMergeTickedFyKeys: cloudHasMerge ? normalizeFyKeys(company.fiscalMergeTickedFyKeys) : null,
+      fiscalPartitionLabel:
+        cloudHasMerge && typeof company.fiscalPartitionLabel === "string"
+          ? company.fiscalPartitionLabel
+          : null,
+      fiscalAutoSplitEnabled: existing?.fiscalAutoSplitEnabled !== false,
+      fiscalSplitConfiguredByUser: true,
+      fiscalAutoSplitLastCheckDay: existing?.fiscalAutoSplitLastCheckDay ?? null,
+      fiscalSplitUpdatedAtMs: cloudVersion,
+    });
+    console.info("[FY-SPLIT-SYNC] applied newer company settings locally", {
+      companyId: cid,
+      mode: cloudHasMerge ? "merge" : "off",
+      updatedAtMs: cloudVersion,
+      partitionCount: isos?.length ?? 0,
+    });
+    return true;
   }
 
-  const isos = normalizeIsoList(company?.fiscalMergePartitionAtIsos);
-  if (!isos?.length) return false;
+  if (existing?.fiscalSplitConfiguredByUser || cloudVersion > 0) return false;
+  if (!cloudHasMerge || !isos?.length) return false;
 
   writeLocalFiscalSplit(cid, {
     fiscalSplitMode: "merge",
@@ -156,6 +225,7 @@ export function seedLocalFiscalSplitFromCompanyDocIfNeeded(
     fiscalAutoSplitEnabled: true,
     fiscalSplitConfiguredByUser: true,
     fiscalAutoSplitLastCheckDay: existing?.fiscalAutoSplitLastCheckDay ?? null,
+    fiscalSplitUpdatedAtMs: cloudVersion || null,
   });
   return true;
 }

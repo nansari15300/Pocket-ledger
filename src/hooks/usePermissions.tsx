@@ -22,6 +22,7 @@ import { logPlPerm, resolvePermissionConfigSource, summarizePermissionDateLimits
 import { findLocalCompanyUserRowForAppUser, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
 import { useAdWallet } from "@/hooks/useAdWallet";
+import { normalizeSpecialAccountUseFor } from "@/lib/specialAccountUsage";
 
 /** Offline company SQLite session — ye role Firebase owner se alag ho sakta hai (same email owner + staff login). */
 function isLocalStorageCompany(c: { storageOption?: string } | null | undefined): boolean {
@@ -83,6 +84,8 @@ export type PermissionConfig = {
   dateLimits: DateLimits;
   fileAttachmentLimits?: FileAttachmentLimits;
   allowAttachments?: boolean; // Global toggle
+  /** Company-wide special bank account Payment In/Out/Balance user allow-lists (synced with role balance perm). */
+  specialAccountUsageDefaults?: import("@/lib/specialAccountUsage").SpecialAccountUseFor;
 };
 
 const flattenedPermissions = PermissionGroups.flatMap(g => g.permissions.map(p => p.key));
@@ -148,6 +151,10 @@ export function normalizePermissionConfig(
     result.allowAttachments = source.allowAttachments !== undefined
         ? source.allowAttachments !== false
         : initialPermissionConfig.allowAttachments;
+
+    result.specialAccountUsageDefaults = normalizeSpecialAccountUseFor(
+      (source as { specialAccountUsageDefaults?: unknown }).specialAccountUsageDefaults
+    );
 
     for (const [storedRole, storedPermissions] of Object.entries(source.roles || {})) {
         const role = permissionRoleKey(storedRole);

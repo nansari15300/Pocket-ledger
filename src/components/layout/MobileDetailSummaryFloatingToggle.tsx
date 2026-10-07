@@ -14,10 +14,13 @@ import { useAppModalOverlayOpen } from "@/hooks/useAppModalOverlayOpen";
 export type MobileDetailSummaryFloatingToggleProps = {
   /** `inline`: pager wrapper ke upar; `fixed`: body portal (report register list). */
   placement?: "inline" | "fixed";
+  /** Popup ledger ke pager par bhi FAB dikhana; default dialogs me hide behavior same rahe. */
+  allowInOverlay?: boolean;
 };
 
 export function MobileDetailSummaryFloatingToggle({
   placement = "fixed",
+  allowInOverlay = false,
 }: MobileDetailSummaryFloatingToggleProps) {
   const { collapsed, toggle } = useMobileDetailSummaryCollapsed();
   const overlayOpen = useAppModalOverlayOpen();
@@ -28,7 +31,7 @@ export function MobileDetailSummaryFloatingToggle({
   }, []);
 
   // Print / edit dialogs ke upar chevron na dikhe
-  if (overlayOpen) {
+  if (overlayOpen && !allowInOverlay) {
     return null;
   }
 

@@ -2874,7 +2874,7 @@ export function TransactionsTable({
         isItemQty && item ? `${formatQuantity(val)} ${displayUnit || ""}` : formatCurrency(val, { noSuffix: true, context: "transaction", noAnimation: true });
       const renderMobileAmountOrQty = (val: number) => {
         if (isItemQty && item) return `${formatQuantity(val)} ${displayUnit || ""}`;
-        if (!isNumberAnimationEnabled || numberAnimationDuration <= 0) {
+        if (context === "daybook" || !isNumberAnimationEnabled || numberAnimationDuration <= 0) {
           return formatCurrency(val, { noSuffix: true, context: "transaction", noAnimation: true });
         }
         return (

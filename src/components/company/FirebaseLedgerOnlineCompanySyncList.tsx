@@ -19,6 +19,8 @@ import {
 } from "@/lib/firebaseLedgerDataSyncDisabled";
 import { runOfflineFullWarmSync } from "@/lib/offlineFullWarmSync";
 import { requestAttachmentUiRefresh } from "@/lib/attachmentLoadReady";
+import { notifyBrowserDbCollectionUpdated } from "@/lib/localCompanyDocMirror";
+import { COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS } from "@/lib/firestoreToLocalCompanyPull";
 import { isSharedOnlineCompany } from "@/lib/companyStorageKind";
 
 type Props = {
@@ -177,7 +179,9 @@ export function FirebaseLedgerOnlineCompanySyncList({
         const registryId = String(company.id || "").trim();
         const authoritativeId = String(company.authoritativeCompanyId || "").trim();
         if (!registryId || !authoritativeId || registryId === authoritativeId) continue;
-        entriesToSave[authoritativeId] = draft[registryId] ?? emptyEntry();
+        const entry = draft[registryId] ?? emptyEntry();
+        entriesToSave[authoritativeId] = entry;
+        entriesToSave[registryId] = entry;
       }
       replaceFirebaseLedgerCompanySyncEntries(entriesToSave);
       requestAttachmentUiRefresh();
@@ -196,13 +200,21 @@ export function FirebaseLedgerOnlineCompanySyncList({
         void (async () => {
           for (const company of selectedCompanies) {
             const id = String(company.id || "").trim();
-            await runOfflineFullWarmSync({
+            const warm = await runOfflineFullWarmSync({
               company,
               localCompanyId: id,
               // Data mirror only — EXE/APK/web: visible FY rows + click/hover lazy attachment load.
               includeAttachmentPrefetch: false,
               skipWarmBootstrapFlag: true,
             }).catch(() => null);
+            if (warm) {
+              for (const coll of COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS) {
+                notifyBrowserDbCollectionUpdated(id, coll, {
+                  immediate: true,
+                  source: "firebase_delta_pull",
+                });
+              }
+            }
           }
         })();
       }

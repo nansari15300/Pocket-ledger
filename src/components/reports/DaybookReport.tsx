@@ -4,12 +4,11 @@
 
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { useCompany } from "@/hooks/useCompany";
-import React, { useEffect, useState, useMemo, useCallback, useDeferredValue } from "react";
+import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Info, X, Calendar as CalendarIcon, Expand, Filter, RotateCw, ChevronLeft, ChevronRight, ChevronDown, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
 import type { Account } from "@/components/bank-cash/types";
-import type { Item } from "@/components/items/types";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Button } from "@/components/ui/button";
@@ -22,9 +21,6 @@ import { useDate } from "@/hooks/useDate";
 import { useCalendarMonths } from "@/hooks/use-mobile";
 import usePermissions from "@/hooks/usePermissions";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ItemFilterDropdown } from "../items/ItemFilterDropdown";
-import { collection, onSnapshot, query } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
 import { applyPaymentBillWiseLinkAllocations } from "@/lib/voucherActionsClient";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useInterCompanyLedgerChangeDetectDialog } from "@/hooks/useInterCompanyLedgerChangeDetectDialog";
@@ -37,9 +33,9 @@ import { Input } from "../ui/input";
 import { TransactionsTable } from "../vouchers/TransactionsTable";
 import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
-import { Skeleton } from "../ui/skeleton";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useServerDaybookDailySummary } from "@/hooks/useServerDaybookDailySummary";
+import type { DaybookDailySummary } from "@/lib/accountLedgerDaySummary";
 import {
   DaybookAccountDayPeekDialog,
   daybookSummaryAccountRowCn,
@@ -64,7 +60,7 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
       userNames: vouchersUserNames,
     } = useFyScopedVouchers();
     const { company, companyId } = useCompany();
-    const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
+    const { dateSystem, formatDate, formatDateBS, formatCurrencyForPrint } = useDate();
     const { can } = usePermissions();
     const router = useRouter();
     const [daybookDate, setDaybookDate] = useState<Date | undefined>(undefined);
@@ -72,7 +68,6 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
     const [daybookVoucherTypes, setDaybookVoucherTypes] = useState<string[]>(['all']);
     const [showDaybookNarration, setShowDaybookNarration] = useState(true);
     const [daybookNarrationNoteSearch, setDaybookNarrationNoteSearch] = useState("");
-    const [items, setItems] = useState<Item[]>([]);
     const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
     const [selectedVoucher, setSelectedVoucher] = React.useState<any>(null);
     const [historyVoucher, setHistoryVoucher] = React.useState<any>(null);
@@ -121,14 +116,6 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
     useEffect(() => {
       setDaybookDate(new Date());
     }, []);
-
-    useEffect(() => {
-        if (!companyId) return;
-        const unsub = onSnapshot(query(collection(firestore, `companies/${companyId}/items`)), (snap) => {
-            setItems(snap.docs.map(d => ({id: d.id, ...d.data()} as Item)))
-        });
-        return () => unsub();
-    }, [companyId]);
 
     useEffect(() => {
         const savedState = sessionStorage.getItem("showNarration");
@@ -249,10 +236,16 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
         }
     }, [daybookUserFilterIds, daybookUserFilter]);
 
+    const daybookEntity = useMemo(() => ({ id: "daybook", items: [] }), []);
+    const daybookDateRange = useMemo(
+        () => (daybookDate ? { from: daybookDate, to: daybookDate } : undefined),
+        [daybookDate]
+    );
+
     const { daybookTransactions, daybookSummary: clientDaybookSummary } = useTransactions(
-        {id: 'daybook', items: []}, 
+        daybookEntity,
         'daybook', 
-        daybookDate ? {from: daybookDate, to: daybookDate} : undefined, 
+        daybookDateRange, 
         undefined, 
         accounts, 
         vouchers, 
@@ -265,8 +258,10 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
         daybookUserFilter
       );
 
-    const deferredDaybookTransactions = useDeferredValue(daybookTransactions);
-    const isDaybookTransactionsPending = deferredDaybookTransactions !== daybookTransactions;
+    const daybookSummaryRef = useRef<DaybookDailySummary | null>(null);
+    useEffect(() => {
+      daybookSummaryRef.current = null;
+    }, [companyId, daybookDate, daybookUserFilter]);
 
     // Server only jab client voucher cache khali/incomplete ho — warna ledger jaisi client math (Aftab Settled vs -5000 bug).
     const {
@@ -278,10 +273,14 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
       userIdFilter: daybookUserFilter,
       enabled: !(vouchers && vouchers.length > 0),
     });
-    const daybookSummary =
+    const daybookSummaryNext =
       clientDaybookSummary ||
       serverDaybookSummary ||
       null;
+    if (daybookSummaryNext) {
+      daybookSummaryRef.current = daybookSummaryNext;
+    }
+    const daybookSummary = daybookSummaryNext ?? daybookSummaryRef.current;
 
     // Daily Summary account search — sirf bank/cash rows; trxn table alag (column filter / daybookFilters)
     const daybookAccountSearchTerm = daybookSummaryAccountSearch.trim().toLowerCase();
@@ -448,10 +447,10 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                                             Bank
                                         </button>
                                     </TableCell>
-                                    <TableCell className={cn("text-right", displayDaybookSummary.bank.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(displayDaybookSummary.bank.yesterday)}</TableCell>
-                                    <TableCell className="text-right text-green-600">{formatCurrency(displayDaybookSummary.bank.in, {noSuffix: true})}</TableCell>
-                                    <TableCell className="text-right text-red-600">{formatCurrency(displayDaybookSummary.bank.out, {noSuffix: true})}</TableCell>
-                                    <TableCell className={cn("text-right", displayDaybookSummary.bank.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(displayDaybookSummary.bank.today)}</TableCell>
+                                    <TableCell className={cn("text-right", displayDaybookSummary.bank.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrencyForPrint(displayDaybookSummary.bank.yesterday)}</TableCell>
+                                    <TableCell className="text-right text-green-600">{formatCurrencyForPrint(displayDaybookSummary.bank.in, {noSuffix: true})}</TableCell>
+                                    <TableCell className="text-right text-red-600">{formatCurrencyForPrint(displayDaybookSummary.bank.out, {noSuffix: true})}</TableCell>
+                                    <TableCell className={cn("text-right", displayDaybookSummary.bank.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrencyForPrint(displayDaybookSummary.bank.today)}</TableCell>
                                 </TableRow>
                                 {daybookBankExpanded && (displayDaybookSummary as any).bankAccounts?.map((row: { id: string; name: string; yesterday: number; in: number; out: number; today: number }) => {
                                     const rowKey = `bank:${row.id}`;
@@ -481,10 +480,10 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                                         className={cn(daybookSummaryAccountRowCn(selected), "pl-daybook-summary-row", selected && "pl-daybook-summary-row-selected")}
                                     >
                                         <TableCell className="pl-9 text-muted-foreground">{row.name}</TableCell>
-                                        <TableCell className={cn("text-right", row.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.yesterday)}</TableCell>
-                                        <TableCell className="text-right text-green-600">{formatCurrency(row.in, { noSuffix: true })}</TableCell>
-                                        <TableCell className="text-right text-red-600">{formatCurrency(row.out, { noSuffix: true })}</TableCell>
-                                        <TableCell className={cn("text-right", row.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.today)}</TableCell>
+                                        <TableCell className={cn("text-right", row.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrencyForPrint(row.yesterday)}</TableCell>
+                                        <TableCell className="text-right text-green-600">{formatCurrencyForPrint(row.in, { noSuffix: true })}</TableCell>
+                                        <TableCell className="text-right text-red-600">{formatCurrencyForPrint(row.out, { noSuffix: true })}</TableCell>
+                                        <TableCell className={cn("text-right", row.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrencyForPrint(row.today)}</TableCell>
                                     </TableRow>
                                     );
                                 })}
@@ -514,10 +513,10 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                                             Cash
                                         </button>
                                     </TableCell>
-                                    <TableCell className={cn("text-right", displayDaybookSummary.cash.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(displayDaybookSummary.cash.yesterday)}</TableCell>
-                                    <TableCell className="text-right text-green-600">{formatCurrency(displayDaybookSummary.cash.in, {noSuffix: true})}</TableCell>
-                                    <TableCell className="text-right text-red-600">{formatCurrency(displayDaybookSummary.cash.out, {noSuffix: true})}</TableCell>
-                                    <TableCell className={cn("text-right", displayDaybookSummary.cash.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(displayDaybookSummary.cash.today)}</TableCell>
+                                    <TableCell className={cn("text-right", displayDaybookSummary.cash.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrencyForPrint(displayDaybookSummary.cash.yesterday)}</TableCell>
+                                    <TableCell className="text-right text-green-600">{formatCurrencyForPrint(displayDaybookSummary.cash.in, {noSuffix: true})}</TableCell>
+                                    <TableCell className="text-right text-red-600">{formatCurrencyForPrint(displayDaybookSummary.cash.out, {noSuffix: true})}</TableCell>
+                                    <TableCell className={cn("text-right", displayDaybookSummary.cash.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrencyForPrint(displayDaybookSummary.cash.today)}</TableCell>
                                 </TableRow>
                                 {daybookCashExpanded && (displayDaybookSummary as any).cashAccounts?.map((row: { id: string; name: string; yesterday: number; in: number; out: number; today: number }) => {
                                     const rowKey = `cash:${row.id}`;
@@ -547,10 +546,10 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                                         className={cn(daybookSummaryAccountRowCn(selected), "pl-daybook-summary-row", selected && "pl-daybook-summary-row-selected")}
                                     >
                                         <TableCell className="pl-9 text-muted-foreground">{row.name}</TableCell>
-                                        <TableCell className={cn("text-right", row.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.yesterday)}</TableCell>
-                                        <TableCell className="text-right text-green-600">{formatCurrency(row.in, { noSuffix: true })}</TableCell>
-                                        <TableCell className="text-right text-red-600">{formatCurrency(row.out, { noSuffix: true })}</TableCell>
-                                        <TableCell className={cn("text-right", row.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.today)}</TableCell>
+                                        <TableCell className={cn("text-right", row.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrencyForPrint(row.yesterday)}</TableCell>
+                                        <TableCell className="text-right text-green-600">{formatCurrencyForPrint(row.in, { noSuffix: true })}</TableCell>
+                                        <TableCell className="text-right text-red-600">{formatCurrencyForPrint(row.out, { noSuffix: true })}</TableCell>
+                                        <TableCell className={cn("text-right", row.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrencyForPrint(row.today)}</TableCell>
                                     </TableRow>
                                     );
                                 })}
@@ -568,10 +567,10 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                                   )}
                                 >
                                   <TableCell>Total</TableCell>
-                                  <TableCell className={cn("text-right", displayDaybookSummary.total.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(displayDaybookSummary.total.yesterday)}</TableCell>
-                                  <TableCell className="text-right text-green-600">{formatCurrency(displayDaybookSummary.total.in, {noSuffix: true})}</TableCell>
-                                  <TableCell className="text-right text-red-600">{formatCurrency(displayDaybookSummary.total.out, {noSuffix: true})}</TableCell>
-                                  <TableCell className={cn("text-right", displayDaybookSummary.total.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(displayDaybookSummary.total.today)}</TableCell>
+                                  <TableCell className={cn("text-right", displayDaybookSummary.total.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrencyForPrint(displayDaybookSummary.total.yesterday)}</TableCell>
+                                  <TableCell className="text-right text-green-600">{formatCurrencyForPrint(displayDaybookSummary.total.in, {noSuffix: true})}</TableCell>
+                                  <TableCell className="text-right text-red-600">{formatCurrencyForPrint(displayDaybookSummary.total.out, {noSuffix: true})}</TableCell>
+                                  <TableCell className={cn("text-right", displayDaybookSummary.total.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrencyForPrint(displayDaybookSummary.total.today)}</TableCell>
                                 </TableRow>
                             </TableBody>
                            </Table>
@@ -679,26 +678,23 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                             </Select>
                         </div>
                     </div>
-                    <span className="text-sm font-medium text-muted-foreground w-full block">Total Vouchers: {deferredDaybookTransactions ? deferredDaybookTransactions.length : 0}</span>
+                    <span className="text-sm font-medium text-muted-foreground w-full block">Total Vouchers: {daybookTransactions ? daybookTransactions.length : 0}</span>
                 </div>
             </CardHeader>
             <CardContent className={cn(
                 "flex-1 min-h-0 overflow-hidden flex flex-col relative px-0 min-w-full",
                 isMobile && "px-0",
-                (!deferredDaybookTransactions || deferredDaybookTransactions.length === 0) && !isDaybookTransactionsPending && "min-h-[420px]"
+                (!daybookTransactions || daybookTransactions.length === 0) && "min-h-[420px]"
             )}>
-                 {isDaybookTransactionsPending ? (
-                    <div className="flex flex-1 min-h-[420px] items-center justify-center p-6">
-                        <Skeleton className="h-8 w-48" />
-                    </div>
-                 ) : deferredDaybookTransactions && deferredDaybookTransactions.length > 0 ? (
+                 {daybookTransactions && daybookTransactions.length > 0 ? (
                 <div className="flex-1 min-h-0 flex flex-col overflow-hidden min-w-full w-full">
                     <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto min-w-full w-full">
                            {/* Mobile: 2px horizontal gap so transaction cards match Daily Summary card spacing */}
                            <div className={cn("w-full min-w-full overflow-hidden pr-[15px]", isMobile && "px-[2px]")}>
                            <TransactionsTable
-                                transactions={deferredDaybookTransactions || []}
-                                context="daybook" 
+                                transactions={daybookTransactions || []}
+                                context="daybook"
+                                disableLayoutAnimation
                                 showNarration={showDaybookNarration}
                                 narrationNoteSearch={daybookNarrationNoteSearch}
                                 journalAccountNames={voucherJournalAccountNames}

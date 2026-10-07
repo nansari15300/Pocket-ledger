@@ -13,8 +13,8 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { formatEntitlementCapLabel, getNextPaidUpgrade } from "@/config/plans";
 import { useState, useEffect, useMemo, useCallback, useRef, forwardRef } from "react";
-import { MobilePagePullRefreshProvider } from "@/contexts/MobilePagePullRefreshContext";
-import { MobilePagePullRefresh } from "@/components/layout/MobilePagePullRefresh";
+import { MobileRoutePullRefreshProvider } from "@/contexts/MobileRoutePullRefreshContext";
+import { GlobalMobilePullRefresh } from "@/components/layout/GlobalMobilePullRefresh";
 import { useAuth } from "@/hooks/useAuth";
 import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
 import { useToast } from "@/hooks/use-toast";
@@ -829,7 +829,7 @@ const DashboardMainShell = forwardRef<
 >(function DashboardMainShell({ children, className }, ref) {
   const isMobile = useIsMobile();
   return (
-    <main ref={ref} className={cn("relative", isMobile && "touch-pan-y", className)}>
+    <main ref={ref} className={cn("relative", isMobile && "touch-pan-y overscroll-y-contain", className)}>
       {children}
     </main>
   );
@@ -841,6 +841,8 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
     const router = useRouter();
     const { user } = useAuth();
     const dashboardMainScrollRef = useRef<HTMLElement>(null);
+    const noLayoutPageScrollRef = useRef<HTMLDivElement>(null);
+    const embedPageScrollRef = useRef<HTMLDivElement>(null);
 
     // Settings / gallery / billing / loans: body scroll band — andar panel scroll (outer chain `min-h-0`).
     useEffect(() => {
@@ -897,7 +899,15 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
             <>
                 <GlobalLeftEdgeOpenAppMenuSwipe />
                 {/* Mobile: `/company` par bhi horizontal edge “back” kam — `app-container` yahan nahi */}
-                <div className={cn(isMobile && "overscroll-x-none h-full min-h-0 w-full min-w-0")}>{children}</div>
+                <MobileRoutePullRefreshProvider>
+                  <div
+                    ref={noLayoutPageScrollRef}
+                    className={cn("relative", isMobile && "overscroll-x-none h-full min-h-0 w-full min-w-0")}
+                  >
+                    <GlobalMobilePullRefresh scrollRef={noLayoutPageScrollRef} />
+                    {children}
+                  </div>
+                </MobileRoutePullRefreshProvider>
             </>
         );
     }
@@ -907,9 +917,15 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
         return (
             <>
                 <GlobalLeftEdgeOpenAppMenuSwipe />
-                <div className={cn("h-full w-full overflow-hidden bg-background", isMobile && "overscroll-x-none")}>
+                <MobileRoutePullRefreshProvider>
+                  <div
+                    ref={embedPageScrollRef}
+                    className={cn("relative h-full w-full overflow-hidden bg-background", isMobile && "overscroll-x-none")}
+                  >
+                    <GlobalMobilePullRefresh scrollRef={embedPageScrollRef} />
                     {children}
-                </div>
+                  </div>
+                </MobileRoutePullRefreshProvider>
             </>
         );
     }
@@ -961,7 +977,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       <PlServerAuthoritativePendingBanner />
                       <PlServerReadSyncHealthBanner />
                       <ApkCloudOnlineSyncToast />
-                      <MobilePagePullRefreshProvider>
+                      <MobileRoutePullRefreshProvider>
                         <DashboardMainShell
                           ref={dashboardMainScrollRef}
                           className={cn(
@@ -971,13 +987,13 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                               pathname?.startsWith("/billing/statement") ||
                               pathname?.startsWith("/loans")
                               ? "overflow-hidden"
-                              : "overflow-y-auto"
+                              : "overflow-y-auto [scrollbar-gutter:stable]"
                           )}
                         >
-                          <MobilePagePullRefresh scrollRef={dashboardMainScrollRef} />
+                          <GlobalMobilePullRefresh scrollRef={dashboardMainScrollRef} />
                           {children}
                         </DashboardMainShell>
-                      </MobilePagePullRefreshProvider>
+                      </MobileRoutePullRefreshProvider>
                       <MobileFloatingButton />
                       {/* Mobile reports detail: PanelRight sheet trigger — footer daen */}
                       <ReportsMobileReportListFab />

@@ -24,6 +24,8 @@ type Props = {
   pagingMode?: "newest-first" | "oldest-first";
   /** Bank statement: "Showing / Trxn Of total" line hata — sirf page-size select + Prev/Next (count clutter avoid). */
   trimSummary?: boolean;
+  /** Popup ledger: summary toggle ko us popup ke overlay ke upar bhi dikhaye. */
+  showSummaryToggleInOverlay?: boolean;
 };
 
 const PAGE_SIZE_OPTIONS = ROWS_PER_PAGE_OPTIONS_MOBILE;
@@ -37,6 +39,7 @@ export function MobileTransactionsPager({
   className,
   edgeCounts,
   trimSummary = false,
+  showSummaryToggleInOverlay = false,
   pagingMode = "newest-first",
 }: Props) {
   const isMobile = useIsMobile();
@@ -83,7 +86,10 @@ export function MobileTransactionsPager({
           {...mdcNoEdgeSwipeCapture}
         >
           <div className="pointer-events-auto">
-            <MobileDetailSummaryFloatingToggle placement="inline" />
+            <MobileDetailSummaryFloatingToggle
+              placement="inline"
+              allowInOverlay={showSummaryToggleInOverlay}
+            />
           </div>
         </div>
       ) : null}

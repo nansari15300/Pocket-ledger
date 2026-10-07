@@ -10,6 +10,8 @@ export type FyKeySqliteScanProgress = {
   phase: "span" | "page_scan";
   scanned: number;
   total: number;
+  minDateMs?: number | null;
+  maxDateMs?: number | null;
 };
 
 const FY_KEY_SCAN_PAGE = 250;
@@ -48,64 +50,31 @@ export async function listFyKeysWithVouchersInSqlite(
     return [];
   }
   try {
-    onProgress?.({ phase: "span", scanned: 0, total: 0 });
-    const span = db
-      .prepare(
-        `SELECT MIN(doc_date_ms) AS min_ms, MAX(doc_date_ms) AS max_ms, COUNT(*) AS cnt
-         FROM company_docs_projection
-         WHERE company_id = ? AND collection = 'vouchers' AND doc_date_ms IS NOT NULL`
-      )
-      .get(companyId) as { min_ms?: number; max_ms?: number; cnt?: number } | undefined;
-
-    const minMs =
-      span?.min_ms != null && Number.isFinite(Number(span.min_ms)) ? Number(span.min_ms) : null;
-    const maxMs =
-      span?.max_ms != null && Number.isFinite(Number(span.max_ms)) ? Number(span.max_ms) : null;
-    const totalApprox = span?.cnt != null && Number.isFinite(Number(span.cnt)) ? Number(span.cnt) : 0;
-
-    fyScanLog("projection span", {
-      companyId,
-      minMs,
-      maxMs,
-      totalApprox,
-      country: country || null,
-      hasCompanyDates: Boolean(companyDates?.fiscalYearStart && companyDates?.fiscalYearEnd),
-    });
-
-    if (minMs == null || maxMs == null || totalApprox <= 0) {
-      // Projection may lag behind full voucher docs — try a light count without date filter.
-      const anyVoucher = db
-        .prepare(
-          `SELECT COUNT(*) AS cnt FROM company_docs_projection
-           WHERE company_id = ? AND collection = 'vouchers'`
-        )
-        .get(companyId) as { cnt?: number } | undefined;
-      fyScanLog("no dated projection rows", {
-        companyId,
-        undatedCount: Number(anyVoucher?.cnt) || 0,
-      });
-      return [];
-    }
-
     await yieldToUi();
 
-    const pageSql = `SELECT doc_date_ms FROM company_docs_projection
+    // `company_docs_projection` has a composite primary key on
+    // (company_id, collection, id). Keyset pagination uses that index and
+    // avoids OFFSET rescanning every earlier voucher for each page.
+    const firstPageSql = `SELECT id, doc_date_ms FROM company_docs_projection
        WHERE company_id = ? AND collection = 'vouchers' AND doc_date_ms IS NOT NULL
-       ORDER BY doc_date_ms ASC
-       LIMIT ? OFFSET ?`;
+       ORDER BY id ASC
+       LIMIT ?`;
+    const nextPageSql = `SELECT id, doc_date_ms FROM company_docs_projection
+       WHERE company_id = ? AND collection = 'vouchers' AND doc_date_ms IS NOT NULL AND id > ?
+       ORDER BY id ASC
+       LIMIT ?`;
 
     const keys = new Set<string>();
-    let offset = 0;
+    let lastId: string | null = null;
     let scanned = 0;
+    let minDateMs: number | null = null;
+    let maxDateMs: number | null = null;
     while (true) {
-      // BrowserDbWrapper.prepare().all() frees the sql.js statement in `finally` —
-      // never reuse one prepare() across pages (throws "Statement closed").
-      const liveDb = await getBrowserDbForCompanyId(companyId);
-      if (!liveDb) {
-        fyScanLog("db missing mid-scan", { companyId, offset, scanned });
-        break;
-      }
-      const rows = liveDb.prepare(pageSql).all(companyId, FY_KEY_SCAN_PAGE, offset) as Array<{
+      // `.all()` frees its SQL.js statement, so prepare a fresh one per page.
+      const rows = (lastId == null
+        ? db.prepare(firstPageSql).all(companyId, FY_KEY_SCAN_PAGE)
+        : db.prepare(nextPageSql).all(companyId, lastId, FY_KEY_SCAN_PAGE)) as Array<{
+        id?: string;
         doc_date_ms?: number;
       }>;
       if (!rows.length) break;
@@ -113,7 +82,11 @@ export async function listFyKeysWithVouchersInSqlite(
       const pageMs: number[] = [];
       for (let i = 0; i < rows.length; i++) {
         const ms = Number(rows[i]?.doc_date_ms);
-        if (Number.isFinite(ms)) pageMs.push(ms);
+        if (Number.isFinite(ms)) {
+          pageMs.push(ms);
+          minDateMs = minDateMs == null ? ms : Math.min(minDateMs, ms);
+          maxDateMs = maxDateMs == null ? ms : Math.max(maxDateMs, ms);
+        }
       }
 
       for (let i = 0; i < pageMs.length; i++) {
@@ -123,18 +96,21 @@ export async function listFyKeysWithVouchersInSqlite(
       }
 
       scanned += rows.length;
-      offset += rows.length;
+      lastId = String(rows[rows.length - 1]?.id ?? "");
       onProgress?.({
         phase: "page_scan",
         scanned,
-        total: Math.max(totalApprox, scanned),
+        // Exact COUNT(*) would synchronously walk the full SQL.js index before
+        // scanning; keep progress responsive and report the checked count only.
+        total: 0,
+        minDateMs,
+        maxDateMs,
       });
       await yieldToUi();
 
       if (rows.length < FY_KEY_SCAN_PAGE) break;
-      // Hard stop — corrupt offset loops
-      if (offset > totalApprox + FY_KEY_SCAN_PAGE * 2) {
-        fyScanLog("page scan safety break", { offset, totalApprox });
+      if (rows[rows.length - 1]?.id == null) {
+        fyScanLog("page scan missing cursor id", { companyId, scanned });
         break;
       }
     }
@@ -148,6 +124,8 @@ export async function listFyKeysWithVouchersInSqlite(
       companyId,
       scanned,
       distinctFyKeys: sorted.length,
+      minDateMs,
+      maxDateMs,
       keys: sorted.slice(0, 12),
     });
     return sorted;

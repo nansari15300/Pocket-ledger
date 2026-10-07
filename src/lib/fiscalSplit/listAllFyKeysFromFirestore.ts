@@ -14,7 +14,9 @@ import { startOfDay } from "date-fns";
 import { getAnusuchi13FyKey } from "@/lib/reports/anusuchi13Confirmation";
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 
-const FIRESTORE_FY_SCAN_PAGE = 400;
+// Smaller pages limit memory and main-thread decode spikes for older companies
+// that need a one-time full scan before the FY index cache has been seeded.
+const FIRESTORE_FY_SCAN_PAGE = 100;
 
 export type FyKeysFirestoreScanProgress = {
   pages: number;

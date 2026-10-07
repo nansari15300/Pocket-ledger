@@ -39,6 +39,7 @@ import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { bankAccountDisplayName } from "@/lib/bankAccountDisplayName";
+import { userCanViewSpecialAccountBalance } from "@/lib/specialAccountUsage";
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
@@ -265,9 +266,16 @@ function BankCashPageContent() {
     );
   }, [isMobile, selected, activeView]);
   
-   const processedAccountGroups = useMemo(() => {
-    const canViewSpecialBalance = can('view_special_account_balance');
+   const roleAllowsSpecialBalance = can("view_special_account_balance");
+  const canManageSpecial = can("manage_special_bank_accounts");
+  const userCanSeeSpecialAccountBalance = useCallback(
+    (acc: Account) =>
+      canManageSpecial ||
+      userCanViewSpecialAccountBalance(acc, user?.email, roleAllowsSpecialBalance),
+    [canManageSpecial, roleAllowsSpecialBalance, user?.email]
+  );
 
+   const processedAccountGroups = useMemo(() => {
     const userDefinedGroups = initialProcessedAccountGroups
         .filter((group: any) => {
           if (group.isAutoUngrouped === true) return false;
@@ -277,9 +285,12 @@ function BankCashPageContent() {
         })
         .map(group => {
         const accountsInGroup = processedAccounts.filter(acc => acc.groupId === group.id);
-        const hasSpecial = accountsInGroup.some(acc => acc.isSpecial);
+        const specialInGroup = accountsInGroup.filter((acc) => acc.isSpecial);
+        const hasSpecial = specialInGroup.length > 0;
         const balance = accountsInGroup.reduce((sum, acc) => sum + acc.balance, 0);
-        const balanceMasked = hasSpecial && !canViewSpecialBalance;
+        const balanceMasked =
+          hasSpecial &&
+          !specialInGroup.every((acc) => userCanSeeSpecialAccountBalance(acc));
         return { ...group, hasSpecial, balance, balanceMasked };
     });
 
@@ -288,7 +299,12 @@ function BankCashPageContent() {
       BANK_ENTITY_GROUP_PRESET,
       companyId || ""
     );
-  }, [processedAccounts, initialProcessedAccountGroups, companyId, can]);
+  }, [
+    processedAccounts,
+    initialProcessedAccountGroups,
+    companyId,
+    userCanSeeSpecialAccountBalance,
+  ]);
 
   const selectedGroup = useMemo(
     () =>
@@ -462,10 +478,10 @@ function BankCashPageContent() {
   }, []);
   
   const totalBalance = useMemo(() => {
-    const canViewSpecialBalance = can('view_special_account_balance');
-    
     if (activeView !== 'groups') {
-        const accountsToSum = processedAccounts.filter(acc => !acc.isSpecial || canViewSpecialBalance);
+        const accountsToSum = processedAccounts.filter(
+          (acc) => !acc.isSpecial || userCanSeeSpecialAccountBalance(acc)
+        );
         return accountsToSum.reduce((acc, account) => acc + account.balance, 0);
     } 
     // activeView === 'groups'
@@ -478,7 +494,7 @@ function BankCashPageContent() {
         return !anyG.balanceMasked && !isSystemParent;
       })
       .reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, processedAccounts, processedAccountGroups, can]);
+  }, [activeView, processedAccounts, processedAccountGroups, userCanSeeSpecialAccountBalance]);
 
   const displayTotalBalance = useMemo(() => {
     if (activeView === "groups") return totalBalance;

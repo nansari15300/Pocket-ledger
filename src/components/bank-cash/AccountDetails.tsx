@@ -31,6 +31,7 @@ import {
   ChevronDown,
   Info,
   Pencil,
+  X,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -166,6 +167,7 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useMasterEntityLivePatch } from "@/hooks/useMasterEntityLivePatch";
 import usePermissions from "@/hooks/usePermissions";
 import { useAuth } from "@/hooks/useAuth";
+import { userCanViewSpecialAccountBalance } from "@/lib/specialAccountUsage";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -209,6 +211,10 @@ interface AccountDetailsProps {
   /** Master-detail mobile: "Showing x of y" title row me — set ho to niche duplicate row nahi */
   onMobileVoucherListStatsChange?: (stats: { showing: number; total: number } | null) => void;
   ledgerPresentationMode?: import("@/lib/nestedLedgerMasterEditPresentation").MasterEditPresentationMode;
+  /** Optional period totals for a report popup that reuses the bank ledger UI. */
+  showPeriodSummaryCards?: boolean;
+  /** Optional inline close control when this detail is hosted inside a report popup. */
+  onPopupClose?: () => void;
 }
 
 export function AccountDetails({
@@ -223,6 +229,8 @@ export function AccountDetails({
   transactions,
   onMobileVoucherListStatsChange,
   ledgerPresentationMode = "default",
+  showPeriodSummaryCards = false,
+  onPopupClose,
 }: AccountDetailsProps) {
   const nestedLedgerNoteDialogShell =
     ledgerPresentationMode === "nested-ledger"
@@ -282,13 +290,15 @@ export function AccountDetails({
     setTempDateRange(dateRange);
   }, [dateRange]);
 
-  const canViewSpecialBalance = can('view_special_account_balance');
-  const showMaskedBalance = initialAccount.isSpecial && !canViewSpecialBalance;
-
   const account = useMemo(() => {
     if (!allAccounts) return initialAccount;
     return allAccounts.find(p => p.id === initialAccount.id) || initialAccount;
   }, [allAccounts, initialAccount]);
+
+  const canViewSpecialBalance =
+    can("manage_special_bank_accounts") ||
+    userCanViewSpecialAccountBalance(account, user?.email, can("view_special_account_balance"));
+  const showMaskedBalance = account.isSpecial && !canViewSpecialBalance;
 
   const ledgerSessionKey = useMemo(
     () =>
@@ -1256,6 +1266,48 @@ export function AccountDetails({
     return displayHeaderClosingBalance >= 0 ? "Dr" : "Cr";
   }, [displayHeaderClosingBalance]);
 
+  const displaySummaryOpening = flipLedgerSignedBalance(
+    Number(openingBalanceForPeriod) || 0,
+    bankDrCrPerspective
+  );
+  const displaySummaryTotals = flipLedgerDrCr(
+    Number(periodDr) || 0,
+    Number(periodCr) || 0,
+    bankDrCrPerspective
+  );
+  const displaySummaryClosing = flipLedgerSignedBalance(
+    typeof closingBalance === "number" ? closingBalance : headerClosingBalance,
+    bankDrCrPerspective
+  );
+  const periodSummaryCards = showPeriodSummaryCards ? (
+    <div className="shrink-0 flex flex-wrap gap-2 px-2 pt-1 pb-2 text-sm" data-pl-ledger-period-summary>
+      <div className="min-w-max flex-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
+        <div className="text-[11px] text-muted-foreground">Opening</div>
+        <div className={cn("whitespace-nowrap font-semibold", displaySummaryOpening >= 0 ? "text-green-600" : "text-red-600")}>
+          {showMaskedBalance ? "*****" : formatCurrency(displaySummaryOpening, { noSuffix: true, hideCurrencySymbol: true })}
+        </div>
+      </div>
+      <div className="min-w-max flex-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
+        <div className="text-[11px] text-muted-foreground">Total In</div>
+        <div className="whitespace-nowrap font-semibold text-green-600">
+          {showMaskedBalance ? "*****" : formatCurrency(displaySummaryTotals.debit, { noSuffix: true, hideCurrencySymbol: true })}
+        </div>
+      </div>
+      <div className="min-w-max flex-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
+        <div className="text-[11px] text-muted-foreground">Total Out</div>
+        <div className="whitespace-nowrap font-semibold text-red-600">
+          {showMaskedBalance ? "*****" : formatCurrency(displaySummaryTotals.credit, { noSuffix: true, hideCurrencySymbol: true })}
+        </div>
+      </div>
+      <div className="min-w-max flex-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
+        <div className="text-[11px] text-muted-foreground">Closing</div>
+        <div className={cn("whitespace-nowrap font-semibold", displaySummaryClosing >= 0 ? "text-green-600" : "text-red-600")}>
+          {showMaskedBalance ? "*****" : formatCurrency(displaySummaryClosing, { noSuffix: true, hideCurrencySymbol: true })}
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     const range = dateRange;
     if (!onDateRangeChange) return;
@@ -1611,6 +1663,15 @@ export function AccountDetails({
               <ArrowLeft className="h-4 w-4" />
             </Button>
           ) : null}
+          {onPopupClose ? (
+            <div
+              className="min-w-0 flex-1 truncate text-sm font-semibold"
+              title={`Bank & Cash · ${account.accountName}`}
+            >
+              Bank &amp; Cash <span className="text-muted-foreground">·</span>{" "}
+              <span className="text-green-600">{account.accountName}</span>
+            </div>
+          ) : null}
         </div>
       )}
       {/* Mobile: date/balance/search — footer chevron se collapse (group pages jaisa) */}
@@ -1704,6 +1765,7 @@ export function AccountDetails({
           </div>
         </div>
       </div>
+      {periodSummaryCards}
       </MobileDetailSummaryCollapsible>
       {/* Transaction list - fills to footer line; inner pb-24 so last row scrolls above fixed footer */}
       {/* scroll-touch + inline style for APK/WebView touch scroll */}
@@ -1758,6 +1820,7 @@ export function AccountDetails({
       </div>
       <MobileTransactionsPager
         className="flex-shrink-0 mb-12"
+        showSummaryToggleInOverlay={Boolean(onPopupClose)}
         currentPage={currentPage}
         totalItems={filteredMobileTransactions.length}
         rowsPerPage={rowsPerPage}
@@ -2043,9 +2106,22 @@ export function AccountDetails({
               <Button variant="outline" size="icon" onClick={handlePrintStatement} className={LEDGER_HEADER_PILL_ICON_CN} data-theme-detail="print">
                 <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
               </Button>
+              {onPopupClose && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={onPopupClose}
+                  className={LEDGER_HEADER_PILL_ICON_CN}
+                  aria-label="Close account ledger"
+                >
+                  <X className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
+                </Button>
+              )}
             </div>
           </div>
         </div>
+        {periodSummaryCards}
         {/* Opening-balance documents: no preview strip here—only File column tick on opening row (openingBalanceAttachmentUrls). */}
 
         {/* TABLE AREA - Statement = running balance; Bill wise = per-row outstanding (same as PartyDetails) */}

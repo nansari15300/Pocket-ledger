@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Fiscal split: off vs merge divider — values `localFiscalSplitStore` me (Firestore nahi).
+ * Fiscal split: off vs merge divider — SQLite/local cache plus the company root setting for online sync.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useCompany } from "@/hooks/useCompany";
@@ -317,9 +317,11 @@ export function FiscalSplitSettings() {
                           <p className="text-xs text-muted-foreground">
                             {firestoreScanned > 0
                               ? `Cloud voucher scan — ${firestoreScanned.toLocaleString()} checked`
-                              : sqliteTotal > 0
-                                ? `Checking fiscal years — ${sqliteScanned}/${sqliteTotal}`
-                                : "Building fiscal-year list from local data…"}
+                              : sqliteScanned > 0
+                                ? `Checking fiscal years — ${sqliteScanned.toLocaleString()}${
+                                    sqliteTotal > 0 ? `/${sqliteTotal.toLocaleString()}` : ""
+                                  } checked`
+                                : "Reading voucher dates only (attachment files are skipped)…"}
                           </p>
                           <p className="text-xs text-muted-foreground">
                             You can keep using other menus; this page will fill when the scan finishes.

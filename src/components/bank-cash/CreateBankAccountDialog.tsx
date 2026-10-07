@@ -44,7 +44,6 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
-  FormDescription,
 } from "@/components/ui/form";
 import { MasterOpeningBalanceAmountField } from "@/components/common/MasterOpeningBalanceAmountField";
 import { Input } from "@/components/ui/input";
@@ -62,7 +61,6 @@ import {
 } from "@/components/ui/select";
 import type { AccountGroup } from "@/components/bank-cash/types";
 import { CreateAccountGroupDialog } from "./CreateAccountGroupDialog";
-import { Switch } from "@/components/ui/switch";
 import usePermissions from "@/hooks/usePermissions";
 import { useDate } from "@/hooks/useDate";
 import { cn } from "@/lib/utils";
@@ -80,8 +78,12 @@ import {
   masterEntityDialogFormWrapperClassName,
 } from "@/lib/masterEntityDialogClasses";
 import { NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN } from "@/lib/dialogShellChrome";
-import { MasterFormTwoColGrid } from "@/components/inter-company/MasterFormLayout";
+import {
+  BankCashFormThreeColGrid,
+  BankCashFormTwoColGrid,
+} from "@/components/bank-cash/bankCashFormLayout";
 import { BankAccountToggleFlagsRow } from "@/components/bank-cash/BankAccountToggleFlagsRow";
+import { BankCashAccountTypeSpecialRow } from "@/components/bank-cash/BankCashAccountTypeSpecialRow";
 import {
   masterSpecialAccountPanelClassName,
   masterSpecialAccountPanelTitleClassName,
@@ -90,7 +92,6 @@ import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
-import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { compressFile } from "@/lib/compression";
 import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useImageCompressionProcessing } from "@/lib/attachmentCompressionUi";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
@@ -102,6 +103,12 @@ import { ScrollArea } from "../ui/scroll-area";
 import { MasterPdfAsImageToggle } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
 import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
+import {
+  listSpecialAccountAccessUsers,
+  normalizeSpecialAccountUseFor,
+  readSpecialAccountUsageDefaults,
+} from "@/lib/specialAccountUsage";
+import { useSpecialAccountUseForSync } from "@/hooks/useSpecialAccountUseForSync";
 import { EntityOpeningBalanceNarrationField } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { sidebarEntityMenuLabel } from "@/lib/sidebarEntityMenuLabels";
@@ -142,6 +149,7 @@ const formSchema = z.object({
   useFor: z.object({
     in: z.array(z.string()),
     out: z.array(z.string()),
+    balance: z.array(z.string()),
   }).optional(),
 }).superRefine(refineMasterOpeningBalanceDateRequired);
 
@@ -172,6 +180,7 @@ export function CreateBankAccountDialog({
   const { toast } = useToast();
   const { user } = useAuth();
   const { company, companyId } = useCompany();
+  const { syncUsageToCompanyPermissions } = useSpecialAccountUseForSync(companyId, company);
   const [groups, setGroups] = useState<AccountGroup[]>([]);
   const { processedAccountGroups } = useVouchers();
   const { can, canAddAvatar, canAddFileImagePdf } = usePermissions();
@@ -206,10 +215,7 @@ export function CreateBankAccountDialog({
       isSpecial: false,
       allowVoucherMinusBalance: false,
       isClearing: false,
-      useFor: {
-          in: company?.ownerEmail ? [company.ownerEmail] : [], 
-          out: company?.ownerEmail ? [company.ownerEmail] : [] 
-      },
+      useFor: readSpecialAccountUsageDefaults(company?.permissionConfig),
       openingBalanceNarration: "",
     },
   });
@@ -219,39 +225,7 @@ export function CreateBankAccountDialog({
   const accountType = form.watch("accountType");
   const isSpecial = form.watch("isSpecial");
   
-  const usersForAccessControl = useMemo(() => {
-    if (!company) return [];
-
-    const ownerUser = {
-        id: company.ownerEmail, 
-        email: company.ownerEmail,
-        name: "Owner",
-        photoURL: null,
-        role: 'owner' as const
-    };
-
-    const sharedUsers = (company.sharedWith || []).map(u => ({
-        id: u.email, 
-        email: u.email,
-        name: u.name || "Unknown",
-        photoURL: u.photoURL || null,
-        role: u.role
-    }));
-    
-    const uniqueUsersMap = new Map<string, any>();
-    
-    if(ownerUser.id) {
-      uniqueUsersMap.set(ownerUser.id, ownerUser);
-    }
-
-    sharedUsers.forEach(u => {
-        if (u.id && !uniqueUsersMap.has(u.id)) {
-            uniqueUsersMap.set(u.id, u);
-        }
-    });
-
-    return Array.from(uniqueUsersMap.values());
-  }, [company]);
+  const usersForAccessControl = useMemo(() => listSpecialAccountAccessUsers(company), [company]);
 
   /** Account-group combobox APK cloud pe redundant Firestore listener na lagao — SQLite warm mirror authoritative. */
   const sqliteListsSkipFirestore = useMemo(
@@ -433,11 +407,9 @@ export function CreateBankAccountDialog({
         openingBalanceNarration: defaults.openingBalanceNarration,
         groupId: getDefaultSystemGroupId("bank", { accountType: defaults.accountType }),
         isSpecial: defaults.isSpecial,
-        useFor:
-          defaults.useFor ?? {
-            in: company?.ownerEmail ? [company.ownerEmail] : [],
-            out: company?.ownerEmail ? [company.ownerEmail] : [],
-          },
+        useFor: defaults.useFor
+          ? normalizeSpecialAccountUseFor(defaults.useFor)
+          : readSpecialAccountUsageDefaults(company?.permissionConfig),
       });
       if (remoteAvatarUrl?.trim() && canAddAvatar) {
         setIsCompressing(true);
@@ -806,47 +778,33 @@ export function CreateBankAccountDialog({
           <Form {...form}>
             <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
             <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-              <FormField
+              <BankCashAccountTypeSpecialRow
                 control={form.control}
-                name="accountType"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel>Account Type</FormLabel>
-                    <RadioGroup
-                      className="flex flex-col gap-2 sm:flex-row sm:gap-6"
-                      value={field.value}
-                      onValueChange={(next: "Bank" | "Cash") => {
-                        field.onChange(next);
-                        const currentBranch = resolveMasterGroupTreeBranchIdForGroup(
-                          form.getValues("groupId"),
-                          processedAccountGroups as AccountGroup[],
-                          BANK_ENTITY_GROUP_PRESET
-                        );
-                        const expectedBranch =
-                          next === "Cash" ? BANK_SYSTEM_CASH_BRANCH_ID : BANK_SYSTEM_BANK_BRANCH_ID;
-                        if (currentBranch !== expectedBranch) {
-                          form.setValue(
-                            "groupId",
-                            getDefaultSystemGroupId("bank", { accountType: next }),
-                            { shouldDirty: true }
-                          );
-                        }
-                      }}
-                    >
-                      <FormItem className="flex items-center space-x-2 space-y-0">
-                        <FormControl><RadioGroupItem value="Bank" /></FormControl>
-                        <FormLabel className="cursor-pointer font-normal">Bank Account</FormLabel>
-                      </FormItem>
-                      <FormItem className="flex items-center space-x-2 space-y-0">
-                        <FormControl><RadioGroupItem value="Cash" /></FormControl>
-                        <FormLabel className="cursor-pointer font-normal">Cash in Hand</FormLabel>
-                      </FormItem>
-                    </RadioGroup>
-                    <FormMessage />
-                  </FormItem>
-                )}
+                form={form}
+                processedAccountGroups={processedAccountGroups as AccountGroup[]}
+                showSpecialSwitch={can("manage_special_bank_accounts")}
               />
-              <MasterFormTwoColGrid>
+              {isSpecial && can("manage_special_bank_accounts") && (
+                <Card className={cn("p-4 -mt-1", masterSpecialAccountPanelClassName)}>
+                  <CardHeader className="p-0 pb-4">
+                    <CardTitle className={masterSpecialAccountPanelTitleClassName}>
+                      Special Account Usage Control
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <SpecialAccountAccessControl
+                      users={usersForAccessControl}
+                      useFor={normalizeSpecialAccountUseFor(form.watch("useFor"))}
+                      onUseForChange={(newUseFor) => {
+                        form.setValue("useFor", newUseFor);
+                        syncUsageToCompanyPermissions(newUseFor);
+                      }}
+                    />
+                  </CardContent>
+                </Card>
+              )}
+              <BankAccountToggleFlagsRow control={form.control} />
+              <BankCashFormTwoColGrid>
                 <FormField
                   control={form.control}
                   name="accountName"
@@ -860,12 +818,22 @@ export function CreateBankAccountDialog({
                     </FormItem>
                   )}
                 />
-                <div aria-hidden className="hidden sm:block" />
-              </MasterFormTwoColGrid>
-              <BankAccountToggleFlagsRow control={form.control} />
-
-              {/* Group | Bank name */}
-              <MasterFormTwoColGrid>
+                <FormField
+                  control={form.control}
+                  name="accountNumber"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Account Number</FormLabel>
+                      <FormControl>
+                        <Input placeholder="e.g., 123456789" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </BankCashFormTwoColGrid>
+              {accountType === "Bank" ? (
+              <BankCashFormThreeColGrid>
                 <FormField
                     control={form.control}
                     name="groupId"
@@ -920,26 +888,93 @@ export function CreateBankAccountDialog({
                         </FormItem>
                     )}
                     />
-                {accountType === "Bank" ? (
-                  <FormField
+                <FormField
+                  control={form.control}
+                  name="bankName"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Bank Name</FormLabel>
+                      <FormControl>
+                        <Input placeholder="e.g., Himalayan Bank" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="ifscCode"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>IFSC/SWIFT Code</FormLabel>
+                      <FormControl>
+                        <Input placeholder="e.g., HBLNPKA..." {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </BankCashFormThreeColGrid>
+              ) : (
+              <BankCashFormTwoColGrid>
+                <FormField
                     control={form.control}
-                    name="bankName"
+                    name="groupId"
                     render={({ field }: any) => (
-                      <FormItem>
-                        <FormLabel>Bank Name</FormLabel>
+                        <FormItem>
+                        <FormLabel>Group</FormLabel>
                         <FormControl>
-                          <Input placeholder="e.g., Himalayan Bank" {...field} />
+                            <MasterGroupTreeCombobox
+                                preset={BANK_ENTITY_GROUP_PRESET}
+                                groups={groups}
+                                processedGroups={processedAccountGroups as AccountGroup[]}
+                                popoverModal
+                                confirmWithOk
+                                value={field.value}
+                                onBranchChange={(branchId) => {
+                                  if (branchId === BANK_SYSTEM_BANK_BRANCH_ID) {
+                                    form.setValue("accountType", "Bank", { shouldDirty: true });
+                                  } else if (branchId === BANK_SYSTEM_CASH_BRANCH_ID) {
+                                    form.setValue("accountType", "Cash", { shouldDirty: true });
+                                  }
+                                }}
+                                onChange={(val, newName) => {
+                                    if (val === "add-new") {
+                                    setIsCreateGroupOpen(true);
+                                    setTimeout(() => {
+                                        document.dispatchEvent(new CustomEvent('prefill-create-account-group-name', { detail: newName }));
+                                    }, 100);
+                                    } else {
+                                    const gid = val === "none" ? "" : val;
+                                    field.onChange(gid);
+                                    if (gid) {
+                                      const branchId = resolveMasterGroupTreeBranchIdForGroup(
+                                        gid,
+                                        processedAccountGroups as AccountGroup[],
+                                        BANK_ENTITY_GROUP_PRESET
+                                      );
+                                      if (branchId === BANK_SYSTEM_CASH_BRANCH_ID) {
+                                        form.setValue("accountType", "Cash", { shouldDirty: true });
+                                      } else if (branchId === BANK_SYSTEM_BANK_BRANCH_ID) {
+                                        form.setValue("accountType", "Bank", { shouldDirty: true });
+                                      }
+                                    }
+                                    }
+                                }}
+                                placeholder="Select or search a group"
+                                searchPlaceholder="Search groups..."
+                                addNewLabel="Create New Group"
+                                disabled={isLoading || isCompressing}
+                                />
                         </FormControl>
                         <FormMessage />
-                      </FormItem>
+                        </FormItem>
                     )}
-                  />
-                ) : (
-                  <div aria-hidden className="hidden sm:block" />
-                )}
-              </MasterFormTwoColGrid>
+                    />
+              </BankCashFormTwoColGrid>
+              )}
 
-              <MasterFormTwoColGrid>
+              <BankCashFormTwoColGrid>
                 <MasterOpeningBalanceAmountField control={form.control} />
                 <FormField
                   control={form.control}
@@ -974,79 +1009,14 @@ export function CreateBankAccountDialog({
                     </FormItem>
                   )}
                 />
-              </MasterFormTwoColGrid>
+              </BankCashFormTwoColGrid>
 
-                {accountType === "Bank" && (
-                  <MasterFormTwoColGrid>
-                        <FormField
-                          control={form.control}
-                          name="accountNumber"
-                          render={({ field }: any) => (
-                            <FormItem>
-                              <FormLabel>Account Number</FormLabel>
-                              <FormControl>
-                                <Input placeholder="e.g., 123456789" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={form.control}
-                          name="ifscCode"
-                          render={({ field }: any) => (
-                            <FormItem>
-                              <FormLabel>IFSC/SWIFT Code</FormLabel>
-                              <FormControl>
-                                <Input placeholder="e.g., HBLNPKA..." {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                  </MasterFormTwoColGrid>
-                )}
-                
-                {can('manage_special_bank_accounts') && (
-                 <FormField
+                <EntityOpeningBalanceNarrationField
                   control={form.control}
-                  name="isSpecial"
-                  render={({ field }: any) => (
-                    <FormItem
-                      className={cn(
-                        "flex flex-row items-center justify-between p-3",
-                        masterSpecialAccountPanelClassName
-                      )}
-                    >
-                      <div className="space-y-0.5">
-                        <FormLabel>Mark as Special Account</FormLabel>
-                        <FormDescription>Special accounts have restricted visibility.</FormDescription>
-                      </div>
-                      <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
-                    </FormItem>
-                  )}
+                  name="openingBalanceNarration"
+                  detailLabel="bank/cash account"
                 />
-                )}
-                
-                {isSpecial && can('manage_special_bank_accounts') && (
-                      <Card className={cn("p-4", masterSpecialAccountPanelClassName)}>
-                        <CardHeader className="p-0 pb-4">
-                          <CardTitle className={masterSpecialAccountPanelTitleClassName}>
-                            Special Account Usage Control
-                          </CardTitle>
-                        </CardHeader>
-                        <CardContent className="p-0">
-                           <SpecialAccountAccessControl
-                                users={usersForAccessControl}
-                                useFor={{
-                                  in: form.watch('useFor')?.in ?? [],
-                                  out: form.watch('useFor')?.out ?? [],
-                                }}
-                                onUseForChange={(newUseFor) => form.setValue('useFor', newUseFor)}
-                            />
-                        </CardContent>
-                      </Card>
-                )}
+
                 <FormItem>
                   <FormLabel>Profile photo (Optional)</FormLabel>
                   {!canAddAvatar ? (
@@ -1153,12 +1123,6 @@ export function CreateBankAccountDialog({
                     </RestrictedFileUploader>
                   )}
                 </FormItem>
-
-                <EntityOpeningBalanceNarrationField
-                  control={form.control}
-                  name="openingBalanceNarration"
-                  detailLabel="bank/cash account"
-                />
             </div>
 
                 <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>

@@ -1440,6 +1440,8 @@ export type SaveVoucherOptions = {
   actorDisplayNameOverride?: string;
   /** Inter Company create: pehli history me user / company detail rows. */
   interCompanyCreateHistory?: InterCompanyCreateHistoryInput;
+  /** Inter Company edit only: preserve existing approval when the row was already approved. */
+  preserveApprovalOnInterCompanyEdit?: boolean;
 };
 
 export async function saveVoucher(
@@ -1618,6 +1620,17 @@ export async function saveVoucher(
     const existingLocal = resolvedExisting?.voucher ?? null;
     const writeCompanyIdLocal = resolvedExisting?.writeCompanyId ?? companyId;
     const nowTs = Timestamp.now();
+    const wasApproved = (existingLocal as Record<string, unknown> | null)?.isApproved === true;
+    const preserveApprovedInterCompanyEdit =
+      options?.preserveApprovalOnInterCompanyEdit === true &&
+      wasApproved &&
+      String(cleanVoucherData.type || (existingLocal as any)?.type || "") === "inter_company";
+    if (preserveApprovedInterCompanyEdit) {
+      cleanVoucherData.isApproved = true;
+      cleanVoucherData.approvedByUserId = (existingLocal as any)?.approvedByUserId ?? null;
+      cleanVoucherData.approvedByUserName = (existingLocal as any)?.approvedByUserName ?? null;
+      cleanVoucherData.approvedAt = (existingLocal as any)?.approvedAt ?? null;
+    }
     let mergedLocal = removeUndefined(
       mergeVoucherEditPayloadPreservingAttachments(
         (existingLocal as Record<string, unknown> | null) ?? null,
@@ -1633,7 +1646,6 @@ export async function saveVoucher(
         }
       )
     ) as Record<string, unknown>;
-    const wasApproved = (existingLocal as Record<string, unknown> | null)?.isApproved === true;
     if (approveAfterSave) {
       const approverName = approveAfterSave.approvedByName ?? approveAfterSave.approvedByUserId;
       mergedLocal.isApproved = true;
@@ -1671,7 +1683,7 @@ export async function saveVoucher(
       } catch {
         /* history optional on local save */
       }
-    } else if (wasApproved) {
+    } else if (wasApproved && !preserveApprovedInterCompanyEdit) {
       mergedLocal.isApproved = false;
       mergedLocal.approvedByUserId = null;
       mergedLocal.approvedByUserName = null;
@@ -1874,10 +1886,21 @@ export async function saveVoucher(
     if (!resolvedLocal?.voucher) throw new Error("Voucher not found");
     oldData = resolvedLocal.voucher;
   }
+  const preserveApprovedInterCompanyEdit =
+    options?.preserveApprovalOnInterCompanyEdit === true &&
+    oldData?.isApproved === true &&
+    String(cleanVoucherData.type || oldData.type || "") === "inter_company";
+  if (preserveApprovedInterCompanyEdit) {
+    cleanVoucherData.isApproved = true;
+    cleanVoucherData.approvedByUserId = oldData.approvedByUserId ?? null;
+    cleanVoucherData.approvedByUserName = oldData.approvedByUserName ?? null;
+    cleanVoucherData.approvedAt = oldData.approvedAt ?? null;
+  }
   const { createdAt, updatedAt, ...restOfOldData } = (oldData || {}) as any;
   const changedFields = getChanges(restOfOldData, cleanVoucherData);
   if (Object.keys(changedFields).length === 0 && !approveAfterSave) return { id: voucherId! };
-  const shouldResetApproval = oldData?.isApproved === true && !approveAfterSave;
+  const shouldResetApproval =
+    oldData?.isApproved === true && !approveAfterSave && !preserveApprovedInterCompanyEdit;
   if (approveAfterSave) {
     const approverName = approveAfterSave.approvedByName ?? approveAfterSave.approvedByUserId;
     changedFields.isApproved = { from: (oldData as any)?.isApproved === true, to: true };

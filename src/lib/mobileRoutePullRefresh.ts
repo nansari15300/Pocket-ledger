@@ -3,17 +3,9 @@
 import { COLLECTIONS_TO_BACKUP, type CompanyBackupCollection } from "@/lib/companyBackupCollections";
 import { activeMasterCollectionPathsForRoute } from "@/lib/ledgerActiveMasterCollections";
 
-/** Pull distance = screen height × ratio (user: ~50% swipe). */
-export const MOBILE_PULL_REFRESH_DISTANCE_RATIO = 0.5;
-
-/** Master list / detail scroll columns — pull-refresh gesture targets (see `MobilePagePullRefresh`). */
-export const PL_MOBILE_PULL_SCROLL_ATTR = "data-pl-mobile-pull-scroll";
-
-export const plMobilePullScrollProps: Record<string, string> = {
-  [PL_MOBILE_PULL_SCROLL_ATTR]: "",
-};
-
 export const MOBILE_ROUTE_PULL_REFRESH_EVENT = "pl-mobile-route-pull-refresh";
+
+export type MobileRoutePullRefreshCollection = CompanyBackupCollection | "quotations";
 
 export type MobileRoutePullRefreshDetail = {
   pathname: string;
@@ -29,7 +21,7 @@ function normalizeRoutePath(pathname: string): string {
   return raw;
 }
 
-function asBackupCollections(paths: Iterable<string>): CompanyBackupCollection[] {
+function asBackupCollections(paths: Iterable<string>): MobileRoutePullRefreshCollection[] {
   const out: CompanyBackupCollection[] = [];
   for (const p of paths) {
     if (BACKUP_COLLECTION_SET.has(p)) out.push(p as CompanyBackupCollection);
@@ -40,7 +32,7 @@ function asBackupCollections(paths: Iterable<string>): CompanyBackupCollection[]
 /**
  * Mobile pull-refresh: sirf current screen ke liye collections — global date / saari masters nahi.
  */
-export function collectionsForMobileRoutePullRefresh(pathname: string): CompanyBackupCollection[] {
+export function collectionsForMobileRoutePullRefresh(pathname: string): MobileRoutePullRefreshCollection[] {
   const route = normalizeRoutePath(pathname).toLowerCase();
 
   if (/^\/party\/[^/]+$/.test(route) && !route.includes("/group/")) {
@@ -84,7 +76,9 @@ export function collectionsForMobileRoutePullRefresh(pathname: string): CompanyB
 
   if (route.startsWith("/dashboard")) return ["vouchers"];
   if (route.startsWith("/gallery")) return ["vouchers"];
-  if (route.startsWith("/quotations")) return ["vouchers"];
+  if (route.startsWith("/quotations")) {
+    return ["quotations", ...asBackupCollections(activeMasterCollectionPathsForRoute(route))];
+  }
   if (route.startsWith("/reports")) return ["vouchers"];
 
   return asBackupCollections(activeMasterCollectionPathsForRoute(route));
@@ -101,7 +95,10 @@ export function dispatchMobileRoutePullRefresh(pathname: string): Promise<void> 
       clearTimeout(timer);
       fn();
     };
-    const timer = setTimeout(() => finish(resolve), 20_000);
+    const timer = setTimeout(
+      () => finish(() => reject(new Error("Mobile route refresh timed out"))),
+      90_000
+    );
     window.dispatchEvent(
       new CustomEvent<MobileRoutePullRefreshDetail>(MOBILE_ROUTE_PULL_REFRESH_EVENT, {
         detail: {

@@ -19,8 +19,18 @@ export async function readFyVoucherIndexFromFirestore(
   try {
     const ref = doc(firestore, fyVoucherIndexDocPath(fsCompanyId));
     const snap = await getDoc(ref);
-    if (!snap.exists()) return null;
-    return normalizeFyVoucherIndex(snap.data());
+    if (!snap.exists()) {
+      console.info("[FY-SCAN] Firestore index miss", { firestoreCompanyId: fsCompanyId });
+      return null;
+    }
+    const index = normalizeFyVoucherIndex(snap.data());
+    console.info(index ? "[FY-SCAN] Firestore index hit" : "[FY-SCAN] Firestore index invalid", {
+      firestoreCompanyId: fsCompanyId,
+      fyKeyCount: index?.fyKeys.length ?? 0,
+      keys: index?.fyKeys.slice(0, 16) ?? [],
+      updatedAtMs: index?.updatedAtMs ?? null,
+    });
+    return index;
   } catch (err) {
     console.warn("[readFyVoucherIndexFromFirestore]", err);
     return null;
@@ -44,4 +54,10 @@ export async function writeFyVoucherIndexToFirestore(
     },
     { merge: true }
   );
+  console.info("[FY-SCAN] Firestore index saved", {
+    firestoreCompanyId: fsCompanyId,
+    fyKeyCount: index.fyKeys.length,
+    keys: index.fyKeys.slice(0, 16),
+    updatedAtMs: index.updatedAtMs,
+  });
 }

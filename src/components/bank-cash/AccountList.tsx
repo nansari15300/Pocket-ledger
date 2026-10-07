@@ -20,6 +20,8 @@ import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import usePermissions from "@/hooks/usePermissions";
+import { useAuth } from "@/hooks/useAuth";
+import { userCanViewSpecialAccountBalance } from "@/lib/specialAccountUsage";
 import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
@@ -62,8 +64,10 @@ export function AccountList({
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
   const { animatePresenceMode, rowMotionProps, markListScrolling, isRowAnimationEnabled, layoutHoldMs } = useMasterListRowMotion();
-  const canViewSpecialAccount = can('view_special_bank_accounts');
-  const canViewSpecialBalance = can('view_special_account_balance');
+  const canViewSpecialAccount = can("view_special_bank_accounts");
+  const { user } = useAuth();
+  const canViewSpecialBalanceRole = can("view_special_account_balance");
+  const canManageSpecial = can("manage_special_bank_accounts");
   const highlightSearch = searchTerm.trim();
 
   const filteredAndSortedAccounts = useMemo(() => {
@@ -141,6 +145,9 @@ export function AccountList({
                 Number(account.balance) || 0,
                 bankDrCrPerspective
               );
+              const canViewSpecialBalance =
+                canManageSpecial ||
+                userCanViewSpecialAccountBalance(account, user?.email, canViewSpecialBalanceRole);
               const cardContent = (
                 <div className="pl-master-list-row">
                   <div className="pl-master-list-row-leading">
@@ -206,7 +213,9 @@ export function AccountList({
                         (displayBalance >= 0 ? "text-green-700" : "text-red-700")
                     )}
                   >
-                    {(isSpecial && !canViewSpecialBalance) ? '*****' : formatCurrency(displayBalance, { showDrCr: true })}
+                    {isSpecial && !canViewSpecialBalance
+                      ? "*****"
+                      : formatCurrency(displayBalance, { showDrCr: true })}
                   </p>
                 </div>
               );

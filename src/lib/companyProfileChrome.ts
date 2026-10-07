@@ -24,7 +24,48 @@ export const companyProfileTabsTrigger =
 /** Company Profile + Manage Sharing outer card shell */
 export const settingsDetailCardShell = cn(
   companyProfilePageBg,
-  "overflow-hidden rounded-lg border border-black shadow-none"
+  "overflow-hidden rounded-lg border !border-emerald-300/55 shadow-none"
+);
+
+/** Inputs / combobox inside company profile chrome — beat theme-pro #000 border */
+/** Shared marker — `globals.css` end + 4K overrides target `.pl-company-profile-field` */
+export const companyProfileFieldClass = cn(
+  "pl-company-profile-field shadow-none focus-visible:ring-emerald-200/50 focus-visible:ring-offset-0"
+);
+
+/** Manage Sharing — theme/4K `.border` black override se bachne ke liye border-0 + inset ring */
+export const companyProfileManageShareFieldClass = cn(
+  companyProfileFieldClass,
+  "border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+);
+
+/** Manage Sharing / Special bank picker — `globals.css` emerald field (Special section jaisa) */
+export const companyProfileManageShareFieldProps = {
+  "data-pl-manage-share-field": "",
+} as const;
+
+/** Manage Sharing / Role Permissions — soft dividers (background-toned, not black) */
+export const companyProfileSoftDivider = "border-emerald-300/55";
+export const companyProfileSoftFieldBorder = "border-emerald-300/60";
+
+/** Nested panel on emerald body — sky/blue ribbon + matching border */
+export const companyProfileNestedBluePanel = cn(
+  "pl-company-profile-bordered-panel rounded-lg border !border-sky-200/80 bg-card shadow-none pl-chrome-tone-blue"
+);
+
+/** Permission / settings chip — white-neutral shell + matching border */
+export const companyProfilePermissionChipShell = cn(
+  "pl-company-profile-bordered-panel rounded-md border !border-emerald-300/55 bg-card/95 shadow-none pl-chrome-tone-rose"
+);
+
+/** Inline control box on emerald body (date limits, toggles) */
+export const companyProfileNestedRosePanel = cn(
+  "pl-company-profile-bordered-panel rounded-lg border !border-emerald-300/55 bg-card/95 shadow-none pl-chrome-tone-rose"
+);
+
+/** Role Permissions — plan / info strip (same emerald shell as main card) */
+export const companyProfileInfoBannerClass = cn(
+  "pl-company-profile-bordered-panel rounded-lg border !border-emerald-300/55 bg-muted/30 p-3 text-sm font-semibold text-foreground"
 );
 
 /** Manage Sharing / Role Permissions body — green fill only (tone class border corners pe card line chipka deta) */

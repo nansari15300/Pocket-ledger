@@ -14,7 +14,7 @@ export function BankAccountToggleFlagsRow<T extends FieldValues>({
   className?: string;
 }) {
   return (
-    <div className={cn("grid grid-cols-1 gap-3 sm:grid-cols-2", className)}>
+    <div className={cn("grid grid-cols-2 gap-[3px] [&>*]:min-w-0", className)}>
       <AllowVoucherMinusBalanceField control={control} />
       <IsClearingAccountField control={control} />
     </div>

@@ -302,8 +302,10 @@ export function rpDialogRowSelectionKey(side: "receivables" | "payables", row: R
 
 /** Per-company outstanding collection deadlines — localStorage `YYYY-MM-DD` (local calendar) keyed by `rpDialogRowSelectionKey`. */
 export type RpDeadlinesMap = Record<string, string>;
+export type RpDeadlineNarrationsMap = Record<string, string>;
 
 const RP_DEADLINES_STORAGE_PREFIX = "pl_rp_collection_deadlines_v1_";
+const RP_DEADLINE_NARRATIONS_STORAGE_PREFIX = "pl_rp_collection_deadline_narrations_v1_";
 
 export function rpDeadlinesStorageKey(companyId: string): string {
   return `${RP_DEADLINES_STORAGE_PREFIX}${companyId}`;
@@ -347,6 +349,38 @@ export function writeRpDeadlinesToStorage(companyId: string, map: RpDeadlinesMap
   if (!companyId || typeof window === "undefined") return;
   try {
     window.localStorage.setItem(rpDeadlinesStorageKey(companyId), JSON.stringify(map));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+export function readRpDeadlineNarrationsFromStorage(companyId: string): RpDeadlineNarrationsMap {
+  if (!companyId || typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(`${RP_DEADLINE_NARRATIONS_STORAGE_PREFIX}${companyId}`);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: RpDeadlineNarrationsMap = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (key && typeof value === "string" && value.trim()) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function writeRpDeadlineNarrationsToStorage(
+  companyId: string,
+  map: RpDeadlineNarrationsMap
+): void {
+  if (!companyId || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      `${RP_DEADLINE_NARRATIONS_STORAGE_PREFIX}${companyId}`,
+      JSON.stringify(map)
+    );
   } catch {
     /* quota / private mode */
   }
@@ -440,6 +474,45 @@ export function filterRpDialogSectionsForDeadlineDue(
     .filter((section) => section.rows.length > 0);
 }
 
+function rpDialogRowMatchesDeadlineDate(
+  side: "receivables" | "payables",
+  row: RpDialogRow,
+  deadlines: RpDeadlinesMap,
+  dateYmd: string | null
+): boolean {
+  const ymd = deadlines[rpDialogRowSelectionKey(side, row)];
+  if (!ymd || !rpDialogRowHasOutstandingBalance(row)) return false;
+  return dateYmd === null || ymd === dateYmd;
+}
+
+export function filterRpDialogSectionsForDeadlineDate(
+  sections: RpDialogSection[],
+  side: "receivables" | "payables",
+  deadlines: RpDeadlinesMap,
+  dateYmd: string | null
+): RpDialogSection[] {
+  return sections
+    .map((section) => {
+      const rows = section.rows.flatMap((row) => {
+        if (row.isIcPeerCompanyGroup && row.icChildren?.length) {
+          const icChildren = row.icChildren.filter((child) =>
+            rpDialogRowMatchesDeadlineDate(side, child, deadlines, dateYmd)
+          );
+          if (icChildren.length === 0) return [];
+          return [{
+            ...row,
+            icChildren,
+            balance: icChildren.reduce((sum, child) => sum + (Number(child.balance) || 0), 0),
+            secondaryLabel: icPeerCompanyGroupSecondaryLabel(icChildren.length),
+          }];
+        }
+        return rpDialogRowMatchesDeadlineDate(side, row, deadlines, dateYmd) ? [row] : [];
+      });
+      return { ...section, rows, rowCount: rpDialogLeafCount(rows) };
+    })
+    .filter((section) => section.rows.length > 0);
+}
+
 export function countRpDeadlineDueAccounts(
   summary: ReceivablesPayablesFinancialSummary,
   categoryFilter: RpCategoryFilter,
@@ -455,6 +528,21 @@ export function countRpDeadlineDueAccounts(
         0
       );
     }
+  }
+  return n;
+}
+
+export function countRpDeadlineAccountsForDate(
+  summary: ReceivablesPayablesFinancialSummary,
+  categoryFilter: RpCategoryFilter,
+  deadlines: RpDeadlinesMap,
+  dateYmd: string | null
+): number {
+  let n = 0;
+  for (const side of ["receivables", "payables"] as const) {
+    const sections = buildRpDialogSections(side, summary, categoryFilter);
+    const filtered = filterRpDialogSectionsForDeadlineDate(sections, side, deadlines, dateYmd);
+    n += filtered.reduce((sum, section) => sum + section.rowCount, 0);
   }
   return n;
 }

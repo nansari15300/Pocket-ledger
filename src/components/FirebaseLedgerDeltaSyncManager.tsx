@@ -68,7 +68,7 @@ export function FirebaseLedgerDeltaSyncManager() {
   useEffect(() => {
     // Single live feed in deltaa — no collection onSnapshot (web/EXE/APK/iOS).
     if (!shouldBindFirebaseLedgerChangeFeed()) return;
-    if (!isFirebaseLedgerCompanyDataSyncEnabled(companyId)) return;
+    if (!isFirebaseLedgerCompanyDataSyncEnabled(companyId, company)) return;
     if (typeof navigator !== "undefined" && !navigator.onLine) return;
     if (!companyId?.trim() || !company || !isCloudBackedCompanyShape(company)) return;
     if (activeCollections.size === 0) return;

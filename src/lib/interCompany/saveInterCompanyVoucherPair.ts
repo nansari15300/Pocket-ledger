@@ -934,7 +934,10 @@ export async function saveInterCompanyVoucherPair(
       sourcePayload,
       input.existingSourceVoucherId || null,
       undefined,
-      icHistoryOpts
+      {
+        ...(icHistoryOpts || {}),
+        preserveApprovalOnInterCompanyEdit: existingSourceApproved,
+      }
     );
     sourceSavedId = sourceSaved.id;
     targetLink.peerVoucherId = sourceSavedId;
@@ -944,7 +947,10 @@ export async function saveInterCompanyVoucherPair(
       { ...targetPayload, interCompanyLink: targetLink },
       resolvedExistingTargetVoucherId,
       undefined,
-      isCreate || !resolvedExistingTargetVoucherId ? icHistoryOpts : undefined
+      {
+        ...(isCreate || !resolvedExistingTargetVoucherId ? icHistoryOpts || {} : {}),
+        preserveApprovalOnInterCompanyEdit: existingTargetApproved,
+      }
     );
     targetSavedId = targetSaved.id;
   } else if (editingSide === "source") {
@@ -956,7 +962,8 @@ export async function saveInterCompanyVoucherPair(
         interCompanyPeerPending: null,
       },
       input.existingSourceVoucherId || null,
-      sourceSaveKeepApproved
+      sourceSaveKeepApproved,
+      { preserveApprovalOnInterCompanyEdit: existingSourceApproved }
     );
     sourceSavedId = sourceSaved.id;
     targetLink.peerVoucherId = sourceSavedId;
@@ -1037,7 +1044,8 @@ export async function saveInterCompanyVoucherPair(
                 : null,
       },
       resolvedExistingTargetVoucherId,
-      targetSaveKeepApproved
+      targetSaveKeepApproved,
+      { preserveApprovalOnInterCompanyEdit: existingTargetApproved }
     );
     targetSavedId = targetSaved.id;
 

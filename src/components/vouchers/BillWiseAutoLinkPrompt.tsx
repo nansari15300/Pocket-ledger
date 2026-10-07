@@ -632,6 +632,8 @@ export function usePartyBillWiseAutoLinkPrompt(opts: {
   /** Signed books opening: Dr > 0, Cr < 0. */
   ledgerOpeningBalance?: number;
   openingBalanceOutstanding?: number;
+  /** Ledger open par dialog khud na khule — sirf toolbar / manual Auto Link. */
+  autoPrompt?: boolean;
 }) {
   const {
     enabled,
@@ -643,6 +645,7 @@ export function usePartyBillWiseAutoLinkPrompt(opts: {
     ledgerKind = "party",
     ledgerOpeningBalance = 0,
     openingBalanceOutstanding,
+    autoPrompt = false,
   } = opts;
   const [open, setOpen] = React.useState(false);
   const [proposal, setProposal] = React.useState<BillWiseAutoLinkProposal | null>(null);
@@ -684,11 +687,9 @@ export function usePartyBillWiseAutoLinkPrompt(opts: {
       return;
     }
 
-    // The toolbar still opens this full ledger review when every row is already
-    // linked / no new pair is suggested. Only automatic prompting needs rows.
-    if (!built.rows.length) {
-      setProposal(built);
-      setOpen(false);
+    // Toolbar manual Auto Link: proposal hamesha hydrate; auto popup band (autoPrompt=false).
+    setProposal(built);
+    if (!autoPrompt || !built.rows.length) {
       return;
     }
 
@@ -700,12 +701,9 @@ export function usePartyBillWiseAutoLinkPrompt(opts: {
         fingerprint: built.fingerprint,
       })
     ) {
-      setProposal(built);
-      setOpen(false);
       return;
     }
 
-    setProposal(built);
     if (promptedFpRef.current === built.fingerprint) return;
     promptedFpRef.current = built.fingerprint;
     const t = window.setTimeout(() => setOpen(true), 600);
@@ -721,6 +719,7 @@ export function usePartyBillWiseAutoLinkPrompt(opts: {
     vouchers,
     ledgerOpeningBalance,
     openingBalanceOutstanding,
+    autoPrompt,
   ]);
 
   return { open, setOpen, proposal };

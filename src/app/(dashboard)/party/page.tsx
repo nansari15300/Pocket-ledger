@@ -1772,7 +1772,6 @@ function PartyPageContent() {
           {/* Transaction list – mobile cards; scroll-touch + inline for APK/WebView touch scroll */}
           <div
             className="flex-1 min-h-0 overflow-auto scroll-touch"
-            data-pl-mobile-pull-scroll=""
           >
             <TransactionsTable
               transactions={mobileFilteredOverdue}

@@ -19,7 +19,7 @@ import {
   useMasterListRowMotion,
 } from "@/hooks/useMasterListRowMotion";
 import { GROUP_LIST_CHILD_INDENT_CLASS } from "@/lib/groupListExpand";
-import type { RpDeadlinesMap, RpDialogRow, RpDialogSection, RpEntityKind } from "@/lib/receivablesPayablesDialogUi";
+import type { RpDeadlineNarrationsMap, RpDeadlinesMap, RpDialogRow, RpDialogSection, RpEntityKind } from "@/lib/receivablesPayablesDialogUi";
 import {
   formatRpDeadlineYmd,
   parseRpDeadlineYmd,
@@ -244,6 +244,7 @@ type ReceivablesPayablesDialogEntityListProps = {
   onSelectRow?: (side: "receivables" | "payables", row: RpDialogRow) => void;
   onOpenRow?: (side: "receivables" | "payables", row: RpDialogRow) => void;
   deadlines?: RpDeadlinesMap;
+  deadlineNarrations?: RpDeadlineNarrationsMap;
   onDeadlineChange?: (side: "receivables" | "payables", row: RpDialogRow, ymd: string | null) => void;
   showDeadlineControls?: boolean;
 };
@@ -350,6 +351,7 @@ function RpDialogEntityRow({
   highlightQuery = "",
   formatAmountText,
   deadlines,
+  deadlineNarrations,
   onDeadlineChange,
   showDeadlineControls,
 }: {
@@ -369,6 +371,7 @@ function RpDialogEntityRow({
   onOpen?: () => void;
   highlightQuery?: string;
   deadlines?: RpDeadlinesMap;
+  deadlineNarrations?: RpDeadlineNarrationsMap;
   onDeadlineChange?: (side: "receivables" | "payables", row: RpDialogRow, ymd: string | null) => void;
   showDeadlineControls?: boolean;
 }) {
@@ -376,6 +379,12 @@ function RpDialogEntityRow({
   const amountDisplay = highlightQuery
     ? renderRpHighlightedAmountText(amountText, highlightQuery)
     : formatAmount(row.balance, side === "payables");
+  const { formatDateBySystem } = useDate();
+  const deadlineKey = rpDialogRowSelectionKey(side, row);
+  const deadlineYmd = deadlines?.[deadlineKey];
+  const deadlineDate = deadlineYmd ? parseRpDeadlineYmd(deadlineYmd) : null;
+  const deadlineNarration = deadlineNarrations?.[deadlineKey] ||
+    "Need to call the party to ask payment";
   return (
     <motion.li
       layoutDependency={displayOrderKey}
@@ -400,6 +409,14 @@ function RpDialogEntityRow({
             {row.secondaryLabel ? (
               <p className="text-[11px] font-normal leading-tight text-muted-foreground">
                 {renderRpHighlightedText(row.secondaryLabel, highlightQuery)}
+              </p>
+            ) : null}
+            {deadlineDate ? (
+              <p
+                className="line-clamp-1 text-[10px] font-normal leading-tight text-muted-foreground"
+                title={`${formatDateBySystem(deadlineDate)} — ${deadlineNarration}`}
+              >
+                {formatDateBySystem(deadlineDate)} — {renderRpHighlightedText(deadlineNarration, highlightQuery)}
               </p>
             ) : null}
           </div>
@@ -539,6 +556,7 @@ function RpIcCompanyGroupRow({
   highlightQuery = "",
   formatAmountText,
   deadlines,
+  deadlineNarrations,
   onDeadlineChange,
   showDeadlineControls,
 }: {
@@ -558,6 +576,7 @@ function RpIcCompanyGroupRow({
   onOpenRow?: (side: "receivables" | "payables", row: RpDialogRow) => void;
   highlightQuery?: string;
   deadlines?: RpDeadlinesMap;
+  deadlineNarrations?: RpDeadlineNarrationsMap;
   onDeadlineChange?: (side: "receivables" | "payables", row: RpDialogRow, ymd: string | null) => void;
   showDeadlineControls?: boolean;
 }) {
@@ -610,6 +629,7 @@ function RpIcCompanyGroupRow({
                     onOpen={() => onOpenRow?.(side, child)}
                     highlightQuery={highlightQuery}
                     deadlines={deadlines}
+                    deadlineNarrations={deadlineNarrations}
                     onDeadlineChange={onDeadlineChange}
                     showDeadlineControls={showDeadlineControls}
                   />
@@ -636,6 +656,7 @@ export function ReceivablesPayablesDialogEntityList({
   onSelectRow,
   onOpenRow,
   deadlines,
+  deadlineNarrations,
   onDeadlineChange,
   showDeadlineControls = true,
 }: ReceivablesPayablesDialogEntityListProps) {
@@ -845,6 +866,7 @@ export function ReceivablesPayablesDialogEntityList({
                         highlightQuery={highlightQuery}
                         formatAmountText={formatAmountText}
                         deadlines={deadlines}
+                        deadlineNarrations={deadlineNarrations}
                         onDeadlineChange={onDeadlineChange}
                         showDeadlineControls={showDeadlineControls}
                       />
@@ -866,6 +888,7 @@ export function ReceivablesPayablesDialogEntityList({
                       onOpen={() => onOpenRow?.(side, row)}
                       highlightQuery={highlightQuery}
                       deadlines={deadlines}
+                      deadlineNarrations={deadlineNarrations}
                       onDeadlineChange={onDeadlineChange}
                       showDeadlineControls={showDeadlineControls}
                     />

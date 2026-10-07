@@ -343,6 +343,8 @@ export type Company = {
     fiscalMergePartitionAtIsos?: string[] | null;
     fiscalMergeTickedFyKeys?: string[] | null;
     fiscalPartitionLabel?: string | null;
+    /** Fiscal split root version used to update device-local settings from newer cloud changes. */
+    fiscalSplitUpdatedAtMs?: number | null;
     /** Sale/Purchase line "+ Add unit" — persisted labels (deduped) for dropdown without retyping. */
     customUnits?: string[];
     /**
@@ -379,6 +381,22 @@ function mergeCompanyWithLocalFiscal(base: Company | null, cid: string | null): 
     local.fiscalSplitConfiguredByUser ||
     (local.fiscalSplitMode === "merge" &&
       Boolean(local.fiscalMergePartitionAtIsos?.length || local.fiscalMergePartitionAtIso));
+  const cloudUpdatedAtMs = Number(base.fiscalSplitUpdatedAtMs) || 0;
+  const localUpdatedAtMs = Number(local.fiscalSplitUpdatedAtMs) || 0;
+  const cloudIsNewer = cloudUpdatedAtMs > localUpdatedAtMs;
+
+  if (cloudIsNewer) {
+    const useCloudMerge = cloudMerge && Boolean(cloudIsos?.length);
+    const iso = useCloudMerge ? cloudIsos?.[0] ?? null : null;
+    return {
+      ...base,
+      fiscalSplitMode: useCloudMerge ? "merge" : "off",
+      fiscalMergePartitionAt: iso ? { toDate: () => new Date(iso) } : null,
+      fiscalMergePartitionAtIsos: useCloudMerge ? cloudIsos : null,
+      fiscalMergeTickedFyKeys: useCloudMerge ? base.fiscalMergeTickedFyKeys ?? null : null,
+      fiscalPartitionLabel: useCloudMerge ? base.fiscalPartitionLabel ?? null : null,
+    };
+  }
 
   if (!localConfigured && !localStored && cloudMerge && cloudIsos) {
     const iso = cloudIsos[0] ?? null;
@@ -773,9 +791,9 @@ const LIST_RECOVERY_MAX_DEFER_PULSES = 24;
 
 /** Refresh boot: gate/list/server-access settle hone se pehle pinned company mat clear karo (EXE SQLite/Firestore slow). */
 function companyRefreshBootGraceMs(): number {
-  if (isElectronDesktopApp()) return 6500;
-  if (isStaticAppBuild() || isCapacitorNativeApp()) return 4500;
-  return 2500;
+  if (isElectronDesktopApp()) return 12_000;
+  if (isStaticAppBuild() || isCapacitorNativeApp()) return 9000;
+  return 4500;
 }
 
 function shouldDeferRefreshBootCompanyClear(
@@ -3357,7 +3375,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
                     const again = readSelectedCompanyId();
                     if (again) {
                         plNavDbg("useCompany.redirectTimer:storedReappeared", { hint: plNavDbgIdHint(again) });
-                        setCompanyIdState(again);
+                        setCompanyId(again);
                         return;
                     }
                     const live = normalizeAppPath(getBrowserPathname());
@@ -3383,7 +3401,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
                 }, REDIRECT_DELAY_MS);
                 return () => clearTimeout(id);
             } else {
-                setCompanyIdState(stored);
+                setCompanyId(stored);
             }
         } catch (_) {
             const live = normalizeAppPath(getBrowserPathname());
@@ -3403,7 +3421,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             }
         }
     }
-  }, [companyId, pathname, router, user, authLoading, loading]);
+  }, [companyId, pathname, router, user, authLoading, loading, setCompanyId]);
 
   /** SuperAdmin: /admin vs main app — list sirf filter se update; Firestore/SQLite route pe dubara nahi. */
   useEffect(() => {

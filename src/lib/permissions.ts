@@ -27,7 +27,6 @@ export type Permission =
   | "view_recent_transactions"
   | "manage_special_bank_accounts"
   | "view_special_bank_accounts"
-  | "view_owner_bank_account_details"
   | "view_special_account_balance"
   | "edit_item_rates_in_vouchers"
   | "edit_voucher_numbers"
@@ -133,9 +132,8 @@ export const PermissionGroups: PermissionGroup[] = [
         permissions: [
             { key: "manage_special_bank_accounts", label: "Manage Special Bank Accounts" },
             { key: "view_special_bank_accounts", label: "View Special Bank Accounts" },
-            { key: "view_owner_bank_account_details", label: "View Owner Bank Account Details" },
             { key: "view_special_account_balance", label: "View Special Account Balance" },
-            { key: "freeze_master_account", label: "Freeze Master Account (Party / Bank / Staff / Tax / Expense)" },
+            { key: "freeze_master_account", label: "Freeze Masters" },
         ],
     },
     {

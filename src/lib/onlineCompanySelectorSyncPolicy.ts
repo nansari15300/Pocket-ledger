@@ -52,7 +52,7 @@ export function isOnlineCompanyLedgerCloudSyncAllowed(
   if (!id) return false;
   if (!companyUsesOnlineSelectorSyncTicks(company ?? null)) return true;
   if (isFirebaseLedgerDataSyncDisabled()) return false;
-  return isFirebaseLedgerCompanyDataSyncEnabled(id);
+  return isFirebaseLedgerCompanyDataSyncEnabled(id, company ?? null);
 }
 
 /**
@@ -69,7 +69,7 @@ export function isOnlineCompanyFilesUiAllowed(
   if (company != null && !companyUsesOnlineSelectorSyncTicks(company)) return true;
   if (isFirebaseLedgerDataSyncDisabled()) return true;
   if (company != null && companyUsesOnlineSelectorSyncTicks(company)) {
-    return isFirebaseLedgerCompanyAttachmentSyncEnabled(id);
+    return isFirebaseLedgerCompanyAttachmentSyncEnabled(id, company);
   }
   // No company row: Data tick on ⇒ Files tick required for download; else don't block unknown/local.
   const entry = getFirebaseLedgerCompanySyncEntry(id);
@@ -95,7 +95,7 @@ export function isOnlineCompanyAttachmentUploadAllowed(
   if (company != null && !companyUsesOnlineSelectorSyncTicks(company)) return true;
   if (isFirebaseLedgerDataSyncDisabled()) return true;
   if (company != null && companyUsesOnlineSelectorSyncTicks(company)) {
-    return isFirebaseLedgerCompanyAttachmentUploadEnabled(id);
+    return isFirebaseLedgerCompanyAttachmentUploadEnabled(id, company);
   }
   const entry = getFirebaseLedgerCompanySyncEntry(id);
   if (entry.data === true) return true;

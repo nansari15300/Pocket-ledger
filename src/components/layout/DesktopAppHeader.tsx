@@ -5,6 +5,7 @@ import { STAFF_ENTITY_ADD_LABEL } from "@/lib/staffEntityDisplayName";
 import { StaffEntityNavIcon } from "@/components/entity/StaffEntityIcon";
 import * as React from "react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { useApkPhoneFormFactor } from "@/hooks/useApkPhoneFormFactor";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -2389,6 +2390,7 @@ export function DesktopAppHeader() {
 
   /** Mobile: lambi toolbar — expand/chevron hata kar horizontal swipe scroll (footer toggle bhi hataya user ne) */
   const headerIsMobile = useIsMobile();
+  const isApkPhoneFormFactor = useApkPhoneFormFactor();
 
   /** Electron `.exe`: pink header ki quick-action strip (Add Sale…) hide/show — localStorage + View menu sync */
   const isElectronDesk = isElectronDesktopApp();
@@ -2442,9 +2444,11 @@ export function DesktopAppHeader() {
           <div className="flex w-full min-w-0 items-center">
             {/* Sidebar ↔ company: exactly 4px (`mr-1`); outer header se sidebar ~2px. */}
             {/* `data-pl-no-edge-swipe-capture`: document capture `preventDefault` edge strip is touch se header button na mare */}
-            <div className="mr-1 flex shrink-0 items-center" data-pl-no-edge-swipe-capture>
-              <SidebarTrigger className="touch-manipulation" />
-            </div>
+            {isApkPhoneFormFactor ? null : (
+              <div className="mr-1 flex shrink-0 items-center" data-pl-no-edge-swipe-capture>
+                <SidebarTrigger className="touch-manipulation" />
+              </div>
+            )}
             <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
               <div className="min-w-0 flex-1">
                 <HeaderCompanyPickerIsland
@@ -2460,7 +2464,7 @@ export function DesktopAppHeader() {
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <DateSystemSwitcher />
-                <HeaderViewModeToggle />
+                {isApkPhoneFormFactor ? null : <HeaderViewModeToggle />}
                 <MobileReportButtonsOnly />
                 <AddNewButtonOnReportPage />
               </div>
@@ -2475,7 +2479,7 @@ export function DesktopAppHeader() {
           <div className="flex w-full min-w-0 flex-wrap items-center gap-2">
             {/* `min-w-0` ta company `truncate` narrow window par kaam kare — sidebar↔company 4px (`gap-1`). */}
             <div className="flex min-w-0 items-center gap-1">
-              <SidebarTrigger />
+              {isApkPhoneFormFactor ? null : <SidebarTrigger />}
               {isElectronDesk ? (
                 <Button
                   type="button"
@@ -2509,7 +2513,7 @@ export function DesktopAppHeader() {
                 onCompanyCreated={onCompanyCreated}
               />
               <DateSystemSwitcher />
-              <HeaderViewModeToggle />
+              {isApkPhoneFormFactor ? null : <HeaderViewModeToggle />}
             </div>
 
             {!(isElectronDesk && quickActionsCollapsed) ? <HeaderActions /> : null}

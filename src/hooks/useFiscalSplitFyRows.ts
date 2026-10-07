@@ -13,7 +13,7 @@ export function useFiscalSplitFyRows() {
   const [fyRows, setFyRows] = useState<FiscalYearMergeRow[]>([]);
   const [voucherDateFrom, setVoucherDateFrom] = useState<Date | null>(null);
   const [voucherDateTo, setVoucherDateTo] = useState<Date | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState<FiscalSplitFyLoadSource | null>(null);
   const [firestoreScanned, setFirestoreScanned] = useState(0);
@@ -40,10 +40,28 @@ export function useFiscalSplitFyRows() {
     setFirestoreScanned(0);
     setSqliteScanned(0);
     setSqliteTotal(0);
+    const applyResult = (result: Awaited<ReturnType<typeof loadFiscalSplitFyRows>>) => {
+      setFyRows(result.rows);
+      setVoucherDateFrom(result.voucherDateFrom);
+      setVoucherDateTo(result.voucherDateTo);
+      setSource(result.source);
+    };
     try {
       const result = await loadFiscalSplitFyRows({
         companyId: cid,
         company: row,
+        onLateUpdate: (lateResult) => {
+          if (gen !== loadGenRef.current) return;
+          console.info("[FY-SCAN] late index update applied", {
+            companyId: cid,
+            source: lateResult.source,
+            rowCount: lateResult.rows.length,
+            fyKeys: lateResult.rows.map((fyRow) => fyRow.fyKey).slice(0, 32),
+            minDateMs: lateResult.voucherDateFrom?.getTime() ?? null,
+            maxDateMs: lateResult.voucherDateTo?.getTime() ?? null,
+          });
+          applyResult(lateResult);
+        },
         onFirestoreProgress: (n) => {
           if (gen === loadGenRef.current) setFirestoreScanned(n);
         },
@@ -59,11 +77,11 @@ export function useFiscalSplitFyRows() {
         source: result.source,
         rowCount: result.rows.length,
         vouchersScanned: result.vouchersScanned,
+        fyKeys: result.rows.map((fyRow) => fyRow.fyKey).slice(0, 32),
+        minDateMs: result.voucherDateFrom?.getTime() ?? null,
+        maxDateMs: result.voucherDateTo?.getTime() ?? null,
       });
-      setFyRows(result.rows);
-      setVoucherDateFrom(result.voucherDateFrom);
-      setVoucherDateTo(result.voucherDateTo);
-      setSource(result.source);
+      applyResult(result);
     } catch (err) {
       if (gen !== loadGenRef.current) return;
       console.warn("[useFiscalSplitFyRows] load failed", err);
@@ -92,6 +110,7 @@ export function useFiscalSplitFyRows() {
     const t = raf == null ? window.setTimeout(start, 0) : null;
     return () => {
       cancelled = true;
+      loadGenRef.current += 1;
       if (raf != null) window.cancelAnimationFrame(raf);
       if (t != null) window.clearTimeout(t);
     };

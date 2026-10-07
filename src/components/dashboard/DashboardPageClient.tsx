@@ -90,7 +90,15 @@ import { openPrintDirect } from "@/lib/printDirect";
 import usePermissions from '@/hooks/usePermissions';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DaybookReport } from '@/components/reports/DaybookReport';
+import {
+  DaybookAccountDayPeekDialog,
+  daybookSummaryAccountRowCn,
+} from '@/components/reports/DaybookAccountDayPeekDialog';
+import type { Account } from '@/components/bank-cash/types';
 import { useFyScopedVouchers } from '@/hooks/useFyScopedVouchers';
+import { useVouchers } from '@/hooks/useVouchers';
+import { getTransactionAmounts as getLedgerTransactionAmounts } from '@/hooks/use-transactions';
+import { computeAccountLedgerDaySummary } from '@/lib/accountLedgerDaySummary';
 import { getOnlineCompanySyncStatusRibbon } from '@/lib/onlineCompanySelectorSyncPolicy';
 import { FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT } from '@/lib/firebaseLedgerCompanySyncPrefs';
 import Link from 'next/link';
@@ -419,11 +427,24 @@ const [mode, setMode] = useState<'all' | 'custom'>('all');
 // ------------------------------------
 
 const BankCashSummary = () => {
-    const { processedAccounts, vouchers } = useFyScopedVouchers();
+    const { processedAccounts, processedTaxes, vouchers: periodVouchers } = useFyScopedVouchers();
+    const { vouchers: ledgerVouchers } = useVouchers();
     const { dateSystem, formatCurrency } = useDate();
+    const [selectedSummaryRowId, setSelectedSummaryRowId] = React.useState<string | null>(null);
+    const [accountDayPeek, setAccountDayPeek] = React.useState<{
+      account: Account;
+      dateRange: DateRange | undefined;
+    } | null>(null);
     const [bankCashDateRange, setBankCashDateRange] = React.useState<DateRange | undefined>(() =>
       getCurrentMonthDateRange(dateSystem)
     );
+
+    const openAccountDayPeek = (accountId: string, rowKey: string) => {
+      const account = (processedAccounts || []).find((item) => String(item.id) === String(accountId));
+      if (!account) return;
+      setSelectedSummaryRowId(rowKey);
+      setAccountDayPeek({ account: account as Account, dateRange: bankCashDateRange });
+    };
 
     useEffect(() => {
       setBankCashDateRange((range) => (range?.from ? getCurrentMonthDateRange(dateSystem) : range));
@@ -431,60 +452,49 @@ const BankCashSummary = () => {
 
 
     const bankCashSummary = React.useMemo(() => {
-        if (!processedAccounts || !vouchers) return { cashAccounts: [], bankAccounts: [], totalBankInflow: 0, totalBankOutflow: 0, totalCashInflow: 0, totalCashOutflow: 0, totalClosingBalance: 0 };
+        if (!processedAccounts || !periodVouchers || !ledgerVouchers) return { cashAccounts: [], bankAccounts: [], totalBankInflow: 0, totalBankOutflow: 0, totalCashInflow: 0, totalCashOutflow: 0, totalClosingBalance: 0 };
     
         const fromDate = bankCashDateRange?.from ? startOfDay(bankCashDateRange.from) : null;
         const toDate = bankCashDateRange?.to ? endOfDay(bankCashDateRange.to) : fromDate ? endOfDay(fromDate) : null;
+        const today = new Date();
     
         const summaryAccounts = processedAccounts.map((acc) => {
-          const newAcc = { ...acc, inflow: 0, outflow: 0, balance: Number(acc.openingBalance) || 0 };
-          
-          const prePeriodTx = vouchers.filter(v => {
-            if (!fromDate) return false;
-            const txDate = safeToDate(v.date);
-            return txDate && txDate < fromDate;
-          });
-    
-          let openingForPeriod = Number(acc.openingBalance) || 0;
-          prePeriodTx.forEach(v => {
-            const amount = v.total || v.amount || 0;
-             if (['payment_in', 'direct_income', 'sale'].includes(v.type) && v.accountId === acc.id) openingForPeriod += amount;
-             if (['payment_out', 'direct_expense', 'purchase'].includes(v.type) && v.accountId === acc.id) openingForPeriod -= amount;
-             if (v.type === 'contra') {
-                if (v.toAccountId === acc.id) openingForPeriod += amount;
-                if (v.fromAccountId === acc.id) openingForPeriod -= amount;
-             }
-             if (v.type === "journal" && Array.isArray(v.entries)) {
-              const entry = v.entries.find((e: any) => e.accountId === acc.id);
-              if (entry) openingForPeriod += Number(entry.debit || 0) - Number(entry.credit || 0);
+          const newAcc = { ...acc, inflow: 0, outflow: 0, balance: 0 };
+          const ledgerClosing = computeAccountLedgerDaySummary(
+            acc,
+            ledgerVouchers,
+            today,
+            null,
+            (voucher) => {
+              const { debit, credit } = getLedgerTransactionAmounts(
+                voucher,
+                "account",
+                acc,
+                "amount",
+                processedAccounts,
+                processedTaxes
+              );
+              return { debit: Number(debit) || 0, credit: Number(credit) || 0 };
             }
+          ).closing;
+
+          periodVouchers.forEach((voucher) => {
+            const txDate = safeToDate(voucher.date);
+            if (fromDate && toDate && !(txDate && txDate >= fromDate && txDate <= toDate)) return;
+
+            const { debit, credit } = getLedgerTransactionAmounts(
+              voucher,
+              "account",
+              acc,
+              "amount",
+              processedAccounts,
+              processedTaxes
+            );
+            newAcc.inflow += Number(debit || 0);
+            newAcc.outflow += Number(credit || 0);
           });
-          newAcc.balance = openingForPeriod;
-    
-          const periodTx = vouchers.filter(v => {
-              if (!fromDate || !toDate) return true;
-              const txDate = safeToDate(v.date);
-              return txDate && txDate >= fromDate && txDate <= toDate;
-          });
-    
-          periodTx.forEach((v) => {
-            const amount = v.total || v.amount || 0;
-            if (['payment_in', 'direct_income', 'sale'].includes(v.type) && v.accountId === acc.id) newAcc.inflow += amount;
-            if (['payment_out', 'direct_expense', 'purchase', 'salary', 'add_salary'].includes(v.type) && v.accountId === acc.id) newAcc.outflow += amount;
-            if (v.type === 'contra') {
-              if (v.toAccountId === acc.id) newAcc.inflow += amount;
-              if (v.fromAccountId === acc.id) newAcc.outflow += amount;
-            }
-            if (v.type === "journal" && Array.isArray(v.entries)) {
-              const entry = v.entries.find((e: any) => e.accountId === acc.id);
-              if (entry) {
-                newAcc.inflow += Number(entry.debit || 0);
-                newAcc.outflow += Number(entry.credit || 0);
-              }
-            }
-          });
-          
-          newAcc.balance += newAcc.inflow - newAcc.outflow;
+
+          newAcc.balance = ledgerClosing;
           return newAcc;
         }).sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
     
@@ -499,9 +509,10 @@ const BankCashSummary = () => {
         const totalClosingBalance = [...bankAccounts, ...cashAccounts].reduce((sum, acc) => sum + acc.balance, 0);
 
         return { cashAccounts, bankAccounts, totalBankInflow, totalBankOutflow, totalCashInflow, totalCashOutflow, totalClosingBalance };
-      }, [processedAccounts, vouchers, bankCashDateRange]);
+      }, [processedAccounts, processedTaxes, periodVouchers, ledgerVouchers, bankCashDateRange]);
 
     return (
+      <>
         <Card
             id="bank-cash-summary-area"
             // Dashboard top cards: give each card a different soft ribbon tone.
@@ -537,9 +548,24 @@ const BankCashSummary = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                        <AnimatePresence>
-                            {bankCashSummary.bankAccounts.map(acc => (
-                                <motion.tr key={acc.id} layout initial={false} exit={{ transition: { duration: 0 } }} className="border-b">
+                        {bankCashSummary.bankAccounts.map(acc => {
+                          const rowKey = `bank:${acc.id}`;
+                          const selected = selectedSummaryRowId === rowKey;
+                          return (
+                                <TableRow
+                                  key={rowKey}
+                                  aria-selected={selected}
+                                  data-pl-daybook-summary-selected={selected ? "" : undefined}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setSelectedSummaryRowId(rowKey);
+                                  }}
+                                  onDoubleClick={(event) => {
+                                    event.stopPropagation();
+                                    openAccountDayPeek(String(acc.id), rowKey);
+                                  }}
+                                  className={cn(daybookSummaryAccountRowCn(selected), "pl-daybook-summary-row", selected && "pl-daybook-summary-row-selected", "border-b")}
+                                >
                                     <TableCell>{acc.accountName}</TableCell>
                                     <TableCell>{acc.accountType}</TableCell>
                                     <TableCell className="text-right text-green-600">{acc.inflow > 0 ? formatCurrency(acc.inflow, { noSuffix: true, duration: 2 }) : '-'}</TableCell>
@@ -547,9 +573,9 @@ const BankCashSummary = () => {
                                     <TableCell className={cn("text-right font-semibold", acc.balance >= 0 ? "text-green-600" : "text-red-600")}>
                                       {acc.balance !== 0 ? formatCurrency(acc.balance, { showDrCr: true, duration: 2 }) : 'Rs. 0.00 Dr'}
                                     </TableCell>
-                                </motion.tr>
-                            ))}
-                        </AnimatePresence>
+                                </TableRow>
+                          );
+                        })}
                          <TableRow className="font-bold bg-muted/50 border-b-2 border-foreground">
                             <TableCell colSpan={2}>Bank Total</TableCell>
                             <TableCell className="text-right text-green-600">{formatCurrency(bankCashSummary.totalBankInflow, {noSuffix: true, duration: 2})}</TableCell>
@@ -558,9 +584,24 @@ const BankCashSummary = () => {
                                 {formatCurrency(bankCashSummary.bankAccounts.reduce((sum, a) => sum + a.balance, 0), { showDrCr: true, duration: 2 })}
                             </TableCell>
                         </TableRow>
-                          <AnimatePresence>
-                            {bankCashSummary.cashAccounts.map(acc => (
-                               <motion.tr key={acc.id} layout initial={false} exit={{ transition: { duration: 0 } }} className="border-b">
+                          {bankCashSummary.cashAccounts.map(acc => {
+                            const rowKey = `cash:${acc.id}`;
+                            const selected = selectedSummaryRowId === rowKey;
+                            return (
+                               <TableRow
+                                  key={rowKey}
+                                  aria-selected={selected}
+                                  data-pl-daybook-summary-selected={selected ? "" : undefined}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setSelectedSummaryRowId(rowKey);
+                                  }}
+                                  onDoubleClick={(event) => {
+                                    event.stopPropagation();
+                                    openAccountDayPeek(String(acc.id), rowKey);
+                                  }}
+                                  className={cn(daybookSummaryAccountRowCn(selected), "pl-daybook-summary-row", selected && "pl-daybook-summary-row-selected", "border-b")}
+                                >
                                     <TableCell>{acc.accountName}</TableCell>
                                     <TableCell>{acc.accountType}</TableCell>
                                     <TableCell className="text-right text-green-600">{acc.inflow > 0 ? formatCurrency(acc.inflow, { noSuffix: true, duration: 2 }) : '-'}</TableCell>
@@ -568,9 +609,9 @@ const BankCashSummary = () => {
                                     <TableCell className={cn("text-right font-semibold", acc.balance >= 0 ? "text-green-600" : "text-red-600")}>
                                       {acc.balance !== 0 ? formatCurrency(acc.balance, { showDrCr: true, duration: 2 }) : 'Rs. 0.00 Dr'}
                                     </TableCell>
-                                </motion.tr>
-                            ))}
-                        </AnimatePresence>
+                                </TableRow>
+                            );
+                          })}
                          <TableRow className="font-bold bg-muted/50 border-b-2 border-foreground">
                             <TableCell colSpan={2}>Cash Total</TableCell>
                             <TableCell className="text-right text-green-600">{formatCurrency(bankCashSummary.totalCashInflow, {noSuffix: true, duration: 2})}</TableCell>
@@ -585,6 +626,16 @@ const BankCashSummary = () => {
                 </ScrollArea>
             </CardContent>
         </Card>
+        <DaybookAccountDayPeekDialog
+          open={!!accountDayPeek}
+          onOpenChange={(open) => {
+            if (!open) setAccountDayPeek(null);
+          }}
+          account={accountDayPeek?.account ?? null}
+          daybookDate={undefined}
+          initialDateRange={accountDayPeek?.dateRange}
+        />
+      </>
     )
 };
 

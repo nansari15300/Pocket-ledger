@@ -20,9 +20,11 @@ import { normalizeStaffSystemGroupRow } from "@/lib/staffSystemGroups";
 import { ensureStaffModuleSystemGroups } from "@/lib/staffModuleSystemGroups";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { normalizeBankAccountRow } from "@/lib/bankAccountDisplayName";
+import { coerceBankAccountIsSpecial } from "@/lib/bankAccountSpecialFlags";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import type { Item, ItemGroup } from "@/components/items/types";
+import type { CompanyBackupCollection } from "@/lib/companyBackupCollections";
 import { setMastersPrintSnapshot } from "@/lib/printMastersSnapshot";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
@@ -956,6 +958,16 @@ export const VoucherProvider = ({
   const warmSqliteCollectionPathsRef = useRef<Set<string>>(new Set());
   /** Async SQLite/Firestore callbacks purani company ke liye late na aayein. */
   const companyDataLoadEpochRef = useRef(0);
+  /** Mobile pull refresh stages SQLite bumps so the visible page stays on its current rows until commit. */
+  const mobilePullRefreshHoldRef = useRef<{
+    companyId: string;
+    collections: Set<string>;
+    pendingCollections: Set<string>;
+  } | null>(null);
+  const mobilePullRefreshMergeRef = useRef<{
+    companyId: string;
+    merge: (collection: string) => Promise<void>;
+  } | null>(null);
   /** Intentional clears only (company switch / gate-shell). Accidental [] = shared-user blink. */
   const allowEmptyVoucherWipeRef = useRef(false);
   const companyIdForWipeGuardRef = useRef<string | null>(companyId);
@@ -1827,9 +1839,8 @@ export const VoucherProvider = ({
 
       const online =
         typeof navigator === "undefined" || navigator.onLine !== false;
-      // Data tick OFF: Local SQLite already loaded above — no Firestore masters/vouchers download.
+      // deltaa / no collection listeners: one-shot Firestore → SQLite + UI when Data tick is on.
       if (
-        false &&
         cloudLedgerSyncAllowed &&
         online &&
         isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape)
@@ -2195,10 +2206,26 @@ export const VoucherProvider = ({
     } else {
       // Data untick: stay on Local SQLite — no company-root server verify / Firestore bind.
       if (!cloudLedgerSyncAllowed) {
-        if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
-          hasWarmLedgerDataRef.current = true;
-          setLoadingIfChanged(false);
-        }
+        const loadLocalOnlyMasters = (): Promise<void> =>
+          Promise.all(
+            collectionsToPrefetch.map(({ path, setter, orderByField }) =>
+              skipWarmSqlitePath(path)
+                ? Promise.resolve()
+                : path === "vouchers"
+                  ? makeVouchersSqliteLoader(setter, orderByField)
+                  : listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+                      .then((cached) => {
+                        applySqliteRows(setter, cached, orderByField, path);
+                      })
+                      .catch(() => {})
+            )
+          ).then(() => undefined);
+        void loadLocalOnlyMasters().finally(() => {
+          if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
+            hasWarmLedgerDataRef.current = true;
+            setLoadingIfChanged(false);
+          }
+        });
         return () => {
           cancelled = true;
         };
@@ -2531,7 +2558,10 @@ export const VoucherProvider = ({
       if (shouldSkipHeavyVoucherBootstrap(pathname)) return;
     if (!shouldListenSqliteBump) return;
 
-    const mergeCollectionFromSqliteBump = (coll: string, opts?: { remoteIncoming?: boolean; reloadFromIdb?: boolean }) => {
+    const mergeCollectionFromSqliteBump = (
+      coll: string,
+      opts?: { remoteIncoming?: boolean; reloadFromIdb?: boolean }
+    ): Promise<void> => {
       livePullDevLog("react_refresh", {
         companyId,
         collection: coll,
@@ -2540,7 +2570,7 @@ export const VoucherProvider = ({
       });
       const bumpCompanyId = String(companyId || "").trim();
       const bumpEpoch = companyDataLoadEpochRef.current;
-      void (async () => {
+      return (async () => {
         try {
           // Same-tab PL pull already wrote sql.js — full IDB export/reload freezes EXE (30–50s menu lag).
           // Cross-renderer host IPC clears cache before bump; listCompanyDocs reopens lazily.
@@ -2676,10 +2706,21 @@ export const VoucherProvider = ({
       })();
     };
 
+    const mobilePullRefreshMergeEntry = {
+      companyId: String(companyId || "").trim(),
+      merge: (coll: string) => mergeCollectionFromSqliteBump(coll),
+    };
+    mobilePullRefreshMergeRef.current = mobilePullRefreshMergeEntry;
+
     const onBump = (ev: Event) => {
       const d = (ev as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
       if (!d || d.companyId !== companyId || !d.collection) return;
       const coll = d.collection;
+      const refreshHold = mobilePullRefreshHoldRef.current;
+      if (refreshHold?.companyId === d.companyId && refreshHold.collections.has(coll)) {
+        refreshHold.pendingCollections.add(coll);
+        return;
+      }
       const remoteHostWrite = d.source === "pl_host_remote_write";
       const plServerPull = d.source === "pl_server_pull";
       const firebaseDeltaPull = d.source === "firebase_delta_pull";
@@ -2742,7 +2783,14 @@ export const VoucherProvider = ({
     };
     const mergeActiveCollectionsFromServerDelta = () => {
       const paths = activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope);
-      for (const coll of paths) mergeCollectionFromSqliteBump(coll);
+      const refreshHold = mobilePullRefreshHoldRef.current;
+      for (const coll of paths) {
+        if (refreshHold?.companyId === companyId && refreshHold.collections.has(coll)) {
+          refreshHold.pendingCollections.add(coll);
+          continue;
+        }
+        mergeCollectionFromSqliteBump(coll);
+      }
     };
 
     const onServerDelta = (ev: Event) => {
@@ -2750,7 +2798,12 @@ export const VoucherProvider = ({
       if (!d?.companyIds?.includes(companyId)) return;
       const refreshPlServerLive = () => {
         const paths = new Set<string>(["vouchers", ...activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope)]);
+        const refreshHold = mobilePullRefreshHoldRef.current;
         for (const coll of paths) {
+          if (refreshHold?.companyId === companyId && refreshHold.collections.has(coll)) {
+            refreshHold.pendingCollections.add(coll);
+            continue;
+          }
           const key = `${companyId}::${coll}`;
           const prevTimer = sqliteBumpMergeTimersRef.current[key];
           if (prevTimer) clearTimeout(prevTimer);
@@ -2808,6 +2861,9 @@ export const VoucherProvider = ({
       window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
       window.removeEventListener(PL_SERVER_CLIENT_DELTA_EVENT, onServerDelta);
       window.removeEventListener(RESTORE_CLOUD_VOUCHERS_REFRESH_EVENT, onRestoreVouchersRefresh);
+      if (mobilePullRefreshMergeRef.current === mobilePullRefreshMergeEntry) {
+        mobilePullRefreshMergeRef.current = null;
+      }
       for (const t of Object.values(sqliteBumpMergeTimersRef.current)) clearTimeout(t);
       sqliteBumpMergeTimersRef.current = {};
     };
@@ -2825,70 +2881,100 @@ export const VoucherProvider = ({
 
   /** Mobile pull-to-refresh: route-scoped SQLite + server (no global date / full master storm). */
   useEffect(() => {
-    if (!companyId) return;
-
     const onMobilePull = async (ev: Event) => {
       const detail = (ev as CustomEvent<MobileRoutePullRefreshDetail>).detail;
       const refreshPath = detail?.pathname || pathname;
       const collections = collectionsForMobileRoutePullRefresh(refreshPath);
       const cid = String(companyId || "").trim();
-      if (!cid || !collections.length) {
+      if (!companyId || !cid || !collections.length) {
         detail?.resolve?.();
         return;
       }
 
+      const refreshHold = {
+        companyId: cid,
+        collections: new Set<string>([
+          ...collections,
+          ...activeMasterCollectionPathsForRoute(refreshPath),
+        ]),
+        pendingCollections: new Set<string>(),
+      };
+      mobilePullRefreshHoldRef.current = refreshHold;
+
       try {
         if (isServerGateCompanyContext) {
           const { refreshPlServerDisplayCacheCompany } = await import("@/lib/plServerDisplayCache");
-          const result = await refreshPlServerDisplayCacheCompany(cid, {
+          const plServerCollections = collections.filter(
+            (coll): coll is CompanyBackupCollection => coll !== "quotations"
+          );
+          await refreshPlServerDisplayCacheCompany(cid, {
             pullFullLedger: false,
-            focusCollections: collections,
+            focusCollections: plServerCollections,
           });
-          const bumpCols = result.changedCollections.length ? result.changedCollections : collections;
-          for (const coll of bumpCols) {
-            notifyBrowserDbCollectionUpdated(cid, coll, {
-              immediate: true,
-              source: "mobile_pull_refresh",
-            });
-          }
-          detail?.resolve?.();
-          return;
-        }
+        } else {
+          const co = company as CloudBackedCompanyShape | null | undefined;
+          const online = typeof navigator === "undefined" || navigator.onLine !== false;
+          const cloudLedgerSyncAllowed = isOnlineCompanyLedgerCloudSyncAllowed(
+            cid,
+            company as Parameters<typeof isOnlineCompanyLedgerCloudSyncAllowed>[1]
+          );
+          const storageOptionLocal = String(co?.storageOption || "").toLowerCase() === "local";
+          const fsCompanyId = storageOptionLocal
+            ? cid
+            : String(co?.authoritativeCompanyId || cid).trim() || cid;
+          const tryFirestore =
+            cloudLedgerSyncAllowed && online && co && isCloudBackedCompany(co);
 
-        const co = company as CloudBackedCompanyShape | null | undefined;
-        const online = typeof navigator === "undefined" || navigator.onLine !== false;
-        const cloudLedgerSyncAllowed = isOnlineCompanyLedgerCloudSyncAllowed(
-          cid,
-          company as Parameters<typeof isOnlineCompanyLedgerCloudSyncAllowed>[1]
-        );
-        const storageOptionLocal = String(co?.storageOption || "").toLowerCase() === "local";
-        const fsCompanyId = storageOptionLocal
-          ? cid
-          : String(co?.authoritativeCompanyId || cid).trim() || cid;
-        const tryFirestore =
-          cloudLedgerSyncAllowed && online && co && isCloudBackedCompany(co);
-
-        for (const coll of collections) {
-          if (tryFirestore) {
-            try {
-              await pullCompanySubcollectionFromFirestoreToLocalDb(
-                fsCompanyId,
-                cid,
-                coll,
-                company,
-                coll === "vouchers" ? "date" : undefined
-              );
-            } catch {
-              /* offline / tick off — still merge local sqlite */
+          for (const coll of collections) {
+            if (tryFirestore && coll !== "quotations") {
+              try {
+                await pullCompanySubcollectionFromFirestoreToLocalDb(
+                  fsCompanyId,
+                  cid,
+                  coll,
+                  company,
+                  coll === "vouchers" ? "date" : undefined
+                );
+              } catch {
+                /* Offline or sync disabled: keep the cached collection for the final display pass. */
+              }
             }
           }
+        }
+
+        // Announce every route collection only after its server/cache refresh pass has finished.
+        for (const coll of collections) {
           notifyBrowserDbCollectionUpdated(cid, coll, {
             immediate: true,
             source: "mobile_pull_refresh",
           });
         }
+
+        const mergeEntry = mobilePullRefreshMergeRef.current;
+        if (mergeEntry?.companyId === cid) {
+          const initialCollections = new Set<string>([
+            ...collections,
+            ...refreshHold.pendingCollections,
+          ]);
+          refreshHold.pendingCollections.clear();
+          await Promise.all([...initialCollections].map((coll) => mergeEntry.merge(coll)));
+
+          // Pick up any in-scope SQLite changes that arrived while the final read/merge was running.
+          while (refreshHold.pendingCollections.size) {
+            const pending = [...refreshHold.pendingCollections];
+            refreshHold.pendingCollections.clear();
+            await Promise.all(pending.map((coll) => mergeEntry.merge(coll)));
+          }
+        }
+
+        if (mobilePullRefreshHoldRef.current === refreshHold) {
+          mobilePullRefreshHoldRef.current = null;
+        }
         detail?.resolve?.();
       } catch (e) {
+        if (mobilePullRefreshHoldRef.current === refreshHold) {
+          mobilePullRefreshHoldRef.current = null;
+        }
         detail?.reject?.(e);
       }
     };
@@ -3519,6 +3605,7 @@ export const VoucherProvider = ({
         const stats = voucherAggregates.accountMap.get(row.id) || { debit: 0, credit: 0 };
         return {
             ...row,
+            isSpecial: coerceBankAccountIsSpecial(row.isSpecial),
             debit: stats.debit,
             credit: stats.credit,
             balance: (Number(row.openingBalance) || 0) + stats.debit - stats.credit
