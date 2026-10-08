@@ -112,7 +112,11 @@ import {
   findInterCompanyEntityById,
   resolveInterCompanyEntityKindForSave,
 } from "@/lib/interCompany/interCompanyEntityLookup";
-import { useInterCompanyEntities } from "@/components/inter-company/useInterCompanyEntities";
+import {
+  buildSourceEntitiesFromVouchers,
+  useInterCompanyEntities,
+} from "@/components/inter-company/useInterCompanyEntities";
+import { useVouchers } from "@/hooks/useVouchers";
 import { readCompanyInterCompanyAcNo } from "@/lib/interCompany/interCompanyAccountNo";
 import {
   ensureCompanyInterCompanyCode,
@@ -540,6 +544,13 @@ export function InterCompanyVoucherForm({
   const { can, canEditRecord, canPerformBackdatedAction, canDeleteVoucher, fileAttachmentLimits, allowAttachments, role } =
     usePermissions();
   const { company, companyId, allCompanies } = useCompany();
+  const {
+    processedAccounts,
+    processedParties,
+    processedStaff,
+    processedTaxes,
+    expenseAccounts,
+  } = useVouchers();
   const { formatDate, formatDateBS, formatDateBySystem, formatCurrency, formatCurrencyForPrint, dateSystem } = useDate();
 
   const [ribbonTab, setRibbonTab] = useState<InterCompanyRibbonTab>(initialRibbonTab ?? "voucher");
@@ -955,22 +966,25 @@ export function InterCompanyVoucherForm({
       let peer: Record<string, unknown> | null = null;
       if (link?.peerCompanyId && link?.peerVoucherId) {
         try {
-          const snap = await getDoc(
-            doc(firestore, `companies/${link.peerCompanyId}/vouchers`, link.peerVoucherId),
-          );
-          if (snap.exists()) peer = snap.data() as Record<string, unknown>;
+          peer = (await getCompanyDocFromBrowserDb(
+            link.peerCompanyId,
+            "vouchers",
+            link.peerVoucherId
+          )) as Record<string, unknown> | null;
         } catch {
-          /* offline */
+          /* local miss */
         }
         if (!peer) {
           try {
-            peer = (await getCompanyDocFromBrowserDb(
-              link.peerCompanyId,
-              "vouchers",
-              link.peerVoucherId
-            )) as Record<string, unknown> | null;
+            const snap = await Promise.race([
+              getDoc(doc(firestore, `companies/${link.peerCompanyId}/vouchers`, link.peerVoucherId)),
+              new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
+            ]);
+            if (snap && typeof snap === "object" && "exists" in snap && (snap as { exists: () => boolean }).exists()) {
+              peer = (snap as { data: () => Record<string, unknown> }).data();
+            }
           } catch {
-            /* local miss */
+            /* offline */
           }
         }
       }
@@ -1015,7 +1029,6 @@ export function InterCompanyVoucherForm({
             targetFiles: targetFilesNext,
           })
         );
-        setIcEditHydrated(true);
         accountBaselineRef.current = {
           sourcePayeeKind: (sourceEntity?.kind || "party") as InterCompanyEntityKind,
           sourcePayeeId: sourceEntity?.id || "",
@@ -1031,7 +1044,9 @@ export function InterCompanyVoucherForm({
           targetBankLabel: readInterCompanyBankLabelSnapshot(row, "target") || tgtBank || "—",
         };
       }
-    })();
+    })().finally(() => {
+      if (!bankHydrateCancelled) setIcEditHydrated(true);
+    });
 
     return () => {
       bankHydrateCancelled = true;
@@ -1175,10 +1190,34 @@ export function InterCompanyVoucherForm({
       ""
   ).trim();
 
+  const activeCompanyEntitySeed = useMemo(
+    () =>
+      buildSourceEntitiesFromVouchers({
+        processedAccounts,
+        processedParties,
+        processedStaff,
+        processedTaxes,
+        expenseAccounts,
+      }),
+    [processedAccounts, processedParties, processedStaff, processedTaxes, expenseAccounts]
+  );
+  const sourceEntitiesSeed = useMemo(() => {
+    const cid = String(sourceEntitiesCompanyId || "").trim();
+    const active = String(companyId || "").trim();
+    if (!cid || cid !== active || activeCompanyEntitySeed.length === 0) return undefined;
+    return activeCompanyEntitySeed;
+  }, [sourceEntitiesCompanyId, companyId, activeCompanyEntitySeed]);
+  const targetEntitiesSeed = useMemo(() => {
+    const cid = String(targetEntitiesCompanyId || "").trim();
+    const active = String(companyId || "").trim();
+    if (!cid || cid !== active || activeCompanyEntitySeed.length === 0) return undefined;
+    return activeCompanyEntitySeed;
+  }, [targetEntitiesCompanyId, companyId, activeCompanyEntitySeed]);
+
   const { entities: sourceEntitiesRaw, loading: sourceEntitiesLoading, reload: reloadSourceEntities } =
-    useInterCompanyEntities(sourceEntitiesCompanyId);
+    useInterCompanyEntities(sourceEntitiesCompanyId, sourceEntitiesSeed);
   const { entities: targetEntitiesRaw, loading: targetEntitiesLoading, reload: reloadTargetEntities } =
-    useInterCompanyEntities(targetEntitiesCompanyId);
+    useInterCompanyEntities(targetEntitiesCompanyId, targetEntitiesSeed);
 
   const companyRowById = useMemo(() => {
     const map = new Map<string, (typeof company) & { id?: string }>();

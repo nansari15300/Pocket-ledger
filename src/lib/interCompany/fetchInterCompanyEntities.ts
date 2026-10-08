@@ -113,6 +113,24 @@ async function fetchInterCompanyEntitiesFromFirestore(
   return rows;
 }
 
+const FIRESTORE_IC_ENTITIES_MS = 8000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("inter-company-entities-timeout")), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+}
+
 /** Company id par saare party/bank/staff/tax/expense rows */
 export async function fetchInterCompanyEntitiesForCompany(
   companyId: string
@@ -121,19 +139,24 @@ export async function fetchInterCompanyEntitiesForCompany(
   if (await isPureLocalInterCompanyCompany(companyId)) {
     return fetchInterCompanyEntitiesFromLocalMirror(companyId);
   }
-  try {
-    const cloud = await fetchInterCompanyEntitiesFromFirestore(companyId);
-    if (cloud.length > 0) return cloud;
-  } catch {
-    /* fall through to local mirror */
-  }
+  // EXE / offline: SQLite mirror pehle — Firestore hang se "Loading accounts…" mat atkao
   try {
     const local = await fetchInterCompanyEntitiesFromLocalMirror(companyId);
     if (local.length > 0) return local;
   } catch {
-    /* ignore */
+    /* cloud try */
   }
-  return [];
+  try {
+    const cloud = await withTimeout(fetchInterCompanyEntitiesFromFirestore(companyId), FIRESTORE_IC_ENTITIES_MS);
+    if (cloud.length > 0) return cloud;
+  } catch {
+    /* fall through */
+  }
+  try {
+    return await fetchInterCompanyEntitiesFromLocalMirror(companyId);
+  } catch {
+    return [];
+  }
 }
 
 /** Edit hydrate: bank id list me na mile to Firestore se naam lao */
@@ -148,7 +171,16 @@ export async function fetchInterCompanyBankEntityDetail(
     return fetchInterCompanyBankEntityDetailFromLocalMirror(cid, bid);
   }
   try {
-    const snap = await getDoc(doc(firestore, `companies/${cid}/bank_accounts`, bid));
+    const localFirst = await fetchInterCompanyBankEntityDetailFromLocalMirror(cid, bid);
+    if (localFirst) return localFirst;
+  } catch {
+    /* cloud */
+  }
+  try {
+    const snap = await withTimeout(
+      getDoc(doc(firestore, `companies/${cid}/bank_accounts`, bid)),
+      FIRESTORE_IC_ENTITIES_MS
+    );
     if (snap.exists()) {
       const data = snap.data() as {
         accountName?: string;

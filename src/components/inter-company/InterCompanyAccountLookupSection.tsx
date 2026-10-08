@@ -891,12 +891,14 @@ export function InterCompanyAccountLookupSection({
   return (
     <div className={cn("space-y-2", interCompanyIcSectionDividerClass, viewOnlyCopyMode && interCompanyViewOnlyAllowCopyClass)}>
       <FormLabel className="!mt-0">{sectionTitle}</FormLabel>
-      {blockFormLoading ? (
+      {disabled && !allowLookupWithoutCompany ? (
+        <p className="text-sm text-muted-foreground">
+          {disabledHint || "You do not have permission to view or edit these accounts."}
+        </p>
+      ) : blockFormLoading ? (
         <p className="text-sm text-muted-foreground">
           {crossSearching ? "Searching linked companies…" : "Loading accounts…"}
         </p>
-      ) : disabled && !allowLookupWithoutCompany ? (
-        <p className="text-sm text-muted-foreground">{disabledHint}</p>
       ) : (
         <>
           <div

@@ -1,15 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
 import { fetchInterCompanyEntitiesForCompany } from "@/lib/interCompany/fetchInterCompanyEntities";
 
 export type { InterCompanyEntityDetail };
 
-/** Firestore se ek company ke masters — target column (phone, avatar, …). */
-export function useInterCompanyEntities(companyId: string | null | undefined) {
-  const [entities, setEntities] = useState<InterCompanyEntityDetail[]>([]);
-  const [loading, setLoading] = useState(false);
+function entityListKey(rows: InterCompanyEntityDetail[] | undefined): string {
+  if (!rows?.length) return "";
+  return rows.map((r) => `${r.kind}:${r.id}`).join("|");
+}
+
+/** SQLite / Firestore — optional in-memory seed (active company vouchers) for instant paint on EXE. */
+export function useInterCompanyEntities(
+  companyId: string | null | undefined,
+  seedEntities?: InterCompanyEntityDetail[]
+) {
+  const seedKey = useMemo(() => entityListKey(seedEntities), [seedEntities]);
+  const [entities, setEntities] = useState<InterCompanyEntityDetail[]>(() => seedEntities ?? []);
+  const [loading, setLoading] = useState(() => !seedEntities?.length);
   const [reloadEpoch, setReloadEpoch] = useState(0);
 
   const reload = useCallback(() => {
@@ -17,18 +26,29 @@ export function useInterCompanyEntities(companyId: string | null | undefined) {
   }, []);
 
   useEffect(() => {
+    if (seedEntities?.length) {
+      setEntities(seedEntities);
+      setLoading(false);
+    }
+  }, [seedKey, seedEntities]);
+
+  useEffect(() => {
     if (!companyId) {
       setEntities([]);
+      setLoading(false);
       return;
     }
     let cancelled = false;
-    setLoading(true);
+    const hadSeed = Boolean(seedEntities?.length);
+    if (!hadSeed) setLoading(true);
     (async () => {
       try {
         const rows = await fetchInterCompanyEntitiesForCompany(companyId);
-        if (!cancelled) setEntities(rows);
+        if (!cancelled) {
+          setEntities(rows.length > 0 ? rows : seedEntities ?? []);
+        }
       } catch {
-        if (!cancelled) setEntities([]);
+        if (!cancelled) setEntities(seedEntities ?? []);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -36,7 +56,8 @@ export function useInterCompanyEntities(companyId: string | null | undefined) {
     return () => {
       cancelled = true;
     };
-  }, [companyId, reloadEpoch]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- seedKey tracks seedEntities identity
+  }, [companyId, reloadEpoch, seedKey]);
 
   return { entities, loading, reload };
 }
@@ -50,6 +71,7 @@ export function buildSourceEntitiesFromVouchers(lists: {
     accountNumber?: string;
     interCompanyAccountNo?: string;
     balance?: number;
+    isClearing?: boolean;
   }[];
   processedParties?: {
     id: string;
@@ -84,6 +106,7 @@ export function buildSourceEntitiesFromVouchers(lists: {
       accountNumber: a.accountNumber,
       interCompanyAccountNo: a.interCompanyAccountNo,
       closingBalance: a.balance,
+      isClearing: a.isClearing === true,
     })
   );
   (lists.processedParties || []).forEach((p) =>
