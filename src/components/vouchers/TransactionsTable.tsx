@@ -147,7 +147,6 @@ import {
   patchFyOpeningRowsBillWiseBalances,
   signedFyOpeningRowAmount,
   signedToOpeningDrCr,
-  sumBillWiseOutstandingBeforeFirstFyDelimiter,
 } from "@/lib/billWiseOpeningBalanceSum";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
 import { resolveLedgerTransactionUserDisplayName, buildActiveRecurringTriggerVoucherIdSet } from "@/lib/ledgerUserColumnDisplay";
@@ -882,10 +881,6 @@ export function TransactionsTable({
       shouldUseOutstandingBalance
     );
   }, [tableTransactions, context, groupEntityType, shouldUseOutstandingBalance]);
-  const billWisePreFySegmentSum = useMemo(() => {
-    if (!shouldUseOutstandingBalance) return null;
-    return sumBillWiseOutstandingBeforeFirstFyDelimiter(fyPatchedLedgerRows, context, groupEntityType);
-  }, [fyPatchedLedgerRows, shouldUseOutstandingBalance, context, groupEntityType]);
   /** Bill-wise carry belongs on FY opening rows — not duplicated on Book Opening when FY merge rows are present. */
   const hasFyOpeningRowsInLedger = useMemo(
     () => fyPatchedLedgerRows.some((r) => r?.type === FY_OPENING_ROW_TYPE),
@@ -1649,10 +1644,8 @@ export function TransactionsTable({
     : useBooksObForRowDrCr && !isBillWiseMode
       ? displayOpeningForDrCr
       : displayOpeningBalance;
-  const billWiseDatedOpeningBalance =
-    shouldUseOutstandingBalance && billWisePreFySegmentSum != null && !hasFyOpeningRowsInLedger
-      ? billWisePreFySegmentSum
-      : displayOpeningBalanceForRow;
+  /** Bill-wise Book Opening = master form OB only; txn outstanding stays on txn rows (not summed into this row). */
+  const billWiseDatedOpeningBalance = displayOpeningBalanceForRow;
   const billWiseDatedOpeningDrCr = signedToOpeningDrCr(
     shouldUseOutstandingBalance ? billWiseDatedOpeningBalance : displayOpeningForDrCr
   );
@@ -1681,24 +1674,18 @@ export function TransactionsTable({
   const masterBookSignedScaled = booksObScaled ?? 0;
   const billWiseBookOpeningBalance = useOutstandingForOpeningRowBalance
     ? displayOpeningBalanceForRow
-    : hasFyOpeningRowsInLedger
-      ? masterBookSignedScaled
-      : shouldUseOutstandingBalance && billWisePreFySegmentSum != null
-        ? billWisePreFySegmentSum
-        : masterBookSignedScaled;
+    : masterBookSignedScaled;
   const billWiseBookOpeningDrCr = signedToOpeningDrCr(billWiseBookOpeningBalance);
-  const bookRowOpeningDr =
-    shouldUseOutstandingBalance && !useOutstandingForOpeningRowBalance && !hasFyOpeningRowsInLedger
-      ? billWiseBookOpeningDrCr.debit
-      : masterBookSignedScaled > 0
-        ? masterBookSignedScaled
-        : 0;
-  const bookRowOpeningCr =
-    shouldUseOutstandingBalance && !useOutstandingForOpeningRowBalance && !hasFyOpeningRowsInLedger
-      ? billWiseBookOpeningDrCr.credit
-      : masterBookSignedScaled < 0
-        ? Math.abs(masterBookSignedScaled)
-        : 0;
+  const bookRowOpeningDr = useOutstandingForOpeningRowBalance
+    ? billWiseBookOpeningDrCr.debit
+    : masterBookSignedScaled > 0
+      ? masterBookSignedScaled
+      : 0;
+  const bookRowOpeningCr = useOutstandingForOpeningRowBalance
+    ? billWiseBookOpeningDrCr.credit
+    : masterBookSignedScaled < 0
+      ? Math.abs(masterBookSignedScaled)
+      : 0;
   /** Spend-wise dated opening row — statement period carry (Book Opening row alag stacked row me books OB). */
   const spendWiseDatedOpeningRowSigned = displayOpeningForDrCr;
   const spendWiseBookOpeningRowDr = shouldUseOutstandingBalance
@@ -2084,7 +2071,15 @@ export function TransactionsTable({
         visibleCreditCol;
 
   const showOpeningBalance = ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context);
-  const showLedgerOpeningRows = showOpeningBalance && !hideLedgerOpeningRows;
+  /** Bill-wise party/staff: no master OB in form → hide bogus "Book Opening" row (txns carry bill-wise balance). */
+  const hideBillWiseBookOpeningWithNoMasterOb =
+    shouldUseOutstandingBalance &&
+    !ledgerDateFilterActive &&
+    !showBookOpeningAboveDatedRow &&
+    Math.abs(masterBookSignedScaled) < BOOK_OB_EPS &&
+    !useOutstandingForOpeningRowBalance;
+  const showLedgerOpeningRows =
+    showOpeningBalance && !hideLedgerOpeningRows && !hideBillWiseBookOpeningWithNoMasterOb;
 
   const debitHeaderLabel =
     debitColumnHeaderLabel ?? (stockView === "amount" ? "Debit" : "In");
