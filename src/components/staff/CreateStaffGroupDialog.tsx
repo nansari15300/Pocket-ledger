@@ -32,6 +32,9 @@ import { isSystemGroupName } from "@/lib/system-group-names";
 import { apkCloudCompanyOfflineViewOnly } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { STAFF_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
+import { masterEntityNestedGroupDialogShell } from "@/lib/masterEntityDialogClasses";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { NESTED_MASTER_GROUP_DIALOG_OVERLAY_CN } from "@/lib/dialogShellChrome";
 import { masterEntityGroupCreateChainPendingNames } from "@/lib/masterEntityGroupTreeForm";
 import type { MasterEntityGroupCreateChainSlot } from "@/lib/masterEntityGroupTreeForm";
 import { saveMasterEntityGroupCreateChain } from "@/lib/masterEntityGroupChainSave";
@@ -62,6 +65,8 @@ export function CreateStaffGroupDialog({
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
     [company, navigatorOnline]
   );
+  const isMobile = useIsMobile();
+  const nestedGroupDialogShell = masterEntityNestedGroupDialogShell(isMobile);
 
   const resetForm = () => {
     setChainSlots([{}]);
@@ -167,10 +172,11 @@ export function CreateStaffGroupDialog({
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogPortal>
-        <DialogOverlay />
+        <DialogOverlay className={NESTED_MASTER_GROUP_DIALOG_OVERLAY_CN} />
         {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
         <DialogContent
-          className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 z-[60] sm:max-h-none sm:w-full sm:max-w-md sm:grid sm:flex-none sm:px-6"
+          overlayClassName={nestedGroupDialogShell.overlayClassName}
+          className={nestedGroupDialogShell.className}
           onOpenAutoFocus={(e) => e.preventDefault()}
           onPointerDownOutside={(e) => {
             const target = e.target as HTMLElement;

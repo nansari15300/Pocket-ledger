@@ -9,6 +9,7 @@
 
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { persistPlModalParentQuery } from "@/lib/modalUrlSync";
 import { readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { isDashboardRedirectGuardActive } from "@/lib/protectFromUnwantedDashboardRedirect";
@@ -68,7 +69,8 @@ export function shouldSuppressTransientCompanyClear(): boolean {
  * Transient stale (`!reactId` + persisted) par `/company` timer mat uthao — persisted hi source ho sakta hai.
  */
 export function shouldDeferMissingCompanyRedirectNative(reactCompanyId: string | null | undefined): boolean {
-  if (typeof window === "undefined" || !isCapacitorNativeApp()) return false;
+  if (typeof window === "undefined") return false;
+  if (!isCapacitorNativeApp() && !isElectronDesktopApp() && !isStaticAppBuild()) return false;
   try {
     const persisted = String(readSelectedCompanyId() || "").trim();
     const reactId = String(reactCompanyId ?? "").trim();

@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, CalendarIcon, Eye, EyeOff, CheckCircle, AlertTriangle, Upload, UserPlus } from "lucide-react";
-import React, { useEffect, useMemo, useState, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -38,6 +38,7 @@ import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Calendar } from "@/components/ui/calendar";
 import { compressImageForCompany, attachmentImageStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
+import { usePcFileDropZone } from "@/lib/attachmentPcFileDrop";
 import { FilePreview } from "../vouchers/FilePreview";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { doc, setDoc, serverTimestamp, Timestamp, collection, query, where, getDocs } from "firebase/firestore";
@@ -223,40 +224,63 @@ export function CreateCompanyForm({
     }
   };
   
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.length) return;
-    if (!canAddAvatar) {
-      e.target.value = "";
-      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow adding company logo." });
-      return;
-    }
-    const inputFile = e.target.files[0]; // Only one logo allowed
-    if (!inputFile) return;
-
-    setIsFileProcessing(true);
-    try {
-      const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, null);
-      if (compressedFile.size > maxBytes) {
+  const processLogoFile = useCallback(
+    async (inputFile: File) => {
+      if (!canAddAvatar) {
         toast({
           variant: "destructive",
-          ...attachmentImageStillTooLargeToastFields(maxKb),
+          title: "Not allowed",
+          description: "Your plan does not allow adding company logo.",
         });
-        e.target.value = "";
         return;
       }
-      const preview = URL.createObjectURL(compressedFile);
-      setFileToUpload({ file: compressedFile, preview });
-    } catch (error) {
-      toast({
-        variant: "destructive",
-        title: "Could not process file",
-        description: error instanceof Error ? error.message : "Compression or PDF read failed.",
-      });
-    } finally {
-      e.target.value = "";
-      setIsFileProcessing(false);
-    }
+      if (!inputFile.type.startsWith("image/")) {
+        toast({
+          variant: "destructive",
+          title: "Images only",
+          description: "Company logo must be an image file.",
+        });
+        return;
+      }
+
+      setIsFileProcessing(true);
+      try {
+        const { file: compressedFile, maxBytes, maxKb } = await compressImageForCompany(inputFile, null);
+        if (compressedFile.size > maxBytes) {
+          toast({
+            variant: "destructive",
+            ...attachmentImageStillTooLargeToastFields(maxKb),
+          });
+          return;
+        }
+        const preview = URL.createObjectURL(compressedFile);
+        setFileToUpload({ file: compressedFile, preview });
+      } catch (error) {
+        toast({
+          variant: "destructive",
+          title: "Could not process file",
+          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
+        });
+      } finally {
+        setIsFileProcessing(false);
+      }
+    },
+    [canAddAvatar, toast]
+  );
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    await processLogoFile(e.target.files[0]);
+    e.target.value = "";
   };
+
+  const { isDragOver: logoDragOver, dropZoneProps: logoDropZoneProps } = usePcFileDropZone({
+    enabled: canAddAvatar && !fileToUpload && !isFileProcessing,
+    onFiles: (files) => {
+      const first = files[0];
+      if (first) void processLogoFile(first);
+    },
+  });
   
   const removeFile = () => {
     if (fileToUpload?.preview) {
@@ -790,8 +814,12 @@ export function CreateCompanyForm({
                 />
               ) : (
                 <FormControl>
-                  <div 
-                    className="relative w-16 h-16 sm:w-24 sm:h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                  <div
+                    {...logoDropZoneProps}
+                    className={cn(
+                      "relative w-16 h-16 sm:w-24 sm:h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer",
+                      logoDragOver && "border-primary bg-primary/10 ring-2 ring-primary ring-offset-2"
+                    )}
                     onClick={() => fileInputRef.current?.click()}
                   >
                     <Upload className="h-4 w-4 sm:h-6 sm:w-6" />

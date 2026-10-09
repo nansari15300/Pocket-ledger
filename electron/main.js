@@ -43,6 +43,14 @@ if (process.platform === "win32") {
   app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
 }
 
+/** Attachment JPEG compress: Canvas toBlob Chrome jaisa GPU path (software raster = 10–15× slow). `app.ready` se pehle. */
+app.commandLine.appendSwitch("ignore-gpu-blocklist");
+app.commandLine.appendSwitch("enable-gpu-rasterization");
+app.commandLine.appendSwitch("enable-zero-copy");
+if (process.platform === "win32") {
+  app.commandLine.appendSwitch("use-angle", "d3d11");
+}
+
 // Do EXE instances = do `localhost` ports = Firebase Auth / IndexedDB alag origin ("login delete") — doosra instance band + pehla focus.
 const IS_PHASE1B_RUNTIME_VERIFY = process.env.PL_PHASE1B_RUNTIME_VERIFY === "1";
 const IS_PLSERVER_COMPANY_AUDIT = process.env.PL_PLSERVER_COMPANY_AUDIT === "1";

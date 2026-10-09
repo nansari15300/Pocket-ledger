@@ -2344,31 +2344,39 @@ export function AddVoucherDialog(props: any) {
   persistDialogBoundsRef.current = persistDialogBoundsToStorage;
 
   // Desktop Add Voucher + Adjust Balance: default 80vw×80vh; user resize/move → localStorage (alag keys).
+  // Use `dialogOpen` (not `isOpen`) — Adjust Balance uses DialogTrigger only (uncontrolled).
   useEffect(() => {
-    if (!isOpen || !isDesktop || typeof window === "undefined") return;
+    if (!dialogOpen || !isDesktop || typeof window === "undefined") return;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const storageKey = isAdjustmentOnlyDialog
       ? VOUCHER_ADJUSTMENT_DIALOG_STORAGE_KEY
       : VOUCHER_DIALOG_STORAGE_KEY;
     dialogBoundsStorageKeyRef.current = storageKey;
+    const def = defaultViewportDialogBounds(vw, vh);
     const restored = readStoredDialogBounds(storageKey, vw, vh);
-    if (restored) {
+    const looksLikeLegacyUninitializedBounds =
+      isAdjustmentOnlyDialog &&
+      restored != null &&
+      restored.w <= MIN_DIALOG_W &&
+      restored.h <= MIN_DIALOG_H &&
+      restored.x <= 1 &&
+      restored.y <= 1;
+    if (restored && !looksLikeLegacyUninitializedBounds) {
       setDialogSize({ w: restored.w, h: restored.h });
       setDialogPosition({ x: restored.x, y: restored.y });
       return;
     }
-    const def = defaultViewportDialogBounds(vw, vh);
     setDialogSize({ w: def.w, h: def.h });
     setDialogPosition({ x: def.x, y: def.y });
-  }, [isOpen, isDesktop, isAdjustmentOnlyDialog]);
+  }, [dialogOpen, isDesktop, isAdjustmentOnlyDialog]);
 
   useEffect(() => {
-    if (prevOpenRef.current && !isOpen && isDesktop && typeof window !== "undefined") {
+    if (prevOpenRef.current && !dialogOpen && isDesktop && typeof window !== "undefined") {
       writeStoredDialogBounds(dialogBoundsStorageKeyRef.current, dialogBoundsLiveRef.current);
     }
-    prevOpenRef.current = isOpen;
-  }, [isOpen, isDesktop]);
+    prevOpenRef.current = dialogOpen;
+  }, [dialogOpen, isDesktop]);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     if (!isDesktop) return;
@@ -4303,8 +4311,8 @@ export function AddVoucherDialog(props: any) {
                         </SelectContent>
                       </Select>
                     ) : null}
-                    <DialogClose className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-500/50 bg-white/60 text-gray-800 shadow-sm opacity-95 transition-colors hover:bg-white hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1">
-                      <X className="h-4 w-4" />
+                    <DialogClose className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-500/50 bg-white/60 text-red-600 shadow-sm opacity-95 transition-colors hover:bg-white hover:text-red-700 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1">
+                      <X className="h-4 w-4 text-red-600" />
                       <span className="sr-only">Close</span>
                     </DialogClose>
                   </div>
@@ -4337,8 +4345,8 @@ export function AddVoucherDialog(props: any) {
                         </SelectContent>
                       </Select>
                     ) : null}
-                    <DialogClose className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-500/50 bg-white/60 text-gray-800 shadow-sm opacity-95 transition-colors hover:bg-white hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1">
-                      <X className="h-4 w-4" />
+                    <DialogClose className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-500/50 bg-white/60 text-red-600 shadow-sm opacity-95 transition-colors hover:bg-white hover:text-red-700 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1">
+                      <X className="h-4 w-4 text-red-600" />
                       <span className="sr-only">Close</span>
                     </DialogClose>
                   </div>

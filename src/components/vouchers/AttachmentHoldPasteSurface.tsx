@@ -34,6 +34,7 @@ import { useCrossCompanyAttachmentAccess } from "@/hooks/useCrossCompanyAttachme
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { usePcFileDropZone } from "@/lib/attachmentPcFileDrop";
 
 function sanitizeDownloadFileName(raw: string): string {
   const base = String(raw || "attachment").trim() || "attachment";
@@ -298,16 +299,33 @@ export function AttachmentHoldPasteSurface({
 
   const slotEnabled = enabled && !isCompressing;
 
+  const handlePcDropFiles = useCallback(
+    (incoming: File[]) => {
+      if (!slotEnabled || incoming.length === 0) return;
+      void onPastedFiles(incoming);
+    },
+    [onPastedFiles, slotEnabled]
+  );
+
+  const { isDragOver: isPcFileDragOver, dropZoneProps: pcDropZoneProps } = usePcFileDropZone({
+    enabled: slotEnabled,
+    onFiles: handlePcDropFiles,
+  });
+
   const addTile = (
     <div
       role="button"
       tabIndex={slotEnabled ? 0 : -1}
       aria-disabled={!slotEnabled}
       aria-busy={isCompressing || undefined}
+      {...pcDropZoneProps}
       className={cn(
         "group relative flex h-full w-full min-h-0 flex-col items-center justify-center touch-manipulation outline-none",
         className,
-        isCompressing && "pointer-events-none cursor-wait opacity-90"
+        isCompressing && "pointer-events-none cursor-wait opacity-90",
+        isPcFileDragOver &&
+          slotEnabled &&
+          "border-primary bg-primary/10 ring-2 ring-primary ring-offset-2 ring-offset-background"
       )}
       onClickCapture={hold.onClickCapture}
       onPointerDown={hold.onPointerDown}
@@ -404,4 +422,36 @@ export function AttachmentHoldPasteSurface({
 
   const addTileSlot = <div className="relative h-24 w-24 shrink-0">{addTile}</div>;
   return addTileSlot;
+}
+
+/** Wrap attachment preview row — drop on existing tiles or gap still attaches (voucher / master docs). */
+export function AttachmentPcDropWrap({
+  enabled,
+  onDropFiles,
+  className,
+  children,
+}: {
+  enabled: boolean;
+  onDropFiles: (files: File[]) => void | Promise<void>;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const { isDragOver, dropZoneProps } = usePcFileDropZone({
+    enabled,
+    onFiles: onDropFiles,
+  });
+
+  return (
+    <div
+      {...dropZoneProps}
+      className={cn(
+        className,
+        isDragOver &&
+          enabled &&
+          "rounded-lg bg-primary/5 ring-2 ring-primary/40 ring-offset-2 ring-offset-background"
+      )}
+    >
+      {children}
+    </div>
+  );
 }

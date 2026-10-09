@@ -434,7 +434,7 @@ export function LinkPaymentInToPaymentOutDialog({
           <p className="text-sm text-amber-600 font-medium px-1 shrink-0">Selected total is less than required. Choose more vouchers to cover the amount.</p>
         )}
         <DialogFooter className="shrink-0 !flex-row flex flex-wrap items-center gap-2 w-full justify-between sm:justify-between">
-          <Button size="sm" onClick={() => onOpenChange(false)} className="h-9 rounded-full shrink-0 bg-orange-500 hover:bg-orange-600 text-white border-0">
+          <Button type="button" size="sm" onClick={() => onOpenChange(false)} className="h-9 rounded-full shrink-0 bg-orange-500 hover:bg-orange-600 text-white border-0">
             {displayOnly ? "Close" : "Cancel"}
           </Button>
           {!displayOnly && (
@@ -449,7 +449,7 @@ export function LinkPaymentInToPaymentOutDialog({
                   Auto Link
                 </Button>
               )}
-              <Button onClick={handleConfirm} className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0">Done</Button>
+              <Button type="button" onClick={handleConfirm} className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0">Done</Button>
             </div>
           )}
         </DialogFooter>

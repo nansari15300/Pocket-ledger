@@ -21,7 +21,7 @@ const SelectTrigger = React.forwardRef<
     ref={ref}
     // Select trigger text must truncate inside its own width on mobile forms.
     className={cn(
-      "flex h-10 w-full min-w-0 max-w-full overflow-hidden items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:min-w-0 [&>span]:max-w-full [&>span]:truncate",
+      "flex h-10 w-full min-w-0 max-w-full overflow-hidden items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-0 focus:border-primary focus-visible:outline-none focus-visible:ring-0 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50 [&>span]:min-w-0 [&>span]:max-w-full [&>span]:truncate",
       className
     )}
     {...props}

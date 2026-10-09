@@ -35,6 +35,9 @@ const MAX_DECODE_DIMENSION = 4096;
 const QUALITY_FLOOR = 0.26;
 const MIN_SCALE = 0.03;
 const MAX_IMAGE_PASSES = 40;
+/** Band search: 18 redraw+encode EXE/APK par 20s+; draw-once + 6 JPEG encodes enough for From–To KB. */
+const QUALITY_BAND_ITERS = 6;
+const QUALITY_UNDER_CAP_ITERS = 4;
 
 /** Bahut zyada pages par raster skip (reference: 50) */
 const MAX_PDF_PAGES_FOR_RASTER = 50;
@@ -57,6 +60,26 @@ function passSizeKeepFactor(currentKb: number, maxKb: number): number {
   return 0.88 - t * 0.38;
 }
 
+function paintSourceToCanvas(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  width: number,
+  height: number
+): void {
+  canvas.width = width;
+  canvas.height = height;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "medium";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(source, 0, 0, width, height);
+}
+
+async function encodeJpegFromPaintedCanvas(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
+  return canvasToBlob(canvas, "image/jpeg", quality);
+}
+
 async function encodeJpegAt(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
@@ -65,19 +88,14 @@ async function encodeJpegAt(
   height: number,
   quality: number
 ): Promise<Blob> {
-  canvas.width = width;
-  canvas.height = height;
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, width, height);
-  ctx.drawImage(source, 0, 0, width, height);
-  return canvasToBlob(canvas, "image/jpeg", quality);
+  paintSourceToCanvas(canvas, ctx, source, width, height);
+  return encodeJpegFromPaintedCanvas(canvas, quality);
 }
 
 /**
  * Ek scale par quality binary-search: output [minBytes, maxBytes] band me, max ke paas.
  * Chhoti image / chhota scale par null → caller scale badhayega.
+ * Draw once — quality loop sirf JPEG encode (EXE/APK pe purana path har pass full redraw).
  */
 async function encodeJpegInBandAtSize(
   canvas: HTMLCanvasElement,
@@ -88,19 +106,20 @@ async function encodeJpegInBandAtSize(
   minBytes: number,
   maxBytes: number
 ): Promise<Blob | null> {
-  const atMaxQ = await encodeJpegAt(canvas, ctx, source, width, height, 0.98);
+  paintSourceToCanvas(canvas, ctx, source, width, height);
+  const atMaxQ = await encodeJpegFromPaintedCanvas(canvas, 0.98);
   if (atMaxQ.size < minBytes) return null;
   if (atMaxQ.size <= maxBytes) return atMaxQ;
 
-  const atMinQ = await encodeJpegAt(canvas, ctx, source, width, height, QUALITY_FLOOR);
+  const atMinQ = await encodeJpegFromPaintedCanvas(canvas, QUALITY_FLOOR);
   if (atMinQ.size > maxBytes) return null;
 
   let lo = QUALITY_FLOOR;
   let hi = 0.98;
   let bestInBand: Blob | null = null;
-  for (let i = 0; i < 18; i++) {
+  for (let i = 0; i < QUALITY_BAND_ITERS; i++) {
     const q = (lo + hi) / 2;
-    const blob = await encodeJpegAt(canvas, ctx, source, width, height, q);
+    const blob = await encodeJpegFromPaintedCanvas(canvas, q);
     if (blob.size <= maxBytes) {
       if (blob.size >= minBytes && (!bestInBand || blob.size > bestInBand.size)) {
         bestInBand = blob;
@@ -113,8 +132,8 @@ async function encodeJpegInBandAtSize(
   return bestInBand;
 }
 
-/** Oversized voucher photo (e.g. 100KB → 45KB): quality + few scales — upscale scan mat karo. */
-const SHRINK_ONLY_SCALES = [1, 0.92, 0.84, 0.76, 0.68, 0.6, 0.52];
+/** Oversized voucher photo: kam scales, pehle hit par return. */
+const SHRINK_ONLY_SCALES = [1, 0.82, 0.64, 0.5];
 
 /** From–To KB band: scale + quality se output ko [min, max] ke andar lao (30–35 na ki 16). */
 async function fitJpegToTargetBand(
@@ -131,7 +150,6 @@ async function fitJpegToTargetBand(
 ): Promise<Blob | null> {
   let bestInBand: Blob | null = null;
   let bestUnderCap: Blob | null = null;
-  const qualitySearchSteps = shrinkOnly ? 8 : 14;
 
   const pickBest = (inBand: Blob | null, under: Blob | null): boolean => {
     if (inBand && (!bestInBand || inBand.size > bestInBand.size)) bestInBand = inBand;
@@ -150,12 +168,13 @@ async function fitJpegToTargetBand(
     const h = Math.max(1, Math.round(baseH * scale));
     const inBand = await encodeJpegInBandAtSize(canvas, ctx, source, w, h, minBytes, maxBytes);
     if (inBand) return pickBest(inBand, null);
+    // Canvas is already painted at this scale from encodeJpegInBandAtSize.
     let lo = QUALITY_FLOOR;
     let hi = 0.98;
     let under: Blob | null = null;
-    for (let i = 0; i < qualitySearchSteps; i++) {
+    for (let i = 0; i < QUALITY_UNDER_CAP_ITERS; i++) {
       const q = (lo + hi) / 2;
-      const blob = await encodeJpegAt(canvas, ctx, source, w, h, q);
+      const blob = await encodeJpegFromPaintedCanvas(canvas, q);
       if (blob.size <= maxBytes) {
         if (!under || blob.size > under.size) under = blob;
         lo = q;
@@ -414,7 +433,7 @@ async function decodeImageForCanvas(
         const resized = await createImageBitmap(bm, {
           resizeWidth: tw,
           resizeHeight: th,
-          resizeQuality: "high",
+          resizeQuality: "medium",
         });
         bm.close();
         bm = resized;

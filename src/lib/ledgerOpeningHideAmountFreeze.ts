@@ -1,5 +1,4 @@
 /**
- * FREEZE (hard): per-row opening "Hide Amount" — disabled until product re-enables explicitly.
- * Do not wire UI or balance adjustments while this is false.
+ * Per-row opening Hide/Show Amount (Book, Dated, FY opening rows).
  */
-export const LEDGER_OPENING_HIDE_AMOUNT_ENABLED = false;
+export const LEDGER_OPENING_HIDE_AMOUNT_ENABLED = true;

@@ -8,7 +8,10 @@ import * as React from "react";
 import Link from "next/link";
 import { Upload } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
+import {
+  AttachmentHoldPasteSurface,
+  AttachmentPcDropWrap,
+} from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { AttachmentPdfOptionsPanel } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 import { toast as sonnerToast } from "sonner";
@@ -203,7 +206,14 @@ export function EntityDocumentsBlock({
             id={`${inputId}-pdf-as-image`}
             existingLockedPdfFileUrls={existingLockedPdfFileUrls}
           />
-          <div className="flex flex-wrap items-start gap-2">
+          <AttachmentPcDropWrap
+            enabled={canAttachDocuments && docSlots.length < 5}
+            onDropFiles={(incoming) => {
+              if (docSlots.length >= 5) return;
+              void onDocsChange(syntheticFileInputChangeEvent(incoming));
+            }}
+            className="flex flex-wrap items-start gap-2"
+          >
             {docSlots.map((slot, idx) => (
               <FilePreview
                 key={typeof slot === "string" ? `${slot}-${idx}` : `${slot.name}-${idx}-${slot.size}`}
@@ -249,7 +259,7 @@ export function EntityDocumentsBlock({
                 </AttachmentHoldPasteSurface>
               </FormControl>
             ) : null}
-          </div>
+          </AttachmentPcDropWrap>
         </div>
       )}
     </FormItem>

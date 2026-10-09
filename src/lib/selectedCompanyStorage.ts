@@ -44,6 +44,22 @@ function getTabInstanceId(): string {
     return exeTabId;
   }
 
+  // EXE BrowserViews share sessionStorage — never use TAB_INSTANCE_SESSION_KEY here (refresh/map key drift).
+  if (isExeMultiTabShell()) {
+    try {
+      const fromName = String(window.name || "").trim();
+      if (fromName.startsWith("pl_tab_")) return fromName;
+      const id =
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? `pl_tab_${crypto.randomUUID()}`
+          : `pl_tab_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      window.name = id;
+      return id;
+    } catch {
+      return `pl_tab_fallback_${Date.now()}`;
+    }
+  }
+
   try {
     let id = cleanCompanyId(window.sessionStorage.getItem(TAB_INSTANCE_SESSION_KEY));
     if (id) return id;
@@ -137,7 +153,12 @@ export function readSelectedCompanyId(): string {
   const fromMap = readTabCompanyFromMap();
   if (fromMap) return fromMap;
   try {
-    return cleanCompanyId(window.localStorage.getItem(GLOBAL_COMPANY_ID_KEY));
+    const global = cleanCompanyId(window.localStorage.getItem(GLOBAL_COMPANY_ID_KEY));
+    // EXE refresh: naya tab map key / preload race — global last-used se is tab dubara pin karo.
+    if (global && isExeMultiTabShell()) {
+      writeTabCompanyToMap(global);
+    }
+    return global;
   } catch {
     return "";
   }

@@ -34,6 +34,8 @@ type Props = {
   /** Override place key; default `vouchers/{voucherId}` when voucherId set. */
   attachmentReusePlaceKey?: string | null;
   clientFileUrls?: readonly string[] | null;
+  /** Prior FY / deferred row: tick/placeholder until user opens (click still loads). */
+  suppressAutoThumbLoad?: boolean;
   "aria-label"?: string;
 };
 
@@ -47,6 +49,7 @@ export function VoucherAttachmentFileIndicator({
   voucherId,
   attachmentReusePlaceKey: attachmentReusePlaceKeyProp,
   clientFileUrls,
+  suppressAutoThumbLoad = false,
   "aria-label": ariaLabel = "Attachment",
 }: Props) {
   const { company, companyId: shellCid } = useCompany();
@@ -95,6 +98,7 @@ export function VoucherAttachmentFileIndicator({
   // Files OFF: sirf device cache se thumb; network kabhi nahi. Files ON: visible page + lazy load.
   const allowThumbLoad =
     wantsPreview &&
+    !suppressAutoThumbLoad &&
     filesNetworkAllowed &&
     (readyState === "ready" || shouldUseAttachmentLazyLoad(company));
   const thumbUrl = useAttachmentThumbDisplayUrl(

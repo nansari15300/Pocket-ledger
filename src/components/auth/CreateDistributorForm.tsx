@@ -35,6 +35,8 @@ import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
 import { compressImageForCompany, attachmentImageStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
+import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 
 
 const formSchema = z.object({
@@ -280,21 +282,25 @@ export function CreateDistributorForm({ application, onApplicationUpdated, onApp
                         <FilePreview key={index} file={file} onRemove={() => removeDocument(index)} />
                         ))}
                         {documentFiles.length < 3 && (
-                        <div 
-                            className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                            onClick={() => documentsInputRef.current?.click()}
-                        >
+                          <AttachmentHoldPasteSurface
+                            enabled={documentFiles.length < 3}
+                            onShortActivate={() => documentsInputRef.current?.click()}
+                            onPastedFiles={(incoming) =>
+                              void handleDocumentsChange(syntheticFileInputChangeEvent(incoming))
+                            }
+                            className="relative flex h-24 w-24 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed text-muted-foreground transition-colors hover:border-primary"
+                          >
                             <PlusCircle className="h-6 w-6" />
-                            <span className="text-xs mt-1">Add File(s)</span>
-                            <Input 
-                            type="file" 
-                            className="hidden"
-                            ref={documentsInputRef}
-                            onChange={handleDocumentsChange}
-                            accept="image/*,application/pdf"
-                            multiple
+                            <span className="mt-1 text-xs">Add File(s)</span>
+                            <Input
+                              type="file"
+                              className="hidden"
+                              ref={documentsInputRef}
+                              onChange={handleDocumentsChange}
+                              accept="image/*,application/pdf"
+                              multiple
                             />
-                        </div>
+                          </AttachmentHoldPasteSurface>
                         )}
                     </div>
                 </RestrictedFileUploader>

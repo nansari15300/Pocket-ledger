@@ -24,6 +24,8 @@ type Props = {
   pagingMode?: "newest-first" | "oldest-first";
   /** Bank statement: "Showing / Trxn Of total" line hata — sirf page-size select + Prev/Next (count clutter avoid). */
   trimSummary?: boolean;
+  /** Dashboard Recent: no "All" — max page size only. */
+  includeAllOption?: boolean;
   /** Popup ledger: summary toggle ko us popup ke overlay ke upar bhi dikhaye. */
   showSummaryToggleInOverlay?: boolean;
 };
@@ -41,6 +43,7 @@ export function MobileTransactionsPager({
   trimSummary = false,
   showSummaryToggleInOverlay = false,
   pagingMode = "newest-first",
+  includeAllOption = true,
 }: Props) {
   const isMobile = useIsMobile();
   const { registerPagerFabHost, unregisterPagerFabHost } = useMobileDetailSummaryCollapsed();
@@ -143,7 +146,7 @@ export function MobileTransactionsPager({
                       {size}
                     </SelectItem>
                   ))}
-                  <SelectItem value="0">All</SelectItem>
+                  {includeAllOption ? <SelectItem value="0">All</SelectItem> : null}
                 </SelectContent>
               </Select>
               {!trimSummary ? (

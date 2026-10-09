@@ -19,7 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
+import { masterEntityNestedGroupDialogShell } from "@/lib/masterEntityDialogClasses";
 import { cn } from "@/lib/utils";
 import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
@@ -161,7 +161,7 @@ export function CreateItemGroupDialog({
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogContent
-        className={cnStaticMobileFullscreenDialog(isMobile, "flex flex-col sm:max-w-md")}
+        {...masterEntityNestedGroupDialogShell(isMobile, "flex flex-col")}
         onOpenAutoFocus={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => {
           const target = e.target as HTMLElement;

@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
+import { masterEntityNestedGroupDialogShell } from "@/lib/masterEntityDialogClasses";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { cn } from "@/lib/utils";
@@ -161,10 +161,7 @@ export function CreateAccountGroupDialog({
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogContent
-        className={cnStaticMobileFullscreenDialog(
-          isMobile,
-          "max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-md sm:grid sm:flex-none sm:px-6"
-        )}
+        {...masterEntityNestedGroupDialogShell(isMobile)}
         onOpenAutoFocus={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => {
           const target = e.target as HTMLElement;

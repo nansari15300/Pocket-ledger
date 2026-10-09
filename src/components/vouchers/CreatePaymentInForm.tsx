@@ -14,6 +14,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react"
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { VoucherNumberInputWithRefresh } from "@/components/vouchers/VoucherNumberInputWithRefresh";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calendar } from "@/components/ui/calendar";
@@ -2100,7 +2101,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <FormItem className="min-w-0 w-full overflow-hidden">
                                   <FormLabel className="text-xs truncate">Voucher No.</FormLabel>
                                   <FormControl>
-                                    <Input placeholder="e.g. RCPT-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                                    <VoucherNumberInputWithRefresh placeholder="e.g. RCPT-001" {...voucherField} chromeSize="sm" className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} onRefresh={() => void fetchVoucherNumber()} showRefresh={isAutoVoucherEnabled && !savedVoucherId && !deleteDisabledWhenLinked} />
                                   </FormControl>
                                 </FormItem>
                               </>
@@ -2178,7 +2179,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </Select>
                             ) : null}
                             <FormControl>
-                              <Input placeholder="e.g. RCPT-001" {...field} className="h-10" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                              <VoucherNumberInputWithRefresh placeholder="e.g. RCPT-001" {...field} className="h-10" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} onRefresh={() => void fetchVoucherNumber()} showRefresh={isAutoVoucherEnabled && !savedVoucherId && !deleteDisabledWhenLinked} />
                             </FormControl>
                           </div>
                           <FormMessage />

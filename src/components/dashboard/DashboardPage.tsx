@@ -129,7 +129,24 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { DaybookReport } from '@/components/reports/DaybookReport';
 import { useVouchers } from '@/hooks/useVouchers';
 import { DashboardStatCardTxnLink } from "@/components/dashboard/DashboardStatCardTxnLink";
-import { TransactionsTable } from '@/components/vouchers/TransactionsTable';
+import { TransactionsTable, type TransactionColumnKey } from '@/components/vouchers/TransactionsTable';
+import { LedgerDesktopFooter } from '@/components/vouchers/LedgerDesktopFooter';
+import { LedgerFooterCheckboxPill } from '@/components/vouchers/ledgerFooterChrome';
+import { MobileTransactionsPager } from '@/components/vouchers/MobileTransactionsPager';
+import type { TransactionSortOrder } from '@/components/vouchers/TransactionTableSortDropdown';
+import { useRowsPerPage } from '@/hooks/useRowsPerPage';
+import { useRowsPerPageSelectControl } from '@/hooks/useRowsPerPageSelect';
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from '@/lib/rowsPerPageSelect';
+import {
+  COLUMN_LABELS,
+  useShowNotes,
+  useTransactionVisibleColumns,
+} from '@/components/vouchers/transactionColumnVisibility';
+import { LedgerFooterColumnsMenu } from '@/components/vouchers/LedgerFooterColumnsMenu';
+import {
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
 import { useDashboard } from '@/hooks/useDashboard';
 import { Calendar } from "@/components/ui/calendar";
 import { useAuth } from '@/hooks/useAuth';
@@ -140,6 +157,10 @@ import { useTransactions } from '@/hooks/use-transactions';
 import { useFeatureAccess } from '@/hooks/use-feature-access';
 import { useIsMobile, useCalendarMonths } from '@/hooks/use-mobile';
 import { DASHBOARD_VIEW_DETAILS_TABLE_CN } from "@/lib/dashboardViewDetailsTableClass";
+import {
+  DashboardWelcomeFooterBanner,
+  dashboardWelcomeFooterReservePx,
+} from "@/components/dashboard/DashboardWelcomeFooterBanner";
 
 // Type definitions
 type Voucher = {
@@ -607,8 +628,22 @@ export default function DashboardPage() {
     const [cashFlowOpen, setCashFlowOpen] = useState(false);
 
     const [showRecentNarration, setShowRecentNarration] = useState(false);
+  const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   
-  const [recentRowsPerPage, setRecentRowsPerPage] = React.useState('20');
+  const [recentRowsPerPage, setRecentRowsPerPage] = useRowsPerPage(50);
+  const [recentCurrentPage, setRecentCurrentPage] = React.useState(1);
+  const [recentSortOrder, setRecentSortOrder] = React.useState<TransactionSortOrder>('desc');
+  const {
+    selectValue: recentRowsPerPageSelectValue,
+    onSelectValueChange: handleRecentRowsPerPageChange,
+  } = useRowsPerPageSelectControl(
+    recentRowsPerPage,
+    setRecentRowsPerPage,
+    setRecentCurrentPage,
+    ROWS_PER_PAGE_OPTIONS_DEFAULT,
+    '50'
+  );
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
   const [selectedVoucher, setSelectedVoucher] = React.useState<any>(null);
   const { visibleCard, setVisibleCard } = useDashboard();
@@ -632,7 +667,6 @@ export default function DashboardPage() {
   const [recentUnapprovedOnly, setRecentUnapprovedOnly] = useState(false);
   const [activeRecentFilter, setActiveRecentFilter] = useState<string | null>(null);
   const [isDateChange, setIsDateChange] = useState(false);
-  const [liveTime, setLiveTime] = useState(new Date());
 
   const isReportsEnabled = useFeatureAccess('reports');
 
@@ -645,26 +679,6 @@ export default function DashboardPage() {
   setStockDateRange(undefined);
 }, [dateSystem]);
 
-
-  useEffect(() => {
-    const timer = setInterval(() => setLiveTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  /** Welcome card clock line: `dateSystem` ke mutabiq AD/BS label — Pocket-Ledger welcome card parity. */
-  const welcomeSystemDateTimeLine = useMemo(() => {
-    const d = liveTime;
-    if (!(d instanceof Date) || isNaN(d.getTime())) return "";
-    const weekday = format(d, "EEEE");
-    const timePart = d.toLocaleTimeString();
-    if (dateSystem === "AD") {
-      return `${weekday}, ${formatDate(d)} (AD) | ${timePart}`;
-    }
-    if (dateSystem === "BS") {
-      return `${weekday}, ${formatDateBS(d)} (BS) | ${timePart}`;
-    }
-    return `${weekday} · AD ${formatDate(d)} · BS ${formatDateBS(d)} | ${timePart}`;
-  }, [liveTime, dateSystem, formatDate, formatDateBS]);
 
   const newYearInfo = useMemo(() => {
     const now = new Date();
@@ -688,7 +702,7 @@ export default function DashboardPage() {
     if (daysToBsNY >= 0 && daysToBsNY <= 10) return { event: "Nepali New Year Countdown", isNewYear: false, daysLeft: daysToBsNY, year: currentBsYear + 1 };
 
     return null;
-  }, [liveTime]);
+  }, []);
 
 
   useEffect(() => {
@@ -1171,20 +1185,64 @@ export default function DashboardPage() {
     effectiveRecentFilters,
     undefined,
     journalAccountNames,
-    userNames
+    userNames,
+    undefined,
+    undefined,
+    true
   );
 
-  const recentTransactions = useMemo(() => {
+  const recentSortedBase = useMemo(() => {
     if (!allRecentTransactions) return [];
     let sorted = sortRecentTransactionsDesc(allRecentTransactions as Record<string, unknown>[]);
+    if (recentSortOrder === 'asc') sorted = [...sorted].reverse();
     if (recentUnapprovedOnly) {
       sorted = sorted.filter((tx) => (tx as any).isApproved !== true);
-      return sorted;
     }
-    const limit = Number(recentRowsPerPage);
-    if (!isNaN(limit) && limit > 0) sorted = sorted.slice(0, limit);
+    if (!includeNotesInTable) {
+      sorted = sorted.filter((tx) => (tx as any).type !== 'note');
+    }
     return sorted;
-  }, [allRecentTransactions, recentRowsPerPage, recentUnapprovedOnly]);
+  }, [allRecentTransactions, recentUnapprovedOnly, recentSortOrder, includeNotesInTable]);
+
+  const recentListTotal = recentSortedBase.length;
+  const recentEffectiveRowsPerPage = Math.max(10, recentRowsPerPage || 50);
+  const recentTotalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(recentListTotal / recentEffectiveRowsPerPage));
+  }, [recentListTotal, recentEffectiveRowsPerPage]);
+  const recentSafePage = Math.min(Math.max(1, recentCurrentPage), recentTotalPages);
+  const recentPaginationSlice = useMemo(() => {
+    const total = recentListTotal;
+    const pageSize = recentEffectiveRowsPerPage;
+    if (total === 0) {
+      return { rows: recentSortedBase, beforeCount: 0, afterCount: 0 };
+    }
+    const start = (recentSafePage - 1) * pageSize;
+    const end = Math.min(total, start + pageSize);
+    return {
+      rows: recentSortedBase.slice(start, end),
+      beforeCount: total - end,
+      afterCount: start,
+    };
+  }, [recentSortedBase, recentEffectiveRowsPerPage, recentSafePage, recentListTotal]);
+  const recentTransactions = recentPaginationSlice.rows;
+  const recentPagerEdgeCounts = useMemo(
+    () => ({
+      before: recentPaginationSlice.beforeCount,
+      after: recentPaginationSlice.afterCount,
+    }),
+    [recentPaginationSlice.afterCount, recentPaginationSlice.beforeCount]
+  );
+
+  React.useEffect(() => {
+    if (recentRowsPerPage <= 0) setRecentRowsPerPage(50);
+  }, [recentRowsPerPage, setRecentRowsPerPage]);
+
+  React.useEffect(() => {
+    setRecentCurrentPage(1);
+  }, [recentDateRange, recentFilters, recentUnapprovedOnly, recentSortOrder, includeNotesInTable]);
+  React.useEffect(() => {
+    setRecentCurrentPage((p) => Math.min(Math.max(1, p), recentTotalPages));
+  }, [recentTotalPages]);
   
   const handlePrint = () => {
     const filterLabel =
@@ -1485,7 +1543,6 @@ export default function DashboardPage() {
     setRecentDateRange(undefined);
     setRecentFilters({});
     setActiveRecentFilter(null);
-    setRecentRowsPerPage('0');
   };
   
   const taxBreakdownData = useMemo(() => {
@@ -2149,9 +2206,30 @@ export default function DashboardPage() {
     <Card className={cn("border-2 border-foreground/20", isMobile && "px-0")}>
       <CardHeader className={cn(isMobile && "px-0.5")}>
         <div className="flex flex-col gap-2">
-          <CardTitle className="text-center w-full">Recent Transactions</CardTitle>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className={cn("flex items-center space-x-2", isMobile ? "order-1" : "md:order-2")}>
+          <div className="flex flex-wrap items-center gap-2 min-h-9 w-full">
+            <CardTitle className="shrink-0 text-left text-lg font-semibold leading-none">
+              Recent Transactions
+            </CardTitle>
+            <Button
+              type="button"
+              size="sm"
+              variant={recentUnapprovedOnly ? "default" : "outline"}
+              className="h-9 whitespace-nowrap"
+              onClick={() => {
+                if (recentUnapprovedOnly) setRecentUnapprovedOnly(false);
+                else applyRecentUnapprovedFilter();
+              }}
+            >
+              Unapproved
+            </Button>
+            {isRecentFilterActive && (
+              <Button variant="ghost" size="sm" onClick={clearRecentFilters}>
+                <XCircle className="mr-2 h-4 w-4" />
+                Clear Filters
+              </Button>
+            )}
+            <div className="min-w-[0.5rem] flex-1" />
+            <div className={cn("flex items-center space-x-2 shrink-0", isMobile ? "order-1" : "md:order-2")}>
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
                   isRange
@@ -2176,35 +2254,7 @@ export default function DashboardPage() {
                 </Popover>
             )}
             </div>
-            <div className={cn("flex items-center space-x-2 flex-1 min-w-0", isMobile ? "order-2" : "md:order-1")}>
-                <span className="text-sm font-medium shrink-0">Show:</span>
-                <Select value={recentRowsPerPage} onValueChange={(v) => setRecentRowsPerPage(v)}>
-                    <SelectTrigger className="h-9 flex-1 min-w-0 w-full">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="20">Last 20</SelectItem>
-                        <SelectItem value="30">Last 30</SelectItem>
-                        <SelectItem value="50">Last 50</SelectItem>
-                        <SelectItem value="0">All</SelectItem>
-                    </SelectContent>
-                </Select>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={recentUnapprovedOnly ? "default" : "outline"}
-                  className="h-9 whitespace-nowrap"
-                  onClick={() => {
-                    if (recentUnapprovedOnly) setRecentUnapprovedOnly(false);
-                    else applyRecentUnapprovedFilter();
-                  }}
-                >
-                  Unapproved
-                </Button>
-            </div>
-             {isRecentFilterActive && <Button variant="ghost" size="sm" onClick={clearRecentFilters}><XCircle className="mr-2 h-4 w-4"/>Clear Filters</Button>}
           </div>
-          <span className="text-sm font-medium text-muted-foreground">Showing {recentTransactions ? recentTransactions.length : 0} Vouchers Of All {allRecentTransactions ? allRecentTransactions.length : 0} Vouchers</span>
         </div>
       </CardHeader>
       <CardContent
@@ -2228,8 +2278,95 @@ export default function DashboardPage() {
           activeFilter={activeRecentFilter}
           setActiveFilter={setActiveRecentFilter}
           hideFooter={true}
+          hideBalanceColumn={true}
           showNarration={showRecentNarration}
+          visibleColumns={visibleColumns}
         />
+        {isMobile ? (
+          <MobileTransactionsPager
+            className="px-2 pt-2"
+            currentPage={recentSafePage}
+            totalItems={recentListTotal}
+            rowsPerPage={recentEffectiveRowsPerPage}
+            onRowsPerPageChange={(nextRows) => {
+              const n = Math.max(10, nextRows || 50);
+              setRecentRowsPerPage(n);
+              setRecentCurrentPage(1);
+            }}
+            onPageChange={setRecentCurrentPage}
+            edgeCounts={recentPagerEdgeCounts}
+            pagingMode="newest-first"
+            trimSummary
+            includeAllOption={false}
+          />
+        ) : (
+          <LedgerDesktopFooter
+            shellClassName="border-t border-blue-300/60 bg-blue-100/80 -mx-4 sm:-mx-6 md:-mx-8 px-4 sm:px-6 md:px-8"
+            left={
+              <>
+                <LedgerFooterCheckboxPill
+                  id="show-narration-recent-legacy"
+                  checked={showRecentNarration}
+                  onCheckedChange={(checked) => setShowRecentNarration(Boolean(checked))}
+                  label="Show Narration"
+                />
+                <LedgerFooterColumnsMenu>
+                  <DropdownMenuContent align="start" className="w-52 p-2">
+                    {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
+                      .filter((key) => key !== 'runningBalance' && key !== 'status')
+                      .map((key) => (
+                        <DropdownMenuItem
+                          key={key}
+                          onSelect={(e) => e.preventDefault()}
+                          className="flex items-center gap-2 cursor-pointer"
+                        >
+                          <Checkbox
+                            id={`col-${key}-recent-legacy`}
+                            checked={visibleColumns[key] !== false}
+                            onCheckedChange={(c) => handleColumnVisibilityChange(key, Boolean(c))}
+                          />
+                          <label
+                            htmlFor={`col-${key}-recent-legacy`}
+                            className="text-sm font-medium flex-1 cursor-pointer"
+                          >
+                            {COLUMN_LABELS[key]}
+                          </label>
+                        </DropdownMenuItem>
+                      ))}
+                  </DropdownMenuContent>
+                </LedgerFooterColumnsMenu>
+                <LedgerFooterCheckboxPill
+                  id="show-notes-recent-legacy"
+                  checked={includeNotesInTable}
+                  disabled={notesPreferenceLockedOnMobile}
+                  onCheckedChange={(c) => setShowNotes(Boolean(c))}
+                  label="Note"
+                />
+              </>
+            }
+            sortBy="date"
+            sortOrder={recentSortOrder}
+            onSortChange={(_by, order) => {
+              setRecentSortOrder(order);
+              setRecentCurrentPage(1);
+            }}
+            viewMode="statement"
+            currentPage={recentSafePage}
+            totalPages={recentTotalPages}
+            setCurrentPage={setRecentCurrentPage}
+            rowsPerPageSelectValue={recentRowsPerPageSelectValue}
+            onRowsPerPageChange={(value) => {
+              const n = Math.max(10, Number(value) || 50);
+              setRecentRowsPerPage(n);
+              setRecentCurrentPage(1);
+            }}
+            rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS_DEFAULT}
+            beforeCount={recentPaginationSlice.beforeCount}
+            afterCount={recentPaginationSlice.afterCount}
+            totalCount={recentListTotal}
+            includeAllOption={false}
+          />
+        )}
         </div>
       </CardContent>
     </Card>
@@ -2283,38 +2420,6 @@ export default function DashboardPage() {
       {shouldShow('bank-cash-summary') && can('view_bank_cash_summary') && <BankCashSummary />}
       {shouldShow('daybook') && can('view_daybook') && <div className="px-0.5"><DaybookReport /></div>}
       {shouldShow('recent-transactions') && can('view_recent_transactions') && renderRecentTransactions()}
-      
-      <Card className="col-span-full bg-muted dark:bg-green-900/20 dark:border-green-600/20 p-2 overflow-hidden relative">
-        {newYearInfo && !newYearInfo.isNewYear && (
-          <div className="absolute top-0 right-0 bg-red-500 text-white text-xs font-bold px-4 py-1 rounded-bl-lg animate-pulse">
-            {newYearInfo.daysLeft} days to {newYearInfo.year}!
-          </div>
-        )}
-        <CardHeader className="p-0 text-center">
-          <p className="text-xs"></p>
-          {newYearInfo?.isNewYear ? (
-              <div className="flex flex-col items-center justify-center py-2">
-                <motion.div
-                  initial={{ scale: 0, y: 20 }}
-                  animate={{ scale: 1, y: 0 }}
-                  transition={{ type: "spring", stiffness: 260, damping: 20 }}
-                  className="text-3xl font-bold bg-gradient-to-r from-amber-400 via-red-500 to-fuchsia-600 bg-clip-text text-transparent"
-                >
-                  {newYearInfo.event}
-                </motion.div>
-                <p className="text-sm font-semibold">{user?.displayName || user?.email}</p>
-              </div>
-          ) : (
-             <CardTitle className="text-1xl font-bold text-green-500 dark:text-green-400">
-              {greeting}, {user?.displayName || user?.email}! Welcome To Pocket-Ledger
-            </CardTitle>
-          )}
-
-          <p className="text-sm text-muted-foreground font-mono">
-            {welcomeSystemDateTimeLine}
-          </p>
-        </CardHeader>
-      </Card>
     </div>
   );
   }
@@ -2337,12 +2442,30 @@ export default function DashboardPage() {
     { id: 'recent-transactions', title: 'Recent' },
   ];
 
+  const legacyDashboardTabFooterPx = isMobile ? 68 : 72;
+  const legacyWelcomeFooterReservePx = dashboardWelcomeFooterReservePx(newYearInfo);
+
   return (
-    <div className="pb-[72px] p-0.5">
+    <div
+      className="p-0.5"
+      style={{ paddingBottom: legacyDashboardTabFooterPx + legacyWelcomeFooterReservePx }}
+    >
       <div className="p-0">
         {renderDashboardContent()}
       </div>
-       
+
+      <div
+        className="fixed left-0 right-0 z-[46] box-border p-0.5 md:left-64"
+        style={{ bottom: `${legacyDashboardTabFooterPx}px` }}
+        data-pl-dashboard-welcome-footer=""
+      >
+        <DashboardWelcomeFooterBanner
+          greeting={greeting}
+          displayName={user?.displayName || user?.email || ""}
+          newYearInfo={newYearInfo}
+        />
+      </div>
+
       <div className="fixed bottom-0 left-0 right-0 z-40 p-0.5 md:left-64">
         {/* User request: footer tabs ek hi green container me, row-layout labels ke saath */}
         <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald flex h-16 items-stretch justify-center gap-0.5 p-2">

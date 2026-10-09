@@ -16,6 +16,7 @@ import {
 } from "@/lib/permanentDeleteFromForm";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { VoucherNumberInputWithRefresh } from "@/components/vouchers/VoucherNumberInputWithRefresh";
 import { Textarea } from "@/components/ui/textarea";
 import { Combobox } from "@/components/ui/combobox";
 import { MASTER_ACCOUNT_FREEZE_LIST_LABEL } from "@/lib/masterAccountFreeze/labels";
@@ -1119,7 +1120,13 @@ export function CreateAdjustmentForm({
           <FormField control={form.control} name="voucherNumber" render={({ field }) => (
             <FormItem>
               <FormLabel>Voucher No.</FormLabel>
-              <FormControl><Input {...field} /></FormControl>
+              <FormControl>
+                <VoucherNumberInputWithRefresh
+                  {...field}
+                  onRefresh={() => void fetchAdjustmentVoucherNumber()}
+                  showRefresh={isAutoVoucherEnabled && !savedVoucherId}
+                />
+              </FormControl>
               <FormMessage />
             </FormItem>
           )} />

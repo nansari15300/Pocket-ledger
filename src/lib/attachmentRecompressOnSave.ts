@@ -336,6 +336,17 @@ export async function recompressOversizedImageAttachmentsOnSave(
   const band = await resolveAttachmentImageKbBand(opts?.companyId);
   const maxBytes = band.maxKb * 1024;
 
+  const hasOversizedImageFile = items.some(
+    (item) => item instanceof File && isImageFile(item) && item.size > maxBytes
+  );
+  const hasImageUrl = items.some((item) => {
+    if (typeof item !== "string") return false;
+    const url = String(item || "").trim();
+    return url.length > 0 && looksLikeImageAttachmentUrl(url);
+  });
+  // Add-time compress (Payment Out jaisa): sirf File/PDF under cap — save par dubara download/compress mat karo.
+  if (!hasOversizedImageFile && !hasImageUrl) return items;
+
   const passthrough = new Map<number, File | string>();
   const jobs: SaveCompressJob[] = [];
 

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Check } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,6 +19,8 @@ type Props = {
   children: React.ReactNode;
   className?: string;
   title?: string;
+  /** FY merge divider: left chevron = format dropdown hint */
+  showLeadingChevron?: boolean;
 };
 
 /** FY opening row pill — click to pick label format (device localStorage). */
@@ -26,6 +28,7 @@ export function FyOpeningPillFormatPill({
   children,
   className,
   title = "Change FY opening label format",
+  showLeadingChevron = false,
 }: Props) {
   const { format, setFormat } = useFyOpeningPillFormat();
 
@@ -35,10 +38,17 @@ export function FyOpeningPillFormatPill({
         <button
           type="button"
           title={title}
-          className={cn("inline-flex max-w-full cursor-pointer rounded-xl border-0 bg-transparent p-0", className)}
+          className={cn(
+            "inline-flex max-w-full cursor-pointer items-center gap-1 border-0 bg-transparent p-0",
+            showLeadingChevron ? "rounded-none" : "rounded-xl",
+            className
+          )}
           onClick={(e) => e.stopPropagation()}
           onDoubleClick={(e) => e.stopPropagation()}
         >
+          {showLeadingChevron ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-foreground" aria-hidden />
+          ) : null}
           {children}
         </button>
       </DropdownMenuTrigger>

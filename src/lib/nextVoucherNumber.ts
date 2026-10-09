@@ -64,6 +64,12 @@ function isLegacyServiceVoucherPrefix(prefixKey: string, prefix: string): boolea
 /** Stored `PS-` / `SS-` → `SER-` (service rename); empty → company default. */
 export function resolveVoucherPrefixForKey(prefixKey: string, prefix: string | undefined | null): string {
   const raw = String(prefix ?? "").trim();
+  if (prefixKey === "inter_company") {
+    const norm = normalizePrefix(raw).toUpperCase();
+    if (raw === "IC-" || norm === "IC" || raw === "FT-" || norm === "FT") {
+      return DEFAULT_VOUCHER_PREFIX_LABELS.inter_company;
+    }
+  }
   if (SERVICE_PREFIX_KEY.has(prefixKey) && (!raw || isLegacyServiceVoucherPrefix(prefixKey, raw))) {
     return DEFAULT_VOUCHER_PREFIX_LABELS[prefixKey] || "SER-";
   }
@@ -100,6 +106,9 @@ export function voucherSerialPrefixAliases(prefixKey: string, prefix: string): s
   }
   if (prefixKey === "sale_service") {
     return [...new Set([resolved, normalizePrefix(resolved), "SS-", "SS"].filter(Boolean))];
+  }
+  if (prefixKey === "inter_company") {
+    return [...new Set([resolved, normalizePrefix(resolved), "FT-", "FT", "IC-", "IC"].filter(Boolean))];
   }
   return [resolved];
 }

@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { RestrictedFileUploader } from "@/components/ui/RestrictedFileUploader";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
+import { VoucherAttachmentPcDropRow } from "@/components/vouchers/VoucherAttachmentPcDropRow";
 import {
   appendCompressedVoucherAttachmentsToState,
   handleVoucherAttachmentInputChange,
@@ -58,7 +59,15 @@ export function LoanVoucherAttachmentsField({
     <div className="space-y-1">
       <Label>{label}</Label>
       <RestrictedFileUploader>
-        <div className="flex flex-wrap gap-3">
+        <VoucherAttachmentPcDropRow
+          enabled={canAddMoreFiles}
+          companyId={companyId}
+          files={files}
+          setFiles={setFiles}
+          limits={fileAttachmentLimits}
+          toast={toast}
+          className="flex flex-wrap gap-3"
+        >
           {files.map((file, index) => (
             <FilePreview
               key={`${typeof file === "string" ? file : file.name}-${index}`}
@@ -115,7 +124,7 @@ export function LoanVoucherAttachmentsField({
               />
             </>
           ) : null}
-        </div>
+        </VoucherAttachmentPcDropRow>
       </RestrictedFileUploader>
     </div>
   );

@@ -26,6 +26,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { VoucherNumberInputWithRefresh } from "@/components/vouchers/VoucherNumberInputWithRefresh";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -2088,11 +2089,14 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                 <FormItem className="min-w-0 w-full overflow-hidden">
                                   <FormLabel className="text-xs truncate">Voucher No.</FormLabel>
                                   <FormControl>
-                                    <Input
+                                    <VoucherNumberInputWithRefresh
                                       placeholder="e.g. ADSAL-001"
                                       {...voucherField}
+                                      chromeSize="sm"
                                       className="h-9 text-xs px-2 min-w-0 max-w-full w-full"
                                       disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))}
+                                      onRefresh={() => void fetchVoucherNumber()}
+                                      showRefresh={isAutoVoucherEnabled && !savedVoucherId && !deleteDisabledWhenLinked}
                                     />
                                   </FormControl>
                                 </FormItem>
@@ -2172,11 +2176,13 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                               </Select>
                             )}
                             <FormControl>
-                              <Input 
-                                placeholder="e.g. ADSAL-001" 
-                                {...field} 
-                                className="h-10" 
-                                disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} 
+                              <VoucherNumberInputWithRefresh
+                                placeholder="e.g. ADSAL-001"
+                                {...field}
+                                className="h-10"
+                                disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))}
+                                onRefresh={() => void fetchVoucherNumber()}
+                                showRefresh={isAutoVoucherEnabled && !savedVoucherId && !deleteDisabledWhenLinked}
                               />
                             </FormControl>
                           </div>

@@ -398,7 +398,7 @@ export function LinkPaymentOutToSalaryDialog({
             <p className="text-sm text-amber-600 font-medium px-1">Selected total is less than required. Choose more vouchers to cover the amount.</p>
           )}
           <div className="flex flex-shrink-0 items-center gap-2 pt-2 border-t flex-wrap justify-between">
-            <Button size="sm" onClick={() => onOpenChange(false)} className="h-9 rounded-full shrink-0 bg-orange-500 hover:bg-orange-600 text-white border-0">
+            <Button type="button" size="sm" onClick={() => onOpenChange(false)} className="h-9 rounded-full shrink-0 bg-orange-500 hover:bg-orange-600 text-white border-0">
               Cancel
             </Button>
             <div className="flex flex-row flex-wrap items-center gap-2 shrink-0">
@@ -410,7 +410,7 @@ export function LinkPaymentOutToSalaryDialog({
                 <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
                 Reset
               </Button>
-              <Button onClick={handleDone} disabled={totalLinked > amountPaid} className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0">
+              <Button type="button" onClick={handleDone} disabled={totalLinked > amountPaid} className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0">
                 DONE
               </Button>
             </div>

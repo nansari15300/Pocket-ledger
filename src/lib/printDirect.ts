@@ -19,8 +19,10 @@ import {
   insertFiscalPartitionRowsMulti,
   type FiscalMergePartitionEntry,
 } from "@/lib/fiscalPartitionRows";
+import type { FiscalPartitionClosingSummary } from "@/lib/fiscalPartitionClosingSummary";
 import {
   buildFiscalMergePartitionBannerLabelForDateSystem,
+  buildFiscalMergePartitionBannerSplitForDateSystem,
   buildFyOpeningPillSplit,
 } from "@/lib/fiscalYearLabel";
 import { getPrintColorPalette, type PrintColorMode } from "@/lib/printColorPalette";
@@ -34,6 +36,7 @@ import {
   type LedgerOpeningPrintRow,
 } from "@/lib/ledgerOpeningBalanceDisplay";
 import { FY_OPENING_ROW_TYPE } from "@/lib/fyPagination/fyOpeningRows";
+import { readFyOpeningPillFormat } from "@/lib/fyOpeningPillFormat";
 
 function resolvePrintFiscalMergePartitions(
   payload: {
@@ -60,7 +63,8 @@ function resolvePrintFiscalMergePartitions(
       at,
       dateSystem,
       formatDate,
-      optionalNote
+      optionalNote,
+      readFyOpeningPillFormat()
     );
 
   if (payload.fiscalMergePartitions?.length) {
@@ -436,7 +440,14 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
   let printMasterIncludeBalance = true;
   if (!payload.skipPrintOptionsDialog) {
     const { promptPrintOptions } = await import("@/components/print/PrintOptionsPrompt");
-    const opts = await promptPrintOptions({ showConfirmationTabs: payload.printConfirmationTabs === true });
+    const opts = await promptPrintOptions({
+      showConfirmationTabs: payload.printConfirmationTabs === true,
+      initial: {
+        printIncludeNarration: payload.showNarration,
+        printIncludeNotes: payload.includeNotes,
+        // User/File: print dialog hamesha off — ledger me column on ho tab bhi; user khud tick kare.
+      },
+    });
     if (!opts) {
       return;
     }
@@ -1156,13 +1167,29 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
         tableHeader.length
       );
 
+  const tableColumnCount = tableHeader.length;
+  const columnWidths = getColumnWidths(p, {
+    landscape: useLandscapePrint,
+    columnCount: tableColumnCount,
+  });
+  const syncedColumnWidths =
+    columnWidths.length === tableColumnCount
+      ? columnWidths
+      : Array.from({ length: tableColumnCount }, (_, i) => columnWidths[i] ?? "*");
+
+  const padPrintRow = (row: TableCell[]): TableCell[] => {
+    const copy = [...row];
+    ensureRowLength(copy, tableColumnCount);
+    return copy;
+  };
+
   const tableLayout: Content = {
     table: {
       headerRows: 1,
-      widths: getColumnWidths(p),
+      widths: syncedColumnWidths,
       body: [
-        tableHeader,
-        ...(openingBalanceRow ?? []),
+        padPrintRow(tableHeader),
+        ...(openingBalanceRow ?? []).map(padPrintRow),
         ...rows.flatMap((row, rowIdx) =>
           buildTableRow(
             row,
@@ -1172,10 +1199,10 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
             formatDateBS,
             formatCurrencyForPrint,
             formatRunning,
-            tableHeader.length
-          )
+            tableColumnCount
+          ).map(padPrintRow)
         ),
-        ...tableFooter,
+        ...tableFooter.map(padPrintRow),
       ]
     },
      layout: {
@@ -1235,7 +1262,7 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
   const docDef: TDocumentDefinitions = {
     pageSize: "A4",
     ...(useLandscapePrint ? { pageOrientation: "landscape" as const } : {}),
-    pageMargins: [30, 100, 30, 40],
+    pageMargins: [PRINT_SIDE_MARGIN_PT, 100, PRINT_SIDE_MARGIN_PT, 40],
     header: header,
     footer: footer,
     content: body,
@@ -1358,9 +1385,23 @@ function computeRows(payload: PrintPayload) {
   const itemForContext = payload.context === 'item' ? findItem(payload.itemsData, payload.contextId) : undefined;
 
   const rowsAsc: any[] = [];
+  let fySegmentDr = 0;
+  let fySegmentCr = 0;
   for (const t of sortedWithPart) {
     if ((t as any).type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
-      rowsAsc.push({ ...(t as any), debit: 0, credit: 0, runningBalance });
+      rowsAsc.push({
+        ...(t as any),
+        debit: 0,
+        credit: 0,
+        runningBalance,
+        _partitionClosingSummary: {
+          totalDr: fySegmentDr,
+          totalCr: fySegmentCr,
+          closingBalance: runningBalance,
+        } satisfies FiscalPartitionClosingSummary,
+      });
+      fySegmentDr = 0;
+      fySegmentCr = 0;
       if (mergePartitions.length) {
         pushFyOpeningPrintRowAfterPartition(rowsAsc, t, runningBalance, payload.company, payload.dateSystem);
       }
@@ -1391,10 +1432,14 @@ function computeRows(payload: PrintPayload) {
     };
     if (t.type === "opening_balance" && typeof t.runningBalance === "number") {
       runningBalance = t.runningBalance;
+      fySegmentDr += debit;
+      fySegmentCr += credit;
       rowsAsc.push({ ...row, runningBalance });
       continue;
     }
     runningBalance += debit - credit;
+    fySegmentDr += debit;
+    fySegmentCr += credit;
     rowsAsc.push({ ...row, runningBalance });
   }
 
@@ -1816,6 +1861,7 @@ const buildOpeningBalanceRow = (
   const showDate = isColVisible(p, "date");
   const showVoucherNo = isColVisible(p, "voucherNo");
   const showUser = isColVisible(p, "user");
+  const showFile = isColVisible(p, "file");
   const visibleDataCols = [showDr, showCr, showStatus, showBalance].filter(Boolean).length;
 
   const factor =
@@ -1910,12 +1956,12 @@ const buildOpeningBalanceRow = (
       }
     }
 
-    const labelColSpan =
-      dateCells.length +
-      (showType ? 1 : 0) +
+    const metaColSpan =
       (showVoucherNo ? 1 : 0) +
       (p.context === "daybook" ? 1 : 0) +
-      (showUser ? 1 : 0);
+      (showUser ? 1 : 0) +
+      (showFile ? 1 : 0);
+    const leadingLabelColSpan = dateCells.length + (showType ? 1 : 0) + metaColSpan;
 
     const row: TableCell[] = [...dateCells];
 
@@ -1926,25 +1972,32 @@ const buildOpeningBalanceRow = (
         fontSize: LEDGER_PRINT_BODY_FONT,
         noWrap: true,
       });
-    } else if (labelColSpan > 0) {
+      if (showVoucherNo) row.push({ text: "", fontSize: 9, noWrap: true });
+      if (p.context === "daybook") row.push({ text: "", fontSize: 9, noWrap: true });
+      if (showUser) row.push({ text: "", fontSize: 9, noWrap: true });
+      if (showFile) row.push({ text: "-", fontSize: 9, alignment: "center", noWrap: true });
+    } else if (metaColSpan > 0) {
       row.push({
         text: spec.pillLabel,
-        colSpan: labelColSpan,
+        colSpan: metaColSpan,
         bold: true,
         alignment: "left",
         fontSize: 9,
         noWrap: true,
       });
-      for (let i = 1; i < labelColSpan; i++) row.push({});
+      for (let i = 1; i < metaColSpan; i++) row.push({});
+    } else if (dateCells.length === 0) {
+      row.push({
+        text: spec.pillLabel,
+        colSpan: 1,
+        bold: true,
+        alignment: "left",
+        fontSize: 9,
+        noWrap: true,
+      });
     }
 
-    if (showType) {
-      if (showVoucherNo) row.push({});
-      if (p.context === "daybook") row.push({});
-      if (showUser) row.push({});
-    }
-
-    if (labelColSpan < 1 && visibleDataCols === 0) {
+    if (leadingLabelColSpan < 1 && visibleDataCols === 0) {
       return [[{ text: spec.pillLabel, colSpan, bold: true, alignment: "left", fontSize: 9, noWrap: true }]];
     }
 
@@ -2000,18 +2053,21 @@ const buildOpeningBalanceRow = (
       if (showBalance) row.push(balanceCell);
       ensureRowLength(row, colSpan);
       if (obDetailContent.length === 0) return [row];
-      const subRow: TableCell[] = [{ text: "", colSpan: labelColSpan, style: "narrationRow" }];
-      for (let i = 1; i < labelColSpan; i++) subRow.push({ text: "" });
+      const subRow: TableCell[] = [{ text: "", colSpan: leadingLabelColSpan, style: "narrationRow" }];
+      for (let i = 1; i < leadingLabelColSpan; i++) subRow.push({ text: "" });
       if (showDr) subRow.push({ text: "", style: "narrationRow" });
       if (showCr) subRow.push({ text: "", style: "narrationRow" });
-      subRow.push({
-        text: obDetailContent,
-        colSpan: 2,
-        alignment: "left",
-        style: "narrationRow",
-        noWrap: false,
-      });
-      subRow.push({ text: "" });
+      const obDetailColSpan = (showStatus ? 1 : 0) + (showBalance ? 1 : 0);
+      if (obDetailColSpan > 0) {
+        subRow.push({
+          text: obDetailContent,
+          colSpan: obDetailColSpan,
+          alignment: "left",
+          style: "narrationRow",
+          noWrap: false,
+        });
+        for (let i = 1; i < obDetailColSpan; i++) subRow.push({ text: "" });
+      }
       ensureRowLength(subRow, colSpan);
       return [row, subRow];
     }
@@ -2044,17 +2100,27 @@ const buildOpeningBalanceRow = (
     ];
     for (let i = 1; i < narrationSpan; i++) subRow.push({});
     for (let i = narrationSpan; i < colSpan; i++) subRow.push({});
+    ensureRowLength(subRow, colSpan);
     result.push(subRow);
   }
 
   return result.length > 0 ? result : null;
 };
 
-/** Ledger print: 7 se zyada visible columns → landscape (Both date = 9 cols, etc.). */
+/** Minimum left/right page margin (6 mm) — table must fit inside remaining width. */
+const PRINT_SIDE_MARGIN_MM = 6;
+const PRINT_SIDE_MARGIN_PT = (PRINT_SIDE_MARGIN_MM * 72) / 25.4;
+
+/** Ledger print: 7+ visible columns → landscape (e.g. Both date + type + voucher + Dr/Cr/Balance = 7). */
 const PRINT_LANDSCAPE_COLUMN_THRESHOLD = 7;
 
 function shouldUseLandscapeLedgerPrint(tableHeader: TableCell[]): boolean {
-  return tableHeader.length > PRINT_LANDSCAPE_COLUMN_THRESHOLD;
+  return tableHeader.length >= PRINT_LANDSCAPE_COLUMN_THRESHOLD;
+}
+
+function ledgerPrintContentWidthPt(landscape: boolean): number {
+  const pageWidthPt = landscape ? 841.89 : 595.28;
+  return pageWidthPt - 2 * PRINT_SIDE_MARGIN_PT;
 }
 
 const buildTableHeader = (p: PrintPayload): TableCell[] => {
@@ -2373,36 +2439,181 @@ function applySpendWisePrintBorders(
   });
 }
 
+function countPrintLeadingColsBeforeDrCr(p: PrintPayload): number {
+  let n = 0;
+  if (isColVisible(p, "date")) n += p.dateSystem === "Both" ? 2 : 1;
+  if (isColVisible(p, "type")) n += 1;
+  if (isColVisible(p, "voucherNo")) n += 1;
+  if (p.context === "daybook") n += 1;
+  if (isColVisible(p, "user")) n += 1;
+  if (isColVisible(p, "file")) n += 1;
+  return n;
+}
+
+function countPrintTrailingColsAfterDrCr(p: PrintPayload): number {
+  let n = 0;
+  if (isBillWiseContext(p) && isColVisible(p, "status")) n += 1;
+  if (isColVisible(p, "runningBalance")) n += 1;
+  return n;
+}
+
+/** Leading cols: poori width par FY End + Total (ek line, wrap nahi). */
+function appendPartitionTotalLeadingCells(
+  row: TableCell[],
+  p: PrintPayload,
+  closingEndLabel: string
+): void {
+  const leading = countPrintLeadingColsBeforeDrCr(p);
+  const endText = (closingEndLabel || "").trim();
+  const labelCell: TableCell = {
+    alignment: "right",
+    fontSize: LEDGER_PRINT_BODY_FONT,
+    margin: [0, 4, 0, 4],
+    noWrap: true,
+    text: endText
+      ? [
+          { text: endText, bold: true, color: "#000000" },
+          { text: "   ", color: "#000000" },
+          { text: "Total", bold: true, color: "#000000" },
+        ]
+      : [{ text: "Total", bold: true, color: "#000000" }],
+  };
+
+  if (leading <= 0) {
+    row.push(labelCell);
+    return;
+  }
+  row.push({ ...labelCell, colSpan: leading });
+  for (let i = 1; i < leading; i++) row.push({});
+}
+
+function buildFyPartitionClosingSummaryPrintRows(
+  summary: FiscalPartitionClosingSummary,
+  p: PrintPayload,
+  colCount: number,
+  formatCurrencyForPrint: Function,
+  formatRunning: Function,
+  showDrCr: boolean,
+  closingEndLabel?: string
+): TableCell[][] {
+  const palette = getPrintColorPalette(p.printColorMode);
+  const showDr = isColVisible(p, "dr");
+  const showCr = isColVisible(p, "cr");
+  const fmt = (val: number) => formatCurrencyForPrint(Math.abs(val), { noSuffix: true });
+  const balanceText =
+    showDrCr && typeof formatRunning === "function"
+      ? formatRunning(summary.closingBalance)
+      : (() => {
+          const core = fmt(summary.closingBalance);
+          if (!showDrCr) return core;
+          return summary.closingBalance >= 0 ? `${core} Dr` : `${core} Cr`;
+        })();
+  const showStatus = isColVisible(p, "status") && isBillWiseContext(p);
+  const showBalance = isColVisible(p, "runningBalance");
+
+  const cells: TableCell[] = [];
+  appendPartitionTotalLeadingCells(cells, p, closingEndLabel || "");
+  if (showDr) {
+    cells.push({
+      text: fmt(summary.totalDr),
+      alignment: "right",
+      bold: true,
+      fontSize: LEDGER_PRINT_BODY_FONT,
+      color: palette.debit,
+      margin: [0, 4, 0, 4],
+      noWrap: true,
+    });
+  }
+  if (showCr) {
+    cells.push({
+      text: fmt(summary.totalCr),
+      alignment: "right",
+      bold: true,
+      fontSize: LEDGER_PRINT_BODY_FONT,
+      color: palette.credit,
+      margin: [0, 4, 0, 4],
+      noWrap: true,
+    });
+  }
+  if (showStatus) {
+    cells.push({
+      text: "-",
+      alignment: "center",
+      bold: true,
+      fontSize: LEDGER_PRINT_BODY_FONT,
+      margin: [0, 4, 0, 4],
+    });
+  }
+  if (showBalance) {
+    cells.push({
+      text: balanceText,
+      alignment: "right",
+      bold: true,
+      fontSize: LEDGER_PRINT_BODY_FONT,
+      color: palette.balanceSigned(summary.closingBalance),
+      margin: [0, 4, 0, 4],
+      noWrap: true,
+    });
+  }
+
+  ensureRowLength(cells, colCount);
+  return [cells];
+}
+
 const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, formatDate: Function, formatDateBS: Function, formatCurrencyForPrint: Function, formatRunning: Function, ledgerColCount: number): TableCell[][] => {
     const palette = getPrintColorPalette(p.printColorMode);
     if (row.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
       const n = Math.max(1, ledgerColCount);
       const boundaryMs = parsePrintPartitionBoundaryMs(row);
       const partitionDate = boundaryMs != null ? new Date(boundaryMs) : null;
-      const label =
+      const fmtStyle = readFyOpeningPillFormat();
+      const optionalNote = p.fiscalPartitionLabel ?? p.company?.fiscalPartitionLabel ?? null;
+      const split =
         partitionDate && !Number.isNaN(partitionDate.getTime())
-          ? buildFiscalMergePartitionBannerLabelForDateSystem(
+          ? buildFiscalMergePartitionBannerSplitForDateSystem(
               p.company,
               partitionDate,
               p.dateSystem,
               formatDate as (d: Date) => string,
-              p.fiscalPartitionLabel ?? p.company?.fiscalPartitionLabel ?? null
+              optionalNote,
+              fmtStyle
             )
-          : row._partitionLabel || "── Closing fiscal period · New fiscal period ──";
-      const cell: TableCell = {
-        text: label,
+          : null;
+      const closingEndLabel =
+        split?.closingEndLabel ??
+        (typeof row._partitionLabel === "string" && row._partitionLabel
+          ? row._partitionLabel
+          : "── Closing fiscal period · New fiscal period ──");
+      const newStartLabel = split?.newStartLabel ?? closingEndLabel;
+      const startCell: TableCell = {
+        text: newStartLabel,
         colSpan: n,
-        alignment: "center",
+        alignment: "left",
         bold: true,
         fontSize: LEDGER_PRINT_BODY_FONT,
-        color: "#1e3a8a",
-        fillColor: "#dbeafe",
+        color: "#000000",
         margin: [0, 4, 0, 4],
         noWrap: true,
       };
-      const mainRow: TableCell[] = [cell];
-      for (let i = 1; i < n; i++) mainRow.push({});
-      return [mainRow];
+      const newStartRow: TableCell[] = [startCell];
+      for (let i = 1; i < n; i++) newStartRow.push({});
+      const summary = row._partitionClosingSummary as FiscalPartitionClosingSummary | undefined;
+      if (summary && (summary.totalDr > 0 || summary.totalCr > 0 || summary.closingBalance !== 0)) {
+        const showDrCr = p.company?.showDrCr !== false;
+        return [
+          ...buildFyPartitionClosingSummaryPrintRows(
+            summary,
+            p,
+            n,
+            formatCurrencyForPrint,
+            formatRunning,
+            showDrCr,
+            closingEndLabel
+          ),
+          newStartRow,
+        ];
+      }
+      return [newStartRow];
     }
 
     if (row.type === FY_OPENING_ROW_TYPE || row._fyOpeningSynthetic === true) {
@@ -2515,11 +2726,30 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
         }
       }
 
+      const showTypeCol = isColVisible(p, "type");
+      const showVoucherNoCol = isColVisible(p, "voucherNo");
+      const showUserCol = isColVisible(p, "user");
+      const showFileCol = isColVisible(p, "file");
+      const spendMetaColSpan =
+        (showVoucherNoCol ? 1 : 0) + (showUserCol ? 1 : 0) + (showFileCol ? 1 : 0);
+
       const mainRow: TableCell[] = [...dateCells];
-      if (isColVisible(p, "type")) mainRow.push({ text: pillLabel, bold: true, fontSize: 9, noWrap: true });
-      if (isColVisible(p, "voucherNo")) mainRow.push({ text: "", fontSize: 9 });
-      if (isColVisible(p, "user")) mainRow.push({ text: "", fontSize: 9 });
-      if (isColVisible(p, "file")) mainRow.push({ text: "-", fontSize: 9, alignment: "center", noWrap: true });
+      if (showTypeCol) {
+        mainRow.push({ text: pillLabel, bold: true, fontSize: 9, noWrap: true });
+        if (showVoucherNoCol) mainRow.push({ text: "", fontSize: 9 });
+        if (showUserCol) mainRow.push({ text: "", fontSize: 9 });
+        if (showFileCol) mainRow.push({ text: "-", fontSize: 9, alignment: "center", noWrap: true });
+      } else if (spendMetaColSpan > 0) {
+        mainRow.push({
+          text: pillLabel,
+          colSpan: spendMetaColSpan,
+          bold: true,
+          alignment: "left",
+          fontSize: 9,
+          noWrap: true,
+        });
+        for (let i = 1; i < spendMetaColSpan; i++) mainRow.push({});
+      }
       if (isColVisible(p, "dr")) {
         mainRow.push({
           text: debit > 0 ? formatCurrencyForPrint(debit, { noSuffix: true }) : "-",
@@ -2539,6 +2769,9 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
           bold: true,
           noWrap: true,
         });
+      }
+      if (isBillWiseContext(p) && isColVisible(p, "status")) {
+        mainRow.push({ text: "-", fontSize: 9, alignment: "left", noWrap: true });
       }
       if (isColVisible(p, "runningBalance")) {
         mainRow.push({
@@ -2783,8 +3016,10 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
     // Match printed columns with currently selected UI columns.
     if (isColVisible(p, "dr")) mainRow.push(debitContent);
     if (isColVisible(p, "cr")) mainRow.push(creditContent);
-    if (isBillWise && isColVisible(p, "status") && statusContent) {
-      mainRow.push(statusContent);
+    if (isBillWise && isColVisible(p, "status")) {
+      mainRow.push(
+        statusContent ?? { text: "-", fontSize: 9, alignment: "left" as const, noWrap: true }
+      );
     }
     if (isColVisible(p, "runningBalance")) mainRow.push(balanceContent);
 
@@ -2837,9 +3072,11 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
     const mainTop = row._spendWiseGroupFirst === true;
     const mainBottom = false;
 
+    ensureRowLength(mainRow, ledgerColCount);
     const mainRowFinal: TableCell[] = inSpendWiseGroup
       ? applySpendWisePrintBorders(mainRow, { top: mainTop, bottom: mainBottom, color: spendWiseColor })
       : mainRow;
+    ensureRowLength(mainRowFinal, ledgerColCount);
 
     const resultRows: TableCell[][] = [mainRowFinal];
 
@@ -2879,7 +3116,15 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
         });
         for (let i = 1; i < narrationSpan; i++) subRow.push({});
         const voucherDetailColSpan = hasBalanceCol ? 2 : 1;
-        subRow.push({ text: statusParts.length > 0 ? (statusParts as any) : '', colSpan: voucherDetailColSpan, alignment: 'left', style: 'narrationRow', noWrap: false });
+        subRow.push({
+          text: statusParts.length > 0 ? (statusParts as any) : "",
+          colSpan: voucherDetailColSpan,
+          alignment: "left",
+          style: "narrationRow",
+          noWrap: false,
+        });
+        for (let i = 1; i < voucherDetailColSpan; i++) subRow.push({});
+        ensureRowLength(subRow, ledgerColCount);
       } else {
         subRow.push({
           text: narrationParts.length > 0 ? (narrationParts as any) : '',
@@ -2894,16 +3139,19 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
       }
       const subTop = false;
       const subBottom = false;
+      ensureRowLength(subRow, ledgerColCount);
       const subRowFinal: TableCell[] = inSpendWiseGroup
         ? applySpendWisePrintBorders(subRow, { top: subTop, bottom: subBottom, color: spendWiseColor })
         : subRow;
+      ensureRowLength(subRowFinal, ledgerColCount);
       resultRows.push(subRowFinal);
     }
 
     if (inSpendWiseGroup && groupEnds) {
-      appendSpendWiseGroupTail(resultRows, mainRow.length, spendWiseColor);
+      appendSpendWiseGroupTail(resultRows, ledgerColCount, spendWiseColor);
     }
-    
+
+    for (const r of resultRows) ensureRowLength(r, ledgerColCount);
     return resultRows;
 }
 
@@ -2979,15 +3227,12 @@ const buildTableFooter = (p: PrintPayload, periodDr: number, periodCr: number, c
     const showStatus = isBillWise && isColVisible(p, "status");
     const showBalance = isColVisible(p, "runningBalance");
     const numDataCols = [showDr, showCr, showStatus, showBalance].filter(Boolean).length;
-    const colSpan = header.length - numDataCols;
-    if (colSpan < 1) return [];
+    const labelColCount = header.length - numDataCols;
+    if (header.length < 1 || numDataCols === 0) return [];
 
-    const footerRow: TableCell[] = [
-        { text: 'Period Total:', colSpan: colSpan, bold: true, alignment: 'right', fontSize: 10, noWrap: true },
-    ];
-    
-    for (let i = 1; i < colSpan; i++) {
-        footerRow.push({});
+    const footerRow: TableCell[] = [];
+    if (labelColCount > 0) {
+      appendLedgerPrintFooterLabelCells(footerRow, p, "Period Total:");
     }
 
     const formatFooterValue = (val: number) => {
@@ -3014,6 +3259,7 @@ const buildTableFooter = (p: PrintPayload, periodDr: number, periodCr: number, c
     }
     if (showBalance) footerRow.push({ text: footerClosingText, bold: true, fontSize: getAutoFontSize(footerClosingText, 10), color: palette.balanceSigned(closing), alignment: 'right', noWrap: true });
     
+    ensureRowLength(footerRow, header.length);
     return [footerRow];
 }
 
@@ -3031,23 +3277,68 @@ type LedgerPrintWidthKey =
   | "status"
   | "balance";
 
+/** Relative weights when many columns — widths sum to 100% so table stays inside page. */
 const LEDGER_PRINT_COL_WEIGHT: Record<LedgerPrintWidthKey, number> = {
-  date: 17,
-  dateBs: 14,
-  dateAd: 14,
-  type: 18,
-  voucherNo: 20,
-  daybook: 18,
-  user: 10,
-  file: 6,
-  dr: 12,
-  cr: 12,
-  status: 10,
-  balance: 15,
+  date: 10,
+  dateBs: 9,
+  dateAd: 9,
+  type: 10,
+  voucherNo: 18,
+  daybook: 14,
+  user: 8,
+  file: 5,
+  dr: 13,
+  cr: 13,
+  status: 9,
+  balance: 16,
 };
 
-/** Party/staff ledger print: % widths so label columns use full page (no left cluster + center gap). */
-function buildWideLedgerPrintColumnWidths(p: PrintPayload): (string | number)[] {
+/** Fixed width (pt) for amount/status columns when column count ≤ 6 — label cols share remaining `*`. */
+const LEDGER_PRINT_FIXED_COL_WIDTH_PT: Partial<Record<LedgerPrintWidthKey, number>> = {
+  dr: 76,
+  cr: 76,
+  status: 50,
+  balance: 86,
+};
+
+const LEDGER_PRINT_MANY_COL_THRESHOLD = 7;
+
+/** Label cells before Dr/Cr/Status/Balance — one per header column (no colSpan; pdfMake footer alignment). */
+function appendLedgerPrintFooterLabelCells(footerRow: TableCell[], p: PrintPayload, labelText: string): void {
+  const empty: TableCell = { text: "" };
+  const labelCells: TableCell[] = [];
+  if (isColVisible(p, "date")) {
+    if (p.dateSystem === "Both") labelCells.push(empty, empty);
+    else labelCells.push(empty);
+  }
+  if (isColVisible(p, "type")) labelCells.push(empty);
+  if (isColVisible(p, "voucherNo")) labelCells.push(empty);
+  if (p.context === "daybook") labelCells.push(empty);
+  if (isColVisible(p, "user")) labelCells.push(empty);
+  if (isColVisible(p, "file")) labelCells.push(empty);
+
+  if (labelCells.length === 0) {
+    footerRow.push({
+      text: labelText,
+      bold: true,
+      alignment: "right",
+      fontSize: 10,
+      noWrap: true,
+    });
+    return;
+  }
+
+  labelCells[labelCells.length - 1] = {
+    text: labelText,
+    bold: true,
+    alignment: "right",
+    fontSize: 10,
+    noWrap: true,
+  };
+  footerRow.push(...labelCells);
+}
+
+function collectLedgerPrintWidthKeys(p: PrintPayload): LedgerPrintWidthKey[] {
   const keys: LedgerPrintWidthKey[] = [];
   if (isColVisible(p, "date")) {
     if (p.dateSystem === "Both") keys.push("dateBs", "dateAd");
@@ -3062,14 +3353,71 @@ function buildWideLedgerPrintColumnWidths(p: PrintPayload): (string | number)[] 
   if (isColVisible(p, "cr")) keys.push("cr");
   if (isBillWiseContext(p) && isColVisible(p, "status")) keys.push("status");
   if (isColVisible(p, "runningBalance")) keys.push("balance");
+  return keys;
+}
 
+function buildWideLedgerPercentColumnWidths(keys: LedgerPrintWidthKey[]): (string | number)[] {
   const total = keys.reduce((sum, key) => sum + LEDGER_PRINT_COL_WEIGHT[key], 0);
   if (total <= 0) return ["*"];
-
   return keys.map((key) => `${((LEDGER_PRINT_COL_WEIGHT[key] / total) * 100).toFixed(2)}%`);
 }
 
-const getColumnWidths = (p: PrintPayload): (string | number)[] => {
+/** Scale fixed amount-column widths so fixed + label minimums fit inside printable width. */
+function scaleFixedAmountColumnWidths(
+  keys: LedgerPrintWidthKey[],
+  contentWidthPt: number
+): Partial<Record<LedgerPrintWidthKey, number>> {
+  const scaled: Partial<Record<LedgerPrintWidthKey, number>> = {};
+  const amountKeys = keys.filter((k) => LEDGER_PRINT_FIXED_COL_WIDTH_PT[k] != null);
+  if (amountKeys.length === 0) return scaled;
+
+  const labelCount = keys.length - amountKeys.length;
+  const labelReservePt = Math.min(contentWidthPt * 0.55, labelCount * 52);
+  let budget = Math.max(120, contentWidthPt - labelReservePt);
+
+  let desired = amountKeys.reduce((sum, k) => sum + (LEDGER_PRINT_FIXED_COL_WIDTH_PT[k] ?? 0), 0);
+  if (desired <= budget) {
+    for (const k of amountKeys) scaled[k] = LEDGER_PRINT_FIXED_COL_WIDTH_PT[k];
+    return scaled;
+  }
+
+  const scale = budget / desired;
+  for (const k of amountKeys) {
+    scaled[k] = Math.max(52, Math.floor((LEDGER_PRINT_FIXED_COL_WIDTH_PT[k] ?? 0) * scale));
+  }
+  return scaled;
+}
+
+/** Party/staff ledger print: ≤6 cols → fixed amount pt + flex labels; 7+ → % widths (fits A4). */
+function buildWideLedgerPrintColumnWidths(
+  p: PrintPayload,
+  opts: { columnCount: number; landscape: boolean }
+): (string | number)[] {
+  const keys = collectLedgerPrintWidthKeys(p);
+  if (keys.length <= 0) return ["*"];
+
+  if (opts.columnCount >= LEDGER_PRINT_MANY_COL_THRESHOLD) {
+    return buildWideLedgerPercentColumnWidths(keys);
+  }
+
+  const contentWidthPt = ledgerPrintContentWidthPt(opts.landscape);
+  const fixedByKey = scaleFixedAmountColumnWidths(keys, contentWidthPt);
+
+  return keys.map((key) => {
+    const fixed = fixedByKey[key];
+    if (fixed != null) return fixed;
+    if (key === "date" || key === "dateBs" || key === "dateAd") return "auto";
+    if (key === "file") return "auto";
+    return "*";
+  });
+}
+
+const getColumnWidths = (
+  p: PrintPayload,
+  opts?: { landscape?: boolean; columnCount?: number }
+): (string | number)[] => {
+  const landscape = opts?.landscape === true;
+  const columnCount = opts?.columnCount ?? collectLedgerPrintWidthKeys(p).length;
   if (p.context === 'sale' && p.transactions.length === 1) {
     return ['auto', '*', 'auto', 'auto', 'auto'];
   }
@@ -3084,7 +3432,7 @@ const getColumnWidths = (p: PrintPayload): (string | number)[] => {
 
   const wideLedger = ["party", "staff", "tax", "account", "group", "expense"].includes(p.context);
   if (wideLedger) {
-    return buildWideLedgerPrintColumnWidths(p);
+    return buildWideLedgerPrintColumnWidths(p, { landscape, columnCount });
   }
   
   const widths: (string | number)[] = [];

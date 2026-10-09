@@ -5,9 +5,12 @@ import { notifyBrowserDbCollectionUpdated } from "@/lib/localCompanyDocMirror";
 import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import type { CompanyStorageRow } from "@/lib/companyStorageKind";
 import { hydrateOnlineVoucherRangeFromFirestore } from "@/lib/ledgerModes/online/fyMonthHydrate";
+import { pullCompanySubcollectionFromFirestoreToLocalDb } from "@/lib/firestoreToLocalCompanyPull";
+import { isFirebaseLedgerCompanyDataSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { listVouchersFromBrowserDbByDateRange } from "@/lib/fyPagination/voucherQueries";
 import { recordFyLoadedRange } from "@/lib/fyPagination/snapshotStore";
 import type { FyActiveScope, FyDateRangeMs } from "@/lib/fyPagination/types";
+import type { Company } from "@/hooks/useCompany";
 
 export type FyScopeCompany = CompanyStorageRow & { country?: string };
 
@@ -44,6 +47,43 @@ async function mergeSqliteRangeIntoFyScope(params: {
  * Online: Firestore range → SQLite mirror, then silent FY merge + voucher list bump.
  * Refresh / filter change: UI already shows SQLite; this updates when server read completes.
  */
+/**
+ * Online + Company Selector Data tick: pull the full vouchers subcollection into SQLite
+ * (web warm sync is often off — FY month scope alone left partial mirrors e.g. 25 vs 300+).
+ */
+export function scheduleOnlineFullVoucherMirrorPull(params: {
+  company: FyScopeCompany | null | undefined;
+  companyId: string;
+}): void {
+  const { company, companyId } = params;
+  const cid = String(companyId || "").trim();
+  if (!cid || !isCloudLinkedCompanyStorage(company)) return;
+  if (!isFirebaseLedgerCompanyDataSyncEnabled(cid, company)) return;
+  const fsCompanyId = String(company?.authoritativeCompanyId || cid).trim();
+  if (!fsCompanyId) return;
+  if (typeof navigator !== "undefined" && !navigator.onLine) return;
+
+  void (async () => {
+    try {
+      await pullCompanySubcollectionFromFirestoreToLocalDb(
+        fsCompanyId,
+        cid,
+        "vouchers",
+        company
+          ? ({ ...company, id: String(company.id || cid).trim() } as Company)
+          : null,
+        "date"
+      );
+      notifyBrowserDbCollectionUpdated(cid, "vouchers", {
+        immediate: true,
+        source: "online_full_voucher_pull",
+      });
+    } catch (err) {
+      console.warn("[sqliteFirstFyLoad] full voucher mirror pull", err);
+    }
+  })();
+}
+
 export function scheduleBackgroundOnlineFyRangeHydrate(params: {
   company: FyScopeCompany | null | undefined;
   companyId: string;

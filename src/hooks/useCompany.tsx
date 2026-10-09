@@ -1199,7 +1199,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     prevLoadingForRecoveryRef.current = loading;
   }, [loading]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     try {
       // Multi-tab: prefer this tab's saved company so refresh does not jump to another tab's company.
       const storedCompanyId = readSelectedCompanyId();
@@ -1352,6 +1352,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     plNavDbg("useCompany.setCompanyId", { hint: plNavDbgIdHint(newCompanyId), len: String(newCompanyId || "").length });
     writeSelectedCompanyId(newCompanyId);
     const nextId = String(newCompanyId || "").trim();
+    if (nextId) bootPinnedCompanyIdRef.current = nextId;
     // Purani company row turant hatao — warna useVouchers stale `companyRef` se galat SQLite gate / merge kare.
     const fromList =
       allCompaniesLiveRef.current.find((c) => c.id === nextId) ??
@@ -3144,6 +3145,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         scheduleListRecoveryDeferPulse("listRowNotMainVisible");
         return;
       }
+      if (shouldDeferRefreshBootCompanyClear(companyId, mountedAtRef.current, bootPinnedCompanyIdRef.current)) {
+        scheduleListRecoveryDeferPulse("listRowNotMainVisible:refreshBoot");
+        return;
+      }
       plDbgCompanyRecovery("listRecovery:listRowNotMainVisible:clear", { companyId });
       setCompanyFrom("listRecovery:listRowNotMainVisible:clear:null", null);
       listRecoverySyncForIdRef.current = null;
@@ -3159,6 +3164,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     let graceMs = allCompaniesForUi.length === 0 ? 0 : 2000;
     if (user?.uid) {
       graceMs = allCompaniesForUi.length === 0 ? LIST_RECOVERY_ONLINE_EMPTY_GRACE_MS : LIST_RECOVERY_ONLINE_NONEMPTY_GRACE_MS;
+    }
+    if (isElectronDesktopApp() || isStaticAppBuild() || isCapacitorNativeApp()) {
+      graceMs = Math.max(graceMs, companyRefreshBootGraceMs());
     }
     if (Date.now() - mountedAtRef.current < graceMs) return;
 
@@ -3363,16 +3371,27 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             // Refresh recovery must use per-tab company first, otherwise another tab's last selection wins.
             const storedCompanyId = readSelectedCompanyId();
             const stored = storedCompanyId?.trim();
+            const bootPinned = bootPinnedCompanyIdRef.current?.trim();
+            if (!stored && bootPinned) {
+              plNavDbg("useCompany.redirectHydrate:bootPinnedRef", { hint: plNavDbgIdHint(bootPinned) });
+              setCompanyId(bootPinned);
+              return;
+            }
             if (!stored) {
-                // Static/Capacitor: IndexedDB + Firestore slow — localStorage/sync ke liye zyada grace
-                const REDIRECT_DELAY_MS = 1400;
+                // Static/Capacitor/EXE: IndexedDB + Firestore slow — localStorage/sync ke liye zyada grace
+                const bootGraceRemaining = Math.max(
+                  0,
+                  companyRefreshBootGraceMs() - (Date.now() - mountedAtRef.current)
+                );
+                const REDIRECT_DELAY_MS = Math.max(1400, bootGraceRemaining + 250);
                 plNavDbg("useCompany.scheduleMissingCompanyRedirect", {
                   pathname: winPath,
                   delayMs: REDIRECT_DELAY_MS,
                   shieldActive: shouldSuppressTransientCompanyClear(),
+                  bootGraceRemaining,
                 });
                 const id = setTimeout(() => {
-                    const again = readSelectedCompanyId();
+                    const again = readSelectedCompanyId()?.trim() || bootPinnedCompanyIdRef.current?.trim();
                     if (again) {
                         plNavDbg("useCompany.redirectTimer:storedReappeared", { hint: plNavDbgIdHint(again) });
                         setCompanyId(again);
@@ -3380,7 +3399,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
                     }
                     const live = normalizeAppPath(getBrowserPathname());
                     if (shouldSkipMissingCompanyRedirect(live, live)) return;
-                    // Persisted-pin delay vs React hydrate (APK turant-SQLite path)
+                    if (Date.now() - mountedAtRef.current < companyRefreshBootGraceMs()) {
+                      plDbgCompanyRecovery("redirectNoStoredCompany:refreshBootGraceHold", {});
+                      plNavDbg("useCompany.router.push./company TIMER BLOCKED refreshBootGrace", { live });
+                      return;
+                    }
+                    // Persisted-pin delay vs React hydrate (APK/EXE turant-SQLite path)
                     if (shouldDeferMissingCompanyRedirectNative(companyIdLiveRef.current)) {
                       plDbgCompanyRecovery("redirectNoStoredCompany:nativeHydrationDeferHold", {});
                       plNavDbg("useCompany.router.push./company TIMER BLOCKED hydrationDefer", { live });

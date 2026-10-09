@@ -16,6 +16,7 @@ import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedEr
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { VoucherNumberInputWithRefresh } from "@/components/vouchers/VoucherNumberInputWithRefresh";
 import { Textarea } from "@/components/ui/textarea";
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
 import { Loader2, Trash2, CalendarIcon, PlusCircle, CheckCircle, History, Printer } from "lucide-react";
@@ -892,7 +893,7 @@ export function CreateNoteForm({
                                 <FormItem className="min-w-0 w-full overflow-hidden">
                                   <FormLabel className="text-xs truncate">Note No.</FormLabel>
                                   <FormControl>
-                                    <Input {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))} />
+                                    <VoucherNumberInputWithRefresh {...voucherField} chromeSize="sm" className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))} onRefresh={() => void fetchVoucherNumber()} showRefresh={isAutoVoucherEnabled && !savedVoucherId} />
                                   </FormControl>
                                 </FormItem>
                               </>
@@ -964,10 +965,12 @@ export function CreateNoteForm({
                               </Select>
                             )}
                             <FormControl>
-                              <Input 
-                                {...field} 
-                                className="h-10" 
-                                disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))} 
+                              <VoucherNumberInputWithRefresh
+                                {...field}
+                                className="h-10"
+                                disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))}
+                                onRefresh={() => void fetchVoucherNumber()}
+                                showRefresh={isAutoVoucherEnabled && !savedVoucherId}
                               />
                             </FormControl>
                           </div>

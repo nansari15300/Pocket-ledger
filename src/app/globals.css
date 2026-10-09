@@ -1126,6 +1126,42 @@ body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
   display: none !important;
 }
 
+/* FY merge divider — sirf 1px lines (double stack = 2px dikhta tha). */
+[data-theme-table="transactions"] tbody tr.transaction-main-row:has(+ tr[data-row="fiscal-partition-total"]) > td:last-child::after,
+[data-theme-table="transactions"] tbody tr.transaction-main-row:has(+ tr.narration-row + tr[data-row="fiscal-partition-total"]) > td:last-child::after,
+[data-theme-table="transactions"] tbody tr.narration-row:has(+ tr[data-row="fiscal-partition-total"]) > td:last-child::after {
+  content: none !important;
+  display: none !important;
+}
+[data-theme-table="transactions"] tbody tr.narration-row:has(+ tr[data-row="fiscal-partition-total"]) {
+  border-bottom-width: 0 !important;
+  border-bottom-color: transparent !important;
+}
+[data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-total"] > td {
+  border-top: 1px solid #000 !important;
+  border-bottom: 1px solid #000 !important;
+  border-left-width: 0 !important;
+  border-right-width: 0 !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+[data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-total"] > td:last-child::after {
+  content: none !important;
+  display: none !important;
+}
+[data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-label"] > td {
+  border-top-width: 0 !important;
+  border-bottom: 1px solid #000 !important;
+  border-left-width: 0 !important;
+  border-right-width: 0 !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+[data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-label"] + tr[data-pl-fy-opening-row] > td {
+  border-top-width: 0 !important;
+  border-top-color: transparent !important;
+}
+
 /* Transaction row horizontal separators —
    Stack above the next row so selected/hover top chrome cannot hide the line
    (especially on narration-less rows where the separator lives on the main row). */
@@ -3058,13 +3094,13 @@ button.day_selected.is-today.has-transactions {
   
   /* Tailwind border utilities - double thickness (except border-0) */
   /* 4K ma sabai borders moto ra pure black */
-  .border:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-manage-share-avatar]),
-  .border-t:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
-  .border-r:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
-  .border-b:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
-  .border-l:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
-  .border-x:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
-  .border-y:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]) {
+  .border:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-manage-share-avatar]):not([data-pl-toolbar-field]),
+  .border-t:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
+  .border-r:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
+  .border-b:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
+  .border-l:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
+  .border-x:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
+  .border-y:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]) {
     border-width: 3px !important;
     border-color: #000000 !important;
   }
@@ -5124,7 +5160,7 @@ body.theme-pro .pl-settings-list-shell {
 body.theme-pro main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
 body.theme-pro main textarea:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
 body.theme-pro main select:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
-body.theme-pro main button[role="combobox"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+body.theme-pro main button[role="combobox"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
 body.theme-pro main button[data-theme-detail="date-range"]:not(.pl-chrome-btn-drop):not(.pl-company-profile-field) {
   border-color: #000 !important;
   border-width: 1px !important;
@@ -6435,7 +6471,7 @@ body[class*="theme-"] main hr {
 body[class*="theme-"] main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
 body[class*="theme-"] main textarea:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
 body[class*="theme-"] main select:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
-body[class*="theme-"] main button[role="combobox"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+body[class*="theme-"] main button[role="combobox"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
 body[class*="theme-"] main button[data-theme-detail="date-range"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]) {
   border-width: 1px !important;
   border-color: #000 !important;
@@ -7407,9 +7443,8 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-mai
 }
 
 /*
- * Select + hover ring: 1.5px all four sides, same weight.
- * Inset box-shadow does not follow border-radius (corner arc missing) — draw a real border
- * on first-td::before, containing block = the <tr>.
+ * Select + hover ring: hover 1px, selected 2px (shared ::before on first td; tr = containing block).
+ * Inset box-shadow does not follow border-radius — real border on ::before.
  */
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not([data-pl-check-marked]),
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected]:not([data-pl-check-marked]),
@@ -7442,13 +7477,285 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row:n
   pointer-events: none;
   z-index: 6;
   box-sizing: border-box;
-  border: 1.5px solid #fb923c;
+  border: 1px solid #fb923c;
   border-radius: 0.75rem;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not([data-pl-check-marked]) > td:first-child::before,
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected]:not([data-pl-check-marked]) > td:first-child::before {
-  border-width: 2.5px;
+  border-width: 2px;
 }
+/* Dashboard Recent — txn shell footer ribbon jitni poori main width */
+[data-pl-dashboard-recent-shell] {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+[data-pl-dashboard-recent-shell]:not([data-pl-dashboard-recent-line-sections])
+  [data-pl-dashboard-recent-chrome] {
+  background-color: #dbeafe !important;
+}
+body.dark
+  [data-pl-dashboard-recent-shell]:not([data-pl-dashboard-recent-line-sections])
+  [data-pl-dashboard-recent-chrome],
+.dark
+  [data-pl-dashboard-recent-shell]:not([data-pl-dashboard-recent-line-sections])
+  [data-pl-dashboard-recent-chrome] {
+  background-color: #172554 !important;
+}
+[data-pl-dashboard-recent-shell][data-pl-dashboard-recent-line-sections]
+  [data-pl-dashboard-recent-chrome] {
+  background-color: hsl(var(--background)) !important;
+}
+[data-pl-dashboard-recent-shell] .pl-ledger-detail-table-shell,
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn],
+[data-pl-dashboard-recent-shell] .pl-ledger-detail-empty-fill {
+  width: 100%;
+  max-width: none;
+}
+[data-pl-dashboard-recent-scroll] {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+}
+[data-pl-dashboard-recent-scroll] .pl-ledger-detail-table-shell {
+  height: 100%;
+  min-height: 0;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] {
+  padding-top: 0;
+  padding-left: 0;
+  box-sizing: border-box;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] {
+  border-bottom: 1px solid #000;
+  box-sizing: border-box;
+}
+[data-pl-dashboard-recent-txn-header].pl-dashboard-recent-txn-header-scroll {
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+[data-pl-dashboard-recent-txn-header].pl-dashboard-recent-txn-header-scroll::-webkit-scrollbar {
+  display: none;
+  height: 0;
+  width: 0;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] .pl-dashboard-recent-sticky-thead th {
+  position: static !important;
+  top: auto !important;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] table {
+  width: 100% !important;
+  min-width: 100%;
+  table-layout: fixed;
+}
+/* Dashboard Recent: column header scroll ke upar chipka rahe (scroll = CardContent wrapper) */
+[data-pl-dashboard-recent-txn] thead.pl-dashboard-recent-sticky-thead tr,
+[data-pl-dashboard-recent-txn] thead.pl-dashboard-recent-sticky-thead th {
+  border-bottom-width: 1px !important;
+}
+[data-pl-dashboard-recent-txn] .pl-dashboard-recent-sticky-thead th {
+  position: sticky !important;
+  top: 0;
+  z-index: 31;
+  background-color: hsl(var(--muted)) !important;
+  background-clip: padding-box;
+  box-shadow: 0 1px 0 0 #000;
+}
+body.theme-pro [data-pl-dashboard-recent-txn] .pl-dashboard-recent-sticky-thead th {
+  background-color: hsl(var(--muted)) !important;
+}
+[data-pl-dashboard-recent-txn][data-pl-txn-table-tone="green"] .pl-dashboard-recent-sticky-thead th {
+  background-color: rgb(240 252 246) !important;
+}
+[data-pl-dashboard-recent-txn][data-pl-txn-table-tone="blue"] .pl-dashboard-recent-sticky-thead th {
+  background-color: rgb(232 240 254) !important;
+}
+/* Dashboard Recent: column header row gray (toolbar upar blue alag); neeche 1px line */
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] .pl-dashboard-recent-sticky-thead th,
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] .pl-dashboard-recent-sticky-thead th {
+  background-color: #e5e7eb !important;
+  box-shadow: none !important;
+}
+body.theme-pro [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] .pl-dashboard-recent-sticky-thead th,
+body.theme-pro [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] .pl-dashboard-recent-sticky-thead th,
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn][data-pl-txn-table-tone="green"] .pl-dashboard-recent-sticky-thead th,
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn][data-pl-txn-table-tone="blue"] .pl-dashboard-recent-sticky-thead th,
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header][data-pl-txn-table-tone="green"] .pl-dashboard-recent-sticky-thead th,
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header][data-pl-txn-table-tone="blue"] .pl-dashboard-recent-sticky-thead th {
+  background-color: #e5e7eb !important;
+}
+body.dark [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] .pl-dashboard-recent-sticky-thead th,
+body.dark [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] .pl-dashboard-recent-sticky-thead th,
+.dark [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] .pl-dashboard-recent-sticky-thead th,
+.dark [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] .pl-dashboard-recent-sticky-thead th {
+  background-color: #374151 !important;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] thead.pl-dashboard-recent-sticky-thead tr,
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] thead.pl-dashboard-recent-sticky-thead tr {
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] thead.pl-dashboard-recent-sticky-thead th,
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] thead.pl-dashboard-recent-sticky-thead th {
+  border-bottom-width: 0 !important;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] thead.pl-dashboard-recent-sticky-thead {
+  border-bottom-width: 0 !important;
+}
+/* Gray column header ↔ pehli txn row: sirf ek 1px (tbody top border band) */
+[data-pl-dashboard-recent-shell]
+  [data-pl-dashboard-recent-txn]
+  tbody
+  > tr.transaction-main-row:first-child
+  > td {
+  border-top-width: 0 !important;
+}
+/* Recent desktop: scroll andar card me — main par stable gutter footer se chauda dikhta tha */
+main:has([data-pl-dashboard-recent-full-bleed]) {
+  scrollbar-gutter: auto !important;
+  overflow-y: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+}
+main:has([data-pl-dashboard-recent-full-bleed]) > * {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+[data-pl-dashboard-recent-full-bleed] {
+  scrollbar-width: thin;
+  scrollbar-color: var(--pl-ledger-txn-scroll-thumb) var(--pl-ledger-txn-scroll-track);
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 100%;
+}
+[data-pl-dashboard-recent-min-column] {
+  box-sizing: border-box;
+  min-width: var(--pl-dashboard-recent-min-width, 10in);
+  width: 100%;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 100%;
+}
+[data-pl-dashboard-recent-min-column] > :first-child {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+[data-pl-dashboard-recent-min-column] > :last-child {
+  flex-shrink: 0;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll] {
+  flex-shrink: 0;
+  margin-top: auto;
+  border-top: 1px solid #000;
+  box-sizing: border-box;
+}
+[data-pl-dashboard-recent-min-column] [data-pl-dashboard-recent-shell],
+[data-pl-dashboard-recent-min-column] [data-pl-dashboard-footer-ribbon] {
+  min-width: 100%;
+  box-sizing: border-box;
+}
+[data-pl-dashboard-recent-min-column] [data-pl-dashboard-recent-chrome],
+[data-pl-dashboard-recent-min-column] [data-pl-recent-txn-toolbar] {
+  min-width: 100%;
+  box-sizing: border-box;
+}
+/* Recent footer ribbon — width fixed wrapper ke andar (2px inset parent par) */
+[data-pl-dashboard-footer-ribbon][data-pl-dashboard-recent-footer-ribbon] {
+  box-sizing: border-box;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+[data-pl-dashboard-recent-full-bleed] [data-pl-dashboard-recent-shell] {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+/* Pagination ribbon par H-scroll bar mat — txn table scroll upar rahe */
+[data-pl-recent-ledger-footer-fixed] > div {
+  overflow: visible !important;
+}
+[data-pl-recent-ledger-footer-fixed] .pl-ledger-footer-scroll {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+[data-pl-recent-ledger-footer-fixed] .pl-ledger-footer-scroll::-webkit-scrollbar {
+  display: none;
+  height: 0;
+  width: 0;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] {
+  padding-bottom: 0;
+  scrollbar-gutter: stable;
+}
+/* Recent: sirf footer H-scroll dikhe — toolbar/header/body par H bar chhupa */
+.pl-dashboard-recent-hide-hscroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--pl-ledger-txn-scroll-thumb) var(--pl-ledger-txn-scroll-track);
+}
+.pl-dashboard-recent-hide-hscroll::-webkit-scrollbar:horizontal {
+  height: 0 !important;
+  display: none;
+}
+.pl-dashboard-recent-hide-hscroll {
+  -ms-overflow-style: -ms-autohiding-scrollbar;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] {
+  scrollbar-width: thin;
+  scrollbar-color: var(--pl-ledger-txn-scroll-thumb) var(--pl-ledger-txn-scroll-track);
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn]::-webkit-scrollbar:vertical {
+  width: var(--pl-ledger-txn-scroll-size) !important;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn]::-webkit-scrollbar:horizontal {
+  height: 0 !important;
+  display: none;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll] {
+  scrollbar-width: thin;
+  scrollbar-color: var(--pl-ledger-txn-scroll-thumb) var(--pl-ledger-txn-scroll-track);
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll]::-webkit-scrollbar {
+  width: var(--pl-ledger-txn-scroll-size) !important;
+  height: var(--pl-ledger-txn-scroll-size) !important;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll]::-webkit-scrollbar-track {
+  background: var(--pl-ledger-txn-scroll-track) !important;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll]::-webkit-scrollbar-thumb {
+  background: var(--pl-ledger-txn-scroll-thumb) !important;
+  border: none !important;
+  border-radius: 9999px;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll]::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header],
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] {
+  max-width: 100%;
+  min-width: 0;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] table th,
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not([data-pl-check-marked]):has(+ .narration-row[data-pl-txn-selected]) > td:first-child::before,
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:first-child::before {
   border-bottom-width: 0;
@@ -8475,6 +8782,59 @@ body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-search-row input
 body[class*="theme-"] [data-pl-mobile-list-dock] .pl-mlc-search-row input[data-pl-mlc-search-input]:focus-visible,
 body[class*="theme-"] [data-pl-party-mobile-list-dock] .pl-mlc-search-row input[data-pl-mlc-search-input]:focus-visible {
   border-color: rgb(96 165 250) !important;
+}
+
+/* Dashboard Recent toolbar — search + Last N dropdown: single blue border (no ring + black border stack) */
+body[class*="theme-"] main [data-pl-recent-txn-toolbar] input[data-pl-mlc-search-input],
+body[class*="theme-"] [data-pl-recent-txn-toolbar] input[data-pl-mlc-search-input] {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: #fff !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body[class*="theme-"] main [data-pl-recent-txn-toolbar] input[data-pl-mlc-search-input]:focus,
+body[class*="theme-"] main [data-pl-recent-txn-toolbar] input[data-pl-mlc-search-input]:focus-visible,
+body[class*="theme-"] [data-pl-recent-txn-toolbar] input[data-pl-mlc-search-input]:focus,
+body[class*="theme-"] [data-pl-recent-txn-toolbar] input[data-pl-mlc-search-input]:focus-visible {
+  outline: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  border-color: rgb(96 165 250) !important;
+  background-color: #fff !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body[class*="theme-"] main [data-pl-recent-txn-toolbar] input[data-pl-mlc-search-input].rounded-md.border,
+body.theme-pro main [data-pl-recent-txn-toolbar] input[data-pl-mlc-search-input].rounded-md.border,
+body[class*="theme-"] [data-pl-recent-txn-toolbar] input[data-pl-mlc-search-input].rounded-md.border {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: #fff !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body[class*="theme-"] main [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"],
+body[class*="theme-"] [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"],
+body[class*="theme-"] main [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"].rounded-md.border,
+body[class*="theme-"] [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"].rounded-md.border {
+  border-width: 1px !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: rgb(219 234 254 / 0.8) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body[class*="theme-"] main [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"]:focus,
+body[class*="theme-"] main [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"]:focus-visible,
+body[class*="theme-"] main [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"][data-state="open"],
+body[class*="theme-"] [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"]:focus,
+body[class*="theme-"] [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"]:focus-visible,
+body[class*="theme-"] [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"][data-state="open"] {
+  outline: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  border-color: rgb(96 165 250) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
 }
 
 /* Balance Sheet difference trace popup — separate section cards + inner grid. */

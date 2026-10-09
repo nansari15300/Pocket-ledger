@@ -171,39 +171,99 @@ export function buildFiscalMergePartitionBannerLabel(
   );
 }
 
+function partitionBannerFyTag(
+  company: FiscalCompanyLike | null | undefined,
+  partitionAt: Date,
+  calendar: "bs" | "ad",
+  formatStyle: FyOpeningPillFormat
+): string {
+  const range =
+    calendar === "bs"
+      ? fiscalYearShortYyRangeBs(partitionAt, formatStyle)
+      : fiscalYearShortYyRangeAd(company, partitionAt, formatStyle);
+  return `FY ${range.replace("-", "/")}`;
+}
+
+function adDateToBsYmd(d: Date): string {
+  const bs = adToBs(d);
+  return `${bs.y}-${pad2(bs.m)}-${pad2(bs.d)}`;
+}
+
+function addCalendarDays(d: Date, days: number): Date {
+  const next = new Date(d.getTime());
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+export type FiscalMergePartitionBannerSplit = {
+  /** Band hone wale FY — partition se ek din pehle. */
+  closingEndLabel: string;
+  /** Naya FY — partition start date. */
+  newStartLabel: string;
+};
+
+/** Top = closing End Date; neeche = new Start Date (ledger merge divider). */
+export function buildFiscalMergePartitionBannerSplitForDateSystem(
+  company: FiscalCompanyLike | null | undefined,
+  partitionAt: Date,
+  dateSystem: LedgerDateSystem,
+  formatDate?: (d: Date) => string,
+  optionalNote?: string | null,
+  formatStyle: FyOpeningPillFormat = readFyOpeningPillFormat()
+): FiscalMergePartitionBannerSplit {
+  const fallback = "── Closing fiscal period · New fiscal period ──";
+  const note = (optionalNote && String(optionalNote).trim()) || "";
+  if (!(partitionAt instanceof Date) || isNaN(partitionAt.getTime())) {
+    const fb = note || fallback;
+    return { closingEndLabel: fb, newStartLabel: fb };
+  }
+
+  const lastDayClosed = addCalendarDays(partitionAt, -1);
+  const bsStartYmd = adDateToBsYmd(partitionAt);
+  const bsEndYmd = adDateToBsYmd(lastDayClosed);
+  const adStartFormatted = formatDate ? formatDate(partitionAt) : format(partitionAt, "yyyy-MM-dd");
+  const adEndFormatted = formatDate ? formatDate(lastDayClosed) : format(lastDayClosed, "yyyy-MM-dd");
+
+  const closingTagBs = partitionBannerFyTag(company, lastDayClosed, "bs", formatStyle);
+  const closingTagAd = partitionBannerFyTag(company, lastDayClosed, "ad", formatStyle);
+  const newTagBs = partitionBannerFyTag(company, partitionAt, "bs", formatStyle);
+  const newTagAd = partitionBannerFyTag(company, partitionAt, "ad", formatStyle);
+
+  let closingEndLabel: string;
+  let newStartLabel: string;
+  if (dateSystem === "Both") {
+    closingEndLabel = `${closingTagBs} End Date ${bsEndYmd} · AD End ${adEndFormatted}`;
+    newStartLabel = `${newTagBs} Start Date ${bsStartYmd} · AD Start ${adStartFormatted}`;
+  } else if (dateSystem === "BS") {
+    closingEndLabel = `${closingTagBs} End Date ${bsEndYmd}`;
+    newStartLabel = `${newTagBs} Start Date ${bsStartYmd}`;
+  } else {
+    closingEndLabel = `${closingTagAd} End Date ${adEndFormatted}`;
+    newStartLabel = `${newTagAd} Start Date ${adStartFormatted}`;
+  }
+  if (note) newStartLabel = `${newStartLabel} — ${note}`;
+  return { closingEndLabel, newStartLabel };
+}
+
 /** Ledger divider — respects user date system (AD / BS / Both). */
 export function buildFiscalMergePartitionBannerLabelForDateSystem(
   company: FiscalCompanyLike | null | undefined,
   partitionAt: Date,
   dateSystem: LedgerDateSystem,
   formatDate?: (d: Date) => string,
-  optionalNote?: string | null
+  optionalNote?: string | null,
+  formatStyle: FyOpeningPillFormat = readFyOpeningPillFormat()
 ): string {
-  const note = (optionalNote && String(optionalNote).trim()) || "";
-  if (!(partitionAt instanceof Date) || isNaN(partitionAt.getTime())) {
-    return note || "── Closing fiscal period · New fiscal period ──";
-  }
-  const bs = adToBs(partitionAt);
-  const bsYmd = `${bs.y}-${pad2(bs.m)}-${pad2(bs.d)}`;
-  const adFormatted = formatDate ? formatDate(partitionAt) : format(partitionAt, "yyyy-MM-dd");
-  const nepalish = company?.country === "Nepal" || !!company?.fiscalYearStart;
-  const fyTagBs = nepalish ? nepalFiscalYearLabelFromAdDate(partitionAt) : `FY ${bs.y}/${String(bs.y + 1).slice(-2)}`;
-  const { start, end } = getFiscalRangeForCompany(
-    company?.country,
+  const { closingEndLabel, newStartLabel } = buildFiscalMergePartitionBannerSplitForDateSystem(
+    company,
     partitionAt,
-    companyFiscalYearDates(company)
+    dateSystem,
+    formatDate,
+    optionalNote,
+    formatStyle
   );
-  const fyTagAd = `FY ${start.getFullYear()}/${String(end.getFullYear()).slice(-2)}`;
-
-  let base: string;
-  if (dateSystem === "Both") {
-    base = `${fyTagBs} Start Date ${bsYmd} · AD ${adFormatted}`;
-  } else if (dateSystem === "BS") {
-    base = `${fyTagBs} Start Date ${bsYmd}`;
-  } else {
-    base = `${fyTagAd} Start Date ${adFormatted}`;
-  }
-  return note ? `${base} — ${note}` : base;
+  if (closingEndLabel === newStartLabel) return closingEndLabel;
+  return `${closingEndLabel} · ${newStartLabel}`;
 }
 
 /** FY opening row pills — Both: type = BS range, voucher no = AD range. */

@@ -319,7 +319,7 @@ export function LinkPaymentInToSalaryDialog({
             )}
           </div>
           <div className="flex flex-shrink-0 items-center gap-2 pt-2 border-t flex-wrap justify-between">
-            <Button size="sm" onClick={() => onOpenChange(false)} className="h-9 rounded-full shrink-0 bg-orange-500 hover:bg-orange-600 text-white border-0">
+            <Button type="button" size="sm" onClick={() => onOpenChange(false)} className="h-9 rounded-full shrink-0 bg-orange-500 hover:bg-orange-600 text-white border-0">
               Cancel
             </Button>
             <div className="flex flex-row flex-wrap items-center gap-2 shrink-0">
@@ -331,7 +331,7 @@ export function LinkPaymentInToSalaryDialog({
                 <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
                 Reset
               </Button>
-              <Button onClick={handleDone} disabled={sourceRows.length === 0 || totalLinked > amountReceived} className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0">
+              <Button type="button" onClick={handleDone} disabled={sourceRows.length === 0 || totalLinked > amountReceived} className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0">
                 DONE
               </Button>
             </div>

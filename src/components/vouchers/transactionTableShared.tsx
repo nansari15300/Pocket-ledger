@@ -4,7 +4,7 @@ import * as React from "react";
 import { TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, Pencil, History, CheckCircle, CheckCheck, CheckSquare, Printer, MousePointerClick, RefreshCw, Loader2, CircleOff } from "lucide-react";
+import { MoreVertical, Pencil, History, CheckCircle, CheckCheck, CheckSquare, Printer, MousePointerClick, RefreshCw, Loader2, CircleOff, Trash2 } from "lucide-react";
 import { StatementCheckedRowMessageLabel } from "@/components/vouchers/StatementCheckedRowMessageLabel";
 import { statementCheckedMessageColumn } from "@/lib/statementCheckRowMessage";
 import { VoucherAttachmentFileIndicator } from "@/components/vouchers/VoucherAttachmentFileIndicator";
@@ -23,6 +23,7 @@ import {
 import { AttachmentHoverPortal } from "@/components/vouchers/AttachmentHoverPortal";
 import { MultiAttachmentPortalPreview } from "@/components/vouchers/attachmentHoverPreviewBody";
 import { differenceInDays } from "date-fns";
+import { shouldAutoWarmAttachmentForLedgerRow } from "@/lib/fyPagination/attachmentFyAutoLoadPolicy";
 import { useDate } from "@/hooks/useDate";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
@@ -41,13 +42,18 @@ import { motion } from "framer-motion";
 import { FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
 import { FY_OPENING_ROW_TYPE } from "@/lib/fyPagination/fyOpeningRows";
 import {
-  buildFiscalMergePartitionBannerLabelForDateSystem,
+  buildFiscalMergePartitionBannerSplitForDateSystem,
   buildFyOpeningPillSplit,
   buildFyPartitionOpeningPillLabel,
   parseFiscalPartitionBoundaryMs,
 } from "@/lib/fiscalYearLabel";
 import { useFyOpeningPillFormat } from "@/hooks/useFyOpeningPillFormat";
 import { FyOpeningPillFormatPill } from "@/components/vouchers/FyOpeningPillFormatPill";
+import {
+  FiscalPartitionClosingSummaryTableRows,
+  type FiscalPartitionColumnLayout,
+} from "@/components/vouchers/FiscalPartitionClosingSummaryBlock";
+import type { FiscalPartitionClosingSummary } from "@/lib/fiscalPartitionClosingSummary";
 import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { companyRequiresLocalAttachmentUrlsOnly } from "@/lib/staticAttachmentDisplayUrl";
@@ -315,10 +321,12 @@ export function OpeningBalanceFileCellContent({
 export function MobileTransactionFilePreview({
   transaction,
   showAll = false,
+  suppressAutoThumbLoad = false,
 }: {
-  transaction?: { fileUrls?: unknown; unassignedFile?: unknown; id?: unknown } | null;
+  transaction?: { fileUrls?: unknown; unassignedFile?: unknown; id?: unknown; date?: unknown } | null;
   /** File column "Show all" — ON: har file alag thumb; OFF: ek thumb (mixed source/reuse → 50/50 frame). */
   showAll?: boolean;
+  suppressAutoThumbLoad?: boolean;
 }) {
   const { company } = useCompany();
   const voucherAttachmentUiOpts = React.useMemo(() => voucherAttachmentUiOptionsForCompany(company), [company]);
@@ -360,6 +368,7 @@ export function MobileTransactionFilePreview({
               companyId={company?.id}
               voucherId={String(transaction?.id || "")}
               clientFileUrls={urls}
+              suppressAutoThumbLoad={suppressAutoThumbLoad}
             />
           </span>
         ))}
@@ -373,6 +382,7 @@ export function MobileTransactionFilePreview({
         companyId={company?.id}
         voucherId={String(transaction?.id || "")}
         clientFileUrls={urls}
+        suppressAutoThumbLoad={suppressAutoThumbLoad}
       />
     );
 
@@ -1397,6 +1407,7 @@ export const TransactionRow = React.memo(
     onRowClick,
     onAddLink,
     onHistoryVoucher,
+    onMoveVoucherToRecycleBin,
     onApproveVoucher,
     onUnapproveVoucher,
     onApproveAllVisible,
@@ -1431,6 +1442,9 @@ export const TransactionRow = React.memo(
     highlightPendingApproval = true,
     /** Bill-wise + fiscal divider: full table colspan for banner row. */
     fullRowColSpan,
+    /** FY merge divider: previous period Total Dr/Cr + closing balance block. */
+    fiscalPartitionClosingSummary,
+    fiscalPartitionColumnLayout,
     /** Recent/top Search: global pink highlight (sirf is query). Column header filters alag — `columnFilters`. */
     textSearchHighlight,
     /** Column header filter values — highlight sirf usi column cell me. */
@@ -1458,6 +1472,7 @@ export const TransactionRow = React.memo(
     onToggleOpeningBalanceAmount,
     onStatusLinkedVoucherClick,
     statusLinkedVoucherPreviewActive,
+    enforceCurrentFyAttachmentAutoLoad = false,
   }: any) => {
     const { company } = useCompany();
     const { format: fyOpeningPillFormat } = useFyOpeningPillFormat();
@@ -1482,29 +1497,75 @@ export const TransactionRow = React.memo(
       const span = typeof fullRowColSpan === "number" && fullRowColSpan > 0 ? fullRowColSpan : 12;
       const boundaryMs = parseFiscalPartitionBoundaryMs(transaction);
       const partitionDate = boundaryMs != null ? new Date(boundaryMs) : null;
-      const label =
+      const partitionLabels =
         partitionDate && !Number.isNaN(partitionDate.getTime())
-          ? buildFiscalMergePartitionBannerLabelForDateSystem(
+          ? buildFiscalMergePartitionBannerSplitForDateSystem(
               company,
               partitionDate,
               dateSystem,
               formatDate,
-              company?.fiscalPartitionLabel ?? null
+              company?.fiscalPartitionLabel ?? null,
+              fyOpeningPillFormat
             )
-          : typeof (transaction as any)._partitionLabel === "string" && (transaction as any)._partitionLabel
-            ? (transaction as any)._partitionLabel
-            : "── Closing fiscal period · New fiscal period ──";
+          : null;
+      const closingEndLabel =
+        partitionLabels?.closingEndLabel ??
+        (typeof (transaction as any)._partitionLabel === "string" && (transaction as any)._partitionLabel
+          ? (transaction as any)._partitionLabel
+          : "── Closing fiscal period · New fiscal period ──");
+      const newStartLabel =
+        partitionLabels?.newStartLabel ??
+        closingEndLabel;
+      const summary = fiscalPartitionClosingSummary as FiscalPartitionClosingSummary | null | undefined;
+      const showDrCr = company?.showDrCr !== false;
+      const formatAmt = (n: number) =>
+        formatCurrencyForPrint(n, { noSuffix: true, context: "transaction", noAnimation: true });
+
+      const columnLayout = fiscalPartitionColumnLayout as FiscalPartitionColumnLayout | undefined;
+      const layout: FiscalPartitionColumnLayout =
+        columnLayout && columnLayout.leadingColSpan >= 0
+          ? columnLayout
+          : {
+              leadingColSpan: Math.max(0, span - 2 - 1),
+              showDebit: true,
+              showCredit: true,
+              showStatus: false,
+              showBalance: true,
+              trailingMenuCol: 1,
+            };
+
+      const MotionTr = motion.tr;
+
       return (
-        <motion.tr
-          layout={animateLayout ? "position" : false}
-          initial={false}
-          className="cursor-default border-y-2 border-blue-600/55 bg-blue-50/90 dark:bg-blue-950/45 hover:!bg-blue-50/90 dark:hover:!bg-blue-950/45"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <TableCell colSpan={span} className="py-2.5 px-3 text-center align-middle">
-            <span className="text-xs font-semibold uppercase tracking-wide text-blue-900 dark:text-blue-100">{label}</span>
-          </TableCell>
-        </motion.tr>
+        <>
+          {summary ? (
+            <FiscalPartitionClosingSummaryTableRows
+              summary={summary}
+              formatAmount={formatAmt}
+              showDrCr={showDrCr}
+              layout={layout}
+              partitionClosingEndLabel={closingEndLabel}
+              rowClassName=""
+              TableRowComponent={
+                MotionTr as unknown as React.ComponentType<React.HTMLAttributes<HTMLTableRowElement>>
+              }
+              onRowClickStop={(e) => e.stopPropagation()}
+            />
+          ) : null}
+          <MotionTr
+            layout={animateLayout ? "position" : false}
+            initial={false}
+            data-row="fiscal-partition-label"
+            className="cursor-default bg-background hover:!bg-background"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <TableCell colSpan={span} className="py-1 px-3 text-left align-middle bg-background">
+              <span className="text-xs font-semibold normal-case tracking-wide text-foreground">
+                {newStartLabel}
+              </span>
+            </TableCell>
+          </MotionTr>
+        </>
       );
     }
 
@@ -1547,7 +1608,7 @@ export const TransactionRow = React.memo(
     const { user, customUser } = useAuth();
     const currentUserUid = user?.uid ?? null;
     const currentUserDisplayName = customUser?.displayName || user?.displayName || user?.email || null;
-    const { can } = usePermissions();
+    const { can, canDeleteVoucher } = usePermissions();
     const isNote = context === "note";
     const { settings: animationSettings } = useAnimationSettings();
     const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
@@ -1922,6 +1983,9 @@ export const TransactionRow = React.memo(
             {(() => {
               const rowUrls = getVoucherAttachmentUrlsForUi(transaction, voucherAttachmentUiOpts);
               if (rowUrls.length === 0) return "-";
+              const suppressAutoThumbLoad =
+                enforceCurrentFyAttachmentAutoLoad &&
+                !shouldAutoWarmAttachmentForLedgerRow(company?.country, transaction?.date, true);
               const indicator =
                 fileShowAll && fileDisplayMode === "preview" ? (
                   <span className="inline-flex items-center gap-1">
@@ -1934,6 +1998,7 @@ export const TransactionRow = React.memo(
                           companyId={company?.id}
                           voucherId={String(transaction.id || "")}
                           clientFileUrls={rowUrls}
+                          suppressAutoThumbLoad={suppressAutoThumbLoad}
                         />
                       </span>
                     ))}
@@ -1946,6 +2011,7 @@ export const TransactionRow = React.memo(
                     companyId={company?.id}
                     voucherId={String(transaction.id || "")}
                     clientFileUrls={rowUrls}
+                    suppressAutoThumbLoad={suppressAutoThumbLoad}
                   />
                 );
               // Files tick OFF: portal still opens local cache only (openAttachmentInApp — no download).
@@ -2250,6 +2316,19 @@ export const TransactionRow = React.memo(
                   History
                 </DropdownMenuItem>
               )}
+              {onMoveVoucherToRecycleBin &&
+                canDeleteVoucher(transaction as { isApproved?: boolean }) &&
+                !isFyOpeningRow &&
+                transaction?.id &&
+                transaction.type !== FISCAL_YEAR_PARTITION_ROW_TYPE && (
+                  <DropdownMenuItem
+                    onClick={() => onMoveVoucherToRecycleBin(transaction)}
+                    className="flex items-center gap-2 text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Move to recycle bin
+                  </DropdownMenuItem>
+                )}
             </DropdownMenuContent>
           </DropdownMenu>
         </TableCell>

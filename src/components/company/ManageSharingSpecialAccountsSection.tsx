@@ -124,7 +124,7 @@ export function ManageSharingSpecialAccountsSection({
     if (!cid || typeof window === "undefined") return;
     const onBump = (ev: Event) => {
       const d = (ev as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
-      if (!d || d.companyId !== cid || d.collectionName !== "bank_accounts") return;
+      if (!d || d.companyId !== cid || d.collection !== "bank_accounts") return;
       void reloadMirroredBankAccounts();
     };
     window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);

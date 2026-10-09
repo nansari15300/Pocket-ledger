@@ -30,6 +30,9 @@ import {
   type ExpenseGroupListBranch,
 } from "@/lib/expenseGroupTree";
 import { createOneExpenseGroup } from "@/lib/expenseGroupWrite";
+import { masterEntityNestedGroupDialogShell } from "@/lib/masterEntityDialogClasses";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { NESTED_MASTER_GROUP_DIALOG_OVERLAY_CN } from "@/lib/dialogShellChrome";
 
 export type ExpenseGroupCreatedPayload = {
   id: string;
@@ -55,6 +58,8 @@ export function CreateExpenseGroupDialog({ onGroupCreated, children, isOpen, onO
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
     [company, navigatorOnline]
   );
+  const isMobile = useIsMobile();
+  const nestedGroupDialogShell = masterEntityNestedGroupDialogShell(isMobile);
 
   const resetForm = () => {
     setChainSlots([{}]);
@@ -208,9 +213,10 @@ export function CreateExpenseGroupDialog({ onGroupCreated, children, isOpen, onO
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         <DialogPortal>
-        <DialogOverlay />
-        <DialogContent 
-          className="sm:max-w-md z-[60]"
+        <DialogOverlay className={NESTED_MASTER_GROUP_DIALOG_OVERLAY_CN} />
+        <DialogContent
+          overlayClassName={nestedGroupDialogShell.overlayClassName}
+          className={nestedGroupDialogShell.className}
           onPointerDownOutside={(e) => {
             const target = e.target as HTMLElement;
             if (target.closest('[data-radix-popper-content-wrapper]')) {

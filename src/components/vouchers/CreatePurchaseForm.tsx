@@ -25,6 +25,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { VoucherNumberInputWithRefresh } from "@/components/vouchers/VoucherNumberInputWithRefresh";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -73,18 +74,11 @@ import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany, resolveCompanyVoucherPrefixList } from "@/lib/nextVoucherNumber";
 import { useAutoVoucherNumberFyDateSync } from "@/hooks/useAutoVoucherNumberFyDateSync";
 import { resolvePrefixFromVoucherNumber } from "@/lib/voucherNumberFormat";
-import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { loadVoucherDataForDeletePreCheck, resolveVoucherDeleteBackdateDate } from "@/lib/voucherDeletePreCheck";
 import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
 import {
-  appendLocalOnlyVoucherFilesToUrls,
-  shouldDeferStorageIncrementUntilPendingUpload,
-  shouldStageNewVoucherFilesAsLocalPending,
-} from "@/lib/voucherLocalAttachmentUpload";
-import {
   applyVoucherAttachmentsAfterFormSave,
   finalizeVoucherAttachmentsAfterFormSave,
-  uploadVoucherAttachmentFileToFirebase,
   voucherAttachmentFieldsForSave,
   voucherAttachmentLockSaveOpts,
 } from "@/lib/voucherFormAttachmentSave";
@@ -122,7 +116,7 @@ import { FilePreview } from "@/components/vouchers/FilePreview";
 import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
-import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
+import { VoucherAttachmentPcDropRow } from "@/components/vouchers/VoucherAttachmentPcDropRow";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateItemDialog } from "@/components/items/CreateItemDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
@@ -135,7 +129,8 @@ import {
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
-import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
+import { resolveVoucherAttachmentsBeforeSave } from "@/lib/voucherFormAttachmentsBeforeSave";
+import { useVoucherAttachmentPostSaveSync } from "@/hooks/useVoucherAttachmentPostSaveSync";
 import { readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import { CreateBankAccountDialog } from "../bank-cash/CreateBankAccountDialog";
 import { AddVoucherDialog } from "./AddVoucherDialog";
@@ -403,6 +398,9 @@ export function CreatePurchaseForm({
   const [showLinkSections, setShowLinkSections] = useState(false);
   const [pendingLinkAllocations, setPendingLinkAllocations] = useState<Record<string, number> | null>(null);
   const billWiseLinksPersistedOnDialogRef = useRef(false);
+  /** Edit hydrate + line calc settle hone se pehle Save mat enable (Payment Out / Journal jaisa). */
+  const [editBaselineHydrated, setEditBaselineHydrated] = useState(() => !voucher?.id);
+  const editBaselineVoucherIdRef = useRef<string | null>(null);
   const resetLinksOnCopyTargetChange = useCallback(() => {
     billWiseLinksPersistedOnDialogRef.current = false;
     setPendingLinkAllocations(null);
@@ -446,11 +444,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const init = initialFilesRef.current;
     return currentUrls.length !== init.length || currentUrls.some((u: any, i: number) => u !== init[i]);
   })();
-  const isFormDirty =
+  const isFormDirtyRaw =
     _isFormFieldsDirty ||
     _isFileDirty ||
     (pendingLinkAllocations != null && !billWiseLinksPersistedOnDialogRef.current) ||
     recurringVoucherAuxiliaryDirty;
+  const isFormDirty = editBaselineHydrated && isFormDirtyRaw;
   const watchedLineItems = useWatch({ control: form.control, name: "lineItems", defaultValue: [] });
   const watchedDiscount = useWatch({ control: form.control, name: "discount" });
   const partyId = form.watch("partyId");
@@ -758,26 +757,49 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     };
   }, [companyId, processedItems]);
 
+  useVoucherAttachmentPostSaveSync({
+    traceSource: "CreatePurchaseForm",
+    companyId,
+    voucher,
+    savedVoucherId,
+    files,
+    setFiles,
+    initialFilesRef,
+    savedFileUrlsSnapshotRef,
+    isFileDirty: _isFileDirty,
+    setSavePdfAsImage,
+  });
+
   // Voucher reset: isFormDirty deps mat — file add se dirty → effect → party "" set hone se bug (sale jaisa)
   useEffect(() => {
     if (voucher?.id) {
       const isSameVoucher = lastResetVoucherIdRef.current === voucher.id;
       // Sale jaisa: edit par snapshot se bar‑bar `form.reset` — date save / field edit wipe
       if (isSameVoucher) return;
-      lastResetVoucherIdRef.current = voucher.id;
+      const vid = voucher.id;
+      lastResetVoucherIdRef.current = vid;
+      editBaselineVoucherIdRef.current = vid;
+      setEditBaselineHydrated(false);
       const initialValues = getInitialFormValues(voucher);
-      form.reset(initialValues);
+      form.reset(initialValues, { keepDirty: false, keepDirtyValues: false });
       const li0 = initialValues.lineItems?.[0];
       if (li0?.type === "service" || li0?.type === "item") {
         setItemType(li0.type);
       }
-      setSavedVoucherId(voucher.id);
+      setSavedVoucherId(vid);
       const urlsToSet = allowAttachments ? voucherAttachmentUrlsForFormState(voucher) : [];
       if (Array.isArray(urlsToSet)) {
         setFiles(urlsToSet);
         initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === "string") as string[];
         setSavePdfAsImage(shouldSuggestPdfAsImage(urlsToSet));
       }
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (editBaselineVoucherIdRef.current !== vid) return;
+          form.reset(form.getValues(), { keepValues: true, keepDirty: false, keepDirtyValues: false });
+          setEditBaselineHydrated(true);
+        });
+      });
     } else if (voucher) {
       // Recon sync draft — poora purchase form hydrate
       const cref = voucher.crossCopySourceRef as { companyId?: string; voucherId?: string } | undefined;
@@ -805,6 +827,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
     } else {
       lastResetVoucherIdRef.current = null;
+      editBaselineVoucherIdRef.current = null;
+      setEditBaselineHydrated(true);
     }
   }, [voucher, form, allowAttachments]);
 
@@ -1078,12 +1102,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           type: "purchase",
         };
 
-        const filesForSave = await prepareVoucherAttachmentsForSave(files, {
-          companyId,
-          savePdfAsImage,
-          lockedPdfFileUrls: readLockedPdfFileUrlsFromRow(voucher),
-        });
-
         const originalVoucherIdToDelete: string | null =
           isEditingAndConverting && voucher?.id ? String(voucher.id) : null;
         const idArgForFirestore = resolveVoucherIdForSave({
@@ -1091,67 +1109,29 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           originalVoucherIdToDelete,
         });
 
-        let existingFileUrls = filesForSave.filter(
-          (f): f is string => typeof f === "string"
-        );
-        let preGeneratedVoucherId: string | undefined;
+        const voucherIdForUpload =
+          idArgForFirestore ?? savedVoucherId ?? voucher?.id ?? undefined;
 
-        // `files` UI list is canonical — do not re-inject `unassignedFile` (resurrects removed attachments).
-
-        const newFilesToUpload = filesForSave.filter(
-          (f): f is File => f instanceof File
-        );
-
-        if (newFilesToUpload.length > 0) {
-          const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
-          const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes }, company?.storageOption);
-          if (!limitCheck.allowed) {
-            sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+        const attachResult = await resolveVoucherAttachmentsBeforeSave({
+          companyId,
+          company,
+          files,
+          savePdfAsImage,
+          lockedPdfSource: voucher,
+          storageFolder: "purchase",
+          maxFileCount: fileAttachmentLimits.maxFileCount,
+          idArgForFirestore,
+          isEditingAndConverting,
+          voucherIdForFirebaseUpload: voucherIdForUpload ? String(voucherIdForUpload) : undefined,
+          onStorageLimitBlocked: (message) => {
+            sonnerToast.error("Storage limit reached", { id: toastId, description: message });
             setIsLoading(false);
-            return null;
-          }
-          if (await shouldStageNewVoucherFilesAsLocalPending(companyId)) {
-            const voucherIdForLocalAttachments =
-              isEditingAndConverting && voucher?.id
-                ? null
-                : idArgForFirestore ?? null;
-            const { fileUrls: mergedUrls, preGeneratedVoucherId: preGen } =
-              await appendLocalOnlyVoucherFilesToUrls({
-                companyId,
-                storageFolder: "purchase",
-                existingFileUrls,
-                newFiles: newFilesToUpload,
-                maxFileCount: fileAttachmentLimits.maxFileCount,
-                existingVoucherId: voucherIdForLocalAttachments,
-              });
-            existingFileUrls = mergedUrls;
-            if (preGen) preGeneratedVoucherId = preGen;
-            if (!shouldDeferStorageIncrementUntilPendingUpload()) {
-              try {
-                await incrementCompanyStorage(companyId, {
-                  attachmentsBytes: totalNewBytes,
-                  storageBytes: totalNewBytes,
-                });
-              } catch {
-                /* offline */
-              }
-            }
-          } else {
-            for (const file of newFilesToUpload) {
-              if (existingFileUrls.length >= fileAttachmentLimits.maxFileCount) break;
-              const voucherIdForUpload =
-                idArgForFirestore ?? savedVoucherId ?? voucher?.id ?? undefined;
-              const url = await uploadVoucherAttachmentFileToFirebase({
-                companyId,
-                voucherType: "purchase",
-                file,
-                voucherId: voucherIdForUpload ? String(voucherIdForUpload) : undefined,
-              });
-              existingFileUrls.push(url);
-              await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
-            }
-          }
-        }
+          },
+        });
+        if (!attachResult) return null;
+
+        const existingFileUrls = attachResult.fileUrls;
+        let preGeneratedVoucherId = attachResult.preGeneratedVoucherId;
 
         let finalData = {
           ...submissionData,
@@ -1866,7 +1846,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <FormItem className="min-w-0 w-full overflow-hidden">
                                   <FormLabel className="text-xs truncate">Invoice No.</FormLabel>
                                   <FormControl>
-                                    <Input placeholder="e.g. PUR-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                                    <VoucherNumberInputWithRefresh placeholder="e.g. PUR-001" {...voucherField} chromeSize="sm" className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} onRefresh={() => void fetchVoucherNumber()} showRefresh={isAutoVoucherEnabled && !savedVoucherId && !deleteDisabledWhenLinked} />
                                   </FormControl>
                                 </FormItem>
                               </>
@@ -2152,7 +2132,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <FormItem className="min-w-0 w-full overflow-hidden flex flex-col">
                               <FormLabel className="truncate">Invoice No.</FormLabel>
                               <FormControl>
-                                <Input placeholder="e.g. PUR-001" {...field} className="h-10 w-full min-w-0 shrink-0" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                                <VoucherNumberInputWithRefresh placeholder="e.g. PUR-001" {...field} className="h-10 w-full min-w-0 shrink-0" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} onRefresh={() => void fetchVoucherNumber()} showRefresh={isAutoVoucherEnabled && !savedVoucherId && !deleteDisabledWhenLinked} />
                               </FormControl>
                               <FormMessage />
                             </FormItem>
@@ -3081,7 +3061,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       )}
                       <RestrictedFileUploader>
                         {/* When linked: add/remove disabled; existing files stay clickable to open. Filter by file identity (not index) so remove works reliably. */}
-                        <div className="flex flex-wrap items-start gap-2 px-[2px]">
+                        <VoucherAttachmentPcDropRow
+                          enabled={
+                            allowAttachments &&
+                            !fileAttachLockedByDialog &&
+                            !editingDisabled &&
+                            fileAttachmentLimits.maxFileCount > 0
+                          }
+                          companyId={companyId}
+                          files={files}
+                          setFiles={setFiles}
+                          limits={fileAttachmentLimits}
+                          toast={toast}
+                          className="flex flex-wrap items-start gap-2 px-[2px]"
+                        >
                           {files.map((file, index) => (
                             <FilePreview
                               key={typeof file === "string" ? file : `file-${index}`}
@@ -3154,7 +3147,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </FormControl>
                             </>
                           )}
-                        </div>
+                        </VoucherAttachmentPcDropRow>
                       </RestrictedFileUploader>
                     </FormItem>
                   </div>
@@ -3383,7 +3376,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       )}
                       <RestrictedFileUploader>
                         {/* When linked: add/remove disabled; existing files stay clickable to open. Filter by file identity (not index) so remove works reliably. */}
-                        <div className="flex flex-wrap items-start gap-4">
+                        <VoucherAttachmentPcDropRow
+                          enabled={
+                            allowAttachments &&
+                            !fileAttachLockedByDialog &&
+                            !editingDisabled &&
+                            fileAttachmentLimits.maxFileCount > 0
+                          }
+                          companyId={companyId}
+                          files={files}
+                          setFiles={setFiles}
+                          limits={fileAttachmentLimits}
+                          toast={toast}
+                          className="flex flex-wrap items-start gap-4"
+                        >
                           {files.map((file, index) => (
                             <FilePreview
                               key={typeof file === "string" ? file : `file-${index}`}
@@ -3456,7 +3462,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </FormControl>
                             </>
                           )}
-                        </div>
+                        </VoucherAttachmentPcDropRow>
                       </RestrictedFileUploader>
                     </FormItem>
                     </div>
@@ -3731,7 +3737,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               billWiseLinksPersistedOnDialogRef.current = true;
               setPendingLinkAllocations(null);
               onEffectiveLinksChange?.(false);
-              onVoucherAction?.("saved", false, docId);
             });
             if (!linkResult.ok) {
               sonnerToast.error("Could not update bill-wise links.", {

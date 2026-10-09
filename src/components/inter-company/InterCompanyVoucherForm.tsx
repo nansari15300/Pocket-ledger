@@ -4,7 +4,7 @@
  * Inter-company voucher � ribbon: Voucher | Invite | Join; linked save on both companies.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useForm, type Control, type FieldValues } from "react-hook-form";
+import { useForm, useFormState, type Control, type FieldValues } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { CalendarIcon, ArrowLeftRight } from "lucide-react";
@@ -101,6 +101,7 @@ import { InterCompanyClearingAccountPrompt } from "@/components/inter-company/In
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { fetchInterCompanyBankEntityDetail } from "@/lib/interCompany/fetchInterCompanyEntities";
 import { getNextInterCompanyVoucherNumber } from "@/lib/interCompany/nextInterCompanyVoucherNumber";
+import { VoucherNumberInputWithRefresh } from "@/components/vouchers/VoucherNumberInputWithRefresh";
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
 import { openPrintDirect } from "@/lib/printDirect";
 import {
@@ -225,6 +226,37 @@ const interCompanySchema = z
   });
 
 type InterCompanyFormValues = z.infer<typeof interCompanySchema>;
+
+function serializeIcFormDirtyBaseline(
+  values: Pick<
+    InterCompanyFormValues,
+    | "voucherNumber"
+    | "date"
+    | "targetCompanyId"
+    | "amount"
+    | "narration"
+    | "otherChargeAccountId"
+    | "otherChargeAmount"
+  >,
+  otherChargeEnabled: boolean
+): string {
+  const dateMs =
+    values.date instanceof Date
+      ? values.date.getTime()
+      : values.date
+        ? new Date(values.date as string | Date).getTime()
+        : 0;
+  return JSON.stringify({
+    voucherNumber: String(values.voucherNumber || ""),
+    date: dateMs,
+    targetCompanyId: String(values.targetCompanyId || ""),
+    amount: Number(values.amount) || 0,
+    narration: String(values.narration || ""),
+    otherChargeAccountId: String(values.otherChargeAccountId || ""),
+    otherChargeAmount: Number(values.otherChargeAmount) || 0,
+    otherChargeEnabled: Boolean(otherChargeEnabled),
+  });
+}
 
 function withSelectedComboboxOption(
   rows: Array<{ value: string; label: string }>,
@@ -687,6 +719,8 @@ export function InterCompanyVoucherForm({
       targetCompanyBankId: string;
       sourceFiles: (File | string)[];
       targetFiles: (File | string)[];
+      sourceCompanyOverrideId?: string;
+      suggestedSourceAccountLabel?: string;
     }) => {
       const fileSig = (files: (File | string)[]) =>
         files
@@ -703,18 +737,21 @@ export function InterCompanyVoucherForm({
         args.targetCompanyBankId,
         fileSig(args.sourceFiles),
         fileSig(args.targetFiles),
+        String(args.sourceCompanyOverrideId || ""),
+        String(args.suggestedSourceAccountLabel || ""),
       ].join("|");
     },
     []
   );
   const [icExtrasBaseline, setIcExtrasBaseline] = useState("");
+  const [icFormBaselineSig, setIcFormBaselineSig] = useState("");
   /** Edit hydrate + extras baseline ready — bina change Save/Approve band (exp jaisa). */
   const [icEditHydrated, setIcEditHydrated] = useState(() => !displayVoucher?.id);
 
   const form = useForm<InterCompanyFormValues>({
     resolver: zodResolver(interCompanySchema) as import("react-hook-form").Resolver<InterCompanyFormValues>,
     defaultValues: {
-      voucherNumber: String(seed?.voucherNumber || "IC-001"),
+      voucherNumber: String(seed?.voucherNumber || ""),
       date: seed?.date instanceof Date ? seed.date : new Date(),
       targetCompanyId: String(seed?.targetCompanyId || ""),
       amount: Number(seed?.amount || 0),
@@ -725,7 +762,13 @@ export function InterCompanyVoucherForm({
   });
 
   const targetCompanyId = form.watch("targetCompanyId");
-  const { isDirty: isFormDirty } = form.formState;
+  const { isDirty: isFormDirty } = useFormState({ control: form.control });
+  const watchedVoucherNumber = form.watch("voucherNumber");
+  const watchedDate = form.watch("date");
+  const watchedAmount = form.watch("amount");
+  const watchedNarration = form.watch("narration");
+  const watchedOtherChargeAccountId = form.watch("otherChargeAccountId");
+  const watchedOtherChargeAmount = form.watch("otherChargeAmount");
 
   // Create: source company default = current (edit hydrate overrides)
   useEffect(() => {
@@ -742,13 +785,28 @@ export function InterCompanyVoucherForm({
     if (displayVoucher?.id || savedSourceId || lastHydratedVoucherIdRef.current) return;
     const gen = ++voucherNumberFetchGenRef.current;
     try {
-      const nextNo = await getNextInterCompanyVoucherNumber(companyId, company as Record<string, unknown>);
+      const nextNo = await getNextInterCompanyVoucherNumber(companyId, company as Record<string, unknown>, {
+        voucherDate: form.getValues("date"),
+      });
       if (gen !== voucherNumberFetchGenRef.current) return;
       form.setValue("voucherNumber", nextNo);
     } catch (err) {
       console.warn("[interCompany] voucher number fetch failed", err);
     }
   }, [company, companyId, form, isAutoVoucherEnabled, savedSourceId, displayVoucher?.id]);
+
+  const refreshVoucherNumber = useCallback(async () => {
+    if (!companyId || !company || !isAutoVoucherEnabled) return;
+    if (displayVoucher?.id || savedSourceId) return;
+    try {
+      const nextNo = await getNextInterCompanyVoucherNumber(companyId, company as Record<string, unknown>, {
+        voucherDate: form.getValues("date"),
+      });
+      form.setValue("voucherNumber", nextNo, { shouldDirty: true });
+    } catch (err) {
+      console.warn("[interCompany] voucher number refresh failed", err);
+    }
+  }, [company, companyId, displayVoucher?.id, form, isAutoVoucherEnabled, savedSourceId]);
 
   /**
    * Attachments upload — save se pehle URL list + in-memory blobs peer copy ke liye.
@@ -855,6 +913,7 @@ export function InterCompanyVoucherForm({
     const vid = String(displayVoucher.id);
     if (lastHydratedVoucherIdRef.current === vid) return;
     setIcEditHydrated(false);
+    setIcFormBaselineSig("");
     lastHydratedVoucherIdRef.current = vid;
     const row = displayVoucher as Record<string, unknown>;
     const dateVal = row.date as { toDate?: () => Date } | Date | string | undefined;
@@ -957,12 +1016,55 @@ export function InterCompanyVoucherForm({
     setPostTargetAsJournal(journalMode);
     setSavedPostTargetAsJournal(journalMode);
 
-    // Edit: company bank — pehle is doc par denormalized ids; phir peer se missing side + peer ki apni attachments
+    const denormSync = resolveInterCompanyBankIdsForEdit(row);
+    let srcBankSync = denormSync.sourceCompanyBankAccountId || "";
+    let tgtBankSync = denormSync.targetCompanyBankAccountId || "";
+    if (!srcBankSync && !link) srcBankSync = readInterCompanyCompanyBankId(row);
+    if (srcBankSync) setSourceCompanyBankId(srcBankSync);
+    if (tgtBankSync) setTargetCompanyBankId(tgtBankSync);
+    const sourceFilesSync = isTargetDoc ? ([] as string[]) : ownFiles;
+    const targetFilesSync = isTargetDoc ? ownFiles : ([] as string[]);
+    const otherChargeOnSync = Boolean(
+      row.otherChargeAccountId || Number(row.otherChargeAmount || 0) > 0
+    );
+    const syncFormValues = form.getValues();
+    form.reset(syncFormValues, { keepDirty: false, keepDirtyValues: false });
+    setIcFormBaselineSig(serializeIcFormDirtyBaseline(syncFormValues, otherChargeOnSync));
+    setIcExtrasBaseline(
+      buildIcExtrasSig({
+        sourcePayeeKind: sourceEntity?.kind || "party",
+        sourcePayeeId: sourceEntity?.id || "",
+        targetPayeeKind: targetEntity?.kind || "party",
+        targetPayeeId: targetEntity?.id || "",
+        sourceCompanyBankId: srcBankSync,
+        targetCompanyBankId: tgtBankSync,
+        sourceFiles: sourceFilesSync,
+        targetFiles: targetFilesSync,
+        sourceCompanyOverrideId: sourceHome,
+        suggestedSourceAccountLabel: String(row.interCompanySuggestedSourceAccountLabel || ""),
+      })
+    );
+    accountBaselineRef.current = {
+      sourcePayeeKind: (sourceEntity?.kind || "party") as InterCompanyEntityKind,
+      sourcePayeeId: sourceEntity?.id || "",
+      targetPayeeKind: (targetEntity?.kind || "party") as InterCompanyEntityKind,
+      targetPayeeId: targetEntity?.id || "",
+      sourceCompanyBankId: srcBankSync,
+      targetCompanyBankId: tgtBankSync,
+      sourcePayeeLabel:
+        readInterCompanyEntityLabelSnapshot(row, "source") || sourceEntity?.id || "—",
+      targetPayeeLabel:
+        readInterCompanyEntityLabelSnapshot(row, "target") || targetEntity?.id || "—",
+      sourceBankLabel: readInterCompanyBankLabelSnapshot(row, "source") || srcBankSync || "—",
+      targetBankLabel: readInterCompanyBankLabelSnapshot(row, "target") || tgtBankSync || "—",
+    };
+    setIcEditHydrated(true);
+
+    // Edit: company bank — peer se missing side + peer attachments; baseline refresh (Save dirty mat lagao)
     let bankHydrateCancelled = false;
     void (async () => {
-      const denorm = resolveInterCompanyBankIdsForEdit(row);
-      let srcBank = denorm.sourceCompanyBankAccountId;
-      let tgtBank = denorm.targetCompanyBankAccountId;
+      let srcBank = srcBankSync;
+      let tgtBank = tgtBankSync;
       let peer: Record<string, unknown> | null = null;
       if (link?.peerCompanyId && link?.peerVoucherId) {
         try {
@@ -1001,12 +1103,11 @@ export function InterCompanyVoucherForm({
             (link!.role === "source" ? readInterCompanyCompanyBankId(peer) : "");
         }
       }
-      if (!srcBank && !link) srcBank = readInterCompanyCompanyBankId(row);
       if (!bankHydrateCancelled) {
         if (srcBank) setSourceCompanyBankId(srcBank);
         if (tgtBank) setTargetCompanyBankId(tgtBank);
-        let sourceFilesNext = isTargetDoc ? ([] as string[]) : ownFiles;
-        let targetFilesNext = isTargetDoc ? ownFiles : ([] as string[]);
+        let sourceFilesNext = sourceFilesSync;
+        let targetFilesNext = targetFilesSync;
         if (peer) {
           const peerOwnFiles = readInterCompanyOwnFileUrls(peer);
           if (isTargetDoc) {
@@ -1017,6 +1118,11 @@ export function InterCompanyVoucherForm({
             targetFilesNext = peerOwnFiles.length > 0 ? peerOwnFiles : targetFilesNext;
           }
         }
+        const hydratedFormValues = form.getValues();
+        form.reset(hydratedFormValues, { keepDirty: false, keepDirtyValues: false });
+        setIcFormBaselineSig(
+          serializeIcFormDirtyBaseline(hydratedFormValues, otherChargeOnSync)
+        );
         setIcExtrasBaseline(
           buildIcExtrasSig({
             sourcePayeeKind: sourceEntity?.kind || "party",
@@ -1027,6 +1133,8 @@ export function InterCompanyVoucherForm({
             targetCompanyBankId: tgtBank || "",
             sourceFiles: sourceFilesNext,
             targetFiles: targetFilesNext,
+            sourceCompanyOverrideId: sourceHome,
+            suggestedSourceAccountLabel: String(row.interCompanySuggestedSourceAccountLabel || ""),
           })
         );
         accountBaselineRef.current = {
@@ -1044,14 +1152,12 @@ export function InterCompanyVoucherForm({
           targetBankLabel: readInterCompanyBankLabelSnapshot(row, "target") || tgtBank || "—",
         };
       }
-    })().finally(() => {
-      if (!bankHydrateCancelled) setIcEditHydrated(true);
-    });
+    })();
 
     return () => {
       bankHydrateCancelled = true;
     };
-  }, [displayVoucher, form, savedSourceId, companyId, buildIcExtrasSig]);
+  }, [displayVoucher?.id, companyId, buildIcExtrasSig, form]);
 
   // Live snapshot / table row baad me bank fields laaye — `lastHydratedVoucherIdRef` dubara hydrate nahi karta
   useEffect(() => {
@@ -2101,7 +2207,7 @@ export function InterCompanyVoucherForm({
     });
     const userExtra = extractInterCompanyUserNarration(form.getValues("narration"), autoNarration);
     form.setValue("narration", composeInterCompanyNarrationBase(autoNarration, userExtra), {
-      shouldDirty: true,
+      shouldDirty: false,
     });
   }, [
     fieldsDisabled,
@@ -2174,8 +2280,38 @@ export function InterCompanyVoucherForm({
     return true;
   };
 
+  const icFormDirty = useMemo(() => {
+    if (!displayVoucher?.id || !icEditHydrated || !icFormBaselineSig) return false;
+    const sig = serializeIcFormDirtyBaseline(
+      {
+        voucherNumber: watchedVoucherNumber,
+        date: watchedDate,
+        targetCompanyId: targetCompanyId,
+        amount: watchedAmount,
+        narration: watchedNarration,
+        otherChargeAccountId: watchedOtherChargeAccountId,
+        otherChargeAmount: watchedOtherChargeAmount,
+      },
+      otherChargeEnabled
+    );
+    return sig !== icFormBaselineSig;
+  }, [
+    displayVoucher?.id,
+    icEditHydrated,
+    icFormBaselineSig,
+    watchedVoucherNumber,
+    watchedDate,
+    targetCompanyId,
+    watchedAmount,
+    watchedNarration,
+    watchedOtherChargeAccountId,
+    watchedOtherChargeAmount,
+    otherChargeEnabled,
+  ]);
+
   const icExtrasDirty =
-    !!savedSourceId &&
+    icEditHydrated &&
+    icExtrasBaseline !== "" &&
     buildIcExtrasSig({
       sourcePayeeKind,
       sourcePayeeId,
@@ -2185,10 +2321,12 @@ export function InterCompanyVoucherForm({
       targetCompanyBankId,
       sourceFiles,
       targetFiles,
+      sourceCompanyOverrideId,
+      suggestedSourceAccountLabel,
     }) !== icExtrasBaseline;
 
   const icHasUserEdits =
-    isFormDirty ||
+    (displayVoucher?.id ? icFormDirty : isFormDirty) ||
     icExtrasDirty ||
     shareSourceAttachmentsWithPeer !== savedShareSourceAttachmentsWithPeer ||
     shareTargetAttachmentsWithSource !== savedShareTargetAttachmentsWithSource ||
@@ -2600,6 +2738,9 @@ export function InterCompanyVoucherForm({
         setSourceCompanyBankId(saveSourceBankId);
         setTargetCompanyBankId(saveTargetBankId);
       }
+      const savedFormValues = form.getValues();
+      form.reset(savedFormValues, { keepDirty: false, keepDirtyValues: false });
+      setIcFormBaselineSig(serializeIcFormDirtyBaseline(savedFormValues, otherChargeEnabled));
       setIcExtrasBaseline(
         buildIcExtrasSig({
           sourcePayeeKind: applyKeySet.size > 0 ? saveSourcePayeeKind : sourcePayeeKind,
@@ -2610,6 +2751,8 @@ export function InterCompanyVoucherForm({
           targetCompanyBankId: applyKeySet.size > 0 ? saveTargetBankId : targetCompanyBankId,
           sourceFiles: sourceFileUrls,
           targetFiles: targetFileUrls,
+          sourceCompanyOverrideId,
+          suggestedSourceAccountLabel,
         })
       );
       setIcEditHydrated(true);
@@ -2689,6 +2832,7 @@ export function InterCompanyVoucherForm({
         setSavedPostTargetAsJournal(false);
         setApplyAccountChangesToOtherSide(false);
         setIcExtrasBaseline("");
+        setIcFormBaselineSig("");
         lastHydratedVoucherIdRef.current = null;
         await fetchVoucherNumber();
       }
@@ -3418,7 +3562,7 @@ export function InterCompanyVoucherForm({
               <FormItem className={interCompanyVoucherHeaderFieldColClass}>
                 <FormLabel className={interCompanyVoucherHeaderLabelClass}>Voucher No.</FormLabel>
                 <FormControl>
-                  <Input
+                  <VoucherNumberInputWithRefresh
                     {...field}
                     className={cn(
                       interCompanyInputClass,
@@ -3427,6 +3571,14 @@ export function InterCompanyVoucherForm({
                     )}
                     readOnly={isInterCompanyEditLocked}
                     disabled={editingDisabled}
+                    onRefresh={() => refreshVoucherNumber()}
+                    showRefresh={
+                      isAutoVoucherEnabled &&
+                      !displayVoucher?.id &&
+                      !savedSourceId &&
+                      !isInterCompanyEditLocked &&
+                      !editingDisabled
+                    }
                   />
                 </FormControl>
                 <FormMessage />

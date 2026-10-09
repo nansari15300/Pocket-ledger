@@ -59,7 +59,8 @@ export function useAutoVoucherNumberFyDateSync(params: Params): void {
       voucherDate: watchedDate,
     });
     if (next && next !== current) {
-      form.setValue(numberField, next, { shouldDirty: true });
+      // Edit: FY segment refresh is derived from date — do not enable Save on open/hydrate.
+      form.setValue(numberField, next, { shouldDirty: false });
     }
   }, [
     watchedDate,

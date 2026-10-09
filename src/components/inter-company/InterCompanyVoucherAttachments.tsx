@@ -8,7 +8,10 @@ import { PlusCircle } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { RestrictedFileUploader } from "@/components/ui/RestrictedFileUploader";
-import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
+import {
+  AttachmentHoldPasteSurface,
+  AttachmentPcDropWrap,
+} from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
 import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
@@ -124,7 +127,22 @@ export function InterCompanyVoucherAttachments({
         </div>
       ) : null}
       <RestrictedFileUploader>
-        <div className="flex flex-wrap gap-3">
+        <AttachmentPcDropWrap
+          enabled={canAttach && files.length < fileAttachmentLimits.maxFileCount}
+          onDropFiles={(incoming) =>
+            void appendCompressedVoucherAttachmentsToState({
+              companyId,
+              incomingFiles: incoming,
+              currentFiles: files,
+              maxFiles: fileAttachmentLimits.maxFileCount,
+              allowImage: fileAttachmentLimits.allowImage,
+              allowPDF: fileAttachmentLimits.allowPDF,
+              setFiles: onFilesChange,
+              toast,
+            })
+          }
+          className="flex flex-wrap gap-3"
+        >
           {files.map((file, idx) => (
             <FilePreview
               key={`own-${idx}-${typeof file === "string" ? file : file.name}`}
@@ -225,7 +243,7 @@ export function InterCompanyVoucherAttachments({
               />
             </>
           ) : null}
-        </div>
+        </AttachmentPcDropWrap>
       </RestrictedFileUploader>
     </div>
   );

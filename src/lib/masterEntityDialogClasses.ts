@@ -1,6 +1,10 @@
 import { cn } from "@/lib/utils";
 import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
-import { NESTED_VOUCHER_MASTER_CREATE_CONTENT_CN } from "@/lib/dialogShellChrome";
+import {
+  NESTED_MASTER_GROUP_DIALOG_CONTENT_CN,
+  NESTED_MASTER_GROUP_DIALOG_OVERLAY_CN,
+  NESTED_VOUCHER_MASTER_CREATE_CONTENT_CN,
+} from "@/lib/dialogShellChrome";
 
 /**
  * Add/Edit master flows (party, bank, staff, tax, expense, item):
@@ -38,4 +42,21 @@ export function cnMasterEntityNarrowDialogContent(
     masterEntityFormChromeClassName,
     ...(extra as string[])
   );
+}
+
+const MASTER_NESTED_GROUP_DIALOG_BASE = `${NESTED_MASTER_GROUP_DIALOG_CONTENT_CN} max-h-[85vh] w-[98vw] max-w-[98vw] flex min-h-0 flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-md sm:grid sm:flex-none sm:px-6`;
+
+/** Create Group from party/bank/staff/etc. master form — stack above parent z-[93]. */
+export function masterEntityNestedGroupDialogShell(
+  isMobile: boolean,
+  ...extraContentClass: (string | undefined | false | null)[]
+) {
+  return {
+    overlayClassName: NESTED_MASTER_GROUP_DIALOG_OVERLAY_CN,
+    className: cn(
+      cnStaticMobileFullscreenDialog(isMobile, MASTER_NESTED_GROUP_DIALOG_BASE),
+      masterEntityFormChromeClassName,
+      ...(extraContentClass as string[])
+    ),
+  };
 }

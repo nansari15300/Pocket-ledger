@@ -68,7 +68,7 @@ import {
   shouldShowInterCompanyInDaybookOrRecent,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { formatInterCompanyLedgerVoucherNumber } from "@/lib/interCompany/interCompanyVoucherDisplay";
-import { sumJournalAmountsForAccount } from "@/lib/journalLedgerAmounts";
+import { getJournalVoucherLegs, sumJournalAmountsForAccount } from "@/lib/journalLedgerAmounts";
 
 export {
   computeAccountLedgerDaySummary,
@@ -590,9 +590,10 @@ export const getTransactionAmounts = (
       break;
     
     case "daybook":
-        if (transaction.type === 'journal') {
-          debit = transaction.entries ? transaction.entries.reduce((sum: number, e: any) => sum + (Number(e.debit) || 0), 0) : 0;
-          credit = transaction.entries ? transaction.entries.reduce((sum: number, e: any) => sum + (Number(e.credit) || 0), 0) : 0;
+        if (transaction.type === "journal" || transaction.type === "adjustment") {
+          const legs = getJournalVoucherLegs(transaction);
+          debit = legs.reduce((sum, e) => sum + toNum(e.debit), 0);
+          credit = legs.reduce((sum, e) => sum + toNum(e.credit), 0);
         } else if (transaction.type === 'contra') {
           debit = amount; 
           credit = amount;
@@ -860,7 +861,9 @@ export function useTransactions(
     userNames?: Record<string, string>,
     displayUnit?: string,
     /** Daybook: sirf is user ke vouchers (summary + table); null/undefined = sab users */
-    daybookUserIdFilter?: string | null
+    daybookUserIdFilter?: string | null,
+    /** Dashboard Recent: running balance column off — skip books walk + per-row balance. */
+    skipRunningBalance?: boolean
 ) {
     const { vouchers, processedTaxes } = useVouchers();
     const { company, companyId } = useCompany();
@@ -1454,9 +1457,12 @@ export function useTransactions(
             }
         }
 
+        const skipRunningBalanceForDaybookRecent =
+            skipRunningBalance === true && context === "daybook";
+
         /** FY merge / full SQLite mirror: books running balance = walk all entity txns (filters don't reset chain). */
         const fullBooksBalanceByVoucherId = new Map<string, number>();
-        if (fullLocalVoucherMirror && sorted.length > 0) {
+        if (!skipRunningBalanceForDaybookRecent && fullLocalVoucherMirror && sorted.length > 0) {
           let booksRunning = Number(initialOpeningBalance) || 0;
           for (const t of sorted) {
             const transactionDate = safeToDate(t.date);
@@ -1652,17 +1658,19 @@ export function useTransactions(
                     if (!keepIcPlaceholder) return null;
                 }
                 
-                const booksBalance = fullBooksBalanceByVoucherId.get(String(t.id || ""));
-                if (booksBalance != null && Number.isFinite(booksBalance)) {
-                  runningBalance = booksBalance;
-                } else if (isJournalAllView && (t.type === 'journal' || t.type === 'adjustment')) {
-                    // For journal transactions in "all" view, running balance should remain at opening balance
-                    // Since journals balance (debit = credit), debit - credit = 0, so balance doesn't change
-                    runningBalance += amounts.debit - amounts.credit; // This will be 0 for balanced journal entries
-                } else if (t.type === "inter_company" && (t as { isApproved?: boolean }).isApproved !== true) {
-                    // IC unapproved — row dikhe, balance approve tak mat badlo
-                } else {
-                    runningBalance += amounts.debit - amounts.credit;
+                if (!skipRunningBalanceForDaybookRecent) {
+                  const booksBalance = fullBooksBalanceByVoucherId.get(String(t.id || ""));
+                  if (booksBalance != null && Number.isFinite(booksBalance)) {
+                    runningBalance = booksBalance;
+                  } else if (isJournalAllView && (t.type === 'journal' || t.type === 'adjustment')) {
+                      // For journal transactions in "all" view, running balance should remain at opening balance
+                      // Since journals balance (debit = credit), debit - credit = 0, so balance doesn't change
+                      runningBalance += amounts.debit - amounts.credit; // This will be 0 for balanced journal entries
+                  } else if (t.type === "inter_company" && (t as { isApproved?: boolean }).isApproved !== true) {
+                      // IC unapproved — row dikhe, balance approve tak mat badlo
+                  } else {
+                      runningBalance += amounts.debit - amounts.credit;
+                  }
                 }
 
                 // Bill-wise status and outstanding for sale/purchase in party/group/daybook context
@@ -2155,7 +2163,7 @@ export function useTransactions(
                             ...amounts,
                             quantity: amounts.quantity,
                             originalQuantity: t.lineItems?.find((li:any) => entity && 'id' in entity && li.itemId === entity.id)?.quantity || 0,
-                            balance: runningBalance,
+                            ...(skipRunningBalanceForDaybookRecent ? {} : { balance: runningBalance }),
                             paymentStatus,
                             isOverdue,
                             outstanding,
@@ -2192,7 +2200,7 @@ export function useTransactions(
                     ...amounts,
                     quantity: amounts.quantity,
                     originalQuantity: t.lineItems?.find((li:any) => entity && 'id' in entity && li.itemId === entity.id)?.quantity || 0,
-                    balance: runningBalance,
+                    ...(skipRunningBalanceForDaybookRecent ? {} : { balance: runningBalance }),
                     paymentStatus,
                     isOverdue,
                     outstanding,
@@ -2405,7 +2413,7 @@ export function useTransactions(
             periodOpeningLoading,
         };
 
-  }, [entity, context, vouchers, companyId, dateRange, stockView, entityList, transactionContext, filters, voucherTypes, formatDate, formatDateBS, journalAccountNames, userNames, formatCurrency, daybookUserIdFilter, company, fy.enabled, fy.activeScope, fy.openingBalances, fy.openingBalancesLoadStatus]);
+  }, [entity, context, vouchers, companyId, dateRange, stockView, entityList, transactionContext, filters, voucherTypes, formatDate, formatDateBS, journalAccountNames, userNames, formatCurrency, daybookUserIdFilter, skipRunningBalance, company, fy.enabled, fy.activeScope, fy.openingBalances, fy.openingBalancesLoadStatus]);
 
   return result;
 }

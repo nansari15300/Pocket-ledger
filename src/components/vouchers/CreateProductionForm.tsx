@@ -8,6 +8,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react"
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { VoucherNumberInputWithRefresh } from "@/components/vouchers/VoucherNumberInputWithRefresh";
 import { Textarea } from "../ui/textarea";
 import { ScrollArea } from "../ui/scroll-area";
 import { VoucherDeleteConfirmAlertDialog } from "@/components/vouchers/VoucherDeleteConfirmAlertDialog";
@@ -819,7 +820,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </Select>
                       )}
                       <FormControl>
-                        <Input {...field} value={field.value ?? ''} className={cn(isPrefixSelectionEnabled && voucherPrefixes.length > 0 && "flex-1")} />
+                        <VoucherNumberInputWithRefresh
+                          {...field}
+                          value={field.value ?? ""}
+                          className={cn(isPrefixSelectionEnabled && voucherPrefixes.length > 0 && "flex-1")}
+                          onRefresh={() => void fetchVoucherNumber()}
+                          showRefresh={isAutoVoucherEnabled && !voucher?.id}
+                        />
                       </FormControl>
                     </div>
                     <FormMessage />

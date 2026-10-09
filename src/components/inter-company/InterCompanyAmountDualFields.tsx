@@ -19,6 +19,7 @@ import {
 } from "@/lib/interCompany/interCompanyVoucherChrome";
 import { cn } from "@/lib/utils";
 import { OTHER_CHARGE_ADD_NEW_LABELS, resolveOtherChargeAddNewType } from "@/lib/otherChargeComboboxAddNew";
+import { parseAmountInputString, sanitizeAmountInputString } from "@/lib/amountInputNormalize";
 
 type FormatPrint = (amount: number, options?: { noSuffix?: boolean }) => string;
 
@@ -50,14 +51,12 @@ const amountSidePanelClass =
   "min-w-0 flex-1 rounded-md border bg-background/80 px-2.5 py-2";
 
 function parseInterCompanyAmountInput(raw: string): number {
-  const cleaned = String(raw || "")
+  const stripped = String(raw || "")
     .replace(/,/g, "")
     .replace(/\s*(Dr|Cr)\s*/gi, "")
-    .replace(/[^\d.-]/g, "")
     .trim();
-  if (!cleaned) return 0;
-  const n = parseFloat(cleaned);
-  return Number.isFinite(n) && n > 0 ? n : 0;
+  const n = parseAmountInputString(stripped);
+  return n > 0 ? n : 0;
 }
 
 function formatInterCompanyAmountDisplay(formatCurrencyForPrint: FormatPrint, amount: number): string {
@@ -185,7 +184,8 @@ export function InterCompanyAmountDualFields({
                         }}
                         onChange={(e) => {
                           if (sourceReadOnly) return;
-                          const raw = e.target.value;
+                          const raw = sanitizeAmountInputString(e.target.value);
+                          e.target.value = raw;
                           setSourceDraft(raw);
                           field.onChange(parseInterCompanyAmountInput(raw));
                         }}
@@ -312,7 +312,8 @@ export function InterCompanyAmountDualFields({
                                 }}
                                 onChange={(e) => {
                                   if (sourceReadOnly) return;
-                                  const raw = e.target.value;
+                                  const raw = sanitizeAmountInputString(e.target.value);
+                                  e.target.value = raw;
                                   setOtherChargeDraft(raw);
                                   amountField.onChange(parseInterCompanyAmountInput(raw));
                                 }}

@@ -20,7 +20,13 @@ import { readLocalFyOpeningBalances } from "@/lib/fyPagination/openingSnapshotHy
 import {
   applyFyScopeFromSqlite,
   scheduleBackgroundOnlineFyRangeHydrate,
+  scheduleOnlineFullVoucherMirrorPull,
 } from "@/lib/fyPagination/sqliteFirstFyLoad";
+import {
+  FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT,
+  isFirebaseLedgerCompanyDataSyncEnabled,
+} from "@/lib/firebaseLedgerCompanySyncPrefs";
+import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import { subscribeVoucherLivePatch } from "@/lib/voucherFormAttachmentSave";
 
 function FyHydratedVoucherLivePatchSync() {
@@ -77,7 +83,11 @@ function FyScopeLoaderInner() {
 
     void (async () => {
       try {
-        const scope = companyUsesFiscalMergeDividers(company)
+        const onlineDataSyncFullScope =
+          isCloudLinkedCompanyStorage(company) &&
+          isFirebaseLedgerCompanyDataSyncEnabled(companyId, company);
+
+        const scope = companyUsesFiscalMergeDividers(company) || onlineDataSyncFullScope
           ? buildFiscalMergeFullVoucherScope(company?.country)
           : await buildScopeWithMinTxnsInFy({
               companyId,
@@ -85,6 +95,9 @@ function FyScopeLoaderInner() {
             });
 
         await applyFyScopeFromSqlite({ companyId, fy, scope });
+        if (onlineDataSyncFullScope) {
+          scheduleOnlineFullVoucherMirrorPull({ company, companyId });
+        }
         if (cancelled) return;
 
         if (cancelled) return;
@@ -149,6 +162,31 @@ function FyScopeLoaderInner() {
   return null;
 }
 
+/** Online tab Save (Data tick): widen scope + full voucher pull without full page reload. */
+function FyOnlineDataSyncPrefsListener() {
+  const { company } = useCompany();
+  const fy = useFyVoucherScope();
+
+  useEffect(() => {
+    const companyId = String(company?.id || "").trim();
+    if (!companyId || !fy.enabled) return;
+
+    const onPrefs = () => {
+      if (!isCloudLinkedCompanyStorage(company)) return;
+      if (!isFirebaseLedgerCompanyDataSyncEnabled(companyId, company)) return;
+      const scope = buildFiscalMergeFullVoucherScope(company?.country);
+      fy.setActiveScope(scope);
+      void applyFyScopeFromSqlite({ companyId, fy, scope });
+      scheduleOnlineFullVoucherMirrorPull({ company, companyId });
+    };
+
+    window.addEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, onPrefs);
+    return () => window.removeEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, onPrefs);
+  }, [company, fy]);
+
+  return null;
+}
+
 export function FyVoucherScopeBootstrap({ children }: { children: React.ReactNode }) {
   const { company } = useCompany();
   const companyId = String(company?.id || "").trim() || null;
@@ -156,6 +194,7 @@ export function FyVoucherScopeBootstrap({ children }: { children: React.ReactNod
   return (
     <FyVoucherScopeProvider companyId={companyId} enabled={Boolean(companyId)}>
       <FyScopeLoaderInner />
+      <FyOnlineDataSyncPrefsListener />
       <FyHydratedVoucherLivePatchSync />
       {children}
     </FyVoucherScopeProvider>

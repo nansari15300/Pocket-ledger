@@ -202,7 +202,7 @@ function CompanySelectorTabBar({
       key={tab}
       type="button"
       className={cn(
-        "flex-1 rounded-sm font-medium transition-colors",
+        "flex-1 rounded-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-0",
         compact ? "px-1.5 py-1.5 text-[11px]" : "px-2 py-2 text-sm",
         value === tab ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
       )}
@@ -3091,7 +3091,7 @@ export function CompanyActions({
                 </>
               ) : (
                 <div
-                  className="mt-2 rounded-md border bg-muted/20 p-2"
+                  className="mt-2 rounded-md bg-muted/20 p-1.5"
                   onPointerDown={(e) => e.preventDefault()}
                   onClick={(e) => e.stopPropagation()}
                 >

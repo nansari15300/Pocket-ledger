@@ -14,6 +14,8 @@ import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import { masterEntityNestedGroupDialogShell } from "@/lib/masterEntityDialogClasses";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import type { Group } from "@/components/party/types";
 import { MasterEntityNestedGroupFields } from "@/components/entity/MasterEntityNestedGroupFields";
@@ -57,6 +59,8 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
   const setOpen = parentOnOpenChange !== undefined ? parentOnOpenChange : setInternalIsOpen;
   const isDialogControlled = parentIsOpen !== undefined;
   const closeDialog = () => setOpen(false);
+  const isMobile = useIsMobile();
+  const nestedGroupDialogShell = masterEntityNestedGroupDialogShell(isMobile);
 
   const resetForm = () => {
     setChainSlots([{}]);
@@ -214,7 +218,8 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
         <DialogTrigger asChild>{children}</DialogTrigger>
       )}
       <DialogContent
-        className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 py-4 sm:max-h-none sm:w-full sm:max-w-md sm:grid sm:flex-none sm:px-6"
+        overlayClassName={nestedGroupDialogShell.overlayClassName}
+        className={cn(nestedGroupDialogShell.className, "py-4")}
         onPointerDownOutside={(e) => {
           const target = e.target as HTMLElement;
           if (target.closest("[data-radix-popper-content-wrapper]")) {

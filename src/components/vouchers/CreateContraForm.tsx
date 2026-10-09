@@ -15,6 +15,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react"
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { VoucherNumberInputWithRefresh } from "@/components/vouchers/VoucherNumberInputWithRefresh";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calendar } from "@/components/ui/calendar";
@@ -1769,7 +1770,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       <FormItem className="min-w-0">
                         <FormLabel className="text-xs truncate">Voucher No. (Out)</FormLabel>
                         <FormControl>
-                          <Input placeholder="CNTR Out - 001" {...field} value={field.value ?? ""} className="h-9 text-xs w-full min-w-0" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                          <VoucherNumberInputWithRefresh placeholder="CNTR Out - 001" {...field} value={field.value ?? ""} chromeSize="sm" className="h-9 text-xs w-full min-w-0" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} onRefresh={() => void fetchVoucherNumber(undefined, { force: true })} showRefresh={isAutoVoucherEnabled && !savedVoucherId && !deleteDisabledWhenLinked} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -1778,7 +1779,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       <FormItem className="min-w-0">
                         <FormLabel className="text-xs truncate">Voucher No. (In)</FormLabel>
                         <FormControl>
-                          <Input placeholder="CNTR In - 001" {...field} value={field.value ?? ""} className="h-9 text-xs w-full min-w-0" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                          <VoucherNumberInputWithRefresh placeholder="CNTR In - 001" {...field} value={field.value ?? ""} chromeSize="sm" className="h-9 text-xs w-full min-w-0" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} onRefresh={() => void fetchVoucherNumber(undefined, { force: true })} showRefresh={isAutoVoucherEnabled && !savedVoucherId && !deleteDisabledWhenLinked} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -2083,7 +2084,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <FormItem>
                           <FormLabel>Voucher No. (Out)</FormLabel>
                           <FormControl>
-                            <Input placeholder="e.g. CNTR Out - 001" {...field} value={field.value ?? ""} className={cn("w-full max-w-[14rem] md:max-w-[12rem]")} disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                            <VoucherNumberInputWithRefresh placeholder="e.g. CNTR Out - 001" {...field} value={field.value ?? ""} className={cn("w-full max-w-[14rem] md:max-w-[12rem]")} disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} onRefresh={() => void fetchVoucherNumber(undefined, { force: true })} showRefresh={isAutoVoucherEnabled && !savedVoucherId && !deleteDisabledWhenLinked} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -2096,7 +2097,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <FormItem>
                           <FormLabel>Voucher No. (In)</FormLabel>
                           <FormControl>
-                            <Input placeholder="e.g. CNTR In - 001" {...field} value={field.value ?? ""} className={cn("w-full max-w-[14rem] md:max-w-[12rem]")} disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                            <VoucherNumberInputWithRefresh placeholder="e.g. CNTR In - 001" {...field} value={field.value ?? ""} className={cn("w-full max-w-[14rem] md:max-w-[12rem]")} disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} onRefresh={() => void fetchVoucherNumber(undefined, { force: true })} showRefresh={isAutoVoucherEnabled && !savedVoucherId && !deleteDisabledWhenLinked} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>

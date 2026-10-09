@@ -33,6 +33,14 @@ import {
 } from "@/lib/nestedLedgerMasterEditPresentation";
 import { cn } from "@/lib/utils";
 
+/** Ledger/table toggles — print dialog inhe default maane (warna Show Narration off + print par phir bhi narration). */
+export type PrintOptionsInitial = {
+  printIncludeNarration?: boolean;
+  printIncludeNotes?: boolean;
+  printIncludeUserColumn?: boolean;
+  printIncludeFileColumn?: boolean;
+};
+
 export type PrintOptionsResult = {
   printIncludeLogo: boolean;
   printIncludeCompanyDetails: boolean;
@@ -49,7 +57,10 @@ export type PrintOptionsResult = {
   printMasterIncludeBalance?: boolean;
 };
 
-export function promptPrintOptions({ showConfirmationTabs = false }: { showConfirmationTabs?: boolean } = {}): Promise<PrintOptionsResult | null> {
+export function promptPrintOptions({
+  showConfirmationTabs = false,
+  initial,
+}: { showConfirmationTabs?: boolean; initial?: PrintOptionsInitial } = {}): Promise<PrintOptionsResult | null> {
   return new Promise((resolve) => {
     const container = document.createElement("div");
     document.body.appendChild(container);
@@ -69,11 +80,11 @@ export function promptPrintOptions({ showConfirmationTabs = false }: { showConfi
       const [view, setView] = React.useState<"report" | "masters">("report");
       const [printLogo, setPrintLogo] = React.useState(true);
       const [printCompany, setPrintCompany] = React.useState(true);
-      const [printNarration, setPrintNarration] = React.useState(true);
+      const [printNarration, setPrintNarration] = React.useState(initial?.printIncludeNarration ?? true);
       const [printTitle, setPrintTitle] = React.useState(true);
-      const [printUserColumn, setPrintUserColumn] = React.useState(false);
-      const [printFileColumn, setPrintFileColumn] = React.useState(false);
-      const [printNotes, setPrintNotes] = React.useState(false);
+      const [printUserColumn, setPrintUserColumn] = React.useState(initial?.printIncludeUserColumn === true);
+      const [printFileColumn, setPrintFileColumn] = React.useState(initial?.printIncludeFileColumn === true);
+      const [printNotes, setPrintNotes] = React.useState(initial?.printIncludeNotes === true);
       const [printColorMode, setPrintColorMode] = React.useState<PrintColorMode>("color");
       const [printReportKind, setPrintReportKind] = React.useState<"confirmation" | "statement" | "both">("confirmation");
 

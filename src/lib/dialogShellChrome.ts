@@ -28,6 +28,10 @@ export const NESTED_VOUCHER_ATTACHMENT_REUSE_CONTENT_CN = "!z-[101]";
 export const NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN = "z-[92] bg-black/45 backdrop-blur-sm";
 export const NESTED_VOUCHER_MASTER_CREATE_CONTENT_CN = "!z-[93]";
 
+/** Add New Group nested inside master add/edit dialog (parent content z-[93]). */
+export const NESTED_MASTER_GROUP_DIALOG_OVERLAY_CN = "z-[94] bg-black/45 backdrop-blur-sm";
+export const NESTED_MASTER_GROUP_DIALOG_CONTENT_CN = "!z-[95]";
+
 /** AlertDialogs inside voucher add/edit (IC pay mode, change detected, delete confirm) — above master create z-[93]. */
 export const NESTED_VOUCHER_ALERT_OVERLAY_CN = "z-[94] bg-black/45 backdrop-blur-sm";
 export const NESTED_VOUCHER_ALERT_CONTENT_CN = "!z-[95]";

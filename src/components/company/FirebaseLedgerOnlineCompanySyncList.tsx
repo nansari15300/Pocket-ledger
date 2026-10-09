@@ -238,9 +238,10 @@ export function FirebaseLedgerOnlineCompanySyncList({
       <div
         key={id}
         className={cn(
-          "grid items-center gap-1 rounded-md border bg-background px-1 py-1",
+          "grid items-center gap-1 rounded-md border border-border/70 bg-background px-1 py-1 focus-within:border-primary/70",
           headerCols
         )}
+        data-pl-company-online-sync-row=""
       >
         <div className="flex min-w-0 items-center gap-1">
           <button

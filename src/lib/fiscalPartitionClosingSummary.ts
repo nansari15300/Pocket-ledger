@@ -1,0 +1,87 @@
+import { FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
+import { FY_OPENING_ROW_TYPE } from "@/lib/fyPagination/fyOpeningRows";
+
+export type FiscalPartitionClosingSummary = {
+  totalDr: number;
+  totalCr: number;
+  /** Signed ledger balance (Dr positive). */
+  closingBalance: number;
+};
+
+function ledgerAmount(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function isClosingSummaryRow(t: unknown): boolean {
+  if (!t || typeof t !== "object") return false;
+  const row = t as { type?: string; _spendWiseSpacer?: boolean };
+  if (row._spendWiseSpacer) return false;
+  if (row.type === FISCAL_YEAR_PARTITION_ROW_TYPE) return false;
+  if (row.type === FY_OPENING_ROW_TYPE) return false;
+  return true;
+}
+
+function rowClosingBalance(t: Record<string, unknown>): number | null {
+  if (typeof t._spendWiseLedgerRunningBalance === "number") return ledgerAmount(t._spendWiseLedgerRunningBalance);
+  if (typeof t._spendWiseRunningBalance === "number") return ledgerAmount(t._spendWiseRunningBalance);
+  if (typeof t.balance === "number") return ledgerAmount(t.balance);
+  if (typeof t.runningBalance === "number") return ledgerAmount(t.runningBalance);
+  return null;
+}
+
+/** FY merge divider se pehle wale segment ka Total Dr/Cr + closing balance. */
+export function computeClosingSummaryBeforePartition(
+  rowsInDisplayOrder: unknown[],
+  partitionIndex: number
+): FiscalPartitionClosingSummary | null {
+  if (!Array.isArray(rowsInDisplayOrder) || partitionIndex < 0 || partitionIndex >= rowsInDisplayOrder.length) {
+    return null;
+  }
+  const partition = rowsInDisplayOrder[partitionIndex] as { type?: string };
+  if (partition?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE) return null;
+
+  let start = 0;
+  for (let i = partitionIndex - 1; i >= 0; i--) {
+    const prev = rowsInDisplayOrder[i] as { type?: string };
+    if (prev?.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
+      start = i + 1;
+      break;
+    }
+  }
+
+  let totalDr = 0;
+  let totalCr = 0;
+  let closingBalance = 0;
+  let sawBalance = false;
+
+  for (let i = start; i < partitionIndex; i++) {
+    const t = rowsInDisplayOrder[i] as Record<string, unknown>;
+    if (!isClosingSummaryRow(t)) continue;
+    totalDr += ledgerAmount(t.debit);
+    totalCr += ledgerAmount(t.credit);
+    const bal = rowClosingBalance(t);
+    if (bal != null) {
+      closingBalance = bal;
+      sawBalance = true;
+    }
+  }
+
+  if (!sawBalance && totalDr === 0 && totalCr === 0) return null;
+
+  return { totalDr, totalCr, closingBalance };
+}
+
+export function buildPartitionClosingSummaryMap(rowsInDisplayOrder: unknown[]): Map<string, FiscalPartitionClosingSummary> {
+  const map = new Map<string, FiscalPartitionClosingSummary>();
+  if (!Array.isArray(rowsInDisplayOrder)) return map;
+  for (let i = 0; i < rowsInDisplayOrder.length; i++) {
+    const row = rowsInDisplayOrder[i] as { type?: string; id?: string };
+    if (row?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE) continue;
+    const summary = computeClosingSummaryBeforePartition(rowsInDisplayOrder, i);
+    if (!summary) continue;
+    const key = String(row.id || `__fiscal_partition_idx_${i}`);
+    map.set(key, summary);
+  }
+  return map;
+}

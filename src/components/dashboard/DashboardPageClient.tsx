@@ -24,7 +24,7 @@ import {
 } from 'firebase/firestore';
 import { applyPaymentBillWiseLinkAllocations } from '@/lib/voucherActionsClient';
 import * as React from 'react';
-import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
   BookText,
   Landmark,
@@ -88,6 +88,7 @@ import { useDate } from '@/hooks/useDate';
 import { useIsMobile, useCalendarMonths, useMobileView } from '@/hooks/use-mobile';
 import { openPrintDirect } from "@/lib/printDirect";
 import usePermissions from '@/hooks/usePermissions';
+import { useVoucherLedgerRecycleBinAction } from '@/hooks/useVoucherLedgerRecycleBinAction';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DaybookReport } from '@/components/reports/DaybookReport';
 import {
@@ -103,7 +104,24 @@ import { getOnlineCompanySyncStatusRibbon } from '@/lib/onlineCompanySelectorSyn
 import { FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT } from '@/lib/firebaseLedgerCompanySyncPrefs';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { TransactionsTable } from '@/components/vouchers/TransactionsTable';
+import { TransactionsTable, type TransactionColumnKey } from '@/components/vouchers/TransactionsTable';
+import { LedgerDesktopFooter } from '@/components/vouchers/LedgerDesktopFooter';
+import { LedgerFooterCheckboxPill } from '@/components/vouchers/ledgerFooterChrome';
+import { MobileTransactionsPager } from '@/components/vouchers/MobileTransactionsPager';
+import type { TransactionSortOrder } from '@/components/vouchers/TransactionTableSortDropdown';
+import { useRowsPerPage } from '@/hooks/useRowsPerPage';
+import { useRowsPerPageSelectControl } from '@/hooks/useRowsPerPageSelect';
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from '@/lib/rowsPerPageSelect';
+import {
+  COLUMN_LABELS,
+  useShowNotes,
+  useTransactionVisibleColumns,
+} from '@/components/vouchers/transactionColumnVisibility';
+import { LedgerFooterColumnsMenu } from '@/components/vouchers/LedgerFooterColumnsMenu';
+import {
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
 import {
   getOppositeAccountLabel,
   getTransactionQuickSearchHaystack,
@@ -143,11 +161,21 @@ import {
 } from "@/lib/receivablesPayablesDialogUi";
 import { useServerReceivablesPayablesSummary } from "@/hooks/useServerReceivablesPayablesSummary";
 import { RecurringAutoSummaryCard } from "@/components/dashboard/RecurringAutoSummaryCard";
-import { DashboardWelcomeClockLine } from "@/components/dashboard/DashboardWelcomeClockLine";
+import {
+  DashboardWelcomeFooterBanner,
+  dashboardWelcomeFooterReservePx,
+} from "@/components/dashboard/DashboardWelcomeFooterBanner";
 import {
   getCurrentMonthDateRange,
   MonthYearFilter as DashboardMonthYearFilter,
 } from "@/components/dashboard/MonthYearFilter";
+
+/** Desktop Recent scrollport: ~1 table row clearance above merged footer ribbon. */
+const RECENT_DESKTOP_FOOTER_SCROLL_ROW_SLACK_PX = 58;
+/** Menu vertical line ↔ txn/footer containers; txn card ↔ footer container. */
+const RECENT_DESKTOP_EDGE_GAP_PX = 2;
+/** Desktop Recent: header + table + footer ek saath — is se chhoti width par H-scroll. */
+const RECENT_DESKTOP_MIN_WIDTH_IN = 10;
 
 // Type definitions
 type Voucher = {
@@ -210,6 +238,7 @@ function getTransactionAmounts(transaction: any) {
        credit = amount;
       break;
     case 'journal':
+    case 'adjustment':
       if (t.entries && Array.isArray(t.entries)) {
         debit = t.entries.reduce((sum: number, e: any) => sum + Number(e.debit || 0), 0);
         credit = t.entries.reduce((sum: number, e: any) => sum + Number(e.credit || 0), 0);
@@ -669,6 +698,7 @@ export function DashboardPageContent() {
     return () => window.clearTimeout(t);
   }, [companyId, onlineSyncStatusRibbon.show, onlineSyncStatusRibbon.message, onlineSyncPrefsEpoch]);
   const { can } = usePermissions();
+  const { requestMoveToRecycleBin, recycleBinConfirmDialog } = useVoucherLedgerRecycleBinAction();
   const { user } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -726,8 +756,22 @@ export function DashboardPageContent() {
     const [cashFlowOpen, setCashFlowOpen] = useState(false);
 
     const [showRecentNarration, setShowRecentNarration] = useState(true);
+  const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   
-  const [recentRowsPerPage, setRecentRowsPerPage] = React.useState('20');
+  const [recentRowsPerPage, setRecentRowsPerPage] = useRowsPerPage(50);
+  const [recentCurrentPage, setRecentCurrentPage] = React.useState(1);
+  const [recentSortOrder, setRecentSortOrder] = React.useState<TransactionSortOrder>('desc');
+  const {
+    selectValue: recentRowsPerPageSelectValue,
+    onSelectValueChange: handleRecentRowsPerPageChange,
+  } = useRowsPerPageSelectControl(
+    recentRowsPerPage,
+    setRecentRowsPerPage,
+    setRecentCurrentPage,
+    ROWS_PER_PAGE_OPTIONS_DEFAULT,
+    '50'
+  );
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
   const [selectedVoucher, setSelectedVoucher] = React.useState<any>(null);
   /** Auto recurring Dr/Cr popup: row → template source body voucher (Recent table jaisa) */
@@ -753,6 +797,8 @@ export function DashboardPageContent() {
   const { handleInterCompanyChangeDetectedClick, interCompanyChangeDetectDialog } =
     useInterCompanyLedgerChangeDetectDialog();
   const { visibleCard, setVisibleCard } = useDashboard();
+  const footerRibbonRef = useRef<HTMLDivElement>(null);
+  const [footerRibbonHeightPx, setFooterRibbonHeightPx] = useState(168);
   /** Chart se wapas: jis tab par user tha (All/Summary/…) — doosra Chart click pe wahi restore, warna state same reh jata tha. */
   const visibleCardBeforeChartsRef = useRef<string>("financial-summaries");
   /** Footer tab panels: ek baar mount ke baad hide/show — All↔Daybook remount freeze hatane ke liye. */
@@ -884,6 +930,24 @@ export function DashboardPageContent() {
     return null;
   }, []);
 
+  useLayoutEffect(() => {
+    let cancelled = false;
+    const sync = () => {
+      const el = footerRibbonRef.current;
+      if (!el || cancelled) return;
+      setFooterRibbonHeightPx(Math.ceil(el.getBoundingClientRect().height));
+    };
+    sync();
+    requestAnimationFrame(sync);
+    const el = footerRibbonRef.current;
+    if (!el) return () => { cancelled = true; };
+    const ro = new ResizeObserver(() => sync());
+    ro.observe(el);
+    return () => {
+      cancelled = true;
+      ro.disconnect();
+    };
+  }, [visibleCard, recentTransactionsCompact, newYearInfo?.isNewYear, isMobile, greeting]);
 
   useEffect(() => {
     const hour = new Date().getHours();
@@ -1292,17 +1356,24 @@ export function DashboardPageContent() {
     effectiveRecentFilters,
     undefined,
     journalAccountNames,
-    userNames
+    userNames,
+    undefined,
+    undefined,
+    true
   );
 
   const recentSortedBase = useMemo(() => {
     if (!allRecentTransactions) return [];
     let sorted = sortRecentTransactionsDesc(allRecentTransactions as Record<string, unknown>[]);
+    if (recentSortOrder === 'asc') sorted = [...sorted].reverse();
     if (recentUnapprovedOnly) {
       sorted = sorted.filter((tx) => (tx as any).isApproved !== true);
     }
+    if (!includeNotesInTable) {
+      sorted = sorted.filter((tx) => (tx as any).type !== 'note');
+    }
     return sorted;
-  }, [allRecentTransactions, recentUnapprovedOnly]);
+  }, [allRecentTransactions, recentUnapprovedOnly, recentSortOrder, includeNotesInTable]);
 
   const recentPoolBeforeLimit = useMemo(() => {
     const q = recentQuickSearch.trim().toLowerCase();
@@ -1312,12 +1383,45 @@ export function DashboardPageContent() {
     );
   }, [recentSortedBase, recentQuickSearch, journalAccountNames, userNames]);
 
-  const recentTransactions = useMemo(() => {
-    if (recentUnapprovedOnly) return recentPoolBeforeLimit;
-    const limit = Number(recentRowsPerPage);
-    if (!isNaN(limit) && limit > 0) return recentPoolBeforeLimit.slice(0, limit);
-    return recentPoolBeforeLimit;
-  }, [recentPoolBeforeLimit, recentRowsPerPage, recentUnapprovedOnly]);
+  const recentListTotal = recentPoolBeforeLimit.length;
+  const recentEffectiveRowsPerPage = Math.max(10, recentRowsPerPage || 50);
+  const recentTotalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(recentListTotal / recentEffectiveRowsPerPage));
+  }, [recentListTotal, recentEffectiveRowsPerPage]);
+  const recentSafePage = Math.min(Math.max(1, recentCurrentPage), recentTotalPages);
+  const recentPaginationSlice = useMemo(() => {
+    const total = recentListTotal;
+    const pageSize = recentEffectiveRowsPerPage;
+    if (total === 0) {
+      return { rows: recentPoolBeforeLimit, beforeCount: 0, afterCount: 0 };
+    }
+    const start = (recentSafePage - 1) * pageSize;
+    const end = Math.min(total, start + pageSize);
+    return {
+      rows: recentPoolBeforeLimit.slice(start, end),
+      beforeCount: total - end,
+      afterCount: start,
+    };
+  }, [recentPoolBeforeLimit, recentEffectiveRowsPerPage, recentSafePage, recentListTotal]);
+  const recentTransactions = recentPaginationSlice.rows;
+  const recentPagerEdgeCounts = useMemo(
+    () => ({
+      before: recentPaginationSlice.beforeCount,
+      after: recentPaginationSlice.afterCount,
+    }),
+    [recentPaginationSlice.afterCount, recentPaginationSlice.beforeCount]
+  );
+
+  React.useEffect(() => {
+    if (recentRowsPerPage <= 0) setRecentRowsPerPage(50);
+  }, [recentRowsPerPage, setRecentRowsPerPage]);
+
+  React.useEffect(() => {
+    setRecentCurrentPage(1);
+  }, [recentQuickSearch, recentDateRange, recentFilters, recentUnapprovedOnly, recentSortOrder, includeNotesInTable]);
+  React.useEffect(() => {
+    setRecentCurrentPage((p) => Math.min(Math.max(1, p), recentTotalPages));
+  }, [recentTotalPages]);
 
   /**
    * Idle blink tracker (no behavior change): PL-gate company pe Recent Transactions
@@ -1691,7 +1795,6 @@ export function DashboardPageContent() {
     setRecentFilters({});
     setRecentQuickSearch('');
     setActiveRecentFilter(null);
-    setRecentRowsPerPage('0');
   };
   
   const taxBreakdownData = useMemo(() => {
@@ -1818,62 +1921,209 @@ export function DashboardPageContent() {
     );
   };
   
+  const recentDesktopLedgerFooter = useMemo(
+    () => (
+      <LedgerDesktopFooter
+        shellClassName="mt-0 rounded-none border-0 bg-background py-1.5 px-2 shadow-none overflow-x-hidden overflow-y-hidden dark:bg-background"
+        left={
+          <>
+            <LedgerFooterCheckboxPill
+              id="show-narration-recent"
+              checked={showRecentNarration}
+              onCheckedChange={(checked) => setShowRecentNarration(Boolean(checked))}
+              label="Show Narration"
+            />
+            <LedgerFooterColumnsMenu>
+              <DropdownMenuContent align="start" className="w-52 p-2">
+                {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
+                  .filter((key) => key !== 'runningBalance' && key !== 'status')
+                  .map((key) => (
+                    <DropdownMenuItem
+                      key={key}
+                      onSelect={(e) => e.preventDefault()}
+                      className="flex items-center gap-2 cursor-pointer"
+                    >
+                      <Checkbox
+                        id={`col-${key}-recent`}
+                        checked={visibleColumns[key] !== false}
+                        onCheckedChange={(c) => handleColumnVisibilityChange(key, Boolean(c))}
+                      />
+                      <label
+                        htmlFor={`col-${key}-recent`}
+                        className="text-sm font-medium flex-1 cursor-pointer"
+                      >
+                        {COLUMN_LABELS[key]}
+                      </label>
+                    </DropdownMenuItem>
+                  ))}
+              </DropdownMenuContent>
+            </LedgerFooterColumnsMenu>
+            <LedgerFooterCheckboxPill
+              id="show-notes-recent"
+              checked={includeNotesInTable}
+              disabled={notesPreferenceLockedOnMobile}
+              onCheckedChange={(c) => setShowNotes(Boolean(c))}
+              label="Note"
+            />
+          </>
+        }
+        sortBy="date"
+        sortOrder={recentSortOrder}
+        onSortChange={(_by, order) => {
+          setRecentSortOrder(order);
+          setRecentCurrentPage(1);
+        }}
+        viewMode="statement"
+        currentPage={recentSafePage}
+        totalPages={recentTotalPages}
+        setCurrentPage={setRecentCurrentPage}
+        rowsPerPageSelectValue={recentRowsPerPageSelectValue}
+        onRowsPerPageChange={(value) => {
+          const n = Math.max(10, Number(value) || 50);
+          setRecentRowsPerPage(n);
+          setRecentCurrentPage(1);
+        }}
+        rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS_DEFAULT}
+        beforeCount={recentPaginationSlice.beforeCount}
+        afterCount={recentPaginationSlice.afterCount}
+        totalCount={recentListTotal}
+        includeAllOption={false}
+      />
+    ),
+    [
+      showRecentNarration,
+      visibleColumns,
+      includeNotesInTable,
+      notesPreferenceLockedOnMobile,
+      recentSortOrder,
+      recentSafePage,
+      recentTotalPages,
+      recentRowsPerPageSelectValue,
+      setRecentRowsPerPage,
+      recentPaginationSlice.beforeCount,
+      recentPaginationSlice.afterCount,
+      recentListTotal,
+      handleColumnVisibilityChange,
+      setShowNotes,
+    ]
+  );
+
+  const recentTabActive = visibleCard === "recent-transactions";
+  const recentFooterRibbonAligned = recentTabActive && !recentTransactionsCompact;
+
   const renderRecentTransactions = () => (
-    <div className="w-full max-w-full">
     <Card
+      data-pl-dashboard-recent-shell={recentFooterRibbonAligned ? "" : undefined}
+      data-pl-dashboard-recent-line-sections={recentFooterRibbonAligned ? "" : undefined}
       className={cn(
-        "w-full max-w-full",
-        proDashboardRibbonClass(2),
-        recentTransactionsCompact && "px-0",
+        "box-border w-full max-w-none",
+        recentFooterRibbonAligned ? "min-w-full" : "min-w-0",
+        recentTabActive
+          ? cn(
+              recentFooterRibbonAligned
+                ? "rounded-none border-0 bg-background shadow-none"
+                : "rounded-b-none rounded-t-md border border-emerald-700/50 border-b-0 bg-card shadow-none dark:border-emerald-800/60",
+              recentTransactionsCompact && "px-0"
+            )
+          : cn(proDashboardRibbonClass(2), recentTransactionsCompact && "px-0"),
+        recentFooterRibbonAligned &&
+          "flex h-full min-h-0 w-full max-w-full flex-1 flex-col overflow-hidden pb-0",
       )}
     >
       {/* Compact: CardHeader default `p-6` hata kar chhoti strip — sirf text jitni height */}
       <CardHeader
+        data-pl-dashboard-recent-chrome={recentFooterRibbonAligned ? "" : undefined}
         className={cn(
-          "px-2 sm:px-4",
           recentTransactionsCompact && "space-y-1 px-2 py-1.5 sm:px-4",
+          !recentTransactionsCompact &&
+            cn(
+              "space-y-0 p-0 py-1",
+              recentFooterRibbonAligned
+                ? "border-b border-black bg-background px-2 sm:px-3 dark:bg-background"
+                : "border-b border-blue-300 bg-blue-100 dark:border-blue-800 dark:bg-blue-950 px-2 sm:px-4",
+            ),
           // Recent tab + mobile: `main` scroll par title/date upar chipke rahein — `sticky` ka scrollport wahi `<main>` hai (layout).
           recentTransactionsCompact &&
             visibleCard === "recent-transactions" &&
-            "sticky top-0 z-20 border-b border-gray-300 bg-gray-200 py-2 shadow-sm dark:border-gray-600 dark:bg-gray-800"
+            "sticky top-0 z-20 border-b border-blue-300 bg-blue-100 py-2 shadow-sm dark:border-blue-800 dark:bg-blue-950"
         )}
       >
-        <div className={cn("flex flex-col", recentTransactionsCompact ? "gap-1" : "gap-2")}>
-          {/* Mobile: title compact rakho; date-range ko button row ke just upar dikhana hai. */}
-          <div
-            className={cn(
-              "flex w-full flex-col items-center justify-center",
-              recentTransactionsCompact && "gap-0 py-0"
-            )}
-          >
-            <CardTitle
-              className={cn(
-                "w-full text-center",
-                recentTransactionsCompact && recentDateRange?.from && "text-sm font-semibold leading-none",
-                recentTransactionsCompact && !recentDateRange?.from && "text-base font-semibold leading-none"
-              )}
-            >
-              Recent Transactions
-            </CardTitle>
-          </div>
-          {/* User request: upar sirf title + date range line hi rahe. */}
-          {recentTransactionsCompact && (
-            <p
-              className="w-full max-w-full truncate px-1 text-center text-[11px] font-bold leading-tight text-foreground"
-              title={recentTransactionsMobileRangeLine ?? "Date range"}
-            >
-              {recentTransactionsMobileRangeLine ?? "Date range"}
-            </p>
-          )}
+        <div className={cn("flex flex-col", recentTransactionsCompact ? "gap-1" : "gap-0")}>
+          {recentTransactionsCompact ? (
+            <>
+              <CardTitle
+                className={cn(
+                  "w-full text-left",
+                  recentDateRange?.from ? "text-sm font-semibold leading-none" : "text-base font-semibold leading-none"
+                )}
+              >
+                Recent Transactions
+              </CardTitle>
+              <p
+                className="w-full max-w-full truncate px-0 text-left text-[11px] font-bold leading-tight text-foreground"
+                title={recentTransactionsMobileRangeLine ?? "Date range"}
+              >
+                {recentTransactionsMobileRangeLine ?? "Date range"}
+              </p>
+            </>
+          ) : null}
           {/* Compact mobile me controls niche fixed panel me jayenge; yahan desktop/non-compact controls hi rakho. */}
           {!recentTransactionsCompact && (
+          <>
           <div
-            className={cn(
-              "flex items-center gap-2 min-h-9",
-              recentTransactionsCompact ? "flex-nowrap overflow-x-auto" : "flex-wrap"
-            )}
+            data-pl-recent-txn-toolbar-scroll=""
+            className="w-full min-w-0 max-w-full overflow-x-auto overflow-y-hidden pl-dashboard-recent-hide-hscroll [scrollbar-gutter:stable]"
           >
-            <div className={cn("flex shrink-0 items-center gap-2 h-9", recentTransactionsCompact ? "order-1" : "md:order-2")}>
+          <div
+            data-pl-recent-txn-toolbar=""
+            className="flex w-max min-w-full min-h-9 items-center gap-x-2 gap-y-1.5 md:gap-x-3"
+          >
+            <div className="flex shrink-0 items-center gap-2">
+              <CardTitle className="max-w-[min(42vw,11rem)] shrink-0 truncate text-left text-base font-semibold leading-none sm:max-w-none sm:text-lg">
+                Recent Transactions
+              </CardTitle>
+            </div>
+            <div className="relative h-9 min-w-[2in] max-w-[28rem] flex-1 basis-[2in]">
+              <Search
+                className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+              <Input
+                type="search"
+                enterKeyHint="search"
+                listChrome
+                listChromeSearch
+                placeholder="Search"
+                value={recentQuickSearch}
+                onChange={(e) => setRecentQuickSearch(e.target.value)}
+                className="h-9 min-h-9 max-h-9 w-full min-w-[2in] bg-white py-1 pl-8 pr-2 text-sm dark:bg-white"
+                aria-label="Search recent vouchers"
+              />
+            </div>
+            <div className="flex h-9 shrink-0 items-center justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={recentUnapprovedOnly ? "default" : "outline"}
+              className="h-9 whitespace-nowrap"
+              onClick={() => {
+                if (recentUnapprovedOnly) setRecentUnapprovedOnly(false);
+                else applyRecentUnapprovedFilter();
+              }}
+            >
+              Unapproved
+            </Button>
+            {(isRecentFilterActive || recentUnapprovedOnly) && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                onClick={clearRecentFilters}
+                aria-label="Clear Filters"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            )}
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
                   isRange
@@ -1960,95 +2210,33 @@ export function DashboardPageContent() {
                 </Popover>
             )}
             </div>
-            <div className={cn("flex items-center gap-2 flex-1 min-w-0 h-9", recentTransactionsCompact ? "order-2" : "md:order-1")}>
-                {!recentTransactionsCompact && <span className="text-sm font-medium shrink-0">Show:</span>}
-                <Select value={recentRowsPerPage} onValueChange={(v) => setRecentRowsPerPage(v)}>
-                    <SelectTrigger className="h-9 flex-1 min-w-0 w-full max-w-[140px]">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="20">Last 20</SelectItem>
-                        <SelectItem value="30">Last 30</SelectItem>
-                        <SelectItem value="50">Last 50</SelectItem>
-                        <SelectItem value="0">All</SelectItem>
-                    </SelectContent>
-                </Select>
-                {!recentTransactionsCompact && (
-                <label className="flex items-center gap-2 h-9 cursor-pointer shrink-0">
-                  <Checkbox id="recent-show-narration" checked={showRecentNarration} onCheckedChange={(c) => setShowRecentNarration(!!c)} className="h-4 w-4" />
-                  <span className="text-sm whitespace-nowrap">Show Narration</span>
-                </label>
-                )}
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={recentUnapprovedOnly ? "default" : "outline"}
-                  className="h-9 whitespace-nowrap"
-                  onClick={() => {
-                    if (recentUnapprovedOnly) setRecentUnapprovedOnly(false);
-                    else applyRecentUnapprovedFilter();
-                  }}
-                >
-                  Unapproved
-                </Button>
-                {/* Clear icon ko Unapproved ke right dikhana hai; unapproved active hone par bhi force-visible. */}
-                {(isRecentFilterActive || recentUnapprovedOnly) && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 shrink-0"
-                    onClick={clearRecentFilters}
-                    aria-label="Clear Filters"
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                )}
-            </div>
           </div>
-          )}
-          {/* Count row: compact mobile ke liye niche fixed panel; yahan desktop/non-compact hi. */}
-          {!recentTransactionsCompact && (
-          <div className="flex h-9 w-full min-w-0 items-center gap-2">
-            <span
-              className={cn(
-                'min-w-0 flex-1 font-medium text-muted-foreground',
-                recentTransactionsCompact ? 'truncate text-sm' : 'text-sm'
-              )}
-              title={
-                recentTransactionsCompact
-                  ? `${recentTransactions.length} Vouchers Of ${recentPoolBeforeLimit.length}`
-                  : `Showing ${recentTransactions.length} Vouchers Of All ${recentPoolBeforeLimit.length} Vouchers`
-              }
-            >
-              {recentTransactionsCompact
-                ? `${recentTransactions.length} Vouchers Of ${recentPoolBeforeLimit.length}`
-                : `Showing ${recentTransactions.length} Vouchers Of All ${recentPoolBeforeLimit.length} Vouchers`}
-            </span>
-            <div className="relative h-9 w-[min(42vw,11rem)] shrink-0 sm:w-44">
-              <Search
-                className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden
-              />
-              <Input
-                type="search"
-                enterKeyHint="search"
-                placeholder="Search"
-                value={recentQuickSearch}
-                onChange={(e) => setRecentQuickSearch(e.target.value)}
-                className="h-9 py-1 pl-8 pr-2 text-sm"
-                aria-label="Search recent vouchers"
-              />
-            </div>
           </div>
+          </>
           )}
         </div>
       </CardHeader>
       <CardContent
-        className="px-0 pb-2"
+        className={cn(
+          "px-0",
+          recentTransactionsCompact
+            ? "pb-2"
+            : "flex min-h-0 flex-1 flex-col overflow-hidden pb-0",
+        )}
         {...(recentTransactionsCompact ? { "data-pl-mobile-txn-host": "" } : {})}
       >
         {/* Mobile Recent: party-parity txn cards (all card themes); list inset handled in TransactionsTable */}
-        <div className={cn("w-full overflow-x-auto", recentTransactionsCompact && "px-0")}>
+        <div
+          className={cn(
+            "w-full",
+            recentTransactionsCompact
+              ? "overflow-x-auto px-0"
+              : "flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden pb-0 pr-1",
+          )}
+          {...(!recentTransactionsCompact && recentFooterRibbonAligned
+            ? { "data-pl-dashboard-recent-scroll": "" }
+            : {})}
+        >
         <TransactionsTable
           transactions={recentTransactions}
           context="daybook"
@@ -2059,6 +2247,7 @@ export function DashboardPageContent() {
           }}
           onInterCompanyChangeDetectedClick={handleInterCompanyChangeDetectedClick}
           onHistoryVoucher={(v) => setHistoryVoucher(v)}
+          onMoveVoucherToRecycleBin={requestMoveToRecycleBin}
           onAddLink={(v) => {
             const isPaymentType = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(v?.type);
             if (isPaymentType) setLinkPaymentVoucher(v);
@@ -2072,13 +2261,32 @@ export function DashboardPageContent() {
           activeFilter={activeRecentFilter}
           setActiveFilter={setActiveRecentFilter}
           hideFooter={true}
+          hideBalanceColumn={true}
           showNarration={showRecentNarration}
+          visibleColumns={visibleColumns}
           transactionCardSearchHighlight={recentQuickSearch}
         />
+        {recentTransactionsCompact ? (
+          <MobileTransactionsPager
+            className="px-2 pt-2"
+            currentPage={recentSafePage}
+            totalItems={recentListTotal}
+            rowsPerPage={recentEffectiveRowsPerPage}
+            onRowsPerPageChange={(nextRows) => {
+              const n = Math.max(10, nextRows || 50);
+              setRecentRowsPerPage(n);
+              setRecentCurrentPage(1);
+            }}
+            onPageChange={setRecentCurrentPage}
+            edgeCounts={recentPagerEdgeCounts}
+            pagingMode="newest-first"
+            trimSummary
+            includeAllOption={false}
+          />
+        ) : null}
         </div>
       </CardContent>
     </Card>
-    </div>
   );
 
   const renderDashboardContent = () => {
@@ -2096,8 +2304,15 @@ export function DashboardPageContent() {
     if (showDaybook) dashboardKeepAlivePanelsRef.current.add("daybook");
     if (showRecent) dashboardKeepAlivePanelsRef.current.add("recent-transactions");
     const keep = dashboardKeepAlivePanelsRef.current;
+    const recentDesktopContained =
+      !recentTransactionsCompact && visibleCard === "recent-transactions";
     return (
-    <div className="space-y-[5px]">
+    <div
+      className={cn(
+        "space-y-[5px]",
+        recentDesktopContained && "flex min-h-0 flex-1 flex-col overflow-hidden space-y-0"
+      )}
+    >
       {/* Keep consistent 5px spacing between dashboard cards/sections. */}
       {keep.has("financial-summaries") && (
         <div className={cn(!showFinancial && "hidden")} inert={!showFinancial || undefined}>
@@ -2121,40 +2336,17 @@ export function DashboardPageContent() {
         </div>
       )}
       {can('view_recent_transactions') && keep.has("recent-transactions") && (
-        <div className={cn(!showRecent && "hidden")} inert={!showRecent || undefined}>
+        <div
+          className={cn(
+            !showRecent && "hidden",
+            recentFooterRibbonAligned && "flex h-full min-h-0 w-full flex-1 flex-col",
+          )}
+          inert={!showRecent || undefined}
+        >
           {renderRecentTransactions()}
         </div>
       )}
-      
-      <Card className={cn("col-span-full p-2 overflow-hidden relative", proDashboardRibbonClass(3))}>
-        {newYearInfo && !newYearInfo.isNewYear && (
-          <div className="absolute top-0 right-0 bg-red-500 text-white text-xs font-bold px-4 py-1 rounded-bl-lg animate-pulse">
-            {newYearInfo.daysLeft} days to {newYearInfo.year}!
-          </div>
-        )}
-        <CardHeader className="p-0 text-center">
-          <p className="text-xs"></p>
-          {newYearInfo?.isNewYear ? (
-              <div className="flex flex-col items-center justify-center py-2">
-                <motion.div
-                  initial={{ scale: 0, y: 20 }}
-                  animate={{ scale: 1, y: 0 }}
-                  transition={{ type: "spring", stiffness: 260, damping: 20 }}
-                  className="text-3xl font-bold bg-gradient-to-r from-amber-400 via-red-500 to-fuchsia-600 bg-clip-text text-transparent"
-                >
-                  {newYearInfo.event}
-                </motion.div>
-                <p className="text-sm font-semibold">{user?.displayName || user?.email}</p>
-              </div>
-          ) : (
-             <CardTitle className="text-1xl font-bold text-green-500 dark:text-green-400">
-              {greeting}, {user?.displayName || user?.email}! Welcome To Pocket Ledger
-            </CardTitle>
-          )}
 
-          <DashboardWelcomeClockLine />
-        </CardHeader>
-      </Card>
     </div>
   );
   }
@@ -2177,23 +2369,40 @@ export function DashboardPageContent() {
     "dashboard-charts": "border-fuchsia-500 bg-fuchsia-300 text-fuchsia-950 dark:border-fuchsia-400 dark:bg-fuchsia-800 dark:text-fuchsia-50",
   };
 
-  /** Recent compact: gray controls + footer tabs ke beech gap hatane ke liye footer top padding band + `bottom` offset = sirf row height. */
-  const isRecentCompactFooter =
+  const showRecentDesktopFixedLedgerFooter =
+    !recentTransactionsCompact && visibleCard === "recent-transactions";
+  const showRecentCompactBottomControls =
     recentTransactionsCompact && visibleCard === "recent-transactions";
-  /* Mobile: pehle `2+4+32` galat tha — `pt-1` `h-8` ke andar (border-box); asli ≈ 2+32=34. Recent compact: footer top pt band + `bottom` = sirf row (`h-8`/`h-[38px]`). */
-  const footerReservePx = isMobile
-    ? isRecentCompactFooter
-      ? 32
-      : 34
-    : isRecentCompactFooter
-      ? 38
-      : 2 + 4 + 38;
-  /** Compact recent: bottom controls panel (2 rows) footer ke upar fixed rahe, content overlap na kare. */
-  const recentBottomControlsReservePx =
-    recentTransactionsCompact && visibleCard === "recent-transactions" ? 74 : 0;
+  const welcomeDisplayName = user?.displayName || user?.email || "";
+  const recentDesktopScrollContained =
+    !recentTransactionsCompact && visibleCard === "recent-transactions";
 
   return (
-    <div className="px-0.5 pt-0.5" style={{ paddingBottom: footerReservePx + recentBottomControlsReservePx }}>
+    <div
+      data-pl-dashboard-recent-full-bleed={recentDesktopScrollContained ? "" : undefined}
+      className={cn(
+        recentDesktopScrollContained
+          ? "flex min-h-0 w-full min-w-0 flex-1 basis-0 flex-col overflow-x-auto overflow-y-hidden p-0"
+          : "px-0.5 pt-0.5",
+      )}
+      style={
+        {
+          paddingBottom: recentDesktopScrollContained ? 0 : footerRibbonHeightPx + 6,
+          ...(recentDesktopScrollContained
+            ? {
+                paddingTop: RECENT_DESKTOP_EDGE_GAP_PX,
+                paddingLeft: RECENT_DESKTOP_EDGE_GAP_PX,
+                paddingRight: RECENT_DESKTOP_EDGE_GAP_PX,
+              }
+            : {}),
+          ["--pl-dashboard-recent-edge-gap"]: `${RECENT_DESKTOP_EDGE_GAP_PX}px`,
+          ["--pl-dashboard-recent-min-width"]: `${RECENT_DESKTOP_MIN_WIDTH_IN}in`,
+          ["--pl-dashboard-footer-ribbon-h"]: `${
+            footerRibbonHeightPx + RECENT_DESKTOP_FOOTER_SCROLL_ROW_SLACK_PX + RECENT_DESKTOP_EDGE_GAP_PX
+          }px`,
+        } as React.CSSProperties
+      }
+    >
       {onlineSyncStatusPopup ? (
         <div
           className="pointer-events-none fixed left-1/2 top-16 z-[200] w-[min(92vw,28rem)] -translate-x-1/2 rounded-md border border-amber-300/90 bg-amber-50 px-4 py-2.5 text-center text-xs text-amber-950 shadow-md sm:text-sm"
@@ -2203,22 +2412,60 @@ export function DashboardPageContent() {
           {onlineSyncStatusPopup}
         </div>
       ) : null}
-      <div className="p-0 min-h-0">
+      <div
+        data-pl-dashboard-recent-min-column={recentDesktopScrollContained ? "" : undefined}
+        className={cn(
+          recentDesktopScrollContained &&
+            "flex min-h-0 w-full min-w-[var(--pl-dashboard-recent-min-width,10in)] max-w-none flex-1 basis-0 flex-col gap-[var(--pl-dashboard-recent-edge-gap,2px)]",
+          !recentDesktopScrollContained && "contents",
+        )}
+      >
+      <div
+        className={cn(
+          "min-h-0 p-0",
+          recentDesktopScrollContained && "flex min-h-0 flex-1 flex-col overflow-hidden"
+        )}
+      >
         {renderDashboardContent()}
       </div>
 
-      {/* User request: top me sirf title+date; baaki controls ko footer ke upar fixed niche panel me rakho. */}
-      {recentTransactionsCompact && visibleCard === "recent-transactions" && (
+      {/* Merged footer ribbon: welcome + (recent controls) + tabs — no row gaps, opaque, scroll stops above. */}
+      <div
+        className={cn(
+          "box-border pb-0",
+          showRecentDesktopFixedLedgerFooter
+            ? "w-full shrink-0"
+            : cn(
+                "fixed bottom-0 z-40 left-0 right-0",
+                "px-0.5",
+                !isMobile && (sidebarRailOpen ? "md:left-64" : "md:left-16"),
+              ),
+        )}
+      >
         <div
+          ref={footerRibbonRef}
+          data-pl-dashboard-footer-ribbon=""
+          {...(showRecentDesktopFixedLedgerFooter
+            ? { "data-pl-dashboard-recent-footer-ribbon": "" }
+            : {})}
           className={cn(
-            // Footer / upar Recent card jaisa: `98vw`+center se zyada wide hota tha — `px-0.5` + main column bounds taaki txn cards / sticky header ke barabar width.
-            "fixed left-0 right-0 z-50 box-border px-0.5",
-            !isMobile && (sidebarRailOpen ? "md:left-64" : "md:left-16")
+            "box-border flex w-full max-w-full flex-col gap-0 overflow-hidden bg-background",
+            showRecentDesktopFixedLedgerFooter ? "min-w-full" : "min-w-0",
+            showRecentDesktopFixedLedgerFooter
+              ? "divide-y divide-black border-t border-black shadow-none"
+              : "rounded-t-md border-2 border-emerald-700/50 shadow-[0_-2px_10px_rgba(0,0,0,0.08)] dark:border-emerald-800/60",
           )}
-          style={{ bottom: `${footerReservePx}px` }}
         >
-          {/* Bottom controls: solid gray + opaque; `border-b-0` — niche emerald footer se flush, double border line na dikhe. */}
-          <div className="w-full max-w-full box-border space-y-1 overflow-x-hidden border border-b-0 border-gray-300 bg-gray-200 px-1 py-1 dark:border-gray-600 dark:bg-gray-800">
+          <DashboardWelcomeFooterBanner
+            embedded
+            lineSections={showRecentDesktopFixedLedgerFooter}
+            greeting={greeting}
+            displayName={welcomeDisplayName}
+            newYearInfo={newYearInfo}
+          />
+
+          {showRecentCompactBottomControls ? (
+          <div data-pl-recent-txn-toolbar="" className="w-full max-w-full box-border space-y-1 overflow-x-hidden border-0 border-t border-gray-300 bg-gray-200 px-1 py-1 dark:border-gray-600 dark:bg-gray-800">
             {/* Row 1: date change + rows + unapproved + clear */}
             {/* Controls row: wrap allow karo so small screens par content clip na ho. */}
             <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -2287,18 +2534,39 @@ export function DashboardPageContent() {
                   </Popover>
                 )}
               </div>
-              <div className="flex min-w-0 flex-1 items-center gap-1 h-8">
-                <Select value={recentRowsPerPage} onValueChange={(v) => setRecentRowsPerPage(v)}>
-                  <SelectTrigger className="h-8 min-w-0 w-full max-w-[112px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="20">Last 20</SelectItem>
-                    <SelectItem value="30">Last 30</SelectItem>
-                    <SelectItem value="50">Last 50</SelectItem>
-                    <SelectItem value="0">All</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 h-auto min-h-8">
+                <LedgerFooterColumnsMenu>
+                  <DropdownMenuContent align="start" className="w-52 p-2">
+                    {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
+                      .filter((key) => key !== 'runningBalance' && key !== 'status')
+                      .map((key) => (
+                        <DropdownMenuItem
+                          key={`m-${key}`}
+                          onSelect={(e) => e.preventDefault()}
+                          className="flex items-center gap-2 cursor-pointer"
+                        >
+                          <Checkbox
+                            id={`col-${key}-recent-m`}
+                            checked={visibleColumns[key] !== false}
+                            onCheckedChange={(c) => handleColumnVisibilityChange(key, Boolean(c))}
+                          />
+                          <label
+                            htmlFor={`col-${key}-recent-m`}
+                            className="text-sm font-medium flex-1 cursor-pointer"
+                          >
+                            {COLUMN_LABELS[key]}
+                          </label>
+                        </DropdownMenuItem>
+                      ))}
+                  </DropdownMenuContent>
+                </LedgerFooterColumnsMenu>
+                <LedgerFooterCheckboxPill
+                  id="show-notes-recent-m"
+                  checked={includeNotesInTable}
+                  disabled={notesPreferenceLockedOnMobile}
+                  onCheckedChange={(c) => setShowNotes(Boolean(c))}
+                  label="Note"
+                />
                 <Button
                   type="button"
                   size="sm"
@@ -2324,15 +2592,8 @@ export function DashboardPageContent() {
                 )}
               </div>
             </div>
-            {/* Row 2: count + search */}
-            <div className="flex h-8 w-full min-w-0 items-center gap-2">
-              <span
-                className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground"
-                title={`${recentTransactions.length} Vouchers Of ${recentPoolBeforeLimit.length}`}
-              >
-                {`${recentTransactions.length} Vouchers Of ${recentPoolBeforeLimit.length}`}
-              </span>
-              <div className="relative h-8 w-[min(42vw,11rem)] shrink-0 sm:w-44">
+            <div className="flex h-8 w-full min-w-0 items-center justify-end gap-2">
+              <div className="relative h-8 w-full max-w-[min(42vw,11rem)] shrink-0 sm:max-w-[11rem] sm:w-44">
                 <Search
                   className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
                   aria-hidden
@@ -2340,32 +2601,31 @@ export function DashboardPageContent() {
                 <Input
                   type="search"
                   enterKeyHint="search"
+                  listChrome
+                  listChromeSearch
                   placeholder="Search"
                   value={recentQuickSearch}
                   onChange={(e) => setRecentQuickSearch(e.target.value)}
-                  className="h-8 py-1 pl-8 pr-2 text-sm"
+                  className="h-8 min-h-8 max-h-8 py-1 pl-8 pr-2 text-sm"
                   aria-label="Search recent vouchers"
                 />
               </div>
             </div>
           </div>
-        </div>
-      )}
+          ) : null}
 
-      <div
-        className={cn(
-          "fixed bottom-0 left-0 right-0 z-40 px-0.5 pb-0",
-          // Recent compact: top pad mat — gray fixed panel aur emerald footer ke beech safed gap.
-          !isRecentCompactFooter && "pt-0.5",
-          !isMobile && (sidebarRailOpen ? "md:left-64" : "md:left-16")
-        )}
-      >
-        {/* User request: footer tabs ko ek hi green container me rakho; desktop row icon+label, mobile icon hide */}
+          {showRecentDesktopFixedLedgerFooter ? (
+            <div data-pl-recent-ledger-footer-fixed="" className="w-full min-w-0 shrink-0 overflow-hidden">
+              {recentDesktopLedgerFooter}
+            </div>
+          ) : null}
+
         <div
           className={cn(
-            "pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald flex items-stretch justify-center gap-0.5 px-1 pb-0",
-            !isRecentCompactFooter && "pt-1",
-            // User request: desktop/PC me footer buttons ~20% taller; mobile unchanged.
+            "flex w-full shrink-0 items-stretch justify-center gap-0.5 px-1",
+            showRecentDesktopFixedLedgerFooter
+              ? "border-0 bg-background"
+              : "border-0 border-t border-emerald-700/40 bg-emerald-200 dark:border-emerald-800 dark:bg-emerald-950",
             isMobile ? "h-8" : "h-[38px]"
           )}
         >
@@ -2389,7 +2649,7 @@ export function DashboardPageContent() {
                 className={cn(
                   // Height compact: footer ko approx 50% reduce karo without breaking alignment
                   "pl-dashboard-footer-tab h-full min-h-0 min-w-0 flex-1 rounded-md border-2 px-1 py-0.5 text-muted-foreground",
-                  footerToneClassByCard[card.id] ?? "border-emerald-200/65 bg-white/55 dark:border-emerald-800/45 dark:bg-background/35",
+                  footerToneClassByCard[card.id] ?? "border-emerald-300 bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900",
                   isMobile ? "justify-center text-center" : "justify-center flex-row items-center gap-1.5",
                   // Active/focus state strong: selected button clearly pop kare
                   visibleCard === card.id && "ring-2 ring-primary/70 shadow-md saturate-125",
@@ -2417,6 +2677,8 @@ export function DashboardPageContent() {
             );
           })}
         </div>
+        </div>
+      </div>
       </div>
        <AddVoucherDialog 
           isOpen={isVoucherDialogOpen}
@@ -2472,6 +2734,7 @@ export function DashboardPageContent() {
            }}
          />
        )}
+      {recycleBinConfirmDialog}
     </div>
   );
 }

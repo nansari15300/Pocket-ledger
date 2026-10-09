@@ -58,7 +58,7 @@ export function BankCashAccountTypeSpecialRow<T extends AccountTypeForm>({
                   if (currentBranch !== expectedBranch) {
                     form.setValue(
                       "groupId" as any,
-                      getDefaultSystemGroupId("bank", { accountType: next }),
+                      getDefaultSystemGroupId("bank", { accountType: next }) as any,
                       { shouldDirty: true }
                     );
                   }
