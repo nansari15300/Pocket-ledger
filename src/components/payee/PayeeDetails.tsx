@@ -72,7 +72,9 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
@@ -108,6 +110,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
@@ -414,9 +417,11 @@ export function PayeeDetails({
 
   return (
     <>
-      <div className="h-full flex flex-col overflow-hidden">
+      <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
         {/* Header: identity + pills — Party-style single row */}
-        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
+        <LedgerTxnScrollColumn
+          header={
+<div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {isMobile && onBack && (
@@ -462,6 +467,7 @@ export function PayeeDetails({
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
+              <LedgerHeaderPrintButton variant="outline" onClick={handlePrint} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
@@ -544,14 +550,12 @@ export function PayeeDetails({
                   All Vouchers
                 </Button>
               )}
-              <Button variant="outline" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN}>
-                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-              </Button>
+              
             </div>
           </div>
         </div>
-        <ScrollArea txnChrome className="flex-1">
-          <div className="py-4">
+          }
+          table={
              <TransactionsTable
               transactions={paginatedTransactions}
               context={entityType}
@@ -574,10 +578,8 @@ export function PayeeDetails({
               isAllVouchersView={isAllVouchersView}
               visibleColumns={entityType === 'staff' ? { ...visibleColumns, status: true } : visibleColumns}
             />
-          </div>
-          <ScrollBar orientation="horizontal" />
-        </ScrollArea>
-        {/* Footer — global PC shell LedgerDesktopFooter */}
+          }
+          footer={
         <LedgerDesktopFooter
           left={
             <>
@@ -642,6 +644,8 @@ export function PayeeDetails({
           beforeCount={desktopPaginationMeta.beforeCount}
           afterCount={desktopPaginationMeta.afterCount}
           totalCount={displayTransactions.length}
+        />
+          }
         />
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>

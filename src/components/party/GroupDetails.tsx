@@ -60,6 +60,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import {
   sortTransactionsWithFiscalMergeForCompany,
@@ -104,7 +105,9 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
 import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
@@ -1552,9 +1555,11 @@ export function GroupDetails({
   );
 
   const renderDesktopView = () => (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
       {/* Header: identity + pills — Party-style single row */}
-      <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
+      <LedgerTxnScrollColumn
+          header={
+<div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
         <div className={LEDGER_HEADER_OUTER_ROW_CN}>
           <div className={LEDGER_HEADER_IDENTITY_CN}>
             {onBack && (
@@ -1642,6 +1647,7 @@ export function GroupDetails({
             </div>
           </div>
           <div className={LEDGER_HEADER_PILL_ROW_CN}>
+              <LedgerHeaderPrintButton variant="chromePill" onClick={handlePrint} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
             {(dateSystem === "BS" || dateSystem === "Both") && (
               <div className="flex items-center gap-1 flex-shrink-0">
@@ -1763,14 +1769,13 @@ export function GroupDetails({
             >
               <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
             </Button>
-            <Button variant="chromePill" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN} data-theme-detail="print">
-              <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-            </Button>
+            
           </div>
         </div>
       </div>
-      <div className={cn("flex-1 flex flex-col min-h-0", balanceMode === "bill_wise" ? "min-w-0" : "overflow-x-auto pl-ledger-txn-scroll-native")}>
-        <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
+          }
+          table={
+          <>
           <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
           <TransactionsTable
             transactions={paginatedTransactions}
@@ -1834,9 +1839,9 @@ export function GroupDetails({
               No transactions found for the selected period.
             </div>
           )}
-        </div>
-      </div>
-      {/* Footer — global PC shell LedgerDesktopFooter */}
+          </>
+        }
+        footer={
       <LedgerDesktopFooter
         left={
           <>
@@ -1905,6 +1910,8 @@ export function GroupDetails({
         beforeCount={desktopPaginationMeta.beforeCount}
         afterCount={desktopPaginationMeta.afterCount}
         totalCount={statusFilteredTransactions.length}
+      />
+        }
       />
     </div>
   );

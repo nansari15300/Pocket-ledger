@@ -88,7 +88,6 @@ import { useDate } from '@/hooks/useDate';
 import { useIsMobile, useCalendarMonths, useMobileView } from '@/hooks/use-mobile';
 import { openPrintDirect } from "@/lib/printDirect";
 import usePermissions from '@/hooks/usePermissions';
-import { useVoucherLedgerRecycleBinAction } from '@/hooks/useVoucherLedgerRecycleBinAction';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DaybookReport } from '@/components/reports/DaybookReport';
 import {
@@ -108,7 +107,11 @@ import { TransactionsTable, type TransactionColumnKey } from '@/components/vouch
 import { LedgerDesktopFooter } from '@/components/vouchers/LedgerDesktopFooter';
 import { LedgerFooterCheckboxPill } from '@/components/vouchers/ledgerFooterChrome';
 import { MobileTransactionsPager } from '@/components/vouchers/MobileTransactionsPager';
-import type { TransactionSortOrder } from '@/components/vouchers/TransactionTableSortDropdown';
+import type {
+  TransactionSortBy,
+  TransactionSortOrder,
+} from '@/components/vouchers/TransactionTableSortDropdown';
+import { sortTransactions } from '@/lib/transactionSort';
 import { useRowsPerPage } from '@/hooks/useRowsPerPage';
 import { useRowsPerPageSelectControl } from '@/hooks/useRowsPerPageSelect';
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from '@/lib/rowsPerPageSelect';
@@ -176,6 +179,21 @@ const RECENT_DESKTOP_FOOTER_SCROLL_ROW_SLACK_PX = 58;
 const RECENT_DESKTOP_EDGE_GAP_PX = 2;
 /** Desktop Recent: header + table + footer ek saath — is se chhoti width par H-scroll. */
 const RECENT_DESKTOP_MIN_WIDTH_IN = 10;
+
+/** Recent footer sort: sirf current page rows — paging window poori list par fixed rehti hai. */
+function sortRecentDashboardPageRows<T extends Record<string, unknown>>(
+  pageRows: T[],
+  sortBy: TransactionSortBy,
+  sortOrder: TransactionSortOrder
+): T[] {
+  if (!pageRows.length) return pageRows;
+  if (sortBy === "date") {
+    let sorted = sortRecentTransactionsDesc(pageRows);
+    if (sortOrder === "asc") sorted = [...sorted].reverse();
+    return sorted;
+  }
+  return sortTransactions(pageRows, sortBy, sortOrder, { tieBreakCreatedAtDesc: true });
+}
 
 // Type definitions
 type Voucher = {
@@ -698,7 +716,6 @@ export function DashboardPageContent() {
     return () => window.clearTimeout(t);
   }, [companyId, onlineSyncStatusRibbon.show, onlineSyncStatusRibbon.message, onlineSyncPrefsEpoch]);
   const { can } = usePermissions();
-  const { requestMoveToRecycleBin, recycleBinConfirmDialog } = useVoucherLedgerRecycleBinAction();
   const { user } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -761,6 +778,7 @@ export function DashboardPageContent() {
   
   const [recentRowsPerPage, setRecentRowsPerPage] = useRowsPerPage(50);
   const [recentCurrentPage, setRecentCurrentPage] = React.useState(1);
+  const [recentSortBy, setRecentSortBy] = React.useState<TransactionSortBy>("date");
   const [recentSortOrder, setRecentSortOrder] = React.useState<TransactionSortOrder>('desc');
   const {
     selectValue: recentRowsPerPageSelectValue,
@@ -1365,7 +1383,6 @@ export function DashboardPageContent() {
   const recentSortedBase = useMemo(() => {
     if (!allRecentTransactions) return [];
     let sorted = sortRecentTransactionsDesc(allRecentTransactions as Record<string, unknown>[]);
-    if (recentSortOrder === 'asc') sorted = [...sorted].reverse();
     if (recentUnapprovedOnly) {
       sorted = sorted.filter((tx) => (tx as any).isApproved !== true);
     }
@@ -1373,7 +1390,7 @@ export function DashboardPageContent() {
       sorted = sorted.filter((tx) => (tx as any).type !== 'note');
     }
     return sorted;
-  }, [allRecentTransactions, recentUnapprovedOnly, recentSortOrder, includeNotesInTable]);
+  }, [allRecentTransactions, recentUnapprovedOnly, includeNotesInTable]);
 
   const recentPoolBeforeLimit = useMemo(() => {
     const q = recentQuickSearch.trim().toLowerCase();
@@ -1397,12 +1414,20 @@ export function DashboardPageContent() {
     }
     const start = (recentSafePage - 1) * pageSize;
     const end = Math.min(total, start + pageSize);
+    const pageRows = recentPoolBeforeLimit.slice(start, end) as Record<string, unknown>[];
     return {
-      rows: recentPoolBeforeLimit.slice(start, end),
+      rows: sortRecentDashboardPageRows(pageRows, recentSortBy, recentSortOrder),
       beforeCount: total - end,
       afterCount: start,
     };
-  }, [recentPoolBeforeLimit, recentEffectiveRowsPerPage, recentSafePage, recentListTotal]);
+  }, [
+    recentPoolBeforeLimit,
+    recentEffectiveRowsPerPage,
+    recentSafePage,
+    recentListTotal,
+    recentSortBy,
+    recentSortOrder,
+  ]);
   const recentTransactions = recentPaginationSlice.rows;
   const recentPagerEdgeCounts = useMemo(
     () => ({
@@ -1418,7 +1443,7 @@ export function DashboardPageContent() {
 
   React.useEffect(() => {
     setRecentCurrentPage(1);
-  }, [recentQuickSearch, recentDateRange, recentFilters, recentUnapprovedOnly, recentSortOrder, includeNotesInTable]);
+  }, [recentQuickSearch, recentDateRange, recentFilters, recentUnapprovedOnly, includeNotesInTable]);
   React.useEffect(() => {
     setRecentCurrentPage((p) => Math.min(Math.max(1, p), recentTotalPages));
   }, [recentTotalPages]);
@@ -1924,7 +1949,7 @@ export function DashboardPageContent() {
   const recentDesktopLedgerFooter = useMemo(
     () => (
       <LedgerDesktopFooter
-        shellClassName="mt-0 rounded-none border-0 bg-background py-1.5 px-2 shadow-none overflow-x-hidden overflow-y-hidden dark:bg-background"
+        shellClassName="mt-0 rounded-none border-0 border-t border-blue-300 bg-blue-100 py-1.5 px-2 shadow-none overflow-x-hidden overflow-y-hidden dark:border-blue-800 dark:bg-blue-950"
         left={
           <>
             <LedgerFooterCheckboxPill
@@ -1967,11 +1992,11 @@ export function DashboardPageContent() {
             />
           </>
         }
-        sortBy="date"
+        sortBy={recentSortBy}
         sortOrder={recentSortOrder}
-        onSortChange={(_by, order) => {
+        onSortChange={(by, order) => {
+          setRecentSortBy(by);
           setRecentSortOrder(order);
-          setRecentCurrentPage(1);
         }}
         viewMode="statement"
         currentPage={recentSafePage}
@@ -1995,6 +2020,7 @@ export function DashboardPageContent() {
       visibleColumns,
       includeNotesInTable,
       notesPreferenceLockedOnMobile,
+      recentSortBy,
       recentSortOrder,
       recentSafePage,
       recentTotalPages,
@@ -2039,7 +2065,7 @@ export function DashboardPageContent() {
             cn(
               "space-y-0 p-0 py-1",
               recentFooterRibbonAligned
-                ? "border-b border-black bg-background px-2 sm:px-3 dark:bg-background"
+                ? "border-b border-blue-300 bg-blue-100 px-2 sm:px-3 dark:border-blue-800 dark:bg-blue-950"
                 : "border-b border-blue-300 bg-blue-100 dark:border-blue-800 dark:bg-blue-950 px-2 sm:px-4",
             ),
           // Recent tab + mobile: `main` scroll par title/date upar chipke rahein — `sticky` ka scrollport wahi `<main>` hai (layout).
@@ -2076,14 +2102,13 @@ export function DashboardPageContent() {
           >
           <div
             data-pl-recent-txn-toolbar=""
-            className="flex w-max min-w-full min-h-9 items-center gap-x-2 gap-y-1.5 md:gap-x-3"
+            className="grid w-full min-w-full min-h-9 grid-cols-[minmax(0,auto)_minmax(2in,1fr)_auto] items-center gap-x-2 gap-y-1.5 md:gap-x-3"
           >
-            <div className="flex shrink-0 items-center gap-2">
-              <CardTitle className="max-w-[min(42vw,11rem)] shrink-0 truncate text-left text-base font-semibold leading-none sm:max-w-none sm:text-lg">
-                Recent Transactions
-              </CardTitle>
-            </div>
-            <div className="relative h-9 min-w-[2in] max-w-[28rem] flex-1 basis-[2in]">
+            <CardTitle className="max-w-[min(42vw,11rem)] shrink-0 truncate text-left text-base font-semibold leading-none sm:max-w-none sm:text-lg">
+              Recent Transactions
+            </CardTitle>
+            <div className="flex min-w-0 justify-center px-1 sm:px-2">
+              <div className="relative h-9 w-full min-w-[2in] max-w-[28rem]">
               <Search
                 className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
                 aria-hidden
@@ -2099,6 +2124,7 @@ export function DashboardPageContent() {
                 className="h-9 min-h-9 max-h-9 w-full min-w-[2in] bg-white py-1 pl-8 pr-2 text-sm dark:bg-white"
                 aria-label="Search recent vouchers"
               />
+              </div>
             </div>
             <div className="flex h-9 shrink-0 items-center justify-end gap-2">
             <Button
@@ -2247,7 +2273,6 @@ export function DashboardPageContent() {
           }}
           onInterCompanyChangeDetectedClick={handleInterCompanyChangeDetectedClick}
           onHistoryVoucher={(v) => setHistoryVoucher(v)}
-          onMoveVoucherToRecycleBin={requestMoveToRecycleBin}
           onAddLink={(v) => {
             const isPaymentType = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(v?.type);
             if (isPaymentType) setLinkPaymentVoucher(v);
@@ -2734,7 +2759,6 @@ export function DashboardPageContent() {
            }}
          />
        )}
-      {recycleBinConfirmDialog}
     </div>
   );
 }

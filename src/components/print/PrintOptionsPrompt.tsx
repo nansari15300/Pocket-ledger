@@ -39,6 +39,7 @@ export type PrintOptionsInitial = {
   printIncludeNotes?: boolean;
   printIncludeUserColumn?: boolean;
   printIncludeFileColumn?: boolean;
+  printLinkedVouchersMode?: "all" | "max2";
 };
 
 export type PrintOptionsResult = {
@@ -55,12 +56,18 @@ export type PrintOptionsResult = {
   printMasterTypes?: MasterPrintKind[];
   printIncludeZeroBalanceMasters?: boolean;
   printMasterIncludeBalance?: boolean;
+  printLinkedVouchersMode?: "all" | "max2";
 };
 
 export function promptPrintOptions({
   showConfirmationTabs = false,
+  showLinkedVoucherOptions = false,
   initial,
-}: { showConfirmationTabs?: boolean; initial?: PrintOptionsInitial } = {}): Promise<PrintOptionsResult | null> {
+}: {
+  showConfirmationTabs?: boolean;
+  showLinkedVoucherOptions?: boolean;
+  initial?: PrintOptionsInitial;
+} = {}): Promise<PrintOptionsResult | null> {
   return new Promise((resolve) => {
     const container = document.createElement("div");
     document.body.appendChild(container);
@@ -86,6 +93,9 @@ export function promptPrintOptions({
       const [printFileColumn, setPrintFileColumn] = React.useState(initial?.printIncludeFileColumn === true);
       const [printNotes, setPrintNotes] = React.useState(initial?.printIncludeNotes === true);
       const [printColorMode, setPrintColorMode] = React.useState<PrintColorMode>("color");
+      const [printLinkedVouchersMode, setPrintLinkedVouchersMode] = React.useState<"all" | "max2">(
+        initial?.printLinkedVouchersMode ?? "all"
+      );
       const [printReportKind, setPrintReportKind] = React.useState<"confirmation" | "statement" | "both">("confirmation");
 
       const finishReportPrint = (destination: "internal" | "external") => {
@@ -98,6 +108,7 @@ export function promptPrintOptions({
           printIncludeFileColumn: printFileColumn,
           printIncludeNotes: printNotes,
           printColorMode,
+          ...(showLinkedVoucherOptions ? { printLinkedVouchersMode } : {}),
           printDestination: destination,
           ...(showConfirmationTabs ? { printReportKind } : {}),
         });
@@ -346,6 +357,36 @@ export function promptPrintOptions({
                     </div>
                   </RadioGroup>
                 </div>
+                {showLinkedVoucherOptions ? (
+                  <div className="space-y-2 rounded-lg border p-3">
+                    <p className="text-sm font-medium">Linked vouchers</p>
+                    <RadioGroup
+                      value={printLinkedVouchersMode}
+                      onValueChange={(value) =>
+                        setPrintLinkedVouchersMode(value === "max2" ? "max2" : "all")
+                      }
+                      className="flex flex-col gap-3"
+                    >
+                      <div className="flex items-start gap-3">
+                        <RadioGroupItem value="all" id="print-linked-vouchers-all" className="mt-0.5" />
+                        <Label htmlFor="print-linked-vouchers-all" className="cursor-pointer font-medium">
+                          Show all
+                        </Label>
+                      </div>
+                      <div className="flex items-start gap-3">
+                        <RadioGroupItem value="max2" id="print-linked-vouchers-max2" className="mt-0.5" />
+                        <div className="grid gap-1 leading-none">
+                          <Label htmlFor="print-linked-vouchers-max2" className="cursor-pointer font-medium">
+                            Show maximum 2
+                          </Label>
+                          <p className="text-xs text-muted-foreground">
+                            Remaining links print as More (+N).
+                          </p>
+                        </div>
+                      </div>
+                    </RadioGroup>
+                  </div>
+                ) : null}
               </div>
               </div>
               <DialogFooter className="shrink-0 !flex-row flex-nowrap items-center justify-end gap-2 w-full overflow-x-auto border-t bg-background pt-3 mt-2 sm:space-x-0 [&>*]:mt-0 [&>button]:shrink-0">

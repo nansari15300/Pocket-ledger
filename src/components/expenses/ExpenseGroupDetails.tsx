@@ -29,6 +29,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 
@@ -72,7 +73,9 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
 import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
@@ -890,9 +893,11 @@ export function ExpenseGroupDetails({
   return (
     <>
       {/* min-h-0 + flex-1 ScrollArea: flex item ko shrink dena zaroori — warna table height expand ho kar scroll band */}
-      <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
         {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className={cn("flex-shrink-0", LEDGER_HEADER_RIBBON_WRAP_CN)}>
+        <LedgerTxnScrollColumn
+          header={
+<div className={cn("flex-shrink-0", LEDGER_HEADER_RIBBON_WRAP_CN)}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {onBack && (
@@ -974,6 +979,7 @@ export function ExpenseGroupDetails({
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
+              <LedgerHeaderPrintButton variant="outline" onClick={handlePrint} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
@@ -1053,14 +1059,14 @@ export function ExpenseGroupDetails({
               <Button variant="outline" size="sm" onClick={() => handleOpenNoteDialog()} className={LEDGER_HEADER_PILL_CN}>
                 <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>
-              <Button variant="outline" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN}>
-                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-              </Button>
+              
             </div>
           </div>
         </div>
-        <ScrollArea txnChrome className="min-h-0 flex-1">
-          <div className="py-4">
+          }
+          table={
+          <>
+          
             <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable
               transactions={paginatedTransactions}
@@ -1089,10 +1095,9 @@ export function ExpenseGroupDetails({
                 No transactions found for the selected period.
               </div>
             )}
-          </div>
-          <ScrollBar orientation="horizontal" />
-        </ScrollArea>
-        {/* Footer — global PC shell LedgerDesktopFooter */}
+          </>
+          }
+          footer={
         <LedgerDesktopFooter
           shellClassName="flex-shrink-0"
           left={
@@ -1163,6 +1168,8 @@ export function ExpenseGroupDetails({
           beforeCount={desktopPaginationMeta.beforeCount}
           afterCount={desktopPaginationMeta.afterCount}
           totalCount={displayTransactions.length}
+        />
+          }
         />
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>

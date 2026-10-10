@@ -55,19 +55,9 @@ import {
 
 function handleRememberUsernameCheckboxChange(
   checked: boolean,
-  typedUsername: string,
-  companyId: string,
-  firebaseUid: string | undefined,
-  userEmail: string | null | undefined,
   setRemember: (v: boolean) => void
 ): void {
   setRemember(checked);
-  const typed = typedUsername.trim();
-  if (checked && typed) {
-    saveRememberedSharedUnlockUsername(firebaseUid, companyId, typed, userEmail);
-  } else if (!checked) {
-    clearRememberedSharedUnlockUsername(firebaseUid, companyId, userEmail);
-  }
 }
 
 export function CompanyUnlockDialog({
@@ -355,7 +345,7 @@ export function CompanyUnlockDialog({
         if (!nextOpen) closeDialog();
       }}
     >
-      <AlertDialogContent className="flex h-[90dvh] max-h-[90dvh] w-[calc(100%-8px)] max-w-md flex-col gap-4 overflow-hidden rounded-2xl supports-[not(height:1dvh)]:h-[90vh] supports-[not(height:1dvh)]:max-h-[90vh]">
+      <AlertDialogContent className="flex max-h-[90dvh] w-[calc(100%-8px)] max-w-md flex-col gap-4 overflow-hidden rounded-2xl supports-[not(height:1dvh)]:max-h-[90vh]">
         <AlertDialogHeader className="shrink-0">
           <AlertDialogTitle>
             {activeCompany && isOfflineCompanyStorage(activeCompany)
@@ -373,7 +363,7 @@ export function CompanyUnlockDialog({
             )}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-0.5 [-webkit-overflow-scrolling:touch]">
+        <div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain pr-0.5 [-webkit-overflow-scrolling:touch]">
           {activeCompany ? (
             <CompanyUnlockContextPickers
               companies={unlockPickerCompanies}
@@ -459,10 +449,6 @@ export function CompanyUnlockDialog({
                           onCheckedChange={(v) =>
                             handleRememberUsernameCheckboxChange(
                               v === true,
-                              usernameInput,
-                              activeCompany.id,
-                              user?.uid,
-                              user?.email,
                               setRememberSharedUsername
                             )
                           }

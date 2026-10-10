@@ -185,6 +185,12 @@ import {
   LEDGER_CLOSING_BALANCE_ACTIONS_CN,
   LEDGER_CLOSING_BALANCE_CARD_ROW_CN,
   LEDGER_CLOSING_BALANCE_TOTAL_CN,
+  LEDGER_ENTITY_BALANCE_COL_PX,
+  LEDGER_ENTITY_TYPE_COL_PX,
+  LEDGER_TXN_BALANCE_HEADER_PAD_CN,
+  LEDGER_TXN_BALANCE_TO_MENU_PAD_CN,
+  LEDGER_TXN_ROW_MENU_COL_PX,
+  LEDGER_TXN_ROW_MENU_CELL_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { stripSpendWiseSyntheticOpeningMaster } from "@/lib/ledgerPagePrint";
 import {
@@ -206,6 +212,22 @@ export type VisibleColumns = Partial<Record<TransactionColumnKey, boolean>>;
 export { TransactionRow, getConversionFactor, formatQuantity };
 
 const SPEND_WISE_TYPE_COL_PX = 112;
+/** Split thead/body: default voucher col — body cells use min-w-[105px]. */
+const LEDGER_VOUCHER_NO_COL_PX = 105;
+/** IC row with “Change Detected” badge — wide only when such rows are on screen. */
+const LEDGER_VOUCHER_NO_IC_COL_PX = 172;
+/** Header filter row uses px-[10px] — body cells match for column text alignment. */
+const LEDGER_TXN_BODY_CELL_PAD_CN = "px-[10px]";
+
+function rowHasInterCompanyPeerPending(t: unknown): boolean {
+  const proposed = (t as { interCompanyPeerPending?: { proposed?: unknown } })?.interCompanyPeerPending
+    ?.proposed;
+  return !!(
+    proposed &&
+    typeof proposed === "object" &&
+    Object.keys(proposed as object).length > 0
+  );
+}
 
 /** Spend-wise table-fixed: type pill ("direct expense") — 75px par voucher no overlap hota tha. */
 function normalizeLedgerObDateField(v: unknown): Date | null {
@@ -945,11 +967,19 @@ export function TransactionsTable({
   const dashboardRecentHeaderScrollRef = useRef<HTMLDivElement>(null);
   const dashboardRecentFooterHScrollRef = useRef<HTMLDivElement>(null);
   const [dashboardRecentHScrollWidth, setDashboardRecentHScrollWidth] = useState(0);
+  const [ledgerUnifiedHScrollActive, setLedgerUnifiedHScrollActive] = useState(false);
+  const resolveUnifiedHorizontalScrollHost = useCallback((): HTMLElement | null => {
+    const body = tableContainerRef.current;
+    if (!body) return null;
+    return body.closest<HTMLElement>("[data-pl-ledger-txn-unified-scroll]");
+  }, []);
+
   const syncDashboardRecentHorizontalScroll = useCallback(
-    (scrollLeft: number, source: "header" | "body" | "footer") => {
+    (scrollLeft: number, source: "header" | "body" | "footer" | "unified") => {
       const body = tableContainerRef.current;
       const header = dashboardRecentHeaderScrollRef.current;
       const footer = dashboardRecentFooterHScrollRef.current;
+      const unifiedHost = resolveUnifiedHorizontalScrollHost();
       if (source !== "header" && header && header.scrollLeft !== scrollLeft) {
         header.scrollLeft = scrollLeft;
       }
@@ -959,8 +989,11 @@ export function TransactionsTable({
       if (source !== "footer" && footer && footer.scrollLeft !== scrollLeft) {
         footer.scrollLeft = scrollLeft;
       }
+      if (unifiedHost && source !== "unified" && unifiedHost.scrollLeft !== scrollLeft) {
+        unifiedHost.scrollLeft = scrollLeft;
+      }
     },
-    []
+    [resolveUnifiedHorizontalScrollHost]
   );
   useEffect(() => {
     if (effectiveActiveFilter === "file") setFileFilterPopoverOpen(true);
@@ -1256,8 +1289,18 @@ export function TransactionsTable({
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" data-pl-txn-icon-btn="" className={cn(txnTableIconBtnCn, "h-8 w-8 shrink-0")}>
-            <MoreVertical className="h-4 w-4 text-muted-foreground" />
+          <Button
+            variant="ghost"
+            size="icon"
+            data-pl-txn-icon-btn=""
+            className={cn(txnTableIconBtnCn, "relative h-8 w-3 min-w-[12px] shrink-0 p-0")}
+          >
+            <span
+              aria-hidden="true"
+              className="absolute right-[4px] top-1/2 -translate-y-1/2 text-base leading-none text-muted-foreground"
+            >
+              ⋮
+            </span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-44">
@@ -1372,7 +1415,12 @@ export function TransactionsTable({
   const renderHeaderWithFilter = (key: string, label: string, isNumeric: boolean = false, minWidthPx?: number) => {
     const isFiltered = !!(filters && filters[key]) || (key === 'type' && voucherTypes && !voucherTypes.includes('all'));
     const thClass = cn('p-0', isNumeric && 'text-right');
-    const innerPadding = ensureMinGaps ? "px-[10px]" : "px-2";
+    const innerPadding =
+      ensureMinGaps && key === "balance"
+        ? LEDGER_TXN_BALANCE_HEADER_PAD_CN
+        : ensureMinGaps
+          ? "px-[10px]"
+          : "px-2";
     const filterValue = filters ? filters[key] || "" : "";
     const filterOpen = effectiveActiveFilter === key;
     const renderTextFilterInput = () => {
@@ -1752,6 +1800,11 @@ export function TransactionsTable({
         {formatCurrency(absValue, { noSuffix: true, context: 'transaction' })} {suffix}
       </span>
     );
+  };
+
+  const formatOpeningRowBalanceCell = (value: number, amountVisible: boolean) => {
+    if (Math.abs(value) < 1e-6) return formatFooterBalance(0);
+    return amountVisible ? formatFooterBalance(value) : "-";
   };
   
   const formatFooterAmount = (val: number) => {
@@ -2152,6 +2205,7 @@ export function TransactionsTable({
 
   // Prevent header/amount overlap — opening row cells helpers
   const ensureMinGaps = true;
+  const ledgerBalanceColStyle = { minWidth: LEDGER_ENTITY_BALANCE_COL_PX };
 
   /** Dated row Date column: filter from, ya page 2+ continuation (openingBalancePeriodStartDate); Book row = master OB date. */
   const datedOpeningBalanceRowDate = useMemo(() => {
@@ -2216,10 +2270,16 @@ export function TransactionsTable({
     <>
       {showCol("type") && (
         <TableCell
-          className={cn(
-            "align-middle overflow-hidden",
-            ensureMinGaps && (hasSpendWiseGroups ? "min-w-[112px] px-[5px]" : "min-w-[75px] px-[5px]")
-          )}
+          className={cn("align-middle overflow-visible", ensureMinGaps && "px-[5px]")}
+          style={
+            ensureMinGaps
+              ? {
+                  minWidth: hasSpendWiseGroups
+                    ? Math.max(SPEND_WISE_TYPE_COL_PX, LEDGER_ENTITY_TYPE_COL_PX)
+                    : LEDGER_ENTITY_TYPE_COL_PX,
+                }
+              : undefined
+          }
         >
           <div className="flex flex-wrap items-center gap-2">
             {showSearchSlot ? openingBalanceLeftContent : null}
@@ -2231,7 +2291,7 @@ export function TransactionsTable({
         </TableCell>
       )}
       {showCol("voucherNo") && (
-        <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined} />
+        <TableCell className={ensureMinGaps ? cn("min-w-[105px]", LEDGER_TXN_BODY_CELL_PAD_CN) : undefined} />
       )}
       {context === "daybook" && <TableCell className="max-w-[200px] truncate" />}
       {isItemPartyContext && showItemPartyColumn && (
@@ -2337,11 +2397,14 @@ export function TransactionsTable({
               <TableCell className={cn("text-center align-top py-0", ensureMinGaps && "min-w-[95px] px-[5px]")} />
             )}
             {showCol("runningBalance") && !hideBalanceColumn && (
-              <TableCell className={cn("text-right", ensureMinGaps && "min-w-[115px] px-[5px]")} />
+              <TableCell
+                className={cn("text-right", ensureMinGaps && cn("tabular-nums", LEDGER_TXN_BALANCE_TO_MENU_PAD_CN))}
+                style={ledgerBalanceColStyle}
+              />
             )}
           </>
         )}
-        <TableCell className="w-10 p-0" />
+        <TableCell className={ensureMinGaps ? LEDGER_TXN_ROW_MENU_CELL_CN : "w-10 p-0"} />
       </tr>
     ) : null;
 
@@ -2366,7 +2429,7 @@ export function TransactionsTable({
           hideBalanceColumn={hideBalanceColumn}
           ensureMinGaps={ensureMinGaps}
         />
-        <TableCell className="w-10 p-0" />
+        <TableCell className={ensureMinGaps ? LEDGER_TXN_ROW_MENU_CELL_CN : "w-10 p-0"} />
       </tr>
     ) : null;
 
@@ -2389,6 +2452,10 @@ export function TransactionsTable({
   const isBillWiseCardContext = resolvedBalanceMode === "bill_wise" && (context === "party" || context === "group" || context === "staff" || context === "account");
   // In party/staff/group billwise view, status shows only bill-wise link voucher no (not spend-wise RCPT/PYMT/Contra).
   const statusBillWiseOnly = resolvedBalanceMode === "bill_wise" && (context === "party" || context === "staff" || context === "group");
+  /** Desktop entity ledgers: fixed thead strip + body scroll (same as Dashboard Recent). */
+  const ledgerDesktopSplitScrollGate = !useMobileCardView && !dashboardRecentFyAttachmentGate;
+  const desktopSplitTableScrollGate =
+    dashboardRecentFyAttachmentGate || ledgerDesktopSplitScrollGate;
 
   // Always run these useMemos — mobile used to return early and skip them, breaking hook order when isMobile flipped.
   const mobileBlocks = useMemo((): MobileBlock[] => {
@@ -2471,7 +2538,7 @@ export function TransactionsTable({
     if (showCol("cr") && !hideCreditColumn) w.push(100);
     if (showCol("status") && !hideStatusColumn) w.push(95);
     if (showCol("runningBalance") && !hideBalanceColumn) w.push(115);
-    w.push(40);
+    w.push(LEDGER_TXN_ROW_MENU_COL_PX);
     return w;
   }, [
     useLedgerGroupCardLayout,
@@ -2507,7 +2574,7 @@ export function TransactionsTable({
     if (showCol("cr") && !hideCreditColumn) w.push(100);
     if (showCol("status") && !hideStatusColumn) w.push(95);
     if (showCol("runningBalance") && !hideBalanceColumn) w.push(115);
-    w.push(40);
+    w.push(LEDGER_TXN_ROW_MENU_COL_PX);
     return w;
   }, [
     dashboardRecentFyAttachmentGate,
@@ -2523,8 +2590,125 @@ export function TransactionsTable({
     visibleColumns,
   ]);
 
+  const ledgerVoucherNoColPx = useMemo(() => {
+    if (!ledgerDesktopSplitScrollGate) return LEDGER_VOUCHER_NO_COL_PX;
+    if (!displayLedgerRows?.some(rowHasInterCompanyPeerPending)) return LEDGER_VOUCHER_NO_COL_PX;
+    return LEDGER_VOUCHER_NO_IC_COL_PX;
+  }, [ledgerDesktopSplitScrollGate, displayLedgerRows]);
+
+  /**
+   * Entity ledger desktop (party, bank, IC clearing, …): fixed cols so split thead/body
+   * stay same width. Date + Balance positions remain fixed; all visible columns between
+   * them share their existing combined width equally for even header spacing.
+   */
+  const ledgerEntityColWidths = useMemo((): number[] => {
+    if (!ledgerDesktopSplitScrollGate) return [];
+    const w: number[] = [];
+    if (showCol("syncStatus")) w.push(78);
+    if (showCol("date")) {
+      if (dateSystem === "Both") w.push(95, 112);
+      else w.push(112);
+    }
+    const middleWidths: number[] = [];
+    if (showCol("type")) {
+      middleWidths.push(
+        hasSpendWiseGroups
+          ? Math.max(SPEND_WISE_TYPE_COL_PX, LEDGER_ENTITY_TYPE_COL_PX)
+          : LEDGER_ENTITY_TYPE_COL_PX
+      );
+    }
+    if (showCol("voucherNo")) middleWidths.push(ledgerVoucherNoColPx);
+    if (context === "daybook") middleWidths.push(120);
+    if (isItemPartyContext && showItemPartyColumn) middleWidths.push(90);
+    if (showCol("user") && context !== "note") middleWidths.push(148);
+    if (showFileBySelection) middleWidths.push(44);
+    if (showCol("dr") && !hideDebitColumn) middleWidths.push(100);
+    if (showCol("cr") && !hideCreditColumn) middleWidths.push(100);
+    if (showCol("status") && !hideStatusColumn) middleWidths.push(95);
+    if (middleWidths.length > 0) {
+      const equalMiddleWidth =
+        middleWidths.reduce((sum, width) => sum + width, 0) / middleWidths.length;
+      w.push(...middleWidths.map(() => equalMiddleWidth));
+    }
+    if (showCol("runningBalance") && !hideBalanceColumn) w.push(LEDGER_ENTITY_BALANCE_COL_PX);
+    w.push(LEDGER_TXN_ROW_MENU_COL_PX);
+    return w;
+  }, [
+    ledgerDesktopSplitScrollGate,
+    dateSystem,
+    context,
+    hasSpendWiseGroups,
+    hideDebitColumn,
+    hideCreditColumn,
+    hideStatusColumn,
+    hideBalanceColumn,
+    showFileBySelection,
+    showItemPartyColumn,
+    isItemPartyContext,
+    visibleColumns,
+    ledgerVoucherNoColPx,
+  ]);
+
+  const splitScrollColWidths: (number | string)[] = dashboardRecentFyAttachmentGate
+    ? dashboardRecentColWidths
+    : ledgerEntityColWidths;
+
+  const splitScrollTableMinPx = useMemo(() => {
+    if (!ledgerDesktopSplitScrollGate || splitScrollColWidths.length === 0) return 0;
+    let sum = 0;
+    for (const w of splitScrollColWidths) {
+      if (typeof w !== "number") return 0;
+      sum += w;
+    }
+    return sum;
+  }, [ledgerDesktopSplitScrollGate, splitScrollColWidths]);
+
   useEffect(() => {
-    if (!dashboardRecentFyAttachmentGate) return;
+    if (!ledgerDesktopSplitScrollGate) {
+      setLedgerUnifiedHScrollActive(false);
+      return;
+    }
+    const host = tableContainerRef.current?.closest<HTMLElement>("[data-pl-ledger-txn-unified-scroll]");
+    setLedgerUnifiedHScrollActive(Boolean(host));
+    if (!host) return;
+    const applyUnifiedTableWidthVar = () => {
+      const bodyTable = tableContainerRef.current?.querySelector("table");
+      const headerTable = host.querySelector<HTMLTableElement>("[data-pl-ledger-txn-header] table");
+      const measured = Math.max(
+        bodyTable?.scrollWidth ?? 0,
+        headerTable?.scrollWidth ?? 0,
+        splitScrollTableMinPx
+      );
+      const w = Math.ceil(measured);
+      if (w > 0) host.style.setProperty("--pl-ledger-txn-table-min-px", String(w));
+      else host.style.removeProperty("--pl-ledger-txn-table-min-px");
+    };
+    applyUnifiedTableWidthVar();
+    const ro = new ResizeObserver(() => applyUnifiedTableWidthVar());
+    if (tableContainerRef.current) ro.observe(tableContainerRef.current);
+    const headerEl = host.querySelector("[data-pl-ledger-txn-header]");
+    if (headerEl) ro.observe(headerEl);
+    window.addEventListener("resize", applyUnifiedTableWidthVar);
+    const onUnifiedScroll = () => {
+      syncDashboardRecentHorizontalScroll(host.scrollLeft, "unified");
+    };
+    host.addEventListener("scroll", onUnifiedScroll, { passive: true });
+    return () => {
+      host.removeEventListener("scroll", onUnifiedScroll);
+      ro.disconnect();
+      window.removeEventListener("resize", applyUnifiedTableWidthVar);
+      host.style.removeProperty("--pl-ledger-txn-table-min-px");
+    };
+  }, [
+    ledgerDesktopSplitScrollGate,
+    syncDashboardRecentHorizontalScroll,
+    transactions.length,
+    visibleColumns,
+    splitScrollTableMinPx,
+  ]);
+
+  useEffect(() => {
+    if (!desktopSplitTableScrollGate) return;
     const measureRecentHorizontalScrollWidth = () => {
       const body = tableContainerRef.current;
       const header = dashboardRecentHeaderScrollRef.current;
@@ -2549,12 +2733,13 @@ export function TransactionsTable({
       window.removeEventListener("resize", measureRecentHorizontalScrollWidth);
     };
   }, [
-    dashboardRecentFyAttachmentGate,
+    desktopSplitTableScrollGate,
     transactions.length,
     visibleColumns,
     dateSystem,
     showNarration,
     dashboardRecentColWidths,
+    ledgerEntityColWidths,
   ]);
 
   const tableBlocks = useMemo((): TableBlock[] | null => {
@@ -2706,11 +2891,11 @@ export function TransactionsTable({
             </TableCell>
           )}
           {showCol("runningBalance") && !hideBalanceColumn && (
-            <TableCell className={cn("text-right font-semibold align-top", masterBookSignedScaled >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
+            <TableCell className={cn("text-right font-semibold align-top", masterBookSignedScaled >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && cn("tabular-nums", LEDGER_TXN_BALANCE_TO_MENU_PAD_CN))} style={ledgerBalanceColStyle}>
               {bookOpeningAmountVisible ? formatFooterBalance(billWiseBookOpeningBalance) : "-"}
             </TableCell>
           )}
-          <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
+          <TableCell className={LEDGER_TXN_ROW_MENU_CELL_CN} onClick={(e) => e.stopPropagation()}>
             {renderOpeningBalanceRowMenu()}
           </TableCell>
         </tr>
@@ -2790,13 +2975,14 @@ export function TransactionsTable({
           </TableCell>
         )}
         {showCol("runningBalance") && !hideBalanceColumn && (
-          <TableCell className={cn("text-right font-semibold align-top", spendWiseBookOpeningBalanceForRow >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
-            {showDatedOpeningAmounts
-              ? formatFooterBalance(useSpendWiseOpeningBalanceCard ? spendWiseBookOpeningBalanceForRow : displayOpeningBalanceForRow)
-              : "-"}
+          <TableCell className={cn("text-right font-semibold align-top", spendWiseBookOpeningBalanceForRow >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && cn("tabular-nums", LEDGER_TXN_BALANCE_TO_MENU_PAD_CN))} style={ledgerBalanceColStyle}>
+            {formatOpeningRowBalanceCell(
+              useSpendWiseOpeningBalanceCard ? spendWiseBookOpeningBalanceForRow : displayOpeningBalanceForRow,
+              showDatedOpeningAmounts
+            )}
           </TableCell>
         )}
-        <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
+        <TableCell className={LEDGER_TXN_ROW_MENU_CELL_CN} onClick={(e) => e.stopPropagation()}>
           {renderOpeningBalanceRowMenu()}
         </TableCell>
       </tr>
@@ -3779,7 +3965,7 @@ export function TransactionsTable({
   }
 
   const ledgerTableClassName = cn(
-    dashboardRecentFyAttachmentGate
+    desktopSplitTableScrollGate
       ? "table-fixed w-full min-w-0"
       : ensureMinGaps
         ? "table-auto w-full min-w-full"
@@ -3791,9 +3977,9 @@ export function TransactionsTable({
 
   const recentTableColgroup = (
     <>
-      {dashboardRecentColWidths.length > 0 && (
+      {splitScrollColWidths.length > 0 && (
         <colgroup>
-          {dashboardRecentColWidths.map((width, i) => (
+          {splitScrollColWidths.map((width, i) => (
             <col
               key={i}
               style={typeof width === "number" ? { width: `${width}px` } : { width }}
@@ -3801,7 +3987,7 @@ export function TransactionsTable({
           ))}
         </colgroup>
       )}
-      {hasSpendWiseGroups && spendWiseColWidths.length > 0 && dashboardRecentColWidths.length === 0 && (
+      {hasSpendWiseGroups && spendWiseColWidths.length > 0 && splitScrollColWidths.length === 0 && (
         <colgroup>
           {spendWiseColWidths.map((width, i) => (
             <col key={i} style={{ width: `${width}px` }} />
@@ -3813,13 +3999,16 @@ export function TransactionsTable({
 
   const recentTableHeader = (
     <TableHeader
-      className={cn(dashboardRecentFyAttachmentGate && "pl-dashboard-recent-sticky-thead")}
+      className={cn(
+        desktopSplitTableScrollGate &&
+          "pl-dashboard-recent-sticky-thead [&_tr]:!border-b-0 [&_tr]:border-b-0"
+      )}
     >
       <TableRow
         className={cn(
           "border-black hover:bg-transparent [&>th]:border-black",
-          dashboardRecentFyAttachmentGate
-            ? "border-b border-b-black [&>th]:border-b [&>th]:border-b-black"
+          desktopSplitTableScrollGate
+            ? "border-b-0 [&>th]:border-b-0"
             : "border-b-2 [&>th]:border-b-2"
         )}
       >
@@ -3832,8 +4021,28 @@ export function TransactionsTable({
         ) : (
           renderHeaderWithFilter("date", "Date", false, ensureMinGaps ? 112 : undefined)
         ))}
-        {showCol("type") && renderHeaderWithFilter("type", "Type", false, ensureMinGaps ? (hasSpendWiseGroups ? SPEND_WISE_TYPE_COL_PX : 75) : undefined)}
-        {showCol("voucherNo") && renderHeaderWithFilter("voucherNumber", "Voucher No.", false, ensureMinGaps ? 105 : undefined)}
+        {showCol("type") &&
+          renderHeaderWithFilter(
+            "type",
+            "Type",
+            false,
+            ensureMinGaps
+              ? desktopSplitTableScrollGate
+                ? hasSpendWiseGroups
+                  ? Math.max(SPEND_WISE_TYPE_COL_PX, LEDGER_ENTITY_TYPE_COL_PX)
+                  : LEDGER_ENTITY_TYPE_COL_PX
+                : hasSpendWiseGroups
+                  ? SPEND_WISE_TYPE_COL_PX
+                  : 75
+              : undefined
+          )}
+        {showCol("voucherNo") &&
+          renderHeaderWithFilter(
+            "voucherNumber",
+            "Voucher No.",
+            false,
+            ensureMinGaps ? (desktopSplitTableScrollGate ? ledgerVoucherNoColPx : LEDGER_VOUCHER_NO_COL_PX) : undefined
+          )}
         {context === "daybook" && renderHeaderWithFilter("accounts", "Accounts", false, ensureMinGaps ? 120 : undefined)}
         {isItemPartyContext && showItemPartyColumn && (
           <TableHead className="font-semibold p-0" style={ensureMinGaps ? { minWidth: "90px" } : undefined}>
@@ -3845,16 +4054,150 @@ export function TransactionsTable({
         {showCol("dr") && !hideDebitColumn && renderHeaderWithFilter("debit", debitHeaderLabel, true, ensureMinGaps ? 100 : undefined)}
         {showCol("cr") && !hideCreditColumn && renderHeaderWithFilter("credit", creditHeaderLabel, true, ensureMinGaps ? 100 : undefined)}
         {showCol("status") && !hideStatusColumn && renderHeaderWithFilter("status", "Status", false, ensureMinGaps ? 95 : undefined)}
-        {showCol("runningBalance") && !hideBalanceColumn && renderHeaderWithFilter("balance", stockView === "amount" ? "Balance" : "Stock", true, ensureMinGaps ? 115 : undefined)}
-        <TableHead className="w-10 p-0" />
+        {showCol("runningBalance") &&
+          !hideBalanceColumn &&
+          renderHeaderWithFilter(
+            "balance",
+            stockView === "amount" ? "Balance" : "Stock",
+            true,
+            ensureMinGaps ? (desktopSplitTableScrollGate ? LEDGER_ENTITY_BALANCE_COL_PX : 115) : undefined
+          )}
+        <TableHead className={ensureMinGaps ? LEDGER_TXN_ROW_MENU_CELL_CN : "w-10 p-0"} />
       </TableRow>
     </TableHeader>
   );
 
+  const renderTransactionTableFooter = () =>
+    !hideFooter ? (
+      <TableFooter
+        {...(desktopSplitTableScrollGate ? { "data-pl-txn-split-scroll-footer": "" } : {})}
+        className={cn(
+          "bg-white",
+          desktopSplitTableScrollGate ? "border-0 shadow-none" : "border-t border-b border-border shadow-inner"
+        )}
+      >
+        <TableRow data-pl-txn-footer-total-row="">
+          <TableCell colSpan={totalColSpan} className="text-right font-semibold">
+            Total
+          </TableCell>
+          {showCol("dr") && !hideDebitColumn && (
+            <TableCell
+              className={cn(
+                "text-right text-green-700 font-semibold",
+                ensureMinGaps && "min-w-[100px] px-[5px]"
+              )}
+            >
+              {formatFooterAmount(footerTotalDr)}
+            </TableCell>
+          )}
+          {showCol("cr") && !hideCreditColumn && (
+            <TableCell
+              className={cn(
+                "text-right text-red-700 font-semibold",
+                ensureMinGaps && "min-w-[100px] px-[5px]"
+              )}
+            >
+              {formatFooterAmount(footerTotalCr)}
+            </TableCell>
+          )}
+          {showCol("status") && !hideStatusColumn && (
+            <TableCell className={cn("text-center font-semibold", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+              -
+            </TableCell>
+          )}
+          {showCol("runningBalance") && !hideBalanceColumn && (
+            <TableCell
+              className={cn(
+                "text-right font-semibold",
+                ensureMinGaps && cn("tabular-nums", LEDGER_TXN_BALANCE_TO_MENU_PAD_CN)
+              )}
+              style={ledgerBalanceColStyle}
+            >
+              -
+            </TableCell>
+          )}
+          <TableCell className={ensureMinGaps ? LEDGER_TXN_ROW_MENU_CELL_CN : "w-10 p-0"} />
+        </TableRow>
+        <TableRow
+          data-pl-txn-footer-closing-row=""
+          className={cn(
+            "font-bold text-base bg-muted/30",
+            desktopSplitTableScrollGate
+              ? "border-0"
+              : "border-t-2 border-black border-b-2 border-black"
+          )}
+        >
+          <TableCell
+            colSpan={totalColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol}
+            className="align-middle"
+          >
+            <div data-pl-closing-balance-card="" className={LEDGER_CLOSING_BALANCE_CARD_ROW_CN}>
+              <div
+                className="flex min-w-0 flex-wrap items-center gap-1"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              >
+                {(
+                  [
+                    { id: "default", label: "Default" },
+                    { id: "green", label: "Green" },
+                    { id: "blue", label: "Blue" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className={cn(
+                      chromeProPillCn,
+                      "h-7 rounded-full px-2.5 text-[11px] font-semibold",
+                      txnTableTone === opt.id && chromePillActive
+                    )}
+                    aria-pressed={txnTableTone === opt.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      applyTxnTableTone(opt.id);
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <div className={LEDGER_CLOSING_BALANCE_TOTAL_CN}>
+                {closingBalanceActions ? (
+                  <div
+                    data-pl-closing-balance-actions=""
+                    className={cn(LEDGER_CLOSING_BALANCE_ACTIONS_CN, "mr-0")}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    {closingBalanceActions}
+                  </div>
+                ) : null}
+                <span className="shrink-0 text-right">Closing Balance</span>
+              </div>
+            </div>
+          </TableCell>
+          {showCol("runningBalance") && !hideBalanceColumn && (
+            <TableCell
+              className={cn(
+                "text-right font-bold",
+                footerClosingBalance >= 0 ? "text-green-700" : "text-red-700",
+                ensureMinGaps && cn("tabular-nums", LEDGER_TXN_BALANCE_TO_MENU_PAD_CN)
+              )}
+              style={ledgerBalanceColStyle}
+            >
+              {formatFooterBalance(footerClosingBalance)}
+            </TableCell>
+          )}
+          <TableCell className={ensureMinGaps ? LEDGER_TXN_ROW_MENU_CELL_CN : "w-10 p-0"} />
+        </TableRow>
+      </TableFooter>
+    ) : null;
+
   const tableContent = (
       <Table className={ledgerTableClassName} scrollContainer={false}>
         {recentTableColgroup}
-        {!dashboardRecentFyAttachmentGate ? recentTableHeader : null}
+        {!desktopSplitTableScrollGate ? recentTableHeader : null}
 
       <TableBody>
         <>
@@ -3916,11 +4259,11 @@ export function TransactionsTable({
                         </TableCell>
                       )}
                       {showCol("runningBalance") && !hideBalanceColumn && (
-                        <TableCell className={cn("text-right font-semibold align-top", masterBookSignedScaled >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
+                        <TableCell className={cn("text-right font-semibold align-top", masterBookSignedScaled >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && cn("tabular-nums", LEDGER_TXN_BALANCE_TO_MENU_PAD_CN))} style={ledgerBalanceColStyle}>
                           {bookOpeningAmountVisible ? formatFooterBalance(billWiseBookOpeningBalance) : "-"}
                         </TableCell>
                       )}
-                      <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
+                      <TableCell className={LEDGER_TXN_ROW_MENU_CELL_CN} onClick={(e) => e.stopPropagation()}>
                         {renderOpeningBalanceRowMenu()}
                       </TableCell>
                     </tr>
@@ -3990,11 +4333,11 @@ export function TransactionsTable({
                       </TableCell>
                     )}
                     {showCol("runningBalance") && !hideBalanceColumn && (
-                        <TableCell className={cn("text-right font-semibold align-top", billWiseDatedOpeningBalance >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
-                            {datedOpeningAmountVisible ? formatFooterBalance(billWiseDatedOpeningBalance) : "-"}
+                        <TableCell className={cn("text-right font-semibold align-top", billWiseDatedOpeningBalance >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && cn("tabular-nums", LEDGER_TXN_BALANCE_TO_MENU_PAD_CN))} style={ledgerBalanceColStyle}>
+                            {formatOpeningRowBalanceCell(billWiseDatedOpeningBalance, datedOpeningAmountVisible)}
                         </TableCell>
                     )}
-                    <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
+                    <TableCell className={LEDGER_TXN_ROW_MENU_CELL_CN} onClick={(e) => e.stopPropagation()}>
                         {renderOpeningBalanceRowMenu()}
                     </TableCell>
                   </tr>
@@ -4410,94 +4753,17 @@ export function TransactionsTable({
         </>
       </TableBody>
        
-       {!hideFooter && (
-        <TableFooter className="bg-white shadow-inner border-t border-b border-border">
-           <TableRow aria-hidden className="bg-transparent border-0 hover:bg-transparent">
-                <TableCell colSpan={openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1} className="p-0 m-0 border-0 bg-transparent" style={{ height: "20px", minHeight: "6px" }} />
-           </TableRow>
-           <TableRow>
-                <TableCell colSpan={totalColSpan} className="text-right font-semibold">
-                    Total
-                </TableCell>
-                {showCol("dr") && !hideDebitColumn && <TableCell className={cn("text-right text-green-700 font-semibold", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-                    {formatFooterAmount(footerTotalDr)}
-                </TableCell>}
-                {showCol("cr") && !hideCreditColumn && <TableCell className={cn("text-right text-red-700 font-semibold", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-                    {formatFooterAmount(footerTotalCr)}
-                </TableCell>}
-                {showCol("status") && !hideStatusColumn && <TableCell className={cn("text-center font-semibold", ensureMinGaps && "min-w-[95px] px-[5px]")}>-</TableCell>}
-                {showCol("runningBalance") && !hideBalanceColumn && <TableCell className={cn("text-right font-semibold", ensureMinGaps && "min-w-[115px] px-[5px]")}>
-                    -
-                </TableCell>}
-                <TableCell className="w-10 p-0" />
-            </TableRow>
-            <TableRow className="border-t-2 border-black border-b-2 border-black font-bold text-base bg-muted/30">
-                <TableCell
-                  colSpan={totalColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol}
-                  className="align-middle"
-                >
-                  <div data-pl-closing-balance-card="" className={LEDGER_CLOSING_BALANCE_CARD_ROW_CN}>
-                    <div
-                      className="flex min-w-0 flex-wrap items-center gap-1"
-                      onClick={(e) => e.stopPropagation()}
-                      onKeyDown={(e) => e.stopPropagation()}
-                    >
-                      {(
-                        [
-                          { id: "default", label: "Default" },
-                          { id: "green", label: "Green" },
-                          { id: "blue", label: "Blue" },
-                        ] as const
-                      ).map((opt) => (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          className={cn(
-                            chromeProPillCn,
-                            "h-7 rounded-full px-2.5 text-[11px] font-semibold",
-                            txnTableTone === opt.id && chromePillActive
-                          )}
-                          aria-pressed={txnTableTone === opt.id}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            applyTxnTableTone(opt.id);
-                          }}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                    <div className={LEDGER_CLOSING_BALANCE_TOTAL_CN}>
-                      {closingBalanceActions ? (
-                        <div
-                          data-pl-closing-balance-actions=""
-                          className={cn(LEDGER_CLOSING_BALANCE_ACTIONS_CN, "mr-0")}
-                          onClick={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => e.stopPropagation()}
-                        >
-                          {closingBalanceActions}
-                        </div>
-                      ) : null}
-                      <span className="shrink-0 text-right">Closing Balance</span>
-                    </div>
-                  </div>
-                </TableCell>
-                {showCol("runningBalance") && !hideBalanceColumn && <TableCell className={cn("text-right font-bold", footerClosingBalance >= 0 ? "text-green-700" : "text-red-700", ensureMinGaps && "min-w-[115px] px-[5px]")}>
-                     {formatFooterBalance(footerClosingBalance)}
-                </TableCell>}
-                <TableCell className="w-10 p-0" />
-            </TableRow>
-        </TableFooter>
-       )}
+       {!desktopSplitTableScrollGate ? renderTransactionTableFooter() : null}
       </Table>
   );
 
   return (
     <div className="pl-ledger-detail-table-shell flex min-h-0 min-w-0 flex-1 flex-col">
-      {dashboardRecentFyAttachmentGate ? (
+      {desktopSplitTableScrollGate ? (
         <div
           ref={dashboardRecentHeaderScrollRef}
-          data-pl-dashboard-recent-txn-header=""
+          {...(dashboardRecentFyAttachmentGate ? { "data-pl-dashboard-recent-txn-header": "" } : {})}
+          {...(ledgerDesktopSplitScrollGate ? { "data-pl-ledger-txn-header": "" } : {})}
           data-theme-table="transactions"
           data-pl-txn-table-tone={txnTableTone}
           className="w-full min-w-0 max-w-full shrink-0 overflow-x-auto overflow-y-hidden pl-dashboard-recent-txn-header-scroll pl-dashboard-recent-hide-hscroll"
@@ -4509,6 +4775,14 @@ export function TransactionsTable({
           </Table>
         </div>
       ) : null}
+      {ledgerDesktopSplitScrollGate ? (
+        <div
+          data-pl-ledger-txn-header-divider=""
+          aria-hidden="true"
+          className="w-full shrink-0 bg-black"
+          style={{ height: 1, minHeight: 1 }}
+        />
+      ) : null}
       <div
         ref={tableContainerRef}
         tabIndex={0}
@@ -4517,15 +4791,19 @@ export function TransactionsTable({
         data-theme-table="transactions"
         data-pl-txn-table-tone={txnTableTone}
         {...(dashboardRecentFyAttachmentGate ? { "data-pl-dashboard-recent-txn": "" } : {})}
+        {...(ledgerDesktopSplitScrollGate ? { "data-pl-ledger-txn": "" } : {})}
         className={cn(
           "w-full min-w-full pl-ledger-txn-scroll-native outline-none focus:outline-none",
-          dashboardRecentFyAttachmentGate
-            ? "min-h-0 min-w-0 max-w-full flex-1 overflow-y-auto overflow-x-auto pl-dashboard-recent-hide-hscroll [scrollbar-gutter:stable]"
+          desktopSplitTableScrollGate
+            ? cn(
+                "min-h-0 min-w-0 max-w-full flex-1 overflow-y-auto pl-dashboard-recent-hide-hscroll [scrollbar-gutter:stable]",
+                ledgerUnifiedHScrollActive ? "overflow-x-hidden" : "overflow-x-auto"
+              )
             : "overflow-x-auto",
           tableScrollBottomBorderCn
         )}
         onScroll={
-          dashboardRecentFyAttachmentGate
+          desktopSplitTableScrollGate
             ? (e) => syncDashboardRecentHorizontalScroll(e.currentTarget.scrollLeft, "body")
             : undefined
         }
@@ -4534,10 +4812,24 @@ export function TransactionsTable({
       >
         {tableContent}
       </div>
-      {dashboardRecentFyAttachmentGate ? (
+      {desktopSplitTableScrollGate && !hideFooter ? (
+        <div
+          data-pl-ledger-txn-fixed-summary=""
+          data-theme-table="transactions"
+          data-pl-txn-table-tone={txnTableTone}
+          className="w-full min-w-0 max-w-full shrink-0 overflow-hidden bg-white"
+        >
+          <Table className={ledgerTableClassName} scrollContainer={false}>
+            {recentTableColgroup}
+            {renderTransactionTableFooter()}
+          </Table>
+        </div>
+      ) : null}
+      {desktopSplitTableScrollGate && !ledgerUnifiedHScrollActive ? (
         <div
           ref={dashboardRecentFooterHScrollRef}
-          data-pl-dashboard-recent-txn-hscroll=""
+          {...(dashboardRecentFyAttachmentGate ? { "data-pl-dashboard-recent-txn-hscroll": "" } : {})}
+          {...(ledgerDesktopSplitScrollGate ? { "data-pl-ledger-txn-hscroll": "" } : {})}
           className="h-[var(--pl-ledger-txn-scroll-size)] w-full min-w-0 max-w-full shrink-0 overflow-x-auto overflow-y-hidden pl-ledger-txn-scroll-native"
           onScroll={(e) => syncDashboardRecentHorizontalScroll(e.currentTarget.scrollLeft, "footer")}
           aria-hidden
@@ -4545,7 +4837,7 @@ export function TransactionsTable({
           <div className="h-px" style={{ width: Math.max(dashboardRecentHScrollWidth, 0) }} />
         </div>
       ) : null}
-      {!dashboardRecentFyAttachmentGate ? (
+      {!desktopSplitTableScrollGate ? (
         <div className="pl-ledger-detail-empty-fill min-h-0 flex-1" aria-hidden />
       ) : null}
     </div>

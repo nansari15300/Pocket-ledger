@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import AdCalendar, { type DateRange } from "@/components/ui/ad-calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { HistoryDialog } from "@/components/vouchers/HistoryDialog";
@@ -280,7 +281,8 @@ export function LoanDetails({
             </div>
           </div>
           <div className={LEDGER_HEADER_PILL_ROW_CN}>
-            <LedgerUnapprovedFilterButton
+            <LedgerHeaderPrintButton variant="outline" onClick={() => void accountingRef.current?.print()} />
+              <LedgerUnapprovedFilterButton
               active={unapprovedOnly}
               onClick={() => setUnapprovedOnly((v) => !v)}
             />
@@ -386,17 +388,7 @@ export function LoanDetails({
               <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
               Add Note
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className={LEDGER_HEADER_PILL_ICON_CN}
-              data-theme-detail="print"
-              onClick={() => void accountingRef.current?.print()}
-              aria-label="Print accounting"
-            >
-              <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-            </Button>
+            
           </div>
         </div>
       </div>

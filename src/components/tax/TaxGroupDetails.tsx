@@ -29,6 +29,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 
@@ -76,7 +77,9 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
 import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
@@ -901,9 +904,11 @@ export function TaxGroupDetails({
   return (
     <>
       <div className="h-full">
-        <div className="h-full flex flex-col overflow-hidden">
+        <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
         {/* Header: identity + pills — Party-style single row */}
-        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
+        <LedgerTxnScrollColumn
+          header={
+<div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {onBack && (
@@ -977,6 +982,7 @@ export function TaxGroupDetails({
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
+              <LedgerHeaderPrintButton variant="outline" onClick={handlePrint} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
@@ -1044,14 +1050,14 @@ export function TaxGroupDetails({
               <Button variant="outline" size="sm" onClick={() => handleOpenNoteDialog()} className={LEDGER_HEADER_PILL_CN}>
                 <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>
-              <Button variant="outline" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN}>
-                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-              </Button>
+              
             </div>
           </div>
         </div>
-        <ScrollArea txnChrome className="flex-1">
-          <div className="py-4">
+          }
+          table={
+          <>
+          
             <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable
               transactions={paginatedTransactions}
@@ -1086,11 +1092,9 @@ export function TaxGroupDetails({
                 No transactions found for the selected period.
               </div>
             )}
-          </div>
-          <ScrollBar orientation="horizontal" />
-        </ScrollArea>
-        {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        {/* Footer — global PC shell LedgerDesktopFooter */}
+          </>
+          }
+          footer={
         <LedgerDesktopFooter
           left={
             <>
@@ -1161,7 +1165,9 @@ export function TaxGroupDetails({
           afterCount={desktopPaginationMeta.afterCount}
           totalCount={displayTransactions.length}
         />
-      </div>
+          }
+        />
+        </div>
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>
         <DialogContent className="h-[95vh] w-full max-w-3xl flex flex-col">

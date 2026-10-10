@@ -22,6 +22,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
@@ -70,7 +71,9 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { useCompany } from "@/hooks/useCompany";
 import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { EditStaffGroupDialog } from "@/components/staff/EditStaffGroupDialog";
@@ -967,8 +970,11 @@ export function StaffGroupDetails({
 
   return (
     <>
-      <div className="h-full flex flex-col overflow-hidden">
-        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
+      <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
+        {/* Table area: same layout as StaffDetails + scrollOnlyTransactions so table gets focus and one Enter opens edit (statement & bill wise) */}
+        <LedgerTxnScrollColumn
+          header={
+<div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {onBack && (
@@ -1043,6 +1049,7 @@ export function StaffGroupDetails({
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
+              <LedgerHeaderPrintButton variant="chromePill" onClick={handlePrint} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
@@ -1133,15 +1140,14 @@ export function StaffGroupDetails({
               <Button variant="chromePill" size="sm" onClick={() => handleOpenNoteDialog()} className={LEDGER_HEADER_PILL_CN}>
                 <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>
-              <Button variant="chromePill" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN}>
-                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-              </Button>
+              
             </div>
           </div>
         </div>
-        {/* Table area: same layout as StaffDetails + scrollOnlyTransactions so table gets focus and one Enter opens edit (statement & bill wise) */}
-        <div className="flex-1 flex flex-col min-h-0 overflow-x-auto">
-          <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
+          }
+          table={
+          <>
+          
             <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable
               transactions={paginatedTransactions}
@@ -1188,9 +1194,9 @@ export function StaffGroupDetails({
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">No transactions found for the selected period.</div>
             )}
-          </div>
-        </div>
-        {/* Footer - global PC shell LedgerDesktopFooter */}
+          </>
+          }
+          footer={
         <LedgerDesktopFooter
           left={
             <>
@@ -1265,6 +1271,8 @@ export function StaffGroupDetails({
           beforeCount={desktopPageLedgerStats.beforeCount}
           afterCount={desktopPageLedgerStats.afterCount}
           totalCount={displayTransactions.length}
+        />
+          }
         />
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>

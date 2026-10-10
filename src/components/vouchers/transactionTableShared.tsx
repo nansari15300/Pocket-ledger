@@ -4,7 +4,7 @@ import * as React from "react";
 import { TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, Pencil, History, CheckCircle, CheckCheck, CheckSquare, Printer, MousePointerClick, RefreshCw, Loader2, CircleOff, Trash2 } from "lucide-react";
+import { Pencil, History, CheckCircle, CheckCheck, CheckSquare, Printer, MousePointerClick, RefreshCw, Loader2, CircleOff, Trash2 } from "lucide-react";
 import { StatementCheckedRowMessageLabel } from "@/components/vouchers/StatementCheckedRowMessageLabel";
 import { statementCheckedMessageColumn } from "@/lib/statementCheckRowMessage";
 import { VoucherAttachmentFileIndicator } from "@/components/vouchers/VoucherAttachmentFileIndicator";
@@ -49,6 +49,12 @@ import {
 } from "@/lib/fiscalYearLabel";
 import { useFyOpeningPillFormat } from "@/hooks/useFyOpeningPillFormat";
 import { FyOpeningPillFormatPill } from "@/components/vouchers/FyOpeningPillFormatPill";
+import {
+  LEDGER_ENTITY_BALANCE_COL_PX,
+  LEDGER_ENTITY_TYPE_COL_PX,
+  LEDGER_TXN_BALANCE_TO_MENU_PAD_CN,
+  LEDGER_TXN_ROW_MENU_CELL_CN,
+} from "@/lib/ledgerHeaderChrome";
 import {
   FiscalPartitionClosingSummaryTableRows,
   type FiscalPartitionColumnLayout,
@@ -1353,7 +1359,13 @@ export function BillWiseLinkedDetailCells({
       <>
         <TableCell className={cn("text-center align-top py-0", ensureMinGaps && "min-w-[95px] px-[5px]")} />
         {showBalance && !hideBalanceColumn && (
-          <TableCell className={cn("text-right align-top py-0", ensureMinGaps && "min-w-[115px] px-[5px]")} />
+          <TableCell
+            className={cn(
+              "text-right align-top py-0 tabular-nums",
+              ensureMinGaps && LEDGER_TXN_BALANCE_TO_MENU_PAD_CN
+            )}
+            style={ensureMinGaps ? { minWidth: LEDGER_ENTITY_BALANCE_COL_PX } : undefined}
+          />
         )}
       </>
     );
@@ -1374,7 +1386,13 @@ export function BillWiseLinkedDetailCells({
         </div>
       </TableCell>
       {showBalance && !hideBalanceColumn && !spanBoth && (
-        <TableCell className={cn("text-right align-top py-0", ensureMinGaps && "min-w-[115px] px-[5px]")} />
+        <TableCell
+          className={cn(
+            "text-right align-top py-0 tabular-nums",
+            ensureMinGaps && LEDGER_TXN_BALANCE_TO_MENU_PAD_CN
+          )}
+          style={ensureMinGaps ? { minWidth: LEDGER_ENTITY_BALANCE_COL_PX } : undefined}
+        />
       )}
     </>
   );
@@ -1842,16 +1860,20 @@ export const TransactionRow = React.memo(
           ))}
         {showCol("type") && (
           <TableCell
-            className={cn(
-              "align-middle overflow-hidden",
-              ensureMinGaps &&
-                (spendWiseInGroupCard ||
-                isSpendWiseChild ||
-                isSpendWiseGroupFirst ||
-                typeof spendWiseGroupColorIndex === "number"
-                  ? "min-w-[112px] px-[5px]"
-                  : "min-w-[75px] px-[5px]")
-            )}
+            className={cn("align-middle overflow-visible", ensureMinGaps && "px-[5px]")}
+            style={
+              ensureMinGaps
+                ? {
+                    minWidth:
+                      spendWiseInGroupCard ||
+                      isSpendWiseChild ||
+                      isSpendWiseGroupFirst ||
+                      typeof spendWiseGroupColorIndex === "number"
+                        ? Math.max(112, LEDGER_ENTITY_TYPE_COL_PX)
+                        : LEDGER_ENTITY_TYPE_COL_PX,
+                  }
+                : undefined
+            }
           >
             {isFyOpeningRow && fyOpeningPillSplit ? (
               <FyOpeningPillFormatPill>
@@ -1859,7 +1881,7 @@ export const TransactionRow = React.memo(
                   variant="outline"
                   className={cn(
                     voucherTypePillClassName(fyOpeningDrCrSide ?? "dr"),
-                    "max-w-full whitespace-nowrap"
+                    "w-fit max-w-none shrink-0 whitespace-nowrap"
                   )}
                 >
                   {hlForColumn("type")(fyOpeningPillSplit.typePill)}
@@ -1875,11 +1897,7 @@ export const TransactionRow = React.memo(
                       : resolveTxnDrCrSide(debit, credit, balance),
                     { interCompanyReversed: isInterCompanyReversedVoucher(transaction) }
                   ),
-                  (spendWiseInGroupCard ||
-                    isSpendWiseChild ||
-                    isSpendWiseGroupFirst ||
-                    typeof spendWiseGroupColorIndex === "number") &&
-                    "max-w-full whitespace-nowrap"
+                  "w-fit max-w-none shrink-0 whitespace-nowrap"
                 )}
               >
                 {hlForColumn("type")(getDisplayType(transaction))}
@@ -1888,7 +1906,7 @@ export const TransactionRow = React.memo(
           </TableCell>
         )}
         {showCol("voucherNo") && (
-          <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined}>
+          <TableCell className={ensureMinGaps ? "min-w-[105px] px-[10px]" : undefined}>
             <span className="inline-flex max-w-full flex-wrap items-center gap-1">
               {fyOpeningPillSplit?.voucherPill ? (
                 <FyOpeningPillFormatPill>
@@ -2192,10 +2210,11 @@ export const TransactionRow = React.memo(
             return (
               <TableCell
                 className={cn(
-                  "text-right font-semibold",
+                  "text-right font-semibold tabular-nums",
                   isZeroBalance ? "text-green-700" : (displayValue >= 0 ? "text-green-700" : "text-red-700"),
-                  ensureMinGaps && "min-w-[115px] px-[5px]"
+                  ensureMinGaps && LEDGER_TXN_BALANCE_TO_MENU_PAD_CN
                 )}
+                style={ensureMinGaps ? { minWidth: LEDGER_ENTITY_BALANCE_COL_PX } : undefined}
                 {...(isZeroBalance ? { "data-cell-settled": "true" } : {})}
               >
                 {isBalanceMasked ? (
@@ -2228,7 +2247,7 @@ export const TransactionRow = React.memo(
             );
           })()}
         <TableCell
-          className="w-11 min-w-[44px] p-1 text-center align-middle"
+          className={ensureMinGaps ? LEDGER_TXN_ROW_MENU_CELL_CN : "w-11 min-w-[44px] p-1 text-center align-middle"}
           data-pl-txn-row-menu=""
           onClick={(e) => e.stopPropagation()}
         >
@@ -2239,9 +2258,14 @@ export const TransactionRow = React.memo(
                 size="icon"
                 data-pl-txn-icon-btn=""
                 data-pl-txn-row-menu-trigger=""
-                className={cn(txnTableIconBtnCn, "h-8 w-8 shrink-0")}
+                className={cn(txnTableIconBtnCn, "relative h-8 w-3 min-w-[12px] shrink-0 p-0")}
               >
-                <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                <span
+                  aria-hidden="true"
+                  className="absolute right-[4px] top-1/2 -translate-y-1/2 text-base leading-none text-muted-foreground"
+                >
+                  ⋮
+                </span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
@@ -2673,11 +2697,14 @@ export const TransactionRow = React.memo(
               </TableCell>
             )}
             {showCol("runningBalance") && !hideBalanceColumn && (
-              <TableCell className={cn("text-right", ensureMinGaps && "min-w-[115px] px-[5px]")} />
+              <TableCell
+                className={cn("text-right tabular-nums", ensureMinGaps && LEDGER_TXN_BALANCE_TO_MENU_PAD_CN)}
+                style={ensureMinGaps ? { minWidth: LEDGER_ENTITY_BALANCE_COL_PX } : undefined}
+              />
             )}
           </>
         )}
-        <TableCell className="w-10 p-0" />
+        <TableCell className={ensureMinGaps ? LEDGER_TXN_ROW_MENU_CELL_CN : "w-10 p-0"} />
       </motion.tr>
     ) : null;
 

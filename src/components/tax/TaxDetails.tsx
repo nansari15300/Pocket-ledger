@@ -76,7 +76,9 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
@@ -112,6 +114,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
@@ -1299,9 +1302,12 @@ export function TaxDetails({
   return (
     <>
       <div className="h-full">
-        <div className="h-full flex flex-col overflow-hidden">
+        <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
         {/* Header: identity + pills â€” Party-style single row */}
-        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
+        {/* TABLE AREA - flex layout so table footer (Total / Closing Balance) stays visible */}
+        <LedgerTxnScrollColumn
+          header={
+<div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {onBack && (
@@ -1361,6 +1367,7 @@ export function TaxDetails({
                 />
                   </div>
             )}
+              <LedgerHeaderPrintButton variant="outline" onClick={handlePrint} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
@@ -1452,15 +1459,13 @@ export function TaxDetails({
                   All Vouchers
                 </Button>
               )}
-              <Button variant="outline" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN}>
-                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-              </Button>
+              
             </div>
           </div>
         </div>
-        {/* TABLE AREA - flex layout so table footer (Total / Closing Balance) stays visible */}
-        <div className="flex-1 flex flex-col min-h-0 overflow-x-auto">
-          <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
+          }
+          table={
+          <>
                 <MasterAccountFreezeTxnShell
                   overlay={taxFreezeOverlay}
                 >
@@ -1512,9 +1517,9 @@ export function TaxDetails({
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">No transactions found for this tax ledger in the selected period.</div>
             )}
-          </div>
-        </div>
-        {/* Footer â€” global PC shell LedgerDesktopFooter */}
+          </>
+          }
+          footer={
         <LedgerDesktopFooter
           left={
             <>
@@ -1589,7 +1594,9 @@ export function TaxDetails({
           totalCount={searchFilteredTransactions.length}
           ledgerPresentationMode={ledgerPresentationMode}
         />
-      </div>
+          }
+        />
+        </div>
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>
         <DialogContent

@@ -37,7 +37,7 @@ export function DashboardWelcomeFooterBanner({
   const shellCn = cn(
     "col-span-full overflow-hidden relative py-1 px-2",
     lineSections
-      ? "rounded-none border-0 bg-background shadow-none dark:bg-background"
+      ? "rounded-none border-0 bg-blue-100 shadow-none dark:border-blue-800 dark:bg-blue-950"
       : cn(
           proDashboardRibbonClass(3),
           embedded

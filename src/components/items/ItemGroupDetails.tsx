@@ -50,6 +50,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 
@@ -100,7 +101,9 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
 import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
@@ -958,9 +961,11 @@ export function ItemGroupDetails({
   return (
     <>
       <div className="h-full">
-        <div className="h-full flex flex-col overflow-hidden">
+        <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
         {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
+        <LedgerTxnScrollColumn
+          header={
+<div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {onBack && (
@@ -1033,6 +1038,7 @@ export function ItemGroupDetails({
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
+              <LedgerHeaderPrintButton variant="outline" onClick={handlePrint} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
@@ -1124,14 +1130,14 @@ export function ItemGroupDetails({
               >
                 <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>
-              <Button variant="outline" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN}>
-                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-              </Button>
+              
             </div>
           </div>
         </div>
-        <ScrollArea txnChrome className="flex-1">
-          <div className="py-4">
+          }
+          table={
+          <>
+          
             <TransactionsTable
               transactions={paginatedTransactions}
               context="group"
@@ -1161,10 +1167,9 @@ export function ItemGroupDetails({
                 No transactions found for the selected period.
               </div>
             )}
-          </div>
-          <ScrollBar orientation="horizontal" />
-        </ScrollArea>
-        {/* Footer — global PC shell LedgerDesktopFooter */}
+          </>
+          }
+          footer={
         <LedgerDesktopFooter
           left={
             <>
@@ -1252,6 +1257,8 @@ export function ItemGroupDetails({
           beforeCount={desktopPaginationMeta.beforeCount}
           afterCount={desktopPaginationMeta.afterCount}
           totalCount={displayTransactions.length}
+        />
+          }
         />
       </div>
       </div>

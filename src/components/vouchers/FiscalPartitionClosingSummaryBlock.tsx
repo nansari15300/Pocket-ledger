@@ -5,6 +5,12 @@ import { TableCell } from "@/components/ui/table";
 import type { FiscalPartitionClosingSummary } from "@/lib/fiscalPartitionClosingSummary";
 import { cn } from "@/lib/utils";
 import { FyOpeningPillFormatPill } from "@/components/vouchers/FyOpeningPillFormatPill";
+import { useFyPartitionRowColor } from "@/hooks/useFyPartitionRowColor";
+import {
+  LEDGER_ENTITY_BALANCE_COL_PX,
+  LEDGER_TXN_BALANCE_TO_MENU_PAD_CN,
+  LEDGER_TXN_ROW_MENU_CELL_CN,
+} from "@/lib/ledgerHeaderChrome";
 
 const ROW_PY = "py-1"; // 4px top/bottom
 const AMOUNT_CELL = cn("text-right font-semibold tabular-nums text-sm", ROW_PY, "px-[5px]");
@@ -50,16 +56,19 @@ export function FiscalPartitionClosingSummaryBlock({
   partitionClosingEndLabel,
 }: Props) {
   const { totalDr, totalCr, closingBalance } = summary;
+  const { color: rowColor, backgroundColor } = useFyPartitionRowColor();
   const balanceText = formatSignedBalance(closingBalance, showDrCr, formatAmount);
   const cellBase = `${ROW_PY} px-2 tabular-nums leading-snug`;
 
   return (
     <div className="w-full text-xs sm:text-sm">
       <div
+        data-pl-fy-row-color={rowColor === "default" ? undefined : rowColor}
         className={cn(
           "grid w-full grid-cols-[1fr_minmax(3rem,auto)_1fr_1fr_1fr] items-center gap-x-2",
           cellBase
         )}
+        style={backgroundColor ? { backgroundColor } : undefined}
       >
       <div className="flex min-w-0 items-center justify-end gap-2 pr-1">
         {partitionClosingEndLabel ? (
@@ -109,6 +118,7 @@ export function FiscalPartitionClosingSummaryTableRows({
   partitionClosingEndLabel,
 }: TableRowsProps) {
   const { totalDr, totalCr, closingBalance } = summary;
+  const { color: rowColor, backgroundColor } = useFyPartitionRowColor();
   const balanceText = formatSignedBalance(closingBalance, showDrCr, formatAmount);
 
   const leading = Math.max(0, layout.leadingColSpan);
@@ -124,7 +134,17 @@ export function FiscalPartitionClosingSummaryTableRows({
   const rowCn = cn(LEDGER_CLOSING_ROW, rowClassName);
 
   return (
-    <TableRowComponent data-row="fiscal-partition-total" className={rowCn} onClick={stop}>
+    <TableRowComponent
+      data-row="fiscal-partition-total"
+      data-pl-fy-row-color={rowColor === "default" ? undefined : rowColor}
+      className={rowCn}
+      style={
+        backgroundColor
+          ? ({ "--pl-fy-partition-row-bg": backgroundColor } as React.CSSProperties)
+          : undefined
+      }
+      onClick={stop}
+    >
       {leading > 0 ? (
         <TableCell colSpan={leading} className={cn(ROW_PY, "px-2")}>
           <div className="flex min-w-0 items-center justify-end gap-2">
@@ -156,13 +176,16 @@ export function FiscalPartitionClosingSummaryTableRows({
         <TableCell
           className={cn(
             AMOUNT_CELL,
+            LEDGER_TXN_BALANCE_TO_MENU_PAD_CN,
+            "tabular-nums",
             closingBalance >= 0 ? "text-green-700" : "text-red-700"
           )}
+          style={{ minWidth: LEDGER_ENTITY_BALANCE_COL_PX }}
         >
           {balanceText}
         </TableCell>
       ) : null}
-      {menuCol > 0 ? <TableCell className="w-10 p-0" /> : null}
+      {menuCol > 0 ? <TableCell className={LEDGER_TXN_ROW_MENU_CELL_CN} /> : null}
     </TableRowComponent>
   );
 }

@@ -314,17 +314,9 @@ function canRememberCompanyUsername(company: CompanyData, userEmail?: string | n
 
 function handleRememberUsernameCheckboxChange(
   checked: boolean,
-  typedUsername: string,
-  companyId: string,
-  firebaseUid: string | undefined,
-  userEmail: string | null | undefined,
   setRemember: (v: boolean) => void
 ): void {
   setRemember(checked);
-  const typed = typedUsername.trim();
-  if (checked && typed) {
-    saveRememberedSharedUnlockUsername(firebaseUid, companyId, typed, userEmail);
-  }
 }
 
 async function withShowCompaniesTimeout<T>(work: Promise<T>, gateId: string, source: string): Promise<T> {
@@ -1177,7 +1169,8 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     const base = usePlServerCompanyMerge
       ? allCompanies
       : allCompanies.filter((c) => !isServerGateCompany(c));
-    const merged = usePlServerCompanyMerge ? mergePlServerSharedCompaniesIntoRegistry(base) : base;
+    const mergedRaw = usePlServerCompanyMerge ? mergePlServerSharedCompaniesIntoRegistry(base) : base;
+    const merged = mergedRaw.map((c) => ({ ...c, isOwned: Boolean(c.isOwned) }));
     const filtered = applyAdminPanelCompanyListFilter(merged);
     return withAdminPanelCompanyInSelectorList(filtered, {
       include: showAdminPanelInSelector,
@@ -1843,7 +1836,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           }
         }}
       >
-        <AlertDialogContent className="flex h-[90dvh] max-h-[90dvh] w-[calc(100%-8px)] max-w-md flex-col gap-4 overflow-hidden rounded-2xl supports-[not(height:1dvh)]:h-[90vh] supports-[not(height:1dvh)]:max-h-[90vh]">
+        <AlertDialogContent className="flex max-h-[90dvh] w-[calc(100%-8px)] max-w-md flex-col gap-4 overflow-hidden rounded-2xl supports-[not(height:1dvh)]:max-h-[90vh]">
           <AlertDialogHeader className="shrink-0">
             <AlertDialogTitle>
               {companyToUnlock && isOfflineCompanyStorage(companyToUnlock)
@@ -1884,7 +1877,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-0.5 [-webkit-overflow-scrolling:touch]">
+          <div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain pr-0.5 [-webkit-overflow-scrolling:touch]">
             {companyToUnlock ? (
               <CompanyUnlockContextPickers
                 companies={unlockPickerCompanies}
@@ -1966,10 +1959,6 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                               onCheckedChange={(v) =>
                                 handleRememberUsernameCheckboxChange(
                                   v === true,
-                                  usernameInput,
-                                  companyToUnlock.id,
-                                  user?.uid,
-                                  user?.email,
                                   setRememberSharedUsername
                                 )
                               }
@@ -2521,7 +2510,8 @@ export function CompanyActions({
     const base = usePlServerCompanyMerge
       ? companies
       : companies.filter((c) => !isServerGateCompany(c));
-    const merged = usePlServerCompanyMerge ? mergePlServerSharedCompaniesIntoRegistry(base) : base;
+    const mergedRaw = usePlServerCompanyMerge ? mergePlServerSharedCompaniesIntoRegistry(base) : base;
+    const merged = mergedRaw.map((c) => ({ ...c, isOwned: Boolean(c.isOwned) }));
     const filtered = applyAdminPanelCompanyListFilter(merged);
     return withAdminPanelCompanyInSelectorList(filtered, {
       include: showAdminPanelInSelector,
@@ -2670,6 +2660,8 @@ export function CompanyActions({
     () => Boolean(companyId && selectorCompanies.some((c) => companyRowMatchesSelectionId(c, companyId))),
     [companyId, selectorCompanies]
   );
+  /** Missing selector row can persist briefly; clear a given selection only once to avoid clear/auto-select loops. */
+  const missingSelectionClearAttemptRef = useRef<string | null>(null);
   const activeCompany =
     (companyId && contextCompany && companyRowMatchesSelectionId(contextCompany, companyId)
       ? contextCompany
@@ -2706,13 +2698,19 @@ export function CompanyActions({
 
   useEffect(() => {
     if (uploadLocked) return;
+    // Keep the last attempted id across the transient null render; otherwise
+    // null -> auto-select same id -> clear repeats forever.
     if (!companyId) return;
-    if (selectedCompanyIsVisible) return;
+    if (selectedCompanyIsVisible) {
+      missingSelectionClearAttemptRef.current = null;
+      return;
+    }
     const hiddenServerSelection =
       !usePlServerCompanyMerge &&
       ((contextCompany?.id === companyId && isServerGateCompany(contextCompany)) ||
         companies.some((c) => c.id === companyId && isServerGateCompany(c)));
-    if (!hiddenServerSelection) {
+    if (!hiddenServerSelection && missingSelectionClearAttemptRef.current !== companyId) {
+      missingSelectionClearAttemptRef.current = companyId;
       // PL gate requires allowlisted reason — otherwise clear is a no-op and stale company stays open.
       clearCompanyId({ force: true, reason: "user_clear" });
     }
@@ -2793,6 +2791,10 @@ export function CompanyActions({
   const companyTriggerLabel =
     companyDisplayName(activeCompany) ||
     (!companies?.length ? "No company — add one" : "Select company");
+  const showTrailingCompanyActions =
+    (canCreateAnyCompany && listTab !== "online") ||
+    Boolean(activeCompany?.isOwned) ||
+    Boolean(activeCompany && isServerGateCompany(activeCompany));
 
   return (
     <>
@@ -2827,8 +2829,14 @@ export function CompanyActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuPortal>
-        <DropdownMenuContent className="w-[min(96vw,560px)] max-h-[min(70vh,520px)] overflow-x-auto overflow-y-auto">
-          <DropdownMenuGroup className="p-2">
+        <DropdownMenuContent
+          data-pl-company-selector-popup=""
+          className={cn(
+            "w-[min(96vw,560px)] max-h-[80dvh] overflow-x-auto overflow-y-auto supports-[not(height:1dvh)]:max-h-[80vh]",
+            listTab === "online" && !showTrailingCompanyActions && "pb-0"
+          )}
+        >
+          <DropdownMenuGroup className={cn("p-2", listTab === "online" && !showTrailingCompanyActions && "pb-0")}>
               {showAdminPanelInSelector ? (
                 <AdminPanelCompanySelectorSection
                   compact
@@ -3091,7 +3099,11 @@ export function CompanyActions({
                 </>
               ) : (
                 <div
-                  className="mt-2 rounded-md bg-muted/20 p-1.5"
+                  data-pl-company-selector-online-list=""
+                  className={cn(
+                    "mt-2 rounded-md bg-muted/20 p-1.5",
+                    !showTrailingCompanyActions && "pb-0"
+                  )}
                   onPointerDown={(e) => e.preventDefault()}
                   onClick={(e) => e.stopPropagation()}
                 >
@@ -3100,6 +3112,23 @@ export function CompanyActions({
                     companies={onlineList}
                     activeCompanyId={companyId}
                     onLogoutCompany={handleLogoutCompany}
+                  leadingActions={
+                    canCreateAnyCompany ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-1.5"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          router.push("/company/create");
+                        }}
+                      >
+                        <PlusCircle className="mr-2 h-4 w-4" />
+                        Add Company
+                      </Button>
+                    ) : null
+                  }
                     onSelectCompany={(c) => {
                       setMenuOpen(false);
                       void handleSelectCompany(c);
@@ -3110,10 +3139,10 @@ export function CompanyActions({
               </>
               ) : null}
             </DropdownMenuGroup>
-          {!adminLedgerMode ? (
+          {!adminLedgerMode && showTrailingCompanyActions ? (
           <>
           <DropdownMenuSeparator />
-          {canCreateAnyCompany ? (
+          {canCreateAnyCompany && listTab !== "online" ? (
             <DropdownMenuGroup>
               <DropdownMenuItem onSelect={() => router.push("/company/create")}>
                 <PlusCircle className="mr-2 h-4 w-4" />
@@ -3198,7 +3227,7 @@ export function CompanyActions({
           }
         }}
       >
-        <AlertDialogContent className="flex h-[90dvh] max-h-[90dvh] w-[calc(100%-8px)] max-w-md flex-col gap-4 overflow-hidden rounded-2xl supports-[not(height:1dvh)]:h-[90vh] supports-[not(height:1dvh)]:max-h-[90vh]">
+        <AlertDialogContent className="flex max-h-[90dvh] w-[calc(100%-8px)] max-w-md flex-col gap-4 overflow-hidden rounded-2xl supports-[not(height:1dvh)]:max-h-[90vh]">
           <AlertDialogHeader className="shrink-0">
             <AlertDialogTitle>
               {companyToUnlock && isOfflineCompanyStorage(companyToUnlock)
@@ -3238,7 +3267,7 @@ export function CompanyActions({
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-0.5 [-webkit-overflow-scrolling:touch]">
+          <div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain pr-0.5 [-webkit-overflow-scrolling:touch]">
             {companyToUnlock ? (
               <CompanyUnlockContextPickers
                 companies={unlockPickerCompanies}
@@ -3320,10 +3349,6 @@ export function CompanyActions({
                               onCheckedChange={(v) =>
                                 handleRememberUsernameCheckboxChange(
                                   v === true,
-                                  usernameInput,
-                                  companyToUnlock.id,
-                                  user?.uid,
-                                  user?.email,
                                   setRememberSharedUsername
                                 )
                               }

@@ -20,6 +20,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import {
   sortTransactionsWithFiscalMergeForCompany,
@@ -88,7 +89,9 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdCalendar from "@/components/ui/ad-calendar";
 import { format, startOfDay } from "date-fns";
@@ -1095,9 +1098,11 @@ export default function ItemDetails({
   );
 
   const renderDesktopView = () => (
-     <div className="h-full flex flex-col">
+     <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
       {/* Header: identity + pills — Party-style single row */}
-      <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
+      <LedgerTxnScrollColumn
+          header={
+<div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
         <div className={LEDGER_HEADER_OUTER_ROW_CN}>
           <div className={LEDGER_HEADER_IDENTITY_CN}>
             <div className={LEDGER_HEADER_AVATAR_CN}>
@@ -1144,7 +1149,8 @@ export default function ItemDetails({
             )}
           </div>
           <div className={LEDGER_HEADER_PILL_ROW_CN}>
-            <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
+            <LedgerHeaderPrintButton variant="outline" onClick={handlePrint} />
+              <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
               <BsDatePicker
                 isRange
@@ -1236,26 +1242,13 @@ export default function ItemDetails({
                 All Vouchers
               </Button>
             )}
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={handlePrint}
-              className={LEDGER_HEADER_PILL_ICON_CN}
-            >
-              <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-            </Button>
+            
           </div>
         </div>
       </div>
-
-      {/* --- TRANSACTIONS TABLE --- */}
-        <ScrollArea txnChrome className="flex-1">
-            <div className="py-4">
-                <TransactionsTable {...itemTransactionsTableProps} />
-            </div>
-            <ScrollBar orientation="horizontal" />
-        </ScrollArea>
-         {/* Footer - global PC shell LedgerDesktopFooter */}
+          }
+          table={<TransactionsTable {...itemTransactionsTableProps} />}
+        footer={
          <LedgerDesktopFooter
            left={
              <>
@@ -1343,6 +1336,8 @@ export default function ItemDetails({
            afterCount={desktopPageLedgerStats.afterCount}
            totalCount={displayTransactions.length}
          />
+        }
+      />
     </div>
   );
 

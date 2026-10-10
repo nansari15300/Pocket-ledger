@@ -23,6 +23,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import {
   sortTransactionsWithFiscalMergeForCompany,
@@ -67,7 +68,10 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
+  LEDGER_TXN_TABLE_HOST_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { useCompany } from "@/hooks/useCompany";
 import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { EditAccountGroupDialog } from "@/components/bank-cash/EditAccountGroupDialog";
@@ -1684,9 +1688,12 @@ export function AccountGroupDetails({
 
   return (
     <>
-      <div className="h-full flex flex-col overflow-hidden">
+      <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
         {/* Header: identity + pills — Party-style single row */}
-        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
+        {/* scroll-touch for APK/WebView touch scroll */}
+        <LedgerTxnScrollColumn
+          header={
+<div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {onBack && (
@@ -1777,6 +1784,7 @@ export function AccountGroupDetails({
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
+              <LedgerHeaderPrintButton variant="chromePill" onClick={handlePrint} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
@@ -1864,15 +1872,13 @@ export function AccountGroupDetails({
               <Button variant="chromePill" size="sm" onClick={() => handleOpenNoteDialog()} className={LEDGER_HEADER_PILL_CN}>
                 <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>
-              <Button variant="chromePill" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN}>
-                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-              </Button>
+              
             </div>
           </div>
         </div>
-        {/* scroll-touch for APK/WebView touch scroll */}
-        <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-auto pl-ledger-txn-scroll-native scroll-touch">
-          <div className={cn("py-4 min-w-0", spendWiseView && "p-[2px]")}>
+          }
+          table={
+          <div className={cn(LEDGER_TXN_TABLE_HOST_CN, spendWiseView && "p-[2px]")}>
             {/* Bank/Cash group pages use their own Statement/Spend-wise toggle, so shared bill-wise preference must stay off here. */}
             <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
             <TransactionsTable
@@ -1934,8 +1940,8 @@ export function AccountGroupDetails({
               </div>
             )}
           </div>
-        </div>
-        {/* Footer — global PC shell LedgerDesktopFooter */}
+          }
+          footer={
         <LedgerDesktopFooter
           left={
             <>
@@ -2059,6 +2065,8 @@ export function AccountGroupDetails({
           beforeCount={ledgerFooterPagingCounts.beforeCount}
           afterCount={ledgerFooterPagingCounts.afterCount}
           totalCount={ledgerFooterPagingCounts.totalCount}
+        />
+          }
         />
       </div>
      <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>

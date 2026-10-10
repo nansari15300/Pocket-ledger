@@ -1139,7 +1139,7 @@ body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
 }
 [data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-total"] > td {
   border-top: 1px solid #000 !important;
-  border-bottom: 1px solid #000 !important;
+  border-bottom: none !important;
   border-left-width: 0 !important;
   border-right-width: 0 !important;
   background-image: none !important;
@@ -1218,6 +1218,75 @@ body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
 .balance-sheet-ledger-popup [data-theme-table="transactions"] tbody tr[data-row="opening-balance"] > td:last-child::after {
   content: none !important;
   display: none !important;
+}
+
+/* Entity ledger txn page: FY jaisa full-width H-lines — har td border-bottom (::after band na ho). */
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-book"]:not(:has(+ tr[data-row="opening-balance-narration"])) > td,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not([data-pl-spend-wise-opening]):not(:has(+ tr[data-row="opening-balance-narration"])):not(:has(+ tr[data-row="opening-balance-linked"])):not(:has(+ tr[data-row="opening-balance-gap"])) > td,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not([data-pl-spend-wise-opening]):has(+ tr[data-row="opening-balance-gap"]) > td,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"]:not([data-pl-spend-wise-opening]) > td,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-linked"]:not([data-pl-spend-wise-opening]) > td,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance"]:not([data-pl-spend-wise-opening]) > td,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"]:has(tfoot[data-pl-txn-split-scroll-footer]) tbody > tr:last-child > td {
+  border-bottom: 1px solid #000 !important;
+  border-left-width: 0 !important;
+  border-right-width: 0 !important;
+  box-shadow: none !important;
+  background-image: none !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]),
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]),
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-book"]:not(:has(+ tr[data-row="opening-balance-narration"])),
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not(:has(+ tr[data-row="opening-balance-narration"])):not(:has(+ tr[data-row="opening-balance-linked"])),
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"]:not([data-pl-spend-wise-opening]),
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-linked"]:not([data-pl-spend-wise-opening]),
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance"]:not([data-pl-spend-wise-opening]),
+[data-pl-ledger-txn-page] [data-theme-table="transactions"]:has(tfoot[data-pl-txn-split-scroll-footer]) tbody > tr:last-child {
+  border-bottom-width: 0 !important;
+  border-bottom-color: transparent !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:has(+ tr[data-row="opening-balance-narration"]) > td,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:has(+ tr[data-row="opening-balance-linked"]) > td,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-book"]:has(+ tr[data-row="opening-balance-narration"]) > td {
+  border-bottom-width: 0 !important;
+  border-bottom-color: transparent !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.transaction-main-row:has(+ tr[data-row="fiscal-partition-total"]) > td,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.transaction-main-row:has(+ tr.narration-row + tr[data-row="fiscal-partition-total"]) > td,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.narration-row:has(+ tr[data-row="fiscal-partition-total"]) > td {
+  border-bottom-width: 0 !important;
+  border-bottom-color: transparent !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.transaction-main-row > td:last-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row > td:last-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.transaction-main-row > td:first-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row > td:first-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"] > td:last-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"] > td:first-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"] > td:last-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"] > td:first-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-linked"] > td:last-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-linked"] > td:first-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance"] > td:last-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="opening-balance"] > td:first-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"]:has(tfoot[data-pl-txn-split-scroll-footer]) tbody > tr:last-child > td:last-child::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"]:has(tfoot[data-pl-txn-split-scroll-footer]) tbody > tr:last-child > td:first-child::after {
+  content: none !important;
+  display: none !important;
+}
+/* FY start label — chhoti ::after / extra top line hatao (sirf full-width total bottom + label bottom). */
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr:has(+ tr[data-row="fiscal-partition-label"]) > td::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-label"] > td::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-total"] > td::after {
+  content: none !important;
+  display: none !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-total"] + tr[data-row="fiscal-partition-label"] > td {
+  border-top: none !important;
+  border-top-width: 0 !important;
+  box-shadow: none !important;
 }
 
 /* BS / Outstanding ledger popup — fill height, no empty-fill compositor gap; crisp txn text */
@@ -2856,6 +2925,34 @@ button.day_selected.is-today.has-transactions {
     transform: none;
     background: #000;
     pointer-events: none;
+  }
+  [data-pl-ledger-txn-page] [data-theme-table="transactions"] table th,
+  [data-pl-ledger-txn-page] [data-theme-table="transactions"] table td,
+  [data-pl-ledger-txn-page] [data-theme-table="transactions"] table tr {
+    border-width: 0 !important;
+  }
+  [data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody > tr {
+    border-bottom-width: 0 !important;
+  }
+  [data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td,
+  [data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td {
+    border-bottom-width: 1px !important;
+    border-bottom-color: #000 !important;
+  }
+  [data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-total"] > td {
+    border-top-width: 1px !important;
+    border-top-color: #000 !important;
+    border-bottom-width: 1px !important;
+    border-bottom-color: #000 !important;
+  }
+  [data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-label"] > td {
+    border-top-width: 0 !important;
+    border-bottom-width: 1px !important;
+    border-bottom-color: #000 !important;
+  }
+  [data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody > tr > td::after {
+    content: none !important;
+    display: none !important;
   }
   [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td {
     padding-bottom: 0.25rem !important;
@@ -7504,7 +7601,27 @@ body.dark
 }
 [data-pl-dashboard-recent-shell][data-pl-dashboard-recent-line-sections]
   [data-pl-dashboard-recent-chrome] {
-  background-color: hsl(var(--background)) !important;
+  background-color: #dbeafe !important;
+}
+body.dark
+  [data-pl-dashboard-recent-shell][data-pl-dashboard-recent-line-sections]
+  [data-pl-dashboard-recent-chrome],
+.dark
+  [data-pl-dashboard-recent-shell][data-pl-dashboard-recent-line-sections]
+  [data-pl-dashboard-recent-chrome] {
+  background-color: #172554 !important;
+}
+[data-pl-dashboard-footer-ribbon][data-pl-dashboard-recent-footer-ribbon]
+  > div:first-child {
+  background-color: #dbeafe !important;
+}
+body.dark
+  [data-pl-dashboard-footer-ribbon][data-pl-dashboard-recent-footer-ribbon]
+  > div:first-child,
+.dark
+  [data-pl-dashboard-footer-ribbon][data-pl-dashboard-recent-footer-ribbon]
+  > div:first-child {
+  background-color: #172554 !important;
 }
 [data-pl-dashboard-recent-shell] .pl-ledger-detail-table-shell,
 [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn],
@@ -7604,6 +7721,521 @@ body.dark [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header]
 [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] thead.pl-dashboard-recent-sticky-thead {
   border-bottom-width: 0 !important;
 }
+
+/* Ledger entity pages (party, bank, staff, …): ribbon + table + footer one H-scroll; split thead + body V-scroll */
+[data-pl-ledger-txn-page] {
+  --pl-ledger-txn-edge-gap: 2px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  padding-right: var(--pl-ledger-txn-edge-gap) !important;
+}
+[data-pl-ledger-txn-page] > .pl-ledger-header-ribbon-wrap,
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-txn-scroll-header .pl-ledger-header-ribbon-wrap {
+  padding-top: 0 !important;
+  margin-top: 0;
+  width: 100%;
+  box-sizing: border-box;
+  border-bottom-width: 0 !important;
+  border-bottom: none !important;
+}
+[data-pl-ledger-txn-page] > .pl-ledger-header-ribbon-wrap {
+  max-width: 100%;
+}
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-txn-scroll-header .pl-ledger-header-ribbon-wrap {
+  max-width: none;
+  overflow-x: visible !important;
+  overflow-y: visible;
+}
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-txn-scroll-header .pl-ledger-header-outer-row {
+  min-width: 100%;
+  width: max-content;
+  max-width: none;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-header],
+[data-pl-ledger-txn-page] [data-pl-ledger-txn],
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-hscroll] {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+[data-pl-ledger-txn-page] > .pl-ledger-desktop-footer-shell {
+  padding-left: var(--pl-ledger-txn-edge-gap) !important;
+  padding-right: var(--pl-ledger-txn-edge-gap) !important;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+/* Detail column height only — do NOT set display:flex on [data-master-detail-layout] (breaks 25/75 grid). */
+main:has([data-pl-ledger-txn-page]) {
+  scrollbar-gutter: auto !important;
+}
+main:has([data-pl-ledger-txn-page]) [data-master-detail-layout="25-75"] > div:last-child {
+  min-height: 0;
+  overflow: hidden;
+}
+[data-pl-ledger-txn-page] .pl-ledger-txn-table-host {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-header] {
+  border-bottom: 1px solid #000 !important;
+  border-bottom-width: 1px !important;
+  box-sizing: border-box;
+  box-shadow: none !important;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-header] table,
+[data-pl-ledger-txn-page] [data-pl-ledger-txn] table {
+  width: 100%;
+  table-layout: fixed;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-header] thead tr,
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-header] thead th {
+  border-bottom-width: 0 !important;
+  border-bottom: none !important;
+  box-shadow: none !important;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn] tbody > tr:first-child > td {
+  border-top-width: 0 !important;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn] {
+  padding-top: 0;
+  padding-left: 0;
+  box-sizing: border-box;
+  flex: 1 1 0;
+  min-height: 0;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-header] .pl-dashboard-recent-sticky-thead th,
+[data-pl-ledger-txn-page] [data-pl-ledger-txn] .pl-dashboard-recent-sticky-thead th {
+  background-color: #e5e7eb !important;
+  box-shadow: none !important;
+}
+body.dark [data-pl-ledger-txn-page] [data-pl-ledger-txn-header] .pl-dashboard-recent-sticky-thead th,
+body.dark [data-pl-ledger-txn-page] [data-pl-ledger-txn] .pl-dashboard-recent-sticky-thead th,
+.dark [data-pl-ledger-txn-page] [data-pl-ledger-txn-header] .pl-dashboard-recent-sticky-thead th,
+.dark [data-pl-ledger-txn-page] [data-pl-ledger-txn] .pl-dashboard-recent-sticky-thead th {
+  background-color: #374151 !important;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-header] thead.pl-dashboard-recent-sticky-thead tr,
+[data-pl-ledger-txn-page] [data-pl-ledger-txn] thead.pl-dashboard-recent-sticky-thead tr {
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-header] thead.pl-dashboard-recent-sticky-thead th,
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-header] thead.pl-dashboard-recent-sticky-thead {
+  border-bottom-width: 0 !important;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-hscroll] {
+  border-top: none !important;
+}
+[data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn-hscroll] {
+  display: none !important;
+}
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-txn-scroll-host-inner {
+  width: max(100%, calc(var(--pl-ledger-txn-table-min-px, 0) * 1px));
+}
+[data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn-header] table,
+[data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn] table {
+  width: max(100%, calc(var(--pl-ledger-txn-table-min-px, 0) * 1px));
+}
+[data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn] {
+  overflow-x: hidden !important;
+}
+/* Row H-lines: first-cell anchor + measured table width (last-cell 10000px cap missed Date col). */
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"]:not([data-pl-spend-wise-opening]) > td:last-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-linked"]:not([data-pl-spend-wise-opening]) > td:last-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance"]:not([data-pl-spend-wise-opening]) > td:last-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not([data-pl-spend-wise-opening]):not(:has(+ tr[data-row="opening-balance-narration"])):not(:has(+ tr[data-row="opening-balance-linked"])):not(:has(+ tr[data-row="opening-balance-gap"])) > td:last-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not([data-pl-spend-wise-opening]):has(+ tr[data-row="opening-balance-gap"]) > td:last-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"]:not([data-pl-spend-wise-opening]):has(+ tr[data-row="opening-balance-gap"]) > td:last-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td:last-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td:last-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"]:has(tfoot[data-pl-txn-split-scroll-footer]) tbody > tr:last-child > td:last-child::after {
+  content: none !important;
+  display: none !important;
+}
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"]:not([data-pl-spend-wise-opening]) > td:first-child,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-linked"]:not([data-pl-spend-wise-opening]) > td:first-child,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance"]:not([data-pl-spend-wise-opening]) > td:first-child,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not([data-pl-spend-wise-opening]):not(:has(+ tr[data-row="opening-balance-narration"])):not(:has(+ tr[data-row="opening-balance-linked"])):not(:has(+ tr[data-row="opening-balance-gap"])) > td:first-child,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not([data-pl-spend-wise-opening]):has(+ tr[data-row="opening-balance-gap"]) > td:first-child,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"]:not([data-pl-spend-wise-opening]):has(+ tr[data-row="opening-balance-gap"]) > td:first-child,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td:first-child,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td:first-child,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"]:has(tfoot[data-pl-txn-split-scroll-footer]) tbody > tr:last-child > td:first-child {
+  position: relative;
+  overflow: visible !important;
+}
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"]:not([data-pl-spend-wise-opening]) > td:first-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-linked"]:not([data-pl-spend-wise-opening]) > td:first-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance"]:not([data-pl-spend-wise-opening]) > td:first-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not([data-pl-spend-wise-opening]):not(:has(+ tr[data-row="opening-balance-narration"])):not(:has(+ tr[data-row="opening-balance-linked"])):not(:has(+ tr[data-row="opening-balance-gap"])) > td:first-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not([data-pl-spend-wise-opening]):has(+ tr[data-row="opening-balance-gap"]) > td:first-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"]:not([data-pl-spend-wise-opening]):has(+ tr[data-row="opening-balance-gap"]) > td:first-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td:first-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td:first-child::after,
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"]:has(tfoot[data-pl-txn-split-scroll-footer]) tbody > tr:last-child > td:first-child::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 1px;
+  width: calc(var(--pl-ledger-txn-table-min-px, 0) * 1px);
+  transform: none;
+  background: #000;
+  pointer-events: none;
+}
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-desktop-footer-shell {
+  overflow-x: hidden !important;
+  overflow-y: visible;
+}
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-desktop-footer-shell .pl-ledger-footer-scroll {
+  overflow-x: hidden !important;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-desktop-footer-shell .pl-ledger-footer-scroll::-webkit-scrollbar {
+  display: none;
+  height: 0;
+  width: 0;
+}
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-desktop-footer-shell > div {
+  flex-wrap: wrap;
+  min-width: 0;
+  width: 100%;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn] tbody > tr.transaction-main-row:first-child > td {
+  border-top-width: 0 !important;
+}
+[data-pl-ledger-txn-page] .pl-ledger-detail-table-shell {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+}
+
+/* Split-scroll txn table — 1px header line; compact Total row; no double footer line on menu col */
+[data-pl-ledger-txn-header] thead.pl-dashboard-recent-sticky-thead th,
+[data-pl-dashboard-recent-txn-header] thead.pl-dashboard-recent-sticky-thead th {
+  border-bottom-width: 0 !important;
+  box-shadow: none !important;
+}
+[data-pl-ledger-txn-header] thead.pl-dashboard-recent-sticky-thead tr,
+[data-pl-dashboard-recent-txn-header] thead.pl-dashboard-recent-sticky-thead tr {
+  border-bottom-width: 0 !important;
+}
+[data-theme-table="transactions"] tfoot[data-pl-txn-split-scroll-footer] {
+  border-top: none !important;
+  border-top-width: 0 !important;
+  border-bottom: 0 !important;
+}
+[data-theme-table="transactions"] tfoot[data-pl-txn-split-scroll-footer] tr[data-pl-txn-footer-total-row] > td {
+  padding-top: 3px !important;
+  padding-bottom: 2px !important;
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+}
+[data-theme-table="transactions"] tfoot[data-pl-txn-split-scroll-footer] tr[data-pl-txn-footer-total-row] > td.w-10,
+[data-theme-table="transactions"] tfoot[data-pl-txn-split-scroll-footer] tr[data-pl-txn-footer-total-row] > td:last-child {
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+}
+[data-theme-table="transactions"] tfoot[data-pl-txn-split-scroll-footer] tr[data-pl-txn-footer-total-row] > td:last-child::after,
+[data-theme-table="transactions"] tfoot[data-pl-txn-split-scroll-footer] tr[data-pl-txn-footer-closing-row] > td:last-child::after,
+[data-theme-table="transactions"] tfoot[data-pl-txn-split-scroll-footer] tr[data-pl-txn-footer-closing-row] > td.w-10 {
+  content: none !important;
+  display: none !important;
+  border: none !important;
+}
+[data-theme-table="transactions"] tfoot[data-pl-txn-split-scroll-footer] > tr {
+  border-width: 0 !important;
+}
+[data-theme-table="transactions"] tfoot[data-pl-txn-split-scroll-footer] tr[data-pl-txn-footer-closing-row] {
+  border-top: 1px solid #000 !important;
+  border-bottom: none !important;
+}
+[data-theme-table="transactions"] tfoot[data-pl-txn-split-scroll-footer] tr[data-pl-txn-footer-closing-row] > td {
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+}
+/* Last txn row → Total: full-width 1px black (same ::after as other rows; tfoot top off) */
+[data-theme-table="transactions"]:has(tfoot[data-pl-txn-split-scroll-footer]) tbody > tr:last-child {
+  border-bottom-width: 0 !important;
+}
+[data-theme-table="transactions"]:has(tfoot[data-pl-txn-split-scroll-footer])
+  tbody
+  > tr:last-child
+  > td:last-child {
+  position: relative;
+  overflow: visible !important;
+}
+[data-theme-table="transactions"]:has(tfoot[data-pl-txn-split-scroll-footer])
+  tbody
+  > tr:last-child
+  > td:last-child::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  width: 10000px;
+  transform: none;
+  background: #000 !important;
+  pointer-events: none;
+}
+
+/* Table-cell pseudo bands are unreliable in Chromium table layout.
+   Use a crisp inset 1px line; it does not add layout width or stack borders. */
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td,
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td {
+  border-bottom-width: 0 !important;
+  box-shadow: inset 0 -1px 0 #000 !important;
+}
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:has(+ .narration-row)
+  > td {
+  box-shadow: none !important;
+}
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row))
+  > td:first-child::after,
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row
+  > td:first-child::after {
+  content: none !important;
+  display: none !important;
+}
+
+/* Prior/current FY parity: opaque 1px line in every cell (inset shadow tinted on old-FY stripes). */
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td,
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td {
+  position: relative;
+  border-bottom-width: 0 !important;
+  box-shadow: none !important;
+}
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td::after,
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto !important;
+  height: 1px !important;
+  background-color: #000 !important;
+  pointer-events: none;
+}
+
+/* Overdue keeps its own data/filter logic; visually match the shared Bill Wise ledger table. */
+html body [data-pl-overdue-billwise-ui] [data-theme-table="transactions"] thead,
+html body [data-pl-overdue-billwise-ui] [data-theme-table="transactions"] thead tr {
+  border-width: 0 !important;
+}
+html body [data-pl-overdue-billwise-ui] [data-theme-table="transactions"] thead th {
+  border-width: 0 !important;
+  background-color: #e5e7eb !important;
+  box-shadow:
+    inset 0 1px 0 #000,
+    inset 0 -1px 0 #000 !important;
+}
+html.dark body [data-pl-overdue-billwise-ui] [data-theme-table="transactions"] thead th {
+  background-color: #374151 !important;
+}
+html body [data-pl-overdue-billwise-ui] [data-pl-ledger-txn-fixed-summary] {
+  background-color: rgb(219 234 254 / 0.8) !important;
+}
+
+/* Header bottom: table's old 2px utility is disabled above, so one wrapper line is safe. */
+html body [data-pl-ledger-txn-page] [data-pl-ledger-txn-header] {
+  border-bottom: none !important;
+  border-bottom-width: 0 !important;
+  box-shadow: inset 0 1px 0 #000 !important;
+}
+html body [data-pl-ledger-txn-page] [data-pl-ledger-txn-header] thead th {
+  border-top-width: 0 !important;
+  border-top: none !important;
+  border-bottom-width: 0 !important;
+  border-bottom: none !important;
+  box-shadow: none !important;
+}
+
+/* Split header/body overlap can cover the header's own bottom edge.
+   Draw the divider inside the first body row instead, where it cannot be clipped. */
+html body
+  [data-pl-ledger-txn-page]
+  [data-pl-ledger-txn]
+  tbody
+  > tr:first-child
+  > td {
+  border-top-width: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Continue each transaction separator through the compact ⋮ cell. */
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td:last-child,
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td:last-child {
+  box-shadow: inset 0 -1px 0 #000 !important;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn] {
+  border-bottom-width: 0 !important;
+  border-bottom: none !important;
+}
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-desktop-footer-shell,
+[data-pl-ledger-txn-page] .pl-ledger-desktop-footer-shell {
+  border-top: 1px solid #000 !important;
+  border-top-color: #000 !important;
+}
+
+/* Ledger txn page: sirf td border-bottom — koi ::after / last-row global band na (2px double fix) */
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody > tr > td::after,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tfoot > tr > td::after {
+  content: none !important;
+  display: none !important;
+  height: 0 !important;
+  width: 0 !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"]:has(tfoot[data-pl-txn-split-scroll-footer]) tbody > tr:last-child > td {
+  border-bottom: 1px solid #000 !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] thead,
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] thead tr {
+  border-width: 0 !important;
+  border-bottom-width: 0 !important;
+  border-bottom: none !important;
+  box-shadow: none !important;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-header] {
+  border-top: none !important;
+  border-bottom: none !important;
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+  box-shadow: none !important;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-header] thead th {
+  border-top: 1px solid #000 !important;
+  border-bottom: 1px solid #000 !important;
+  box-shadow: none !important;
+}
+[data-pl-ledger-txn-page] [data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody > tr > td:first-child::after {
+  content: none !important;
+  display: none !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"]:has(tfoot[data-pl-txn-split-scroll-footer]) tbody > tr:last-child > td:last-child::after {
+  content: none !important;
+  display: none !important;
+}
+/* tr border-b + td border-bottom = 2px — ledger par sirf td 1px */
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody > tr {
+  border-bottom: none !important;
+  border-bottom-width: 0 !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody > tr > td {
+  border-top-width: 0 !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-total"] > td {
+  border-top: 1px solid #000 !important;
+  border-bottom: 1px solid #000 !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-label"] > td {
+  border-top: none !important;
+  border-top-width: 0 !important;
+  border-bottom: 1px solid #000 !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-total"] + tr[data-row="fiscal-partition-label"] > td {
+  border-top: none !important;
+  border-top-width: 0 !important;
+}
+
+/* Single-line ownership:
+   header line = header wrapper only; FY End upper line = preceding txn only. */
+[data-pl-ledger-txn-page] [data-pl-ledger-txn] tbody > tr:first-child,
+[data-pl-ledger-txn-page] [data-pl-ledger-txn] tbody > tr:first-child > td {
+  border-top: none !important;
+  border-top-width: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+[data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:has(+ tr[data-row="fiscal-partition-total"])
+  > td,
+[data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.narration-row:has(+ tr[data-row="fiscal-partition-total"])
+  > td {
+  border-bottom: 1px solid #000 !important;
+}
+[data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:has(+ tr.narration-row + tr[data-row="fiscal-partition-total"])
+  > td {
+  border-bottom: none !important;
+  border-bottom-width: 0 !important;
+}
+[data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody tr[data-row="fiscal-partition-total"] > td {
+  border-top: none !important;
+  border-top-width: 0 !important;
+}
+
 /* Gray column header ↔ pehli txn row: sirf ek 1px (tbody top border band) */
 [data-pl-dashboard-recent-shell]
   [data-pl-dashboard-recent-txn]
@@ -10124,4 +10756,299 @@ html[data-pl-embedded-shell] .simplebar-track {
   display: none !important;
   visibility: hidden !important;
   pointer-events: none !important;
+}
+
+/* FINAL: entity-ledger horizontal chrome is always one physical CSS line.
+   Keep this last so theme hover/selected rules cannot restore stacked row lines. */
+html body [data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody > tr {
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+  box-shadow: none;
+}
+html body [data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody > tr > td {
+  border-top-width: 0 !important;
+}
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td,
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td {
+  border-bottom: 1px solid #000 !important;
+}
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:has(+ .narration-row)
+  > td {
+  border-bottom-width: 0 !important;
+}
+html body [data-pl-ledger-txn-page] [data-theme-table="transactions"] tbody > tr > td::after,
+html body [data-pl-ledger-txn-page] [data-theme-table="transactions"] tfoot > tr > td::after {
+  content: none !important;
+  display: none !important;
+}
+html body [data-pl-ledger-txn-page] [data-pl-ledger-txn-header] {
+  border: 0 !important;
+  box-shadow: none !important;
+}
+html body [data-pl-ledger-txn-page] [data-pl-ledger-txn-header] thead th {
+  border-top: 1px solid #000 !important;
+  border-bottom: 1px solid #000 !important;
+  box-shadow: none !important;
+}
+
+/* Fixed summary directly above pagination: one line above Total + same blue as pagination. */
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tfoot[data-pl-txn-split-scroll-footer]
+  tr[data-pl-txn-footer-total-row],
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tfoot[data-pl-txn-split-scroll-footer]
+  tr[data-pl-txn-footer-closing-row] {
+  border-width: 0 !important;
+}
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tfoot[data-pl-txn-split-scroll-footer]
+  tr[data-pl-txn-footer-total-row]
+  > td {
+  border-top: 1px solid #000 !important;
+  border-bottom-width: 0 !important;
+  background-color: rgb(219 234 254 / 0.8) !important;
+}
+
+/* `TransactionsTable` carries a legacy `border-b-2` utility on every table.
+   Split ledger body + fixed summary use explicit 1px separators instead. */
+html body [data-pl-ledger-txn-page] [data-pl-ledger-txn-header] > div > table,
+html body [data-pl-ledger-txn-page] [data-pl-ledger-txn] > div > table,
+html body
+  [data-pl-ledger-txn-page]
+  [data-pl-ledger-txn-fixed-summary]
+  > div
+  > table {
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+  border-top: none !important;
+  border-bottom: none !important;
+}
+html body [data-pl-ledger-txn-page] [data-pl-ledger-txn-fixed-summary] {
+  border-width: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Crisp transaction separators: one full-width 1px black band, not per-cell borders.
+   Per-cell borders can anti-alias at fractional fixed-column widths and look gray/blurry. */
+html body
+  [data-pl-ledger-txn-page]
+  [data-pl-ledger-txn-unified-scroll]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td,
+html body
+  [data-pl-ledger-txn-page]
+  [data-pl-ledger-txn-unified-scroll]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td {
+  border-bottom-width: 0 !important;
+  border-bottom: none !important;
+}
+html body
+  [data-pl-ledger-txn-page]
+  [data-pl-ledger-txn-unified-scroll]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td:first-child,
+html body
+  [data-pl-ledger-txn-page]
+  [data-pl-ledger-txn-unified-scroll]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td:first-child {
+  position: relative;
+  overflow: visible !important;
+}
+html body
+  [data-pl-ledger-txn-page]
+  [data-pl-ledger-txn-unified-scroll]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td:first-child::after,
+html body
+  [data-pl-ledger-txn-page]
+  [data-pl-ledger-txn-unified-scroll]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card])
+  > td:first-child::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  bottom: 0;
+  width: calc(var(--pl-ledger-txn-table-min-px, 0) * 1px);
+  height: 1px;
+  background: #000 !important;
+  pointer-events: none;
+}
+html body
+  [data-pl-ledger-txn-page]
+  [data-theme-table="transactions"]
+  tfoot[data-pl-txn-split-scroll-footer]
+  tr[data-pl-txn-footer-closing-row]
+  > td {
+  border-top: 1px solid #000 !important;
+  border-bottom-width: 0 !important;
+  background-color: rgb(219 234 254 / 0.8) !important;
+}
+
+/* Overdue: exactly one full-width 1px separator, anchored only to the first cell. */
+html body
+  [data-pl-overdue-billwise-ui]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row,
+html body
+  [data-pl-overdue-billwise-ui]
+  [data-theme-table="transactions"]
+  tbody
+  tr.narration-row {
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+  box-shadow: none !important;
+}
+html body
+  [data-pl-overdue-billwise-ui]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row))
+  > td,
+html body
+  [data-pl-overdue-billwise-ui]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row
+  > td {
+  border-bottom-width: 0 !important;
+  box-shadow: none !important;
+}
+html body
+  [data-pl-overdue-billwise-ui]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row))
+  > td::after,
+html body
+  [data-pl-overdue-billwise-ui]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row
+  > td::after {
+  content: none !important;
+  display: none !important;
+}
+html body
+  [data-pl-overdue-billwise-ui]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row))
+  > td:first-child,
+html body
+  [data-pl-overdue-billwise-ui]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row
+  > td:first-child {
+  position: relative;
+  overflow: visible !important;
+}
+html body
+  [data-pl-overdue-billwise-ui]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row:not(:has(+ .narration-row))
+  > td:first-child::after,
+html body
+  [data-pl-overdue-billwise-ui]
+  [data-theme-table="transactions"]
+  tbody
+  tr.transaction-main-row
+  + tr.narration-row
+  > td:first-child::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  bottom: 0;
+  width: calc(var(--pl-ledger-txn-table-min-px, 0) * 1px);
+  height: 1px;
+  background: #000 !important;
+  pointer-events: none;
+}
+
+/* Locally selected FY closing-row color overrides theme stripe backgrounds. */
+html[data-pl-fy-start-row-color]
+  body
+  [data-theme-table="transactions"]
+  tbody
+  tr[data-row="fiscal-partition-label"]
+  > td {
+  background-color: var(--pl-fy-start-row-bg) !important;
+}
+html[data-pl-fy-end-row-color]
+  body
+  [data-theme-table="transactions"]
+  tbody
+  tr[data-row="fiscal-partition-total"]
+  > td {
+  background-color: var(--pl-fy-end-row-bg) !important;
+}
+html body
+  [data-theme-table="transactions"]
+  tbody
+  tr[data-row="fiscal-partition-total"][data-pl-fy-row-color]
+  > td {
+  background-color: var(--pl-fy-partition-row-bg) !important;
+}
+
+/* Header company selector: grow naturally up to the popup's 80dvh cap, then outer popup scrolls. */
+html body [data-pl-company-selector-popup] .max-h-56,
+html body [data-pl-company-selector-popup] .max-h-64 {
+  max-height: none !important;
+}
+
+/* Online selector Add Company / Save row: compact, 4px above and below pills. */
+html body
+  [data-pl-company-selector-online-list]
+  > div
+  > div:last-child {
+  margin-top: 0 !important;
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
 }

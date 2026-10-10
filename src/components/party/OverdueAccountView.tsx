@@ -30,8 +30,9 @@ import {
 import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { sortTransactionsWithFiscalMergeForCompany, sortTransactions, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { Checkbox } from "@/components/ui/checkbox";
-import { AlertCircle, CheckSquare, Filter, MoreVertical, Pencil, Printer, History, X } from "lucide-react";
+import { AlertCircle, CheckSquare, Filter, Pencil, Printer, History, X } from "lucide-react";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import {
   LEDGER_HEADER_RIBBON_WRAP_CN,
   LEDGER_HEADER_OUTER_ROW_CN,
@@ -47,9 +48,19 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
+  LEDGER_ENTITY_BALANCE_COL_PX,
+  LEDGER_TXN_BALANCE_TO_MENU_PAD_CN,
+  LEDGER_TXN_ROW_MENU_CELL_CN,
+  LEDGER_TXN_ROW_MENU_COL_PX,
 } from "@/lib/ledgerHeaderChrome";
 import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import {
+  LEDGER_TXN_TABLE_TONE_CHANGED_EVENT,
+  readLedgerTxnTableTone,
+  type LedgerTxnTableTone,
+} from "@/lib/ledgerTxnTableTone";
 import { getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
 import {
   resolveTxnDrCrSide,
@@ -233,6 +244,13 @@ export function OverdueAccountView({
     }
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [txnTableTone, setTxnTableTone] = useState<LedgerTxnTableTone>("default");
+  useEffect(() => {
+    setTxnTableTone(readLedgerTxnTableTone());
+    const onToneChange = () => setTxnTableTone(readLedgerTxnTableTone());
+    window.addEventListener(LEDGER_TXN_TABLE_TONE_CHANGED_EVENT, onToneChange);
+    return () => window.removeEventListener(LEDGER_TXN_TABLE_TONE_CHANGED_EVENT, onToneChange);
+  }, []);
   /** Main + narration hover ek block — globals.css [data-pl-txn-hovered] (normal ledger jaisa) */
   const [hoveredTxnId, setHoveredTxnId] = useState<string | null>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
@@ -490,6 +508,39 @@ export function OverdueAccountView({
     netBalance: 145,
   } as const;
 
+  /** Bill-wise visual parity: fixed Date/Balance, with safe equal-width middle columns. */
+  const overdueColumnWidths = useMemo(() => {
+    const widths: number[] = [];
+    if (visibleColumns.date) widths.push(OVERDUE_HEADER_MIN_PX.date);
+
+    const middleBaseWidths: number[] = [];
+    if (visibleColumns.type) middleBaseWidths.push(OVERDUE_HEADER_MIN_PX.type);
+    if (visibleColumns.voucherNo) middleBaseWidths.push(OVERDUE_HEADER_MIN_PX.voucherNo);
+    if (visibleColumns.party) middleBaseWidths.push(OVERDUE_HEADER_MIN_PX.party);
+    if (visibleColumns.user) middleBaseWidths.push(OVERDUE_HEADER_MIN_PX.user);
+    if (visibleColumns.file) middleBaseWidths.push(44);
+    if (visibleColumns.debit) middleBaseWidths.push(OVERDUE_HEADER_MIN_PX.debit);
+    if (visibleColumns.credit) middleBaseWidths.push(OVERDUE_HEADER_MIN_PX.credit);
+    if (visibleColumns.status) middleBaseWidths.push(OVERDUE_HEADER_MIN_PX.status);
+    if (middleBaseWidths.length > 0) widths.push(...middleBaseWidths.map(() => 120));
+
+    if (visibleColumns.netBalance) widths.push(LEDGER_ENTITY_BALANCE_COL_PX);
+    widths.push(LEDGER_TXN_ROW_MENU_COL_PX);
+    return widths;
+  }, [visibleColumns]);
+  const overdueTableMinWidth = useMemo(
+    () => overdueColumnWidths.reduce((sum, width) => sum + width, 0),
+    [overdueColumnWidths]
+  );
+
+  const overdueColgroup = (
+    <colgroup>
+      {overdueColumnWidths.map((width, index) => (
+        <col key={index} style={{ width: `${width}px` }} />
+      ))}
+    </colgroup>
+  );
+
   const renderHeaderWithFilter = (key: string, label: string, isNumeric: boolean = false, minWidthPx?: number) => {
     const isFiltered =
       !!(filters[key] ?? "").trim() ||
@@ -536,7 +587,14 @@ export function OverdueAccountView({
     return (
       <TableHead className={cn("p-0", isNumeric && "text-right")} style={minWidthPx != null ? { minWidth: `${minWidthPx}px` } : undefined}>
         {/* Header style — TransactionsTable jaisa (black bar + filter icons) */}
-        <div className={cn("flex items-center gap-1 whitespace-nowrap px-2 py-3 font-bold", isFiltered ? "text-red-600" : "text-black", isNumeric ? "justify-end" : "justify-start")}>
+        <div
+          className={cn(
+            "flex items-center gap-1 whitespace-nowrap py-3 font-bold",
+            key === "balance" ? LEDGER_TXN_BALANCE_TO_MENU_PAD_CN : "px-[10px]",
+            isFiltered ? "text-red-600" : "text-black",
+            isNumeric ? "justify-end" : "justify-start"
+          )}
+        >
           <span>{label}</span>
           <Popover modal open={activeFilter === key} onOpenChange={(open) => setActiveFilter(open ? key : null)}>
             <PopoverTrigger asChild>
@@ -605,7 +663,7 @@ export function OverdueAccountView({
     };
     return (
       <TableHead className="p-0 text-center font-semibold" style={{ minWidth: "44px" }} data-theme-header="file">
-        <div className={cn("flex items-center justify-center gap-1 whitespace-nowrap px-2 py-3 font-bold", isFiltered ? "text-red-600" : "text-black")}>
+        <div className={cn("flex items-center justify-center gap-1 whitespace-nowrap px-[10px] py-3 font-bold", isFiltered ? "text-red-600" : "text-black")}>
           <span>File</span>
           <Popover modal open={activeFilter === "file"} onOpenChange={(open) => setActiveFilter(open ? "file" : null)}>
             <PopoverTrigger asChild>
@@ -733,9 +791,55 @@ export function OverdueAccountView({
     }
   };
 
+  const overdueTotalFooter = (
+    <TableFooter data-pl-txn-split-scroll-footer="" className="border-0 bg-blue-100/80 shadow-none">
+      <TableRow data-pl-txn-footer-total-row="" className="border-0 font-semibold">
+        <TableCell
+          colSpan={
+            (visibleColumns.date ? 1 : 0) +
+            (visibleColumns.type ? 1 : 0) +
+            (visibleColumns.voucherNo ? 1 : 0) +
+            (visibleColumns.party ? 1 : 0) +
+            (visibleColumns.user ? 1 : 0) +
+            (visibleColumns.file ? 1 : 0)
+          }
+          className="pl-3 pr-2 text-right"
+        >
+          Total
+        </TableCell>
+        {visibleColumns.debit && (
+          <TableCell className="text-right text-green-600">
+            {formatCurrency(totalDebit, { noSuffix: true, context: "transaction" })}
+          </TableCell>
+        )}
+        {visibleColumns.credit && (
+          <TableCell className="text-right text-red-600">
+            {formatCurrency(totalCredit, { noSuffix: true, context: "transaction" })}
+          </TableCell>
+        )}
+        {visibleColumns.status && <TableCell />}
+        {visibleColumns.netBalance && (
+          <TableCell
+            className={LEDGER_TXN_BALANCE_TO_MENU_PAD_CN}
+            style={{ minWidth: LEDGER_ENTITY_BALANCE_COL_PX }}
+          />
+        )}
+        <TableCell className={LEDGER_TXN_ROW_MENU_CELL_CN} />
+      </TableRow>
+    </TableFooter>
+  );
+
 
   return (
-    <div className="flex h-full min-h-full flex-col overflow-hidden">
+    <div
+      data-pl-ledger-txn-page=""
+      data-pl-overdue-billwise-ui=""
+      className={cn(LEDGER_TXN_PAGE_ROOT_CN, "h-full min-h-full")}
+      style={{ "--pl-ledger-txn-table-min-px": overdueTableMinWidth } as React.CSSProperties}
+    >
+      <LedgerTxnScrollColumn
+        header={
+          <>
       {/* Header: Party Details jaisa — title, balance, print */}
       <div className={cn("flex-shrink-0", LEDGER_HEADER_RIBBON_WRAP_CN)}>
         <div className={LEDGER_HEADER_OUTER_ROW_CN}>
@@ -819,10 +923,14 @@ export function OverdueAccountView({
           </div>
         </div>
       </div>
-      <Card className="flex min-h-0 flex-1 flex-col border-0 shadow-none rounded-none">
+          </>
+        }
+        table={
+          <>
+      <Card className="flex min-h-0 flex-1 flex-col border-0 bg-[#ecfdf5] shadow-none rounded-none">
         {/* scroll-touch + inline style for APK/WebView touch scroll */}
         <CardContent
-          className="flex-1 min-h-0 overflow-auto scroll-touch p-0 py-4"
+          className="flex-1 min-h-0 overflow-auto scroll-touch bg-[#ecfdf5] p-0"
         >
           <div
             ref={tableContainerRef}
@@ -830,13 +938,20 @@ export function OverdueAccountView({
             role="grid"
             aria-label="Overdue vouchers"
             data-theme-table="transactions"
-            className="outline-none focus:outline-none min-h-0 w-full min-w-0 overflow-x-auto border-b-2 border-border scrollbar-slim-dim"
+            data-pl-txn-table-tone={txnTableTone}
+            data-pl-ledger-txn=""
+            className="outline-none focus:outline-none min-h-0 w-full min-w-0 overflow-x-auto bg-[#ecfdf5] scrollbar-slim-dim"
             onKeyDown={handleTableKeyDown}
             onClick={() => tableContainerRef.current?.focus()}
           >
-          <Table className="table-auto w-full min-w-0 border-separate border-spacing-0 border-b-2 border-border">
+          <Table
+            className="table-fixed w-full border-separate border-spacing-0"
+            style={{ minWidth: overdueTableMinWidth }}
+            scrollContainer={false}
+          >
+            {overdueColgroup}
             <TableHeader>
-              <TableRow className="border-b-2 border-black hover:bg-transparent [&>th]:border-b-2 [&>th]:border-black">
+              <TableRow className="border-0 hover:bg-transparent">
                 {visibleColumns.date && renderHeaderWithFilter("date", "Date", false, OVERDUE_HEADER_MIN_PX.date)}
                 {visibleColumns.type && renderHeaderWithFilter("type", "Type", false, OVERDUE_HEADER_MIN_PX.type)}
                 {visibleColumns.voucherNo && renderHeaderWithFilter("voucherNumber", "Voucher No.", false, OVERDUE_HEADER_MIN_PX.voucherNo)}
@@ -847,7 +962,7 @@ export function OverdueAccountView({
                 {visibleColumns.credit && renderHeaderWithFilter("credit", "Credit", true, OVERDUE_HEADER_MIN_PX.credit)}
                 {visibleColumns.status && renderHeaderWithFilter("status", "Status", false, OVERDUE_HEADER_MIN_PX.status)}
                 {visibleColumns.netBalance && renderHeaderWithFilter("balance", "Net Balance", true, OVERDUE_HEADER_MIN_PX.netBalance)}
-                <TableHead className="w-10 min-w-10 p-1 pr-[5px] text-center font-semibold align-middle" />
+                <TableHead className={LEDGER_TXN_ROW_MENU_CELL_CN} />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -871,7 +986,8 @@ export function OverdueAccountView({
                   return (
                     <TableRow
                       key={(t as any).id || `fy-partition-${rowIndex}`}
-                      className="cursor-default border-y-2 border-blue-600/55 bg-blue-50/90 hover:!bg-blue-50/90 dark:bg-blue-950/45 dark:hover:!bg-blue-950/45"
+                      data-row="fiscal-partition-label"
+                      className="cursor-default border-0 bg-background hover:!bg-background"
                       onClick={(e) => e.stopPropagation()}
                     >
                       <TableCell colSpan={overdueTableColSpan} className="py-2.5 px-3 text-center align-middle">
@@ -924,7 +1040,7 @@ export function OverdueAccountView({
                     onDoubleClick={() => onEditVoucher?.(t)}
                   >
                     {visibleColumns.date && (
-                      <TableCell className="whitespace-nowrap pl-3 pr-2">
+                      <TableCell className="overflow-hidden whitespace-nowrap pl-3 pr-2">
                         {hl(dateStr)}
                         {entryClock ? <span className="ml-1 text-[10px] text-muted-foreground">• {hl(entryClock)}</span> : null}
                       </TableCell>
@@ -942,9 +1058,27 @@ export function OverdueAccountView({
                         </Badge>
                       </TableCell>
                     )}
-                    {visibleColumns.voucherNo && <TableCell>{hl(t.voucherNumber || "—")}</TableCell>}
-                    {visibleColumns.party && <TableCell className="font-medium">{hl(t.partyName || "—")}</TableCell>}
-                    {visibleColumns.user && <TableCell className="text-muted-foreground">{hl(displayUserName)}</TableCell>}
+                    {visibleColumns.voucherNo && (
+                      <TableCell className="overflow-hidden">
+                        <span className="block truncate" title={t.voucherNumber || "—"}>
+                          {hl(t.voucherNumber || "—")}
+                        </span>
+                      </TableCell>
+                    )}
+                    {visibleColumns.party && (
+                      <TableCell className="overflow-hidden font-medium">
+                        <span className="block truncate" title={t.partyName || "—"}>
+                          {hl(t.partyName || "—")}
+                        </span>
+                      </TableCell>
+                    )}
+                    {visibleColumns.user && (
+                      <TableCell className="overflow-hidden text-muted-foreground">
+                        <span className="block truncate" title={displayUserName}>
+                          {hl(displayUserName)}
+                        </span>
+                      </TableCell>
+                    )}
                     {visibleColumns.file && (
                       <TableCell className="min-w-[44px] px-[5px] text-center" onClick={(e) => e.stopPropagation()}>
                         {(() => {
@@ -1025,18 +1159,35 @@ export function OverdueAccountView({
                       </TableCell>
                     )}
                     {visibleColumns.netBalance && (
-                      <TableCell className={cn("min-w-[145px] whitespace-nowrap text-right font-semibold", balanceVal >= 0 ? "text-green-600" : "text-red-600")}>
+                      <TableCell
+                        className={cn(
+                          "whitespace-nowrap text-right font-semibold",
+                          LEDGER_TXN_BALANCE_TO_MENU_PAD_CN,
+                          balanceVal >= 0 ? "text-green-600" : "text-red-600"
+                        )}
+                        style={{ minWidth: LEDGER_ENTITY_BALANCE_COL_PX }}
+                      >
                         {hl(`${formatCurrencyForPrint(Math.abs(balanceVal), { noSuffix: true, context: "transaction" })} ${balanceVal >= 0 ? "Dr" : "Cr"}`)}
                       </TableCell>
                     )}
                     <TableCell
-                      className="w-10 p-1 pr-[5px] text-center align-middle"
+                      className={LEDGER_TXN_ROW_MENU_CELL_CN}
                       onClick={(e) => e.stopPropagation()}
                     >
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" data-pl-txn-icon-btn="" className={cn(txnTableIconBtnCn, "h-8 w-8 shrink-0")}>
-                            <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            data-pl-txn-icon-btn=""
+                            className={cn(txnTableIconBtnCn, "relative h-8 w-3 min-w-[12px] shrink-0 p-0")}
+                          >
+                            <span
+                              aria-hidden="true"
+                              className="absolute right-[4px] top-1/2 -translate-y-1/2 text-base leading-none text-muted-foreground"
+                            >
+                              ⋮
+                            </span>
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-40">
@@ -1105,8 +1256,13 @@ export function OverdueAccountView({
                       {visibleColumns.status && (
                         <TableCell className="pt-0.5 pb-0.5 px-2 text-center align-top" aria-hidden="true" />
                       )}
-                      {visibleColumns.netBalance && <TableCell className="py-0 w-10 p-0" />}
-                      <TableCell className="py-0 w-10 p-0" />
+                      {visibleColumns.netBalance && (
+                        <TableCell
+                          className={cn("py-0", LEDGER_TXN_BALANCE_TO_MENU_PAD_CN)}
+                          style={{ minWidth: LEDGER_ENTITY_BALANCE_COL_PX }}
+                        />
+                      )}
+                      <TableCell className={LEDGER_TXN_ROW_MENU_CELL_CN} />
                     </motion.tr>
                     );
                   })()}
@@ -1115,38 +1271,29 @@ export function OverdueAccountView({
               })}
               </AnimatePresence>
             </TableBody>
-            <TableFooter>
-              <TableRow className="font-semibold">
-                <TableCell
-                  colSpan={
-                    (visibleColumns.date ? 1 : 0) +
-                    (visibleColumns.type ? 1 : 0) +
-                    (visibleColumns.voucherNo ? 1 : 0) +
-                    (visibleColumns.party ? 1 : 0) +
-                    (visibleColumns.user ? 1 : 0) +
-                    (visibleColumns.file ? 1 : 0)
-                  }
-                  className="pl-3 pr-2"
-                >Total</TableCell>
-                {visibleColumns.debit && (
-                  <TableCell className="text-right text-green-600">
-                    {formatCurrency(totalDebit, { noSuffix: true, context: "transaction" })}
-                  </TableCell>
-                )}
-                {visibleColumns.credit && (
-                  <TableCell className="text-right text-red-600">
-                    {formatCurrency(totalCredit, { noSuffix: true, context: "transaction" })}
-                  </TableCell>
-                )}
-                {visibleColumns.status && <TableCell />}
-                {visibleColumns.netBalance && <TableCell />}
-                <TableCell className="w-10 p-1 pr-[5px]" />
-              </TableRow>
-            </TableFooter>
           </Table>
           </div>
         </CardContent>
       </Card>
+      <div
+        data-pl-ledger-txn-fixed-summary=""
+        data-theme-table="transactions"
+        data-pl-txn-table-tone={txnTableTone}
+        className="w-full min-w-0 shrink-0 overflow-hidden bg-blue-100/80"
+      >
+        <Table
+          className="table-fixed w-full border-separate border-spacing-0"
+          style={{ minWidth: overdueTableMinWidth }}
+          scrollContainer={false}
+        >
+          {overdueColgroup}
+          {overdueTotalFooter}
+        </Table>
+      </div>
+          </>
+        }
+        footer={
+          <>
       {/* Footer: global PC shell — Party Details jaisa LedgerDesktopFooter */}
       <LedgerDesktopFooter
         left={
@@ -1198,6 +1345,9 @@ export function OverdueAccountView({
         beforeCount={overduePaging.beforeCount}
         afterCount={overduePaging.afterCount}
         totalCount={sortedRows.length}
+      />
+          </>
+        }
       />
     </div>
   );

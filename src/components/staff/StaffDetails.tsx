@@ -95,7 +95,9 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
@@ -132,6 +134,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import {
   sortTransactionsWithFiscalMergeForCompany,
@@ -1632,9 +1635,12 @@ export function StaffDetails({
   };
 
   const renderDesktopView = () => (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
       {/* Header: identity + pills — Party-style single row */}
-      <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
+      {/* TABLE AREA - flex layout so table footer (Total / Closing Balance) stays visible */}
+      <LedgerTxnScrollColumn
+          header={
+<div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
         <div className={LEDGER_HEADER_OUTER_ROW_CN}>
           <div className={LEDGER_HEADER_IDENTITY_CN}>
             {isMobile && onBack && (
@@ -1680,6 +1686,7 @@ export function StaffDetails({
           </div>
           <div className={LEDGER_HEADER_PILL_ROW_CN}>
                 <ReconciliationAccountButton accountId={staff.id} />
+              <LedgerHeaderPrintButton variant="outline" onClick={balanceMode === "bill_wise" ? handlePrintBillWise : handlePrintStatement} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
               <BsDatePicker
@@ -1801,15 +1808,7 @@ export function StaffDetails({
                 All Vouchers
               </Button>
             )}
-            <Button
-              variant="chromePill"
-              size="icon"
-              onClick={balanceMode === "bill_wise" ? handlePrintBillWise : handlePrintStatement}
-              className={LEDGER_HEADER_PILL_ICON_CN}
-              data-theme-detail="print"
-            >
-              <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-            </Button>
+            
             {isCompanyAdmin ? (
               <Button
                 type="button"
@@ -1824,9 +1823,9 @@ export function StaffDetails({
           </div>
         </div>
       </div>
-      {/* TABLE AREA - flex layout so table footer (Total / Closing Balance) stays visible */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-x-auto pl-ledger-txn-scroll-native">
-        <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
+          }
+          table={
+                <>
                 <MasterAccountFreezeTxnShell
                   overlay={staffFreezeOverlay}
                 >
@@ -1893,9 +1892,9 @@ export function StaffDetails({
                 : "No transactions found for this staff member in the selected period."}
             </div>
           )}
-        </div>
-      </div>
-      {/* Footer — global PC shell LedgerDesktopFooter */}
+                </>
+        }
+        footer={
       <LedgerDesktopFooter
         left={
           <>
@@ -1978,6 +1977,8 @@ export function StaffDetails({
         afterCount={desktopPaginationMeta.afterCount}
         totalCount={sortedTransactions.length}
         ledgerPresentationMode={ledgerPresentationMode}
+      />
+        }
       />
     </div>
   );

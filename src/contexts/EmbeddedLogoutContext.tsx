@@ -31,7 +31,6 @@ import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession"
 import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
 import { clearAllCloudCompanyPasswordUnlockSessionsForUser } from "@/lib/cloudCompanyPasswordUnlockRemember";
 import { clearAllOfflineUnlockSessionsForUser } from "@/lib/offlineCompanyUnlockRemember";
-import { clearAllRememberedSharedUnlockUsernamesForUser } from "@/lib/onlineSharedUnlockRememberUsername";
 import {
   detectSavedLoginAuthMethod,
   upsertSavedLoginAccount,
@@ -64,7 +63,6 @@ async function performFirebaseLogout(
   clearEmbeddedSessionUnlock();
   clearAllCloudCompanyPasswordUnlockSessionsForUser(firebaseUid ?? undefined, userEmail);
   clearAllOfflineUnlockSessionsForUser(firebaseUid ?? undefined);
-  clearAllRememberedSharedUnlockUsernamesForUser(firebaseUid ?? undefined, userEmail);
   pruneRememberedLoginEmailIfDisabled();
   if (isLocalGuestEnabled()) {
     disableLocalGuest();

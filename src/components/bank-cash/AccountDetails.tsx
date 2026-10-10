@@ -78,6 +78,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import { LedgerViewModePills, LedgerViewModeToggleButton } from "@/components/ui/LedgerViewModePills";
 
@@ -101,7 +102,10 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
+  LEDGER_TXN_TABLE_HOST_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
@@ -1955,9 +1959,15 @@ export function AccountDetails({
 
   const renderDesktopView = () => {
     return (
-     <div className="h-full flex flex-col">
+     <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
         {/* Header: identity + pills — Party-style single row */}
-        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
+        {periodSummaryCards}
+        {/* Opening-balance documents: no preview strip here—only File column tick on opening row (openingBalanceAttachmentUrls). */}
+
+        {/* TABLE AREA - Statement = running balance; Bill wise = per-row outstanding (same as PartyDetails) */}
+        <LedgerTxnScrollColumn
+          header={
+<div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               <div className={LEDGER_HEADER_AVATAR_CN}>
@@ -2015,6 +2025,7 @@ export function AccountDetails({
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
               <ReconciliationAccountButton accountId={account.id} />
+              <LedgerHeaderPrintButton variant="outline" onClick={handlePrintStatement} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
@@ -2109,9 +2120,7 @@ export function AccountDetails({
               <Button variant="outline" size="sm" onClick={() => setIsNoteOpen(true)} className={LEDGER_HEADER_PILL_CN} data-theme-detail="add-note">
                 <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>
-              <Button variant="outline" size="icon" onClick={handlePrintStatement} className={LEDGER_HEADER_PILL_ICON_CN} data-theme-detail="print">
-                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-              </Button>
+              
               {onPopupClose && (
                 <Button
                   type="button"
@@ -2127,12 +2136,9 @@ export function AccountDetails({
             </div>
           </div>
         </div>
-        {periodSummaryCards}
-        {/* Opening-balance documents: no preview strip here—only File column tick on opening row (openingBalanceAttachmentUrls). */}
-
-        {/* TABLE AREA - Statement = running balance; Bill wise = per-row outstanding (same as PartyDetails) */}
-        <div className="flex-1 flex flex-col min-h-0 overflow-x-auto pl-ledger-txn-scroll-native">
-          <div className={cn("py-4 min-w-0", spendWiseView ? "p-[2px]" : "flex-1 flex flex-col min-h-0")}>
+          }
+          table={
+          <div className={cn(LEDGER_TXN_TABLE_HOST_CN, spendWiseView && "p-[2px]")}>
             {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}
             <MasterAccountFreezeTxnShell
               overlay={accountFreezeOverlay}
@@ -2193,8 +2199,8 @@ export function AccountDetails({
             />
             </MasterAccountFreezeTxnShell>
           </div>
-        </div>
-        {/* Footer — global PC shell LedgerDesktopFooter */}
+          }
+          footer={
         <LedgerDesktopFooter
           left={
             <>
@@ -2319,6 +2325,8 @@ export function AccountDetails({
           afterCount={ledgerFooterPagingCounts.afterCount}
           totalCount={ledgerFooterPagingCounts.totalCount}
           ledgerPresentationMode={ledgerPresentationMode}
+        />
+          }
         />
       </div>
   );

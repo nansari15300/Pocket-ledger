@@ -98,6 +98,19 @@ export function clearRememberedSharedUnlockUsername(
     for (const k of collectKeys(firebaseUid, companyId, userEmail)) {
       localStorage.removeItem(k);
     }
+    // Company/local-data deletion callers may not know the login email.
+    // In that case remove every remembered username scoped to this company.
+    if (!normalizeUnlockEmail(userEmail)) {
+      const suffix = `_${companyId}`;
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(`${STORAGE_PREFIX}_`) && key.endsWith(suffix)) {
+          keysToRemove.push(key);
+        }
+      }
+      for (const key of keysToRemove) localStorage.removeItem(key);
+    }
   } catch {
     /* ignore */
   }

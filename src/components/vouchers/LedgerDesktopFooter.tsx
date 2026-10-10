@@ -30,7 +30,7 @@ export function LedgerDesktopFooter({
   return (
     <div
       className={cn(
-        "border-t border-blue-300/60 bg-blue-100/80 py-2 px-4 overflow-auto min-h-0 pl-ledger-footer-scroll flex-shrink-0 mt-auto",
+        "pl-ledger-desktop-footer-shell border-t border-blue-300/60 bg-blue-100/80 py-2 px-4 overflow-auto min-h-0 pl-ledger-footer-scroll flex-shrink-0 mt-auto",
         shellClassName
       )}
     >

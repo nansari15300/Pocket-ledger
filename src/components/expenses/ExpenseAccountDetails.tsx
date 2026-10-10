@@ -90,7 +90,9 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
@@ -132,6 +134,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 
@@ -769,9 +772,12 @@ export function ExpenseAccountDetails({
     }
 
     return (
-     <div className="flex h-full min-h-0 flex-col overflow-hidden">
+     <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
         {/* Header: identity + pills â€” Party-style single row */}
-        <div className={cn("flex-shrink-0", LEDGER_HEADER_RIBBON_WRAP_CN)}>
+        {/* TABLE AREA â€” min-h-0: flex-1 ScrollArea shrink ho kar vertical scroll */}
+        <LedgerTxnScrollColumn
+          header={
+<div className={cn("flex-shrink-0", LEDGER_HEADER_RIBBON_WRAP_CN)}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {isMobile && onBack && (
@@ -825,6 +831,7 @@ export function ExpenseAccountDetails({
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
+              <LedgerHeaderPrintButton variant="outline" onClick={handlePrint} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
@@ -915,16 +922,14 @@ export function ExpenseAccountDetails({
                   All Vouchers
                 </Button>
               )}
-              <Button variant="outline" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN}>
-                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-              </Button>
+              
             </div>
           </div>
         </div>
-
-        {/* TABLE AREA â€” min-h-0: flex-1 ScrollArea shrink ho kar vertical scroll */}
-        <ScrollArea txnChrome className="min-h-0 flex-1">
-          <div className="py-4">
+          }
+          table={
+          <>
+          
             <MasterAccountFreezeTxnShell
               overlay={expenseFreezeOverlay}
             >
@@ -957,10 +962,11 @@ export function ExpenseAccountDetails({
               {...statementCheck.tableProps}
             />
             </MasterAccountFreezeTxnShell>
-          </div>
-          <ScrollBar orientation="horizontal" />
-        </ScrollArea>
-        {/* Footer â€” global PC shell LedgerDesktopFooter */}
+          </>
+
+                  }
+
+                  footer={
         <LedgerDesktopFooter
           shellClassName="flex-shrink-0"
           left={
@@ -1030,6 +1036,8 @@ export function ExpenseAccountDetails({
           beforeCount={desktopPaginationMeta.beforeCount}
           afterCount={desktopPaginationMeta.afterCount}
           totalCount={displayTransactions.length}
+        />
+          }
         />
       </div>
   );

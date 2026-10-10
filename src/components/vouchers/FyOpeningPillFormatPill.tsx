@@ -6,6 +6,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -13,6 +15,12 @@ import {
   type FyOpeningPillFormat,
 } from "@/lib/fyOpeningPillFormat";
 import { useFyOpeningPillFormat } from "@/hooks/useFyOpeningPillFormat";
+import { useFyPartitionRowColor } from "@/hooks/useFyPartitionRowColor";
+import {
+  FY_PARTITION_ROW_COLOR_OPTIONS,
+  type FyPartitionRowColor,
+  type FyPartitionRowColorTarget,
+} from "@/lib/fyPartitionRowColor";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -31,6 +39,10 @@ export function FyOpeningPillFormatPill({
   showLeadingChevron = false,
 }: Props) {
   const { format, setFormat } = useFyOpeningPillFormat();
+  const [colorTarget, setColorTarget] = React.useState<FyPartitionRowColorTarget>("end");
+  const startRowColor = useFyPartitionRowColor("start");
+  const endRowColor = useFyPartitionRowColor("end");
+  const activeRowColor = colorTarget === "start" ? startRowColor : endRowColor;
 
   return (
     <DropdownMenu>
@@ -72,6 +84,58 @@ export function FyOpeningPillFormatPill({
             </span>
           </DropdownMenuItem>
         ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="pb-1 text-xs">FY row color</DropdownMenuLabel>
+        <div className="grid grid-cols-2 gap-1 px-2 pb-2">
+          {([
+            ["start", "FY Start Row"],
+            ["end", "FY End Row"],
+          ] as const).map(([target, label]) => (
+            <button
+              key={target}
+              type="button"
+              className={cn(
+                "h-7 rounded-md border px-2 text-xs font-semibold",
+                colorTarget === target
+                  ? "border-blue-500 bg-blue-100 text-blue-900"
+                  : "border-border bg-background text-foreground"
+              )}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setColorTarget(target);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-1 px-2 pb-2">
+          {FY_PARTITION_ROW_COLOR_OPTIONS.map((option) => (
+            <DropdownMenuItem
+              key={option.value}
+              title={option.label}
+              aria-label={`${option.label} FY row color`}
+              className={cn(
+                "relative h-7 w-7 cursor-pointer rounded-md border p-0 focus:ring-2 focus:ring-blue-500",
+                option.value === "default" && "bg-background"
+              )}
+              style={
+                option.color
+                  ? { backgroundColor: option.color, borderColor: option.borderColor }
+                  : undefined
+              }
+              onSelect={() => activeRowColor.setColor(option.value as FyPartitionRowColor)}
+            >
+              {option.value === "default" ? (
+                <span className="absolute inset-[3px] rounded-sm border border-dashed border-muted-foreground/60" />
+              ) : null}
+              {activeRowColor.color === option.value ? (
+                <Check className="relative z-10 m-auto h-4 w-4 text-black" />
+              ) : null}
+            </DropdownMenuItem>
+          ))}
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   );

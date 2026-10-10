@@ -59,6 +59,7 @@ import { mdc } from "@/lib/mobileDetailChrome";
 import { Calendar } from "@/components/ui/calendar";
 import { useDate } from "@/hooks/useDate";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
@@ -1052,6 +1053,7 @@ export function AccountDetails({
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
+              <LedgerHeaderPrintButton variant="outline" onClick={handlePrintStatement} />
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
                   isRange
@@ -1122,9 +1124,6 @@ export function AccountDetails({
                   All Vouchers
                 </Button>
               )}
-              <Button variant="outline" size="icon" onClick={handlePrintStatement} className={LEDGER_HEADER_PILL_ICON_CN}>
-                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
-              </Button>
             </div>
           </div>
         </div>

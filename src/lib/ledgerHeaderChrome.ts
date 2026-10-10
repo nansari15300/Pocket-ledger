@@ -19,9 +19,37 @@ export const LEDGER_HEADER_PILL_ICON_SIZE_CN = "h-3.5 w-3.5";
  */
 export const LEDGER_HEADER_PILL_ROW_CN =
   "pl-ledger-header-card pl-ledger-header-pill-row justify-start gap-[3px]";
-/** Outer ribbon wrap — top/bottom gap 2px; pill-blue strip */
+/** Outer ribbon wrap — sides/bottom gap; pill-blue strip (top flush on txn pages via CSS) */
 export const LEDGER_HEADER_RIBBON_WRAP_CN =
-  "pl-ledger-header-ribbon-wrap border-b px-[3px] py-[3px] overflow-x-auto min-h-0 scrollbar-slim-dim";
+  "pl-ledger-header-ribbon-wrap shrink-0 border-b px-[3px] py-[3px] overflow-x-auto min-h-0 scrollbar-slim-dim";
+/** Right inset on entity txn pages — matches Dashboard Recent edge gap. */
+export const LEDGER_TXN_PAGE_EDGE_GAP_PX = 2;
+/** Ledger detail pane: fixed ribbon + scrollable table (desktop). */
+export const LEDGER_TXN_PAGE_ROOT_CN =
+  "flex h-full min-h-0 w-full max-w-full flex-1 flex-col overflow-hidden box-border";
+/** Single H-scroll owner (table + footer move together). */
+export const LEDGER_TXN_SCROLL_HOST_CN =
+  "pl-ledger-txn-scroll-host flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-hidden pl-ledger-txn-scroll-native";
+export const LEDGER_TXN_SCROLL_INNER_CN =
+  "pl-ledger-txn-scroll-host-inner flex min-h-0 min-w-full flex-1 flex-col";
+export const LEDGER_TXN_TABLE_HOST_CN =
+  "pl-ledger-txn-table-host flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden";
+/** Ribbon slot inside unified H-scroll — width follows table min width. */
+export const LEDGER_TXN_SCROLL_HEADER_CN =
+  "pl-ledger-txn-scroll-header shrink-0 min-w-full w-full box-border";
+/** Entity ledger split table: Type pill (incl. FY opening label) fit + colgroup sync. */
+export const LEDGER_ENTITY_TYPE_COL_PX = 120;
+/** Entity ledger Balance — large formatted amounts + Dr/Cr suffix. */
+export const LEDGER_ENTITY_BALANCE_COL_PX = 132;
+/** Compact visual strip after Balance; the visible ⋮ sits 4px from the right edge. */
+export const LEDGER_TXN_ROW_MENU_COL_PX = 12;
+export const LEDGER_TXN_ROW_MENU_CELL_CN =
+  "relative box-border w-3 min-w-[12px] max-w-[12px] p-0 align-middle";
+/** Header stays aligned at the Balance column's right boundary. */
+export const LEDGER_TXN_BALANCE_HEADER_PAD_CN = "pl-[10px] pr-0";
+/** Body amount/Dr/Cr: 10px visual gap from ⋮; right-edge gap stays unchanged. */
+export const LEDGER_TXN_BALANCE_TO_MENU_PAD_CN = "pl-[10px] pr-[6px]";
+
 /** Outer ribbon — 50/50; overflow parent pe H-scroll jab left floor tight ho */
 export const LEDGER_HEADER_OUTER_ROW_CN =
   "pl-ledger-header-outer-row flex w-full flex-nowrap items-stretch gap-1";

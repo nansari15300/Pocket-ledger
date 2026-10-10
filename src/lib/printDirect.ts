@@ -37,6 +37,10 @@ import {
 } from "@/lib/ledgerOpeningBalanceDisplay";
 import { FY_OPENING_ROW_TYPE } from "@/lib/fyPagination/fyOpeningRows";
 import { readFyOpeningPillFormat } from "@/lib/fyOpeningPillFormat";
+import {
+  getFyPartitionRowBackground,
+  readFyPartitionRowColor,
+} from "@/lib/fyPartitionRowColor";
 
 function resolvePrintFiscalMergePartitions(
   payload: {
@@ -301,6 +305,8 @@ export type PrintPayload = {
   creditColumnHeaderLabel?: string;
   /** Bill-wise: vouchers for allocation amount lookup (voucher details with amount in print). */
   vouchers?: any[];
+  /** Bill-wise linked voucher detail density selected in Print options. */
+  printLinkedVouchersMode?: "all" | "max2";
   /** Merge fiscal: nayi FY ki pehli din (AD) — table jaisa PDF me divider. */
   fiscalMergePartitionAt?: Date | null;
   /** Merge fiscal: multiple partition starts (preferred over single `fiscalMergePartitionAt`). */
@@ -442,9 +448,11 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
     const { promptPrintOptions } = await import("@/components/print/PrintOptionsPrompt");
     const opts = await promptPrintOptions({
       showConfirmationTabs: payload.printConfirmationTabs === true,
+      showLinkedVoucherOptions: payload.billWise === true,
       initial: {
         printIncludeNarration: payload.showNarration,
         printIncludeNotes: payload.includeNotes,
+        printLinkedVouchersMode: payload.printLinkedVouchersMode ?? "all",
         // User/File: print dialog hamesha off — ledger me column on ho tab bhi; user khud tick kare.
       },
     });
@@ -478,6 +486,7 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
         ...(typeof opts.printIncludeFileColumn === "boolean" ? { file: opts.printIncludeFileColumn } : {}),
       },
       printColorMode: opts.printColorMode ?? "color",
+      printLinkedVouchersMode: opts.printLinkedVouchersMode ?? payload.printLinkedVouchersMode ?? "all",
       ...(opts.printReportKind
         ? {
             printReportKind: opts.printReportKind,
@@ -2028,9 +2037,11 @@ const buildOpeningBalanceRow = (
         return getAllocationTotal(obAlloc);
       };
       const decimalPlaces = p.company.decimalPlaces ?? 2;
+      const visibleObNos = p.printLinkedVouchersMode === "max2" ? obNos.slice(0, 2) : obNos;
+      const hiddenObNosCount = obNos.length - visibleObNos.length;
       const obDetailContent =
         obNos.length && p.showNarration
-          ? obNos.flatMap((no, i) => {
+          ? visibleObNos.flatMap((no, i) => {
               const amt = vouchers.length ? getOBAmountForVoucher(no) : 0;
               const displayNo = no === "Opening Balance" ? "Opening" : no;
               const label = amt > 0 ? `${displayNo}) ${formatVoucherAmount(amt, decimalPlaces)}` : displayNo;
@@ -2040,6 +2051,13 @@ const buildOpeningBalanceRow = (
               ];
             })
           : [];
+      if (hiddenObNosCount > 0 && p.showNarration) {
+        obDetailContent.push({
+          text: ` + More (+${hiddenObNosCount})`,
+          color: p.printColorMode === "bw" ? "#000000" : "#2563eb",
+          fontSize: 7,
+        });
+      }
       const statusCell: TableCell = {
         text: obStatusLabel,
         color: obStatusLabel === "Paid" ? palette.paid : palette.unpaid,
@@ -2261,6 +2279,7 @@ const getStatusDetailForPrint = (
     decimalPlaces?: number;
     /** Print options Color vs B&W — bill-wise voucher detail colors */
     colorMode?: PrintColorMode;
+    linkedVouchersMode?: "all" | "max2";
   }
 ): string | Array<{ text: string; color?: string; fontSize?: number }> => {
   const billWiseOnly = opts?.billWiseOnly === true;
@@ -2306,7 +2325,8 @@ const getStatusDetailForPrint = (
   if (deduped.length === 0) return "";
   const fontSize = 7;
   const content: Array<{ text: string; color?: string; fontSize?: number }> = [];
-  deduped.forEach(({ no, getAmt }, i) => {
+  const visible = opts?.linkedVouchersMode === "max2" ? deduped.slice(0, 2) : deduped;
+  visible.forEach(({ no, getAmt }, i) => {
     if (i > 0) content.push({ text: " + ", fontSize });
     const amt = vouchers.length ? getAmt(no) : 0;
     const displayNo = no === "Opening Balance" ? "Opening" : no;
@@ -2314,6 +2334,14 @@ const getStatusDetailForPrint = (
     const color = palette.billWiseVoucher(i);
     content.push({ text: label, color, fontSize });
   });
+  const hiddenCount = deduped.length - visible.length;
+  if (hiddenCount > 0) {
+    content.push({
+      text: ` + More (+${hiddenCount})`,
+      color: opts?.colorMode === "bw" ? "#000000" : "#2563eb",
+      fontSize,
+    });
+  }
   return content;
 };
 
@@ -2497,6 +2525,10 @@ function buildFyPartitionClosingSummaryPrintRows(
   closingEndLabel?: string
 ): TableCell[][] {
   const palette = getPrintColorPalette(p.printColorMode);
+  const rowFill =
+    p.printColorMode === "bw"
+      ? null
+      : getFyPartitionRowBackground(readFyPartitionRowColor("end"));
   const showDr = isColVisible(p, "dr");
   const showCr = isColVisible(p, "cr");
   const fmt = (val: number) => formatCurrencyForPrint(Math.abs(val), { noSuffix: true });
@@ -2557,6 +2589,15 @@ function buildFyPartitionClosingSummaryPrintRows(
   }
 
   ensureRowLength(cells, colCount);
+  if (rowFill) {
+    cells.forEach((cell) => {
+      // pdfmake colSpan placeholders must remain plain `{}`; a fillColor-only
+      // placeholder is treated as an invalid document node.
+      if (cell && typeof cell === "object" && Object.keys(cell).length > 0) {
+        cell.fillColor = rowFill;
+      }
+    });
+  }
   return [cells];
 }
 
@@ -2585,6 +2626,10 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
           ? row._partitionLabel
           : "── Closing fiscal period · New fiscal period ──");
       const newStartLabel = split?.newStartLabel ?? closingEndLabel;
+      const startRowFill =
+        p.printColorMode === "bw"
+          ? null
+          : getFyPartitionRowBackground(readFyPartitionRowColor("start"));
       const startCell: TableCell = {
         text: newStartLabel,
         colSpan: n,
@@ -2594,6 +2639,7 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
         color: "#000000",
         margin: [0, 4, 0, 4],
         noWrap: true,
+        ...(startRowFill ? { fillColor: startRowFill } : {}),
       };
       const newStartRow: TableCell[] = [startCell];
       for (let i = 1; i < n; i++) newStartRow.push({});
@@ -3062,6 +3108,7 @@ const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, form
             vouchers: p.vouchers,
             decimalPlaces: p.company.decimalPlaces ?? 2,
             colorMode: p.printColorMode,
+            linkedVouchersMode: p.printLinkedVouchersMode,
           })
         : "";
     const mainHasSubRow = Boolean(

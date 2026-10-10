@@ -153,6 +153,7 @@ import {
   writeLedgerDetailSessionSnapshot,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
+import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import {
   computeAccountConfirmationSummary,
@@ -227,7 +228,9 @@ import {
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
   LEDGER_HEADER_PILL_ROW_CN,
+  LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 const getInitials = (name: string) => {
   if (!name) return "NA";
   return name
@@ -2003,9 +2006,12 @@ export function PartyDetails({
       {party?.id && <EntityAlarmPopup context="Party" entityId={party.id} />}
       {autoLinkPromptUi}
       {openingBalanceMasterEditUi}
-      <div className="h-full min-h-0 flex flex-1 flex-col overflow-hidden">
+      <div data-pl-ledger-txn-page="" className={LEDGER_TXN_PAGE_ROOT_CN}>
         {/* Header: identity + pills ek hi gap (pill gap); Party name chhoti width pe max 2 line (avatar h-12), pattika height nahi badhe */}
-        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
+        {/* Party docs sirf table Opening row File column + Edit party dialog — yahan duplicate thumbnail strip nahi */}
+        <LedgerTxnScrollColumn
+          header={
+<div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             {/* Left 50%: fixed avatar + name card (H-scroll) + balance card */}
             <div className={LEDGER_HEADER_IDENTITY_CN}>
@@ -2078,6 +2084,7 @@ export function PartyDetails({
                 (!isIcCompanyGroupView || icGroupFilteredMember) ? (
                 <ReconciliationAccountButton accountId={headerIdentityParty.id} />
               ) : null}
+              <LedgerHeaderPrintButton variant="outline" onClick={handlePrint} />
               <LedgerUnapprovedFilterButton
                 active={unapprovedOnly}
                 onClick={toggleUnapprovedOnly}
@@ -2195,9 +2202,7 @@ export function PartyDetails({
                   All Vouchers
                 </Button>
               )}
-              <Button variant="outline" size="icon" className={LEDGER_HEADER_PILL_ICON_CN} onClick={handlePrint} data-theme-detail="print">
-                <Printer className="h-3.5 w-3.5" />
-              </Button>
+              
               {isCompanyAdmin ? (
                 <Button
                   type="button"
@@ -2212,9 +2217,8 @@ export function PartyDetails({
             </div>
           </div>
         </div>
-        {/* Party docs sirf table Opening row File column + Edit party dialog — yahan duplicate thumbnail strip nahi */}
-        <div className={cn("flex-1 flex flex-col min-h-0", balanceMode === "bill_wise" ? "min-w-0" : "overflow-x-auto pl-ledger-txn-scroll-native")}>
-          <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
+          }
+          table={
             <MasterAccountFreezeTxnShell
               overlay={partyFreezeOverlay}
             >
@@ -2288,9 +2292,8 @@ export function PartyDetails({
             />
             )}
             </MasterAccountFreezeTxnShell>
-          </div>
-        </div>
-        {/* Footer: global PC shell â€” LedgerDesktopFooter */}
+          }
+          footer={
         <LedgerDesktopFooter
           left={
             <>
@@ -2368,6 +2371,8 @@ export function PartyDetails({
           afterCount={desktopPaginationMeta.afterCount}
           totalCount={statusFilteredTransactions.length}
           ledgerPresentationMode={ledgerPresentationMode}
+        />
+          }
         />
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>
