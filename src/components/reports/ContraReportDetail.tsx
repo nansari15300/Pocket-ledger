@@ -10,6 +10,7 @@ import { AccountList } from "@/components/bank-cash/AccountList";
 import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
 import { ReportRegisterDesktopSplit } from "@/components/reports/ReportRegisterDesktopSplit";
 import { ReportRegisterListHeading } from "@/components/reports/ReportRegisterListHeading";
+import { ReportRegisterListSearchRow } from "@/components/reports/ReportRegisterListSearchRow";
 import type { Account } from "@/components/bank-cash/types";
 import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
@@ -201,17 +202,11 @@ export function ContraReportDetail() {
                 </p>
               </Card>
             </div>
-            <div className="p-3 border-b flex-shrink-0">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search accounts..."
-                  className="pl-9"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-              </div>
-            </div>
+            <ReportRegisterListSearchRow
+              placeholder="Search accounts..."
+              value={searchTerm}
+              onChange={setSearchTerm}
+            />
             <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
               <h3 className="text-sm font-semibold">Accounts ({filteredAccounts.length})</h3>
             </div>

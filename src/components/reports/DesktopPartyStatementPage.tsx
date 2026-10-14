@@ -24,6 +24,7 @@ import { mlc } from "@/lib/mobileListChrome";
 import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import type { Party, Group } from "@/components/party/types";
 import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
+import { ReportLedgerTxnDetailPane } from "@/components/reports/ReportLedgerTxnDetailPane";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { startOfMonth, endOfMonth, format, isSameDay } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
@@ -720,7 +721,9 @@ export default function DesktopPartyStatementPage() {
                         </div>
                     }
                     listView={reportListView}
-                    detailView={reportDetailView}
+                    detailView={
+                      <ReportLedgerTxnDetailPane>{reportDetailView}</ReportLedgerTxnDetailPane>
+                    }
                     isMobile={false}
                 />
                 {addVoucherDialog}

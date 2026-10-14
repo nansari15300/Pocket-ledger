@@ -25,6 +25,7 @@ import {
 import { applyPaymentBillWiseLinkAllocations } from '@/lib/voucherActionsClient';
 import * as React from 'react';
 import { useEffect, useLayoutEffect, useState, useMemo, useRef, useCallback, startTransition } from 'react';
+import { engageClientHealthEmergencyBrake } from "@/lib/clientHealthMonitor";
 import {
   BookText,
   Landmark,
@@ -294,23 +295,20 @@ function getTransactionAmounts(transaction: any) {
   return { debit, credit };
 }
 
-/**
- * Recent Search: voucher/narration/accounts/user/amounts — kahin se bhi token match.
- * Narration + note title included (Show Narration toggle se independent).
- */
-function transactionMatchesRecentQuickSearch(
-  tx: any,
-  qLower: string,
-  journalAccountNames: Record<string, string>,
-  userNames: Record<string, string>
-): boolean {
-  if (!qLower) return true;
-  const tokens = qLower
-    .split(/\s+/)
-    .map((t) => t.replace(/,/g, "").trim().toLowerCase())
-    .filter(Boolean);
-  if (tokens.length === 0) return true;
+/** Recent search: is se zyada lagne par UI health emergency overlay. */
+const RECENT_SEARCH_SLOW_MS = 5_000;
 
+type RecentSearchHaystackRow = {
+  tx: Record<string, unknown>;
+  hay: string;
+  numericFields: number[];
+};
+
+function buildRecentTransactionSearchHaystackRow(
+  tx: Record<string, unknown>,
+  journalAccountNames: Record<string, string>,
+  userNames: Record<string, string>,
+): RecentSearchHaystackRow {
   const names = { ...journalAccountNames, ...userNames };
   const pieces: string[] = [];
 
@@ -319,7 +317,7 @@ function transactionMatchesRecentQuickSearch(
   if (typeof tx?.title === "string" && tx.type === "note") pieces.push(tx.title);
 
   const uid = tx?.userId;
-  if (uid && userNames[uid]) pieces.push(userNames[uid]);
+  if (typeof uid === "string" && userNames[uid]) pieces.push(userNames[uid]);
 
   for (const key of ["debit", "credit", "total", "amount", "balance", "runningBalance", "outstanding"] as const) {
     const v = tx[key];
@@ -332,22 +330,38 @@ function transactionMatchesRecentQuickSearch(
   }
 
   const d =
-    tx?.date && (typeof tx.date.toDate === "function" ? tx.date.toDate() : new Date(tx.date));
+    tx?.date && (typeof (tx.date as { toDate?: () => Date }).toDate === "function"
+      ? (tx.date as { toDate: () => Date }).toDate()
+      : new Date(tx.date as string | number | Date));
   if (d && !isNaN(d.getTime())) {
     pieces.push(d.toISOString(), d.toLocaleDateString(), d.toLocaleString());
   }
 
   const hay = pieces.join(" ").toLowerCase().replace(/,/g, " ");
-
-  const numericFields = ["debit", "credit", "total", "amount", "balance", "runningBalance", "outstanding"].map(
-    (k) => Number(tx[k])
+  const numericFields = ["debit", "credit", "total", "amount", "balance", "runningBalance", "outstanding"].map((k) =>
+    Number(tx[k]),
   );
+
+  return { tx, hay, numericFields };
+}
+
+/** Recent Search: voucher/narration/accounts/user/amounts — kahin se bhi token match. */
+function recentSearchHaystackRowMatchesQuery(row: RecentSearchHaystackRow, qLower: string): boolean {
+  if (!qLower) return true;
+  const tokens = qLower
+    .split(/\s+/)
+    .map((t) => t.replace(/,/g, "").trim().toLowerCase())
+    .filter(Boolean);
+  if (tokens.length === 0) return true;
 
   for (const tok of tokens) {
     if (!tok) continue;
-    if (hay.includes(tok)) continue;
+    if (row.hay.includes(tok)) continue;
     const qNum = Number(tok.replace(/,/g, ""));
-    if (Number.isFinite(qNum) && numericFields.some((n) => Number.isFinite(n) && Math.abs(n - qNum) < 0.000001)) {
+    if (
+      Number.isFinite(qNum) &&
+      row.numericFields.some((n) => Number.isFinite(n) && Math.abs(n - qNum) < 0.000001)
+    ) {
       continue;
     }
     return false;
@@ -917,8 +931,10 @@ export function DashboardPageContentImpl() {
   const [isRecentCalendarOpen, setIsRecentCalendarOpen] = React.useState(false);
   const [tempRecentDateRange, setTempRecentDateRange] = React.useState<DateRange | undefined>(undefined);
   const [recentFilters, setRecentFilters] = useState<Record<string, string>>({});
-  /** Recent card header: client-side quick filter (voucher no / narration / names) — pool + "Showing" counts isi se. */
-  const [recentQuickSearch, setRecentQuickSearch] = useState('');
+  /** Recent search: live filter; sirf sync filter ≥5s ho to health popup. */
+  const [recentQuickSearchInput, setRecentQuickSearchInput] = useState("");
+  const recentSearchLastFilterMsRef = useRef(0);
+  const recentSearchSlowBrakeAtRef = useRef(0);
   /** Recent card quick chip: click -> all-time unapproved only (date/type/column filters ignore). */
   const [recentUnapprovedOnly, setRecentUnapprovedOnly] = useState(false);
   const [activeRecentFilter, setActiveRecentFilter] = useState<string | null>(null);
@@ -1524,12 +1540,46 @@ export function DashboardPageContentImpl() {
   }, [allRecentTransactions, recentUnapprovedOnly, includeNotesInTable, dashboardRecentPipelineActive]);
 
   const recentPoolBeforeLimit = useMemo(() => {
-    const q = recentQuickSearch.trim().toLowerCase();
-    if (!q) return recentSortedBase;
-    return recentSortedBase.filter((tx) =>
-      transactionMatchesRecentQuickSearch(tx, q, journalAccountNames, userNames)
+    const q = recentQuickSearchInput.trim().toLowerCase();
+    if (!q) {
+      recentSearchLastFilterMsRef.current = 0;
+      return recentSortedBase;
+    }
+    if (!dashboardRecentPipelineActive || recentSortedBase.length === 0) {
+      recentSearchLastFilterMsRef.current = 0;
+      return [] as typeof recentSortedBase;
+    }
+    const t0 = performance.now();
+    const filtered = recentSortedBase.filter((tx) => {
+      const row = buildRecentTransactionSearchHaystackRow(
+        tx as Record<string, unknown>,
+        journalAccountNames,
+        userNames,
+      );
+      return recentSearchHaystackRowMatchesQuery(row, q);
+    });
+    recentSearchLastFilterMsRef.current = performance.now() - t0;
+    return filtered;
+  }, [
+    recentSortedBase,
+    recentQuickSearchInput,
+    journalAccountNames,
+    userNames,
+    dashboardRecentPipelineActive,
+  ]);
+
+  useEffect(() => {
+    const q = recentQuickSearchInput.trim();
+    if (!q) return;
+    const elapsed = recentSearchLastFilterMsRef.current;
+    if (elapsed < RECENT_SEARCH_SLOW_MS) return;
+    const now = Date.now();
+    if (now - recentSearchSlowBrakeAtRef.current < 30_000) return;
+    recentSearchSlowBrakeAtRef.current = now;
+    engageClientHealthEmergencyBrake(
+      `Recent search filter took ${(elapsed / 1000).toFixed(1)}s (threshold 5s). Copy log if needed, then Resume.`,
     );
-  }, [recentSortedBase, recentQuickSearch, journalAccountNames, userNames]);
+  }, [recentPoolBeforeLimit, recentQuickSearchInput]);
 
   const recentListTotal = recentPoolBeforeLimit.length;
   const recentEffectiveRowsPerPage = Math.max(10, recentRowsPerPage || 50);
@@ -1574,7 +1624,7 @@ export function DashboardPageContentImpl() {
 
   React.useEffect(() => {
     setRecentCurrentPage(1);
-  }, [recentQuickSearch, recentDateRange, recentFilters, recentUnapprovedOnly, includeNotesInTable]);
+  }, [recentQuickSearchInput, recentDateRange, recentFilters, recentUnapprovedOnly, includeNotesInTable]);
   React.useEffect(() => {
     setRecentCurrentPage((p) => Math.min(Math.max(1, p), recentTotalPages));
   }, [recentTotalPages]);
@@ -1935,21 +1985,21 @@ export function DashboardPageContentImpl() {
       recentDateRange !== undefined ||
       Object.values(recentFilters).some(v => v) ||
       recentUnapprovedOnly ||
-      recentQuickSearch.trim() !== '',
-    [recentDateRange, recentFilters, recentUnapprovedOnly, recentQuickSearch]
+      recentQuickSearchInput.trim() !== "",
+    [recentDateRange, recentFilters, recentUnapprovedOnly, recentQuickSearchInput]
   );
   const clearRecentFilters = () => {
     setRecentDateRange(undefined);
     setRecentFilters({});
     setRecentUnapprovedOnly(false);
-    setRecentQuickSearch('');
+    setRecentQuickSearchInput("");
   };
   const applyRecentUnapprovedFilter = () => {
     // User request: button click = all-time unapproved vouchers only.
     setRecentUnapprovedOnly(true);
     setRecentDateRange(undefined);
     setRecentFilters({});
-    setRecentQuickSearch('');
+    setRecentQuickSearchInput("");
     setActiveRecentFilter(null);
   };
   
@@ -2255,8 +2305,8 @@ export function DashboardPageContentImpl() {
                 listChrome
                 listChromeSearch
                 placeholder="Search"
-                value={recentQuickSearch}
-                onChange={(e) => setRecentQuickSearch(e.target.value)}
+                value={recentQuickSearchInput}
+                onChange={(e) => setRecentQuickSearchInput(e.target.value)}
                 className="h-9 min-h-9 max-h-9 w-full min-w-[2in] bg-white py-1 pl-8 pr-2 text-sm dark:bg-white"
                 aria-label="Search recent vouchers"
               />
@@ -2425,7 +2475,7 @@ export function DashboardPageContentImpl() {
           hideBalanceColumn={true}
           showNarration={showRecentNarration}
           visibleColumns={visibleColumns}
-          transactionCardSearchHighlight={recentQuickSearch}
+          transactionCardSearchHighlight={recentQuickSearchInput}
         />
         {recentTransactionsCompact ? (
           <MobileTransactionsPager
@@ -2847,8 +2897,8 @@ export function DashboardPageContentImpl() {
                   listChrome
                   listChromeSearch
                   placeholder="Search"
-                  value={recentQuickSearch}
-                  onChange={(e) => setRecentQuickSearch(e.target.value)}
+                  value={recentQuickSearchInput}
+                  onChange={(e) => setRecentQuickSearchInput(e.target.value)}
                   className="h-8 min-h-8 max-h-8 py-1 pl-8 pr-2 text-sm"
                   aria-label="Search recent vouchers"
                 />

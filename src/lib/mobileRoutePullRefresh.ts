@@ -79,8 +79,6 @@ export function collectionsForMobileRoutePullRefresh(pathname: string): MobileRo
   if (route.startsWith("/quotations")) {
     return ["quotations", ...asBackupCollections(activeMasterCollectionPathsForRoute(route))];
   }
-  if (route.startsWith("/reports")) return ["vouchers"];
-
   return asBackupCollections(activeMasterCollectionPathsForRoute(route));
 }
 

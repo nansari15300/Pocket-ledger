@@ -9810,6 +9810,9 @@ body[class*="theme-"] [data-pl-party-mobile-list-dock] .pl-mlc-search-row input[
   background-color: #fff !important;
   background-image: none !important;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  max-height: 30px !important;
 }
 body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-search-row input[data-pl-mlc-search-input]:focus-visible,
 body[class*="theme-"] [data-pl-mobile-list-dock] .pl-mlc-search-row input[data-pl-mlc-search-input]:focus-visible,

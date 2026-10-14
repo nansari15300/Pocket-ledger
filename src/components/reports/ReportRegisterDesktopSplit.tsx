@@ -38,7 +38,11 @@ export function ReportRegisterDesktopSplit({
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{listPanel}</div>
         <ResizeWidthHandle onPointerDown={beginResize} title={resizeTitle} />
       </div>
-      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden" data-pl-report-register-trxn="">
+      <div
+        className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+        data-pl-report-register-trxn=""
+        data-pl-report-ledger-txn-detail=""
+      >
         {detailPanel}
       </div>
     </div>

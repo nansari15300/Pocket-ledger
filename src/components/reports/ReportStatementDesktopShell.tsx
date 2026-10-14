@@ -15,6 +15,7 @@ import {
   ReportStatementSummaryCardsGrid,
   type ReportStatementSummaryCardData,
 } from "@/components/reports/ReportStatementSummaryCards";
+import { REPORT_LIST_SEARCH_INPUT_CN } from "@/components/reports/ReportRegisterListSearchRow";
 
 export type ReportStatementDesktopShellProps = {
   listChromeRouteKey: MasterDetailListRouteKey;
@@ -95,6 +96,7 @@ export function ReportStatementDesktopShell({
           placeholder={listTab === groupTabValue ? groupSearchPlaceholder : entitySearchPlaceholder}
           listChrome
           listChromeSearch
+          className={REPORT_LIST_SEARCH_INPUT_CN}
           value={listSearchTerm}
           onChange={(e) => onListSearchChange(e.target.value)}
           autoComplete="off"

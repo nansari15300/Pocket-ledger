@@ -2,6 +2,7 @@
 
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { VOUCHER_FORM_MASTER_COLLECTION_PATHS } from "@/lib/ledgerActiveMasterCollections";
 
 /**
  * APK + EXE: background sync/outbox bina poori registry+listener rebuild — page shake / auto re-render kam.
@@ -40,8 +41,8 @@ export function sqliteBumpCollectionNeededOnLedgerRoute(pathname: string, collec
   if (route.startsWith("/gallery")) {
     return coll === "vouchers";
   }
-  if (route === "/reports" || route === "/reports/") {
-    return coll === "vouchers";
+  if (route === "/reports" || route === "/reports/" || route.startsWith("/reports/")) {
+    return VOUCHER_FORM_MASTER_COLLECTION_PATHS.has(coll);
   }
   return true;
 }

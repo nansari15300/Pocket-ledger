@@ -1,8 +1,5 @@
 "use client";
 
-import { isCapacitorNativeApp, isAndroidOrIosEmbeddedWebView } from "@/lib/isCapacitorNative";
-import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
-import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import {
   hideClientHealthEmergencyOverlay,
   refreshClientHealthEmergencyOverlayLog,
@@ -12,9 +9,9 @@ import {
 /**
  * Client UI health: recent clicks, JS errors, and main-thread stalls (freeze hints).
  *
- * Default ON (web + EXE + APK). Opt-out:
- *   localStorage.setItem("pl_ui_health_monitor", "0"); location.reload();
- * Force ON: pl_ui_health_monitor=1
+ * Default ON only in development builds (`npm run dev`). Production web/EXE/APK: OFF.
+ * Opt-out (dev): localStorage pl_ui_health_monitor=0
+ * Force ON (prod debug): pl_ui_health_monitor=1 or NEXT_PUBLIC_PL_UI_HEALTH_MONITOR=1
  *
  * Manual diary: Ctrl+Shift+U (when monitor enabled).
  * After freeze: diary auto-opens when the main thread recovers (stall detected) or tab becomes visible again.
@@ -190,24 +187,24 @@ function envMonitorFlag(): boolean {
   }
 }
 
-function isEmbeddedShellHealthMonitorDefault(): boolean {
-  if (typeof window === "undefined") return false;
-  return (
-    isCapacitorNativeApp() ||
-    isAndroidOrIosEmbeddedWebView() ||
-    isElectronDesktopApp() ||
-    isStaticAppBuild()
-  );
+/** Baked at build time — true for `next dev`, false for production static/EXE/APK. */
+function isDevBuildHealthMonitorDefault(): boolean {
+  try {
+    return typeof process !== "undefined" && process.env.NODE_ENV === "development";
+  } catch {
+    return false;
+  }
 }
 
 export function isClientHealthMonitorEnabled(): boolean {
-  if (typeof window === "undefined") return envMonitorFlag();
+  if (typeof window === "undefined") {
+    return envMonitorFlag() || isDevBuildHealthMonitorDefault();
+  }
   try {
     if (window.localStorage.getItem("pl_ui_health_monitor") === "0") return false;
   } catch {
     /* ignore */
   }
-  if (isEmbeddedShellHealthMonitorDefault()) return true;
   if (envMonitorFlag()) return true;
   try {
     if (window.localStorage.getItem("pl_ui_health_monitor") === "1") return true;
@@ -215,15 +212,7 @@ export function isClientHealthMonitorEnabled(): boolean {
   } catch {
     /* ignore */
   }
-  try {
-    if (typeof process !== "undefined" && process.env.NODE_ENV === "development") return true;
-  } catch {
-    /* ignore */
-  }
-  const host = window.location.hostname || "";
-  if (host === "localhost" || host === "127.0.0.1") return true;
-  /** Global default ON — freeze diagnostics (opt-out: localStorage pl_ui_health_monitor=0). */
-  return true;
+  return isDevBuildHealthMonitorDefault();
 }
 
 export function isPlUiHealthBrakeEngaged(): boolean {

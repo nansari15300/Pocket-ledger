@@ -24,6 +24,7 @@ import { useSearchParams } from "next/navigation";
 import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
 import { ReportRegisterDesktopSplit } from "@/components/reports/ReportRegisterDesktopSplit";
 import { ReportRegisterListHeading } from "@/components/reports/ReportRegisterListHeading";
+import { ReportRegisterListSearchRow } from "@/components/reports/ReportRegisterListSearchRow";
 import {
   voucherCountsAsDashboardPaySalary,
   voucherCountsAsDashboardPaymentOutExcludingPaySalary,
@@ -448,17 +449,11 @@ export function PaymentOutReportDetail() {
                   </p>
                 </Card>
               </div>
-              <div className="p-3 border-b flex-shrink-0">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search payees..."
-                    className="pl-9"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                </div>
-              </div>
+              <ReportRegisterListSearchRow
+                placeholder="Search payees..."
+                value={searchTerm}
+                onChange={setSearchTerm}
+              />
               <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
                 <h3 className="text-sm font-semibold">Paid to ({filteredPayees.length})</h3>
               </div>

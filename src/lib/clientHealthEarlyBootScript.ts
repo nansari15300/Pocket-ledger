@@ -1,15 +1,12 @@
 /** Inlined in root layout — runs before React: clicks/errors only (no heartbeat; avoids 60s timer false stalls). */
+const PL_HEALTH_DEV_BUILD = process.env.NODE_ENV === "development";
+
 export const CLIENT_HEALTH_EARLY_BOOT_SCRIPT = `(function(){try{
+var PL_HEALTH_DEV_BUILD=${PL_HEALTH_DEV_BUILD ? "true" : "false"};
 function healthOn(){
   try{if(localStorage.getItem("pl_ui_health_monitor")==="0")return false;}catch(e){}
   try{if(localStorage.getItem("pl_ui_health_monitor")==="1")return true;if(sessionStorage.getItem("pl_ui_health_monitor")==="1")return true;}catch(e){}
-  var h=location.hostname||"";
-  if(h==="localhost"||h==="127.0.0.1")return true;
-  var ua=(navigator.userAgent||"").toLowerCase();
-  if(ua.indexOf("electron")>=0)return true;
-  try{var C=window.Capacitor;if(C&&C.isNativePlatform&&C.isNativePlatform())return true;}catch(e){}
-  if(/Android/i.test(ua)&&/; wv\\)|\\bwv\\b|Capacitor|Ionic/i.test(ua))return true;
-  return true;
+  return PL_HEALTH_DEV_BUILD===true;
 }
 if(!healthOn())return;
 window.__PL_UI_HEALTH_EARLY__=1;

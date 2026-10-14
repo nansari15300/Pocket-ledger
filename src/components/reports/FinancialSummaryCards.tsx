@@ -53,6 +53,12 @@ import {
 import { getTransactionAmounts as getLedgerTransactionAmounts } from "@/hooks/use-transactions";
 import { dashboardStatCardReportHref } from "@/lib/dashboardStatCardReportHref";
 import {
+    formatAnusuchi13FyRangeLabel,
+    getAnusuchi13FyKey,
+    getFiscalRangeForFyKey,
+} from "@/lib/reports/anusuchi13Confirmation";
+import { resolveCompanyFiscalYearDates } from "@/lib/companyFyVoucherSuggestion";
+import {
     computeReceivablesPayablesFinancialSummary,
 } from "@/lib/receivablesPayablesFinancialSummary";
 import { computeRpReceivePayAtDayEnds, type RpSeriesEntity } from "@/lib/receivablesPayablesLedgerAmounts";
@@ -524,13 +530,31 @@ const ReportMonthYearFilter = ({ dateRange, setDateRange, dateSystem }: { dateRa
 function TopSummaryRowWrap({
     compact,
     className,
+    chartRowLayout,
     children,
 }: {
     compact: boolean;
     className: string;
+    /** Chart tab: 4 KPI cards full-width row (Stock niche alag row). */
+    chartRowLayout?: boolean;
     children: React.ReactNode;
 }) {
-    return compact ? <>{children}</> : <div className={className}>{children}</div>;
+    if (compact) {
+        return className ? <div className={className}>{children}</div> : <>{children}</>;
+    }
+    return (
+        <div
+            data-pl-dashboard-top-summary-row=""
+            className={cn(
+                chartRowLayout
+                    ? "grid w-full min-w-0 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 items-stretch gap-[5px] [&>*]:h-full [&>*]:min-h-[12rem] [&>*]:min-w-0"
+                    : "grid w-max min-w-full grid-flow-col auto-cols-[minmax(min-content,1fr)] items-stretch gap-[5px] [&>*]:h-full [&>*]:min-h-[12rem]",
+                className,
+            )}
+        >
+            {children}
+        </div>
+    );
 }
 
 export function FinancialSummaryCards({
@@ -1906,6 +1930,128 @@ export function FinancialSummaryCards({
         });
     }, [vouchers, voucherStatsDateRange]);
 
+    const companyCountry = company?.country || "Nepal";
+    const companyFyDates = useMemo(() => resolveCompanyFiscalYearDates(company), [company]);
+    const runningFyKey = useMemo(
+        () => getAnusuchi13FyKey(companyCountry, new Date(), companyFyDates),
+        [companyCountry, companyFyDates],
+    );
+    const entityVoucherFyKeys = useMemo(() => {
+        const keys = new Set<string>();
+        keys.add(runningFyKey);
+        for (const v of vouchers || []) {
+            const d = safeToDate(v.date);
+            if (d) keys.add(getAnusuchi13FyKey(companyCountry, d, companyFyDates));
+        }
+        return [...keys].sort((a, b) => {
+            const aStart = Number(a.split("-")[0]) || 0;
+            const bStart = Number(b.split("-")[0]) || 0;
+            return bStart - aStart;
+        });
+    }, [vouchers, companyCountry, companyFyDates, runningFyKey]);
+
+    type EntitySummaryFyPick = "current" | "all" | string;
+    type EntitySummaryPeriodPick = "fy_full" | "current_month";
+    const [entitySummaryFyPick, setEntitySummaryFyPick] = useState<EntitySummaryFyPick>("current");
+    const [entitySummaryPeriodPick, setEntitySummaryPeriodPick] =
+        useState<EntitySummaryPeriodPick>("fy_full");
+
+    const entitySummaryEffectiveRange = useMemo((): { from: Date; to: Date } | null => {
+        const monthOnly = () => {
+            const m = getCurrentMonthDateRange(dateSystem);
+            if (!m?.from) return null;
+            return {
+                from: startOfDay(m.from),
+                to: endOfDay(m.to ?? m.from),
+            };
+        };
+        if (entitySummaryFyPick === "all") {
+            return entitySummaryPeriodPick === "current_month" ? monthOnly() : null;
+        }
+        const fyKey = entitySummaryFyPick === "current" ? runningFyKey : entitySummaryFyPick;
+        const { start, end } = getFiscalRangeForFyKey(companyCountry, fyKey, companyFyDates);
+        const fyFrom = startOfDay(start);
+        const fyTo = endOfDay(end);
+        if (entitySummaryPeriodPick !== "current_month") {
+            return { from: fyFrom, to: fyTo };
+        }
+        const month = monthOnly();
+        if (!month) return { from: fyFrom, to: fyTo };
+        const from = month.from > fyFrom ? month.from : fyFrom;
+        const to = month.to < fyTo ? month.to : fyTo;
+        return { from, to };
+    }, [
+        entitySummaryFyPick,
+        entitySummaryPeriodPick,
+        runningFyKey,
+        companyCountry,
+        companyFyDates,
+        dateSystem,
+    ]);
+
+    const entitySummaryDateInRange = useCallback(
+        (d: Date | null | undefined) => {
+            if (!d) return false;
+            if (!entitySummaryEffectiveRange) return true;
+            return d >= entitySummaryEffectiveRange.from && d <= entitySummaryEffectiveRange.to;
+        },
+        [entitySummaryEffectiveRange],
+    );
+
+    const entityFilteredParties = useMemo(
+        () =>
+            processedParties.filter((p: any) =>
+                entitySummaryDateInRange(pickEntityCreatedAt(p)),
+            ),
+        [processedParties, entitySummaryDateInRange],
+    );
+    const entityFilteredStaff = useMemo(
+        () =>
+            processedStaff.filter((s: any) => entitySummaryDateInRange(pickEntityCreatedAt(s))),
+        [processedStaff, entitySummaryDateInRange],
+    );
+    const entityFilteredAccounts = useMemo(
+        () =>
+            processedAccounts.filter((a: any) =>
+                entitySummaryDateInRange(pickEntityCreatedAt(a)),
+            ),
+        [processedAccounts, entitySummaryDateInRange],
+    );
+    const entityFilteredItems = useMemo(
+        () =>
+            processedItems.filter((i: any) => entitySummaryDateInRange(pickEntityCreatedAt(i))),
+        [processedItems, entitySummaryDateInRange],
+    );
+
+    const entityVouchersFiltered = useMemo(
+        () =>
+            (vouchers || []).filter((v) => entitySummaryDateInRange(safeToDate(v.date))),
+        [vouchers, entitySummaryDateInRange],
+    );
+
+    const entitySummaryScopeHint = useMemo(() => {
+        if (!entitySummaryEffectiveRange) {
+            return entitySummaryFyPick === "all" ? "All FY · all dates" : "";
+        }
+        const fmt = (d: Date) => (dateSystem === "BS" ? formatDateBS(d) : formatDate(d));
+        const range = `${fmt(entitySummaryEffectiveRange.from)} → ${fmt(entitySummaryEffectiveRange.to)}`;
+        if (entitySummaryPeriodPick === "current_month") {
+            return `Current month (within FY) · ${range}`;
+        }
+        if (entitySummaryFyPick === "all") return range;
+        const fyKey = entitySummaryFyPick === "current" ? runningFyKey : entitySummaryFyPick;
+        return `${formatAnusuchi13FyRangeLabel(companyCountry, fyKey, fmt)} · ${range}`;
+    }, [
+        entitySummaryEffectiveRange,
+        entitySummaryFyPick,
+        entitySummaryPeriodPick,
+        runningFyKey,
+        companyCountry,
+        dateSystem,
+        formatDate,
+        formatDateBS,
+    ]);
+
     const stats = useMemo(() => {
         if (!vouchers) return { otherStats: statCardData.map(s => ({ ...s, total: 0, count: 0 })) };
 
@@ -1930,34 +2076,6 @@ export function FinancialSummaryCards({
 
         return { otherStats };
     }, [vouchers, voucherStatsFilteredVouchers]);
-
-    /** Desktop: Stock Summary height = right voucher-stats column (3/4/5 rows — screen par). */
-    const voucherStatsColRef = useRef<HTMLDivElement>(null);
-    const [stockPanelHeight, setStockPanelHeight] = useState<number | undefined>(undefined);
-    useEffect(() => {
-        if (compact || showVoucherDateCharts) return;
-        const el = voucherStatsColRef.current;
-        if (!el || typeof window === "undefined") return;
-
-        const mq = window.matchMedia("(min-width: 1024px)");
-        const syncHeight = () => {
-            if (!mq.matches) {
-                setStockPanelHeight(undefined);
-                return;
-            }
-            setStockPanelHeight(el.offsetHeight);
-        };
-
-        const ro = new ResizeObserver(syncHeight);
-        ro.observe(el);
-        mq.addEventListener("change", syncHeight);
-        syncHeight();
-
-        return () => {
-            ro.disconnect();
-            mq.removeEventListener("change", syncHeight);
-        };
-    }, [compact, stats.otherStats.length, showVoucherDateCharts]);
 
     // Chart tab: har voucher-type card ke liye din (AD calendar day) par total amount — dashboard totals se same filter/amount rules.
     const voucherStatDateChartData = useMemo(() => {
@@ -2255,84 +2373,84 @@ export function FinancialSummaryCards({
     // Chart tab: entity count cards — master `createdAt` se din-wise adds (Parties / Staff / Bank+Cash / Items).
     const entityChartPartiesDaily = useMemo(() => {
         if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
-        const partyDates = processedParties
+        const partyDates = entityFilteredParties
             .filter((p: any) => !DASHBOARD_CHART_EXCLUDE_PARTY_IDS.has(p.id) && !p.isSystemAccount)
             .map((p: any) => pickEntityCreatedAt(p));
         return buildDailyCountChart(partyDates, dateSystem, formatDate, formatDateBS);
-    }, [showVoucherDateCharts, processedParties, dateSystem, formatDate, formatDateBS]);
+    }, [showVoucherDateCharts, entityFilteredParties, dateSystem, formatDate, formatDateBS]);
 
     const entityChartStaffDaily = useMemo(() => {
         if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
         return buildDailyCountChart(
-            processedStaff.map((s: any) => pickEntityCreatedAt(s)),
+            entityFilteredStaff.map((s: any) => pickEntityCreatedAt(s)),
             dateSystem,
             formatDate,
             formatDateBS
         );
-    }, [showVoucherDateCharts, processedStaff, dateSystem, formatDate, formatDateBS]);
+    }, [showVoucherDateCharts, entityFilteredStaff, dateSystem, formatDate, formatDateBS]);
 
     const entityChartBankCashDaily = useMemo(() => {
         if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
-        const dates = processedAccounts
+        const dates = entityFilteredAccounts
             .filter((a: any) => a.accountType === "Bank" || a.accountType === "Cash")
             .map((a: any) => pickEntityCreatedAt(a));
         return buildDailyCountChart(dates, dateSystem, formatDate, formatDateBS);
-    }, [showVoucherDateCharts, processedAccounts, dateSystem, formatDate, formatDateBS]);
+    }, [showVoucherDateCharts, entityFilteredAccounts, dateSystem, formatDate, formatDateBS]);
 
     const entityChartItemsDaily = useMemo(() => {
         if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
         return buildDailyCountChart(
-            processedItems.map((i: any) => pickEntityCreatedAt(i)),
+            entityFilteredItems.map((i: any) => pickEntityCreatedAt(i)),
             dateSystem,
             formatDate,
             formatDateBS
         );
-    }, [showVoucherDateCharts, processedItems, dateSystem, formatDate, formatDateBS]);
+    }, [showVoucherDateCharts, entityFilteredItems, dateSystem, formatDate, formatDateBS]);
 
     const entityChartPartiesPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
-        const partyDates = processedParties
+        const partyDates = entityFilteredParties
             .filter((p: any) => !DASHBOARD_CHART_EXCLUDE_PARTY_IDS.has(p.id) && !p.isSystemAccount)
             .map((p: any) => pickEntityCreatedAt(p));
         return buildDailyCountPointsByDay(partyDates);
-    }, [showVoucherDateCharts, processedParties]);
+    }, [showVoucherDateCharts, entityFilteredParties]);
 
     const entityChartStaffPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
-        return buildDailyCountPointsByDay(processedStaff.map((s: any) => pickEntityCreatedAt(s)));
-    }, [showVoucherDateCharts, processedStaff]);
+        return buildDailyCountPointsByDay(entityFilteredStaff.map((s: any) => pickEntityCreatedAt(s)));
+    }, [showVoucherDateCharts, entityFilteredStaff]);
 
     const entityChartBankCashPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
-        const dates = processedAccounts
+        const dates = entityFilteredAccounts
             .filter((a: any) => a.accountType === "Bank" || a.accountType === "Cash")
             .map((a: any) => pickEntityCreatedAt(a));
         return buildDailyCountPointsByDay(dates);
-    }, [showVoucherDateCharts, processedAccounts]);
+    }, [showVoucherDateCharts, entityFilteredAccounts]);
 
     const entityChartItemsPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
-        return buildDailyCountPointsByDay(processedItems.map((i: any) => pickEntityCreatedAt(i)));
-    }, [showVoucherDateCharts, processedItems]);
+        return buildDailyCountPointsByDay(entityFilteredItems.map((i: any) => pickEntityCreatedAt(i)));
+    }, [showVoucherDateCharts, entityFilteredItems]);
 
     /** Total Vouchers card: voucher `date` par din-wise count (mini chart). */
     const entityChartVouchersDaily = useMemo(() => {
         if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
-        const dates = voucherStatsFilteredVouchers.map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
+        const dates = entityVouchersFiltered.map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
         return buildDailyCountChart(dates, dateSystem, formatDate, formatDateBS);
-    }, [showVoucherDateCharts, voucherStatsFilteredVouchers, dateSystem, formatDate, formatDateBS]);
+    }, [showVoucherDateCharts, entityVouchersFiltered, dateSystem, formatDate, formatDateBS]);
 
     const entityChartVouchersCountPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
-        const dates = voucherStatsFilteredVouchers.map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
+        const dates = entityVouchersFiltered.map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
         return buildDailyCountPointsByDay(dates);
-    }, [showVoucherDateCharts, voucherStatsFilteredVouchers]);
+    }, [showVoucherDateCharts, entityVouchersFiltered]);
 
     /** View full popup: us din sab vouchers ka total amount (`total`/`amount`). */
     const voucherAmountPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
         const dayMap = new Map<string, number>();
-        for (const v of voucherStatsFilteredVouchers) {
+        for (const v of entityVouchersFiltered) {
             const d = safeToDate(v.date);
             if (!d) continue;
             const k = format(startOfDay(d), "yyyy-MM-dd");
@@ -2342,7 +2460,7 @@ export function FinancialSummaryCards({
         return Array.from(dayMap.entries())
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([dayKey, amount]) => ({ dayKey, amount }));
-    }, [showVoucherDateCharts, voucherStatsFilteredVouchers]);
+    }, [showVoucherDateCharts, entityVouchersFiltered]);
 
     // Chart tab: Stock — item master create date se daily add count.
     const dashboardStockItemAdds = useMemo(() => {
@@ -2379,19 +2497,38 @@ export function FinancialSummaryCards({
         };
     }, [showVoucherDateCharts, processedAccounts, dateSystem, formatDate, formatDateBS]);
 
-    // Chart mode only: jitni width available ho, cards usme stretch ho jayein; normal Summary mode purana fixed slots rakhe.
-    const gridCols = compact
-        ? ""
+    /** Entity row: same page width as top 5 cards — never wrap. */
+    const dashboardEntityRowClass = "flex w-full min-w-0 flex-nowrap items-stretch gap-[5px]";
+    const topSummaryRowWrapClass = "";
+    const topSummaryCardShellClass = compact
+        ? "h-full flex flex-col"
         : showVoucherDateCharts
-          ? "grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))]"
-          : "grid-cols-1 sm:grid-cols-[repeat(2,minmax(min-content,1fr))] lg:grid-cols-[repeat(3,minmax(min-content,1fr))] xl:grid-cols-[repeat(5,minmax(min-content,1fr))]";
-    /** Outstanding / Cash Flow / Tax / Bank / Auto recurring — ek row me same height. */
-    const topSummaryRowWrapClass = compact
-        ? ""
-        : `col-span-full grid ${gridCols} gap-[5px] items-stretch`;
-    const topSummaryCardShellClass = "h-full flex flex-col";
+          ? "flex h-full min-h-[12rem] min-w-0 w-full flex-col overflow-hidden"
+          : "flex h-full min-h-[12rem] min-w-max w-full flex-col overflow-hidden";
     const topSummaryCardBodyClass = "flex-1 flex flex-col";
     const topSummaryCardFooterClass = "mt-auto shrink-0 text-right pt-2";
+    const topSummaryMetricRowCn = cn(
+        "flex items-baseline justify-between",
+        !compact && "flex-nowrap gap-x-4"
+    );
+    const topSummaryMetricLabelCn = cn(
+        "text-xs text-muted-foreground",
+        !compact && "shrink-0 whitespace-nowrap"
+    );
+    const topSummaryMetricValueCn = cn(!compact && "shrink-0 whitespace-nowrap text-right tabular-nums");
+    const topSummaryMetricLineValueCn = cn(
+        compact ? "text-sm font-bold" : "text-base font-bold",
+        topSummaryMetricValueCn,
+    );
+    const topSummaryMetricNetLabelCn = cn(
+        compact ? "text-xs font-bold" : "text-sm font-bold",
+        !compact && "shrink-0 whitespace-nowrap",
+    );
+    const topSummaryMetricNetValueCn = cn(
+        compact ? "text-base font-bold" : "text-lg font-bold",
+        topSummaryMetricValueCn,
+    );
+    const topSummaryMetricDrCrCn = "text-xs font-normal";
     // Dashboard request: keep exact 5px card-to-card spacing across summary grids.
     const cardSpacing = compact ? "gap-[5px] px-0.5" : "gap-[5px] px-0.5";
     // APK WebView compatibility: apply shared top ribbon strip class directly on every dashboard summary card.
@@ -2401,11 +2538,22 @@ export function FinancialSummaryCards({
     
     // Responsive classes only for compact mode (report page)
     // Use min-width to prevent content overflow, cards will auto-adjust columns
-    const cardWrapperClass = compact ? "flex flex-col min-w-0 w-full" : "";
+    const cardWrapperClass = compact
+        ? "flex flex-col min-w-0 w-full"
+        : "h-full min-w-max w-full overflow-hidden";
     const headerClass = compact ? "min-w-0 gap-2 flex-shrink-0" : "";
     const titleClass = compact ? "truncate flex-shrink-0" : "";
+    const topSummaryCardHeaderClass = cn(
+        "flex flex-row items-center justify-between gap-2 space-y-0 p-4",
+        compact ? cn(headerClass, "overflow-hidden") : "min-w-0 shrink-0 flex-nowrap overflow-hidden"
+    );
+    const topSummaryCardHeaderTitleClass = cn(
+        "text-base whitespace-nowrap text-card-foreground",
+        titleClass,
+        compact ? "min-w-0" : "shrink-0"
+    );
     const filterWrapperClass = compact ? "flex-shrink-0" : "";
-    const contentClass = compact ? "flex-1 flex flex-col" : "";
+    const contentClass = compact ? "flex-1 flex flex-col" : "flex min-h-0 flex-1 flex-col";
 
     /** Mini vs full popup: same series, alag margins / tick size. */
     const dashboardChartLazyMount = showVoucherDateCharts && !compact;
@@ -2616,7 +2764,7 @@ export function FinancialSummaryCards({
         return (
             <Card
                 key={stat.type}
-                className={`hover:bg-muted/50 transition-colors self-start ${dashboardCardRibbonClass} ${ribbonTone(idx + 5)}`}
+                className={`flex min-w-0 w-full h-full flex-col hover:bg-muted/50 transition-colors ${dashboardCardRibbonClass} ${ribbonTone(idx + 5)}`}
             >
                 <CardHeader className="p-3 space-y-2">
                     <div className="flex items-center justify-between gap-2">
@@ -2639,7 +2787,7 @@ export function FinancialSummaryCards({
                         </div>
                     </div>
                 </CardHeader>
-                <CardContent className="p-3 pt-0">
+                <CardContent className="flex flex-1 flex-col p-3 pt-0">
                     {stat.type === "journal" || stat.type === "add_salary" || stat.type === "contra" ? (
                         <div className="text-xl font-bold text-blue-600">
                             {formatCurrency(stat.total, { noSuffix: true, duration: 2 })}
@@ -2665,7 +2813,7 @@ export function FinancialSummaryCards({
                         <p className="text-xs text-muted-foreground">{stat.count} transaction(s)</p>
                     )}
                     {showVoucherDateCharts && (
-                        <div className="mt-2 w-full min-w-0">
+                        <div className="mt-2 flex min-h-[104px] w-full min-w-0 flex-1 flex-col">
                             {voucherStatDateChartData[stat.type]?.length ? (
                                 <DashboardScrollFriendlyChartHost
                                     className="h-[104px]"
@@ -2683,7 +2831,9 @@ export function FinancialSummaryCards({
                                     }
                                 </DashboardScrollFriendlyChartHost>
                             ) : (
-                                <p className="text-[10px] text-muted-foreground pt-2">No dated rows for chart</p>
+                                <p className="flex h-[104px] items-center justify-center text-center text-[10px] text-muted-foreground">
+                                    No dated rows for chart
+                                </p>
                             )}
                         </div>
                     )}
@@ -2692,17 +2842,14 @@ export function FinancialSummaryCards({
         );
     };
 
-    const stockHeightMatched = !compact && stockPanelHeight != null && stockPanelHeight > 0;
-
-    /** Stock card: compact report = pehle; full dashboard = left column height right stats column se match. */
+    /** Stock card: compact report = pehle; full dashboard = top-5 ke niche full-width row. */
     const renderStockSummaryDashboardCard = () => (
             <Card
                 className={cn(
-                    compact ? "financial-summary-stock-card" : "w-full min-h-0",
-                    stockHeightMatched ? "h-full flex flex-col" : !compact && "self-start",
-                    "transition-colors",
+                    compact ? "financial-summary-stock-card" : "w-full min-h-0 self-stretch",
+                    "transition-colors flex flex-col",
                     dashboardCardRibbonClass,
-                    cardWrapperClass,
+                    compact ? cardWrapperClass : "overflow-hidden",
                     ribbonTone(0)
                 )}
             >
@@ -2714,22 +2861,15 @@ export function FinancialSummaryCards({
                         <MonthYearFilter dateRange={stockDateRange} setDateRange={setStockDateRange} dateSystem={dateSystem} />
                     )}
                 </CardHeader>
-                <CardContent
-                    className={cn(
-                        "p-4 pt-0 flex flex-col min-h-0",
-                        contentClass,
-                        stockHeightMatched && "flex-1"
-                    )}
-                >
-                    <ScrollArea
-                        className={cn(
-                            "flex-1 min-h-0 pr-3 -mr-1",
-                            compact && "min-h-0",
-                            !compact && !stockHeightMatched && "max-h-[min(55vh,380px)]"
-                        )}
-                    >
-                        <div className="space-y-6 pb-4">
-                            <div className="text-center pt-2">
+                <CardContent className={cn("p-4 pt-0 flex flex-col min-h-0", contentClass)}>
+                    <ScrollArea className={cn("flex-1 min-h-0 pr-3 -mr-1", compact && "min-h-0", !compact && "max-h-[min(42vh,320px)] md:max-h-none")}>
+                        <div
+                            className={cn(
+                                "space-y-6 pb-4",
+                                !compact && "md:grid md:grid-cols-3 md:gap-6 md:space-y-0 md:items-start",
+                            )}
+                        >
+                            <div className="text-center pt-2 md:pt-4">
                                 <p className="text-xs text-muted-foreground">Total Stock Value</p>
                                 <div className="flex items-center justify-center gap-2">
                                     <p className={cn('text-2xl font-bold whitespace-nowrap', overallStockSummary.totalStockValue >= 0 ? 'text-green-600' : 'text-red-600')}>
@@ -2737,7 +2877,7 @@ export function FinancialSummaryCards({
                                     </p>
                                 </div>
                             </div>
-                            <div className="space-y-6">
+                            <div className={cn("space-y-6", !compact && "md:space-y-0 md:contents")}>
                                 <div>
                                     <h4 className="text-xs font-semibold mb-2 text-center">Top 5 Sale Items</h4>
                                     <div className="space-y-2">
@@ -2876,7 +3016,20 @@ export function FinancialSummaryCards({
     return (
         <div
             {...(showVoucherDateCharts && !compact ? { "data-pl-dashboard-summary-charts": "" } : {})}
-            className={`${compact ? "financial-summary-grid" : `grid ${gridCols} w-max min-w-full items-start`} ${cardSpacing} ${compact ? "w-full" : ""}`}
+            data-pl-dashboard-summary-page-bound={
+                !compact && !showVoucherDateCharts ? "" : undefined
+            }
+            className={cn(
+                compact
+                    ? cn("financial-summary-grid w-full", cardSpacing)
+                    : cn(
+                          "flex flex-col items-stretch",
+                          showVoucherDateCharts
+                              ? "w-full min-w-0 max-w-full"
+                              : "w-max min-w-full",
+                          cardSpacing,
+                      )
+            )}
         >
             <Dialog
                 open={!!dashboardChartFullView}
@@ -2964,38 +3117,44 @@ export function FinancialSummaryCards({
                 </DialogContent>
             </Dialog>
             {compact && renderStockSummaryDashboardCard()}
-            <TopSummaryRowWrap compact={compact} className={topSummaryRowWrapClass}>
+            <TopSummaryRowWrap
+                compact={compact}
+                className={topSummaryRowWrapClass}
+                chartRowLayout={showVoucherDateCharts && !compact}
+            >
             {/* Auto recurring — same 5-col grid width as Outstanding (`col-span-1` slot se) */}
             {recurringSummarySlot}
 
             {can("view_receivable_payable_summary") && (
                 <Card className={`col-span-1 transition-colors ${topSummaryCardShellClass} ${dashboardCardRibbonClass} ${cardWrapperClass} ${ribbonTone(1)}`}>
-                    <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
-                        <CardTitle className={`text-base whitespace-nowrap text-card-foreground ${titleClass} min-w-0`}>
-                            Outstanding
-                        </CardTitle>
+                    <CardHeader className={topSummaryCardHeaderClass}>
+                        <CardTitle className={topSummaryCardHeaderTitleClass}>Outstanding</CardTitle>
+                        <div className="shrink-0">
                         {compact ? (
                             <ReportMonthYearFilter dateRange={receivablesDateRange} setDateRange={setReceivablesDateRange} dateSystem={dateSystem} />
                         ) : (
                             <MonthYearFilter dateRange={receivablesDateRange} setDateRange={setReceivablesDateRange} dateSystem={dateSystem} />
                         )}
+                        </div>
                     </CardHeader>
-                    <CardContent className={cn("p-4 pt-0 space-y-2", contentClass, topSummaryCardBodyClass)}>
-                        <div className="flex items-baseline justify-between">
-                            <span className="text-xs text-muted-foreground">{compact ? "Total Receivable" : "To Receive"}</span>
-                            <span className="text-base font-bold text-green-600">
-                                {formatCurrency(outstandingCardTotals.receivableSum, {noSuffix: true})} <span className="text-xs">Dr</span>
+                    <CardContent className={cn("overflow-hidden p-4 pt-0 space-y-2", contentClass, topSummaryCardBodyClass)}>
+                        <div className={topSummaryMetricRowCn}>
+                            <span className={topSummaryMetricLabelCn}>{compact ? "Total Receivable" : "To Receive"}</span>
+                            <span className={cn(topSummaryMetricLineValueCn, "text-green-600")}>
+                                {formatCurrency(outstandingCardTotals.receivableSum, {noSuffix: true})}{" "}
+                                <span className={topSummaryMetricDrCrCn}>Dr</span>
                             </span>
                         </div>
-                        <div className="flex items-baseline justify-between">
-                            <span className="text-xs text-muted-foreground">{compact ? "Total Payable" : "To Pay"}</span>
-                            <span className="text-base font-bold text-red-600">
-                                {formatCurrency(outstandingCardTotals.payableSum, {noSuffix: true})} <span className="text-xs">Cr</span>
+                        <div className={topSummaryMetricRowCn}>
+                            <span className={topSummaryMetricLabelCn}>{compact ? "Total Payable" : "To Pay"}</span>
+                            <span className={cn(topSummaryMetricLineValueCn, "text-red-600")}>
+                                {formatCurrency(outstandingCardTotals.payableSum, {noSuffix: true})}{" "}
+                                <span className={topSummaryMetricDrCrCn}>Cr</span>
                             </span>
                         </div>
-                        <div className="flex items-baseline justify-between pt-2 mt-2 border-t">
-                            <span className="text-sm font-bold">{compact ? "Net Balance" : "Net"}</span>
-                            <span className={cn('text-lg font-bold', outstandingCardTotals.net >= 0 ? "text-green-600" : "text-red-600")}>
+                        <div className={cn(topSummaryMetricRowCn, "pt-2 mt-2 border-t")}>
+                            <span className={topSummaryMetricNetLabelCn}>{compact ? "Net Balance" : "Net"}</span>
+                            <span className={cn(topSummaryMetricNetValueCn, outstandingCardTotals.net >= 0 ? "text-green-600" : "text-red-600")}>
                                 {formatCurrency(outstandingCardTotals.net, { showDrCr: true })}
                             </span>
                         </div>
@@ -3036,31 +3195,36 @@ export function FinancialSummaryCards({
             
             {can("view_payment_in_out_summary") && (
                 <Card className={`col-span-1 transition-colors ${topSummaryCardShellClass} ${dashboardCardRibbonClass} ${cardWrapperClass} ${ribbonTone(2)}`}>
-                    <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
-                        <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Cash Flow</CardTitle>
+                    <CardHeader className={topSummaryCardHeaderClass}>
+                        <CardTitle className={topSummaryCardHeaderTitleClass}>Cash Flow</CardTitle>
+                        <div className="shrink-0">
                         {compact ? (
                             <ReportMonthYearFilter dateRange={cashFlowDateRange} setDateRange={setCashFlowDateRange} dateSystem={dateSystem} />
                         ) : (
                             <MonthYearFilter dateRange={cashFlowDateRange} setDateRange={setCashFlowDateRange} dateSystem={dateSystem} />
                         )}
+                        </div>
                     </CardHeader>
-                    <CardContent className={cn("p-4 pt-0 space-y-2", contentClass, topSummaryCardBodyClass)}>
-                        <div className="flex items-baseline justify-between">
-                            <span className="text-xs text-muted-foreground">Payment In</span>
-                            <span className="text-base font-bold text-green-600">
-                                {formatCurrency(cashFlowDetails.totalInflow, {noSuffix: true})} <span className="text-xs">Dr</span>
+                    <CardContent className={cn("overflow-hidden p-4 pt-0 space-y-2", contentClass, topSummaryCardBodyClass)}>
+                        <div className={topSummaryMetricRowCn}>
+                            <span className={topSummaryMetricLabelCn}>Payment In</span>
+                            <span className={cn(topSummaryMetricLineValueCn, "text-green-600")}>
+                                {formatCurrency(cashFlowDetails.totalInflow, {noSuffix: true})}{" "}
+                                <span className={topSummaryMetricDrCrCn}>Dr</span>
                             </span>
                         </div>
-                        <div className="flex items-baseline justify-between">
-                            <span className="text-xs text-muted-foreground">Payment Out</span>
-                            <span className="text-base font-bold text-red-600">
-                                {formatCurrency(cashFlowDetails.totalOutflow, {noSuffix: true})} <span className="text-xs">Cr</span>
+                        <div className={topSummaryMetricRowCn}>
+                            <span className={topSummaryMetricLabelCn}>Payment Out</span>
+                            <span className={cn(topSummaryMetricLineValueCn, "text-red-600")}>
+                                {formatCurrency(cashFlowDetails.totalOutflow, {noSuffix: true})}{" "}
+                                <span className={topSummaryMetricDrCrCn}>Cr</span>
                             </span>
                         </div>
-                        <div className="flex items-baseline justify-between pt-2 mt-2 border-t">
-                            <span className="text-sm font-bold">Net Flow</span>
-                            <span className={cn('text-lg font-bold', (cashFlowDetails.totalInflow - cashFlowDetails.totalOutflow) >= 0 ? "text-green-600" : "text-red-600")}>
-                                {formatCurrency(Math.abs(cashFlowDetails.totalInflow - cashFlowDetails.totalOutflow), { noSuffix: true, duration: 2 })} <span className="text-xs">{(cashFlowDetails.totalInflow - cashFlowDetails.totalOutflow) >= 0 ? 'Dr' : 'Cr'}</span>
+                        <div className={cn(topSummaryMetricRowCn, "pt-2 mt-2 border-t")}>
+                            <span className={topSummaryMetricNetLabelCn}>Net Flow</span>
+                            <span className={cn(topSummaryMetricNetValueCn, (cashFlowDetails.totalInflow - cashFlowDetails.totalOutflow) >= 0 ? "text-green-600" : "text-red-600")}>
+                                {formatCurrency(Math.abs(cashFlowDetails.totalInflow - cashFlowDetails.totalOutflow), { noSuffix: true, duration: 2 })}{" "}
+                                <span className={topSummaryMetricDrCrCn}>{(cashFlowDetails.totalInflow - cashFlowDetails.totalOutflow) >= 0 ? "Dr" : "Cr"}</span>
                             </span>
                         </div>
                         {showVoucherDateCharts && !compact && (
@@ -3261,30 +3425,34 @@ export function FinancialSummaryCards({
             )}
 
             <Card className={`col-span-1 transition-colors ${topSummaryCardShellClass} ${dashboardCardRibbonClass} ${cardWrapperClass} ${ribbonTone(3)}`}>
-                <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
-                    <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Tax Summary</CardTitle>
+                <CardHeader className={topSummaryCardHeaderClass}>
+                    <CardTitle className={topSummaryCardHeaderTitleClass}>Tax Summary</CardTitle>
+                    <div className="shrink-0">
                     {compact ? (
                         <ReportMonthYearFilter dateRange={taxDateRange} setDateRange={setTaxDateRange} dateSystem={dateSystem} />
                     ) : (
                         <MonthYearFilter dateRange={taxDateRange} setDateRange={setTaxDateRange} dateSystem={dateSystem} />
                     )}
+                    </div>
                 </CardHeader>
-                <CardContent className={cn("p-4 pt-0 space-y-2", contentClass, topSummaryCardBodyClass)}>
-                    <div className="flex items-baseline justify-between">
-                        <span className="text-xs text-muted-foreground">Paid Tax</span>
-                        <span className="text-sm font-bold text-green-600">
-                            {formatCurrency(taxSummary.totalInput, {noSuffix: true})} <span className="text-xs">Dr</span>
+                <CardContent className={cn("overflow-hidden p-4 pt-0 space-y-2", contentClass, topSummaryCardBodyClass)}>
+                    <div className={topSummaryMetricRowCn}>
+                        <span className={topSummaryMetricLabelCn}>Paid Tax</span>
+                        <span className={cn(topSummaryMetricLineValueCn, "text-green-600")}>
+                            {formatCurrency(taxSummary.totalInput, {noSuffix: true})}{" "}
+                            <span className={topSummaryMetricDrCrCn}>Dr</span>
                         </span>
                     </div>
-                    <div className="flex items-baseline justify-between">
-                        <span className="text-xs text-muted-foreground">Received Tax</span>
-                        <span className="text-sm font-bold text-red-600">
-                            {formatCurrency(taxSummary.totalOutput, {noSuffix: true})} <span className="text-xs">Cr</span>
+                    <div className={topSummaryMetricRowCn}>
+                        <span className={topSummaryMetricLabelCn}>Received Tax</span>
+                        <span className={cn(topSummaryMetricLineValueCn, "text-red-600")}>
+                            {formatCurrency(taxSummary.totalOutput, {noSuffix: true})}{" "}
+                            <span className={topSummaryMetricDrCrCn}>Cr</span>
                         </span>
                     </div>
-                    <div className="flex items-baseline justify-between pt-2 mt-2 border-t">
-                        <span className="text-sm font-bold">Net Balance</span>
-                        <span className={cn('text-base font-bold', taxSummary.netBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    <div className={cn(topSummaryMetricRowCn, "pt-2 mt-2 border-t")}>
+                        <span className={topSummaryMetricNetLabelCn}>Net Balance</span>
+                        <span className={cn(topSummaryMetricNetValueCn, taxSummary.netBalance >= 0 ? "text-green-600" : "text-red-600")}>
                             {formatCurrency(taxSummary.netBalance, {showDrCr: true})}
                         </span>
                     </div>
@@ -3882,28 +4050,30 @@ export function FinancialSummaryCards({
             </Card>
 
             <Card className={`col-span-1 transition-colors ${topSummaryCardShellClass} ${dashboardCardRibbonClass} ${cardWrapperClass} ${ribbonTone(4)}`}>
-                <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
-                    <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Bank & Cash Summary</CardTitle>
-                    <Button variant="outline" size="sm" className="h-8 rounded-full px-3" disabled>
+                <CardHeader className={topSummaryCardHeaderClass}>
+                    <CardTitle className={topSummaryCardHeaderTitleClass}>Bank & Cash Summary</CardTitle>
+                    <div className="shrink-0">
+                    <Button variant="outline" size="sm" className="h-8 shrink-0 rounded-full px-3 whitespace-nowrap" disabled>
                         Today
                     </Button>
+                    </div>
                 </CardHeader>
-                <CardContent className={cn("p-4 pt-0 space-y-2", contentClass, topSummaryCardBodyClass)}>
-                    <div className="flex items-baseline justify-between">
-                        <span className="text-xs text-muted-foreground">Total Bank Balance</span>
-                        <span className={cn("text-lg font-bold", bankCashSummary.totalBankBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                <CardContent className={cn("overflow-hidden p-4 pt-0 space-y-2", contentClass, topSummaryCardBodyClass)}>
+                    <div className={topSummaryMetricRowCn}>
+                        <span className={topSummaryMetricLabelCn}>Total Bank Balance</span>
+                        <span className={cn(topSummaryMetricLineValueCn, bankCashSummary.totalBankBalance >= 0 ? "text-green-600" : "text-red-600")}>
                             {formatCurrency(bankCashSummary.totalBankBalance, {noSuffix: true})}
                         </span>
                     </div>
-                    <div className="flex items-baseline justify-between">
-                        <span className="text-xs text-muted-foreground">Total Cash Balance</span>
-                        <span className={cn("text-lg font-bold", bankCashSummary.totalCashBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    <div className={topSummaryMetricRowCn}>
+                        <span className={topSummaryMetricLabelCn}>Total Cash Balance</span>
+                        <span className={cn(topSummaryMetricLineValueCn, bankCashSummary.totalCashBalance >= 0 ? "text-green-600" : "text-red-600")}>
                             {formatCurrency(bankCashSummary.totalCashBalance, {noSuffix: true})}
                         </span>
                     </div>
-                    <div className="flex items-baseline justify-between pt-2 mt-2 border-t">
-                        <span className="text-sm font-bold">Grand Total</span>
-                        <span className={cn("text-lg font-bold", bankCashSummary.grandTotalBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    <div className={cn(topSummaryMetricRowCn, "pt-2 mt-2 border-t")}>
+                        <span className={topSummaryMetricNetLabelCn}>Grand Total</span>
+                        <span className={cn(topSummaryMetricNetValueCn, bankCashSummary.grandTotalBalance >= 0 ? "text-green-600" : "text-red-600")}>
                             {formatCurrency(bankCashSummary.grandTotalBalance, {showDrCr: true})}
                         </span>
                     </div>
@@ -4142,34 +4312,23 @@ export function FinancialSummaryCards({
             </Card>
             </TopSummaryRowWrap>
 
-            {can("view_voucher_type_summaries") && !compact && (
-                <div className="col-span-full grid grid-cols-1 items-start gap-[5px] lg:grid-cols-[minmax(260px,36%)_minmax(0,1fr)] xl:grid-cols-[minmax(300px,34%)_minmax(0,1fr)]">
-                    <div
-                        className="min-w-0 lg:flex lg:flex-col"
-                        style={stockPanelHeight ? { height: stockPanelHeight } : undefined}
-                    >
-                        {renderStockSummaryDashboardCard()}
-                    </div>
-                    <div
-                        ref={voucherStatsColRef}
-                        className="grid min-w-0 grid-cols-1 items-start gap-[5px] sm:grid-cols-2 xl:grid-cols-3"
-                    >
-                        {stats.otherStats.map((stat, idx) => renderVoucherStatCard(stat, idx))}
-                    </div>
-                </div>
+            {!compact && (
+                <div className="w-full min-w-0 shrink-0">{renderStockSummaryDashboardCard()}</div>
             )}
-            {/* Voucher summary cards band ho to bhi Stock pehle jaisa dashboard par dikhe. */}
-            {!compact && !can("view_voucher_type_summaries") && (
-                <div className="col-span-full">{renderStockSummaryDashboardCard()}</div>
+
+            {can("view_voucher_type_summaries") && !compact && (
+                <div className="col-span-full grid w-full min-w-0 grid-cols-1 items-stretch gap-[5px] sm:grid-cols-2 lg:grid-cols-4">
+                    {stats.otherStats.map((stat, idx) => renderVoucherStatCard(stat, idx))}
+                </div>
             )}
 
             {can("view_entity_counts_summary") && !compact && (
-                <>
+                <div className={cn("w-full min-w-0 overflow-hidden", dashboardEntityRowClass)}>
                     {/* Entity cards: count + Chart tab par master add-by-day (Vouchers card sirf number). */}
                     {[
                         {
                             title: "Total Parties",
-                            value: processedParties.length,
+                            value: entityFilteredParties.length,
                             chart: showVoucherDateCharts ? entityChartPartiesDaily : null,
                             chartLabel: "Parties added/day",
                             chartColor: "#2563eb",
@@ -4177,7 +4336,7 @@ export function FinancialSummaryCards({
                         },
                         {
                             title: "Total Staff",
-                            value: processedStaff.length,
+                            value: entityFilteredStaff.length,
                             chart: showVoucherDateCharts ? entityChartStaffDaily : null,
                             chartLabel: "Staff added/day",
                             chartColor: "#059669",
@@ -4185,7 +4344,7 @@ export function FinancialSummaryCards({
                         },
                         {
                             title: "Bank/Cash Acc",
-                            value: processedAccounts.length,
+                            value: entityFilteredAccounts.length,
                             chart: showVoucherDateCharts ? entityChartBankCashDaily : null,
                             chartLabel: "Bank & Cash a/c added/day",
                             chartColor: "#1d4ed8",
@@ -4193,7 +4352,7 @@ export function FinancialSummaryCards({
                         },
                         {
                             title: "Total Items",
-                            value: processedItems.length,
+                            value: entityFilteredItems.length,
                             chart: showVoucherDateCharts ? entityChartItemsDaily : null,
                             chartLabel: "Items added/day",
                             chartColor: "#0d9488",
@@ -4201,7 +4360,7 @@ export function FinancialSummaryCards({
                         },
                         {
                             title: "Total Vouchers",
-                            value: voucherStatsFilteredVouchers.length,
+                            value: entityVouchersFiltered.length,
                             chart: showVoucherDateCharts ? entityChartVouchersDaily : null,
                             chartLabel: "Vouchers added/day (count)",
                             chartColor: "#6366f1",
@@ -4215,17 +4374,73 @@ export function FinancialSummaryCards({
                                 : undefined,
                         },
                     ].map((item, idx) => (
-                        <Card key={item.title} className={`${dashboardCardRibbonClass} ${ribbonTone(idx + 2)}`}>
-                            <CardHeader className="p-3">
-                                <CardTitle className="text-sm whitespace-nowrap">{item.title}</CardTitle>
+                        <Card key={item.title} className={`min-w-0 flex-1 overflow-hidden ${dashboardCardRibbonClass} ${ribbonTone(idx + 2)}`}>
+                            <CardHeader className="space-y-1 p-3 pb-1">
+                                <div className="flex min-w-0 items-center justify-between gap-1">
+                                    <CardTitle className="min-w-0 shrink truncate text-sm">{item.title}</CardTitle>
+                                    <div className="flex shrink-0 items-center gap-0.5">
+                                        <Select
+                                            value={entitySummaryFyPick}
+                                            onValueChange={(v) =>
+                                                setEntitySummaryFyPick(v as EntitySummaryFyPick)
+                                            }
+                                        >
+                                            <SelectTrigger
+                                                className="h-7 max-w-[6.25rem] px-1.5 text-[10px] font-medium"
+                                                title={entitySummaryScopeHint}
+                                            >
+                                                <SelectValue placeholder="FY" />
+                                            </SelectTrigger>
+                                            <SelectContent align="end">
+                                                <SelectItem value="current" className="text-xs">
+                                                    Current FY ({runningFyKey})
+                                                </SelectItem>
+                                                <SelectItem value="all" className="text-xs">
+                                                    All FY
+                                                </SelectItem>
+                                                {entityVoucherFyKeys
+                                                    .filter((k) => k !== runningFyKey)
+                                                    .map((fyKey) => (
+                                                        <SelectItem key={fyKey} value={fyKey} className="text-xs">
+                                                            {fyKey}
+                                                        </SelectItem>
+                                                    ))}
+                                            </SelectContent>
+                                        </Select>
+                                        <Select
+                                            value={entitySummaryPeriodPick}
+                                            onValueChange={(v) =>
+                                                setEntitySummaryPeriodPick(v as EntitySummaryPeriodPick)
+                                            }
+                                        >
+                                            <SelectTrigger
+                                                className="h-7 max-w-[6.5rem] px-1.5 text-[10px] font-medium"
+                                                title={entitySummaryScopeHint}
+                                            >
+                                                <SelectValue placeholder="Period" />
+                                            </SelectTrigger>
+                                            <SelectContent align="end">
+                                                <SelectItem value="fy_full" className="text-xs">
+                                                    Full FY
+                                                </SelectItem>
+                                                <SelectItem value="current_month" className="text-xs">
+                                                    Current Month
+                                                </SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
                             </CardHeader>
                             <CardContent className="p-3 pt-0">
                                 <div className="text-2xl font-bold">{item.value}</div>
-                                {item.title === "Total Vouchers" && (
-                                    <p className="mt-0.5 truncate text-[11px] font-medium text-muted-foreground" title={`Range: ${voucherStatsRangeLabel}`}>
-                                        Range: {voucherStatsRangeLabel}
+                                {entitySummaryScopeHint ? (
+                                    <p
+                                        className="mt-0.5 truncate text-[10px] text-muted-foreground"
+                                        title={entitySummaryScopeHint}
+                                    >
+                                        {entitySummaryScopeHint}
                                     </p>
-                                )}
+                                ) : null}
                                 {item.chart && (
                                     <div className="mt-2 border-t border-border/50 pt-2">
                                         {renderDashboardMiniBar(
@@ -4241,7 +4456,7 @@ export function FinancialSummaryCards({
                             </CardContent>
                         </Card>
                     ))}
-                </>
+                </div>
             )}
         </div>
     );

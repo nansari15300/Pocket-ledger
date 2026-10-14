@@ -29,8 +29,76 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { RecurringDashboardLine } from "@/lib/dashboardRecurringAccrual";
 import { X } from "lucide-react";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type RecurringDetailsFmt = (n: number) => React.ReactNode;
+
+function recurringTemplateSourceBodyId(tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate): string {
+  return String(tpl.cloneSourceVoucherId || "").trim() || String(tpl.sourceVoucherId || "").trim();
+}
+
+function recurringSyncWaitMessage(scheduleCount: number): string {
+  const n = Math.max(1, scheduleCount);
+  return `${n} schedule(s) are enabled, but the clone/source vouchers are not in the list yet. Refresh the page or wait for sync; amounts will appear here.`;
+}
+
+function recurringOrphanSourceMessage(scheduleCount: number): string {
+  const n = Math.max(1, scheduleCount);
+  return `${n} enabled schedule(s) reference a source voucher that is not in this company (deleted or never synced). Open the source journal again to re-enable auto recurring, or remove the schedule from Firebase/local recurring templates.`;
+}
+
+type RecurringVoucherResolveMeta = {
+  vouchersLoading: boolean;
+  voucherById: Map<string, Record<string, unknown>>;
+};
+
+function partitionRecurringTemplatesBySource(
+  templates: Array<{ id: string; tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate }>,
+  voucherById: Map<string, Record<string, unknown>>,
+) {
+  const missingSource: typeof templates = [];
+  const resolvedSource: typeof templates = [];
+  for (const row of templates) {
+    const sourceId = recurringTemplateSourceBodyId(row.tpl);
+    if (!sourceId || !voucherById.has(sourceId)) missingSource.push(row);
+    else resolvedSource.push(row);
+  }
+  return { missingSource, resolvedSource };
+}
+
+function RecurringSyncWaitInfoTip({ scheduleCount }: { scheduleCount: number }) {
+  const [open, setOpen] = React.useState(false);
+  const message = recurringSyncWaitMessage(scheduleCount);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <AppFreshInfoButton
+          size="xs"
+          className={cn(open && "border-blue-400 bg-blue-200/80 text-blue-400")}
+          aria-label="Waiting for voucher sync"
+          aria-expanded={open}
+          title={message}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }}
+        />
+      </PopoverTrigger>
+      <PopoverContent
+        side="bottom"
+        align="start"
+        collisionPadding={12}
+        className="z-[10050] max-w-[min(22rem,calc(100vw-2rem))] p-3 text-xs leading-relaxed text-muted-foreground"
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
+        {message}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 type RecurringLiveComputeBase = Omit<RecurringAccrualComputeInputs, "nowMs">;
 
@@ -48,20 +116,20 @@ const RecurringAutoSummaryAmountRows = React.memo(function RecurringAutoSummaryA
 
   return (
     <>
-      <div className="flex min-h-[1.5rem] min-w-0 items-baseline justify-between gap-2 sm:gap-3">
-        <span className="min-w-0 shrink truncate text-xs text-muted-foreground">Inflow to company</span>
+      <div className="flex min-h-[1.5rem] flex-nowrap items-baseline justify-between gap-x-4 gap-y-0">
+        <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">Inflow to company</span>
         <span className="shrink-0 whitespace-nowrap text-base font-bold tabular-nums text-green-600">
           {formatAmount(dr)} <span className="text-xs">Dr</span>
         </span>
       </div>
-      <div className="flex min-h-[1.5rem] min-w-0 items-baseline justify-between gap-2 sm:gap-3">
-        <span className="min-w-0 shrink truncate text-xs text-muted-foreground">Outflow from company</span>
+      <div className="flex min-h-[1.5rem] flex-nowrap items-baseline justify-between gap-x-4 gap-y-0">
+        <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">Outflow from company</span>
         <span className="shrink-0 whitespace-nowrap text-base font-bold tabular-nums text-red-600">
           {formatAmount(cr)} <span className="text-xs">Cr</span>
         </span>
       </div>
-      <div className="mt-2 flex min-h-[1.75rem] min-w-0 items-baseline justify-between gap-2 border-t pt-2 sm:gap-3">
-        <span className="min-w-0 shrink truncate text-sm font-bold">Balance</span>
+      <div className="mt-2 flex min-h-[1.75rem] flex-nowrap items-baseline justify-between gap-x-4 border-t pt-2">
+        <span className="shrink-0 whitespace-nowrap text-sm font-bold">Balance</span>
         <span
           className={cn(
             "shrink-0 whitespace-nowrap text-lg font-bold tabular-nums",
@@ -88,6 +156,70 @@ type RecurringLiveDetailsProps = {
   isMobile: boolean;
   onClose: () => void;
 };
+
+function RecurringAutoSummaryOrphanSourceDetails({
+  templates,
+  scheduleCount,
+}: {
+  templates: Array<{ id: string; tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate }>;
+  scheduleCount: number;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
+      <p className="text-sm leading-relaxed text-amber-900 dark:text-amber-100">{recurringOrphanSourceMessage(scheduleCount)}</p>
+      <ScrollArea className="mt-4 min-h-0 flex-1">
+        <ul className="space-y-2 pr-3 text-sm">
+          {templates.map(({ id, tpl }) => {
+            const sourceId = recurringTemplateSourceBodyId(tpl);
+            const label = String(tpl.manualOnSourceVoucherNumber || sourceId || "Schedule").trim();
+            return (
+              <li key={id} className="rounded-md border border-amber-500/40 bg-amber-50/80 px-3 py-2 dark:bg-amber-950/30">
+                <p className="font-medium text-foreground">{label || "Auto schedule"}</p>
+                {sourceId ? (
+                  <p className="mt-0.5 text-xs text-muted-foreground">Missing source voucher id: {sourceId}</p>
+                ) : (
+                  <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-200">No source voucher id on template.</p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </ScrollArea>
+    </div>
+  );
+}
+
+function RecurringAutoSummarySyncWaitDetails({
+  templates,
+  scheduleCount,
+}: {
+  templates: Array<{ id: string; tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate }>;
+  scheduleCount: number;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
+      <p className="text-sm leading-relaxed text-muted-foreground">{recurringSyncWaitMessage(scheduleCount)}</p>
+      <ScrollArea className="mt-4 min-h-0 flex-1">
+        <ul className="space-y-2 pr-3 text-sm">
+          {templates.map(({ id, tpl }) => {
+            const sourceId = recurringTemplateSourceBodyId(tpl);
+            const label = String(tpl.manualOnSourceVoucherNumber || sourceId || "Schedule").trim();
+            return (
+              <li key={id} className="rounded-md border border-border/70 bg-muted/20 px-3 py-2">
+                <p className="font-medium text-foreground">{label || "Auto schedule"}</p>
+                {sourceId ? (
+                  <p className="mt-0.5 text-xs text-muted-foreground">Source voucher id: {sourceId}</p>
+                ) : (
+                  <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-200">No source voucher id on template.</p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </ScrollArea>
+    </div>
+  );
+}
 
 /** Dialog tables — snap parent live engine se; alag tick nahi. */
 const RecurringAutoSummaryLiveDetails = React.memo(function RecurringAutoSummaryLiveDetails({
@@ -432,6 +564,7 @@ type RecurringLiveSnapEngineProps = {
   recurringCompanyEnabled: boolean;
   hadResolvedRowsRef: React.MutableRefObject<boolean>;
   onSnapChange: (snap: RecurringLiveSnap) => void;
+  onVoucherResolveMetaChange?: (meta: RecurringVoucherResolveMeta) => void;
 };
 
 /** `useVouchers` sirf yahan — sync bumps is component ke andar absorb; view re-render na ho. */
@@ -440,9 +573,11 @@ const RecurringLiveSnapEngine = React.memo(function RecurringLiveSnapEngine({
   recurringCompanyEnabled,
   hadResolvedRowsRef,
   onSnapChange,
+  onVoucherResolveMetaChange,
 }: RecurringLiveSnapEngineProps) {
   const {
     vouchers,
+    loading: vouchersLoading,
     journalAccountNames,
     processedParties,
     processedStaff,
@@ -515,6 +650,10 @@ const RecurringLiveSnapEngine = React.memo(function RecurringLiveSnapEngine({
   const lastDisplayKeyRef = React.useRef("");
 
   React.useEffect(() => {
+    onVoucherResolveMetaChange?.({ vouchersLoading, voucherById });
+  }, [vouchersLoading, voucherById, onVoucherResolveMetaChange]);
+
+  React.useEffect(() => {
     if (liveSnap.templateRows.length > 0) {
       hadResolvedRowsRef.current = true;
     }
@@ -536,6 +675,8 @@ type RecurringAutoSummaryLiveViewProps = {
   onOpenBodyVoucher?: (bodyVoucherId: string) => void;
   inGrid: boolean;
   hadResolvedRowsRef: React.MutableRefObject<boolean>;
+  onSyncWaitHintChange?: (active: boolean, scheduleCount: number) => void;
+  voucherResolveMeta: RecurringVoucherResolveMeta;
 };
 
 /** Stable UI — `useVouchers` nahi; sirf snap badle tab re-render. */
@@ -548,16 +689,53 @@ const RecurringAutoSummaryLiveView = React.memo(function RecurringAutoSummaryLiv
   onOpenBodyVoucher,
   inGrid,
   hadResolvedRowsRef,
+  onSyncWaitHintChange,
+  voucherResolveMeta,
 }: RecurringAutoSummaryLiveViewProps) {
   const { formatCurrencyForPrint } = useDate();
   const isMobile = useIsMobile();
 
+  const { missingSource, resolvedSource } = React.useMemo(
+    () => partitionRecurringTemplatesBySource(templates, voucherResolveMeta.voucherById),
+    [templates, voucherResolveMeta.voucherById],
+  );
+
   const waitingForVouchers =
-    !templatesLoading && templates.length > 0 && snap.templateRows.length === 0 && !hadResolvedRowsRef.current;
-  const showLiveAmounts = !waitingForVouchers;
-  const triggeringCount = snap.templateRows.length > 0 ? snap.templateRows.length : templates.length;
-  const triggeringLabel =
-    triggeringCount === 1 ? "1 voucher triggering" : `${triggeringCount} vouchers triggering`;
+    !templatesLoading &&
+    voucherResolveMeta.vouchersLoading &&
+    templates.length > 0 &&
+    snap.templateRows.length === 0 &&
+    !hadResolvedRowsRef.current &&
+    missingSource.length > 0 &&
+    resolvedSource.length === 0;
+
+  const orphanedSchedules =
+    !templatesLoading &&
+    !voucherResolveMeta.vouchersLoading &&
+    templates.length > 0 &&
+    snap.templateRows.length === 0 &&
+    missingSource.length > 0 &&
+    resolvedSource.length === 0;
+
+  React.useEffect(() => {
+    onSyncWaitHintChange?.(waitingForVouchers, templates.length);
+  }, [waitingForVouchers, templates.length, onSyncWaitHintChange]);
+
+  const showLiveAmounts = !waitingForVouchers && !orphanedSchedules;
+  const scheduleCount = templates.length;
+  const liveTriggerCount = snap.templateRows.length;
+  const triggeringLabel = orphanedSchedules
+    ? scheduleCount === 1
+      ? "1 schedule — source missing"
+      : `${scheduleCount} schedules — source missing`
+    : waitingForVouchers
+      ? scheduleCount === 1
+        ? "1 schedule enabled"
+        : `${scheduleCount} schedules enabled`
+      : liveTriggerCount === 1
+        ? "1 voucher triggering"
+        : `${liveTriggerCount} vouchers triggering`;
+  const canOpenDetails = scheduleCount > 0 && !templatesLoading;
   const formatAmount = React.useCallback(
     (n: number) => formatCurrencyForPrint(n, { showDrCr: false }),
     [formatCurrencyForPrint],
@@ -575,14 +753,11 @@ const RecurringAutoSummaryLiveView = React.memo(function RecurringAutoSummaryLiv
   const lineOpenHandler = onOpenBodyVoucher ? handleLineOpenVoucher : undefined;
 
   return (
-    <>
-      {waitingForVouchers ? (
-        <p className="text-xs text-muted-foreground leading-relaxed">
-          {templates.length} schedule(s) are enabled, but the clone/source vouchers are not in the list yet. Refresh
-          the page or wait for sync; amounts will appear here.
-        </p>
-      ) : showLiveAmounts ? (
+    <div className={cn("flex min-h-0 flex-col", inGrid && "h-full flex-1")}>
+      {showLiveAmounts ? (
         <RecurringAutoSummaryAmountRows snap={snap} formatAmount={formatAmount} />
+      ) : inGrid ? (
+        <div className="min-h-0 flex-1" aria-hidden />
       ) : null}
 
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
@@ -590,15 +765,13 @@ const RecurringAutoSummaryLiveView = React.memo(function RecurringAutoSummaryLiv
           <span className="min-w-0 truncate text-xs font-medium text-muted-foreground" title="Active Auto Monthly journal schedules">
             {templatesLoading ? "…" : triggeringLabel}
           </span>
-          {waitingForVouchers ? (
-            <span className="shrink-0 text-xs text-muted-foreground">Details after sync</span>
-          ) : (
+          {canOpenDetails ? (
             <DialogTrigger asChild>
               <Button variant="link" size="sm" className="h-auto shrink-0 p-0 text-rose-700">
                 View details
               </Button>
             </DialogTrigger>
-          )}
+          ) : null}
         </div>
         <DialogContent
           hideCloseButton
@@ -624,7 +797,11 @@ const RecurringAutoSummaryLiveView = React.memo(function RecurringAutoSummaryLiv
               <X className="h-3 w-3 md:h-3.5 md:w-3.5" strokeWidth={2.25} />
             </Button>
           </DialogHeader>
-          {!waitingForVouchers ? (
+          {orphanedSchedules ? (
+            <RecurringAutoSummaryOrphanSourceDetails templates={missingSource} scheduleCount={missingSource.length} />
+          ) : waitingForVouchers ? (
+            <RecurringAutoSummarySyncWaitDetails templates={templates} scheduleCount={scheduleCount} />
+          ) : (
             <RecurringAutoSummaryLiveDetails
               snap={snap}
               fmt={formatAmount}
@@ -632,10 +809,10 @@ const RecurringAutoSummaryLiveView = React.memo(function RecurringAutoSummaryLiv
               isMobile={isMobile}
               onClose={() => setDetailsOpen(false)}
             />
-          ) : null}
+          )}
         </DialogContent>
       </Dialog>
-    </>
+    </div>
   );
 });
 
@@ -648,11 +825,22 @@ type RecurringAutoSummaryLiveIslandProps = {
   onOpenBodyVoucher?: (bodyVoucherId: string) => void;
   inGrid: boolean;
   hadResolvedRowsRef: React.MutableRefObject<boolean>;
+  onSyncWaitHintChange?: (active: boolean, scheduleCount: number) => void;
 };
 
 const RecurringAutoSummaryLiveIsland = React.memo(function RecurringAutoSummaryLiveIsland(
   props: RecurringAutoSummaryLiveIslandProps,
 ) {
+  const [voucherResolveMeta, setVoucherResolveMeta] = React.useState<RecurringVoucherResolveMeta>(() => ({
+    vouchersLoading: true,
+    voucherById: new Map(),
+  }));
+  const onVoucherResolveMetaChange = React.useCallback((meta: RecurringVoucherResolveMeta) => {
+    setVoucherResolveMeta((prev) =>
+      prev.vouchersLoading === meta.vouchersLoading && prev.voucherById === meta.voucherById ? prev : meta,
+    );
+  }, []);
+
   const [snap, setSnap] = React.useState<RecurringLiveSnap>(() =>
     computeRecurringAccrualSnapshot({
       templates: props.templates,
@@ -685,8 +873,11 @@ const RecurringAutoSummaryLiveIsland = React.memo(function RecurringAutoSummaryL
         recurringCompanyEnabled={props.recurringCompanyEnabled}
         hadResolvedRowsRef={props.hadResolvedRowsRef}
         onSnapChange={onSnapChange}
+        onVoucherResolveMetaChange={onVoucherResolveMetaChange}
       />
-      <RecurringAutoSummaryLiveView {...props} snap={snap} />
+      <div className={cn(props.inGrid && "flex min-h-0 flex-1 flex-col")}>
+        <RecurringAutoSummaryLiveView {...props} snap={snap} voucherResolveMeta={voucherResolveMeta} />
+      </div>
     </>
   );
 });
@@ -700,6 +891,7 @@ type RecurringAutoSummaryCardBodyProps = {
   setDetailsOpen: (open: boolean) => void;
   onOpenBodyVoucher?: (bodyVoucherId: string) => void;
   inGrid: boolean;
+  onSyncWaitHintChange?: (active: boolean, scheduleCount: number) => void;
 };
 
 /** Templates-only shell — `useVouchers` / sync flicker yahan nahi. */
@@ -712,6 +904,7 @@ const RecurringAutoSummaryCardBody = React.memo(function RecurringAutoSummaryCar
   setDetailsOpen,
   onOpenBodyVoucher,
   inGrid,
+  onSyncWaitHintChange,
 }: RecurringAutoSummaryCardBodyProps) {
   const hadResolvedRowsRef = React.useRef(false);
   const templatesEverLoadedRef = React.useRef(false);
@@ -730,29 +923,37 @@ const RecurringAutoSummaryCardBody = React.memo(function RecurringAutoSummaryCar
     templatesLoading && !templatesEverLoadedRef.current && !hadResolvedRowsRef.current;
 
   return (
-    <CardContent className={cn("min-h-[8.5rem] space-y-2 p-4 pt-0", inGrid && "flex flex-1 flex-col")}>
+    <CardContent
+      className={cn(
+        "space-y-2 p-4 pt-0",
+        inGrid ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "min-h-[8.5rem]",
+      )}
+    >
       {!recurringCompanyEnabled ? (
-        <p className="text-xs text-muted-foreground leading-relaxed">
+        <p className={cn("text-xs text-muted-foreground leading-relaxed", inGrid && "flex-1")}>
           Turn the switch on to generate and track scheduled vouchers. You can also change this under Settings →
           Voucher settings.
         </p>
       ) : showInitialTemplateLoading ? (
-        <Skeleton className="h-20 w-full" />
+        <Skeleton className={cn("h-20 w-full", inGrid && "flex-1")} />
       ) : emptySchedules ? (
-        <p className="text-xs text-muted-foreground leading-relaxed">
+        <p className={cn("text-xs text-muted-foreground leading-relaxed", inGrid && "flex-1")}>
           No enabled auto schedule yet. Open a voucher, turn on auto recurring, and save.
         </p>
       ) : (
-        <RecurringAutoSummaryLiveIsland
-          templates={templates}
-          templatesLoading={templatesLoading}
-          recurringCompanyEnabled={recurringCompanyEnabled}
-          detailsOpen={detailsOpen}
-          setDetailsOpen={setDetailsOpen}
-          onOpenBodyVoucher={onOpenBodyVoucher}
-          inGrid={inGrid}
-          hadResolvedRowsRef={hadResolvedRowsRef}
-        />
+        <div className={cn(inGrid && "flex min-h-0 flex-1 flex-col")}>
+          <RecurringAutoSummaryLiveIsland
+            templates={templates}
+            templatesLoading={templatesLoading}
+            recurringCompanyEnabled={recurringCompanyEnabled}
+            detailsOpen={detailsOpen}
+            setDetailsOpen={setDetailsOpen}
+            onOpenBodyVoucher={onOpenBodyVoucher}
+            inGrid={inGrid}
+            hadResolvedRowsRef={hadResolvedRowsRef}
+            onSyncWaitHintChange={onSyncWaitHintChange}
+          />
+        </div>
       )}
     </CardContent>
   );
@@ -789,7 +990,20 @@ export const RecurringAutoSummaryCard = React.memo(function RecurringAutoSummary
   const canToggleRecurring = can("configure_recurring_auto_company");
   const [savingToggle, setSavingToggle] = React.useState(false);
   const [detailsOpen, setDetailsOpen] = React.useState(false);
+  const [syncWaitHint, setSyncWaitHint] = React.useState({ active: false, scheduleCount: 0 });
   const inGrid = layout === "gridCell";
+
+  const onSyncWaitHintChange = React.useCallback((active: boolean, scheduleCount: number) => {
+    setSyncWaitHint((prev) =>
+      prev.active === active && prev.scheduleCount === scheduleCount ? prev : { active, scheduleCount },
+    );
+  }, []);
+
+  React.useEffect(() => {
+    if (!recurringCompanyEnabled || templates.length === 0) {
+      setSyncWaitHint({ active: false, scheduleCount: 0 });
+    }
+  }, [recurringCompanyEnabled, templates.length]);
 
   const onRecurringToggle = React.useCallback(
     async (checked: boolean) => {
@@ -839,7 +1053,7 @@ export const RecurringAutoSummaryCard = React.memo(function RecurringAutoSummary
   if (!canViewRecurringCard) return null;
 
   const gridOuterClass = cn(
-    "col-span-1 min-w-min w-full h-full min-h-[12rem] flex flex-col app-chrome-top-ribbon",
+    "flex h-full min-h-[12rem] min-w-max w-full flex-col overflow-hidden app-chrome-top-ribbon",
     proDashboardRibbonClass(4),
     className,
   );
@@ -847,8 +1061,25 @@ export const RecurringAutoSummaryCard = React.memo(function RecurringAutoSummary
 
   return (
     <Card className={inGrid ? gridOuterClass : defaultOuterClass}>
-      <CardHeader className="flex shrink-0 flex-row items-center justify-between gap-2 space-y-0 p-4 pb-2">
-        <CardTitle className="min-w-0 truncate text-base font-semibold text-card-foreground">Auto recurring</CardTitle>
+      <CardHeader
+        className={cn(
+          "flex shrink-0 flex-row items-center justify-between gap-2 space-y-0",
+          inGrid ? "min-w-0 flex-nowrap overflow-hidden p-4" : "p-4 pb-2",
+        )}
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+          <CardTitle
+            className={cn(
+              "text-base font-semibold text-card-foreground",
+              inGrid ? "shrink-0 whitespace-nowrap" : "min-w-0 truncate",
+            )}
+          >
+            Auto recurring
+          </CardTitle>
+          {syncWaitHint.active ? (
+            <RecurringSyncWaitInfoTip scheduleCount={syncWaitHint.scheduleCount} />
+          ) : null}
+        </div>
         <div className="flex shrink-0 items-center gap-2">
           <Switch
             checked={recurringCompanyEnabled}
@@ -868,6 +1099,7 @@ export const RecurringAutoSummaryCard = React.memo(function RecurringAutoSummary
         setDetailsOpen={setDetailsOpen}
         onOpenBodyVoucher={onOpenBodyVoucher}
         inGrid={inGrid}
+        onSyncWaitHintChange={onSyncWaitHintChange}
       />
     </Card>
   );

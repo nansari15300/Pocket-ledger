@@ -6,8 +6,8 @@ import dynamic from "next/dynamic";
 import { ReportList } from "@/components/reports/ReportList";
 import { reports, type Report } from "@/components/reports/report-data";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { Input } from "@/components/ui/input";
-import { Search, PanelRight } from "lucide-react";
+import { PanelRight } from "lucide-react";
+import { ReportRegisterListSearchRow } from "@/components/reports/ReportRegisterListSearchRow";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { useReportList } from "@/contexts/ReportListContext";
@@ -194,17 +194,11 @@ function ReportsPageContent() {
 
   const listView = (
     <div className="flex flex-col h-full min-h-0" data-pl-master-list-chrome="">
-      <div className="pl-mlc-search-row border-b px-2 py-[4px]">
-         <div className="relative flex-1 min-w-0">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-                placeholder="Search reports..."
-                className="pl-9"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-            />
-        </div>
-      </div>
+      <ReportRegisterListSearchRow
+        placeholder="Search reports..."
+        value={searchTerm}
+        onChange={setSearchTerm}
+      />
       <ReportList 
         reports={filteredReports}
         onSelectReport={(r) => {

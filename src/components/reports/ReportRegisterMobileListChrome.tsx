@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { mdc } from "@/lib/mobileDetailChrome";
+import { REPORT_LIST_SEARCH_INPUT_CN } from "@/components/reports/ReportRegisterListSearchRow";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 
 export type ReportRegisterMobileListChromeSummary = {
@@ -61,9 +62,12 @@ export function ReportRegisterMobileListChrome({
               <Search className={mdc.listSearchIcon} />
               <Input
                 placeholder={searchPlaceholder}
-                className={mdc.listSearchInput}
+                listChrome
+                listChromeSearch
+                className={REPORT_LIST_SEARCH_INPUT_CN}
                 value={searchValue}
                 onChange={(e) => onSearchChange(e.target.value)}
+                autoComplete="off"
               />
             </div>
           </div>

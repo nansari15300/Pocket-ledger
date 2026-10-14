@@ -45,8 +45,10 @@ export function activeMasterCollectionPathsForRoute(
   if (route.startsWith("/items")) return new Set(["vouchers", "items", "item_groups"]);
   if (route.startsWith("/incomes")) return new Set(["vouchers", "expense_accounts", "expense_groups"]);
   if (route.startsWith("/gallery")) return new Set(["vouchers"]);
-  if (route === "/reports" || route === "/reports/") return new Set(["vouchers"]);
-  if (route.startsWith("/reports/")) return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
+  // Reports hub (`/reports`) embeds Trial Balance, Party P&L, registers, etc. — masters chahiye (pehle vouchers-only → Unknown Party).
+  if (route === "/reports" || route === "/reports/" || route.startsWith("/reports/")) {
+    return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
+  }
   if (route.startsWith("/dashboard")) {
     return dashboardMasterCollectionPathsForTab(readDashboardActiveTabForBootstrap());
   }
