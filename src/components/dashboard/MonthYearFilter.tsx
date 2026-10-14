@@ -8,8 +8,9 @@ import { Calendar as CalendarIcon } from "lucide-react";
 import { format, getYear, getMonth, endOfMonth, startOfDay, endOfDay } from "date-fns";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { adToBs, bsToAd, getBSMonthDays } from "@/lib/bs-date";
+import { cn } from "@/lib/utils";
 
-export type MonthYearFilterMode = "current" | "all" | "custom";
+export type MonthYearFilterMode = "current" | "full_fy" | "all" | "custom";
 
 const bsMonths = ["Baisakh", "Jestha", "Ashadh", "Shrawan", "Bhadra", "Ashwin", "Kartik", "Mangsir", "Poush", "Magh", "Falgun", "Chaitra"];
 
@@ -40,8 +41,14 @@ export function isCurrentMonthDateRange(dateRange: DateRange | undefined, dateSy
     return sameDay(dateRange.from, current.from) && sameDay(dateRange.to ?? dateRange.from, current.to);
 }
 
-export function formatMonthYearRangeLabel(dateRange: DateRange | undefined, dateSystem: string, baseDate = new Date()) {
-    if (!dateRange?.from) return "All Time";
+export function formatMonthYearRangeLabel(
+    dateRange: DateRange | undefined,
+    dateSystem: string,
+    baseDate = new Date(),
+    mode?: MonthYearFilterMode,
+) {
+    if (mode === "full_fy") return "Full FY";
+    if (!dateRange?.from) return mode === "all" ? "All Time" : "Full FY";
     if (isCurrentMonthDateRange(dateRange, dateSystem, baseDate)) return "Current Month";
     if (isBsMode(dateSystem)) {
         const bs = adToBs(dateRange.from);
@@ -53,14 +60,23 @@ export function formatMonthYearRangeLabel(dateRange: DateRange | undefined, date
 export function MonthYearFilter({ 
     dateRange, 
     setDateRange, 
-    dateSystem 
+    dateSystem,
+    triggerClassName,
+    filterMode,
+    onFilterModeChange,
+    showFullFyOption = false,
 }: { 
     dateRange: DateRange | undefined, 
     setDateRange: (range: DateRange | undefined) => void, 
-    dateSystem: string 
+    dateSystem: string;
+    triggerClassName?: string;
+    filterMode?: MonthYearFilterMode;
+    onFilterModeChange?: (mode: MonthYearFilterMode) => void;
+    /** Dashboard summary cards: Full FY in same pill as Current Month. */
+    showFullFyOption?: boolean;
 }) {
     const [isOpen, setIsOpen] = useState(false);
-    const [mode, setMode] = useState<MonthYearFilterMode>('all');
+    const [mode, setMode] = useState<MonthYearFilterMode>(filterMode ?? 'all');
     
     // Current Date Infos
     const today = useMemo(() => new Date(), []);
@@ -78,8 +94,12 @@ export function MonthYearFilter({
 
     // Sync internal state with dateRange prop
     useEffect(() => {
+        if (filterMode) {
+            setMode(filterMode);
+            return;
+        }
         if (!dateRange?.from) {
-            setMode('all');
+            setMode(showFullFyOption ? 'full_fy' : 'all');
         } else {
             setMode(isCurrentMonthDateRange(dateRange, dateSystem, today) ? 'current' : 'custom');
             if (isBsMode(dateSystem)) {
@@ -91,14 +111,20 @@ export function MonthYearFilter({
                 setSelectedAdMonth(getMonth(dateRange.from));
             }
         }
-    }, [dateRange, dateSystem]);
+    }, [dateRange, dateSystem, filterMode, showFullFyOption]);
 
     const applyFilter = () => {
         if (mode === 'current') {
             setDateRange(getCurrentMonthDateRange(dateSystem, today));
+            onFilterModeChange?.('current');
+        } else if (mode === 'full_fy') {
+            setDateRange(undefined);
+            onFilterModeChange?.('full_fy');
         } else if (mode === 'all') {
             setDateRange(undefined);
+            onFilterModeChange?.('all');
         } else {
+            onFilterModeChange?.('custom');
             if (isBsMode(dateSystem)) {
                 const startAd = bsToAd({ y: selectedBsYear, m: selectedBsMonth, d: 1 });
                 const daysInMonth = getBSMonthDays(selectedBsYear)[selectedBsMonth - 1];
@@ -122,8 +148,8 @@ export function MonthYearFilter({
     };
 
     const displayText = useMemo(() => {
-        return formatMonthYearRangeLabel(dateRange, dateSystem, today);
-    }, [dateRange, dateSystem, today]);
+        return formatMonthYearRangeLabel(dateRange, dateSystem, today, mode);
+    }, [dateRange, dateSystem, today, mode]);
 
     return (
         <Popover open={isOpen} onOpenChange={setIsOpen} modal={false}>
@@ -131,7 +157,7 @@ export function MonthYearFilter({
                 <Button 
                     variant="outline" 
                     size="sm" 
-                    className="h-7 px-2 text-xs font-normal"
+                    className={cn("h-7 px-2 text-xs font-normal", triggerClassName)}
                     onClick={(e) => {
                         e.stopPropagation();
                     }}
@@ -167,6 +193,7 @@ export function MonthYearFilter({
                             </SelectTrigger>
                             <SelectContent className="z-[99999]">
                                 <SelectItem value="current">Current Month</SelectItem>
+                                {showFullFyOption ? <SelectItem value="full_fy">Full FY</SelectItem> : null}
                                 <SelectItem value="all">All Time</SelectItem>
                                 <SelectItem value="custom">Custom Month</SelectItem>
                             </SelectContent>

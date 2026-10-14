@@ -925,19 +925,29 @@ const RecurringAutoSummaryCardBody = React.memo(function RecurringAutoSummaryCar
   return (
     <CardContent
       className={cn(
-        "space-y-2 p-4 pt-0",
+        "min-w-0 space-y-2 p-4 pt-0",
         inGrid ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "min-h-[8.5rem]",
       )}
     >
       {!recurringCompanyEnabled ? (
-        <p className={cn("text-xs text-muted-foreground leading-relaxed", inGrid && "flex-1")}>
+        <p
+          className={cn(
+            "min-w-0 break-words text-pretty text-xs leading-snug text-muted-foreground",
+            inGrid && "flex-1",
+          )}
+        >
           Turn the switch on to generate and track scheduled vouchers. You can also change this under Settings →
           Voucher settings.
         </p>
       ) : showInitialTemplateLoading ? (
         <Skeleton className={cn("h-20 w-full", inGrid && "flex-1")} />
       ) : emptySchedules ? (
-        <p className={cn("text-xs text-muted-foreground leading-relaxed", inGrid && "flex-1")}>
+        <p
+          className={cn(
+            "min-w-0 break-words text-pretty text-xs leading-snug text-muted-foreground",
+            inGrid && "flex-1",
+          )}
+        >
           No enabled auto schedule yet. Open a voucher, turn on auto recurring, and save.
         </p>
       ) : (
@@ -1053,27 +1063,26 @@ export const RecurringAutoSummaryCard = React.memo(function RecurringAutoSummary
   if (!canViewRecurringCard) return null;
 
   const gridOuterClass = cn(
-    "flex h-full min-h-[12rem] min-w-max w-full flex-col overflow-hidden app-chrome-top-ribbon",
+    "flex h-full min-h-[12rem] min-w-0 w-full max-w-full flex-col overflow-hidden app-chrome-top-ribbon",
     proDashboardRibbonClass(4),
     className,
   );
-  const defaultOuterClass = cn("min-w-min w-full min-h-[12rem] app-chrome-top-ribbon", proDashboardRibbonClass(4), className);
+  const defaultOuterClass = cn(
+    "min-h-[12rem] w-full min-w-0 max-w-full app-chrome-top-ribbon",
+    proDashboardRibbonClass(4),
+    className,
+  );
 
   return (
     <Card className={inGrid ? gridOuterClass : defaultOuterClass}>
       <CardHeader
         className={cn(
-          "flex shrink-0 flex-row items-center justify-between gap-2 space-y-0",
-          inGrid ? "min-w-0 flex-nowrap overflow-hidden p-4" : "p-4 pb-2",
+          "flex shrink-0 flex-row flex-wrap items-center justify-between gap-2 space-y-0",
+          inGrid ? "min-w-0 overflow-hidden p-4" : "p-4 pb-2",
         )}
       >
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-          <CardTitle
-            className={cn(
-              "text-base font-semibold text-card-foreground",
-              inGrid ? "shrink-0 whitespace-nowrap" : "min-w-0 truncate",
-            )}
-          >
+          <CardTitle className="min-w-0 text-base font-semibold leading-snug text-card-foreground">
             Auto recurring
           </CardTitle>
           {syncWaitHint.active ? (

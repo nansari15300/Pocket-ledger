@@ -43,7 +43,9 @@ import {
     getCurrentMonthDateRange,
     isCurrentMonthDateRange,
     MonthYearFilter,
+    type MonthYearFilterMode,
 } from "@/components/dashboard/MonthYearFilter";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { openPrintDirect } from "@/lib/printDirect";
 import { orderedCashFlowCategories } from "@/lib/cashFlowCategoryOrder";
 import {
@@ -527,6 +529,9 @@ const ReportMonthYearFilter = ({ dateRange, setDateRange, dateSystem }: { dateRa
 };
 
 /** Module scope — inline wrapper har parent render par remount karta tha (Auto recurring card flicker). */
+const DASHBOARD_SUMMARY_BLUE_PILL_CN =
+    "h-7 max-w-[7.5rem] shrink-0 truncate rounded-full border-blue-500/80 bg-blue-50 px-2 text-[11px] font-semibold text-blue-700 shadow-none hover:bg-blue-100 focus-visible:ring-blue-400 dark:border-blue-600 dark:bg-blue-950/45 dark:text-blue-200 dark:hover:bg-blue-950/60 [&_svg]:text-blue-600";
+
 function TopSummaryRowWrap({
     compact,
     className,
@@ -546,9 +551,10 @@ function TopSummaryRowWrap({
         <div
             data-pl-dashboard-top-summary-row=""
             className={cn(
+                "grid w-full min-w-0 max-w-full items-stretch gap-[5px] [&>*]:h-full [&>*]:min-h-[12rem] [&>*]:min-w-0",
                 chartRowLayout
-                    ? "grid w-full min-w-0 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 items-stretch gap-[5px] [&>*]:h-full [&>*]:min-h-[12rem] [&>*]:min-w-0"
-                    : "grid w-max min-w-full grid-flow-col auto-cols-[minmax(min-content,1fr)] items-stretch gap-[5px] [&>*]:h-full [&>*]:min-h-[12rem]",
+                    ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
+                    : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5",
                 className,
             )}
         >
@@ -1920,16 +1926,6 @@ export function FinancialSummaryCards({
         [voucherStatsDateRange, dateSystem]
     );
 
-    const voucherStatsFilteredVouchers = useMemo(() => {
-        if (!voucherStatsDateRange?.from) return vouchers || [];
-        const fromDate = startOfDay(voucherStatsDateRange.from);
-        const toDate = voucherStatsDateRange.to ? endOfDay(voucherStatsDateRange.to) : endOfDay(fromDate);
-        return (vouchers || []).filter((v) => {
-            const txDate = safeToDate(v.date);
-            return txDate && txDate >= fromDate && txDate <= toDate;
-        });
-    }, [vouchers, voucherStatsDateRange]);
-
     const companyCountry = company?.country || "Nepal";
     const companyFyDates = useMemo(() => resolveCompanyFiscalYearDates(company), [company]);
     const runningFyKey = useMemo(
@@ -1954,7 +1950,7 @@ export function FinancialSummaryCards({
     type EntitySummaryPeriodPick = "fy_full" | "current_month";
     const [entitySummaryFyPick, setEntitySummaryFyPick] = useState<EntitySummaryFyPick>("current");
     const [entitySummaryPeriodPick, setEntitySummaryPeriodPick] =
-        useState<EntitySummaryPeriodPick>("fy_full");
+        useState<EntitySummaryPeriodPick>("current_month");
 
     const entitySummaryEffectiveRange = useMemo((): { from: Date; to: Date } | null => {
         const monthOnly = () => {
@@ -1998,29 +1994,60 @@ export function FinancialSummaryCards({
         [entitySummaryEffectiveRange],
     );
 
+    const voucherStatsFilteredVouchers = useMemo(() => {
+        let filtered = vouchers || [];
+        if (entitySummaryEffectiveRange) {
+            filtered = filtered.filter((v) => entitySummaryDateInRange(safeToDate(v.date)));
+        }
+        if (voucherStatsDateRange?.from) {
+            const fromDate = startOfDay(voucherStatsDateRange.from);
+            const toDate = voucherStatsDateRange.to ? endOfDay(voucherStatsDateRange.to) : endOfDay(fromDate);
+            filtered = filtered.filter((v) => {
+                const txDate = safeToDate(v.date);
+                return txDate && txDate >= fromDate && txDate <= toDate;
+            });
+        }
+        return filtered;
+    }, [vouchers, entitySummaryEffectiveRange, entitySummaryDateInRange, voucherStatsDateRange]);
+
+    const entityMasterDateInRange = useCallback(
+        (d: Date | null | undefined) => {
+            if (!entitySummaryDateInRange(d)) return false;
+            if (entitySummaryPeriodPick === "current_month") return true;
+            if (voucherStatsDateRange?.from) {
+                if (!d) return false;
+                const fromDate = startOfDay(voucherStatsDateRange.from);
+                const toDate = endOfDay(voucherStatsDateRange.to ?? voucherStatsDateRange.from);
+                return d >= fromDate && d <= toDate;
+            }
+            return true;
+        },
+        [entitySummaryDateInRange, entitySummaryPeriodPick, voucherStatsDateRange],
+    );
+
     const entityFilteredParties = useMemo(
         () =>
             processedParties.filter((p: any) =>
-                entitySummaryDateInRange(pickEntityCreatedAt(p)),
+                entityMasterDateInRange(pickEntityCreatedAt(p)),
             ),
-        [processedParties, entitySummaryDateInRange],
+        [processedParties, entityMasterDateInRange],
     );
     const entityFilteredStaff = useMemo(
         () =>
-            processedStaff.filter((s: any) => entitySummaryDateInRange(pickEntityCreatedAt(s))),
-        [processedStaff, entitySummaryDateInRange],
+            processedStaff.filter((s: any) => entityMasterDateInRange(pickEntityCreatedAt(s))),
+        [processedStaff, entityMasterDateInRange],
     );
     const entityFilteredAccounts = useMemo(
         () =>
             processedAccounts.filter((a: any) =>
-                entitySummaryDateInRange(pickEntityCreatedAt(a)),
+                entityMasterDateInRange(pickEntityCreatedAt(a)),
             ),
-        [processedAccounts, entitySummaryDateInRange],
+        [processedAccounts, entityMasterDateInRange],
     );
     const entityFilteredItems = useMemo(
         () =>
-            processedItems.filter((i: any) => entitySummaryDateInRange(pickEntityCreatedAt(i))),
-        [processedItems, entitySummaryDateInRange],
+            processedItems.filter((i: any) => entityMasterDateInRange(pickEntityCreatedAt(i))),
+        [processedItems, entityMasterDateInRange],
     );
 
     const entityVouchersFiltered = useMemo(
@@ -2051,6 +2078,100 @@ export function FinancialSummaryCards({
         formatDate,
         formatDateBS,
     ]);
+
+    const dashboardMonthFilterMode = useMemo((): MonthYearFilterMode => {
+        if (entitySummaryPeriodPick === "current_month") return "current";
+        if (!voucherStatsDateRange?.from) return "full_fy";
+        return "custom";
+    }, [entitySummaryPeriodPick, voucherStatsDateRange]);
+
+    const onDashboardMonthFilterMode = useCallback((mode: MonthYearFilterMode) => {
+        if (mode === "current") {
+            setEntitySummaryPeriodPick("current_month");
+            setVoucherStatsDateRange(getCurrentMonthDateRange(dateSystem));
+            return;
+        }
+        if (mode === "full_fy") {
+            setEntitySummaryPeriodPick("fy_full");
+            setVoucherStatsDateRange(undefined);
+            return;
+        }
+        setEntitySummaryPeriodPick("fy_full");
+        if (mode === "all") {
+            setVoucherStatsDateRange(undefined);
+        }
+    }, [dateSystem]);
+
+    const dashboardFyPickLabel =
+        entitySummaryFyPick === "current"
+            ? `FY ${runningFyKey}`
+            : entitySummaryFyPick === "all"
+              ? "All FY"
+              : entitySummaryFyPick;
+
+    const renderDashboardSummaryScopeControls = () => (
+        <div className="flex shrink-0 items-center gap-1">
+            <Popover modal={false}>
+                <PopoverTrigger asChild>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className={DASHBOARD_SUMMARY_BLUE_PILL_CN}
+                        title={entitySummaryScopeHint}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {dashboardFyPickLabel}
+                    </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="z-[9999] w-48 p-2" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex flex-col gap-1">
+                        <Button
+                            type="button"
+                            variant={entitySummaryFyPick === "current" ? "default" : "ghost"}
+                            size="sm"
+                            className="h-8 justify-start text-xs"
+                            onClick={() => setEntitySummaryFyPick("current")}
+                        >
+                            Current FY ({runningFyKey})
+                        </Button>
+                        <Button
+                            type="button"
+                            variant={entitySummaryFyPick === "all" ? "default" : "ghost"}
+                            size="sm"
+                            className="h-8 justify-start text-xs"
+                            onClick={() => setEntitySummaryFyPick("all")}
+                        >
+                            All FY
+                        </Button>
+                        {entityVoucherFyKeys
+                            .filter((k) => k !== runningFyKey)
+                            .map((fyKey) => (
+                                <Button
+                                    key={fyKey}
+                                    type="button"
+                                    variant={entitySummaryFyPick === fyKey ? "default" : "ghost"}
+                                    size="sm"
+                                    className="h-8 justify-start text-xs"
+                                    onClick={() => setEntitySummaryFyPick(fyKey)}
+                                >
+                                    {fyKey}
+                                </Button>
+                            ))}
+                    </div>
+                </PopoverContent>
+            </Popover>
+            <MonthYearFilter
+                dateRange={voucherStatsDateRange}
+                setDateRange={setVoucherStatsDateRange}
+                dateSystem={dateSystem}
+                showFullFyOption
+                triggerClassName={DASHBOARD_SUMMARY_BLUE_PILL_CN}
+                filterMode={dashboardMonthFilterMode}
+                onFilterModeChange={onDashboardMonthFilterMode}
+            />
+        </div>
+    );
 
     const stats = useMemo(() => {
         if (!vouchers) return { otherStats: statCardData.map(s => ({ ...s, total: 0, count: 0 })) };
@@ -2497,25 +2618,27 @@ export function FinancialSummaryCards({
         };
     }, [showVoucherDateCharts, processedAccounts, dateSystem, formatDate, formatDateBS]);
 
-    /** Entity row: same page width as top 5 cards — never wrap. */
-    const dashboardEntityRowClass = "flex w-full min-w-0 flex-nowrap items-stretch gap-[5px]";
+    /** Entity row: full-width grid — APK/tablet par horizontal scroll avoid. */
+    const dashboardEntityRowClass =
+        "grid w-full min-w-0 max-w-full grid-cols-1 items-stretch gap-[5px] sm:grid-cols-2 lg:grid-cols-5";
     const topSummaryRowWrapClass = "";
     const topSummaryCardShellClass = compact
         ? "h-full flex flex-col"
-        : showVoucherDateCharts
-          ? "flex h-full min-h-[12rem] min-w-0 w-full flex-col overflow-hidden"
-          : "flex h-full min-h-[12rem] min-w-max w-full flex-col overflow-hidden";
+        : "flex h-full min-h-[12rem] min-w-0 w-full max-w-full flex-col overflow-hidden";
     const topSummaryCardBodyClass = "flex-1 flex flex-col";
     const topSummaryCardFooterClass = "mt-auto shrink-0 text-right pt-2";
     const topSummaryMetricRowCn = cn(
-        "flex items-baseline justify-between",
-        !compact && "flex-nowrap gap-x-4"
+        "flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5",
+        !compact && "sm:flex-nowrap sm:gap-x-4",
     );
     const topSummaryMetricLabelCn = cn(
-        "text-xs text-muted-foreground",
-        !compact && "shrink-0 whitespace-nowrap"
+        "min-w-0 max-w-[58%] text-xs text-muted-foreground break-words leading-snug",
+        !compact && "sm:max-w-none sm:shrink-0 sm:whitespace-nowrap",
     );
-    const topSummaryMetricValueCn = cn(!compact && "shrink-0 whitespace-nowrap text-right tabular-nums");
+    const topSummaryMetricValueCn = cn(
+        "shrink-0 text-right tabular-nums",
+        !compact && "whitespace-nowrap",
+    );
     const topSummaryMetricLineValueCn = cn(
         compact ? "text-sm font-bold" : "text-base font-bold",
         topSummaryMetricValueCn,
@@ -2540,7 +2663,7 @@ export function FinancialSummaryCards({
     // Use min-width to prevent content overflow, cards will auto-adjust columns
     const cardWrapperClass = compact
         ? "flex flex-col min-w-0 w-full"
-        : "h-full min-w-max w-full overflow-hidden";
+        : "h-full min-w-0 w-full max-w-full overflow-hidden";
     const headerClass = compact ? "min-w-0 gap-2 flex-shrink-0" : "";
     const titleClass = compact ? "truncate flex-shrink-0" : "";
     const topSummaryCardHeaderClass = cn(
@@ -2766,25 +2889,10 @@ export function FinancialSummaryCards({
                 key={stat.type}
                 className={`flex min-w-0 w-full h-full flex-col hover:bg-muted/50 transition-colors ${dashboardCardRibbonClass} ${ribbonTone(idx + 5)}`}
             >
-                <CardHeader className="p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                        <CardTitle className="min-w-0 truncate text-sm whitespace-nowrap">{stat.title}</CardTitle>
-                        <stat.icon className="h-5 w-5 shrink-0 text-muted-foreground" />
-                    </div>
-                    <div className="flex min-w-0 items-center justify-between gap-2">
-                        <span
-                            className="min-w-0 truncate text-[11px] font-medium text-muted-foreground"
-                            title={`Range: ${voucherStatsRangeLabel}`}
-                        >
-                            Range: {voucherStatsRangeLabel}
-                        </span>
-                        <div className="shrink-0 [&_button]:h-7 [&_button]:max-w-[7.5rem] [&_button]:px-2 [&_button]:text-[11px]">
-                            <MonthYearFilter
-                                dateRange={voucherStatsDateRange}
-                                setDateRange={setVoucherStatsDateRange}
-                                dateSystem={dateSystem}
-                            />
-                        </div>
+                <CardHeader className="space-y-1 p-3 pb-1">
+                    <div className="flex min-w-0 items-center justify-between gap-1">
+                        <CardTitle className="min-w-0 truncate text-sm">{stat.title}</CardTitle>
+                        {renderDashboardSummaryScopeControls()}
                     </div>
                 </CardHeader>
                 <CardContent className="flex flex-1 flex-col p-3 pt-0">
@@ -3022,13 +3130,7 @@ export function FinancialSummaryCards({
             className={cn(
                 compact
                     ? cn("financial-summary-grid w-full", cardSpacing)
-                    : cn(
-                          "flex flex-col items-stretch",
-                          showVoucherDateCharts
-                              ? "w-full min-w-0 max-w-full"
-                              : "w-max min-w-full",
-                          cardSpacing,
-                      )
+                    : cn("flex w-full min-w-0 max-w-full flex-col items-stretch", cardSpacing)
             )}
         >
             <Dialog
@@ -4378,57 +4480,7 @@ export function FinancialSummaryCards({
                             <CardHeader className="space-y-1 p-3 pb-1">
                                 <div className="flex min-w-0 items-center justify-between gap-1">
                                     <CardTitle className="min-w-0 shrink truncate text-sm">{item.title}</CardTitle>
-                                    <div className="flex shrink-0 items-center gap-0.5">
-                                        <Select
-                                            value={entitySummaryFyPick}
-                                            onValueChange={(v) =>
-                                                setEntitySummaryFyPick(v as EntitySummaryFyPick)
-                                            }
-                                        >
-                                            <SelectTrigger
-                                                className="h-7 max-w-[6.25rem] px-1.5 text-[10px] font-medium"
-                                                title={entitySummaryScopeHint}
-                                            >
-                                                <SelectValue placeholder="FY" />
-                                            </SelectTrigger>
-                                            <SelectContent align="end">
-                                                <SelectItem value="current" className="text-xs">
-                                                    Current FY ({runningFyKey})
-                                                </SelectItem>
-                                                <SelectItem value="all" className="text-xs">
-                                                    All FY
-                                                </SelectItem>
-                                                {entityVoucherFyKeys
-                                                    .filter((k) => k !== runningFyKey)
-                                                    .map((fyKey) => (
-                                                        <SelectItem key={fyKey} value={fyKey} className="text-xs">
-                                                            {fyKey}
-                                                        </SelectItem>
-                                                    ))}
-                                            </SelectContent>
-                                        </Select>
-                                        <Select
-                                            value={entitySummaryPeriodPick}
-                                            onValueChange={(v) =>
-                                                setEntitySummaryPeriodPick(v as EntitySummaryPeriodPick)
-                                            }
-                                        >
-                                            <SelectTrigger
-                                                className="h-7 max-w-[6.5rem] px-1.5 text-[10px] font-medium"
-                                                title={entitySummaryScopeHint}
-                                            >
-                                                <SelectValue placeholder="Period" />
-                                            </SelectTrigger>
-                                            <SelectContent align="end">
-                                                <SelectItem value="fy_full" className="text-xs">
-                                                    Full FY
-                                                </SelectItem>
-                                                <SelectItem value="current_month" className="text-xs">
-                                                    Current Month
-                                                </SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
+                                    {renderDashboardSummaryScopeControls()}
                                 </div>
                             </CardHeader>
                             <CardContent className="p-3 pt-0">
