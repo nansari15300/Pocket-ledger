@@ -79,6 +79,7 @@ export function normalizeVoucherLineItemForForm<T extends Record<string, unknown
     ...li,
     itemId: String(li.itemId ?? "").trim(),
     taxAccountId: String(li.taxAccountId ?? "").trim(),
+    tdsAccountId: String(li.tdsAccountId ?? "").trim(),
     unit: li.unit != null ? String(li.unit) : "",
     allowManualRate: li.allowManualRate !== false,
   };

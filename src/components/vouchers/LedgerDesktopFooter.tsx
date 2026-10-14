@@ -30,26 +30,21 @@ export function LedgerDesktopFooter({
   return (
     <div
       className={cn(
-        "pl-ledger-desktop-footer-shell border-t border-blue-300/60 bg-blue-100/80 py-2 px-4 overflow-auto min-h-0 pl-ledger-footer-scroll flex-shrink-0 mt-auto",
+        "pl-ledger-desktop-footer-shell border-t border-blue-300/60 bg-blue-100/80 py-2 px-4 overflow-x-visible overflow-y-visible min-h-0 flex-shrink-0 mt-auto",
         shellClassName
       )}
+      data-pl-ledger-footer-single-row=""
     >
       <div
+        data-pl-ledger-footer-measure-row=""
         className={cn(
-          "flex min-w-max flex-col gap-y-2 sm:flex-row sm:items-center",
+          "flex w-max min-w-full flex-nowrap items-center",
           ledgerFooterRowCn,
           className
         )}
       >
-        <div
-          className={cn(
-            ledgerFooterRowCn,
-            "min-w-0 overflow-x-auto pl-ledger-footer-scroll text-sm text-muted-foreground"
-          )}
-        >
-          {left}
-        </div>
-        <LedgerFooterPaginationBar {...pagination} />
+        <div className={cn(ledgerFooterRowCn, "shrink-0 text-sm text-muted-foreground")}>{left}</div>
+        <LedgerFooterPaginationBar {...pagination} className="ml-auto shrink-0" />
       </div>
     </div>
   );

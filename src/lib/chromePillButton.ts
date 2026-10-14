@@ -22,3 +22,10 @@ export const chromePillActive =
 export function chromePillBtn(active?: boolean, className?: string) {
   return cn(chromePillBase, active && chromePillActive, className);
 }
+
+/** Ledger Statement / Bill wise / TDS row type pill — blue chrome + green border. */
+export const LEDGER_VIEW_MODE_TYPE_PILL_CN = cn(
+  "inline-flex h-6 items-center rounded-xl px-2.5 font-medium whitespace-nowrap shrink-0",
+  chromeProPillCn,
+  "!border-green-600"
+);

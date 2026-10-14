@@ -55,9 +55,17 @@ import {
   isVoucherLimitError,
   patchVoucherFields,
   softDeleteVoucherMoveToRecycleBin,
-  voucherRecycleBinDeletedAt,
   applyJournalBillWiseLinkAllocations,
 } from "@/lib/voucherActionsClient";
+import {
+  getVoucherConvertOriginalId,
+  getVoucherEditConvertPresentation,
+  isVoucherEditConverting,
+  markVoucherConvertedInRecycleBin,
+  resolveVoucherConvertSourceType,
+} from "@/lib/voucherEditConvert";
+import { VoucherEditConvertConfirmDialog } from "@/components/vouchers/VoucherEditConvertConfirmDialog";
+import { useVoucherEditConvertSubmitGate } from "@/hooks/useVoucherEditConvertSubmitGate";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { useAutoVoucherNumberFyDateSync } from "@/hooks/useAutoVoucherNumberFyDateSync";
@@ -526,9 +534,20 @@ export function CreateJournalForm({
   const isEditing = !!voucher?.id;
   /** Journal tab me `Add Salary` source aane par bhi convert treat karo taaki fresh journal number bane. */
   const isEditingAndConverting =
-    Boolean(voucher) &&
-    // Preserve original saved type from dialog shaping so Contra -> Journal edit switch refreshes voucher no.
-    (String((voucher as any)?._sourceVoucherType || voucher?.type || "") !== "journal" || String(voucher?.subType || "") === "add_salary");
+    isVoucherEditConverting(voucher, "journal") ||
+    (Boolean(voucher?.id) &&
+      String(voucher?.subType || "") === "add_salary" &&
+      resolveVoucherConvertSourceType(voucher) !== "journal");
+  const convertPresentation = useMemo(
+    () => getVoucherEditConvertPresentation(voucher as Record<string, unknown> | undefined, "journal"),
+    [voucher]
+  );
+  const {
+    convertConfirmOpen,
+    setConvertConfirmOpen,
+    gateConvertSubmit,
+    confirmConvertSubmit,
+  } = useVoucherEditConvertSubmitGate(isEditingAndConverting);
   // Sync draft: voucher hai par id nahi — fields editable rehne chahiye (account + narration manually bhar sake)
   const isFormEditing = !voucher?.id || isEditing;
 
@@ -1771,16 +1790,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const handleFormSubmit = useCallback(
     (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
       e.preventDefault();
-      void form.handleSubmit(
-        async (data) => {
-          await processAndSaveRef.current?.(data, options.saveAndNew ?? false, options.approveAfterSave);
-        },
-        (errors) => {
-          sonnerToast.error("Validation Failed", { description: formatJournalFormValidationErrors(errors) });
-        }
-      )(e);
+      gateConvertSubmit(() => {
+        void form.handleSubmit(
+          async (data) => {
+            await processAndSaveRef.current?.(data, options.saveAndNew ?? false, options.approveAfterSave);
+          },
+          (errors) => {
+            sonnerToast.error("Validation Failed", { description: formatJournalFormValidationErrors(errors) });
+          }
+        )(e);
+      });
     },
-    [form]
+    [form, gateConvertSubmit]
   );
   
   async function processAndSave(data: JournalFormValues, saveAndNew: boolean = false, approveAfterSave?: boolean) {
@@ -1859,8 +1880,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     setIsLoading(true);
 
     try {
-      const originalVoucherIdToDelete: string | null =
-        isEditingAndConverting && voucher?.id ? String(voucher.id) : null;
+      const originalVoucherIdToDelete: string | null = isEditingAndConverting
+        ? getVoucherConvertOriginalId(voucher)
+        : null;
       const idArgForFirestore = resolveVoucherIdForSave({
         savedVoucherId,
         originalVoucherIdToDelete,
@@ -2010,12 +2032,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           markCopiedDraftPersisted();
           if (isMounted.current) setSavedVoucherId(savedDoc.id);
           if (originalVoucherIdToDelete) {
-              // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
-              await patchVoucherFields(companyId, originalVoucherIdToDelete, {
-                isDeleted: true,
-                deletedAt: voucherRecycleBinDeletedAt(),
-                convertedToType: 'journal',
+              await markVoucherConvertedInRecycleBin(companyId, originalVoucherIdToDelete, {
+                convertedToType: "journal",
                 convertedToVoucherNumber: submissionData.voucherNumber,
+                convertedToVoucherId: savedDoc.id,
+                deletedBy: user.uid,
               });
           }
       } else {
@@ -3543,8 +3564,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   Cancel
                 </Button>
                 {/* Pehle save ke baad `savedVoucherId` — tab bhi bina change Save band */}
-                <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
-                  {isLoading ? "..." : "Save"}
+                <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty && !isEditingAndConverting)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                  {isLoading ? "..." : isEditingAndConverting ? "Convert" : "Save"}
                 </Button>
                 {voucher?.id ? (
                   <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -3580,9 +3601,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty && !isEditingAndConverting)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save
+                    {isEditingAndConverting ? "Convert" : "Save"}
                   </Button>
                   {voucher?.id ? (
                     <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
@@ -3601,6 +3622,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           </div>}
         </form>
       </Form>
+      {convertPresentation ? (
+        <VoucherEditConvertConfirmDialog
+          open={convertConfirmOpen}
+          onOpenChange={setConvertConfirmOpen}
+          bannerText={convertPresentation.bannerText}
+          onConfirm={confirmConvertSubmit}
+        />
+      ) : null}
       {/* Party-side Journal linking: "Link Journal Dr to Linkable Cr Txns" → show Cr list. "Link Journal Cr to Linkable Dr Txns" → show Dr list. */}
       <LinkPaymentToTxnsDialog
         isOpen={!!activeJournalLinkContext && activeJournalLinkContext.kind === "party"}

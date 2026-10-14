@@ -67,10 +67,10 @@ import { collectBankAccountIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTo
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
 import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
 import { flipLedgerSignedBalance } from "@/lib/bankLedgerDrCrPerspective";
-import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
-import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
-import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { MobileMasterDetailHeaderAvatar } from "@/components/entity/MobileMasterDetailHeaderAvatar";
+import { MobileMasterDetailHeaderDateSecondary } from "@/components/entity/MobileMasterDetailHeaderDateSecondary";
+import { mobileEntityDetailShellTitle } from "@/lib/mobileDetailChrome";
 import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
 import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
@@ -224,46 +224,28 @@ function BankCashPageContent() {
     if (!isMobile || activeView === "groups") setBankMobileVoucherStats(null);
   }, [isMobile, activeView, selectedAccount?.id]);
 
+  const bankShellTitle = useMemo(
+    () => mobileEntityDetailShellTitle(isMobile, Boolean(selected), bankCashMasterDetailTitle, "Bank details"),
+    [isMobile, selected, bankCashMasterDetailTitle]
+  );
+  const mobileBankHeaderSecondary = useMemo((): ReactNode | undefined => {
+    if (!isMobile || !selected) return undefined;
+    const range = activeView === "groups" ? groupDetailsDateRange : accountDetailsDateRange;
+    const onClear =
+      activeView === "groups"
+        ? () => setGroupDetailsDateRange(undefined)
+        : () => setAccountDetailsDateRange(undefined);
+    return <MobileMasterDetailHeaderDateSecondary dateRange={range} onClear={onClear} />;
+  }, [isMobile, selected, activeView, accountDetailsDateRange, groupDetailsDateRange]);
   const mobileBankDetailHeaderEnd = useMemo(() => {
     if (!isMobile || !selected) return null;
     const selectedEntity = selected as Account | AccountGroup;
-    // Union-safe label: account uses `accountName`, group uses `name`.
     const name =
       activeView !== "groups"
         ? (String((selectedEntity as Account).accountName || "").trim() || "Account")
         : (String((selectedEntity as AccountGroup).name || "").trim() || "Account");
     const attachmentUrl = trimEntityFileUrlForPreview((selectedEntity as any).fileUrl);
-    const initials = String(name)
-      .split(" ")
-      .filter(Boolean)
-      .map((part) => part[0])
-      .slice(0, 2)
-      .join("")
-      .toUpperCase() || "NA";
-    const openPreview = () => {
-      // Bank/Cash mobile header avatar: tap for full preview.
-      if (!attachmentUrl) return;
-      void openAttachmentInApp(attachmentUrl, { title: String(name) });
-    };
-    return (
-      <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
-        <EntityFileAttachmentHover fileUrl={attachmentUrl} triggerClassName="inline-flex rounded-full">
-          <button
-            type="button"
-            className="inline-flex h-full w-full items-center justify-center rounded-full"
-            onClick={openPreview}
-            aria-label={`Preview ${name} avatar`}
-          >
-            <ResolvedEntityAvatar
-              className="h-full w-full text-xs"
-              src={attachmentUrl ?? undefined}
-              alt={String(name)}
-              fallbackText={initials}
-            />
-          </button>
-        </EntityFileAttachmentHover>
-      </div>
-    );
+    return <MobileMasterDetailHeaderAvatar name={name} attachmentUrl={attachmentUrl} />;
   }, [isMobile, selected, activeView]);
   
   const isSpecialAccountOwner = userIsSpecialAccountOwner(
@@ -796,6 +778,7 @@ function BankCashPageContent() {
             onDateRangeChange={setAccountDetailsDateRange}
             userNames={userNames}
             onMobileVoucherListStatsChange={isMobile ? setBankMobileVoucherStats : undefined}
+            hideMobilePeriodLabelRow={isMobile}
           />
       )}
       {activeView === 'groups' && selectedGroup && (
@@ -811,6 +794,7 @@ function BankCashPageContent() {
           dateRange={groupDetailsDateRange}
           onDateRangeChange={setGroupDetailsDateRange}
           userNames={userNames}
+          hideMobilePeriodLabelRow={isMobile}
         />
       )}
       {!selected && <div className="p-6 text-center text-muted-foreground">Select an item to see details</div>}
@@ -819,10 +803,11 @@ function BankCashPageContent() {
 
   return (
     <ResponsiveMasterDetail
-      title={bankCashMasterDetailTitle}
+      title={bankShellTitle}
       mobileSelectionLabel={mobileBankCashSelectionLabel}
       mobileSelectionLabelClassName={mobileBankCashSelectionLabelClassName}
       mobileDetailHeaderEnd={mobileBankDetailHeaderEnd}
+      mobileDetailHeaderSecondary={mobileBankHeaderSecondary}
       balance={
         <span className={cn(
             "font-semibold",

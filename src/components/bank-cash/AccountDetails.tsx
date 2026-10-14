@@ -1,4 +1,4 @@
-﻿
+
 "use client";
 
 import * as React from "react";
@@ -124,6 +124,7 @@ import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useInterCompanyLedgerChangeDetectDialog } from "@/hooks/useInterCompanyLedgerChangeDetectDialog";
 import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillLabel";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
+import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
@@ -219,6 +220,7 @@ interface AccountDetailsProps {
   showPeriodSummaryCards?: boolean;
   /** Optional inline close control when this detail is hosted inside a report popup. */
   onPopupClose?: () => void;
+  hideMobilePeriodLabelRow?: boolean;
 }
 
 export function AccountDetails({
@@ -235,6 +237,7 @@ export function AccountDetails({
   ledgerPresentationMode = "default",
   showPeriodSummaryCards = false,
   onPopupClose,
+  hideMobilePeriodLabelRow = false,
 }: AccountDetailsProps) {
   const nestedLedgerNoteDialogShell =
     ledgerPresentationMode === "nested-ledger"
@@ -349,6 +352,7 @@ export function AccountDetails({
 
   const {
     freezeOverlay: accountFreezeOverlay,
+    closingBalanceRowActions: accountClosingBalanceRowActions,
     closingBalanceActions: accountClosingBalanceActions,
   } = useMasterAccountFreezeDetailsChrome({
     companyId,
@@ -1686,23 +1690,24 @@ export function AccountDetails({
       )}
       {/* Mobile: date/balance/search — footer chevron se collapse (group pages jaisa) */}
       <MobileDetailSummaryCollapsible>
-      {/* Last 10 Txns / date range label */}
-      <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
-        <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
-        {dateRange != null && (dateRange.from != null || dateRange.to != null) && onDateRangeChange && (
-          <button
-            type="button"
-            onClick={() => onDateRangeChange(undefined)}
-            className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
-            aria-label="Clear date filter"
-          >
-            <XCircle className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
+      {!hideMobilePeriodLabelRow ? (
+        <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
+          <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
+          {dateRange != null && (dateRange.from != null || dateRange.to != null) && onDateRangeChange && (
+            <button
+              type="button"
+              onClick={() => onDateRangeChange(undefined)}
+              className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
+              aria-label="Clear date filter"
+            >
+              <XCircle className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      ) : null}
       {/* Balance row */}
-      <div className="px-3 py-2 border-b flex-shrink-0">
-        <p className={cn("text-2xl font-bold flex justify-center items-baseline gap-px", displayHeaderClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+      <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
+        <p className={cn(mdc.mobileTxnBalanceText2xlFlex, displayHeaderClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
           {showMaskedBalance ? (
             "*****"
           ) : displayHeaderClosingBalance === 0 ? (
@@ -1820,6 +1825,7 @@ export function AccountDetails({
             closingBalance={showMaskedBalance ? undefined : displayMobilePageLedgerStats.closingForPage}
             isBalanceMasked={showMaskedBalance}
             scrollOnlyTransactions
+            closingBalanceRowActions={accountClosingBalanceRowActions}
             closingBalanceActions={accountClosingBalanceActions}
             blinkMode={spendWiseBlinkMode}
             spendWiseGroupPrint={spendWiseGroupPrint}
@@ -1829,7 +1835,7 @@ export function AccountDetails({
         </div>
       </div>
       <MobileTransactionsPager
-        className="flex-shrink-0 mb-12"
+        className={mdc.ledgerTxnPagerOutside}
         showSummaryToggleInOverlay={Boolean(onPopupClose)}
         currentPage={currentPage}
         totalItems={filteredMobileTransactions.length}
@@ -2192,7 +2198,8 @@ export function AccountDetails({
               closingBalance={showMaskedBalance ? undefined : displayDesktopPageLedgerStats.closingForPage}
               isBalanceMasked={showMaskedBalance}
               scrollOnlyTransactions
-              closingBalanceActions={accountClosingBalanceActions}
+              closingBalanceRowActions={accountClosingBalanceRowActions}
+            closingBalanceActions={accountClosingBalanceActions}
               blinkMode={spendWiseBlinkMode}
               spendWiseGroupPrint={spendWiseGroupPrint}
               {...bankDepositWithdrawColumnLabels}

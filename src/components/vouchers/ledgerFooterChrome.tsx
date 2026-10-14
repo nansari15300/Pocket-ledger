@@ -20,13 +20,15 @@ export function LedgerFooterChromePill({
   active,
   className,
   children,
+  ...rest
 }: {
   active?: boolean;
   className?: string;
   children: React.ReactNode;
-}) {
+} & React.HTMLAttributes<HTMLSpanElement>) {
   return (
     <span
+      {...rest}
       className={cn(
         "inline-flex shrink-0 items-center rounded-full px-2.5",
         LEDGER_FOOTER_PILL_H,

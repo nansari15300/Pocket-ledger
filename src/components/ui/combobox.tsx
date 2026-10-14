@@ -67,6 +67,8 @@ type ComboboxProps = {
   triggerLabelMinCh?: number;
   /** Trigger pill naam ki width jitni — w-full stretch nahi. */
   fitTrigger?: boolean;
+  /** Pill column bhar de, aur naam column se lamba ho to column uske saath badhe. */
+  fillColumn?: boolean;
   /** Optional: cap visible filtered options (useful for mobile dropdown performance/clarity). */
   maxVisibleOptions?: number;
   /** Popover panel extra classes; agar set ho to default trigger-width inline style skip (mobile width jaise). */
@@ -103,6 +105,7 @@ export function Combobox({
   triggerLabelScrollable = false,
   triggerLabelMinCh,
   fitTrigger = false,
+  fillColumn = false,
   maxVisibleOptions,
   popoverContentClassName,
   commandListClassName,
@@ -324,8 +327,12 @@ export function Combobox({
           title={title}
           className={cn(
             // overflow label wrapper par; button par nahi — warna ChevronsUpDown clip (Unit = lamba minWidth).
-            fitTrigger ? "w-fit max-w-full justify-between gap-0.5 h-9 px-2" : "w-full max-w-full justify-between gap-0.5 h-9 px-2",
-            !fitTrigger && labelMinCh == null ? "min-w-0" : "",
+            fillColumn
+              ? "w-full min-w-max max-w-none justify-between gap-0.5 h-9 px-2"
+              : fitTrigger
+                ? "w-fit max-w-full justify-between gap-0.5 h-9 px-2"
+                : "w-full max-w-full justify-between gap-0.5 h-9 px-2",
+            !fillColumn && !fitTrigger && labelMinCh == null ? "min-w-0" : "",
             triggerLabelScrollable ? "overflow-x-auto" : "overflow-visible",
             triggerClassName
           )}
@@ -339,7 +346,7 @@ export function Combobox({
           <span
             className={cn(
               "flex items-center gap-1",
-              fitTrigger
+              fillColumn || fitTrigger
                 ? "w-auto shrink-0 whitespace-nowrap"
                 : triggerLabelScrollable
                   ? "min-w-0 flex-1 max-w-full overflow-x-auto"
@@ -355,7 +362,7 @@ export function Combobox({
             <span
               className={cn(
                 "block text-left",
-                fitTrigger
+                fillColumn || fitTrigger
                   ? "w-auto whitespace-nowrap"
                   : cn(
                       "flex-1 max-w-full",

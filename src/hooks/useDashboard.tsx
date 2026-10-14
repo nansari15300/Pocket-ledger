@@ -1,6 +1,18 @@
 "use client";
 
-import React, { createContext, useContext, useState, ReactNode, useEffect, startTransition } from "react";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  ReactNode,
+  startTransition,
+} from "react";
+import {
+  normalizeDashboardVisibleCard,
+  readDashboardVisibleCardFromStorage,
+  syncDashboardTabToSession,
+} from "@/lib/dashboardTabPanels";
 
 type DashboardContextType = {
   visibleCard: string;
@@ -10,28 +22,14 @@ type DashboardContextType = {
 const DashboardContext = createContext<DashboardContextType | undefined>(undefined);
 
 export const DashboardProvider = ({ children }: { children: ReactNode }) => {
-  // Default "all" so Daybook + Recent show for PL Server staff (role ticks apply via can()).
-  const [visibleCard, setVisibleCardState] = useState("all");
+  const [visibleCard, setVisibleCardState] = useState(readDashboardVisibleCardFromStorage);
 
   useEffect(() => {
-    const savedCard = localStorage.getItem("dashboardVisibleCard");
-    if (!savedCard) return;
-    // Recurring footer tab removed — migrate old localStorage value to a valid tab
-    const normalized = savedCard === "auto-recurring" ? "all" : savedCard;
-    setVisibleCardState(normalized);
-    if (normalized !== savedCard) {
-      localStorage.setItem("dashboardVisibleCard", normalized);
-    }
+    syncDashboardTabToSession(readDashboardVisibleCardFromStorage());
   }, []);
 
   const setVisibleCard = (cardId: string) => {
-    // Recurring tab removed — normalize stale id from old clients or bookmarks
-    const id = cardId === "auto-recurring" ? "all" : cardId;
-    try {
-      localStorage.setItem("dashboardVisibleCard", id);
-    } catch {
-      /* private mode / quota */
-    }
+    const id = syncDashboardTabToSession(normalizeDashboardVisibleCard(cardId));
     // Tab highlight pehle; heavy Daybook/Summary paint transition me — All↔Daybook freeze kam.
     startTransition(() => {
       setVisibleCardState(id);

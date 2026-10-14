@@ -109,6 +109,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
+import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { EditItemGroupDialog } from "./EditItemGroupDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -180,6 +181,7 @@ export function ItemGroupDetails({
   userNames,
   transactions,
   groupMemberFilterId = null,
+  hideMobilePeriodLabelRow = false,
 }: {
   group: ItemGroup;
   allGroups: ItemGroup[];
@@ -195,6 +197,7 @@ export function ItemGroupDetails({
   userNames: Record<string, string>;
   transactions: any[];
   groupMemberFilterId?: string | null;
+  hideMobilePeriodLabelRow?: boolean;
 }) {
   useFyLoadOnDateRangeChange(dateRange);
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
@@ -735,22 +738,29 @@ export function ItemGroupDetails({
           {/* Mobile: date/balance/search — footer chevron se collapse */}
           <MobileDetailSummaryCollapsible>
           <div className="flex flex-col flex-shrink-0 border-b bg-background">
-            <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0 bg-background">
-              <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
-              {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
-                <button
-                  type="button"
-                  onClick={() => onDateRangeChange(undefined)}
-                  className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
-                  aria-label="Clear date filter"
-                >
-                  <XCircle className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-            <div className="px-3 py-2 border-b flex items-center justify-between gap-2 flex-shrink-0 bg-background">
-              <span className="text-sm font-medium text-muted-foreground flex-1">{closingBalance >= 0 ? "Asset" : "Liability"}</span>
-              <span className={cn("text-2xl font-bold", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+            {!hideMobilePeriodLabelRow ? (
+              <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0 bg-background">
+                <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
+                {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
+                  <button
+                    type="button"
+                    onClick={() => onDateRangeChange(undefined)}
+                    className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
+                    aria-label="Clear date filter"
+                  >
+                    <XCircle className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            ) : null}
+            <div
+              className={cn(mdc.mobileTxnBalanceRow, "flex items-center justify-between gap-2 bg-background")}
+              {...mdcMobileTxnBalanceRowData}
+            >
+              <span className="m-0 flex-1 text-sm font-medium leading-tight text-muted-foreground">
+                {closingBalance >= 0 ? "Asset" : "Liability"}
+              </span>
+              <span className={cn("m-0 text-2xl font-bold leading-tight", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
                 {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
               </span>
             </div>
@@ -795,7 +805,7 @@ export function ItemGroupDetails({
               </div>
             </div>
             <MobileTransactionsPager
-              className="flex-shrink-0 mb-12"
+              className={mdc.ledgerTxnPagerOutside}
               currentPage={currentPage}
               totalItems={ledgerPagingTransactions.length}
               rowsPerPage={rowsPerPage}

@@ -23,7 +23,9 @@ export function VoucherNumberInputWithRefresh({
   ...inputProps
 }: Props) {
   const [busy, setBusy] = useState(false);
-  const canRefresh = Boolean(showRefresh && onRefresh && !disabled);
+  // Refresh stays visible/clickable even when the text field is read-only
+  // (no voucher-number edit permission) — click rescans the next auto number.
+  const showRefreshBtn = Boolean(showRefresh && onRefresh);
   const iconBtnClass = chromeSize === "sm" ? "h-7 w-7" : "h-8 w-8";
   const inputPadRight = chromeSize === "sm" ? "pr-9" : "pr-10";
 
@@ -47,15 +49,15 @@ export function VoucherNumberInputWithRefresh({
   return (
     <div className="relative min-w-0 w-full">
       <Input
-        className={cn("min-w-0 w-full", canRefresh && inputPadRight, className)}
+        className={cn("min-w-0 w-full", showRefreshBtn && inputPadRight, className)}
         disabled={disabled}
         {...inputProps}
       />
-      {canRefresh ? (
+      {showRefreshBtn ? (
         <button
           type="button"
           className={cn(
-            "absolute right-0.5 top-1/2 inline-flex -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-50",
+            "absolute right-0.5 top-1/2 z-[1] inline-flex -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-50",
             iconBtnClass
           )}
           title="Refresh voucher number"

@@ -893,6 +893,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 
     const noLayoutPages = ["/company/create"];
     const isEmbedRoute = pathname?.startsWith("/embed");
+    const normalizedPath = (pathname ?? "").replace(/\/$/, "");
+    const isDashboardHomeRoute =
+      normalizedPath === "/dashboard" || normalizedPath.endsWith("/dashboard");
 
     if (noLayoutPages.includes(pathname)) {
         return (
@@ -985,9 +988,13 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                             pathname?.startsWith("/settings") ||
                               pathname?.startsWith("/gallery") ||
                               pathname?.startsWith("/billing/statement") ||
-                              pathname?.startsWith("/loans")
+                              pathname?.startsWith("/loans") ||
+                              (isDashboardHomeRoute && !isMobile)
                               ? "overflow-hidden"
-                              : "overflow-y-auto [scrollbar-gutter:stable]"
+                              : cn(
+                                  "overflow-y-auto [scrollbar-gutter:stable]",
+                                  isDashboardHomeRoute && isMobile && "scrollbar-slim-dim",
+                                )
                           )}
                         >
                           <GlobalMobilePullRefresh scrollRef={dashboardMainScrollRef} />

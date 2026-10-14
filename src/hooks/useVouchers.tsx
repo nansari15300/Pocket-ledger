@@ -71,6 +71,7 @@ import {
   activeMasterCollectionPathsForRoute,
   VOUCHER_FORM_MASTER_COLLECTION_PATHS,
 } from "@/lib/ledgerActiveMasterCollections";
+import { DASHBOARD_TAB_CHANGED_EVENT } from "@/lib/dashboardTabPanels";
 import {
   collectionsForMobileRoutePullRefresh,
   MOBILE_ROUTE_PULL_REFRESH_EVENT,
@@ -91,7 +92,8 @@ import {
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import {
-  getBillWiseAllocatedToTarget,
+  buildBillWiseIncomingAllocationMaps,
+  getBillWiseAllocatedToTargetWithMaps,
   getPaymentStatus as getPaymentStatusResult,
   getSalePurchaseBillWiseLinkNos,
   isSaleOrPurchaseBillVoucherType,
@@ -757,6 +759,17 @@ const isAliveDoc = (row: any) => row?.isDeleted !== true;
 const HEAVY_LEDGER_SKIP_ROUTE_PREFIXES = ["/company", "/admin", "/distributor-signup", "/gate"] as const;
 const HEAVY_LEDGER_SKIP_ROUTES = new Set(["/", ""]);
 
+function masterRouteSegment(pathname: string): string {
+  let route = String(pathname || "").trim().toLowerCase();
+  if (route.startsWith("/app/")) route = route.slice(4) || "/";
+  return route.replace(/^\/+|\/+$/g, "").split("/")[0] || "";
+}
+
+/** Overdue virtual account — sirf Party master page par chahiye; Reports/nav par skip se main-thread save. */
+function routeNeedsOverdueVoucherScan(pathname: string): boolean {
+  return masterRouteSegment(pathname) === "party";
+}
+
 /** Master collections config — prefetch/listener/filter sab jagah same source. */
 type MasterCollectionConfig = {
   path: string;
@@ -861,6 +874,13 @@ export const VoucherProvider = ({
   const { companyId, company, clearCompanyId } = useCompany();
   commitEntityListCompanyId = String(companyId || "").trim();
   const pathname = usePathname() || "";
+  const [dashboardTabScopeVersion, setDashboardTabScopeVersion] = useState(0);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onTab = () => setDashboardTabScopeVersion((v) => v + 1);
+    window.addEventListener(DASHBOARD_TAB_CHANGED_EVENT, onTab);
+    return () => window.removeEventListener(DASHBOARD_TAB_CHANGED_EVENT, onTab);
+  }, []);
   /** Gate/settings shells vs ledger — pathname string har sidebar click pe change; boolean sirf shell enter/exit. */
   const ledgerBootstrapActive = !shouldSkipHeavyVoucherBootstrap(pathname);
   const { user, customUser, loading: authLoading } = useAuth();
@@ -2435,6 +2455,7 @@ export const VoucherProvider = ({
     groups.length,
     user?.uid,
     ledgerBootstrapActive,
+    dashboardTabScopeVersion,
   ]);
 
   // Party/Bank pe rehte hue bhi dashboard masters idle me warm — Dashboard/Reports/Gallery click pe missing load freeze na ho.
@@ -2459,8 +2480,9 @@ export const VoucherProvider = ({
       { path: "tax_groups", setter: setTaxGroups },
       { path: "expense_groups", setter: setExpenseGroups },
     ];
+    const neededPaths = activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope);
     const missing = allCollectionsToPrefetch.filter(
-      (c) => VOUCHER_FORM_MASTER_COLLECTION_PATHS.has(c.path) && !sqliteCollectionWarmWithRows(c.path)
+      (c) => neededPaths.has(c.path) && !sqliteCollectionWarmWithRows(c.path)
     );
     if (!missing.length) return;
 
@@ -2543,6 +2565,8 @@ export const VoucherProvider = ({
     user?.uid,
     ledgerBootstrapActive,
     pathname,
+    dashboardTabScopeVersion,
+    voucherFormMasterScope,
   ]);
 
   // Single-doc / write-path upsert ke baad merge (notify) — collections ke hisaab se state update.
@@ -3215,6 +3239,7 @@ export const VoucherProvider = ({
     // Pre-create Item Map for faster Unit Conversion lookup inside the loop
     const itemConfigMap = new Map<string, Item>();
     items.forEach(i => itemConfigMap.set(i.id, i));
+    const staffIdSet = new Set((staff || []).map((s) => s.id));
 
     vouchersForDisplay.forEach(v => {
         const amount = Number(v.amount || v.total || 0);
@@ -3229,8 +3254,7 @@ export const VoucherProvider = ({
         // --- Staff Logic ---
         if (v.type === "journal" && v.subType === "add_salary" && Array.isArray(v.entries)) {
             v.entries.forEach((entry: any) => {
-                const isStaff = staff.some(s => s.id === entry.accountId);
-                if (isStaff) {
+                if (staffIdSet.has(entry.accountId)) {
                   addVal(staffMap, entry.accountId, 'credit', Number(entry.credit || 0));
                 }
             });
@@ -3285,7 +3309,7 @@ export const VoucherProvider = ({
             if (v.otherChargeAccountId && paymentOutOtherChargeAmount > 0) {
               if (partyIdSet.has(String(v.otherChargeAccountId))) {
                 addVal(partyMap, v.otherChargeAccountId, 'debit', paymentOutOtherChargeAmount);
-              } else if (staff.some((s) => s.id === v.otherChargeAccountId)) {
+              } else if (staffIdSet.has(v.otherChargeAccountId)) {
                 addVal(staffMap, v.otherChargeAccountId, 'debit', paymentOutOtherChargeAmount);
               } else {
                 addVal(expenseMap, v.otherChargeAccountId, 'debit', paymentOutOtherChargeAmount);
@@ -3401,6 +3425,15 @@ export const VoucherProvider = ({
                       const tAmt = Number(line.taxAmount);
                       if (v.type === 'purchase') addVal(taxMap, line.taxAccountId, 'debit', tAmt);
                       else if (v.type === 'sale') addVal(taxMap, line.taxAccountId, 'credit', tAmt);
+                }
+                if (line.tdsAccountId && line.tdsAmount) {
+                      const tdsAmt = Number(line.tdsAmount);
+                      if (tdsAmt > 0) {
+                        if (v.type === "purchase" || v.type === "purchase_service")
+                          addVal(taxMap, line.tdsAccountId, "credit", tdsAmt);
+                        else if (v.type === "sale" || v.type === "sale_service")
+                          addVal(taxMap, line.tdsAccountId, "debit", tdsAmt);
+                      }
                 }
 
                 // --- Item Stock Logic ---
@@ -3522,6 +3555,9 @@ export const VoucherProvider = ({
   );
 
   const { overdueTransactions, hasOverdueTransactions } = useMemo(() => {
+    if (!routeNeedsOverdueVoucherScan(pathname)) {
+      return { overdueTransactions: [], hasOverdueTransactions: false };
+    }
     const cid = String(companyId || "").trim();
     if (
       cid &&
@@ -3533,11 +3569,12 @@ export const VoucherProvider = ({
       return { overdueTransactions: [], hasOverdueTransactions: false };
     }
     const partyNameById = new Map(processedParties.map((p) => [p.id, p.name]));
+    const billWiseIncoming = buildBillWiseIncomingAllocationMaps(vouchersForDisplay);
     const list: VoucherContextType["overdueTransactions"] = [];
     for (const v of vouchersForDisplay) {
       if (!isSaleOrPurchaseBillVoucherType(v.type) || !v.partyId) continue;
       const total = Number(v.total ?? v.amount ?? ((v.subTotal ?? 0) - (v.discount ?? 0) + (v.tax ?? 0))) || 0;
-      const allocated = getBillWiseAllocatedToTarget(v, String(v.id), vouchersForDisplay);
+      const allocated = getBillWiseAllocatedToTargetWithMaps(v, String(v.id), billWiseIncoming);
       const result = getPaymentStatusResult(total, allocated, v.dueDate);
       if (!result.isOverdue) continue;
       const partyName = partyNameById.get(v.partyId) ?? v.partyId;
@@ -3584,7 +3621,7 @@ export const VoucherProvider = ({
       });
     }
     return { overdueTransactions: list, hasOverdueTransactions: list.length > 0 };
-  }, [vouchersForDisplay, processedParties, companyId, company, onlineSyncPrefsEpoch]);
+  }, [vouchersForDisplay, processedParties, companyId, company, onlineSyncPrefsEpoch, pathname]);
 
   const processedStaff: ProcessedStaff[] = useMemo(() => {
     return staff.map(s => {

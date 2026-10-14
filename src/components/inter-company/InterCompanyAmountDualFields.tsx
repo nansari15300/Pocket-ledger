@@ -5,7 +5,7 @@
  * har side: label box + amount box ek row; comma + Cr; min width 25mm.
  * Source side: optional Other charge (Payment Out jaisa).
  */
-import { useState, type ComponentProps, type ReactNode } from "react";
+import { type ComponentProps, type ReactNode } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 import { PlusCircle, X } from "lucide-react";
 import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -19,7 +19,8 @@ import {
 } from "@/lib/interCompany/interCompanyVoucherChrome";
 import { cn } from "@/lib/utils";
 import { OTHER_CHARGE_ADD_NEW_LABELS, resolveOtherChargeAddNewType } from "@/lib/otherChargeComboboxAddNew";
-import { parseAmountInputString, sanitizeAmountInputString } from "@/lib/amountInputNormalize";
+import { parseAmountInputString } from "@/lib/amountInputNormalize";
+import type { ChangeEvent } from "react";
 
 type FormatPrint = (amount: number, options?: { noSuffix?: boolean }) => string;
 
@@ -50,19 +51,18 @@ const AMOUNT_MEASURE_FALLBACK = "0.00 Cr";
 const amountSidePanelClass =
   "min-w-0 flex-1 rounded-md border bg-background/80 px-2.5 py-2";
 
-function parseInterCompanyAmountInput(raw: string): number {
-  const stripped = String(raw || "")
-    .replace(/,/g, "")
-    .replace(/\s*(Dr|Cr)\s*/gi, "")
-    .trim();
-  const n = parseAmountInputString(stripped);
-  return n > 0 ? n : 0;
+function formatInterCompanyAmountNumeric(
+  formatCurrencyForPrint: FormatPrint,
+  amount: number
+): string {
+  const n = Number(amount);
+  if (!n || n <= 0) return "";
+  return formatCurrencyForPrint(n, { noSuffix: true });
 }
 
 function formatInterCompanyAmountDisplay(formatCurrencyForPrint: FormatPrint, amount: number): string {
-  const n = Number(amount);
-  if (!n || n <= 0) return "";
-  return `${formatCurrencyForPrint(n, { noSuffix: true })} Cr`;
+  const num = formatInterCompanyAmountNumeric(formatCurrencyForPrint, amount);
+  return num ? `${num} Cr` : "";
 }
 
 function InterCompanyAmountLabelBox({ children }: { children: ReactNode }) {
@@ -82,12 +82,50 @@ function InterCompanyResponsiveAmountInput({
   displayText,
   placeholder = AMOUNT_MEASURE_FALLBACK,
   className,
+  showCrSuffix = false,
   ...inputProps
 }: {
   displayText: string;
   placeholder?: string;
+  /** Editable amount — " Cr" suffix input ke bahar (cursor jump fix). */
+  showCrSuffix?: boolean;
 } & ComponentProps<typeof Input>) {
   const measure = (displayText && displayText.trim()) || placeholder || AMOUNT_MEASURE_FALLBACK;
+
+  if (showCrSuffix) {
+    const numericMeasure = measure.replace(/\s*Cr\s*$/i, "").trim() || "0.00";
+    return (
+      <div className="inline-grid max-w-full [&>*]:col-start-1 [&>*]:row-start-1">
+        <span
+          className={cn(
+            interCompanyInputClass,
+            "invisible whitespace-pre border border-transparent px-3 text-sm pointer-events-none min-w-[25mm]"
+          )}
+          aria-hidden
+        >
+          {numericMeasure}
+        </span>
+        <div
+          className={cn(
+            interCompanyInputClass,
+            interCompanyAmountInputSizingClass,
+            "inline-flex h-9 min-w-[25mm] max-w-full items-center gap-1 px-3 py-0 pr-8",
+            className
+          )}
+        >
+          <Input
+            {...inputProps}
+            type="number"
+            placeholder={numericMeasure || "0.00"}
+            className="h-8 min-w-[3ch] flex-1 border-0 bg-transparent p-0 shadow-none focus-visible:border-transparent focus-visible:ring-0"
+          />
+          <span className="shrink-0 text-sm font-medium tabular-nums" aria-hidden>
+            Cr
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="inline-grid max-w-full [&>*]:col-start-1 [&>*]:row-start-1">
@@ -135,11 +173,6 @@ export function InterCompanyAmountDualFields({
   otherChargeAddNewLabels = OTHER_CHARGE_ADD_NEW_LABELS,
   onOtherChargeAccountChange,
 }: Props) {
-  const [sourceFocused, setSourceFocused] = useState(false);
-  const [sourceDraft, setSourceDraft] = useState("");
-  const [otherChargeFocused, setOtherChargeFocused] = useState(false);
-  const [otherChargeDraft, setOtherChargeDraft] = useState("");
-
   const targetDisplay = formatInterCompanyAmountDisplay(formatCurrencyForPrint, amount);
   const sourceReadOnly = Boolean(fieldsDisabled || editLocked);
   const showOtherChargeCard =
@@ -156,11 +189,10 @@ export function InterCompanyAmountDualFields({
               formatCurrencyForPrint,
               Number(field.value) || 0
             );
-            const sourceDisplay = sourceReadOnly
-              ? formatted
-              : sourceFocused
-                ? sourceDraft
-                : formatted;
+            const sourceMeasure = formatInterCompanyAmountNumeric(
+              formatCurrencyForPrint,
+              Number(field.value) || 0
+            );
 
             return (
               <FormItem className="min-w-0 space-y-0">
@@ -168,32 +200,27 @@ export function InterCompanyAmountDualFields({
                   <InterCompanyAmountSideRow label="Payment Out (source)">
                     <FormControl>
                       <InterCompanyResponsiveAmountInput
-                        type="text"
-                        inputMode="decimal"
-                        displayText={sourceDisplay}
+                        displayText={sourceReadOnly ? formatted : sourceMeasure}
                         placeholder={AMOUNT_MEASURE_FALLBACK}
-                        value={sourceDisplay}
+                        showCrSuffix={!sourceReadOnly}
                         readOnly={sourceReadOnly}
                         disabled={sourceReadOnly ? false : fieldsDisabled}
                         className={cn(sourceReadOnly && interCompanyReadOnlyCopyInputClass)}
-                        onFocus={() => {
-                          if (sourceReadOnly) return;
-                          setSourceFocused(true);
-                          const n = Number(field.value) || 0;
-                          setSourceDraft(n > 0 ? String(n) : "");
-                        }}
-                        onChange={(e) => {
-                          if (sourceReadOnly) return;
-                          const raw = sanitizeAmountInputString(e.target.value);
-                          e.target.value = raw;
-                          setSourceDraft(raw);
-                          field.onChange(parseInterCompanyAmountInput(raw));
-                        }}
-                        onBlur={() => {
-                          if (sourceReadOnly) return;
-                          setSourceFocused(false);
-                          field.onChange(parseInterCompanyAmountInput(sourceDraft));
-                        }}
+                        {...(sourceReadOnly
+                          ? {
+                              type: "text" as const,
+                              value: formatted,
+                            }
+                          : {
+                              value: Number(field.value) || 0,
+                              onChange: (e: ChangeEvent<HTMLInputElement>) => {
+                                field.onChange(parseAmountInputString(e.target.value));
+                              },
+                              onBlur: () => {
+                                const n = parseAmountInputString(String(field.value ?? ""));
+                                field.onChange(n > 0 ? n : 0);
+                              },
+                            })}
                       />
                     </FormControl>
                   </InterCompanyAmountSideRow>
@@ -284,11 +311,10 @@ export function InterCompanyAmountDualFields({
                           formatCurrencyForPrint,
                           Number(amountField.value) || 0
                         );
-                        const ocDisplay = sourceReadOnly
-                          ? ocFormatted
-                          : otherChargeFocused
-                            ? otherChargeDraft
-                            : ocFormatted;
+                        const ocMeasure = formatInterCompanyAmountNumeric(
+                          formatCurrencyForPrint,
+                          Number(amountField.value) || 0
+                        );
                         return (
                           <FormItem className="min-w-[5.5rem] shrink-0 space-y-1">
                             <FormLabel className="block text-xs leading-tight text-muted-foreground whitespace-nowrap">
@@ -296,32 +322,27 @@ export function InterCompanyAmountDualFields({
                             </FormLabel>
                             <FormControl>
                               <InterCompanyResponsiveAmountInput
-                                type="text"
-                                inputMode="decimal"
-                                displayText={ocDisplay}
+                                displayText={sourceReadOnly ? ocFormatted : ocMeasure}
                                 placeholder={AMOUNT_MEASURE_FALLBACK}
-                                value={ocDisplay}
+                                showCrSuffix={!sourceReadOnly}
                                 readOnly={sourceReadOnly}
                                 disabled={sourceReadOnly ? false : fieldsDisabled}
                                 className={cn(sourceReadOnly && interCompanyReadOnlyCopyInputClass)}
-                                onFocus={() => {
-                                  if (sourceReadOnly) return;
-                                  setOtherChargeFocused(true);
-                                  const n = Number(amountField.value) || 0;
-                                  setOtherChargeDraft(n > 0 ? String(n) : "");
-                                }}
-                                onChange={(e) => {
-                                  if (sourceReadOnly) return;
-                                  const raw = sanitizeAmountInputString(e.target.value);
-                                  e.target.value = raw;
-                                  setOtherChargeDraft(raw);
-                                  amountField.onChange(parseInterCompanyAmountInput(raw));
-                                }}
-                                onBlur={() => {
-                                  if (sourceReadOnly) return;
-                                  setOtherChargeFocused(false);
-                                  amountField.onChange(parseInterCompanyAmountInput(otherChargeDraft));
-                                }}
+                                {...(sourceReadOnly
+                                  ? {
+                                      type: "text" as const,
+                                      value: ocFormatted,
+                                    }
+                                  : {
+                                      value: Number(amountField.value) || 0,
+                                      onChange: (e: ChangeEvent<HTMLInputElement>) => {
+                                        amountField.onChange(parseAmountInputString(e.target.value));
+                                      },
+                                      onBlur: () => {
+                                        const n = parseAmountInputString(String(amountField.value ?? ""));
+                                        amountField.onChange(n > 0 ? n : 0);
+                                      },
+                                    })}
                               />
                             </FormControl>
                             <FormMessage />

@@ -54,7 +54,7 @@ import {
 } from "@/lib/ledgerTxnTableTone";
 import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
-import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillLabel";
+import { AdjustBalanceLedgerPillButton } from "@/components/vouchers/AdjustBalancePillLabel";
 import { DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
@@ -216,14 +216,7 @@ export const LoanTransactions = forwardRef(function LoanTransactions(
           adjustmentTarget: { id: loanAccountId, entityType: "staff", name: loanName || "Loan" },
         }}
       >
-        <Button
-          variant="outline"
-          size="sm"
-          className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")}
-          title="Adjust Balance"
-        >
-          <AdjustBalancePillLabel />
-        </Button>
+        <AdjustBalanceLedgerPillButton title="Adjust Balance" />
       </AddVoucherDialog>
     );
   }, [ledger, loanAccountId, loanName]);

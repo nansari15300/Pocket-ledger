@@ -3,6 +3,7 @@
  * Pure helpers: allocated amount per voucher, outstanding, validate, auto-link, payment status.
  */
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
+import { getSalePurchaseBillWiseTargetTotal } from "@/lib/tdsVoucher";
 
 /** Special voucherId used when allocating payment to party/staff opening balance. */
 export const OPENING_BALANCE_VOUCHER_ID = "opening_balance";
@@ -239,24 +240,31 @@ export function getAllocatedByBillWiseSourceVouchers(vouchers: any[]): Map<strin
   return map;
 }
 
-/**
- * Bill-wise: kitna amount target (sale/purchase) par allocate ho chuka hai.
- * Payment Out/In + target.allocations dono record ho sakte hain — sum se double-count na ho (Link dialog = max).
- */
-export function getBillWiseAllocatedToTarget(
+/** Pre-built incoming allocation indexes — one pass over vouchers, many target lookups. */
+export type BillWiseIncomingAllocationMaps = {
+  byPaymentIn: Map<string, number>;
+  byPaymentOut: Map<string, number>;
+  byBillWiseSources: Map<string, number>;
+};
+
+export function buildBillWiseIncomingAllocationMaps(vouchers: any[]): BillWiseIncomingAllocationMaps {
+  return {
+    byPaymentIn: getAllocatedByVoucherId(vouchers),
+    byPaymentOut: getAllocatedByVoucherIdFromPaymentOuts(vouchers),
+    byBillWiseSources: getAllocatedByBillWiseSourceVouchers(vouchers),
+  };
+}
+
+function billWiseAllocatedToTargetFromMaps(
   targetVoucher: any,
   targetVoucherId: string,
-  vouchers: any[]
+  maps: BillWiseIncomingAllocationMaps
 ): number {
   const vid = String(targetVoucherId);
-  const allocatedByPaymentIn = getAllocatedByVoucherId(vouchers);
-  const allocatedByPaymentOut = getAllocatedByVoucherIdFromPaymentOuts(vouchers);
-  const allocatedByBillWiseSources = getAllocatedByBillWiseSourceVouchers(vouchers);
-
   const sourceInbound =
-    (allocatedByPaymentIn.get(vid) ?? 0) +
-    (allocatedByPaymentOut.get(vid) ?? 0) +
-    (allocatedByBillWiseSources.get(vid) ?? 0);
+    (maps.byPaymentIn.get(vid) ?? 0) +
+    (maps.byPaymentOut.get(vid) ?? 0) +
+    (maps.byBillWiseSources.get(vid) ?? 0);
 
   const fromTarget = ((targetVoucher?.allocations as Allocation[] | undefined) || []).reduce(
     (sum, a) => sum + getAllocationTotal(a),
@@ -272,6 +280,31 @@ export function getBillWiseAllocatedToTarget(
   );
 
   return Math.max(fromTarget, sourceInbound) + targetObAlloc;
+}
+
+/**
+ * Bill-wise: kitna amount target (sale/purchase) par allocate ho chuka hai.
+ * Payment Out/In + target.allocations dono record ho sakte hain — sum se double-count na ho (Link dialog = max).
+ */
+export function getBillWiseAllocatedToTarget(
+  targetVoucher: any,
+  targetVoucherId: string,
+  vouchers: any[]
+): number {
+  return billWiseAllocatedToTargetFromMaps(
+    targetVoucher,
+    targetVoucherId,
+    buildBillWiseIncomingAllocationMaps(vouchers)
+  );
+}
+
+/** Same as {@link getBillWiseAllocatedToTarget} but reuses pre-built maps (ledger rows / overdue scan). */
+export function getBillWiseAllocatedToTargetWithMaps(
+  targetVoucher: any,
+  targetVoucherId: string,
+  maps: BillWiseIncomingAllocationMaps
+): number {
+  return billWiseAllocatedToTargetFromMaps(targetVoucher, targetVoucherId, maps);
 }
 
 export function isSaleOrPurchaseBillVoucherType(type: string | undefined): boolean {
@@ -455,7 +488,7 @@ export function getPaymentOutRemaining(v: any): number {
  * Sale/Purchase use total; prefer total for correct remaining.
  */
 export function getVoucherRemaining(v: any): number {
-  const amount = Number(v.total ?? v.amount ?? 0);
+  const amount = getSalePurchaseBillWiseTargetTotal(v);
   const allocations = (v.allocations as Allocation[] | undefined) || [];
   const allocated = allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
   return Math.max(0, amount - allocated);

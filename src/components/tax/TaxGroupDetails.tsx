@@ -43,6 +43,7 @@ import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
+import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -153,6 +154,7 @@ export function TaxGroupDetails({
   userNames,
   journalAccountNames: journalAccountNamesProp,
   groupMemberFilterId = null,
+  hideMobilePeriodLabelRow = false,
 }: {
   group: TaxGroup;
   allGroups: TaxGroup[];
@@ -166,6 +168,7 @@ export function TaxGroupDetails({
   journalAccountNames?: Record<string, string>;
   onBack?: () => void;
   groupMemberFilterId?: string | null;
+  hideMobilePeriodLabelRow?: boolean;
 }) {
   useFyLoadOnDateRangeChange(dateRange);
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
@@ -200,7 +203,11 @@ export function TaxGroupDetails({
     [selectedMemberTax?.fileUrl, selectedMemberTax?.id]
   );
 
-  const { memberFreezeOverlay, memberClosingBalanceActions } = useGroupMemberAccountLedgerChrome({
+  const {
+    memberFreezeOverlay,
+    memberClosingBalanceRowActions,
+    memberClosingBalanceActions,
+  } = useGroupMemberAccountLedgerChrome({
     companyId,
     collection: TAX_FREEZE_COLLECTION,
     patchCollection: "taxes",
@@ -623,27 +630,29 @@ export function TaxGroupDetails({
           {/* Mobile: scroll + pager above fixed footer */}
           {/* Mobile: date/balance/search — footer chevron se collapse */}
           <MobileDetailSummaryCollapsible>
-          <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
-            <span className="text-xs font-medium text-muted-foreground">
-              {!dateRange || (dateRange.from == null && dateRange.to == null)
-                ? rowsPerPage > 0
-                  ? `Last ${rowsPerPage} Txns`
-                  : "All Txns"
-                : dateRangeLabel}
-            </span>
-            {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
-              <button
-                type="button"
-                onClick={() => onDateRangeChange(undefined)}
-                className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
-                aria-label="Clear date filter"
-              >
-                <XCircle className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-          <div className="px-3 py-2 border-b flex-shrink-0">
-            <p className={cn("text-2xl font-bold text-center", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+          {!hideMobilePeriodLabelRow ? (
+            <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
+              <span className="text-xs font-medium text-muted-foreground">
+                {!dateRange || (dateRange.from == null && dateRange.to == null)
+                  ? rowsPerPage > 0
+                    ? `Last ${rowsPerPage} Txns`
+                    : "All Txns"
+                  : dateRangeLabel}
+              </span>
+              {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
+                <button
+                  type="button"
+                  onClick={() => onDateRangeChange(undefined)}
+                  className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
+                  aria-label="Clear date filter"
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          ) : null}
+          <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
+            <p className={cn(mdc.mobileTxnBalanceText2xl, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
               {balanceText} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
             </p>
           </div>
@@ -716,6 +725,7 @@ export function TaxGroupDetails({
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
               closingBalance={desktopPaginationMeta.closingForPage}
+              closingBalanceRowActions={memberClosingBalanceRowActions}
               closingBalanceActions={memberClosingBalanceActions}
               isTaxContext={true}
               scrollOnlyTransactions
@@ -1081,6 +1091,7 @@ export function TaxGroupDetails({
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
               closingBalance={desktopPaginationMeta.closingForPage}
+              closingBalanceRowActions={memberClosingBalanceRowActions}
               closingBalanceActions={memberClosingBalanceActions}
               scrollOnlyTransactions
               highlightPendingApproval

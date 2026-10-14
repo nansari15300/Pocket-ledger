@@ -81,9 +81,16 @@ import {
   isVoucherLimitError,
   patchVoucherFields,
   softDeleteVoucherMoveToRecycleBin,
-  voucherRecycleBinDeletedAt,
   updateVoucherSpendWiseLinks,
 } from "@/lib/voucherActionsClient";
+import {
+  getVoucherConvertOriginalId,
+  getVoucherEditConvertPresentation,
+  isVoucherEditConverting,
+  markVoucherConvertedInRecycleBin,
+} from "@/lib/voucherEditConvert";
+import { VoucherEditConvertConfirmDialog } from "@/components/vouchers/VoucherEditConvertConfirmDialog";
+import { useVoucherEditConvertSubmitGate } from "@/hooks/useVoucherEditConvertSubmitGate";
 import {
   formatVoucherNumber,
   normalizePrefix,
@@ -333,7 +340,17 @@ export function CreateContraForm({
 
   const isEditing = !!voucher;
   // Preserve original saved type from dialog shaping so Journal -> Contra edit switch refreshes voucher no.
-  const isEditingAndConverting = voucher && String((voucher as any)?._sourceVoucherType || voucher.type || "") !== 'contra';
+  const isEditingAndConverting = isVoucherEditConverting(voucher, "contra");
+  const convertPresentation = useMemo(
+    () => getVoucherEditConvertPresentation(voucher as Record<string, unknown> | undefined, "contra"),
+    [voucher]
+  );
+  const {
+    convertConfirmOpen,
+    setConvertConfirmOpen,
+    gateConvertSubmit,
+    confirmConvertSubmit,
+  } = useVoucherEditConvertSubmitGate(Boolean(isEditingAndConverting));
   
   const form = useForm<ContraFormValues>({
     resolver: zodResolver(formSchema) as Resolver<ContraFormValues>,
@@ -1045,16 +1062,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         setIsAmountMoreThanAccountOpen(true);
         return;
       }
-      void form.handleSubmit(
-        async (data) => {
-          await processAndSaveRef.current?.(data, options.saveAndNew ?? false, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave ?? false);
-        },
-        () => {
-          sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
-        }
-      )(e);
+      gateConvertSubmit(() => {
+        void form.handleSubmit(
+          async (data) => {
+            await processAndSaveRef.current?.(data, options.saveAndNew ?? false, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave ?? false);
+          },
+          () => {
+            sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
+          }
+        )(e);
+      });
     },
-    [form, isAmountExceedingSelectedFromAccount]
+    [form, isAmountExceedingSelectedFromAccount, gateConvertSubmit]
   );
   
   async function processAndSave(data: ContraFormValues, saveAndNew: boolean = false, onSuccess?: () => void, approveAfterSave?: boolean) {
@@ -1219,8 +1238,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           ? allocatePaymentInAmounts(amount, linkIds, allVouchers ?? [], (data as any).fromAccountId, linkedAmountByPaymentInId, spendWiseInAccountOpeningBalance)
           : {};
       
-      const originalVoucherIdToDelete: string | null =
-        isEditingAndConverting && voucher?.id ? String(voucher.id) : null;
+      const originalVoucherIdToDelete: string | null = isEditingAndConverting
+        ? getVoucherConvertOriginalId(voucher)
+        : null;
       const idArgForFirestore = resolveVoucherIdForSave({
         savedVoucherId,
         originalVoucherIdToDelete,
@@ -1305,12 +1325,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           const savedLinkIds = Array.isArray(submissionData.linkedPaymentInIds) ? [...submissionData.linkedPaymentInIds] : [];
           initialLinkedPaymentInIdsRef.current = savedLinkIds;
           if (originalVoucherIdToDelete) {
-              // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
-              await patchVoucherFields(companyId, originalVoucherIdToDelete, {
-                isDeleted: true,
-                deletedAt: voucherRecycleBinDeletedAt(),
-                convertedToType: 'contra',
+              await markVoucherConvertedInRecycleBin(companyId, originalVoucherIdToDelete, {
+                convertedToType: "contra",
                 convertedToVoucherNumber: submissionData.voucherNumber,
+                convertedToVoucherId: savedDoc.id,
+                deletedBy: user.uid,
               });
           }
       } else {
@@ -2596,8 +2615,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
-                  {isLoading ? "..." : "Save"}
+                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty && !isEditingAndConverting)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                  {isLoading ? "..." : isEditingAndConverting ? "Convert" : "Save"}
                 </Button>
                 {voucher?.id ? (
                   <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -2633,9 +2652,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty && !isEditingAndConverting)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save
+                    {isEditingAndConverting ? "Convert" : "Save"}
                   </Button>
                   {voucher?.id ? (
                     <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
@@ -2654,6 +2673,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           </div>
         </form>
       </Form>
+      {convertPresentation ? (
+        <VoucherEditConvertConfirmDialog
+          open={convertConfirmOpen}
+          onOpenChange={setConvertConfirmOpen}
+          bannerText={convertPresentation.bannerText}
+          onConfirm={confirmConvertSubmit}
+        />
+      ) : null}
       <CreateBankAccountDialog onAccountCreated={handleAccountCreated} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen} />
       <CreatePartyDialog
         isOpen={isCreatePartyOpen}

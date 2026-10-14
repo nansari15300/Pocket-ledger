@@ -1,4 +1,4 @@
-﻿
+
 "use client";
 
 import * as React from "react";
@@ -50,7 +50,7 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
-import { mdc } from "@/lib/mobileDetailChrome";
+import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
 import * as XLSX from "xlsx";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 import {
@@ -187,6 +187,7 @@ interface ExpenseAccountDetailsProps {
   /** Reports embed: PrintÂ·ExcelÂ·Bill wiseÂ·Date footer (income/expense ledger actions hide). */
   mobileFooterVariant?: "ledger" | "report";
   mobileReportStickyTitle?: string;
+  hideMobilePeriodLabelRow?: boolean;
 }
 
 export function ExpenseAccountDetails({
@@ -205,6 +206,7 @@ export function ExpenseAccountDetails({
   onBack,
   mobileFooterVariant = "ledger",
   mobileReportStickyTitle,
+  hideMobilePeriodLabelRow = false,
 }: ExpenseAccountDetailsProps) {
   useFyLoadOnDateRangeChange(dateRange);
   const { company, companyId } = useCompany();
@@ -293,6 +295,7 @@ export function ExpenseAccountDetails({
 
   const {
     freezeOverlay: expenseFreezeOverlay,
+    closingBalanceRowActions: expenseClosingBalanceRowActions,
     closingBalanceActions: expenseClosingBalanceActions,
   } = useMasterAccountFreezeDetailsChrome({
     companyId,
@@ -958,6 +961,7 @@ export function ExpenseAccountDetails({
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
               closingBalance={desktopPaginationMeta.closingForPage}
+              closingBalanceRowActions={expenseClosingBalanceRowActions}
               closingBalanceActions={expenseClosingBalanceActions}
               {...statementCheck.tableProps}
             />
@@ -1123,25 +1127,26 @@ export function ExpenseAccountDetails({
           ) : null}
           {/* Mobile: date/balance/search â€” footer chevron se collapse (group pages jaisa) */}
           <MobileDetailSummaryCollapsible>
-          {/* Row 2: Last 10 Txns / date range */}
-          <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
-            <span className="text-xs font-medium text-muted-foreground">
-              {dateRangeLabel}
-            </span>
-            {dateRange != null && (dateRange.from != null || dateRange.to != null) && onDateRangeChange && (
-              <button
-                type="button"
-                onClick={() => onDateRangeChange(undefined)}
-                className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
-                aria-label="Clear date filter"
-              >
-                <XCircle className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
+          {!hideMobilePeriodLabelRow ? (
+            <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
+              <span className="text-xs font-medium text-muted-foreground">
+                {dateRangeLabel}
+              </span>
+              {dateRange != null && (dateRange.from != null || dateRange.to != null) && onDateRangeChange && (
+                <button
+                  type="button"
+                  onClick={() => onDateRangeChange(undefined)}
+                  className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
+                  aria-label="Clear date filter"
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          ) : null}
           {/* Balance + books / view-start hints (ek account par hi; "all" aggregate nahi) */}
-          <div className="px-3 py-2 border-b flex-shrink-0">
-            <p className={cn("text-2xl font-bold text-center", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+          <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
+            <p className={cn(mdc.mobileTxnBalanceText2xl, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
               {balanceText} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
             </p>
           </div>
@@ -1223,7 +1228,8 @@ export function ExpenseAccountDetails({
                   periodCr={mobilePageLedgerStats.periodCrForPage}
                   closingBalance={mobilePageLedgerStats.closingForPage}
                   scrollOnlyTransactions
-                  closingBalanceActions={expenseClosingBalanceActions}
+                  closingBalanceRowActions={expenseClosingBalanceRowActions}
+              closingBalanceActions={expenseClosingBalanceActions}
                   {...statementCheck.tableProps}
                 />
                 </MasterAccountFreezeTxnShell>
@@ -1278,7 +1284,8 @@ export function ExpenseAccountDetails({
                   periodCr={mobilePageLedgerStats.periodCrForPage}
                   closingBalance={mobilePageLedgerStats.closingForPage}
                   scrollOnlyTransactions
-                  closingBalanceActions={expenseClosingBalanceActions}
+                  closingBalanceRowActions={expenseClosingBalanceRowActions}
+              closingBalanceActions={expenseClosingBalanceActions}
                   {...statementCheck.tableProps}
                 />
                 </MasterAccountFreezeTxnShell>

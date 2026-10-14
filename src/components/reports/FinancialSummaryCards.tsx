@@ -1,7 +1,7 @@
 "use client";
 import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
-import React, { Fragment, useCallback, useMemo, useState, useEffect, useRef } from "react";
+import React, { Fragment, useCallback, useDeferredValue, useMemo, useState, useEffect, useRef } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -55,6 +55,7 @@ import { dashboardStatCardReportHref } from "@/lib/dashboardStatCardReportHref";
 import {
     computeReceivablesPayablesFinancialSummary,
 } from "@/lib/receivablesPayablesFinancialSummary";
+import { computeRpReceivePayAtDayEnds, type RpSeriesEntity } from "@/lib/receivablesPayablesLedgerAmounts";
 import {
     buildRpDialogSections,
     countRpDeadlineDueAccounts,
@@ -443,6 +444,71 @@ type FinancialSummaryCardsProps = {
     recurringSummarySlot?: React.ReactNode;
 };
 
+/** Dashboard Chart tab: avoid Recharts ResponsiveContainer resize storms while scrolling. */
+const DASHBOARD_CHART_RESIZE_DEBOUNCE_MS = 400;
+const DASHBOARD_CHART_LAZY_ROOT_MARGIN = "160px";
+
+function DashboardScrollFriendlyChartHost({
+    className,
+    minHeight = 88,
+    lazyNearViewport = false,
+    children,
+}: {
+    className?: string;
+    minHeight?: number;
+    lazyNearViewport?: boolean;
+    children: (size: { width: number; height: number }) => React.ReactNode;
+}) {
+    const hostRef = useRef<HTMLDivElement>(null);
+    const [lazyVisible, setLazyVisible] = useState(!lazyNearViewport);
+    const [size, setSize] = useState({ width: 0, height: minHeight });
+
+    useEffect(() => {
+        if (!lazyNearViewport || lazyVisible) return;
+        const el = hostRef.current;
+        if (!el) return;
+        const io = new IntersectionObserver(
+            (entries) => {
+                if (entries.some((e) => e.isIntersecting)) setLazyVisible(true);
+            },
+            { root: null, rootMargin: DASHBOARD_CHART_LAZY_ROOT_MARGIN, threshold: 0.01 },
+        );
+        io.observe(el);
+        return () => io.disconnect();
+    }, [lazyNearViewport, lazyVisible]);
+
+    useEffect(() => {
+        if (!lazyVisible) return;
+        const el = hostRef.current;
+        if (!el) return;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const apply = () => {
+            const width = Math.max(0, Math.floor(el.clientWidth));
+            const height = Math.max(minHeight, Math.floor(el.clientHeight) || minHeight);
+            setSize((prev) =>
+                prev.width === width && prev.height === height ? prev : { width, height },
+            );
+        };
+        const schedule = () => {
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(apply, DASHBOARD_CHART_RESIZE_DEBOUNCE_MS);
+        };
+        apply();
+        const ro = new ResizeObserver(schedule);
+        ro.observe(el);
+        return () => {
+            ro.disconnect();
+            if (timer) clearTimeout(timer);
+        };
+    }, [lazyVisible, minHeight]);
+
+    return (
+        <div ref={hostRef} className={cn("w-full", className)} style={{ minHeight }}>
+            {lazyVisible && size.width > 0 ? children(size) : null}
+        </div>
+    );
+}
+
 // Custom MonthYearFilter wrapper for report page with overflow handling
 const ReportMonthYearFilter = ({ dateRange, setDateRange, dateSystem }: { dateRange: DateRange | undefined, setDateRange: (range: DateRange | undefined) => void, dateSystem: string }) => {
     return (
@@ -468,7 +534,7 @@ function TopSummaryRowWrap({
 }
 
 export function FinancialSummaryCards({
-    vouchers,
+    vouchers: vouchersProp,
     processedParties,
     processedStaff,
     processedTaxes,
@@ -481,6 +547,8 @@ export function FinancialSummaryCards({
     showVoucherDateCharts = false,
     recurringSummarySlot,
 }: FinancialSummaryCardsProps) {
+    /** Live snapshot / SQLite merge nayi array de — current frame (scroll/click) pe heavy recompute mat lagao. */
+    const vouchers = useDeferredValue(vouchersProp);
     const { formatCurrency, formatCurrencyForPrint, dateSystem, formatDate, formatDateBS } = useDate();
     const { can } = usePermissions();
     const { company } = useCompany();
@@ -1187,17 +1255,17 @@ export function FinancialSummaryCards({
         }
 
         let totalValue = 0;
-        const itemsWithSales = processedItems.map(item => {
+        const itemMeta = processedItems.map((item) => {
             const conversions = (item.unitConversions || []) as any[];
             const smallestUnit = conversions.length > 0 ? conversions[conversions.length - 1].toUnit : ((item as any).openingBalanceUnit || '');
-            
+
             const getFactorToSmallest = (unit: string): number => {
                 if (!unit || conversions.length === 0 || unit === smallestUnit) return 1;
-                
+
                 let factor = 1;
                 let current = unit;
                 for (let i = 0; i < 10; i++) {
-                    const conv = conversions.find(c => c.fromUnit === current);
+                    const conv = conversions.find((c) => c.fromUnit === current);
                     if (!conv) return 0;
                     factor *= Number(conv.conversionFactor) || 1;
                     current = conv.toUnit;
@@ -1209,44 +1277,54 @@ export function FinancialSummaryCards({
             const purchasePriceUnit = (item as any).purchasePriceUnit || smallestUnit;
             const purchasePriceFactor = getFactorToSmallest(purchasePriceUnit);
             const purchasePriceInSmallestUnit = purchasePriceFactor > 0 ? (item.purchasePrice || 0) / purchasePriceFactor : 0;
-            
             const value = (item.stockQty || 0) * purchasePriceInSmallestUnit;
             totalValue += value;
-
-            let salesQty = 0;
-            let salesValue = 0;
-            let purchaseQty = 0;
-            let purchaseValue = 0;
-
-            filteredVouchers.forEach(v => {
-                if (v.lineItems?.some((li: any) => li.itemId === item.id)) {
-                    const lineItem = v.lineItems.find((li: any) => li.itemId === item.id);
-                    if (lineItem) {
-                        const qty = Number(lineItem.quantity) || 0;
-                        const lineValue = (qty * Number(lineItem.rate)) || 0;
-                        const standardizedQty = qty * getFactorToSmallest(lineItem.unit);
-
-                        if (v.type === 'sale') {
-                            salesQty += standardizedQty;
-                            salesValue += lineValue;
-                        } else if (v.type === 'purchase') {
-                            purchaseQty += standardizedQty;
-                            purchaseValue += lineValue;
-                        }
-                    }
+            return { item, smallestUnit, getFactorToSmallest, value };
+        });
+        const metaById = new Map(itemMeta.map((m) => [String(m.item.id), m]));
+        const movement = new Map<string, { salesQty: number; salesValue: number; purchaseQty: number; purchaseValue: number }>();
+        for (const v of filteredVouchers) {
+            if (v.type !== "sale" && v.type !== "purchase") continue;
+            const lines = v.lineItems;
+            if (!Array.isArray(lines)) continue;
+            const seen = new Set<string>();
+            for (const lineItem of lines) {
+                const itemId = String(lineItem?.itemId || "");
+                if (!itemId || seen.has(itemId)) continue;
+                const meta = metaById.get(itemId);
+                if (!meta) continue;
+                seen.add(itemId);
+                const qty = Number(lineItem.quantity) || 0;
+                const lineValue = qty * (Number(lineItem.rate) || 0);
+                const standardizedQty = qty * meta.getFactorToSmallest(lineItem.unit);
+                const row = movement.get(itemId) || { salesQty: 0, salesValue: 0, purchaseQty: 0, purchaseValue: 0 };
+                if (v.type === "sale") {
+                    row.salesQty += standardizedQty;
+                    row.salesValue += lineValue;
+                } else {
+                    row.purchaseQty += standardizedQty;
+                    row.purchaseValue += lineValue;
                 }
-            });
-
+                movement.set(itemId, row);
+            }
+        }
+        const itemsWithSales = itemMeta.map(({ item, smallestUnit, value }) => {
+            const move = movement.get(String(item.id)) || {
+                salesQty: 0,
+                salesValue: 0,
+                purchaseQty: 0,
+                purchaseValue: 0,
+            };
             return {
                 ...item,
                 qty: item.stockQty || 0,
                 unit: smallestUnit,
                 rate: item.purchasePrice || 0,
-                value: value,
-                salesQty,
-                salesValue,
-                purchaseQty,
-                purchaseValue,
+                value,
+                salesQty: move.salesQty,
+                salesValue: move.salesValue,
+                purchaseQty: move.purchaseQty,
+                purchaseValue: move.purchaseValue,
                 smallestUnit,
             };
         });
@@ -1285,18 +1363,20 @@ export function FinancialSummaryCards({
         };
         
         const todayEnd = endOfDay(new Date());
-        
+        const datedVouchers = vouchers.flatMap((v) => {
+            const txDate = safeToDate(v.date);
+            return txDate && txDate <= todayEnd ? [{ v, txDate }] : [];
+        });
+
         const summaryAccounts = processedAccounts.map((acc) => {
             const newAcc = { ...acc, inflow: 0, outflow: 0, balance: Number(acc.openingBalance) || 0 };
             const accountObDate = safeToDate((acc as any).openingBalanceDate);
 
-            const periodTx = vouchers.filter(v => {
-                const txDate = safeToDate(v.date);
-                if (accountObDate && txDate && txDate < accountObDate) return false;
-                return txDate && txDate <= todayEnd;
-            });
-            
-            periodTx.forEach((v) => {
+            const periodTx = accountObDate
+                ? datedVouchers.filter((row) => row.txDate >= accountObDate)
+                : datedVouchers;
+
+            periodTx.forEach(({ v }) => {
                 const { debit, credit } = getLedgerTransactionAmounts(v, "account", acc, "amount", processedItems, processedTaxes);
                 newAcc.inflow += Number(debit) || 0;
                 newAcc.outflow += Number(credit) || 0;
@@ -1855,7 +1935,7 @@ export function FinancialSummaryCards({
     const voucherStatsColRef = useRef<HTMLDivElement>(null);
     const [stockPanelHeight, setStockPanelHeight] = useState<number | undefined>(undefined);
     useEffect(() => {
-        if (compact) return;
+        if (compact || showVoucherDateCharts) return;
         const el = voucherStatsColRef.current;
         if (!el || typeof window === "undefined") return;
 
@@ -2096,6 +2176,46 @@ export function FinancialSummaryCards({
             }
         }
 
+        const skipOpening = (name: unknown) => String(name || "") === "Opening Balance";
+        const entities: RpSeriesEntity[] = [
+            ...processedParties.map((p: any) => ({
+                id: String(p.id || ""),
+                openingBalance: Number(p.openingBalance) || 0,
+                context: "party" as const,
+                skip: skipOpening(p.name) || skipOpening(p.party),
+            })),
+            ...processedStaff.map((s: any) => ({
+                id: String(s.id || ""),
+                openingBalance: Number(s.openingBalance) || 0,
+                context: "staff" as const,
+                skip: skipOpening(s.name),
+            })),
+            ...processedTaxes.map((t: any) => ({
+                id: String(t.id || ""),
+                openingBalance: Number(t.openingBalance) || 0,
+                context: "tax" as const,
+                skip: skipOpening(t.name),
+            })),
+            ...processedAccounts.map((a: any) => ({
+                id: String(a.id || ""),
+                openingBalance: Number(a.openingBalance) || 0,
+                context: "account" as const,
+                skip: skipOpening(a.name),
+            })),
+            ...expenseAccounts.map((e: any) => ({
+                id: String(e.id || ""),
+                openingBalance: Number(e.openingBalance) || 0,
+                context: "expense" as const,
+                skip: skipOpening(e.name),
+            })),
+        ];
+        const series = computeRpReceivePayAtDayEnds({
+            entities,
+            vouchers,
+            dayEndMs: dayBoundaries.map((day) => endOfDay(day).getTime()),
+            processedTaxes,
+        });
+
         const toReceive: { name: string; amount: number }[] = [];
         const toPay: { name: string; amount: number }[] = [];
         const net: { name: string; amount: number }[] = [];
@@ -2103,37 +2223,18 @@ export function FinancialSummaryCards({
         const toPayPointsByDay: ChartDayPoint[] = [];
         const netPointsByDay: ChartDayPoint[] = [];
 
-        for (const day of dayBoundaries) {
-            const endD = endOfDay(day);
-            const dk = format(startOfDay(day), "yyyy-MM-dd");
-            let slice: any[];
-            if (receivablesDateRange?.from) {
-                slice = vouchers.filter((v) => {
-                    const tx = safeToDate(v.date);
-                    return tx && tx <= endD;
-                });
-            } else {
-                slice = vouchers.filter((v) => {
-                    const tx = safeToDate(v.date);
-                    return tx && tx <= endD;
-                });
-            }
-            const { receivableSum, payableSum } = computeOutstandingSnapshot(
-                slice,
-                processedParties,
-                processedStaff,
-                processedTaxes,
-                processedAccounts,
-                expenseAccounts
-            );
+        dayBoundaries.forEach((day, idx) => {
+            const receivableSum = series[idx]?.receivable || 0;
+            const payableSum = series[idx]?.payable || 0;
             const label = labelForDay(day);
+            const dk = format(startOfDay(day), "yyyy-MM-dd");
             toReceive.push({ name: label, amount: receivableSum });
             toPay.push({ name: label, amount: payableSum });
             net.push({ name: label, amount: receivableSum - payableSum });
             toReceivePointsByDay.push({ dayKey: dk, amount: receivableSum });
             toPayPointsByDay.push({ dayKey: dk, amount: payableSum });
             netPointsByDay.push({ dayKey: dk, amount: receivableSum - payableSum });
-        }
+        });
 
         return { toReceive, toPay, net, toReceivePointsByDay, toPayPointsByDay, netPointsByDay };
     }, [
@@ -2144,6 +2245,8 @@ export function FinancialSummaryCards({
         processedParties,
         processedStaff,
         processedTaxes,
+        processedAccounts,
+        expenseAccounts,
         dateSystem,
         formatDate,
         formatDateBS,
@@ -2305,11 +2408,14 @@ export function FinancialSummaryCards({
     const contentClass = compact ? "flex-1 flex flex-col" : "";
 
     /** Mini vs full popup: same series, alag margins / tick size. */
+    const dashboardChartLazyMount = showVoucherDateCharts && !compact;
+
     const renderBarChartInner = (
         data: { name: string; amount: number }[],
         barColor: string,
         tooltipIsCount: boolean,
-        variant: "mini" | "full"
+        variant: "mini" | "full",
+        chartSize?: { width: number; height: number },
     ) => {
         if (!data.length) {
             return <p className="text-[10px] text-muted-foreground text-center pt-6">—</p>;
@@ -2321,29 +2427,46 @@ export function FinancialSummaryCards({
             variant === "mini"
                 ? { top: 2, right: 2, left: 0, bottom: 0 }
                 : { top: 16, right: 24, left: 8, bottom: 48 };
+        const barChart = (
+            <BarChart
+                data={data}
+                margin={margin}
+                {...(chartSize ? { width: chartSize.width, height: chartSize.height } : {})}
+            >
+                <CartesianGrid strokeDasharray="3 3" className="opacity-35" />
+                <XAxis
+                    dataKey="name"
+                    tick={{ fontSize: xTick }}
+                    interval="preserveStartEnd"
+                    angle={variant === "full" ? -32 : 0}
+                    textAnchor={variant === "full" ? "end" : "middle"}
+                    height={variant === "full" ? 72 : undefined}
+                />
+                <YAxis tick={{ fontSize: yTick }} width={yWidth} />
+                <Tooltip
+                    formatter={(v: number) =>
+                        tooltipIsCount
+                            ? [String(v), "Added"]
+                            : [formatCurrency(v, { noSuffix: true, duration: 2 }), "Amount"]
+                    }
+                    labelFormatter={(l) => `Date: ${l}`}
+                />
+                <Bar
+                    dataKey="amount"
+                    fill={barColor}
+                    radius={[2, 2, 0, 0]}
+                    isAnimationActive={false}
+                />
+            </BarChart>
+        );
+        if (chartSize) return barChart;
         return (
-            <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data} margin={margin}>
-                    <CartesianGrid strokeDasharray="3 3" className="opacity-35" />
-                    <XAxis
-                        dataKey="name"
-                        tick={{ fontSize: xTick }}
-                        interval="preserveStartEnd"
-                        angle={variant === "full" ? -32 : 0}
-                        textAnchor={variant === "full" ? "end" : "middle"}
-                        height={variant === "full" ? 72 : undefined}
-                    />
-                    <YAxis tick={{ fontSize: yTick }} width={yWidth} />
-                    <Tooltip
-                        formatter={(v: number) =>
-                            tooltipIsCount
-                                ? [String(v), "Added"]
-                                : [formatCurrency(v, { noSuffix: true, duration: 2 }), "Amount"]
-                        }
-                        labelFormatter={(l) => `Date: ${l}`}
-                    />
-                    <Bar dataKey="amount" fill={barColor} radius={[2, 2, 0, 0]} />
-                </BarChart>
+            <ResponsiveContainer
+                width="100%"
+                height="100%"
+                debounce={DASHBOARD_CHART_RESIZE_DEBOUNCE_MS}
+            >
+                {barChart}
             </ResponsiveContainer>
         );
     };
@@ -2384,9 +2507,15 @@ export function FinancialSummaryCards({
                         View full
                     </Button>
                 </div>
-                <div className="mt-1 h-[88px] w-full min-h-[72px]">
-                    {renderBarChartInner(data, barColor, tooltipIsCount, "mini")}
-                </div>
+                <DashboardScrollFriendlyChartHost
+                    className="mt-1 h-[88px] min-h-[72px]"
+                    minHeight={72}
+                    lazyNearViewport={dashboardChartLazyMount}
+                >
+                    {(size) =>
+                        renderBarChartInner(data, barColor, tooltipIsCount, "mini", size)
+                    }
+                </DashboardScrollFriendlyChartHost>
             </div>
         );
     };
@@ -2536,26 +2665,23 @@ export function FinancialSummaryCards({
                         <p className="text-xs text-muted-foreground">{stat.count} transaction(s)</p>
                     )}
                     {showVoucherDateCharts && (
-                        <div className="mt-2 h-[104px] w-full min-w-0">
+                        <div className="mt-2 w-full min-w-0">
                             {voucherStatDateChartData[stat.type]?.length ? (
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart
-                                        data={voucherStatDateChartData[stat.type]}
-                                        margin={{ top: 4, right: 4, left: 0, bottom: 0 }}
-                                    >
-                                        <CartesianGrid strokeDasharray="3 3" className="opacity-40" />
-                                        <XAxis dataKey="name" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
-                                        <YAxis tick={{ fontSize: 9 }} width={32} />
-                                        <Tooltip
-                                            formatter={(value: number) => [
-                                                formatCurrency(value, { noSuffix: true, duration: 2 }),
-                                                "Amount",
-                                            ]}
-                                            labelFormatter={(l) => `Date: ${l}`}
-                                        />
-                                        <Bar dataKey="amount" fill="hsl(var(--primary))" radius={[2, 2, 0, 0]} />
-                                    </BarChart>
-                                </ResponsiveContainer>
+                                <DashboardScrollFriendlyChartHost
+                                    className="h-[104px]"
+                                    minHeight={104}
+                                    lazyNearViewport={dashboardChartLazyMount}
+                                >
+                                    {(size) =>
+                                        renderBarChartInner(
+                                            voucherStatDateChartData[stat.type],
+                                            "hsl(var(--primary))",
+                                            false,
+                                            "mini",
+                                            size,
+                                        )
+                                    }
+                                </DashboardScrollFriendlyChartHost>
                             ) : (
                                 <p className="text-[10px] text-muted-foreground pt-2">No dated rows for chart</p>
                             )}
@@ -2749,7 +2875,8 @@ export function FinancialSummaryCards({
 
     return (
         <div
-            className={`${compact ? "financial-summary-grid" : `grid ${gridCols} w-full max-w-full items-start`} ${cardSpacing} ${compact ? "w-full" : ""}`}
+            {...(showVoucherDateCharts && !compact ? { "data-pl-dashboard-summary-charts": "" } : {})}
+            className={`${compact ? "financial-summary-grid" : `grid ${gridCols} w-max min-w-full items-start`} ${cardSpacing} ${compact ? "w-full" : ""}`}
         >
             <Dialog
                 open={!!dashboardChartFullView}

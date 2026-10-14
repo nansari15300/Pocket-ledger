@@ -69,10 +69,10 @@ import {
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
-import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
-import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
-import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { MobileMasterDetailHeaderAvatar } from "@/components/entity/MobileMasterDetailHeaderAvatar";
+import { MobileMasterDetailHeaderDateSecondary } from "@/components/entity/MobileMasterDetailHeaderDateSecondary";
+import { mobileEntityDetailShellTitle } from "@/lib/mobileDetailChrome";
 import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 
 function TaxPageContent() {
@@ -206,44 +206,25 @@ function TaxPageContent() {
     const name = group.name;
     return name && String(name).trim() ? String(name).trim() : null;
   }, [selected, activeView, groupMemberFilterId, processedTaxes, mobileTaxSelectionLabelClassName]);
+  const taxMasterDetailTitle = activeView === "groups" ? "Tax Group" : "Tax";
+  const taxShellTitle = useMemo(
+    () => mobileEntityDetailShellTitle(isMobile, Boolean(selected), taxMasterDetailTitle, "Tax details"),
+    [isMobile, selected, taxMasterDetailTitle]
+  );
+  const mobileTaxHeaderSecondary = useMemo((): ReactNode | undefined => {
+    if (!isMobile || !selected) return undefined;
+    const range = activeView === "groups" ? groupDetailsDateRange : taxDetailsDateRange;
+    const onClear =
+      activeView === "groups" ? () => setGroupDetailsDateRange(undefined) : () => setTaxDetailsDateRange(undefined);
+    return <MobileMasterDetailHeaderDateSecondary dateRange={range} onClear={onClear} />;
+  }, [isMobile, selected, activeView, taxDetailsDateRange, groupDetailsDateRange]);
   const mobileTaxDetailHeaderAvatar = useMemo(() => {
     if (!isMobile || !selected) return null;
     const selectedEntity = selected as Tax | TaxGroup;
     const name = selectedEntity.name || "Tax";
     const attachmentUrl = trimEntityFileUrlForPreview((selectedEntity as any).fileUrl);
-    const initials = name
-      .split(" ")
-      .filter(Boolean)
-      .map((part) => part[0])
-      .slice(0, 2)
-      .join("")
-      .toUpperCase() || "NA";
-    const openPreview = () => {
-      // Tax mobile header avatar: tap to open full preview.
-      if (!attachmentUrl) return;
-      void openAttachmentInApp(attachmentUrl, { title: name });
-    };
-    return (
-      <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
-        <EntityFileAttachmentHover fileUrl={attachmentUrl} triggerClassName="inline-flex rounded-full">
-          <button
-            type="button"
-            className="inline-flex h-full w-full items-center justify-center rounded-full"
-            onClick={openPreview}
-            aria-label={`Preview ${name} avatar`}
-          >
-            <ResolvedEntityAvatar
-              className="h-full w-full text-xs"
-              src={attachmentUrl ?? undefined}
-              alt={name}
-              fallbackText={initials}
-            />
-          </button>
-        </EntityFileAttachmentHover>
-      </div>
-    );
+    return <MobileMasterDetailHeaderAvatar name={name} attachmentUrl={attachmentUrl} />;
   }, [isMobile, selected]);
-  const taxMasterDetailTitle = activeView === "groups" ? "Tax Group" : "Tax";
   useSyncMasterDetailHeaderId("tax", selectedTax?.id ?? selectedGroupRaw?.id ?? null);
   
   const processedTaxGroups = useMemo(() => {
@@ -687,10 +668,10 @@ function TaxPageContent() {
   const detailView = (
     <>
       {activeView === 'taxes' && selectedTax && (
-        <TaxDetails tax={selectedTax} allTaxes={processedTaxes} onTaxUpdated={handleTaxUpdated} onTaxDeleted={() => setSelected(null)} dateRange={taxDetailsDateRange} onDateRangeChange={setTaxDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} />
+        <TaxDetails tax={selectedTax} allTaxes={processedTaxes} onTaxUpdated={handleTaxUpdated} onTaxDeleted={() => setSelected(null)} dateRange={taxDetailsDateRange} onDateRangeChange={setTaxDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} hideMobilePeriodLabelRow={isMobile} />
       )}
       {activeView === 'groups' && selectedGroup && (
-        <TaxGroupDetails key={`${selectedGroup.id}:${groupMemberFilterId ?? "all"}`} group={selectedGroup} allGroups={processedTaxGroups} taxes={taxesForGroupDetails} groupMemberFilterId={groupMemberFilterId} onGroupUpdated={() => {}} onGroupDeleted={() => setSelected(null)} onTaxUpdated={handleTaxUpdated} dateRange={groupDetailsDateRange} onDateRangeChange={setGroupDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} />
+        <TaxGroupDetails key={`${selectedGroup.id}:${groupMemberFilterId ?? "all"}`} group={selectedGroup} allGroups={processedTaxGroups} taxes={taxesForGroupDetails} groupMemberFilterId={groupMemberFilterId} onGroupUpdated={() => {}} onGroupDeleted={() => setSelected(null)} onTaxUpdated={handleTaxUpdated} dateRange={groupDetailsDateRange} onDateRangeChange={setGroupDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} hideMobilePeriodLabelRow={isMobile} />
       )}
       {!selected && <div className="p-6 text-center text-muted-foreground">Select an item to see details</div>}
     </>
@@ -698,10 +679,11 @@ function TaxPageContent() {
 
   return (
     <ResponsiveMasterDetail
-      title={taxMasterDetailTitle}
+      title={taxShellTitle}
       mobileSelectionLabel={mobileTaxSelectionLabel}
       mobileSelectionLabelClassName={mobileTaxSelectionLabelClassName}
       mobileDetailHeaderEnd={mobileTaxDetailHeaderAvatar}
+      mobileDetailHeaderSecondary={mobileTaxHeaderSecondary}
       balance={
         <span className={cn(
             "font-semibold",

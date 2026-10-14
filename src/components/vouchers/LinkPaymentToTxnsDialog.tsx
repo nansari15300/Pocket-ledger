@@ -33,6 +33,7 @@ import {
   getJournalPartyBillWiseAmountFromEntries,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
+import { getSalePurchaseBillWiseTargetTotal } from "@/lib/tdsVoucher";
 import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 
 const safeToDate = (date: unknown): Date | null => {
@@ -323,7 +324,7 @@ export function LinkPaymentToTxnsDialog({
         String((v as any).partyId ?? "") === String(partyId)
     );
     const sales = salesForParty.map((v) => {
-      const total = Number(v.total ?? v.amount ?? 0);
+      const total = getSalePurchaseBillWiseTargetTotal(v);
       const allocatedToOthers = getAllocatedToOthersFromTarget(getFreshTarget(v), v.id);
       // Linkable = Amount - Other Linked; table shows (outstanding - linked) where linked includes Current Link
       const outstanding = Math.max(0, total - allocatedToOthers);
@@ -499,7 +500,7 @@ export function LinkPaymentToTxnsDialog({
         String((v as any).partyId ?? "") === String(partyId)
     );
     const purchases = purchasesForParty.map((v) => {
-      const total = Number(v.total ?? v.amount ?? 0);
+      const total = getSalePurchaseBillWiseTargetTotal(v);
       const allocatedToOthers = getAllocatedToOthersFromTargetOut(getFreshTargetOut(v), v.id);
       const outstanding = Math.max(0, total - allocatedToOthers);
       return {

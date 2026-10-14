@@ -1653,6 +1653,12 @@ body.theme-pro header button[data-pl-header-preview-info]:hover svg {
 [data-pl-closing-balance-card] {
   overflow: visible !important;
 }
+/* Mobile txn list: Adjust Balance + Closing Balance ek row; Freeze / Send neeche */
+[data-pl-mobile-closing-balance-stack][data-pl-closing-balance-card] [data-pl-closing-balance-actions] {
+  margin-right: 0 !important;
+  flex: 1 1 auto !important;
+  justify-content: flex-start !important;
+}
 /* Loan accounting: Closing Balance footer — tone pills + Adjust Balance + label, ek hi row */
 [data-pl-loan-accounting-table] [data-pl-closing-balance-card] {
   flex-wrap: nowrap !important;
@@ -2975,7 +2981,7 @@ button.day_selected.is-today.has-transactions {
   input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
   textarea:not([data-pl-mlc-search-input]):not(.pl-company-profile-field):not([data-pl-manage-share-field]),
   select:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
-  button:not([class*="border-0"]):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+  button:not([class*="border-0"]):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not([data-pl-mobile-header-avatar-no-photo]):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
   [type="text"]:not(.pl-company-profile-field),
   [type="number"]:not(.pl-company-profile-field),
   [type="email"]:not(.pl-company-profile-field),
@@ -3191,8 +3197,8 @@ button.day_selected.is-today.has-transactions {
   
   /* Tailwind border utilities - double thickness (except border-0) */
   /* 4K ma sabai borders moto ra pure black */
-  .border:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-manage-share-avatar]):not([data-pl-toolbar-field]),
-  .border-t:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
+  .border:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not([data-pl-mobile-header-avatar-no-photo]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-manage-share-avatar]):not([data-pl-toolbar-field]),
+  .border-t:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not([data-pl-mobile-header-avatar-no-photo]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
   .border-r:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
   .border-b:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
   .border-l:not(.border-0):not([data-pl-list-row]):not([data-pl-footer-drcr-balance-card]):not([data-pl-header-preview-switch]):not([data-pl-mlc-search-input]):not(.pl-master-list-group-icon):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
@@ -3725,11 +3731,16 @@ button.day_selected.is-today.has-transactions {
   /* Select dropdowns */
   [class*="select"],
   [class*="Select"],
-  [role="combobox"],
-  [data-radix-select-trigger],
+  [role="combobox"]:not([data-pl-mobile-txn-pager-select]),
+  [data-radix-select-trigger]:not([data-pl-mobile-txn-pager-select]),
   [data-radix-select-content] {
     border-width: 3px !important;
     border-color: #000000 !important;
+  }
+  button[data-pl-mobile-txn-pager-select][role="combobox"] {
+    border-width: 1px !important;
+    border-color: rgb(147 197 253) !important;
+    background-color: #fff !important;
   }
   
   /* Checkbox borders */
@@ -3899,6 +3910,14 @@ button.day_selected.is-today.has-transactions {
   [placeholder*="search"] {
     border-width: 3px !important;
     border-color: #000000 !important;
+  }
+  [data-pl-ledger-txn-page] input[placeholder*="Search" i],
+  [data-pl-ledger-txn-page] input[placeholder*="search" i],
+  input[data-pl-mlc-search-input][placeholder*="Search" i],
+  input[data-pl-mlc-search-input][placeholder*="search" i] {
+    border-width: 1px !important;
+    border-color: rgb(147 197 253) !important;
+    background-color: #fff !important;
   }
   
   /* Input group borders */
@@ -4616,8 +4635,19 @@ body[class*="theme-"].dark main [data-pl-reports-list] [data-pl-list-row] .pl-ma
   padding-left: 1.75rem !important;
   padding-right: 0.5rem !important;
 }
-/* Pink pending count — search/+ Add row se upar na nikle */
-[data-pl-master-list-chrome] .pl-mlc-search-row .pl-mlc-pending-badge {
+/* List search: row me stretch; mobile par cap + right align (@media 767) */
+[data-pl-master-list-chrome] .pl-mlc-search-row > .pl-mlc-search-wrap {
+  flex: 1 1 0% !important;
+  min-width: 0 !important;
+}
+[data-pl-master-list-chrome] .pl-mlc-search-row > .pl-mlc-search-wrap input {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+/* Pink pending count — search/+ Add row se upar na nikle; border bg pink se thoda dark */
+[data-pl-master-list-chrome] .pl-mlc-search-row .pl-mlc-pending-badge,
+[data-pl-mobile-list-dock] .pl-mlc-search-row .pl-mlc-pending-badge,
+[data-pl-party-mobile-list-dock] .pl-mlc-search-row .pl-mlc-pending-badge {
   height: var(--pl-mlc-pill-h) !important;
   min-height: var(--pl-mlc-pill-h) !important;
   max-height: var(--pl-mlc-pill-h) !important;
@@ -4626,6 +4656,23 @@ body[class*="theme-"].dark main [data-pl-reports-list] [data-pl-list-row] .pl-ma
   line-height: 1 !important;
   border-width: 1px !important;
   box-sizing: border-box !important;
+  background-color: rgb(252 231 243) !important;
+  border-color: rgb(249 168 212) !important;
+  color: rgb(131 24 67) !important;
+}
+[data-pl-master-list-chrome] .pl-mlc-search-row .pl-mlc-pending-badge[aria-pressed="true"],
+[data-pl-mobile-list-dock] .pl-mlc-search-row .pl-mlc-pending-badge[aria-pressed="true"],
+[data-pl-party-mobile-list-dock] .pl-mlc-search-row .pl-mlc-pending-badge[aria-pressed="true"] {
+  background-color: rgb(219 39 119) !important;
+  border-color: rgb(190 24 93) !important;
+  color: rgb(255 255 255) !important;
+}
+.dark [data-pl-master-list-chrome] .pl-mlc-search-row .pl-mlc-pending-badge:not([aria-pressed="true"]),
+.dark [data-pl-mobile-list-dock] .pl-mlc-search-row .pl-mlc-pending-badge:not([aria-pressed="true"]),
+.dark [data-pl-party-mobile-list-dock] .pl-mlc-search-row .pl-mlc-pending-badge:not([aria-pressed="true"]) {
+  background-color: rgb(80 7 36 / 0.6) !important;
+  border-color: rgb(157 23 77) !important;
+  color: rgb(252 231 243) !important;
 }
 /* List voucher shortcuts (Add Salary, Pay Salary, Direct Income…) — search row jitni height */
 [data-pl-master-list-chrome] .pl-mlc-action-row button {
@@ -5254,10 +5301,10 @@ body.theme-pro .pl-settings-list-shell {
 }
 
 /* Pro: saare main forms — gray field + black border (Company Profile jaisa) */
-body.theme-pro main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
+body.theme-pro main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]):not([placeholder="Search transactions"]):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
 body.theme-pro main textarea:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
 body.theme-pro main select:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
-body.theme-pro main button[role="combobox"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
+body.theme-pro main button[role="combobox"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]):not([data-pl-mobile-txn-pager-select]),
 body.theme-pro main button[data-theme-detail="date-range"]:not(.pl-chrome-btn-drop):not(.pl-company-profile-field) {
   border-color: #000 !important;
   border-width: 1px !important;
@@ -6155,13 +6202,55 @@ body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-action-row {
     font-size: 0.8125rem !important;
     line-height: 1 !important;
   }
-  /* Mobile master list footer dock — tabs +20% (1.5→1.8rem), rows ke beech 2px gap */
+  /* Mobile/APK list footer — pills 35px, row 43px (4px pad). PC chrome alag. */
+  [data-pl-mobile-list-dock],
+  [data-pl-party-mobile-list-dock] {
+    --pl-mlc-pill-h: 35px;
+    --pl-mlc-dock-row-h: 43px;
+  }
   [data-pl-mobile-list-dock] .pl-mlc-tabs-row,
-  [data-pl-party-mobile-list-dock] .pl-mlc-tabs-row {
-    min-height: 1.92rem !important;
+  [data-pl-party-mobile-list-dock] .pl-mlc-tabs-row,
+  [data-pl-mobile-list-dock] .pl-mlc-search-row,
+  [data-pl-mobile-list-dock] .pl-mlc-section-label-row,
+  [data-pl-mobile-list-dock] .pl-mlc-action-row,
+  [data-pl-mobile-list-dock] .pl-mlc-quick-filter-row,
+  [data-pl-mobile-list-dock] .pl-mlc-footer-summary-row,
+  [data-pl-party-mobile-list-dock] .pl-mlc-search-row,
+  [data-pl-party-mobile-list-dock] .pl-mlc-section-label-row,
+  [data-pl-party-mobile-list-dock] .pl-mlc-quick-filter-row,
+  [data-pl-party-mobile-list-dock] .pl-mlc-footer-summary-row {
+    display: flex !important;
+    align-items: center !important;
+    box-sizing: border-box !important;
+    height: var(--pl-mlc-dock-row-h) !important;
+    min-height: var(--pl-mlc-dock-row-h) !important;
+    max-height: var(--pl-mlc-dock-row-h) !important;
     padding-top: 4px !important;
     padding-bottom: 4px !important;
-    box-sizing: border-box !important;
+  }
+  [data-pl-mobile-list-dock] .pl-mlc-quick-filter-row > div,
+  [data-pl-party-mobile-list-dock] .pl-mlc-quick-filter-row > div {
+    width: 100%;
+  }
+  [data-pl-mobile-list-dock] [data-pl-party-overdue-row] {
+    /* Dock gap 4px hata ke pill ke upar/neeche line sirf 3px. */
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    margin-top: -4px !important;
+    margin-bottom: -4px !important;
+    padding-top: 3px !important;
+    padding-bottom: 3px !important;
+  }
+  [data-pl-mobile-list-dock] .pl-mlc-section-label-row button,
+  [data-pl-mobile-list-dock] .pl-mlc-quick-filter-row button,
+  [data-pl-party-mobile-list-dock] .pl-mlc-quick-filter-row button {
+    height: var(--pl-mlc-pill-h) !important;
+    min-height: var(--pl-mlc-pill-h) !important;
+    max-height: var(--pl-mlc-pill-h) !important;
+    align-self: center !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
   }
   [data-pl-mobile-list-dock] [data-pl-master-list-tabs][role="tablist"],
   [data-pl-mobile-list-dock] [role="tablist"],
@@ -6188,9 +6277,59 @@ body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-action-row {
     padding-bottom: 4px !important;
     box-sizing: border-box !important;
   }
+  [data-pl-mobile-list-dock] [data-pl-party-overdue-row].pl-mlc-section-label-row {
+    padding-top: 3px !important;
+    padding-bottom: 3px !important;
+  }
+  /* Overdue pill nahi: count row text jitni, aur text upar/neeche line ke beech */
+  [data-pl-mobile-list-dock] .pl-mlc-section-label-row:not([data-pl-party-overdue-row]),
+  [data-pl-party-mobile-list-dock] .pl-mlc-section-label-row:not([data-pl-party-overdue-row]) {
+    display: flex !important;
+    align-items: center !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    /* Dock gap 4px sirf is row ke upar — hatao, taaki text dono border ke beech center rahe */
+    margin-top: -4px !important;
+    padding-top: 3px !important;
+    padding-bottom: 3px !important;
+    line-height: 1 !important;
+  }
+  [data-pl-mobile-list-dock] .pl-mlc-section-label-row:not([data-pl-party-overdue-row]) > *,
+  [data-pl-party-mobile-list-dock] .pl-mlc-section-label-row:not([data-pl-party-overdue-row]) > * {
+    line-height: 1 !important;
+  }
+  /* Mobile list search: Add → unapprove → search (right); search max 50% screen ya 2in */
+  [data-pl-master-list-chrome] .pl-mlc-search-row > .pl-mlc-search-wrap,
+  [data-pl-mobile-list-dock] .pl-mlc-search-row > .pl-mlc-search-wrap,
+  [data-pl-party-mobile-list-dock] .pl-mlc-search-row > .pl-mlc-search-wrap {
+    flex: 1 1 0% !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: min(50vw, 2in) !important;
+    margin-left: auto !important;
+  }
+  [data-pl-mobile-list-dock] .pl-mlc-search-row > .pl-mlc-search-wrap,
+  [data-pl-party-mobile-list-dock] .pl-mlc-search-row > .pl-mlc-search-wrap {
+    order: 3 !important;
+  }
+  [data-pl-mobile-list-dock] .pl-mlc-search-row > .pl-mlc-pending-badge,
+  [data-pl-party-mobile-list-dock] .pl-mlc-search-row > .pl-mlc-pending-badge {
+    order: 2 !important;
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: calc(5ch + 10px) !important;
+    max-width: none !important;
+  }
+  [data-pl-mobile-list-dock] .pl-mlc-search-row > :not(.pl-mlc-search-wrap):not(.pl-mlc-pending-badge),
+  [data-pl-party-mobile-list-dock] .pl-mlc-search-row > :not(.pl-mlc-search-wrap):not(.pl-mlc-pending-badge) {
+    order: 1 !important;
+    flex: 0 0 auto !important;
+  }
   body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-search-row input {
     border-color: rgb(147 197 253) !important;
-    background-color: rgb(219 234 254 / 0.8) !important;
+    background-color: #fff !important;
+    background-image: none !important;
   }
   /* Master list amounts: Dr/Cr — mobile APK par bhi hamesha green/red (pehle Pro par Dr pink ho jata tha) */
   [data-pl-master-list-chrome] [data-pl-list-balance="dr"] {
@@ -6276,8 +6415,8 @@ body.theme-pro [data-theme-table="transactions"]:not([data-pl-txn-table-tone="gr
 }
 
 /* Reconciliation matched pair — dono side green (detail: file end par stripe override ke baad) */
-body[class*="theme-"] main .rounded-lg.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]):not([data-pl-company-profile-chrome]):not(.pl-company-profile-bordered-panel),
-body[class*="theme-"] main .rounded-md.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]):not([data-pl-company-profile-chrome]):not(.pl-company-profile-bordered-panel),
+body[class*="theme-"] main .rounded-lg.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]):not([data-pl-company-profile-chrome]):not(.pl-company-profile-bordered-panel):not([data-pl-mobile-header-avatar-no-photo]),
+body[class*="theme-"] main .rounded-md.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-ledger-txn-search]):not([data-pl-mobile-txn-pager-select]):not(.pl-mlc-pending-badge):not([data-pl-mobile-transaction-card]):not([data-pl-company-profile-chrome]):not(.pl-company-profile-bordered-panel):not([data-pl-mobile-header-avatar-no-photo]),
 body[class*="theme-"] main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]):not([data-pl-company-profile-chrome]):not(.pl-company-profile-bordered-panel),
 body[class*="theme-"] main .rounded-lg.border.bg-card.shadow-sm:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]):not([data-pl-company-profile-chrome]):not(.pl-company-profile-bordered-panel),
 body[class*="theme-"] [data-pl-main-sidebar] .rounded-md.border:not([data-pl-sidebar-brand-icon]):not(.pl-chrome-btn-drop),
@@ -6297,7 +6436,7 @@ body[class*="theme-"] header .border-2:not([class*="pl-chrome-tone-"]):not([data
  * Admin panel — theme-pro black border override ko soft tone se replace (box bg ke saath match, thoda alag).
  */
 html.pl-admin-route body[class*="theme-"] main .rounded-lg.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]),
-html.pl-admin-route body[class*="theme-"] main .rounded-md.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not([data-pl-mobile-transaction-card]),
+html.pl-admin-route body[class*="theme-"] main .rounded-md.border:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-footer-drcr-balance-card]):not([data-pl-mlc-search-input]):not(.pl-mlc-pending-badge):not([data-pl-mobile-transaction-card]),
 html.pl-admin-route body[class*="theme-"] main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
 html.pl-admin-route body[class*="theme-"] main .rounded-lg.border.bg-card.shadow-sm:not([data-pl-list-row]):not(.pl-dashboard-tone-card):not([data-pl-mobile-transaction-card]),
 html.pl-admin-route body[class*="theme-"] main .border-2:not(.pl-dashboard-tone-card):not(.pl-dashboard-footer-tab):not([data-pl-mobile-transaction-card]),
@@ -6568,7 +6707,7 @@ body[class*="theme-"] main hr {
 body[class*="theme-"] main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]):not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]),
 body[class*="theme-"] main textarea:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
 body[class*="theme-"] main select:not(.pl-company-profile-field):not([data-pl-manage-share-field]),
-body[class*="theme-"] main button[role="combobox"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]),
+body[class*="theme-"] main button[role="combobox"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]):not([data-pl-manage-share-perm-filter]):not([data-pl-manage-share-bank-select]):not([data-pl-toolbar-field]):not([data-pl-mobile-txn-pager-select]),
 body[class*="theme-"] main button[data-theme-detail="date-range"]:not(.pl-company-profile-field):not([data-pl-manage-share-field]) {
   border-width: 1px !important;
   border-color: #000 !important;
@@ -6746,7 +6885,7 @@ body:not(.theme-pro):not(.theme-pure-white).theme-colorfull main {
   background-color: hsl(var(--card)) !important;
   background-image: none !important;
 }
-body:not(.theme-pro):not(.theme-pure-white) main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]),
+body:not(.theme-pro):not(.theme-pure-white) main input:not([type="checkbox"]):not([type="radio"]):not([data-pl-mlc-search-input]):not([placeholder="Search transactions"]),
 body:not(.theme-pro):not(.theme-pure-white) main textarea,
 body:not(.theme-pro):not(.theme-pure-white) main select,
 body:not(.theme-pro):not(.theme-pure-white) main button[role="combobox"],
@@ -7611,16 +7750,11 @@ body.dark
   [data-pl-dashboard-recent-chrome] {
   background-color: #172554 !important;
 }
-[data-pl-dashboard-footer-ribbon][data-pl-dashboard-recent-footer-ribbon]
-  > div:first-child {
+[data-pl-dashboard-footer-ribbon] > div:first-child {
   background-color: #dbeafe !important;
 }
-body.dark
-  [data-pl-dashboard-footer-ribbon][data-pl-dashboard-recent-footer-ribbon]
-  > div:first-child,
-.dark
-  [data-pl-dashboard-footer-ribbon][data-pl-dashboard-recent-footer-ribbon]
-  > div:first-child {
+body.dark [data-pl-dashboard-footer-ribbon] > div:first-child,
+.dark [data-pl-dashboard-footer-ribbon] > div:first-child {
   background-color: #172554 !important;
 }
 [data-pl-dashboard-recent-shell] .pl-ledger-detail-table-shell,
@@ -7643,11 +7777,14 @@ body.dark
 [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] {
   padding-top: 0;
   padding-left: 0;
+  padding-right: var(--pl-dashboard-recent-txn-body-vscroll-pad, 0px);
   box-sizing: border-box;
+  scrollbar-gutter: auto !important;
 }
 [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] {
   border-bottom: 1px solid #000;
   box-sizing: border-box;
+  padding-right: var(--pl-dashboard-recent-txn-body-vscroll-pad, 0px);
 }
 [data-pl-dashboard-recent-txn-header].pl-dashboard-recent-txn-header-scroll {
   overflow-y: hidden;
@@ -7662,6 +7799,7 @@ body.dark
   position: static !important;
   top: auto !important;
 }
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] table,
 [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] table {
   width: 100% !important;
   min-width: 100%;
@@ -7728,7 +7866,15 @@ body.dark [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header]
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
+  height: 100%;
+  min-height: 0;
   padding-right: var(--pl-ledger-txn-edge-gap) !important;
+}
+/* Entity desktop: detail pane full bleed — ribbon / table / footer right edge (no 2px strip). */
+[data-pl-ledger-txn-page]:has([data-pl-ledger-txn-unified-scroll]) {
+  --pl-ledger-txn-edge-gap: 0px;
+  padding-right: 0 !important;
+  padding-left: 0 !important;
 }
 [data-pl-ledger-txn-page] > .pl-ledger-header-ribbon-wrap,
 [data-pl-ledger-txn-unified-scroll] .pl-ledger-txn-scroll-header .pl-ledger-header-ribbon-wrap {
@@ -7768,11 +7914,28 @@ body.dark [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header]
 }
 /* Detail column height only — do NOT set display:flex on [data-master-detail-layout] (breaks 25/75 grid). */
 main:has([data-pl-ledger-txn-page]) {
+  overflow: hidden !important;
+  min-height: 0;
   scrollbar-gutter: auto !important;
+}
+main:has([data-pl-ledger-txn-page]) > [data-master-detail-layout="25-75"] {
+  display: grid !important;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+}
+main:has([data-pl-ledger-txn-page]) [data-master-detail-layout="25-75"] > div:first-child {
+  min-height: 0;
+  min-width: 0;
 }
 main:has([data-pl-ledger-txn-page]) [data-master-detail-layout="25-75"] > div:last-child {
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
+  width: 100%;
+  max-width: 100%;
 }
 [data-pl-ledger-txn-page] .pl-ledger-txn-table-host {
   padding-top: 0 !important;
@@ -7831,15 +7994,68 @@ body.dark [data-pl-ledger-txn-page] [data-pl-ledger-txn] .pl-dashboard-recent-st
 [data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn-hscroll] {
   display: none !important;
 }
+[data-pl-ledger-txn-unified-scroll].pl-ledger-txn-scroll-host {
+  box-sizing: border-box;
+  max-height: 100%;
+  width: 100%;
+  max-width: 100%;
+  scrollbar-gutter: auto !important;
+}
 [data-pl-ledger-txn-unified-scroll] .pl-ledger-txn-scroll-host-inner {
-  width: max(100%, calc(var(--pl-ledger-txn-table-min-px, 0) * 1px));
+  box-sizing: border-box;
+  width: 100%;
+  min-width: max(100%, calc(var(--pl-ledger-txn-table-min-px, 0) * 1px));
+  max-width: none;
+  max-height: 100%;
+  min-height: 0;
+  padding-bottom: 0;
+}
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-txn-table-host,
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-detail-table-shell {
+  min-width: 100%;
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+}
+[data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn-header],
+[data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn],
+[data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn-fixed-summary] {
+  max-width: none;
+  width: 100%;
+  min-width: 100%;
+  box-sizing: border-box;
+}
+[data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn-header] {
+  padding-right: var(--pl-ledger-txn-body-vscroll-pad, 0px);
+  overflow-x: hidden !important;
+  min-width: 100%;
+  max-width: none;
+}
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-detail-table-shell {
+  min-width: max(100%, calc(var(--pl-ledger-txn-table-min-px, 0) * 1px));
+  width: 100%;
+  max-width: none;
+}
+[data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn-fixed-summary] {
+  padding-right: var(--pl-ledger-txn-body-vscroll-pad, 0px);
 }
 [data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn-header] table,
-[data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn] table {
-  width: max(100%, calc(var(--pl-ledger-txn-table-min-px, 0) * 1px));
+[data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn] table,
+[data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn-fixed-summary] table {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: max(100%, calc(var(--pl-ledger-txn-table-min-px, 0) * 1px));
+  max-width: none;
+  table-layout: fixed;
 }
 [data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn] {
   overflow-x: hidden !important;
+  scrollbar-gutter: auto !important;
+}
+/* Entity ledger txn rows: show full cell text (no …); col min-width + table-auto handles width. */
+[data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr.transaction-main-row > td {
+  text-overflow: clip;
+  overflow: visible;
 }
 /* Row H-lines: first-cell anchor + measured table width (last-cell 10000px cap missed Date col). */
 [data-pl-ledger-txn-unified-scroll] [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"]:not([data-pl-spend-wise-opening]) > td:last-child::after,
@@ -7886,23 +8102,38 @@ body.dark [data-pl-ledger-txn-page] [data-pl-ledger-txn] .pl-dashboard-recent-st
   pointer-events: none;
 }
 [data-pl-ledger-txn-unified-scroll] .pl-ledger-desktop-footer-shell {
-  overflow-x: hidden !important;
+  overflow-x: visible !important;
   overflow-y: visible;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: max(100%, calc(var(--pl-ledger-txn-table-min-px, 0) * 1px));
+  max-width: none;
+  flex-shrink: 0;
+  padding-left: 3px !important;
+  padding-right: calc(3px + var(--pl-ledger-txn-body-vscroll-pad, 0px)) !important;
 }
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-desktop-footer-shell.pl-ledger-footer-scroll,
 [data-pl-ledger-txn-unified-scroll] .pl-ledger-desktop-footer-shell .pl-ledger-footer-scroll {
-  overflow-x: hidden !important;
+  overflow-x: visible !important;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-desktop-footer-shell.pl-ledger-footer-scroll::-webkit-scrollbar,
 [data-pl-ledger-txn-unified-scroll] .pl-ledger-desktop-footer-shell .pl-ledger-footer-scroll::-webkit-scrollbar {
   display: none;
   height: 0;
   width: 0;
 }
 [data-pl-ledger-txn-unified-scroll] .pl-ledger-desktop-footer-shell > div {
-  flex-wrap: wrap;
-  min-width: 0;
-  width: 100%;
+  flex-wrap: nowrap !important;
+  box-sizing: border-box;
+  min-width: 100%;
+  width: max-content;
+  max-width: none;
+}
+[data-pl-ledger-txn-unified-scroll] .pl-ledger-desktop-footer-shell[data-pl-ledger-footer-single-row] > div {
+  min-width: 100%;
+  width: max-content;
 }
 [data-pl-ledger-txn-page] [data-pl-ledger-txn] tbody > tr.transaction-main-row:first-child > td {
   border-top-width: 0 !important;
@@ -8310,6 +8541,29 @@ main:has([data-pl-dashboard-recent-full-bleed]) > * {
   border-radius: 0 !important;
   box-shadow: none !important;
 }
+/* Dashboard fixed footer — sidebar edge se right tak full bleed (no side inset). */
+[data-pl-dashboard-footer-ribbon] {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
+  border-radius: 0;
+}
+/* Dashboard home: footer neeche lock — txn upar scroll, ribbon me overlap na ho. */
+main:has([data-pl-dashboard-page-root]) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden !important;
+}
+[data-pl-dashboard-page-root] {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 [data-pl-dashboard-recent-full-bleed] [data-pl-dashboard-recent-shell] {
   width: 100%;
   max-width: 100%;
@@ -8356,6 +8610,80 @@ main:has([data-pl-dashboard-recent-full-bleed]) > * {
   height: 0 !important;
   display: none;
 }
+/* Daybook desktop: sirf outer host H-scroll — header / body alag bar nahi (TransactionsTable same). */
+[data-pl-daybook-unified-scroll].pl-daybook-txn-scroll-host {
+  box-sizing: border-box;
+  max-height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-gutter: auto !important;
+}
+[data-pl-daybook-unified-scroll] .pl-daybook-txn-scroll-host-inner {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: max(100%, calc(var(--pl-daybook-txn-table-min-px, 0) * 1px));
+  max-width: none;
+  max-height: 100%;
+  min-height: 0;
+}
+[data-pl-daybook-unified-scroll] .pl-ledger-txn-table-host,
+[data-pl-daybook-unified-scroll] .pl-ledger-detail-table-shell {
+  min-width: 100%;
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+}
+[data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn-header],
+[data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn] {
+  max-width: none;
+  width: 100%;
+  min-width: 100%;
+  overflow-x: hidden !important;
+  box-sizing: border-box;
+}
+[data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn-header] {
+  padding-right: var(--pl-daybook-txn-body-vscroll-pad, 0px);
+  overflow-x: hidden !important;
+  min-width: 100%;
+  max-width: none;
+}
+[data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn-header] table,
+[data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn] table {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: max(100%, calc(var(--pl-daybook-txn-table-min-px, 0) * 1px));
+  max-width: none;
+  table-layout: fixed;
+}
+[data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn] {
+  overflow-x: hidden !important;
+  scrollbar-gutter: auto !important;
+  padding-right: var(--pl-daybook-txn-body-vscroll-pad, 0px);
+  box-sizing: border-box;
+}
+[data-pl-dashboard-recent-shell] [data-pl-txn-row-menu],
+[data-pl-daybook-unified-scroll] [data-pl-txn-row-menu] {
+  overflow: visible;
+}
+[data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn-hscroll],
+[data-pl-daybook-unified-scroll] [data-pl-ledger-txn-hscroll] {
+  display: none !important;
+  height: 0 !important;
+  overflow: hidden !important;
+}
+[data-pl-daybook-unified-scroll] .pl-dashboard-recent-hide-hscroll {
+  overflow-x: hidden !important;
+}
+[data-pl-daybook-unified-scroll] [data-theme-table="transactions"] tbody tr.transaction-main-row > td {
+  text-overflow: clip;
+  overflow: visible;
+}
+[data-pl-daybook-unified-scroll] [data-pl-txn-row-menu],
+[data-pl-daybook-unified-scroll] [data-pl-txn-row-menu-trigger] {
+  overflow: visible;
+}
 [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll] {
   scrollbar-width: thin;
   scrollbar-color: var(--pl-ledger-txn-scroll-thumb) var(--pl-ledger-txn-scroll-track);
@@ -8386,6 +8714,64 @@ main:has([data-pl-dashboard-recent-full-bleed]) > * {
 [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] table td {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Recent desktop: date + entry time visible (Daybook parity); col min-width handles fit. */
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] table tbody tr.transaction-main-row > td {
+  text-overflow: clip;
+  overflow: visible;
+}
+/* Recent: Date under "D"; max 3px PM → Type pill (2px + 1px pad). */
+[data-pl-dashboard-recent-shell] [data-pl-ledger-txn-last-date-cell] {
+  text-align: left !important;
+  white-space: nowrap;
+  padding-right: 2px !important;
+  padding-left: 5px;
+}
+[data-pl-dashboard-recent-shell] [data-pl-ledger-txn-type-cell] {
+  white-space: nowrap;
+  padding-left: 1px !important;
+  padding-right: 5px;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] th[data-pl-col="date"],
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] th[data-pl-col="date_ad"] {
+  text-align: left !important;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] th[data-pl-col="date"] > div,
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] th[data-pl-col="date_ad"] > div {
+  padding-right: 2px !important;
+  padding-left: 5px !important;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] th[data-pl-col="type"] > div {
+  padding-left: 1px !important;
+  padding-right: 5px !important;
+}
+[data-pl-daybook-unified-scroll] [data-pl-ledger-txn-last-date-cell] {
+  text-align: left !important;
+  white-space: nowrap;
+  padding-right: 2px !important;
+  padding-left: 5px;
+}
+[data-pl-daybook-unified-scroll] [data-pl-ledger-txn-type-cell] {
+  white-space: nowrap;
+  padding-left: 1px !important;
+  padding-right: 5px;
+}
+[data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn-header] th[data-pl-col="date"],
+[data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn-header] th[data-pl-col="date_ad"] {
+  text-align: left !important;
+}
+[data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn-header] th[data-pl-col="date"] > div,
+[data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn-header] th[data-pl-col="date_ad"] > div {
+  padding-right: 2px !important;
+  padding-left: 5px !important;
+}
+[data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn-header] th[data-pl-col="type"] > div {
+  padding-left: 1px !important;
+  padding-right: 5px !important;
+}
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll] {
+  padding-right: var(--pl-dashboard-recent-txn-body-vscroll-pad, 0px);
+  box-sizing: border-box;
 }
 
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not([data-pl-check-marked]):has(+ .narration-row[data-pl-txn-selected]) > td:first-child::before,
@@ -9233,7 +9619,7 @@ body.theme-pro main button.pl-dashboard-footer-tab[data-pl-footer-tab="all"] {
 }
 body[class*="theme-"] main button.pl-dashboard-footer-tab[data-pl-footer-tab="financial-summaries"],
 body.theme-pro main button.pl-dashboard-footer-tab[data-pl-footer-tab="financial-summaries"] {
-  border-color: rgb(249 115 22 / 0.85) !important;
+  border-color: rgb(236 72 153 / 0.85) !important;
   border-width: 2px !important;
 }
 body[class*="theme-"] main button.pl-dashboard-footer-tab[data-pl-footer-tab="bank-cash-summary"],
@@ -9253,8 +9639,24 @@ body.theme-pro main button.pl-dashboard-footer-tab[data-pl-footer-tab="recent-tr
 }
 body[class*="theme-"] main button.pl-dashboard-footer-tab[data-pl-footer-tab="dashboard-charts"],
 body.theme-pro main button.pl-dashboard-footer-tab[data-pl-footer-tab="dashboard-charts"] {
-  border-color: rgb(217 70 239 / 0.85) !important;
+  border-color: rgb(236 72 153 / 0.85) !important;
   border-width: 2px !important;
+}
+[data-pl-dashboard-footer-summary-chart-pair] button.pl-dashboard-footer-tab[data-pl-footer-summary-chart-segment] {
+  border-width: 0 !important;
+  border-color: transparent !important;
+}
+[data-pl-dashboard-footer-summary-chart-pair] {
+  border-color: rgb(236 72 153 / 0.85) !important;
+}
+
+/* Dashboard Chart tab scroll: contain chain scroll; isolate chart grid from footer resize churn */
+[data-pl-dashboard-summary-chart-scroll] {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+[data-pl-dashboard-summary-charts] .recharts-responsive-container {
+  contain: layout style paint;
 }
 
 /* Sab popup dialogs — dim green shell (theme / 4K black override se bachao) */
@@ -9397,7 +9799,7 @@ body[class*="theme-"] button[data-pl-header-preview-switch].rounded-full.border[
   background-color: rgb(220 252 231) !important;
 }
 
-/* Master list search — + Add Account chrome pill jaisa blue border (theme black input/rounded-md override se upar) */
+/* Master list search — Recent search jaisa: white fill, blue border */
 body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-search-row input[data-pl-mlc-search-input].rounded-md.border,
 body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-search-row input[data-pl-mlc-search-input].rounded-md.border,
 body[class*="theme-"] [data-pl-mobile-list-dock] .pl-mlc-search-row input[data-pl-mlc-search-input].rounded-md.border,
@@ -9405,10 +9807,9 @@ body[class*="theme-"] [data-pl-party-mobile-list-dock] .pl-mlc-search-row input[
 [data-pl-master-list-chrome] .pl-mlc-search-row input[data-pl-mlc-search-input].rounded-md.border {
   border-width: 1px !important;
   border-color: rgb(147 197 253) !important;
-  background-color: rgb(219 234 254 / 0.8) !important;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.55),
-    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+  background-color: #fff !important;
+  background-image: none !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
 }
 body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-search-row input[data-pl-mlc-search-input]:focus-visible,
 body[class*="theme-"] [data-pl-mobile-list-dock] .pl-mlc-search-row input[data-pl-mlc-search-input]:focus-visible,
@@ -9443,6 +9844,128 @@ body[class*="theme-"] [data-pl-recent-txn-toolbar] input[data-pl-mlc-search-inpu
   background-color: #fff !important;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
 }
+/*
+ * Search boxes — Recent page jaisa: white fill + blue border.
+ * PC, mobile, APK (shared CSS). Theme black-border / blue-fill overrides se upar.
+ */
+body[class*="theme-"] main input[data-pl-mlc-search-input].rounded-md.border,
+body.theme-pro main input[data-pl-mlc-search-input].rounded-md.border,
+body:not(.theme-pro):not(.theme-pure-white) main input[data-pl-mlc-search-input].rounded-md.border,
+body[class*="theme-"] input[data-pl-mlc-search-input].rounded-md.border,
+body[class*="theme-"] main input[placeholder="Search transactions" i].rounded-md.border,
+body.theme-pro main input[placeholder="Search transactions" i].rounded-md.border,
+body:not(.theme-pro):not(.theme-pure-white) main input[placeholder="Search transactions" i].rounded-md.border,
+body[class*="theme-"] main input[placeholder="Search notes" i].rounded-md.border,
+body[class*="theme-"] main input[placeholder="Search account" i].rounded-md.border,
+body[class*="theme-"] main input[placeholder="search transactions"].rounded-md.border {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: #fff !important;
+  background-image: none !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body[class*="theme-"] main input[data-pl-mlc-search-input].rounded-md.border:focus,
+body[class*="theme-"] main input[data-pl-mlc-search-input].rounded-md.border:focus-visible,
+body[class*="theme-"] input[data-pl-mlc-search-input].rounded-md.border:focus,
+body[class*="theme-"] input[data-pl-mlc-search-input].rounded-md.border:focus-visible,
+body[class*="theme-"] main input[placeholder="Search transactions" i].rounded-md.border:focus,
+body[class*="theme-"] main input[placeholder="Search transactions" i].rounded-md.border:focus-visible,
+body[class*="theme-"] main input[placeholder="Search notes" i].rounded-md.border:focus,
+body[class*="theme-"] main input[placeholder="Search notes" i].rounded-md.border:focus-visible,
+body[class*="theme-"] main input[placeholder="Search account" i].rounded-md.border:focus,
+body[class*="theme-"] main input[placeholder="Search account" i].rounded-md.border:focus-visible,
+body[class*="theme-"] main input[placeholder="search transactions"].rounded-md.border:focus,
+body[class*="theme-"] main input[placeholder="search transactions"].rounded-md.border:focus-visible {
+  outline: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  border-color: rgb(96 165 250) !important;
+  background-color: #fff !important;
+  background-image: none !important;
+}
+/* Mobile txn pager rows/page — theme black combobox border se bahar */
+body[class*="theme-"] main button[data-pl-mobile-txn-pager-select][role="combobox"],
+body[class*="theme-"] [data-pl-mobile-txn-pager] button[data-pl-mobile-txn-pager-select][role="combobox"] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: #fff !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+/* Mobile/APK entity txn detail — search + pagination ribbon (list/dashboard jaisa blue) */
+@media (max-width: 767px) {
+  body[class*="theme-"] main [data-pl-ledger-txn-page] input[placeholder="Search transactions" i],
+  body[class*="theme-"] [data-pl-ledger-txn-page] input[placeholder="Search transactions" i],
+  body[class*="theme-"] main [data-pl-ledger-txn-page] input[placeholder="Search notes" i],
+  body[class*="theme-"] [data-pl-ledger-txn-page] input[placeholder="Search notes" i] {
+    border-width: 1px !important;
+    border-style: solid !important;
+    border-color: rgb(147 197 253) !important;
+    background-color: #fff !important;
+    background-image: none !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+  }
+  body[class*="theme-"] main [data-pl-ledger-txn-page] input[placeholder="Search transactions" i]:focus,
+  body[class*="theme-"] main [data-pl-ledger-txn-page] input[placeholder="Search transactions" i]:focus-visible,
+  body[class*="theme-"] [data-pl-ledger-txn-page] input[placeholder="Search transactions" i]:focus,
+  body[class*="theme-"] [data-pl-ledger-txn-page] input[placeholder="Search transactions" i]:focus-visible,
+  body[class*="theme-"] main [data-pl-ledger-txn-page] input[placeholder="Search notes" i]:focus,
+  body[class*="theme-"] main [data-pl-ledger-txn-page] input[placeholder="Search notes" i]:focus-visible {
+    outline: none !important;
+    --tw-ring-shadow: 0 0 #0000 !important;
+    --tw-ring-offset-shadow: 0 0 #0000 !important;
+    border-color: rgb(96 165 250) !important;
+    background-color: #fff !important;
+  }
+  [data-pl-ledger-txn-page] .pl-mobile-txn-pager,
+  [data-pl-ledger-txn-page] [data-pl-mobile-txn-pager] {
+    height: 30px !important;
+    min-height: 30px !important;
+    max-height: 30px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    border-top-color: rgb(147 197 253 / 0.6) !important;
+    background-color: rgb(219 234 254 / 0.8) !important;
+    box-sizing: border-box !important;
+  }
+  [data-pl-ledger-txn-page] [data-pl-mobile-txn-pager] [data-pl-mobile-txn-pager-select],
+  [data-pl-mobile-txn-pager] [data-pl-mobile-txn-pager-select] {
+    border-width: 1px !important;
+    border-style: solid !important;
+    border-color: rgb(147 197 253) !important;
+    background-color: #fff !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+  }
+  [data-pl-ledger-txn-page] input[data-pl-ledger-txn-search],
+  [data-pl-ledger-txn-page] input[data-pl-mlc-search-input][data-pl-ledger-txn-search] {
+    height: 2.25rem !important;
+    min-height: 2.25rem !important;
+    max-height: 2.25rem !important;
+    border-width: 1px !important;
+    border-style: solid !important;
+    border-color: rgb(147 197 253) !important;
+    background-color: #fff !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+    box-sizing: border-box !important;
+  }
+  body[class*="theme-"] main [data-pl-mobile-txn-pager] button[data-pl-mobile-txn-pager-select][role="combobox"],
+  body[class*="theme-"] [data-pl-mobile-txn-pager] button[data-pl-mobile-txn-pager-select][role="combobox"] {
+    border-width: 1px !important;
+    border-style: solid !important;
+    border-color: rgb(147 197 253) !important;
+    background-color: #fff !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+  }
+  [data-pl-ledger-txn-page] .pl-ledger-desktop-footer-shell {
+    border-top-color: rgb(147 197 253 / 0.6) !important;
+    background-color: rgb(219 234 254 / 0.8) !important;
+  }
+  /* Pagination strip action footer (Receive/Pay…) ke upar flush */
+  [data-pl-ledger-txn-page] .pl-mobile-txn-pager-host {
+    margin-bottom: calc(env(safe-area-inset-bottom, 0px) + 2.25rem) !important;
+  }
+}
 body[class*="theme-"] main [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"],
 body[class*="theme-"] [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"],
 body[class*="theme-"] main [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"].rounded-md.border,
@@ -9453,6 +9976,32 @@ body[class*="theme-"] [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field]
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.55),
     0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+
+/* Merged mobile detail header — no-photo avatar = list dock chevron (border-blue-500 / bg-blue-100 / text-blue-600) */
+body[class*="theme-"] main [data-pl-mobile-detail-header-avatar-slot] button[data-pl-mobile-header-avatar-no-photo],
+body[class*="theme-"] main [data-pl-mobile-detail-merged-header] button[data-pl-mobile-header-avatar-no-photo] {
+  border-width: 1px !important;
+  border-color: rgb(59 130 246) !important;
+  background-color: rgb(219 234 254) !important;
+  color: rgb(37 99 235) !important;
+}
+body[class*="theme-"] main [data-pl-mobile-detail-header-avatar-slot] button[data-pl-mobile-header-avatar-no-photo] .pl-mobile-header-avatar-fallback {
+  background-color: rgb(219 234 254) !important;
+  color: rgb(37 99 235) !important;
+}
+
+/* Mobile entity closing balance — border (H line) se text 3px gap */
+[data-pl-mobile-txn-balance-row] {
+  padding-top: 3px !important;
+  padding-bottom: 3px !important;
+  box-sizing: border-box;
+}
+[data-pl-mobile-txn-balance-row] > p,
+[data-pl-mobile-txn-balance-row] > div > p {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  line-height: 1.15 !important;
 }
 body[class*="theme-"] main [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"]:focus,
 body[class*="theme-"] main [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"]:focus-visible,
@@ -10300,51 +10849,32 @@ html body[class*="theme-"] main .relative.rounded-lg.border.bg-card.border-2.sha
   color: #000000 !important;
 }
 
-/* Amount / balance chips copy THIS card's fill + border (2px). */
-html body [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="violet"] [data-pl-mobile-card-inner-pill],
-html body [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="violet"] [data-pl-mobile-card-inner-pill] {
-  border: 2px solid #ffffff !important;
-  background-color: #ffffff !important;
+/* Mobile txn card: amounts/balance — plain text only (no chip box; all card theme modes). */
+html body [data-pl-mobile-transaction-card] [data-pl-mobile-card-amount],
+html body [data-pl-mobile-transaction-card] [data-pl-mobile-card-amount] * {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
 }
-html body [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="violet"] [data-pl-mobile-card-inner-pill] {
-  border: 2px solid #d1d5db !important;
-  background-color: #e5e7eb !important;
+html body [data-pl-mobile-transaction-card] [data-pl-mobile-card-amount-actions] {
+  column-gap: 4px !important;
+  margin-right: -7px !important;
 }
-html body [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="default"] [data-pl-mobile-card-inner-pill],
-html body [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="default"] [data-pl-mobile-card-inner-pill] {
-  border: 2px solid rgb(52 211 153) !important;
-  background-color: rgb(236 253 245) !important;
-}
-html body [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="default"] [data-pl-mobile-card-inner-pill] {
-  border: 2px solid rgb(190 24 93) !important;
-  background-color: #fce7f3 !important;
-}
-html body [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="blue"] [data-pl-mobile-card-inner-pill],
-html body [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="blue"] [data-pl-mobile-card-inner-pill] {
-  border: 2px solid rgb(147 197 253) !important;
-  background-color: #dbeafe !important;
-}
-html body [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="blue"] [data-pl-mobile-card-inner-pill] {
-  border: 2px solid rgb(107 114 128) !important;
-  background-color: #e5e7eb !important;
-}
-html body [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="pink"] [data-pl-mobile-card-inner-pill],
-html body [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="pink"] [data-pl-mobile-card-inner-pill] {
-  border: 2px solid rgb(249 168 212) !important;
-  background-color: #fce7f3 !important;
-}
-html body [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="pink"] [data-pl-mobile-card-inner-pill] {
-  border: 2px solid rgb(251 191 36) !important;
-  background-color: #fef3c7 !important;
-}
-html body [data-pl-mobile-transaction-card="green"][data-pl-mobile-card-color="amber"] [data-pl-mobile-card-inner-pill],
-html body [data-pl-mobile-transaction-card="blue"][data-pl-mobile-card-color="amber"] [data-pl-mobile-card-inner-pill] {
-  border: 2px solid rgb(252 211 77) !important;
-  background-color: #fef3c7 !important;
-}
-html body [data-pl-mobile-transaction-card="pink"][data-pl-mobile-card-color="amber"] [data-pl-mobile-card-inner-pill] {
-  border: 2px solid #ffa500 !important;
-  background-color: #ffa500 !important;
+html body [data-pl-mobile-transaction-card] [data-pl-mobile-card-amount-actions] [data-pl-mobile-card-row-menu] {
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 /* Unapproved card border must use the 3-dot palette even when theme status rules force a 2px pink edge. */
@@ -10923,6 +11453,15 @@ html body
   border-bottom-width: 0 !important;
   background-color: rgb(219 234 254 / 0.8) !important;
 }
+html body
+  [data-pl-ledger-txn-page]
+  [data-pl-ledger-txn-fixed-summary]
+  [data-theme-table="transactions"]
+  tfoot[data-pl-txn-split-scroll-footer]
+  tr[data-pl-txn-footer-closing-row]
+  > td:last-child {
+  background-color: rgb(219 234 254 / 0.8) !important;
+}
 
 /* Overdue: exactly one full-width 1px separator, anchored only to the first cell. */
 html body
@@ -11021,6 +11560,17 @@ html[data-pl-fy-start-row-color]
   > td {
   background-color: var(--pl-fy-start-row-bg) !important;
 }
+/* Mobile FY merge start row (div, not table tr) */
+html[data-pl-fy-start-row-color] body [data-row="fiscal-partition-label"] {
+  background-color: var(--pl-fy-start-row-bg) !important;
+}
+/* Mobile txn list: FY end + start rows edge-to-edge (cancel Default 8px inset) */
+[data-pl-mobile-txn-list][data-pl-mobile-card-page-color="violet"] [data-pl-mobile-fy-partition] {
+  margin-left: -8px !important;
+  margin-right: -8px !important;
+  width: calc(100% + 16px) !important;
+  max-width: none !important;
+}
 html[data-pl-fy-end-row-color]
   body
   [data-theme-table="transactions"]
@@ -11051,4 +11601,15 @@ html body
   margin-top: 0 !important;
   padding-top: 0.25rem;
   padding-bottom: 0.25rem;
+}
+
+/* Mobile txn pager — rows/page select: blue border (theme ~6699 black combobox ke baad last win) */
+html body[class*="theme-"] main [data-pl-mobile-txn-pager] button[data-pl-mobile-txn-pager-select][role="combobox"],
+html body[class*="theme-"] main button[data-pl-mobile-txn-pager-select][role="combobox"].rounded-md.border,
+html body[class*="theme-"] main [data-pl-mobile-txn-pager] button.pl-mobile-txn-pager-select[role="combobox"] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(147 197 253) !important;
+  background-color: #fff !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
 }

@@ -11,20 +11,33 @@ export type InputProps = React.ComponentProps<"input"> & {
   listChromeSearch?: boolean
 }
 
-const inputShellClass = (listChrome?: boolean, listChromeSearch?: boolean, className?: string) =>
+const inputShellClass = (
+  listChrome?: boolean,
+  listChromeSearch?: boolean,
+  className?: string,
+  ledgerTxnSearch?: boolean
+) =>
   cn(
-    listChrome
-      ? cn(
-          "flex h-6 min-h-6 max-h-6 w-full min-w-0 max-w-full rounded-md border bg-background py-0 text-xs file:border-0 file:bg-transparent file:text-xs file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50",
-          listChromeSearch ? "border-blue-300 pl-7 pr-7" : "border-input px-2"
-        )
-      : "flex h-10 w-full min-w-0 max-w-full rounded-md border border-input bg-background px-3 py-2 text-sm file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50",
+    ledgerTxnSearch
+      ? "flex h-9 min-h-9 max-h-9 w-full min-w-0 max-w-full rounded-md border border-blue-300 bg-background py-0 pl-7 pr-2 text-sm file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+      : listChrome
+        ? cn(
+            "flex h-6 min-h-6 max-h-6 w-full min-w-0 max-w-full rounded-md border bg-background py-0 text-xs file:border-0 file:bg-transparent file:text-xs file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50",
+            listChromeSearch ? "border-blue-300 pl-7 pr-7" : "border-input px-2"
+          )
+        : "flex h-10 w-full min-w-0 max-w-full rounded-md border border-input bg-background px-3 py-2 text-sm file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50",
     className
   )
 
+const LEDGER_TXN_SEARCH_PLACEHOLDERS = new Set(["search transactions", "search notes"]);
+
 const Input = React.forwardRef<HTMLInputElement, InputProps>(
   ({ className, listChrome, listChromeSearch, type, onChange, onBlur, onFocus, ...props }, ref) => {
-    const inputType = listChromeSearch && !type ? "search" : type;
+    const placeholderKey = String(props.placeholder ?? "").trim().toLowerCase();
+    const ledgerTxnSearch = LEDGER_TXN_SEARCH_PLACEHOLDERS.has(placeholderKey);
+    const useListChrome = listChrome || ledgerTxnSearch;
+    const useListChromeSearch = listChromeSearch || ledgerTxnSearch;
+    const inputType = useListChromeSearch && !type ? "search" : type;
     const rawNumberInput = props["data-pl-raw-number"] != null;
     const amountNumberMode = type === "number" && !rawNumberInput;
 
@@ -94,8 +107,9 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
     return (
       <input
         type={inputType}
-        data-pl-mlc-search-input={listChromeSearch ? "" : undefined}
-        className={inputShellClass(listChrome, listChromeSearch, className)}
+        data-pl-mlc-search-input={useListChromeSearch ? "" : undefined}
+        data-pl-ledger-txn-search={ledgerTxnSearch ? "" : undefined}
+        className={inputShellClass(useListChrome, useListChromeSearch, className, ledgerTxnSearch)}
         ref={ref}
         {...props}
         onChange={(event) => {

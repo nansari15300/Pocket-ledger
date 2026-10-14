@@ -19,7 +19,7 @@ export const mlc = {
 
   /** Search + badge + add row */
   searchRow: "pl-mlc-search-row flex flex-shrink-0 items-center gap-1 border-b px-2 py-[4px]",
-  searchWrap: "relative min-w-0 flex-1",
+  searchWrap: "pl-mlc-search-wrap relative min-w-0 flex-1",
   /** Search input ke andar — `Input listChromeSearch` ke saath; pointer-events-none overlap fix */
   searchIcon:
     "pl-mlc-search-icon pointer-events-none absolute left-1.5 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground",

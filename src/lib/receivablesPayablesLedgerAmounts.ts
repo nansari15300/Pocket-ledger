@@ -9,6 +9,10 @@ import {
   hideUnapprovedTargetInterCompanyEntityLedger,
 } from "@/lib/interCompany/interCompanyLedgerAmounts";
 import { sumJournalAmountsForAccount } from "@/lib/journalLedgerAmounts";
+import {
+  salePurchaseDiscountExpenseLedgerAmounts,
+  salePurchaseTaxableAmount,
+} from "@/lib/salePurchaseDiscountAdjustment";
 
 export type RpLedgerContext = "account" | "party" | "staff" | "tax" | "expense";
 
@@ -120,7 +124,7 @@ function getIncomeExpenseRpLedgerDebitCredit(v: any, entityId: string): { debit:
 
   const taxableAmount =
     ["sale", "purchase"].includes(String(v?.type ?? "")) && toNum(v?.subTotal) > 0
-      ? toNum(v.subTotal) - toNum(v?.discount)
+      ? salePurchaseTaxableAmount(v)
       : amount;
 
   if (v?.type === "direct_expense" && (String(v?.toAccountId ?? "") === entityId || String(v?.expenseAccountId ?? "") === entityId)) {
@@ -149,6 +153,11 @@ function getIncomeExpenseRpLedgerDebitCredit(v: any, entityId: string): { debit:
   if (v?.type === "purchase") {
     const purchaseId = String(v?.purchaseAccountId ?? v?.expenseAccountId ?? "purchase_account");
     if (purchaseId === entityId) debit += taxableAmount;
+  }
+  if (v?.type === "sale" || v?.type === "purchase") {
+    const disc = salePurchaseDiscountExpenseLedgerAmounts(v, entityId);
+    debit += disc.debit;
+    credit += disc.credit;
   }
   if (isJournalLike(v) && v?.subType !== "add_salary" && Array.isArray(v?.entries)) {
     const journalAmt = sumJournalAmountsForAccount(v.entries, entityId);
@@ -205,4 +214,76 @@ export function computeRpLedgerAlignedBalance(
     balance += debit - credit;
   }
   return balance;
+}
+
+export type RpSeriesEntity = {
+  id: string;
+  openingBalance: number;
+  context: RpLedgerContext;
+  /** Dashboard "Opening Balance" synthetic row — sum se bahar. */
+  skip?: boolean;
+};
+
+function voucherInstantMs(date: unknown): number | null {
+  if (date == null) return null;
+  if (date instanceof Date) {
+    const t = date.getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  const d = date as { toDate?: () => Date };
+  if (typeof d.toDate === "function") {
+    const t = d.toDate().getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  const t = new Date(date as string).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+/**
+ * Chart outstanding: har din alag se poora R/P mat chalao.
+ * Entities × vouchers ek baar, phir din boundary par running balance.
+ */
+export function computeRpReceivePayAtDayEnds(args: {
+  entities: RpSeriesEntity[];
+  vouchers: any[];
+  /** Inclusive end instant (ms) per chart day, ascending. */
+  dayEndMs: number[];
+  processedTaxes?: any[];
+}): { receivable: number; payable: number }[] {
+  const { entities, vouchers, dayEndMs, processedTaxes = [] } = args;
+  const n = dayEndMs.length;
+  const out = Array.from({ length: n }, () => ({ receivable: 0, payable: 0 }));
+  if (!n || !entities.length) return out;
+
+  const dated: { t: number; v: any }[] = [];
+  for (const v of vouchers) {
+    const t = voucherInstantMs(v?.date);
+    if (t == null) continue;
+    dated.push({ t, v });
+  }
+  dated.sort((a, b) => a.t - b.t);
+
+  for (const entity of entities) {
+    if (entity.skip) continue;
+    const id = String(entity.id || "").trim();
+    if (!id) continue;
+    let bal = toNum(entity.openingBalance);
+    let i = 0;
+    for (let d = 0; d < n; d++) {
+      const end = dayEndMs[d];
+      while (i < dated.length && dated[i].t <= end) {
+        const { debit, credit } = getRpLedgerDebitCredit(
+          dated[i].v,
+          id,
+          entity.context,
+          processedTaxes
+        );
+        bal += debit - credit;
+        i++;
+      }
+      if (bal > 0.01) out[d].receivable += bal;
+      else if (bal < -0.01) out[d].payable += Math.abs(bal);
+    }
+  }
+  return out;
 }

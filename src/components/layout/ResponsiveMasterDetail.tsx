@@ -31,6 +31,8 @@ export function ResponsiveMasterDetail({
   mobileSelectionLabel,
   mobileSelectionLabelClassName,
   mobileDetailHeaderEnd,
+  /** Mobile: 2nd line (e.g. Last 10 Txns) — title row ke saath; avatar square stretch (party txn). */
+  mobileDetailHeaderSecondary,
   listChromeRouteKey,
   mobileTabsDocked,
   /** Optional override for list tabs wrapper row (report statement stacked bands). */
@@ -53,6 +55,7 @@ export function ResponsiveMasterDetail({
   mobileSelectionLabel?: React.ReactNode;
   mobileSelectionLabelClassName?: string;
   mobileDetailHeaderEnd?: React.ReactNode;
+  mobileDetailHeaderSecondary?: React.ReactNode;
   listChromeRouteKey?: MasterDetailListRouteKey;
   mobileTabsDocked?: boolean;
   tabsRowClassName?: string;
@@ -158,45 +161,107 @@ export function ResponsiveMasterDetail({
       return (
         <>
           <div className="h-full w-full overflow-hidden bg-background flex flex-col">
-            <div className={mdc.masterBackRow} {...mdcNoEdgeSwipeCapture} data-pl-mobile-back-row="">
-              <Button variant="ghost" size="icon" className={mdc.backBtn} onClick={onBackToList} aria-label="Back to list">
-                <ArrowLeft className={mdc.backIcon} />
-              </Button>
-              <div className="flex min-w-0 flex-1 items-center gap-1">
-                <h1 className={mdc.masterTitle}>{title}</h1>
-                {mobileSelectionLabel ? (
-                  <>
-                    <span className="text-muted-foreground/55 shrink-0 select-none" aria-hidden>
-                      ·
-                    </span>
-                    {typeof mobileSelectionLabel === "string" ? (
-                      <span
-                        className={cn(
-                          mdc.masterSelectionName,
-                          mobileSelectionLabelClassName ?? "text-muted-foreground"
+            {mobileDetailHeaderSecondary != null ? (
+              <div
+                className={cn(mdc.masterBackRow, "items-stretch gap-2 py-1")}
+                {...mdcNoEdgeSwipeCapture}
+                data-pl-mobile-back-row=""
+                data-pl-mobile-detail-merged-header=""
+              >
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn(mdc.backBtn, "self-center shrink-0")}
+                  onClick={onBackToList}
+                  aria-label="Back to list"
+                >
+                  <ArrowLeft className={mdc.backIcon} />
+                </Button>
+                <div className="flex min-w-0 flex-1 flex-col justify-center py-0.5">
+                  <div className="flex min-w-0 items-center gap-1 pb-[3px]">
+                    <h1 className={mdc.masterTitle}>{title}</h1>
+                    {mobileSelectionLabel ? (
+                      <>
+                        <span className="text-muted-foreground/55 shrink-0 select-none" aria-hidden>
+                          ·
+                        </span>
+                        {typeof mobileSelectionLabel === "string" ? (
+                          <span
+                            className={cn(
+                              mdc.masterSelectionName,
+                              "whitespace-normal line-clamp-2 leading-tight",
+                              mobileSelectionLabelClassName ?? "text-muted-foreground"
+                            )}
+                            title={mobileSelectionLabel}
+                          >
+                            {mobileSelectionLabel}
+                          </span>
+                        ) : (
+                          mobileSelectionLabel
                         )}
-                        title={mobileSelectionLabel}
-                      >
-                        {mobileSelectionLabel}
-                      </span>
-                    ) : (
-                      mobileSelectionLabel
-                    )}
-                  </>
+                      </>
+                    ) : null}
+                  </div>
+                  <div className="min-w-0 border-t border-border pt-[3px]">{mobileDetailHeaderSecondary}</div>
+                </div>
+                {mobileDetailHeaderEnd ? (
+                  <div
+                    className="flex shrink-0 self-stretch items-stretch pl-0.5"
+                    data-pl-mobile-detail-header-avatar-slot=""
+                  >
+                    <div className="aspect-square h-full min-h-[2.75rem] max-h-[4.75rem] w-auto min-w-[2.75rem]">
+                      {typeof mobileDetailHeaderEnd === "string" || typeof mobileDetailHeaderEnd === "number" ? (
+                        <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
+                          {mobileDetailHeaderEnd}
+                        </div>
+                      ) : (
+                        mobileDetailHeaderEnd
+                      )}
+                    </div>
+                  </div>
                 ) : null}
               </div>
-              {mobileDetailHeaderEnd ? (
-                <div className="flex-shrink-0">
-                  {typeof mobileDetailHeaderEnd === "string" || typeof mobileDetailHeaderEnd === "number" ? (
-                    <div className="text-xs text-muted-foreground whitespace-nowrap max-w-[45%] truncate text-right">
-                      {mobileDetailHeaderEnd}
-                    </div>
-                  ) : (
-                    mobileDetailHeaderEnd
-                  )}
+            ) : (
+              <div className={mdc.masterBackRow} {...mdcNoEdgeSwipeCapture} data-pl-mobile-back-row="">
+                <Button variant="ghost" size="icon" className={mdc.backBtn} onClick={onBackToList} aria-label="Back to list">
+                  <ArrowLeft className={mdc.backIcon} />
+                </Button>
+                <div className="flex min-w-0 flex-1 items-center gap-1">
+                  <h1 className={mdc.masterTitle}>{title}</h1>
+                  {mobileSelectionLabel ? (
+                    <>
+                      <span className="text-muted-foreground/55 shrink-0 select-none" aria-hidden>
+                        ·
+                      </span>
+                      {typeof mobileSelectionLabel === "string" ? (
+                        <span
+                          className={cn(
+                            mdc.masterSelectionName,
+                            mobileSelectionLabelClassName ?? "text-muted-foreground"
+                          )}
+                          title={mobileSelectionLabel}
+                        >
+                          {mobileSelectionLabel}
+                        </span>
+                      ) : (
+                        mobileSelectionLabel
+                      )}
+                    </>
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
+                {mobileDetailHeaderEnd ? (
+                  <div className="flex-shrink-0">
+                    {typeof mobileDetailHeaderEnd === "string" || typeof mobileDetailHeaderEnd === "number" ? (
+                      <div className="text-xs text-muted-foreground whitespace-nowrap max-w-[45%] truncate text-right">
+                        {mobileDetailHeaderEnd}
+                      </div>
+                    ) : (
+                      mobileDetailHeaderEnd
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            )}
             <div className="flex-1 min-h-0 overflow-hidden flex flex-col">{detailView}</div>
           </div>
           {mobileListSheet}

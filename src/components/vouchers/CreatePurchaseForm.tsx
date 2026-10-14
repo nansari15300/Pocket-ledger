@@ -69,7 +69,15 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_MOBILE_ATTACH_TILE_SLOT, VOUCHER_MOBILE_ATTACH_PREVIEW_CLASS, VOUCHER_MOBILE_ATTACH_ADD_SURFACE_CLASS, VOUCHER_DESKTOP_ATTACH_TILE_SLOT, VOUCHER_DESKTOP_ATTACH_PREVIEW_CLASS, VOUCHER_DESKTOP_ATTACH_ADD_SURFACE_CLASS } from "@/components/vouchers/voucherButtonStyles";
-import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherActionsClient";
+import {
+  getVoucherConvertOriginalId,
+  getVoucherEditConvertPresentation,
+  isVoucherEditConverting,
+  markVoucherConvertedInRecycleBin,
+} from "@/lib/voucherEditConvert";
+import { VoucherEditConvertConfirmDialog } from "@/components/vouchers/VoucherEditConvertConfirmDialog";
+import { useVoucherEditConvertSubmitGate } from "@/hooks/useVoucherEditConvertSubmitGate";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany, resolveCompanyVoucherPrefixList } from "@/lib/nextVoucherNumber";
 import { useAutoVoucherNumberFyDateSync } from "@/hooks/useAutoVoucherNumberFyDateSync";
@@ -141,6 +149,57 @@ import {
   lineItemIdFromComboboxValue,
   normalizeVoucherLineItemForForm,
 } from "@/components/vouchers/voucherLineItemCombobox";
+import { SalePurchaseTdsLineUi } from "@/components/vouchers/SalePurchaseTdsLineUi";
+import { SalePurchaseLineAmountInput } from "@/components/vouchers/SalePurchaseLineAmountInput";
+import { SalePurchaseDiscountAdjustmentRow } from "@/components/vouchers/SalePurchaseDiscountAdjustmentRow";
+import { SalePurchaseTotalsSummaryAmount } from "@/components/vouchers/SalePurchaseTotalsSummaryAmount";
+import {
+  normalizeSalePurchaseDiscountSign,
+  resolveAdjustmentExpenseAccountId,
+  salePurchaseDiscountNetEffect,
+} from "@/lib/salePurchaseDiscountAdjustment";
+import {
+  readCompanyDiscountExpenseDefault,
+  SALE_PURCHASE_TOTALS_SUMMARY_BOX_DESKTOP,
+  SALE_PURCHASE_TOTALS_SUMMARY_BOX_MOBILE,
+  SALE_PURCHASE_TOTALS_SUMMARY_ROW,
+} from "@/lib/salePurchaseDiscountDefault";
+import {
+  SALE_PURCHASE_TDS_PAIR_GRID,
+  salePurchaseLinePairTd,
+  salePurchaseLinePairTh,
+  salePurchasePairBodyCell,
+  salePurchasePairHeaderCell,
+} from "@/components/vouchers/salePurchaseLineDesktopPairs";
+import {
+  calcLineTdsAmount,
+  lineTaxableBaseForTds,
+  readStoredTdsDefault,
+} from "@/lib/tdsVoucher";
+import {
+  getSalePurchaseDesktopLineGridStyle,
+  SALE_PURCHASE_DESKTOP_LINE_GRID_CLASS,
+  SALE_PURCHASE_DESKTOP_LINE_BODY_CELL,
+  SALE_PURCHASE_DESKTOP_LINE_UNIFIED_GRID_DIVIDERS,
+  SALE_PURCHASE_DESKTOP_LINE_UNIFIED_GRID_FRAME,
+  SALE_PURCHASE_DESKTOP_LINE_TABLE_INNER,
+  SALE_PURCHASE_VOUCHER_DESKTOP_BODY,
+  mapSalePurchaseLineTaxComboboxOptions,
+  resolveSalePurchaseLineColumnLabels,
+  SALE_PURCHASE_LINE_DESKTOP_COMBOBOX_PROPS,
+  SALE_PURCHASE_LINE_ITEM_COMBOBOX_PROPS,
+  SALE_PURCHASE_DESKTOP_LINE_ITEM_CELL,
+  SALE_PURCHASE_LINE_NUMBER_INPUT_CLASS,
+  SALE_PURCHASE_DESKTOP_LINE_NUMBER_CELL,
+  SALE_PURCHASE_LINE_TAX_COMBOBOX_PROPS,
+  salePurchaseLineNumberInputStyle,
+  salePurchaseLineMoneyInputStyle,
+  formatSalePurchaseLineMoneyDisplay,
+  SALE_PURCHASE_LINE_MONEY_INPUT_FIELD_PROPS,
+  SALE_PURCHASE_DESKTOP_LINE_DELETE_HEADER,
+  SALE_PURCHASE_DESKTOP_LINE_DELETE_CELL,
+  SALE_PURCHASE_DESKTOP_LINE_DELETE_BUTTON_CLASS,
+} from "@/lib/salePurchaseLineColumnLabels";
 
 
 const fileSchema = z.object({
@@ -161,6 +220,8 @@ const lineItemSchema = z.object({
   amount: z.coerce.number(),
   taxAccountId: optionalLineString(),
   taxAmount: z.coerce.number().optional(),
+  tdsAccountId: optionalLineString(),
+  tdsAmount: z.coerce.number().optional(),
   isTaxInclusive: z.boolean(),
   /** Purchase: checkbox beside rate — untick to lock rate to item price. */
   allowManualRate: z.boolean().default(true),
@@ -179,7 +240,10 @@ const formSchema = z.object({
   subTotal: z.coerce.number(),
   totalPurchasePrice: z.coerce.number().optional(),
   discount: z.coerce.number().optional(),
+  discountSign: z.enum(["+", "-"]).optional(),
+  discountExpenseAccountId: z.string().optional(),
   tax: z.coerce.number().min(0).optional(),
+  tds: z.coerce.number().min(0).optional(),
   total: z.coerce.number(),
   unassignedFile: z.any().optional(), // Keep unassignedFile data
   isApproved: z.boolean().optional(),
@@ -217,10 +281,7 @@ function formatPurchaseFormValidationErrors(errors: FieldErrors<PurchaseFormValu
 
 // MAX_ATTACHMENTS is now from permissions: fileAttachmentLimits.maxFileCount
 
-// Desktop line grid: Unit (3rd track) Qty + 15px — header/cell thoda wider; baaki Qty jaisa.
-const COLS =
-  "grid grid-cols-[minmax(220px,2.2fr)_minmax(8.5rem,0.52fr)_minmax(calc(8.5rem+15px),0.52fr)_minmax(8.5rem,0.52fr)_minmax(3.25rem,0.34fr)_minmax(12rem,1.25fr)_minmax(8.5rem,0.58fr)_minmax(8.5rem,0.62fr)_40px] gap-0";
-const TH_BASE = "px-2 py-2 bg-muted/50 font-semibold text-sm box-border";
+const TH_BASE = "px-2 py-2 bg-muted/50 font-semibold text-sm box-border whitespace-nowrap";
 const TD_BASE = "px-2 py-1 box-border";
 const FLAT_INPUT = "h-9 w-full border-0 shadow-none focus-visible:ring-0 rounded-none";
 const FLAT_SELECT_TRIGGER = "h-9 w-full border-0 shadow-none focus-visible:ring-0 rounded-none";
@@ -239,6 +300,8 @@ function createEmptyPurchaseLineItem(type: "item" | "service" = "item") {
     amount: 0,
     taxAccountId: "",
     taxAmount: 0,
+    tdsAccountId: "",
+    tdsAmount: 0,
     isTaxInclusive: false,
     allowManualRate: true,
   };
@@ -258,7 +321,10 @@ function getInitialFormValues(voucher?: any): PurchaseFormValues {
       subTotal: 0,
       totalPurchasePrice: 0,
       discount: 0,
+      discountSign: "-",
+      discountExpenseAccountId: "",
       tax: 0,
+      tds: 0,
       total: 0,
       unassignedFile: null, // सुरुमा null राख्ने
       isApproved: false,
@@ -280,7 +346,10 @@ function getInitialFormValues(voucher?: any): PurchaseFormValues {
     dueDate: dueDate ?? undefined,
     overdueImportant: voucher.overdueImportant === true,
     discount: voucher.discount || 0,
+    discountSign: normalizeSalePurchaseDiscountSign(voucher.discountSign),
+    discountExpenseAccountId: String(voucher.discountExpenseAccountId ?? ""),
     tax: voucher.tax || 0,
+    tds: voucher.tds || 0,
     fileUrls: attachmentEntries,
     files: attachmentEntries.map((entry) => ({
       file: typeof File !== "undefined" && entry instanceof File ? entry : null,
@@ -348,6 +417,11 @@ export function CreatePurchaseForm({
   const [items, setItems] = useState<Item[]>([]);
   const { toast } = useToast();
   const { company, companyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
+  const lineColLabels = useMemo(() => resolveSalePurchaseLineColumnLabels(company), [company]);
+  const lineTaxComboboxOptions = useMemo(
+    () => mapSalePurchaseLineTaxComboboxOptions(processedTaxes),
+    [processedTaxes]
+  );
   const { user, customUser } = useAuth();
   const { role, can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const { dateSystem, formatCurrency, formatCurrencyForPrint, formatDate, formatDateBS } = useDate();
@@ -388,6 +462,7 @@ export function CreatePurchaseForm({
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
   const lastResetVoucherIdRef = useRef<string | null>(null);
   const [taxRowIndex, setTaxRowIndex] = useState<number | null>(null);
+  const [tdsRowIndex, setTdsRowIndex] = useState<number | null>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDueDateCalendarOpen, setIsDueDateCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -418,9 +493,17 @@ export function CreatePurchaseForm({
   // Keep "Read me" help controlled from this form so purchase link section can open the shared multilingual guide.
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
   const isEditing = !!voucher?.id;
-  // Use preserved source type so edit convert (Sale -> Purchase) correctly triggers voucher-no refresh.
-  const isEditingAndConverting =
-    Boolean(voucher?.id) && String((voucher as any)?._sourceVoucherType || voucher?.type || "") !== "purchase";
+  const isEditingAndConverting = isVoucherEditConverting(voucher, "purchase");
+  const convertPresentation = useMemo(
+    () => getVoucherEditConvertPresentation(voucher as Record<string, unknown> | undefined, "purchase"),
+    [voucher]
+  );
+  const {
+    convertConfirmOpen,
+    setConvertConfirmOpen,
+    gateConvertSubmit,
+    confirmConvertSubmit,
+  } = useVoucherEditConvertSubmitGate(isEditingAndConverting);
   
   const form = useForm<PurchaseFormValues>({
     resolver: zodResolver(formSchema) as Resolver<PurchaseFormValues>,
@@ -431,6 +514,10 @@ export function CreatePurchaseForm({
     control: form.control,
     name: "lineItems",
   });
+  const desktopLineGridStyle = useMemo(
+    () => getSalePurchaseDesktopLineGridStyle(lineColLabels, fields.length > 1),
+    [lineColLabels, fields.length]
+  );
 
   const [itemType, setItemType] = useState<"item" | "service">("item");
   const isCompanyAdmin = role === "owner" || customUser?.role === "CompanyAdmin" || customUser?.role === "SuperAdmin";
@@ -452,6 +539,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const isFormDirty = editBaselineHydrated && isFormDirtyRaw;
   const watchedLineItems = useWatch({ control: form.control, name: "lineItems", defaultValue: [] });
   const watchedDiscount = useWatch({ control: form.control, name: "discount" });
+  const watchedDiscountSign = useWatch({ control: form.control, name: "discountSign" });
   const partyId = form.watch("partyId");
   const lineItemTaxId = watchedLineItems[0]?.taxAccountId;
   
@@ -498,6 +586,26 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         .map((p: any) => ({ value: p.id, label: p.name })),
     [expenseAccounts, expenseGroupIds]
   );
+  const discountExpenseAccountOptions = useMemo(
+    () =>
+      expenseAccounts
+        .filter(
+          (a: any) =>
+            (a.groupId && expenseGroupIds.has(a.groupId)) || String((a as any).type || "").toLowerCase() === "expense"
+        )
+        .map((p: any) => ({ value: p.id, label: p.name })),
+    [expenseAccounts, expenseGroupIds]
+  );
+  useEffect(() => {
+    const current = String(form.getValues("discountExpenseAccountId") ?? "").trim();
+    if (current) return;
+    const companyDefault = readCompanyDiscountExpenseDefault("purchase", company);
+    const adjId =
+      companyDefault || resolveAdjustmentExpenseAccountId(expenseAccounts as any[]);
+    if (adjId) {
+      form.setValue("discountExpenseAccountId", adjId, { shouldDirty: false, shouldValidate: false });
+    }
+  }, [company, expenseAccounts, form]);
   // All unique units from all items — merged with `company.customUnits` for blank-item rows
   const allCompanyUnits = useMemo(() => {
     const units = new Set<string>();
@@ -922,7 +1030,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
     let subTotal = 0;
     let totalTax = 0;
+    let totalTds = 0;
     let totalPurchasePrice = 0;
+    const tdsRateMap = new Map<string, number>(processedTaxes.map((t) => [t.id, Number(t.rate) / 100]));
 
     (watchedLineItems || []).forEach((item, index) => {
       const qty = Number(item?.quantity ?? 0);
@@ -958,16 +1068,32 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
       subTotal += amount;
       totalTax += taxAmount;
+      const tdsAmount = calcLineTdsAmount(lineTaxableBaseForTds({ amount }), String(item?.tdsAccountId ?? ""), tdsRateMap);
+      totalTds += tdsAmount;
+      const currTdsAmt = Number(form.getValues(`lineItems.${index}.tdsAmount`) ?? 0);
+      if (currTdsAmt !== tdsAmount) {
+        form.setValue(`lineItems.${index}.tdsAmount`, tdsAmount, {
+          shouldDirty: false,
+          shouldTouch: false,
+          shouldValidate: false,
+        });
+      }
     });
 
     subTotal = round2(subTotal);
     totalTax = round2(totalTax);
-    const discount = round2(Number(watchedDiscount ?? 0));
-    const total = round2(subTotal - discount + totalTax);
+    totalTds = round2(totalTds);
+    const discountMag = round2(Math.max(0, Number(watchedDiscount ?? 0)));
+    const discountNet = salePurchaseDiscountNetEffect(
+      normalizeSalePurchaseDiscountSign(watchedDiscountSign),
+      discountMag
+    );
+    const total = round2(subTotal + discountNet + totalTax);
 
     const currSubTotal = Number(form.getValues("subTotal") ?? 0);
     const currTotalPurchase = Number(form.getValues("totalPurchasePrice") ?? 0);
     const currTax = Number(form.getValues("tax") ?? 0);
+    const currTds = Number(form.getValues("tds") ?? 0);
     const currTotal = Number(form.getValues("total") ?? 0);
 
     if (currSubTotal !== subTotal) {
@@ -979,10 +1105,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (currTax !== totalTax) {
       form.setValue("tax", totalTax, { shouldDirty: false, shouldTouch: false, shouldValidate: false });
     }
+    if (currTds !== totalTds) {
+      form.setValue("tds", totalTds, { shouldDirty: false, shouldTouch: false, shouldValidate: false });
+    }
     if (currTotal !== total) {
       form.setValue("total", total, { shouldDirty: false, shouldTouch: false, shouldValidate: false });
     }
-  }, [watchedLineItems, watchedDiscount, processedTaxes, form, allProcessedItems]);
+  }, [watchedLineItems, watchedDiscount, watchedDiscountSign, processedTaxes, form, allProcessedItems]);
 
   /* ------------------------------ HANDLERS -------------------------------- */
 
@@ -1001,9 +1130,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const processAndSaveRef = useRef<((data: any, opts?: any) => Promise<any>) | null>(null);
 
   // Validated payload `data` से save — `getValues()` से date कभी-कभी miss होकर coerce में "आज" भर जाता था
-  const handleFormSubmit = useCallback(
+  const runValidatedSubmit = useCallback(
     (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
-      e.preventDefault();
       if (submitInFlightRef.current || isLoading) return;
       submitInFlightRef.current = true;
       void (async () => {
@@ -1022,6 +1150,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       })();
     },
     [form, isLoading]
+  );
+
+  const handleFormSubmit = useCallback(
+    (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
+      e.preventDefault();
+      gateConvertSubmit(() => runValidatedSubmit(e, options));
+    },
+    [gateConvertSubmit, runValidatedSubmit]
   );
 
    const processAndSave = useCallback(
@@ -1092,18 +1228,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           ...li,
           quantity: Number(li.quantity),
           taxAmount: li.taxAmount || 0,
+          tdsAccountId: String(li.tdsAccountId ?? "").trim(),
+          tdsAmount: round2(Number(li.tdsAmount ?? 0)),
           // Bina item = blank; select karke save par id Firestore me persist ho.
           itemId: String(li.itemId ?? "").trim(),
         }));
+        const tdsTotal = round2(
+          lineItemsWithTax.reduce((s, li) => s + (Number(li.tdsAmount) || 0), 0)
+        );
 
         const submissionData = {
           ...data,
           lineItems: lineItemsWithTax,
+          tds: tdsTotal,
           type: "purchase",
         };
 
-        const originalVoucherIdToDelete: string | null =
-          isEditingAndConverting && voucher?.id ? String(voucher.id) : null;
+        const originalVoucherIdToDelete: string | null = isEditingAndConverting
+          ? getVoucherConvertOriginalId(voucher)
+          : null;
         const idArgForFirestore = resolveVoucherIdForSave({
           savedVoucherId,
           originalVoucherIdToDelete,
@@ -1166,13 +1309,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             docId = savedDoc.id;
             if (isMounted.current) setSavedVoucherId(docId);
             if (originalVoucherIdToDelete) {
-                // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
-                await patchVoucherFields(companyId, originalVoucherIdToDelete, {
-                    isDeleted: true,
-                    deletedAt: voucherRecycleBinDeletedAt(),
-                    convertedToType: 'purchase',
-                    convertedToVoucherNumber: finalData.voucherNumber,
-                });
+              await markVoucherConvertedInRecycleBin(companyId, originalVoucherIdToDelete, {
+                convertedToType: "purchase",
+                convertedToVoucherNumber: finalData.voucherNumber,
+                convertedToVoucherId: docId,
+                deletedBy: user.uid,
+              });
             }
         } else {
             throw new Error("Failed to save voucher and get ID.");
@@ -1496,9 +1638,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (taxRowIndex !== null) {
       form.setValue(`lineItems.${taxRowIndex}.taxAccountId`, newTaxId);
     }
+    if (tdsRowIndex !== null) {
+      form.setValue(`lineItems.${tdsRowIndex}.tdsAccountId`, newTaxId);
+    }
     setIsCreateTaxOpen(false);
     setTaxRowIndex(null);
+    setTdsRowIndex(null);
   };
+
+  const openCreateTdsTaxDialog = useCallback((lineIndex: number, prefillName?: string) => {
+    setTdsRowIndex(lineIndex);
+    setTaxRowIndex(null);
+    setIsCreateTaxOpen(true);
+    setTimeout(() => {
+      document.dispatchEvent(new CustomEvent("prefill-create-tax-name", { detail: prefillName }));
+    }, 100);
+  }, []);
 
   /* ------------------------- DERIVED MEMOS / WATCHES ---------------------- */
 
@@ -1512,10 +1667,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   // Keep ref current so handleFormSubmit always calls latest version
   processAndSaveRef.current = processAndSave;
 
-  const [subTotal, total, tax, totalPurchasePrice] = useWatch({
+  const [subTotal, total, tax, tds, totalPurchasePrice] = useWatch({
     control: form.control,
-    name: ["subTotal", "total", "tax", "totalPurchasePrice"],
+    name: ["subTotal", "total", "tax", "tds", "totalPurchasePrice"],
   });
+
+  useEffect(() => {
+    const def = readStoredTdsDefault("purchase", companyId || "");
+    if (!def) return;
+    (form.getValues("lineItems") || []).forEach((li: { tdsAccountId?: string }, i: number) => {
+      if (!String(li?.tdsAccountId || "").trim()) {
+        form.setValue(`lineItems.${i}.tdsAccountId`, def, { shouldDirty: false, shouldTouch: false });
+      }
+    });
+  }, [companyId, form, fields.length]);
   
   const filteredItems = useMemo(() => items.filter((i) => i.type === itemType && !i.isDeleted), [items, itemType]);
   
@@ -1802,13 +1967,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           >
             <div
               className={cn(
-                "space-y-6 min-w-0 w-full bg-slate-100",
-                !isMobile && "min-w-[1320px] px-[2px]",
-                isMobile ? "max-w-full overflow-x-hidden [&>*]:max-w-full" : "",
-                "[&>*]:min-w-0"
+                "space-y-6 bg-slate-100 px-[2px]",
+                isMobile
+                  ? "min-w-0 w-full max-w-full overflow-x-hidden [&>*]:max-w-full [&>*]:min-w-0"
+                  : cn(SALE_PURCHASE_VOUCHER_DESKTOP_BODY)
               )}
             >
-              <div className="rounded-lg border border-sky-400 bg-sky-100 p-1">
+              <div className={cn("rounded-lg border border-sky-400 bg-sky-100 p-1", !isMobile && "w-full")}>
               {/* PC View: All 4 Fields in Same Row with Responsive Wrapping */}
               {isMobile ? (
                 <>
@@ -2014,7 +2179,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     const hasDateAD = dateSystem === 'AD' || dateSystem === 'Both';
                     const colCount = 2 + (hasPrefix ? 1 : 0) + 1 + (hasDateBS ? 1 : 0) + (hasDateAD ? 1 : 0);
                     return (
-                      <div className="grid gap-2 w-full min-w-0 max-w-full items-end" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}>
+                      <div className="grid gap-2 w-full items-end" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(max-content, 1fr))` }}>
                         <FormField
                           control={form.control}
                           name="partyId"
@@ -2181,8 +2346,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
               {/* Line Items Grid (same green section treatment as Sale form). */}
                 <div className={cn(
-                  "border border-emerald-300/80 rounded-lg relative bg-emerald-50 p-1 min-w-0",
-                  isMobile ? "w-[calc(100%-4px)] mx-auto px-[2px] overflow-hidden" : "px-[2px] overflow-x-visible"
+                  "border border-emerald-300/80 rounded-lg relative bg-emerald-50 p-1",
+                  isMobile ? "w-[calc(100%-4px)] mx-auto px-[2px] overflow-hidden min-w-0" : "w-full px-[2px] overflow-visible"
                 )}>
                 <div className={cn("mb-2", isMobile && "flex justify-start")}>
                   <Tabs value={itemType} onValueChange={(v) => handleItemTypeTabChange(v as "item" | "service")} className={cn(isMobile && "w-auto")}>
@@ -2412,10 +2577,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   <FormControl>
                                     <div className="[&_button]:h-9 [&_button]:text-xs">
                                       <Combobox
-                                        options={processedTaxes.map((t) => ({
-                                          value: t.id,
-                                          label: `${t.name} @ ${t.rate}%`,
-                                        }))}
+                                        options={lineTaxComboboxOptions}
                                         value={field.value}
                                         disabled={itemFieldsDisabled}
                                         onChange={(val, newName) => {
@@ -2429,8 +2591,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                             field.onChange(val === "none" ? "" : val);
                                           }
                                         }}
-                                        placeholder="Tax"
+                                        placeholder={lineColLabels.tax}
                                         addNewLabel="+ Add New Tax"
+                                        {...SALE_PURCHASE_LINE_TAX_COMBOBOX_PROPS}
                                       />
                                     </div>
                                   </FormControl>
@@ -2439,6 +2602,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             />
                           </div>
                         </div>
+
+                        <SalePurchaseTdsLineUi
+                          control={form.control}
+                          index={index}
+                          side="purchase"
+                          companyId={companyId || ""}
+                          processedTaxes={processedTaxes}
+                          taxableAmount={lineTaxableBaseForTds({ amount: Number(watchedLineItems?.[index]?.amount ?? 0) })}
+                          disabled={itemFieldsDisabled}
+                          onRequestCreateTdsAccount={(prefillName) => openCreateTdsTaxDialog(index, prefillName)}
+                          variant="mobile"
+                          taxableLabel={lineColLabels.taxable}
+                          tdsLabel={lineColLabels.tds}
+                          tdsAmountLabel={lineColLabels.tdsAmount}
+                          tdsPlaceholder={lineColLabels.tds}
+                        />
 
                         {/* Row 4: Tax Inc, Tax Amt and Amount */}
                         <div className="flex gap-[2px] px-[2px]">
@@ -2479,7 +2658,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               name={`lineItems.${index}.taxAmount`}
                               render={({ field }: any) => (
                                 <FormItem>
-                                  <FormLabel className="text-xs">Tax Amt.</FormLabel>
+                                  <FormLabel className="text-xs">{lineColLabels.taxAmount}</FormLabel>
                                   <FormControl>
                                     <Input
                                       type="number"
@@ -2498,7 +2677,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               name={`lineItems.${index}.amount`}
                               render={({ field }: any) => (
                                 <FormItem>
-                                  <FormLabel className="text-xs">Amount</FormLabel>
+                                  <FormLabel className="text-xs">{lineColLabels.amount}</FormLabel>
                                   <FormControl>
                                     <Input
                                       type="number"
@@ -2546,11 +2725,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </div>
                 ) : (
                   // PC: wide layout ka horizontal scroll form ke scroll wale parent div me (footer fixed).
-                  <div className="w-full min-w-0">
-                    <div className={cn(COLS, "divide-x divide-border border-b")}>
-                        <div className={cn(TH_BASE, "flex items-center justify-between gap-1 min-w-0")}>
+                  <div className={SALE_PURCHASE_DESKTOP_LINE_TABLE_INNER}>
+                    <div
+                      className={cn(
+                        SALE_PURCHASE_DESKTOP_LINE_GRID_CLASS,
+                        SALE_PURCHASE_DESKTOP_LINE_UNIFIED_GRID_DIVIDERS,
+                        SALE_PURCHASE_DESKTOP_LINE_UNIFIED_GRID_FRAME
+                      )}
+                      style={desktopLineGridStyle}
+                    >
+                    <div className="contents">
+                        <div className={cn(TH_BASE, SALE_PURCHASE_DESKTOP_LINE_ITEM_CELL, "flex items-center justify-between gap-1 whitespace-nowrap")}>
                           {/* Desktop: Item Copy visible ho to Item header red highlight. */}
-                          <span className={cn("truncate", desktopHeaderCopyItem && "text-red-600 font-semibold")}>Item</span>
+                          <span className={cn(desktopHeaderCopyItem && "text-red-600 font-semibold")}>Item</span>
                           {desktopHeaderCopyItem && (
                             <Button
                               type="button"
@@ -2567,20 +2754,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <div className={cn(TH_BASE, "text-center")}>Qty</div>
                         <div className={cn(TH_BASE, "text-center")}>Unit</div>
                         <div className={cn(TH_BASE, "text-center")}>Rate</div>
-                        <div className={cn(TH_BASE, "flex flex-col items-center justify-center gap-0.5 px-1 text-center")}>
-                          <Checkbox
-                            checked={(form.watch("lineItems") || []).every((li) => li.isTaxInclusive)}
-                            onCheckedChange={handleToggleAllInclusive}
-                            id="all-inclusive"
-                          />
-                          {/* Header: Tax copy mismatch ho to Tax Inc label red; resolved case me normal. */}
-                          <label htmlFor="all-inclusive" className={cn("cursor-pointer select-none text-[10px] leading-tight font-semibold text-foreground", desktopHeaderCopyTax && "text-red-600")}>
-                            Tax Inc.
-                          </label>
+                        <div className={cn(TH_BASE, "text-right text-xs")}>{lineColLabels.taxable}</div>
+                        <div className={salePurchaseLinePairTh(TH_BASE, SALE_PURCHASE_TDS_PAIR_GRID)}>
+                          <div className={salePurchasePairHeaderCell("left")}>{lineColLabels.tds}</div>
+                          <div className={salePurchasePairHeaderCell("right")}>{lineColLabels.tdsAmount}</div>
                         </div>
                         <div className={cn(TH_BASE, "flex items-center gap-1 min-w-0 flex-nowrap justify-end")}>
-                          {/* Desktop: Tax Copy visible ho to Tax header red highlight. */}
-                          <span className={cn("truncate font-semibold text-foreground min-w-0 flex-1 text-left", desktopHeaderCopyTax && "text-red-600")}>Tax</span>
+                          <span className={cn("truncate font-semibold text-foreground min-w-0 flex-1 text-left text-xs", desktopHeaderCopyTax && "text-red-600")}>{lineColLabels.tax}</span>
                           {desktopHeaderCopyTax && (
                             <Button
                               type="button"
@@ -2594,35 +2774,44 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             </Button>
                           )}
                         </div>
-                        <div className={cn(TH_BASE, "text-right")}>Tax Amt.</div>
-                        <div className={cn(TH_BASE, "text-right")}>Amount</div>
-                        <div className={TH_BASE} />
-                      </div>
+                        <div className={cn(TH_BASE, "flex flex-col items-center justify-center gap-0.5 px-1 text-center")}>
+                          <Checkbox
+                            checked={(form.watch("lineItems") || []).every((li) => li.isTaxInclusive)}
+                            onCheckedChange={handleToggleAllInclusive}
+                            id="all-inclusive"
+                          />
+                          <label htmlFor="all-inclusive" className={cn("cursor-pointer select-none text-[10px] leading-tight font-semibold text-foreground", desktopHeaderCopyTax && "text-red-600")}>
+                            Tax Inc.
+                          </label>
+                        </div>
+                        <div className={cn(TH_BASE, "text-right text-xs")}>{lineColLabels.taxAmount}</div>
+                        <div className={cn(TH_BASE, "text-right text-xs")}>{lineColLabels.amount}</div>
+                        {fields.length > 1 ? <div className={SALE_PURCHASE_DESKTOP_LINE_DELETE_HEADER} /> : null}
+                    </div>
                       {/* Desktop Rows */}
                       {fields.map((line, index) => {
                         const selectedItem = allProcessedItems.find(
                           (i) => i.id === form.getValues(`lineItems.${index}.itemId`)
                         );
-                        // When item selected: use item's units; else use all company units (creatable)
                         const unitOptions =
                           selectedItem
                             ? (selectedItem.unitConversions as any[])?.flatMap((uc) => [uc.fromUnit, uc.toUnit])?.filter((v, i, a) => a.indexOf(v) === i && v) || []
                             : companyUnitsMerged;
-                        // New voucher: never lock item fields; existing: lock when payment linked
                         const itemFieldsDisabled = (voucher?.id || savedVoucherId) ? (hasItemEditLock || deleteDisabledWhenLinked) : false;
 
                         return (
-                          <div key={line.id} className={cn(COLS, "divide-x divide-border border-t")}>
-                        <div className={cn(TD_BASE, "min-w-0")}>
+                          <div className="contents" key={line.id}>
+                            <div className={cn(TD_BASE, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL, SALE_PURCHASE_DESKTOP_LINE_ITEM_CELL)}>
                           <FormField
                               control={form.control}
                               name={`lineItems.${index}.itemId`}
                               render={({ field }: any) => (
-                                <FormItem className="min-w-0 w-full">
+                                <FormItem className="w-full min-w-[2.5in] max-w-none space-y-0">
                                 <Combobox
                                   options={itemOptions}
                                   value={comboboxValueFromLineItemId(field.value)}
                                   disabled={itemFieldsDisabled}
+                                  {...SALE_PURCHASE_LINE_ITEM_COMBOBOX_PROPS}
                                   onChange={(val, newName) => {
                                     if (val === "add-new") {
                                       setIsCreateItemOpen(true);
@@ -2657,26 +2846,26 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           />
                         </div>
 
-                        <div className={cn(TD_BASE, "flex items-center justify-end")}>
+                        <div className={cn(SALE_PURCHASE_DESKTOP_LINE_NUMBER_CELL, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
                           <FormField
                             control={form.control}
                             name={`lineItems.${index}.quantity`}
                             render={({ field }: any) => (
-                              <FormControl>
-                                <Input type="number" {...field} className={cn(FLAT_INPUT, "text-right tabular-nums")} disabled={itemFieldsDisabled} />
+                              <FormControl className="shrink-0">
+                                <Input type="number" {...field} style={salePurchaseLineNumberInputStyle(field.value)} className={SALE_PURCHASE_LINE_NUMBER_INPUT_CLASS} disabled={itemFieldsDisabled} />
                               </FormControl>
                             )}
                           />
                         </div>
 
-                        <div className={TD_BASE}>
+                        <div className={cn(TD_BASE, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
                           <FormField
                             control={form.control}
                             name={`lineItems.${index}.unit`}
                             render={({ field }: any) => (
-                              <FormItem className="w-full">
+                              <FormItem className="w-max min-w-max max-w-none space-y-0">
                                 <FormControl>
-                                  <div className="w-full [&_button]:h-9 [&_button]:w-full [&_button]:text-xs">
+                                  <div className="[&_button]:h-9 [&_button]:text-xs">
                                     <Combobox
                                       options={[
                                         ...unitOptions.map((u) => ({ value: u, label: u })),
@@ -2684,6 +2873,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                       ]}
                                       value={field.value}
                                       disabled={itemFieldsDisabled}
+                                      {...SALE_PURCHASE_LINE_DESKTOP_COMBOBOX_PROPS}
                                       onChange={(val, newName) => {
                                         const unitVal = val === "add-new" ? (newName || "").trim() : val;
                                         field.onChange(unitVal);
@@ -2696,7 +2886,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                       }}
                                       placeholder="Unit"
                                       addNewLabel="+ Add unit"
-                                      triggerLabelMinCh={12}
                                     />
                                   </div>
                                 </FormControl>
@@ -2705,22 +2894,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           />
                         </div>
 
-                        <div className={cn(TD_BASE, "flex items-center justify-end")}>
+                        <div className={cn(SALE_PURCHASE_DESKTOP_LINE_NUMBER_CELL, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL, "gap-[2px]")}>
                           <FormField
                             control={form.control}
                             name={`lineItems.${index}.rate`}
                             render={({ field }: any) => (
-                              <div className="flex w-full min-w-0 items-center justify-end gap-1">
+                              <div className="flex w-full min-w-0 items-stretch justify-end gap-[2px]">
                                 {/* Purchase table rate — Tooltip bahar, FormControl andar Input par */}
                                 <TooltipProvider delayDuration={0}>
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                      <FormControl>
+                                      <FormControl className="shrink-0">
                                         <Input
                                           type="number"
                                           {...field}
                                           disabled={purchaseRateDisabled(index, itemFieldsDisabled)}
-                                          className={cn(FLAT_INPUT, "min-w-0 flex-1 text-right tabular-nums", purchaseRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
+                                          style={salePurchaseLineNumberInputStyle(field.value)}
+                                          className={cn(SALE_PURCHASE_LINE_NUMBER_INPUT_CLASS, purchaseRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
                                           title={
                                             !canEditRates
                                               ? "No role permission to edit rates"
@@ -2770,107 +2960,140 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           />
                         </div>
 
-                        <div className={cn(TD_BASE, "flex items-center justify-center")}>
-                          <FormField
-                            control={form.control}
-                            name={`lineItems.${index}.isTaxInclusive`}
-                            render={({ field }: any) => (
-                              <FormItem className="flex items-center shrink-0 m-0 space-y-0">
-                                <FormControl>
-                                  <Checkbox checked={field.value} onCheckedChange={field.onChange} disabled={itemFieldsDisabled} />
-                                </FormControl>
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                        <div className={cn(TD_BASE, "min-w-0")}>
-                          <FormField
-                            control={form.control}
-                            name={`lineItems.${index}.taxAccountId`}
-                            render={({ field }: any) => (
-                              <FormItem className="w-full min-w-0">
-                                <Combobox
-                                  options={processedTaxes.map((t) => ({
-                                    value: t.id,
-                                    label: `${t.name} @ ${t.rate}%`,
-                                  }))}
-                                  value={field.value}
+                            <div className={cn(SALE_PURCHASE_DESKTOP_LINE_NUMBER_CELL, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
+                              <SalePurchaseTdsLineUi
+                                control={form.control}
+                                index={index}
+                                side="purchase"
+                                companyId={companyId || ""}
+                                processedTaxes={processedTaxes}
+                                taxableAmount={lineTaxableBaseForTds({ amount: Number(watchedLineItems?.[index]?.amount ?? 0) })}
+                                disabled={itemFieldsDisabled}
+                                variant="desktop-taxable"
+                                flatInputClass={FLAT_INPUT}
+                                taxableLabel={lineColLabels.taxable}
+                                tdsLabel={lineColLabels.tds}
+                                tdsAmountLabel={lineColLabels.tdsAmount}
+                                tdsPlaceholder={lineColLabels.tds}
+                              />
+                            </div>
+                            <div className={cn(salePurchaseLinePairTd(TD_BASE, SALE_PURCHASE_TDS_PAIR_GRID), SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
+                              <SalePurchaseTdsLineUi
+                                control={form.control}
+                                index={index}
+                                side="purchase"
+                                companyId={companyId || ""}
+                                processedTaxes={processedTaxes}
+                                taxableAmount={lineTaxableBaseForTds({ amount: Number(watchedLineItems?.[index]?.amount ?? 0) })}
+                                disabled={itemFieldsDisabled}
+                                onRequestCreateTdsAccount={(prefillName) => openCreateTdsTaxDialog(index, prefillName)}
+                                variant="desktop-tds-pair"
+                                flatInputClass={FLAT_INPUT}
+                                taxableLabel={lineColLabels.taxable}
+                                tdsLabel={lineColLabels.tds}
+                                tdsAmountLabel={lineColLabels.tdsAmount}
+                                tdsPlaceholder={lineColLabels.tds}
+                              />
+                            </div>
+                            <div className={cn(TD_BASE, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
+                              <FormField
+                                control={form.control}
+                                name={`lineItems.${index}.taxAccountId`}
+                                render={({ field }: any) => (
+                                  <FormItem className="w-max min-w-max max-w-none space-y-0">
+                                    <Combobox
+                                      options={lineTaxComboboxOptions}
+                                      value={field.value}
+                                      disabled={itemFieldsDisabled}
+                                      {...SALE_PURCHASE_LINE_DESKTOP_COMBOBOX_PROPS}
+                                      onChange={(val, newName) => {
+                                        if (val === "add-new") {
+                                          setTaxRowIndex(index);
+                                          setIsCreateTaxOpen(true);
+                                          setTimeout(() => {
+                                            document.dispatchEvent(new CustomEvent("prefill-create-tax-name", { detail: newName }));
+                                          }, 100);
+                                        } else {
+                                          field.onChange(val === "none" ? "" : val);
+                                        }
+                                      }}
+                                      placeholder={lineColLabels.tax}
+                                      addNewLabel="+ Add New Tax"
+                                    />
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
+                            <div className={cn(TD_BASE, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL, "flex items-center justify-center")}>
+                              <FormField
+                                control={form.control}
+                                name={`lineItems.${index}.isTaxInclusive`}
+                                render={({ field }: any) => (
+                                  <FormItem className="flex items-center shrink-0 m-0 space-y-0">
+                                    <FormControl>
+                                      <Checkbox checked={field.value} onCheckedChange={field.onChange} disabled={itemFieldsDisabled} />
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
+                            <div className={cn(SALE_PURCHASE_DESKTOP_LINE_NUMBER_CELL, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
+                              <FormField
+                                control={form.control}
+                                name={`lineItems.${index}.taxAmount`}
+                                render={({ field }: any) => (
+                                  <FormControl className="inline-flex w-max shrink-0 justify-end">
+                                    <Input
+                                      {...SALE_PURCHASE_LINE_MONEY_INPUT_FIELD_PROPS}
+                                      name={field.name}
+                                      onBlur={field.onBlur}
+                                      ref={field.ref}
+                                      value={formatSalePurchaseLineMoneyDisplay(field.value)}
+                                      style={salePurchaseLineMoneyInputStyle(field.value)}
+                                      className={cn(SALE_PURCHASE_LINE_NUMBER_INPUT_CLASS, "bg-muted")}
+                                    />
+                                  </FormControl>
+                                )}
+                              />
+                            </div>
+                            <div className={cn(SALE_PURCHASE_DESKTOP_LINE_NUMBER_CELL, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
+                              <FormField
+                                control={form.control}
+                                name={`lineItems.${index}.amount`}
+                                render={({ field }: any) => (
+                                  <FormControl className="shrink-0">
+                                    <SalePurchaseLineAmountInput
+                                      name={field.name}
+                                      value={field.value}
+                                      readOnly
+                                      onBlur={field.onBlur}
+                                      onRawChange={() => {}}
+                                    />
+                                  </FormControl>
+                                )}
+                              />
+                            </div>
+                            {fields.length > 1 ? (
+                              <div className={cn(SALE_PURCHASE_DESKTOP_LINE_DELETE_CELL, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className={SALE_PURCHASE_DESKTOP_LINE_DELETE_BUTTON_CLASS}
                                   disabled={itemFieldsDisabled}
-                                  onChange={(val, newName) => {
-                                    if (val === "add-new") {
-                                      setTaxRowIndex(index);
-                                      setIsCreateTaxOpen(true);
-                                      setTimeout(() => {
-                                          document.dispatchEvent(new CustomEvent('prefill-create-tax-name', { detail: newName }));
-                                      }, 100);
-                                    } else {
-                                      field.onChange(val === "none" ? "" : val);
-                                    }
-                                  }}
-                                  placeholder="Tax"
-                                  addNewLabel="+ Add New Tax"
-                                />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-
-                        {/* Tax Amount */}
-                        <div className={cn(TD_BASE, "flex items-center justify-end")}>
-                          <FormField
-                            control={form.control}
-                            name={`lineItems.${index}.taxAmount`}
-                            render={({ field }: any) => (
-                              <FormControl>
-                                <Input
-                                  type="number"
-                                  {...field}
-                                  readOnly
-                                  className={cn(FLAT_INPUT, "bg-muted text-right tabular-nums")}
-                                />
-                              </FormControl>
-                            )}
-                          />
-                        </div>
-
-                        {/* Amount */}
-                        <div className={cn(TD_BASE, "flex items-center justify-end")}>
-                          <FormField
-                            control={form.control}
-                            name={`lineItems.${index}.amount`}
-                            render={({ field }: any) => (
-                              <FormControl>
-                                <Input
-                                  type="number"
-                                  {...field}
-                                  readOnly
-                                  className={cn(FLAT_INPUT, "bg-muted text-right tabular-nums")}
-                                />
-                              </FormControl>
-                            )}
-                          />
-                        </div>
-
-                        {/* Remove Line */}
-                        <div className={cn(TD_BASE, "flex items-center")}>
-                          {fields.length > 1 && (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              disabled={itemFieldsDisabled}
-                              onClick={() => remove(index)}
-                              aria-label="Remove line"
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                                  onClick={() => remove(index)}
+                                  aria-label="Remove line"
+                                >
+                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                </Button>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
                       {/* Add Line Button */}
-                      <div className="border-t px-2 py-2">
+                      <div className="border-t border-black px-2 py-2">
                         <Button
                           type="button"
                           variant="outline"
@@ -2889,38 +3112,48 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               {isMobile ? (
                 <div className="grid grid-cols-2 gap-3 w-[calc(100%-4px)] mx-auto px-[2px]">
                   {/* Mobile: items ke niche turant Sub Total block — Sale form jaisa flow */}
-                  <div className="col-span-2 bg-cyan-50 border-cyan-300/80 px-[2px] py-2 rounded-lg border space-y-1.5 w-full">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs">Sub Total:</span>
-                      <span className="text-xs font-medium">{(subTotal || 0).toFixed(2)}</span>
+                  <div className={SALE_PURCHASE_TOTALS_SUMMARY_BOX_MOBILE}>
+                    <div className={SALE_PURCHASE_TOTALS_SUMMARY_ROW}>
+                      <span className="text-xs shrink-0">Sub Total:</span>
+                      <SalePurchaseTotalsSummaryAmount value={subTotal || 0} className="text-xs font-medium" />
                     </div>
-                    <FormField
+                    <SalePurchaseDiscountAdjustmentRow
                       control={form.control}
-                      name="discount"
-                      render={({ field }: any) => (
-                        <FormItem className="flex flex-row justify-between items-center gap-2 space-y-0">
-                          <FormLabel className="text-xs shrink-0">Discount:</FormLabel>
-                          <FormControl>
-                            <Input type="number" className="w-20 border rounded p-1 text-right text-xs h-7 shrink-0" {...field} disabled={deleteDisabledWhenLinked} />
-                          </FormControl>
-                        </FormItem>
-                      )}
+                      side="purchase"
+                      disabled={deleteDisabledWhenLinked}
+                      expenseAccountOptions={discountExpenseAccountOptions}
+                      variant="mobile"
                     />
-                    <div className="flex justify-between items-center pt-1 border-t">
-                      <div className="flex items-center gap-1">
-                        <FormLabel className="text-xs">Tax:</FormLabel>
+                    <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "pt-1 border-t")}>
+                      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                        <FormLabel className="text-xs shrink-0">Tax:</FormLabel>
                         {selectedTax && (
-                          <FormLabel className={cn("text-[10px] font-semibold", selectedTax.balance < 0 ? "text-red-600" : "text-green-600")}>
+                          <FormLabel className={cn("text-[10px] font-semibold truncate min-w-0", selectedTax.balance < 0 ? "text-red-600" : "text-green-600")}>
                             {selectedTax.balance < 0 ? `Pay: ${formatCurrencyForPrint(Math.abs(selectedTax.balance), { noSuffix: true, noAnimation: true })}` : `Rec: ${formatCurrencyForPrint(selectedTax.balance, { noSuffix: true, noAnimation: true })}`}
                           </FormLabel>
                         )}
                       </div>
-                      <span className="text-xs font-medium">{(tax || 0).toFixed(2)}</span>
+                      <SalePurchaseTotalsSummaryAmount value={tax || 0} className="text-xs font-medium" />
                     </div>
-                    <div className="flex justify-between items-center pt-1 border-t text-base font-bold">
-                      <span className="text-sm">Total:</span>
-                      <span className="text-red-600 text-sm">{(total || 0).toFixed(2)}</span>
+                    {(tds || 0) > 0 && (
+                      <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "pt-1")}>
+                        <span className="text-xs shrink-0">TDS:</span>
+                        <SalePurchaseTotalsSummaryAmount value={tds || 0} className="text-xs font-medium" tdsDeduction />
+                      </div>
+                    )}
+                    <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "pt-1 border-t text-base font-bold")}>
+                      <span className="text-sm shrink-0">{(tds || 0) > 0 ? "Invoice Total:" : "Total:"}</span>
+                      <SalePurchaseTotalsSummaryAmount value={total || 0} className="text-red-600 text-sm font-bold" />
                     </div>
+                    {(tds || 0) > 0 && (
+                      <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "pt-1 border-t font-semibold")}>
+                        <span className="text-sm shrink-0">Net Payable:</span>
+                        <SalePurchaseTotalsSummaryAmount
+                          value={Math.max(0, (total || 0) - (tds || 0))}
+                          className="text-sm font-semibold"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {/* Mobile: narration + due date grouped container color (same as Sale form). */}
@@ -3247,7 +3480,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="grid w-full grid-cols-1 md:grid-cols-2 gap-6">
                   {/* Desktop: Left: Narration + Due Date + Files */}
                   <div className="space-y-4">
                     <div className="rounded-lg border border-amber-300/80 bg-amber-50 p-3">
@@ -3471,38 +3704,48 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   {/* Desktop: two containers — (1) Sub total to Total, (2) Link for bill wise — 15px gap, same as mobile */}
                   <div className="flex flex-col gap-[15px] w-full">
                     {/* Container 1: Sub total se total tak */}
-                    <div className="space-y-4 border border-cyan-300/80 rounded-lg px-[2px] py-4 bg-cyan-50 w-full">
-                      <div className="flex justify-between items-center font-medium">
-                        <span>Sub Total:</span>
-                        <span>{(subTotal || 0).toFixed(2)}</span>
+                    <div className={SALE_PURCHASE_TOTALS_SUMMARY_BOX_DESKTOP}>
+                      <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "font-medium")}>
+                        <span className="shrink-0">Sub Total:</span>
+                        <SalePurchaseTotalsSummaryAmount value={subTotal || 0} />
                       </div>
-                      <FormField
+                      <SalePurchaseDiscountAdjustmentRow
                         control={form.control}
-                        name="discount"
-                        render={({ field }: any) => (
-                          <FormItem className="flex justify-between items-center">
-                            <FormLabel>Discount:</FormLabel>
-                            <FormControl>
-                              <Input type="number" className="w-32 text-right" {...field} disabled={deleteDisabledWhenLinked} />
-                            </FormControl>
-                          </FormItem>
-                        )}
+                        side="purchase"
+                        disabled={deleteDisabledWhenLinked}
+                        expenseAccountOptions={discountExpenseAccountOptions}
+                        variant="desktop"
                       />
-                      <div className="flex justify-between items-center">
-                        <div className="flex items-center gap-2">
-                          <FormLabel>Tax:</FormLabel>
+                      <div className={SALE_PURCHASE_TOTALS_SUMMARY_ROW}>
+                        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+                          <FormLabel className="shrink-0">Tax:</FormLabel>
                           {selectedTax && (
-                            <FormLabel className={cn("text-xs font-semibold", selectedTax.balance < 0 ? 'text-red-600' : 'text-green-600')}>
+                            <FormLabel className={cn("text-xs font-semibold truncate min-w-0", selectedTax.balance < 0 ? 'text-red-600' : 'text-green-600')}>
                               {selectedTax.balance < 0 ? `Payable: ${formatCurrencyForPrint(Math.abs(selectedTax.balance), { noSuffix: true, noAnimation: true })}` : `Receivable: ${formatCurrencyForPrint(selectedTax.balance, { noSuffix: true, noAnimation: true })}`}
                             </FormLabel>
                           )}
                         </div>
-                        <span className="w-32 text-right">{(tax || 0).toFixed(2)}</span>
+                        <SalePurchaseTotalsSummaryAmount value={tax || 0} />
                       </div>
-                      <div className="flex justify-between items-center text-lg font-bold border-t pt-2 mt-2">
-                        <span>Total:</span>
-                        <span className="text-red-600">{(total || 0).toFixed(2)}</span>
+                      {(tds || 0) > 0 && (
+                        <div className={SALE_PURCHASE_TOTALS_SUMMARY_ROW}>
+                          <FormLabel className="shrink-0">TDS:</FormLabel>
+                          <SalePurchaseTotalsSummaryAmount value={tds || 0} tdsDeduction />
+                        </div>
+                      )}
+                      <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "text-lg font-bold border-t pt-2 mt-2")}>
+                        <span className="shrink-0">{(tds || 0) > 0 ? "Invoice Total:" : "Total:"}</span>
+                        <SalePurchaseTotalsSummaryAmount value={total || 0} className="text-red-600 font-bold" />
                       </div>
+                      {(tds || 0) > 0 && (
+                        <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "font-semibold border-t pt-2")}>
+                          <span className="shrink-0">Net Payable:</span>
+                          <SalePurchaseTotalsSummaryAmount
+                            value={Math.max(0, (total || 0) - (tds || 0))}
+                            className="font-semibold"
+                          />
+                        </div>
+                      )}
                     </div>
                     {/* Container 2: Link for bill wise — same table/style as Payment Out. Shown for both new and edit so user can link before/after save. */}
                     {shouldShowLinkButton && (
@@ -3622,8 +3865,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="button" onClick={() => { setPendingLinkAllocations(null); onVoucherAction?.('cancelled'); }} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
-                  {isLoading ? "..." : "Save"}
+                <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty && !isEditingAndConverting)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                  {isLoading ? "..." : isEditingAndConverting ? "Convert" : "Save"}
                 </Button>
                 <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isAttachmentProcessing || isApproving || editingDisabled) : (isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
                   {isApproving ? "..." : (showSaveAndApproveOnCreate && !voucher?.id ? "Save & Approve" : (isFormDirty ? "Save & Approve" : "Approve"))}
@@ -3651,9 +3894,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty && !isEditingAndConverting)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save
+                    {isEditingAndConverting ? "Convert" : "Save"}
                   </Button>
                   <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isAttachmentProcessing || isApproving || editingDisabled) : (isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
@@ -3665,6 +3908,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           </div>
         </form>
       </Form>
+
+      {convertPresentation ? (
+        <VoucherEditConvertConfirmDialog
+          open={convertConfirmOpen}
+          onOpenChange={setConvertConfirmOpen}
+          bannerText={convertPresentation.bannerText}
+          onConfirm={confirmConvertSubmit}
+        />
+      ) : null}
       
       <CreatePartyDialog
         onPartyCreated={(id) => {

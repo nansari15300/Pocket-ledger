@@ -246,6 +246,11 @@ export type Company = {
     /** ISO 4217 — country se default; company profile currency dropdown se override. */
     currencyCode?: string;
     displaySettings?: DisplaySettings;
+    /** Sale/Purchase line grid column labels (Voucher Settings — company-wide). */
+    salePurchaseLineColumnLabels?: import("@/lib/salePurchaseLineColumnLabels").SalePurchaseLineColumnLabels;
+    /** Default discount adjustment expense account — sale/purchase forms (company-wide). */
+    saleDiscountExpenseAccountId?: string;
+    purchaseDiscountExpenseAccountId?: string;
     isApprovalEnabled?: boolean;
     isOwned?: boolean;
     planId?: string;

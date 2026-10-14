@@ -62,7 +62,7 @@ import {
   searchParamsStringForModalClose,
 } from "@/lib/modalUrlSync";
 import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
-import { mdc, mdcNoEdgeSwipeCapture, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
+import { mdc, mdcMobileTxnBalanceRowData, mdcNoEdgeSwipeCapture, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import AdCalendar from "@/components/ui/ad-calendar";
 import {
@@ -171,7 +171,7 @@ import { ledgerMasterDateRangeLabel } from "@/lib/ledgerMasterDefaultView";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { toast } from "sonner";
-import { chromePillActive } from "@/lib/chromePillButton";
+import { LedgerHeaderTogglePill } from "@/components/ui/LedgerHeaderTogglePill";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
   BillWiseAutoLinkPromptDialog,
@@ -206,6 +206,7 @@ export function StaffDetails({
   mobileFooterVariant = "ledger",
   mobileReportStickyTitle,
   ledgerPresentationMode = "default",
+  hideMobilePeriodLabelRow = false,
 }: {
   staff: Staff;
   allGroups?: StaffGroup[];
@@ -224,6 +225,8 @@ export function StaffDetails({
   mobileFooterVariant?: "ledger" | "report";
   mobileReportStickyTitle?: string;
   ledgerPresentationMode?: import("@/lib/nestedLedgerMasterEditPresentation").MasterEditPresentationMode;
+  /** Mobile merged master-detail header already shows period label */
+  hideMobilePeriodLabelRow?: boolean;
 }) {
   const nestedLedgerNoteDialogShell =
     ledgerPresentationMode === "nested-ledger"
@@ -320,6 +323,7 @@ export function StaffDetails({
   const {
     blockNewTransactions: blockStaffNewTransactions,
     freezeOverlay: staffFreezeOverlay,
+    closingBalanceRowActions: staffClosingBalanceRowActions,
     closingBalanceActions: staffClosingBalanceActions,
   } = useMasterAccountFreezeDetailsChrome({
     companyId,
@@ -1152,26 +1156,27 @@ export function StaffDetails({
         </div>
       ) : null}
       <MobileDetailSummaryCollapsible>
-      {/* Row 2: Last 10 Txns or date range label */}
-      <div className="flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5">
-        <span className="text-[11px] font-medium leading-tight text-muted-foreground">
-          {dateRangeLabel}
-        </span>
-        {dateRange != null &&
-          (dateRange.from != null || dateRange.to != null) && (
-            <button
-              type="button"
-              onClick={() => handleDateRangeChange(undefined)}
-              className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
-              aria-label="Clear date filter"
-            >
-              <XCircle className="h-3.5 w-3.5" />
-            </button>
-          )}
-      </div>
+      {!hideMobilePeriodLabelRow ? (
+        <div className="flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5">
+          <span className="text-[11px] font-medium leading-tight text-muted-foreground">
+            {dateRangeLabel}
+          </span>
+          {dateRange != null &&
+            (dateRange.from != null || dateRange.to != null) && (
+              <button
+                type="button"
+                onClick={() => handleDateRangeChange(undefined)}
+                className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
+                aria-label="Clear date filter"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+              </button>
+            )}
+        </div>
+      ) : null}
       {/* Balance - same as bank mobile: amount + Dr/Cr */}
-      <div className={mdc.balanceRow}>
-        <p className={cn(mdc.balanceTextCenter, headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+      <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
+        <p className={cn(mdc.mobileTxnBalanceTextLg, headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
           {headerClosingBalance === 0
             ? "Settled Up"
             : formatCurrency(headerClosingBalance, { showDrCr: true })}
@@ -1344,6 +1349,7 @@ export function StaffDetails({
           debitColumnHeaderLabel={taxDetailsMode ? "Tax" : undefined}
           creditColumnHeaderLabel={taxDetailsMode ? "Salary" : undefined}
           scrollOnlyTransactions
+          closingBalanceRowActions={staffClosingBalanceRowActions}
           closingBalanceActions={staffClosingBalanceActions}
           {...statementCheck.tableProps}
         />
@@ -1791,17 +1797,12 @@ export function StaffDetails({
               Add Note
             </Button>
             {canUseStaffTaxDetails && (
-              <Button
-                variant="chromePill"
-                size="sm"
-                type="button"
-                aria-pressed={taxDetailsMode}
-                onClick={toggleTaxDetailsMode}
-                className={cn(LEDGER_HEADER_PILL_CN, taxDetailsMode && chromePillActive)}
-                data-theme-detail="tax-details"
-              >
-                Tax Details
-              </Button>
+              <LedgerHeaderTogglePill
+                label="Tax Details"
+                active={taxDetailsMode}
+                onToggle={toggleTaxDetailsMode}
+                groupAriaLabel="Tax details view"
+              />
             )}
             {onShowAll && (
               <Button variant="chromePill" size="sm" onClick={onShowAll} className={LEDGER_HEADER_PILL_CN}>
@@ -1881,6 +1882,7 @@ export function StaffDetails({
                   debitColumnHeaderLabel={taxDetailsMode ? "Tax" : undefined}
                   creditColumnHeaderLabel={taxDetailsMode ? "Salary" : undefined}
                   scrollOnlyTransactions
+                  closingBalanceRowActions={staffClosingBalanceRowActions}
                   closingBalanceActions={staffClosingBalanceActions}
                   {...statementCheck.tableProps}
                 />

@@ -34,7 +34,7 @@ import { SpendWiseBlinkInfoDialog } from "../vouchers/SpendWiseBlinkInfoDialog";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
-import { mdc } from "@/lib/mobileDetailChrome";
+import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import {
   clearPlModalParentQueryBackup,
@@ -172,6 +172,7 @@ export function AccountGroupDetails({
   onBack,
   userNames,
   groupMemberFilterId = null,
+  hideMobilePeriodLabelRow = false,
 }: { 
   group: AccountGroup, 
   allGroups: AccountGroup[],
@@ -184,6 +185,7 @@ export function AccountGroupDetails({
   userNames?: Record<string, string>;
   onBack?: () => void;
   groupMemberFilterId?: string | null;
+  hideMobilePeriodLabelRow?: boolean;
 }) {
   useFyLoadOnDateRangeChange(dateRange);
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
@@ -233,7 +235,11 @@ export function AccountGroupDetails({
     [selectedMemberAccount?.fileUrl, selectedMemberAccount?.id]
   );
 
-  const { memberFreezeOverlay, memberClosingBalanceActions } = useGroupMemberAccountLedgerChrome({
+  const {
+    memberFreezeOverlay,
+    memberClosingBalanceRowActions,
+    memberClosingBalanceActions,
+  } = useGroupMemberAccountLedgerChrome({
     companyId,
     collection: BANK_ACCOUNT_FREEZE_COLLECTION,
     patchCollection: "bank_accounts",
@@ -1362,27 +1368,29 @@ export function AccountGroupDetails({
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden w-full">
           {/* Mobile: scroll + pager above fixed footer */}
           <MobileDetailSummaryCollapsible>
-          <div className="flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5">
-            <span className="text-[11px] font-medium leading-tight text-muted-foreground">
-              {!dateRange || (dateRange.from == null && dateRange.to == null)
-                ? rowsPerPage > 0
-                  ? `Last ${rowsPerPage} Txns`
-                  : "All Txns"
-                : dateRangeLabel}
-            </span>
-            {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
-              <button
-                type="button"
-                onClick={() => onDateRangeChange(undefined)}
-                className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
-                aria-label="Clear date filter"
-              >
-                <XCircle className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-          <div className={mdc.balanceRow}>
-            <p className={cn(mdc.balanceTextCenter, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+          {!hideMobilePeriodLabelRow ? (
+            <div className="flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5">
+              <span className="text-[11px] font-medium leading-tight text-muted-foreground">
+                {!dateRange || (dateRange.from == null && dateRange.to == null)
+                  ? rowsPerPage > 0
+                    ? `Last ${rowsPerPage} Txns`
+                    : "All Txns"
+                  : dateRangeLabel}
+              </span>
+              {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
+                <button
+                  type="button"
+                  onClick={() => onDateRangeChange(undefined)}
+                  className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
+                  aria-label="Clear date filter"
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          ) : null}
+          <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
+            <p className={cn(mdc.mobileTxnBalanceTextLg, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
               {isBalanceMasked ? "*****" : formatCurrency(closingBalance, { showDrCr: true })}
             </p>
           </div>
@@ -1478,6 +1486,7 @@ export function AccountGroupDetails({
               periodDr={isBalanceMasked ? undefined : mobilePageLedgerStats.periodDrForPage}
               periodCr={isBalanceMasked ? undefined : mobilePageLedgerStats.periodCrForPage}
               closingBalance={isBalanceMasked ? undefined : mobilePageLedgerStats.closingForPage}
+              closingBalanceRowActions={memberClosingBalanceRowActions}
               closingBalanceActions={memberClosingBalanceActions}
               isBalanceMasked={isBalanceMasked}
               scrollOnlyTransactions
@@ -1925,6 +1934,7 @@ export function AccountGroupDetails({
               periodDr={isBalanceMasked ? undefined : desktopPageLedgerStats.periodDrForPage}
               periodCr={isBalanceMasked ? undefined : desktopPageLedgerStats.periodCrForPage}
               closingBalance={isBalanceMasked ? undefined : desktopPageLedgerStats.closingForPage}
+              closingBalanceRowActions={memberClosingBalanceRowActions}
               closingBalanceActions={memberClosingBalanceActions}
               isBalanceMasked={isBalanceMasked}
               disableLayoutAnimation={disableTableLayoutAnimation}

@@ -25,7 +25,7 @@ export function LedgerTxnScrollColumn({
       <div className={LEDGER_TXN_SCROLL_INNER_CN}>
         {header ? <div className={LEDGER_TXN_SCROLL_HEADER_CN}>{header}</div> : null}
         <div className={LEDGER_TXN_TABLE_HOST_CN}>{table}</div>
-        {footer}
+        {footer ? <div className="w-full min-w-full shrink-0">{footer}</div> : null}
       </div>
     </div>
   );

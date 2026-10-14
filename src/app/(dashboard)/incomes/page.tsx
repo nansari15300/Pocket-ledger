@@ -67,10 +67,10 @@ import { PermissionButton } from "@/components/permission";
 import usePermissions from "@/hooks/usePermissions";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
-import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
-import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
-import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { MobileMasterDetailHeaderAvatar } from "@/components/entity/MobileMasterDetailHeaderAvatar";
+import { MobileMasterDetailHeaderDateSecondary } from "@/components/entity/MobileMasterDetailHeaderDateSecondary";
+import { mobileEntityDetailShellTitle } from "@/lib/mobileDetailChrome";
 import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 import { moveExpenseAccountToGroup } from "@/lib/expenseGroupAccountMove";
 import { createMasterEntityGroupTreeMoveHandler } from "@/lib/createMasterEntityGroupTreeMoveHandler";
@@ -237,44 +237,28 @@ function IncomeExpensePageContent() {
     processedExpenseAccounts,
     mobileIncomesSelectionLabelClassName,
   ]);
+  const incomesMasterDetailTitle = activeView === "groups" ? "Income & Expense Groups" : "Income & Expense";
+  const incomesShellTitle = useMemo(
+    () =>
+      mobileEntityDetailShellTitle(isMobile, Boolean(selected), incomesMasterDetailTitle, "Account details"),
+    [isMobile, selected, incomesMasterDetailTitle]
+  );
+  const mobileIncomesHeaderSecondary = useMemo((): ReactNode | undefined => {
+    if (!isMobile || !selected) return undefined;
+    const range = activeView === "groups" ? groupDetailsDateRange : accountDetailsDateRange;
+    const onClear =
+      activeView === "groups"
+        ? () => setGroupDetailsDateRange(undefined)
+        : () => setAccountDetailsDateRange(undefined);
+    return <MobileMasterDetailHeaderDateSecondary dateRange={range} onClear={onClear} />;
+  }, [isMobile, selected, activeView, accountDetailsDateRange, groupDetailsDateRange]);
   const mobileIncomesDetailHeaderAvatar = useMemo(() => {
     if (!isMobile || !selected) return null;
     const selectedEntity = selected as ExpenseAccount | ExpenseGroup;
     const name = selectedEntity.name || "Account";
     const attachmentUrl = trimEntityFileUrlForPreview((selectedEntity as any).fileUrl);
-    const initials = name
-      .split(" ")
-      .filter(Boolean)
-      .map((part) => part[0])
-      .slice(0, 2)
-      .join("")
-      .toUpperCase() || "NA";
-    const openPreview = () => {
-      // Income/Expense mobile header avatar: tap opens full preview.
-      if (!attachmentUrl) return;
-      void openAttachmentInApp(attachmentUrl, { title: name });
-    };
-    return (
-      <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
-        <EntityFileAttachmentHover fileUrl={attachmentUrl} triggerClassName="inline-flex rounded-full">
-          <button
-            type="button"
-            className="inline-flex h-full w-full items-center justify-center rounded-full"
-            onClick={openPreview}
-            aria-label={`Preview ${name} avatar`}
-          >
-            <ResolvedEntityAvatar
-              className="h-full w-full text-xs"
-              src={attachmentUrl ?? undefined}
-              alt={name}
-              fallbackText={initials}
-            />
-          </button>
-        </EntityFileAttachmentHover>
-      </div>
-    );
+    return <MobileMasterDetailHeaderAvatar name={name} attachmentUrl={attachmentUrl} />;
   }, [isMobile, selected]);
-  const incomesMasterDetailTitle = activeView === "groups" ? "Income & Expense Groups" : "Income & Expense";
   useSyncMasterDetailHeaderId("incomes", selectedAccount?.id ?? selectedGroupRaw?.id ?? null);
   const incomesMenuEnabled = featureConfig.incomes !== false;
   const incomesListEnabled = incomesMenuEnabled && featureConfig.incomes_list !== false;
@@ -966,7 +950,8 @@ function IncomeExpensePageContent() {
             onAccountDeleted={() => setSelected(null)} 
             dateRange={accountDetailsDateRange} 
             onDateRangeChange={setAccountDetailsDateRange} 
-            userNames={{ ...vouchersUserNames, ...userNames }} 
+            userNames={{ ...vouchersUserNames, ...userNames }}
+            hideMobilePeriodLabelRow={isMobile}
         />
       )}
       {!detailsDisabled && activeView === 'groups' && selectedGroup && (
@@ -981,7 +966,8 @@ function IncomeExpensePageContent() {
             onAccountUpdated={() => {}} 
             dateRange={groupDetailsDateRange} 
             onDateRangeChange={setGroupDetailsDateRange} 
-            userNames={{ ...vouchersUserNames, ...userNames }} 
+            userNames={{ ...vouchersUserNames, ...userNames }}
+            hideMobilePeriodLabelRow={isMobile}
         />
       )}
       {!detailsDisabled && !selected && <div className="p-6 text-center text-muted-foreground">Select an item to see details</div>}
@@ -994,10 +980,11 @@ function IncomeExpensePageContent() {
       {/* h-full + min-h-0: dashboard main (overflow-y-auto) ke andar list column ko height mile, PC par ScrollArea scroll kare */}
       <div className="h-full min-h-0 min-w-0">
       <ResponsiveMasterDetail
-        title={incomesMasterDetailTitle}
+        title={incomesShellTitle}
         mobileSelectionLabel={mobileIncomesSelectionLabel}
         mobileSelectionLabelClassName={mobileIncomesSelectionLabelClassName}
         mobileDetailHeaderEnd={mobileIncomesDetailHeaderAvatar}
+        mobileDetailHeaderSecondary={mobileIncomesHeaderSecondary}
         balance={
             <span className={cn(
                 "font-semibold",

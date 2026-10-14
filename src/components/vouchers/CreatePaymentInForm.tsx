@@ -73,7 +73,15 @@ import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDial
 import type { ExpenseAccount } from "../expenses/types";
 import { Checkbox } from "../ui/checkbox";
 import type { DateRange } from "@/components/ui/ad-calendar";
-import { saveVoucher, isVoucherLimitError, updateVoucherSpendWiseLinks, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, updateVoucherSpendWiseLinks, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherActionsClient";
+import {
+  getVoucherConvertOriginalId,
+  getVoucherEditConvertPresentation,
+  isVoucherEditConverting,
+  markVoucherConvertedInRecycleBin,
+} from "@/lib/voucherEditConvert";
+import { VoucherEditConvertConfirmDialog } from "@/components/vouchers/VoucherEditConvertConfirmDialog";
+import { useVoucherEditConvertSubmitGate } from "@/hooks/useVoucherEditConvertSubmitGate";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { useAutoVoucherNumberFyDateSync } from "@/hooks/useAutoVoucherNumberFyDateSync";
@@ -432,10 +440,6 @@ export function CreatePaymentInForm({
 
     }, [vouchersLoading, companyId]);
 
-  /** Source voucher type snapshot — tab switch par target type compare karke convert detect. */
-  // Prefer original persisted type from dialog shaping so edit tab-switch can trigger voucher-no refresh.
-  const sourceVoucherType = String((voucher as any)?._sourceVoucherType || voucher?.type || "");
-  
   const form = useForm<PaymentInFormValues>({
     resolver: zodResolver(formSchema) as Resolver<PaymentInFormValues>,
     defaultValues: getInitialFormValues(voucher || defaultVoucherData),
@@ -796,7 +800,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const voucherType = defaultTab === 'direct_income' ? 'direct_income' : 'payment_in';
   /** Edit dialog me tab click (Payment In <-> Direct Income) par bhi voucher number regenerate karo. */
-  const isEditingAndConverting = Boolean(voucher?.id) && sourceVoucherType !== voucherType;
+  const isEditingAndConverting = isVoucherEditConverting(voucher, voucherType);
+  const convertPresentation = useMemo(
+    () => getVoucherEditConvertPresentation(voucher as Record<string, unknown> | undefined, voucherType),
+    [voucher, voucherType]
+  );
+  const {
+    convertConfirmOpen,
+    setConvertConfirmOpen,
+    gateConvertSubmit,
+    confirmConvertSubmit,
+  } = useVoucherEditConvertSubmitGate(isEditingAndConverting);
 
   /** Allocation-based link changed (party bill-wise or staff salary link) — so Save & Approve should show. */
   const _isAllocationLinkDirty = (() => {
@@ -1351,14 +1365,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   // Validated `data` से save — nested mobile `date` + `getValues()` से date miss होकर server पर "आज" न जाए
   function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
-    void form.handleSubmit(
-      async (data) => {
-        await processAndSave(data, options.saveAndNew, options.print, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave);
-      },
-      (errors) => {
-        sonnerToast.error("Validation Failed", { description: formatPaymentInFormValidationErrors(errors) });
-      }
-    )(e);
+    const run = () => {
+      void form.handleSubmit(
+        async (data) => {
+          await processAndSave(data, options.saveAndNew, options.print, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave);
+        },
+        (errors) => {
+          sonnerToast.error("Validation Failed", { description: formatPaymentInFormValidationErrors(errors) });
+        }
+      )(e);
+    };
+    gateConvertSubmit(run);
   }
 
   async function processAndSave(data: PaymentInFormValues, saveAndNew: boolean = false, print: boolean = false, onSuccess?: () => void, approveAfterSave?: boolean) {
@@ -1447,8 +1464,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     setIsLoading(true);
 
     try {
-      const originalVoucherIdToDelete: string | null =
-        isEditingAndConverting && voucher?.id ? String(voucher.id) : null;
+      const originalVoucherIdToDelete: string | null = isEditingAndConverting
+        ? getVoucherConvertOriginalId(voucher)
+        : null;
       const idArgForFirestore = resolveVoucherIdForSave({
         savedVoucherId,
         originalVoucherIdToDelete,
@@ -1597,12 +1615,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           docId = savedDoc.id;
           setSavedVoucherId(docId);
           if (originalVoucherIdToDelete) {
-              // Local-only mode me bhi converted voucher ko recycle-bin mark karna zaroori hai.
-              await patchVoucherFields(companyId, originalVoucherIdToDelete, {
-                isDeleted: true,
-                deletedAt: voucherRecycleBinDeletedAt(),
+              await markVoucherConvertedInRecycleBin(companyId, originalVoucherIdToDelete, {
                 convertedToType: voucherType,
                 convertedToVoucherNumber: sanitizedData.voucherNumber,
+                convertedToVoucherId: docId,
+                deletedBy: user.uid,
               });
           }
       } else {
@@ -3204,8 +3221,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   Cancel
                 </Button>
                 {/* Edit + unchanged → Save off; chhota sa dirty → on (Approve jaisa) */}
-                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
-                  {isLoading ? "..." : "Save"}
+                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty && !isEditingAndConverting)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                  {isLoading ? "..." : isEditingAndConverting ? "Convert" : "Save"}
                 </Button>
                 {voucher?.id ? (
                   <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -3241,9 +3258,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty && !isEditingAndConverting)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save
+                    {isEditingAndConverting ? "Convert" : "Save"}
                   </Button>
                   {voucher?.id ? (
                     <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
@@ -3262,6 +3279,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           </div>
         </form>
       </Form>
+      {convertPresentation ? (
+        <VoucherEditConvertConfirmDialog
+          open={convertConfirmOpen}
+          onOpenChange={setConvertConfirmOpen}
+          bannerText={convertPresentation.bannerText}
+          onConfirm={confirmConvertSubmit}
+        />
+      ) : null}
       <CreatePartyDialog
         onPartyCreated={(id) => {
           pendingPartyIdUntilInPartiesListRef.current = id;

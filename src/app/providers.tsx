@@ -58,6 +58,9 @@ import { PlServerAuthoritativeReplayManager } from "@/components/PlServerAuthori
 import { FirebaseLedgerDeltaSyncManager } from "@/components/FirebaseLedgerDeltaSyncManager";
 import { DaybookWedgeSyncManager } from "@/components/wedge/DaybookWedgeSyncManager";
 import { WebAppBasePathUrlGuard } from "@/components/WebAppBasePathUrlGuard";
+import { PlUiHealthBrakeGate } from "@/components/debug/PlUiHealthBrakeGate";
+import { ClientHealthGlobalBootstrap } from "@/components/debug/ClientHealthGlobalBootstrap";
+import { ClientHealthMonitorSnapshotSync } from "@/components/debug/ClientHealthMonitorSnapshotSync";
 
 /** Local-only app start: sql.js init pehle se — refresh par company turant SQLite se load. */
 function SqlitePrewarmBootstrap() {
@@ -122,6 +125,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     return (
       <ThemeProvider>
         <AuthProvider>
+            <ClientHealthGlobalBootstrap />
             <EmbeddedDeviceLockSessionProvider>
             <FirebaseErrorListener />
             {/* EXE/APK: PIN pehle — SQLite/sync baad me (`EmbeddedAppDeferredShell`) */}
@@ -131,6 +135,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
             <EmbeddedOfflineFirestoreTransport />
             <GateProvider>
             <CompanyProvider>
+                <ClientHealthMonitorSnapshotSync />
                 <EmbeddedStartupPrimeBootstrap />
                 <SqlitePrewarmBootstrap />
                 <CrossCompanyAttachmentAccessBridge />
@@ -172,6 +177,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <ReleaseUpdateCheck />
                 <PresenceManager />
                 <PrintLogoPreloader />
+                <PlUiHealthBrakeGate>
                 <DateProvider>
                     <BalanceModeProvider>
                         <DialogBackHandlerProvider>
@@ -196,6 +202,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                         </DialogBackHandlerProvider>
                     </BalanceModeProvider>
                 </DateProvider>
+                </PlUiHealthBrakeGate>
                 {/* Pehli device login: web = short hydrate; APK/static = data mirror splash + background attachment cache */}
                 <FirstDeviceCompanyHydrationOverlay />
                 </FirstLoginWarmGateProvider>

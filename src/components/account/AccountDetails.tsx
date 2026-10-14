@@ -854,7 +854,7 @@ export function AccountDetails({
                 periodCr={ledgerPageStats.periodCrForPage}
                 closingBalance={ledgerPageStats.closingForPage}
                 scrollOnlyTransactions
-                closingBalanceActions={
+                closingBalanceRowActions={
                   account.id !== "all" ? (
                     <AddVoucherDialog
                       defaultTab="adjustment"
@@ -1153,7 +1153,7 @@ export function AccountDetails({
               periodDr={ledgerPageStats.periodDrForPage}
               periodCr={ledgerPageStats.periodCrForPage}
               closingBalance={ledgerPageStats.closingForPage}
-              closingBalanceActions={
+              closingBalanceRowActions={
                 account.id !== "all" ? (
                   <AddVoucherDialog
                     defaultTab="adjustment"

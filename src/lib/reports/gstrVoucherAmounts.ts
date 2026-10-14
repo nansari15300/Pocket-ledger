@@ -1,5 +1,6 @@
 import { endOfDay, startOfDay } from "date-fns";
 import type { DateRange } from "@/components/ui/ad-calendar";
+import { salePurchaseTaxableAmount } from "@/lib/salePurchaseDiscountAdjustment";
 
 function voucherJsDate(date: unknown): Date | null {
   if (!date) return null;
@@ -44,7 +45,7 @@ export function resolveGstrSalePurchaseAmounts(v: {
   if (taxAmount === 0 && Array.isArray(v.lineItems)) {
     taxAmount = v.lineItems.reduce((sum, li) => sum + Number(li?.taxAmount ?? 0), 0);
   }
-  const taxableAmount = Math.max(0, subTotal - Number(v.discount ?? 0));
+  const taxableAmount = Math.max(0, salePurchaseTaxableAmount(v));
   const totalAmount = taxableAmount + taxAmount;
   return { taxableAmount, taxAmount, totalAmount };
 }

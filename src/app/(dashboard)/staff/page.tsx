@@ -58,11 +58,11 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesStaffLedger";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
-import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { StaffEntityNavIcon } from "@/components/entity/StaffEntityIcon";
-import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
-import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { MobileMasterDetailHeaderAvatar } from "@/components/entity/MobileMasterDetailHeaderAvatar";
+import { MobileMasterDetailHeaderDateSecondary } from "@/components/entity/MobileMasterDetailHeaderDateSecondary";
+import { mobileEntityDetailShellTitle } from "@/lib/mobileDetailChrome";
 import {
   STAFF_ENTITY_ADD_BUTTON,
   STAFF_ENTITY_LABEL,
@@ -212,43 +212,22 @@ function StaffPageContent() {
     const name = group.name;
     return name && String(name).trim() ? String(name).trim() : null;
   }, [selected, activeView, groupMemberFilterId, processedStaff, mobileStaffSelectionLabelClassName]);
+  const staffShellTitle = useMemo(
+    () => mobileEntityDetailShellTitle(isMobile, Boolean(selected), "Staff", "Staff details"),
+    [isMobile, selected]
+  );
+  const mobileStaffHeaderSecondary = useMemo((): ReactNode | undefined => {
+    if (!isMobile || !selected) return undefined;
+    return (
+      <MobileMasterDetailHeaderDateSecondary dateRange={dateRange} onClear={() => setDateRange(undefined)} />
+    );
+  }, [isMobile, selected, dateRange]);
   const mobileStaffDetailHeaderAvatar = useMemo(() => {
     if (!isMobile || !selected) return null;
     const selectedEntity = selected as Staff | StaffGroup;
     const name = selectedEntity.name || STAFF_ENTITY_LABEL;
-    // Stale `"null"` / khali — header par PDF preview mat kholo
     const attachmentUrl = trimEntityFileUrlForPreview((selectedEntity as any).fileUrl);
-    const initials = name
-      .split(" ")
-      .filter(Boolean)
-      .map((part) => part[0])
-      .slice(0, 2)
-      .join("")
-      .toUpperCase() || "NA";
-    const openPreview = () => {
-      // Header avatar tap should open full preview (same behavior as Party mobile details).
-      if (!attachmentUrl) return;
-      void openAttachmentInApp(attachmentUrl, { title: name });
-    };
-    return (
-      <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
-        <EntityFileAttachmentHover fileUrl={attachmentUrl} triggerClassName="inline-flex rounded-full">
-          <button
-            type="button"
-            className="inline-flex h-full w-full items-center justify-center rounded-full"
-            onClick={openPreview}
-            aria-label={`Preview ${name} avatar`}
-          >
-            <ResolvedEntityAvatar
-              className="h-full w-full text-xs"
-              src={attachmentUrl ?? undefined}
-              alt={name}
-              fallbackText={initials}
-            />
-          </button>
-        </EntityFileAttachmentHover>
-      </div>
-    );
+    return <MobileMasterDetailHeaderAvatar name={name} attachmentUrl={attachmentUrl} />;
   }, [isMobile, selected]);
   useSyncMasterDetailHeaderId("staff", selectedStaff?.id ?? selectedGroupRaw?.id ?? null);
 
@@ -694,6 +673,7 @@ function StaffPageContent() {
       dateRange={dateRange}
       onDateRangeChange={setDateRange}
       userNames={userNames}
+      hideMobilePeriodLabelRow={isMobile}
     />
   ) : activeView === "groups" && selectedGroup ? (
     <StaffGroupDetails
@@ -708,6 +688,7 @@ function StaffPageContent() {
       dateRange={dateRange}
       onDateRangeChange={setDateRange}
       userNames={userNames}
+      hideMobilePeriodLabelRow={isMobile}
     />
   ) : (
     <div className="p-6 text-center text-muted-foreground">Select an item to view details</div>
@@ -716,10 +697,13 @@ function StaffPageContent() {
   return (
     <>
     <ResponsiveMasterDetail
-      title={<LoanStaffNavTitle active="staff" />}
+      title={
+        isMobile && selected ? staffShellTitle : <LoanStaffNavTitle active="staff" />
+      }
       mobileSelectionLabel={mobileStaffSelectionLabel}
       mobileSelectionLabelClassName={mobileStaffSelectionLabelClassName}
       mobileDetailHeaderEnd={mobileStaffDetailHeaderAvatar}
+      mobileDetailHeaderSecondary={mobileStaffHeaderSecondary}
       balance={
         <span className={cn(
             "font-semibold",

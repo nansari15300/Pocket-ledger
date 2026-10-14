@@ -392,6 +392,8 @@ function mapRemoteSalePurchaseLineItems(params: {
       amount,
       taxAccountId,
       taxAmount: Number(row.taxAmount) || 0,
+      tdsAccountId: String(row.tdsAccountId ?? "").trim(),
+      tdsAmount: Number(row.tdsAmount) || 0,
       isTaxInclusive: Boolean(row.isTaxInclusive),
       allowManualRate: row.allowManualRate !== false,
     };

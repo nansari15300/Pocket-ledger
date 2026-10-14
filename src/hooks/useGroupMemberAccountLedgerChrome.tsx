@@ -68,7 +68,12 @@ export function useGroupMemberAccountLedgerChrome<T extends MasterAccountFreezeF
       </AddVoucherDialog>
     ) : null;
 
-  const { freezeOverlay, closingBalanceActions, blockNewTransactions } = useMasterAccountFreezeDetailsChrome({
+  const {
+    freezeOverlay,
+    closingBalanceRowActions,
+    closingBalanceActions,
+    blockNewTransactions,
+  } = useMasterAccountFreezeDetailsChrome({
     companyId,
     collection,
     entityId: selectedMember?.id ?? "",
@@ -80,6 +85,7 @@ export function useGroupMemberAccountLedgerChrome<T extends MasterAccountFreezeF
 
   return {
     memberFreezeOverlay: freezeOverlay,
+    memberClosingBalanceRowActions: closingBalanceRowActions,
     memberClosingBalanceActions: closingBalanceActions,
     blockMemberNewTransactions: blockNewTransactions,
   };

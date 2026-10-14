@@ -1,5 +1,12 @@
 "use client";
 
+import * as React from "react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import {
+  ADJUST_BALANCE_PILL_CN,
+  LEDGER_CLOSING_BALANCE_ADJUST_PILL_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { publicAssetUrl } from "@/lib/webAppBasePath";
 
 /** Adjust Balance pill — pointing-hand pic (Closing Balance ki taraf). */
@@ -17,5 +24,28 @@ export function AdjustBalancePillLabel() {
         draggable={false}
       />
     </>
+  );
+}
+
+/** Ledger closing footer — same width/height as `MasterAccountFreezeOwnerToggle` pill. */
+export function AdjustBalanceLedgerPillButton({
+  className,
+  ...props
+}: React.ComponentProps<typeof Button>) {
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      data-pl-adjust-balance-closing-pill=""
+      className={cn(
+        ADJUST_BALANCE_PILL_CN,
+        LEDGER_CLOSING_BALANCE_ADJUST_PILL_CN,
+        "!h-[27px] min-h-[27px] text-xs",
+        className
+      )}
+      {...props}
+    >
+      <AdjustBalancePillLabel />
+    </Button>
   );
 }

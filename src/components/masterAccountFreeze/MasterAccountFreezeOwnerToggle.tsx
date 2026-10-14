@@ -3,7 +3,10 @@
 import * as React from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
-import { LEDGER_HEADER_PILL_CN } from "@/lib/ledgerHeaderChrome";
+import {
+  LEDGER_CLOSING_BALANCE_ACTION_PILL_CN,
+  LEDGER_HEADER_PILL_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
 import { saveMasterAccountFreeze } from "@/lib/masterAccountFreeze/saveMasterAccountFreeze";
 import { masterAccountFreezeToggleLabel } from "@/lib/masterAccountFreeze/labels";
@@ -68,8 +71,10 @@ export function MasterAccountFreezeOwnerToggle({
   return (
     <LedgerFooterChromePill
       active={checked}
+      data-pl-ledger-closing-action-pill=""
       className={cn(
         LEDGER_HEADER_PILL_CN,
+        LEDGER_CLOSING_BALANCE_ACTION_PILL_CN,
         "cursor-pointer rounded-full px-2.5",
         saving && "pointer-events-none opacity-60",
         className

@@ -25,6 +25,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { DateFormatSettingsDialog } from "@/components/settings/DateFormatSettingsDialog";
 import { cn } from "@/lib/utils";
+import { getVoucherEditConvertPresentation } from "@/lib/voucherEditConvert";
+import { VoucherEditConvertBanner } from "@/components/vouchers/VoucherEditConvertBanner";
 import { nestedVoucherAlertShell } from "@/lib/dialogShellChrome";
 import { startOfDay } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -48,6 +50,7 @@ import { InterCompanyPayModeInfoButton } from "@/components/inter-company/InterC
 import type { InterCompanyRibbonTab } from "@/components/inter-company/InterCompanyRibbonNav";
 import { isInterCompanyVoucherEditDeleteBlocked } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { useCompany, CompanyContext, type Company } from "@/hooks/useCompany";
+import { SALE_PURCHASE_VOUCHER_DIALOG_MIN_W } from "@/lib/salePurchaseLineColumnLabels";
 import {
   listCompaniesForVoucherCopyTo,
   PL_SERVER_ACCESS_CONTEXT_EVENT,
@@ -289,12 +292,18 @@ function canEditConvertBetween(stored: VoucherType, active: VoucherType): boolea
 function shapeVoucherForActiveEditTab(voucher: Record<string, unknown> | undefined, activeTab: VoucherType): Record<string, unknown> | undefined {
   if (!voucher?.id) return voucher;
   const stored = (String(voucher.type || "sale") as VoucherType);
+  const sourceVoucherId = String(voucher.id || "");
   if (!canEditConvertBetween(stored, activeTab)) {
     // Preserve original saved type so child forms can reliably detect edit-convert transitions.
-    return { ...voucher, _sourceVoucherType: stored };
+    return { ...voucher, _sourceVoucherType: stored, _sourceVoucherId: sourceVoucherId };
   }
   // Keep active tab as editable type, but also preserve original persisted type for conversion-aware effects.
-  const next: Record<string, unknown> = { ...voucher, type: activeTab, _sourceVoucherType: stored };
+  const next: Record<string, unknown> = {
+    ...voucher,
+    type: activeTab,
+    _sourceVoucherType: stored,
+    _sourceVoucherId: sourceVoucherId,
+  };
 
   const isCashflowIn = (t: VoucherType) => t === "payment_in" || t === "direct_income";
   const isCashflowOut = (t: VoucherType) => t === "payment_out" || t === "direct_expense";
@@ -1251,6 +1260,16 @@ function VoucherDialogContent({
     };
   }, [voucher, defaultVoucherData, isEditing, activeTab, ledgerEntityId]);
 
+  const editConvertPresentation = useMemo(
+    () =>
+      getVoucherEditConvertPresentation(
+        initialVoucherData as Record<string, unknown> | undefined,
+        activeTab,
+        voucherTabLabel
+      ),
+    [initialVoucherData, activeTab]
+  );
+
   const ActiveForm = useMemo(() => formMap[activeTab], [activeTab]);
   // formInstanceKey copy-draft re-seed par badalti hai (parent), taaki naye target company ka voucher number/account
   // wagairah form re-mount par fresh load ho — purane defaults ki state stale na rahe.
@@ -1427,6 +1446,9 @@ function VoucherDialogContent({
           isMobile ? "pt-0 pb-0" : "pt-6 pb-6 md:p-6"
         )}
       >
+        {editConvertPresentation ? (
+          <VoucherEditConvertBanner message={editConvertPresentation.bannerText} />
+        ) : null}
         <Suspense fallback={<div className="p-10 text-center"><Loader2 className="animate-spin mx-auto" /></div>}>
           {ActiveForm ? (
             <ActiveForm 
@@ -1738,6 +1760,13 @@ export function AddVoucherDialog(props: any) {
   /** `VoucherDialogContent` se sync — Inter Company open/edit par header lock turant (child mount se pehle flash na ho). */
   const [voucherFormActiveTab, setVoucherFormActiveTab] = useState<VoucherType>(() =>
     getVoucherType(voucher, defaultVoucherData, defaultTabProp ?? "sale")
+  );
+  const voucherDialogMinW = useMemo(
+    () =>
+      voucherFormActiveTab === "sale" || voucherFormActiveTab === "purchase"
+        ? Math.max(MIN_DIALOG_W, SALE_PURCHASE_VOUCHER_DIALOG_MIN_W)
+        : MIN_DIALOG_W,
+    [voucherFormActiveTab]
   );
   /** Auto recurring UI + Firestore: inner form ka current tab journal ho tab hi. */
   const showVoucherAutoRecurringUi = voucherFormActiveTab === "journal";
@@ -2337,6 +2366,12 @@ export function AddVoucherDialog(props: any) {
     };
   }, [dialogPosition.x, dialogPosition.y, dialogSize.w, dialogSize.h]);
 
+  useEffect(() => {
+    if (!dialogOpen || !isDesktop) return;
+    if (voucherFormActiveTab !== "sale" && voucherFormActiveTab !== "purchase") return;
+    setDialogSize((prev) => (prev.w >= voucherDialogMinW ? prev : { ...prev, w: voucherDialogMinW }));
+  }, [dialogOpen, isDesktop, voucherFormActiveTab, voucherDialogMinW]);
+
   const persistDialogBoundsToStorage = useCallback(() => {
     if (!isDesktop || typeof window === "undefined") return;
     writeStoredDialogBounds(dialogBoundsStorageKeyRef.current, dialogBoundsLiveRef.current);
@@ -2425,10 +2460,11 @@ export function AddVoucherDialog(props: any) {
       const dy = e.clientY - startY;
       let w = startW;
       let hh = startH;
-      if (h === "e" || h === "se" || h === "ne") w = Math.max(MIN_DIALOG_W, Math.min(startW + dx, vw));
+      const minW = voucherDialogMinW;
+      if (h === "e" || h === "se" || h === "ne") w = Math.max(minW, Math.min(startW + dx, vw));
       if (h === "w" || h === "sw" || h === "nw") {
-        const dw = Math.min(dx, startW - MIN_DIALOG_W);
-        w = Math.max(MIN_DIALOG_W, Math.min(startW - dw, vw));
+        const dw = Math.min(dx, startW - minW);
+        w = Math.max(minW, Math.min(startW - dw, vw));
       }
       if (h === "s" || h === "se" || h === "sw") hh = Math.max(MIN_DIALOG_H, Math.min(startH + dy, vh));
       if (h === "n" || h === "nw" || h === "ne") {
@@ -2453,7 +2489,7 @@ export function AddVoucherDialog(props: any) {
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-  }, [isDesktop, dialogSize.w, dialogSize.h, dialogPosition.x, dialogPosition.y]);
+  }, [isDesktop, dialogSize.w, dialogSize.h, dialogPosition.x, dialogPosition.y, voucherDialogMinW]);
 
   // When editing, subscribe to voucher doc so unlink/allocations updates enable Save & convert
   useEffect(() => {
@@ -4835,7 +4871,7 @@ export function AddVoucherDialog(props: any) {
               top: dialogPosition.y,
               width: dialogSize.w,
               height: dialogSize.h,
-              minWidth: MIN_DIALOG_W,
+              minWidth: voucherDialogMinW,
               minHeight: MIN_DIALOG_H,
             }}
           >

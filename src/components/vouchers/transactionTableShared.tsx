@@ -32,6 +32,14 @@ import usePermissions from "@/hooks/usePermissions";
 import { useIsMobile } from "@/hooks/use-mobile";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import { cn } from "@/lib/utils";
+import { isTransactionColumnVisible } from "@/lib/transactionVisibleColumnShow";
+import {
+  LEDGER_TDS_ROW_FLAG,
+  isLedgerTdsTableRow,
+  ledgerTdsRowAmountToneClass,
+  ledgerTdsTypeDisplayLabel,
+  ledgerTdsTypePillDrCrSide,
+} from "@/lib/partyLedgerTdsView";
 import { Switch } from "@/components/ui/switch";
 import { isLedgerTransactionPeerPendingChange, isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
 import { toast } from "sonner";
@@ -52,8 +60,29 @@ import { FyOpeningPillFormatPill } from "@/components/vouchers/FyOpeningPillForm
 import {
   LEDGER_ENTITY_BALANCE_COL_PX,
   LEDGER_ENTITY_TYPE_COL_PX,
+  LEDGER_ENTITY_USER_COL_PX,
+  LEDGER_TDS_AMOUNT_CELL_PAD_CN,
+  LEDGER_TDS_AMOUNT_COL_PX,
+  LEDGER_TDS_TAXABLE_CELL_PAD_CN,
+  LEDGER_TDS_TAXABLE_COL_PX,
+  LEDGER_TDS_VOUCHER_NO_COL_PX,
+  LEDGER_TDS_USER_CELL_PAD_CN,
+  LEDGER_TDS_ROW_TEXT_CELL_PAD_CN,
+  LEDGER_TDS_DR_CR_CELL_PAD_CN,
+  LEDGER_TDS_FILE_COL_PX,
+  LEDGER_TDS_FILE_CELL_PAD_CN,
+  LEDGER_BOTH_DATE_BS_AD_GAP_PX,
+  LEDGER_BOTH_DATE_BS_CELL_PAD_CN,
+  LEDGER_ENTITY_DATE_BS_COL_PX,
+  LEDGER_TDS_DATE_TO_TYPE_GAP_PX,
+  LEDGER_TDS_DATE_COL_PX,
+  LEDGER_TDS_LAST_DATE_CELL_PAD_CN,
   LEDGER_TXN_BALANCE_TO_MENU_PAD_CN,
   LEDGER_TXN_ROW_MENU_CELL_CN,
+  LEDGER_TXN_BODY_CELL_PAD_CN,
+  LEDGER_TXN_COL_MAX_GAP_PAD_CN,
+  LEDGER_TXN_DR_CR_AMOUNT_CELL_CN,
+  LEDGER_TXN_DR_CR_COL_PX,
 } from "@/lib/ledgerHeaderChrome";
 import {
   FiscalPartitionClosingSummaryTableRows,
@@ -464,6 +493,9 @@ export const getDisplayType = (t: any) => {
   }
   if (t.type === "journal" && t.subType === "add_salary") return "Add Salary";
   if (t.type === "inter_company") return "Inter Company";
+  if (t.type === "tds" || t._ledgerTdsRow || t[LEDGER_TDS_ROW_FLAG]) {
+    return ledgerTdsTypeDisplayLabel(t._ledgerTdsSide);
+  }
   return t.type.replace(/_/g, " ");
 };
 
@@ -1617,11 +1649,11 @@ export const TransactionRow = React.memo(
       "[&>td:first-child]:border-l-2 [&>td:last-child]:border-r-2"
     );
     const isMobileView = useIsMobile();
-    const showCol = (key: string) => {
-      // Mobile ledger rows: date column always visible rakho (desktop column-toggle se hide na ho).
-      if (isMobileView && key === "date") return true;
-      return visibleColumns == null || visibleColumns[key] !== false;
-    };
+    const showCol = (key: string) =>
+      isTransactionColumnVisible(visibleColumns, key, {
+        isMobileView,
+        forceDateOnMobile: true,
+      });
     const { effectiveNotificationSettings } = useCompany();
     const { user, customUser } = useAuth();
     const currentUserUid = user?.uid ?? null;
@@ -1674,6 +1706,10 @@ export const TransactionRow = React.memo(
       ? resolveTxnDrCrSide(debit, credit, balance) ?? (Number(balance) >= 0 ? "dr" : "cr")
       : null;
 
+    const isLedgerTdsRow = isLedgerTdsTableRow(transaction as { type?: string; [LEDGER_TDS_ROW_FLAG]?: boolean });
+    const ledgerTdsAmountToneCn = isLedgerTdsRow ? ledgerTdsRowAmountToneClass(transaction) : null;
+    const tdsLedgerRowLayout = ensureMinGaps && (showCol("tdsTaxable") || showCol("tdsAmount"));
+    const tdsRowTextPadCn = tdsLedgerRowLayout ? LEDGER_TDS_ROW_TEXT_CELL_PAD_CN : null;
 
     // Blink animation: Dr/Cr/Balance numerals + Dr/Cr suffix only — not group border / full cell (see MainRow, no row-level animate).
     const activeBlinkModes = Array.isArray(blinkMode) ? blinkMode : [];
@@ -1840,38 +1876,96 @@ export const TransactionRow = React.memo(
           />
         )}
         {showCol("date") &&
-          (dateSystem === "Both" ? (
-            <>
-              <TableCell className={ensureMinGaps ? "min-w-[95px] px-[5px]" : undefined}>{d ? hlForColumn("date_bs")(formatDateBS(d)) : ""}</TableCell>
-              <TableCell className={ensureMinGaps ? "min-w-[112px] px-[5px]" : undefined}>
-                {d ? hlForColumn("date_ad")(formatDate(d)) : ""}
+          (() => {
+            const hasTdsLedgerCols = showCol("tdsTaxable") || showCol("tdsAmount");
+            const bsDateMinPx =
+              LEDGER_ENTITY_DATE_BS_COL_PX +
+              (dateSystem === "Both" ? LEDGER_BOTH_DATE_BS_AD_GAP_PX : 0);
+            const tdsLastDateMinPx = hasTdsLedgerCols ? LEDGER_TDS_DATE_COL_PX : 112;
+            const lastDatePad =
+              ensureMinGaps && hasTdsLedgerCols
+                ? LEDGER_TDS_LAST_DATE_CELL_PAD_CN
+                : ensureMinGaps
+                  ? "min-w-[112px] px-[5px]"
+                  : undefined;
+            const tdsDateCellStyle =
+              ensureMinGaps && hasTdsLedgerCols
+                ? {
+                    minWidth: `${tdsLastDateMinPx}px`,
+                    maxWidth: `${tdsLastDateMinPx}px`,
+                  }
+                : undefined;
+            return dateSystem === "Both" ? (
+              <>
+                <TableCell
+                  className={cn(
+                    ensureMinGaps ? LEDGER_BOTH_DATE_BS_CELL_PAD_CN : undefined,
+                    hasTdsLedgerCols && "overflow-x-clip"
+                  )}
+                  style={ensureMinGaps ? { minWidth: `${bsDateMinPx}px` } : undefined}
+                >
+                  {d ? hlForColumn("date_bs")(formatDateBS(d)) : ""}
+                </TableCell>
+                <TableCell
+                  data-pl-ledger-txn-last-date-cell=""
+                  className={cn(
+                    typeof lastDatePad === "string" ? lastDatePad : undefined,
+                    "whitespace-nowrap",
+                    (hasTdsLedgerCols || ensureMinGaps) && "overflow-x-clip"
+                  )}
+                  style={tdsDateCellStyle}
+                >
+                  {d ? hlForColumn("date_ad")(formatDate(d)) : ""}
+                  {entryClock ? (
+                    <span className="ml-1 inline-block text-[10px] text-foreground/70">
+                      {hlForColumn("date_ad")(entryClock)}
+                    </span>
+                  ) : null}
+                </TableCell>
+              </>
+            ) : (
+              <TableCell
+                data-pl-ledger-txn-last-date-cell=""
+                className={cn(
+                  typeof lastDatePad === "string" ? lastDatePad : undefined,
+                  "whitespace-nowrap",
+                  (hasTdsLedgerCols || ensureMinGaps) && "overflow-x-clip"
+                )}
+                style={tdsDateCellStyle}
+              >
+                {d ? hlForColumn("date")(dateSystem === "AD" ? formatDate(d) : formatDateBS(d)) : ""}
                 {entryClock ? (
-                  <span className="ml-1 whitespace-nowrap text-[10px] text-foreground/70">• {hlForColumn("date_ad")(entryClock)}</span>
+                  <span className="ml-1 inline-block text-[10px] text-foreground/70">
+                    {hlForColumn("date")(entryClock)}
+                  </span>
                 ) : null}
               </TableCell>
-            </>
-          ) : (
-            <TableCell className={ensureMinGaps ? "min-w-[112px] px-[5px]" : undefined}>
-              {d ? hlForColumn("date")(dateSystem === "AD" ? formatDate(d) : formatDateBS(d)) : ""}
-              {entryClock ? (
-                <span className="ml-1 whitespace-nowrap text-[10px] text-foreground/70">• {hlForColumn("date")(entryClock)}</span>
-              ) : null}
-            </TableCell>
-          ))}
+            );
+          })()}
         {showCol("type") && (
           <TableCell
-            className={cn("align-middle overflow-visible", ensureMinGaps && "px-[5px]")}
+            data-pl-ledger-txn-type-cell=""
+            className={cn(
+              "align-middle",
+              tdsLedgerRowLayout ? "overflow-x-clip" : "overflow-visible",
+              tdsRowTextPadCn ?? (ensureMinGaps && LEDGER_TXN_COL_MAX_GAP_PAD_CN)
+            )}
             style={
               ensureMinGaps
-                ? {
-                    minWidth:
-                      spendWiseInGroupCard ||
-                      isSpendWiseChild ||
-                      isSpendWiseGroupFirst ||
-                      typeof spendWiseGroupColorIndex === "number"
-                        ? Math.max(112, LEDGER_ENTITY_TYPE_COL_PX)
-                        : LEDGER_ENTITY_TYPE_COL_PX,
-                  }
+                ? tdsLedgerRowLayout
+                  ? {
+                      minWidth: `${LEDGER_ENTITY_TYPE_COL_PX}px`,
+                      maxWidth: `${LEDGER_ENTITY_TYPE_COL_PX}px`,
+                    }
+                  : {
+                      minWidth:
+                        spendWiseInGroupCard ||
+                        isSpendWiseChild ||
+                        isSpendWiseGroupFirst ||
+                        typeof spendWiseGroupColorIndex === "number"
+                          ? Math.max(112, LEDGER_ENTITY_TYPE_COL_PX)
+                          : LEDGER_ENTITY_TYPE_COL_PX,
+                    }
                 : undefined
             }
           >
@@ -1887,6 +1981,17 @@ export const TransactionRow = React.memo(
                   {hlForColumn("type")(fyOpeningPillSplit.typePill)}
                 </Badge>
               </FyOpeningPillFormatPill>
+            ) : (transaction as { _ledgerTdsRow?: boolean; type?: string })[LEDGER_TDS_ROW_FLAG] ||
+              (transaction as { type?: string }).type === "tds" ? (
+              <Badge
+                variant="outline"
+                className={cn(
+                  voucherTypePillClassName(ledgerTdsTypePillDrCrSide(transaction)),
+                  "w-fit max-w-none shrink-0 whitespace-nowrap"
+                )}
+              >
+                {hlForColumn("type")(getDisplayType(transaction))}
+              </Badge>
             ) : (
               <Badge
                 variant="outline"
@@ -1906,7 +2011,22 @@ export const TransactionRow = React.memo(
           </TableCell>
         )}
         {showCol("voucherNo") && (
-          <TableCell className={ensureMinGaps ? "min-w-[105px] px-[10px]" : undefined}>
+          <TableCell
+            className={cn(
+              ensureMinGaps &&
+                (tdsLedgerRowLayout
+                  ? cn(LEDGER_TXN_BODY_CELL_PAD_CN, "max-w-none overflow-x-clip")
+                  : cn("min-w-[105px]", LEDGER_TXN_BODY_CELL_PAD_CN))
+            )}
+            style={
+              ensureMinGaps && tdsLedgerRowLayout
+                ? {
+                    minWidth: `${Math.max(LEDGER_TDS_VOUCHER_NO_COL_PX, 105)}px`,
+                    maxWidth: `${Math.max(LEDGER_TDS_VOUCHER_NO_COL_PX, 105)}px`,
+                  }
+                : undefined
+            }
+          >
             <span className="inline-flex max-w-full flex-wrap items-center gap-1">
               {fyOpeningPillSplit?.voucherPill ? (
                 <FyOpeningPillFormatPill>
@@ -1921,7 +2041,7 @@ export const TransactionRow = React.memo(
                   </Badge>
                 </FyOpeningPillFormatPill>
               ) : (
-              <span className="min-w-0 truncate">
+              <span className="whitespace-nowrap">
                 {hlForColumn("voucherNumber")(getDisplayVoucherNumber(transaction))}
               </span>
               )}
@@ -1958,11 +2078,21 @@ export const TransactionRow = React.memo(
         {showCol("user") && context !== "note" && (
           <TableCell
             className={cn(
-              ensureMinGaps && "px-[5px]",
+              ensureMinGaps &&
+                (tdsLedgerRowLayout
+                  ? cn(LEDGER_TDS_USER_CELL_PAD_CN, "overflow-x-clip")
+                  : "px-[5px]"),
               !isMobileView && shouldShowAutoRecurringSwitchInLedgerUserCell(transaction)
-                ? "min-w-[148px] max-w-[180px]"
-                : "max-w-[150px] min-w-[120px] overflow-hidden",
+                ? "min-w-[148px]"
+                : tdsLedgerRowLayout
+                  ? "min-w-[148px]"
+                  : "max-w-[150px] min-w-[120px] overflow-hidden",
             )}
+            style={
+              ensureMinGaps && tdsLedgerRowLayout
+                ? { minWidth: `${LEDGER_ENTITY_USER_COL_PX}px`, maxWidth: `${LEDGER_ENTITY_USER_COL_PX}px` }
+                : undefined
+            }
           >
             {(() => {
               const showAutoRecurringSwitch = shouldShowAutoRecurringSwitchInLedgerUserCell(
@@ -1977,7 +2107,9 @@ export const TransactionRow = React.memo(
                     onClick={(e) => e.stopPropagation()}
                     onPointerDown={(e) => e.stopPropagation()}
                   >
-                    <span className="min-w-0 truncate" title={displayName}>{hlForColumn("user")(displayName)}</span>
+                    <span className="whitespace-nowrap" title={displayName}>
+                      {hlForColumn("user")(displayName)}
+                    </span>
                     <Switch
                       checked
                       disabled
@@ -1987,20 +2119,32 @@ export const TransactionRow = React.memo(
                   </span>
                 );
               }
-              return <span className="block truncate" title={displayName}>{hlForColumn("user")(displayName)}</span>;
+              return (
+                <span className="block whitespace-nowrap" title={displayName}>
+                  {hlForColumn("user")(displayName)}
+                </span>
+              );
             })()}
           </TableCell>
         )}
         {showFileColumn && (
           <TableCell
             data-pl-txn-file-cell=""
-            className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")}
+            className={cn(
+              "text-center align-middle",
+              tdsLedgerRowLayout ? LEDGER_TDS_FILE_CELL_PAD_CN : ensureMinGaps && "min-w-[44px] px-[5px]"
+            )}
+            style={
+              ensureMinGaps && tdsLedgerRowLayout ? { minWidth: `${LEDGER_TDS_FILE_COL_PX}px` } : undefined
+            }
             onClick={stopTxnRowOpenFromFilePreview}
             onDoubleClick={stopTxnRowOpenFromFilePreview}
           >
             {(() => {
               const rowUrls = getVoucherAttachmentUrlsForUi(transaction, voucherAttachmentUiOpts);
-              if (rowUrls.length === 0) return "-";
+              if (rowUrls.length === 0) {
+                return <span className="flex w-full justify-center">-</span>;
+              }
               const suppressAutoThumbLoad =
                 enforceCurrentFyAttachmentAutoLoad &&
                 !shouldAutoWarmAttachmentForLedgerRow(company?.country, transaction?.date, true);
@@ -2052,7 +2196,7 @@ export const TransactionRow = React.memo(
                       });
                     }
                   : undefined;
-              return (
+              const filePreview = (
                 <AttachmentHoverPortal
                   triggerClassName="inline-flex cursor-pointer"
                   onPreviewDoubleClick={singlePdfOpen}
@@ -2068,26 +2212,83 @@ export const TransactionRow = React.memo(
                   {indicator}
                 </AttachmentHoverPortal>
               );
+              return tdsLedgerRowLayout ? (
+                <div className="flex w-full justify-center">{filePreview}</div>
+              ) : (
+                filePreview
+              );
             })()}
           </TableCell>
         )}
+        {showCol("tdsTaxable") && (
+          <TableCell
+            className={cn(
+              tdsLedgerRowLayout ? "text-center" : "text-right",
+              "tabular-nums align-middle",
+              ledgerTdsAmountToneCn,
+              tdsRowTextPadCn ?? (ensureMinGaps && LEDGER_TDS_TAXABLE_CELL_PAD_CN)
+            )}
+            style={ensureMinGaps ? { minWidth: `${LEDGER_TDS_TAXABLE_COL_PX}px` } : undefined}
+          >
+            {renderHlDrCr(formatAmountCell(Number(transaction._tdsTaxable) || 0), "debit")}
+          </TableCell>
+        )}
+        {showCol("tdsAmount") && (
+          <TableCell
+            className={cn(
+              tdsLedgerRowLayout ? "text-left" : "text-right",
+              "tabular-nums align-middle",
+              ledgerTdsAmountToneCn ?? "font-semibold",
+              tdsRowTextPadCn ?? (ensureMinGaps && LEDGER_TDS_AMOUNT_CELL_PAD_CN)
+            )}
+            style={ensureMinGaps ? { minWidth: `${LEDGER_TDS_AMOUNT_COL_PX}px` } : undefined}
+          >
+            {renderHlDrCr(formatAmountCell(Number(transaction._tdsAmount) || 0), "credit")}
+          </TableCell>
+        )}
         {showCol("dr") && (
-          <TableCell className={cn("text-right font-semibold tabular-nums text-green-700", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+          <TableCell
+            className={cn(
+              "text-right tabular-nums",
+              ledgerTdsAmountToneCn ?? "font-semibold text-green-700",
+              ensureMinGaps &&
+                (tdsLedgerRowLayout
+                  ? cn(LEDGER_TDS_DR_CR_CELL_PAD_CN, "min-w-[100px]")
+                  : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN)
+            )}
+            style={ensureMinGaps ? { minWidth: `${LEDGER_TXN_DR_CR_COL_PX}px` } : undefined}
+          >
             {isFyOpeningRow ? (
               renderFyOpeningDrCrCell("dr")
             ) : isStatementChecked && statementCheckedMessageColumn(debit, credit) === "debit" ? (
-              <StatementCheckedRowMessageLabel className="w-full" align="end" />
+              <StatementCheckedRowMessageLabel
+                className="w-full"
+                align="end"
+              />
             ) : (
               renderHlDrCr(formatAmountCell(debit), "debit")
             )}
           </TableCell>
         )}
         {showCol("cr") && (
-          <TableCell className={cn("text-right font-semibold tabular-nums text-red-700", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+          <TableCell
+            className={cn(
+              "text-right tabular-nums",
+              ledgerTdsAmountToneCn ?? "font-semibold text-red-700",
+              ensureMinGaps &&
+                (tdsLedgerRowLayout
+                  ? cn(LEDGER_TDS_DR_CR_CELL_PAD_CN, "min-w-[100px]")
+                  : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN)
+            )}
+            style={ensureMinGaps ? { minWidth: `${LEDGER_TXN_DR_CR_COL_PX}px` } : undefined}
+          >
             {isFyOpeningRow ? (
               renderFyOpeningDrCrCell("cr")
             ) : isStatementChecked && statementCheckedMessageColumn(debit, credit) === "credit" ? (
-              <StatementCheckedRowMessageLabel className="w-full" align="end" />
+              <StatementCheckedRowMessageLabel
+                className="w-full"
+                align="end"
+              />
             ) : (
               renderHlDrCr(formatAmountCell(credit), "credit")
             )}
@@ -2207,21 +2408,28 @@ export const TransactionRow = React.memo(
               fyOpeningSignedBalance == null &&
               typeof valueToShow === "number" &&
               Math.abs(valueToShow) < 1e-6;
+            const balanceToneCn = isLedgerTdsRow
+              ? ledgerTdsAmountToneCn
+              : isZeroBalance
+                ? "text-green-700"
+                : displayValue >= 0
+                  ? "text-green-700"
+                  : "text-red-700";
             return (
               <TableCell
                 className={cn(
                   "text-right font-semibold tabular-nums",
-                  isZeroBalance ? "text-green-700" : (displayValue >= 0 ? "text-green-700" : "text-red-700"),
+                  balanceToneCn,
                   ensureMinGaps && LEDGER_TXN_BALANCE_TO_MENU_PAD_CN
                 )}
                 style={ensureMinGaps ? { minWidth: LEDGER_ENTITY_BALANCE_COL_PX } : undefined}
-                {...(isZeroBalance ? { "data-cell-settled": "true" } : {})}
+                {...(isZeroBalance && !isLedgerTdsRow ? { "data-cell-settled": "true" } : {})}
               >
                 {isBalanceMasked ? (
                   "*****"
                 ) : isFyOpeningRow && !showOpeningBalanceAmount ? (
                   "-"
-                ) : isZeroBalance ? (
+                ) : isZeroBalance && !isLedgerTdsRow ? (
                   <span
                     className={cn(
                       "font-bold text-green-700",
@@ -2380,6 +2588,8 @@ export const TransactionRow = React.memo(
           (isItemPartyContext && showItemPartyColumn ? 1 : 0) +
           (showCol("user") && context !== "note" ? 1 : 0) +
           (showFileColumn ? 1 : 0) +
+          (showCol("tdsTaxable") ? 1 : 0) +
+          (showCol("tdsAmount") ? 1 : 0) +
           (showCol("dr") ? 1 : 0) +
           (showCol("cr") ? 1 : 0);
     const statusDetailText = getStatusDetail(transaction, { billWiseOnly: statusBillWiseOnly });
@@ -2513,7 +2723,6 @@ export const TransactionRow = React.memo(
         }
         className={cn(
           "transaction-main-row min-h-[28px] cursor-pointer text-foreground",
-          isFyOpeningRow && "border-t-2 border-black [&>td]:border-t-2 [&>td]:border-black",
           txnStripeBgClass,
           isSpendWiseChild && "pl-6 text-sm [&>td]:py-1",
           isSpendWiseChild && !isSelected && !isSpendWiseInflowRow && !isSpendWiseOutflowRow && !spendWiseChildNeedsIndent && "bg-muted/20 [&>td]:bg-muted/20",

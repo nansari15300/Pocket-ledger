@@ -7,13 +7,16 @@ import { useCompany } from "@/hooks/useCompany";
 import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Info, X, Calendar as CalendarIcon, Expand, Filter, RotateCw, ChevronLeft, ChevronRight, ChevronDown, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DaybookTxnScrollColumn } from "@/components/reports/DaybookTxnScrollColumn";
+import { DAYBOOK_SHIFT_DATE_EVENT } from "@/components/dashboard/DashboardWelcomeFooterBanner";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
 import type { Account } from "@/components/bank-cash/types";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { startOfDay, isSameDay, addDays } from "date-fns";
+import { startOfDay, isSameDay, addDays, subDays } from "date-fns";
+import { DASHBOARD_EMBEDDED_DAYBOOK_VOUCHER_LOOKBACK_DAYS } from "@/lib/dashboardTabPanels";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdCalendar from "@/components/ui/ad-calendar";
 import { collectVoucherCalendarDates } from "@/lib/voucherDateNormalize";
@@ -48,10 +51,31 @@ interface DaybookReportProps {
   onFullScreenToggle?: () => void;
   /** Dashboard keep-alive: intro/swipe jab panel visible ho tab hi (default: always visible). */
   isPanelVisible?: boolean;
+  /** Dashboard footer ribbon: desktop ←/→ yahan; toolbar/bottom strip hide. */
+  welcomeRibbonDateNav?: boolean;
+  /** Dashboard Daybook tab (not full /reports route). */
+  dashboardEmbedded?: boolean;
 }
 
+function voucherToJsDate(raw: unknown): Date | null {
+  if (!raw) return null;
+  try {
+    const d = raw as { toDate?: () => Date };
+    if (typeof d.toDate === "function") return d.toDate();
+    if (raw instanceof Date) return raw;
+    const parsed = new Date(raw as string | number);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  } catch {
+    return null;
+  }
+}
 
-export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: DaybookReportProps) {
+export function DaybookReport({
+  onFullScreenToggle,
+  isPanelVisible = true,
+  welcomeRibbonDateNav = false,
+  dashboardEmbedded = false,
+}: DaybookReportProps) {
     const {
       vouchers,
       processedAccounts: accounts,
@@ -117,20 +141,19 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
       setDaybookDate(new Date());
     }, []);
 
-    useEffect(() => {
-        const savedState = sessionStorage.getItem("showNarration");
-        setShowDaybookNarration(savedState !== "false");
-    }, []);
-
-    const handleShowNarrationChange = (checked: boolean) => {
-        setShowDaybookNarration(checked);
-        sessionStorage.setItem("showNarration", String(checked));
-    };
-
-    // PC: toolbar arrows + side chevrons + keyboard (- / =); mobile: swipe only on bottom ← → strip.
     const shiftDaybookDateBy = useCallback((deltaDays: number) => {
         setDaybookDate((prev) => startOfDay(addDays(prev ?? new Date(), deltaDays)));
     }, []);
+
+    useEffect(() => {
+      if (isMobile) return;
+      const onShift = (event: Event) => {
+        const delta = (event as CustomEvent<number>).detail;
+        if (delta === -1 || delta === 1) shiftDaybookDateBy(delta);
+      };
+      window.addEventListener(DAYBOOK_SHIFT_DATE_EVENT, onShift);
+      return () => window.removeEventListener(DAYBOOK_SHIFT_DATE_EVENT, onShift);
+    }, [isMobile, shiftDaybookDateBy]);
 
     useEffect(() => {
         if (!isMobile || !isPanelVisible) {
@@ -203,8 +226,38 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
         setDaybookFilters(prev => ({...prev, [key]: value}));
     }
 
+    const daybookMonthCutoff = useMemo(
+      () =>
+        dashboardEmbedded
+          ? startOfDay(subDays(new Date(), DASHBOARD_EMBEDDED_DAYBOOK_VOUCHER_LOOKBACK_DAYS))
+          : null,
+      [dashboardEmbedded]
+    );
+
+    /** Dashboard keep-alive: hidden tab par voucher filter / calendar mat chalao. */
+    const daybookPipelineActive = !dashboardEmbedded || isPanelVisible;
+
+    const vouchersForDaybookPipelineRef = useRef<typeof vouchers>(vouchers);
+    const vouchersForDaybookPipeline = useMemo(() => {
+      if (dashboardEmbedded && !isPanelVisible) {
+        return vouchersForDaybookPipelineRef.current;
+      }
+      const next =
+        !dashboardEmbedded || !daybookMonthCutoff
+          ? vouchers
+          : vouchers.filter((v) => {
+              const d = voucherToJsDate(v?.date);
+              return d ? startOfDay(d) >= daybookMonthCutoff : false;
+            });
+      vouchersForDaybookPipelineRef.current = next;
+      return next;
+    }, [vouchers, dashboardEmbedded, daybookMonthCutoff, isPanelVisible]);
+
     // plserver/APK: dates often plain `{seconds,nanoseconds}` after JSON wire — not `toDate()` / `new Date(obj)`.
-    const transactionDates = useMemo(() => collectVoucherCalendarDates(vouchers), [vouchers]);
+    const transactionDates = useMemo(() => {
+      if (!daybookPipelineActive) return [];
+      return collectVoucherCalendarDates(vouchersForDaybookPipeline);
+    }, [vouchersForDaybookPipeline, daybookPipelineActive]);
 
     // User filter: sirf company owner + sharedWith — reconciliation / voucher ke extra userId mat dikhao
     const { daybookUserFilterIds, daybookUserLabelHints } = useMemo(() => {
@@ -242,21 +295,31 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
         [daybookDate]
     );
 
-    const { daybookTransactions, daybookSummary: clientDaybookSummary } = useTransactions(
+    const { daybookTransactions: hookDaybookTransactions, daybookSummary: clientDaybookSummary } = useTransactions(
         daybookEntity,
         'daybook', 
         daybookDateRange, 
         undefined, 
-        accounts, 
-        vouchers, 
+        accounts,
+        vouchersForDaybookPipeline,
         undefined, 
         daybookFilters, 
         daybookVoucherTypes, 
         voucherJournalAccountNames, 
         vouchersUserNames,
         undefined,
-        daybookUserFilter
+        daybookUserFilter,
+        dashboardEmbedded,
+        daybookPipelineActive
       );
+
+    const hookDaybookTransactionsRef = useRef<any[]>([]);
+    if (daybookPipelineActive && Array.isArray(hookDaybookTransactions)) {
+      hookDaybookTransactionsRef.current = hookDaybookTransactions;
+    }
+    const daybookTransactions = daybookPipelineActive
+      ? hookDaybookTransactions
+      : hookDaybookTransactionsRef.current;
 
     const daybookSummaryRef = useRef<DaybookDailySummary | null>(null);
     useEffect(() => {
@@ -329,16 +392,16 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
     const isFullScreen = !!onFullScreenToggle;
 
     return (
-      <div id="daybook-area" className={cn("printable-area flex flex-col min-h-0 h-full")}>
+      <div id="daybook-area" className={cn("printable-area flex flex-col min-h-0 h-full", isMobile && "w-full min-w-0 max-w-full")}>
         <Card
             className={cn(
             "relative flex-1 flex flex-col min-h-0 overflow-hidden border-2 border-foreground transition-all duration-300",
             isFullScreen && "h-full",
-            isMobile && "px-0",
+            isMobile && "w-full min-w-0 max-w-full px-0",
             isMobile && daybookRotated && "max-w-[90vh] w-[90vh] h-[100vw] fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rotate-90 z-50"
         )}
         >
-            <CardHeader className={cn("print:hidden flex-shrink-0", isMobile && "px-0.5")}>
+            <CardHeader className={cn("print:hidden flex-shrink-0", isMobile && "w-full min-w-0 max-w-full px-0.5")}>
                 <div className="flex flex-wrap items-center justify-between gap-4">
                     <div>
                         <CardTitle>Daybook</CardTitle>
@@ -363,7 +426,7 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                     </div>
                 </div>
                  {displayDaybookSummary && (
-                    <Card className={cn("mt-4 bg-blue-50 border-blue-200 text-blue-800", isMobile && "rounded-lg mx-[2px]")}>
+                    <Card className={cn("mt-4 bg-blue-50 border-blue-200 text-blue-800", isMobile && "min-w-0 max-w-full rounded-lg mx-[2px]")}>
                         <CardHeader className={cn("pb-2 pt-4 space-y-3", isMobile ? "px-2" : "px-4")}>
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                 <div className="min-w-0">
@@ -414,7 +477,7 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                             onClick={() => setSelectedDaybookSummaryRowId(null)}
                             className={cn(
                               isMobile
-                                ? "[&_thead_tr]:!border-b-[3px] [&_tbody_tr]:!border-b-[1.2px] [&_tbody_tr.daybook-summary-group-row]:!border-t-[3px] [&_tbody_tr.daybook-summary-group-row]:!border-b-[3px]"
+                                ? "min-w-0 max-w-full [&_thead_tr]:!border-b-[3px] [&_tbody_tr]:!border-b-[1.2px] [&_tbody_tr.daybook-summary-group-row]:!border-t-[3px] [&_tbody_tr.daybook-summary-group-row]:!border-b-[3px]"
                                 : "[&_thead_tr]:!border-b-[3px] [&_tbody_tr]:!border-b-[1.5px] [&_tbody_tr.daybook-summary-group-row]:!border-t-[3px] [&_tbody_tr.daybook-summary-group-row]:!border-b-[3px]",
                               "[&_thead_tr]:!border-foreground [&_tbody_tr]:!border-foreground/85 [&_tbody_tr.daybook-summary-group-row]:cursor-pointer [&_tbody_tr.daybook-summary-group-row]:transition-colors [&_tbody_tr.daybook-summary-group-row:hover]:bg-blue-100/40"
                             )}
@@ -612,7 +675,7 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                                 </Popover>
                             )}
                             {/* PC: date ↔ Today ke beech prev/next din; mobile par hide */}
-                            {!isMobile && (
+                            {!isMobile && !welcomeRibbonDateNav && (
                                 <>
                                     <Button type="button" variant="outline" size="icon" className="h-9 w-9 shrink-0" aria-label="Previous day" onClick={() => shiftDaybookDateBy(-1)}>
                                         <ChevronLeft className="h-4 w-4" />
@@ -632,7 +695,7 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                                 <Checkbox
                                     id="daybook-show-narration"
                                     checked={showDaybookNarration}
-                                    onCheckedChange={(c) => handleShowNarrationChange(Boolean(c))}
+                                    onCheckedChange={(c) => setShowDaybookNarration(Boolean(c))}
                                 />
                                 <label htmlFor="daybook-show-narration" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Show Narration</label>
                             </div>
@@ -682,16 +745,16 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                 </div>
             </CardHeader>
             <CardContent className={cn(
-                "flex-1 min-h-0 overflow-hidden flex flex-col relative px-0 min-w-full",
-                isMobile && "px-0",
+                "flex-1 min-h-0 overflow-hidden flex flex-col relative px-0",
+                isMobile ? "w-full min-w-0 max-w-full" : "min-w-full",
                 (!daybookTransactions || daybookTransactions.length === 0) && "min-h-[420px]"
             )}>
                  {daybookTransactions && daybookTransactions.length > 0 ? (
                 <div className="flex-1 min-h-0 flex flex-col overflow-hidden min-w-full w-full">
-                    <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto min-w-full w-full">
-                           {/* Mobile: 2px horizontal gap so transaction cards match Daily Summary card spacing */}
-                           <div className={cn("w-full min-w-full overflow-hidden pr-[15px]", isMobile && "px-[2px]")}>
-                           <TransactionsTable
+                    {isMobile ? (
+                      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto min-w-full w-full">
+                        <div className={cn("w-full min-w-full overflow-hidden px-[2px]")}>
+                          <TransactionsTable
                                 transactions={daybookTransactions || []}
                                 context="daybook"
                                 disableLayoutAnimation
@@ -712,9 +775,38 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                                 onVoucherTypeChange={setDaybookVoucherTypes}
                                 isDateChange={isDateChange}
                                 hideFooter={true}
-                           />
-                           </div>
-                    </div>
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <DaybookTxnScrollColumn className="flex-1 min-h-0">
+                        <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col">
+                          <TransactionsTable
+                                transactions={daybookTransactions || []}
+                                context="daybook"
+                                disableLayoutAnimation
+                                showNarration={showDaybookNarration}
+                                narrationNoteSearch={daybookNarrationNoteSearch}
+                                journalAccountNames={voucherJournalAccountNames}
+                                userNames={vouchersUserNames}
+                                onRowClick={handleEditVoucher}
+                                onInterCompanyChangeDetectedClick={handleInterCompanyChangeDetectedClick}
+                                onHistoryVoucher={handleHistoryVoucher}
+                                onAddLink={handleAddLink}
+                                openingBalance={daybookSummary?.total.yesterday}
+                                filters={daybookFilters}
+                                setFilters={setDaybookFilters}
+                                activeFilter={activeDaybookFilter}
+                                setActiveFilter={setActiveDaybookFilter}
+                                voucherTypes={daybookVoucherTypes}
+                                onVoucherTypeChange={setDaybookVoucherTypes}
+                                isDateChange={isDateChange}
+                                hideFooter={true}
+                                daybookDesktopUnifiedScroll
+                          />
+                        </div>
+                      </DaybookTxnScrollColumn>
+                    )}
                 </div>
               ) : (
                 <div className="relative flex-1 min-h-0 flex items-center justify-center pointer-events-none overflow-hidden rounded-b-lg">
@@ -729,7 +821,8 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                     </div>
                 </div>
               )}
-            {/* Blue txn list ke niche ← → strip — mobile swipe sirf yahan (portal / summary / cards par nahi). */}
+            {/* Mobile: txn list ke niche ← → swipe strip; desktop dashboard uses Good Afternoon ribbon. */}
+            {isMobile ? (
             <div className="relative shrink-0 flex h-10 items-center print:hidden">
                 <button
                     type="button"
@@ -760,6 +853,7 @@ export function DaybookReport({ onFullScreenToggle, isPanelVisible = true }: Day
                     <ChevronRight className={cn(isMobile ? "h-7 w-7" : "h-8 w-8")} strokeWidth={1.5} />
                 </button>
             </div>
+            ) : null}
             </CardContent>
         </Card>
         {isMobile && showSwipeDateIntro && isPanelVisible ? (

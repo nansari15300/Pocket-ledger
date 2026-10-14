@@ -22,6 +22,9 @@ import {
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { MobileMasterDetailNestedName } from "@/components/entity/MobileMasterDetailNestedName";
 import { mlc } from "@/lib/mobileListChrome";
+import { mobileEntityDetailShellTitle } from "@/lib/mobileDetailChrome";
+import { MobileMasterDetailHeaderAvatar } from "@/components/entity/MobileMasterDetailHeaderAvatar";
+import { MobileMasterDetailHeaderDateSecondary } from "@/components/entity/MobileMasterDetailHeaderDateSecondary";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PartyList } from "@/components/party/PartyList";
@@ -95,9 +98,6 @@ import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
 import {
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
-import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
-import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
-import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import {
   matchesOverdueImportanceFilter,
@@ -211,7 +211,7 @@ function PartyPageContent() {
   // Pehle company context: warna vouchersLoading false ho kar khali list flash, phir company aate hi dubara paint (Poora page jump).
   const { company, companyId, loading: companyLoading, effectiveNotificationSettings } = useCompany();
   const adminPartyMode = isAdminPanelPartyPage(companyId);
-  const { formatCurrency } = useDate();
+  const { formatCurrency, formatDate, formatDateBS, dateSystem } = useDate();
   const { vouchers, loading: vouchersLoading, processedParties, processedPartiesForSelection, processedGroups: initialProcessedGroups, overdueTransactions, hasOverdueTransactions, userNames: voucherUserNames, journalAccountNames } = useVouchers();
   const waitingForCompany = Boolean(companyId && (companyLoading || !company));
   const pageColdLoading = waitingForCompany || (vouchersLoading && processedParties.length === 0);
@@ -554,42 +554,33 @@ function PartyPageContent() {
   ]);
 
   /** Mobile party ledger: master row me "Parties" ki jagah context clear ("Party details" + naam). */
-  const responsiveMasterDetailTitle = useMemo(() => {
-    if (isMobile && selectedParty) return "Party details";
-    return partyMasterDetailTitle;
-  }, [isMobile, selectedParty, partyMasterDetailTitle]);
+  const responsiveMasterDetailTitle = useMemo(
+    () =>
+      mobileEntityDetailShellTitle(
+        isMobile,
+        Boolean(selectedParty && selectedParty.id !== OVERDUE_ACCOUNT_ID),
+        partyMasterDetailTitle,
+        "Party details"
+      ),
+    [isMobile, selectedParty, partyMasterDetailTitle]
+  );
+  const partyMobileHeaderSecondary = useMemo((): ReactNode | undefined => {
+    const partyDetailViews = ["parties", "ic_ac", "subscribers", "agents"] as const;
+    if (!isMobile || !selectedParty || selectedParty.id === OVERDUE_ACCOUNT_ID) return undefined;
+    if (!partyDetailViews.includes(activeView as (typeof partyDetailViews)[number])) return undefined;
+    return (
+      <MobileMasterDetailHeaderDateSecondary
+        dateRange={partyDetailsDateRange}
+        onClear={() => setPartyDetailsDateRange(undefined)}
+      />
+    );
+  }, [isMobile, selectedParty, activeView, partyDetailsDateRange]);
+
   const mobileDetailHeaderAvatar = useMemo(() => {
     if (!isMobile || !selectedParty) return null;
     const attachmentUrl = trimEntityFileUrlForPreview((selectedParty as any).fileUrl);
-    const initials = (selectedParty.name || "NA")
-      .split(" ")
-      .filter(Boolean)
-      .map((part) => part[0])
-      .slice(0, 2)
-      .join("")
-      .toUpperCase();
-    const openPreview = () => {
-      if (!attachmentUrl) return;
-      void openAttachmentInApp(attachmentUrl, { title: selectedParty.name });
-    };
     return (
-      <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
-        <EntityFileAttachmentHover fileUrl={attachmentUrl} triggerClassName="inline-flex rounded-full">
-          <button
-            type="button"
-            className="inline-flex h-full w-full items-center justify-center rounded-full"
-            onClick={openPreview}
-            aria-label={`Preview ${selectedParty.name} avatar`}
-          >
-            <ResolvedEntityAvatar
-              className="h-full w-full text-xs"
-              src={attachmentUrl ?? undefined}
-              alt={selectedParty.name}
-              fallbackText={initials || "NA"}
-            />
-          </button>
-        </EntityFileAttachmentHover>
-      </div>
+      <MobileMasterDetailHeaderAvatar name={selectedParty.name || "Party"} attachmentUrl={attachmentUrl} />
     );
   }, [isMobile, selectedParty]);
 
@@ -1440,7 +1431,10 @@ function PartyPageContent() {
         : `Party (${filteredPartyCount})`;
 
   const partySectionLabelEl = (
-    <div className={cn(mlc.sectionLabelRow, "justify-between", isMobile && "px-[2px]")}>
+    <div
+      className={cn(mlc.sectionLabelRow, "justify-between", isMobile && "px-[2px]")}
+      {...(hasOverdueTransactions && overdueVirtualParty ? { "data-pl-party-overdue-row": "" } : {})}
+    >
       <div className="flex items-center gap-2">
         <User className={mlc.sectionIcon} />
         <span>{partyListSectionTitle}</span>
@@ -1449,7 +1443,7 @@ function PartyPageContent() {
         <Button
           variant="outline"
           size="sm"
-          className="h-7 px-2 text-xs font-medium border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-900/40 dark:hover:text-amber-100"
+          className="h-[35px] max-h-[35px] self-center px-2 text-xs font-medium border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-900/40 dark:hover:text-amber-100"
           onClick={() => handleSelect(overdueVirtualParty)}
         >
           <AlertCircle className="h-3.5 w-3 mr-1 shrink-0" />
@@ -1663,6 +1657,7 @@ function PartyPageContent() {
           dateRange={partyDetailsDateRange}
           onDateRangeChange={setPartyDetailsDateRange}
           userNames={mergedUserNames}
+          hideMobilePeriodLabelRow={isMobile}
         />
       )}
       {activeView === 'groups' && selectedGroup && (
@@ -1891,6 +1886,7 @@ function PartyPageContent() {
         mobileSelectionLabel={mobilePartyGroupSelectionLabel}
         mobileSelectionLabelClassName={mobilePartyGroupSelectionLabelClassName}
         mobileDetailHeaderEnd={mobileDetailHeaderAvatar}
+        mobileDetailHeaderSecondary={partyMobileHeaderSecondary}
         balance={
           <span className={cn(
               "font-semibold",

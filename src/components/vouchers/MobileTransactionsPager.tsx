@@ -32,6 +32,12 @@ type Props = {
 
 const PAGE_SIZE_OPTIONS = ROWS_PER_PAGE_OPTIONS_MOBILE;
 
+/** 30px pager row ke andar — thoda bada label, height na badhe */
+const PAGER_NAV_BTN_CLASS =
+  "h-5 min-h-0 shrink-0 px-2 py-0 text-xs leading-none font-bold bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-200 disabled:text-gray-500";
+const PAGER_NEXT_BTN_CLASS =
+  "h-5 min-h-0 shrink-0 px-2 py-0 text-xs leading-none font-bold bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-200 disabled:text-gray-500";
+
 export function MobileTransactionsPager({
   currentPage,
   totalItems,
@@ -81,11 +87,11 @@ export function MobileTransactionsPager({
   }, [isMobile, registerPagerFabHost, unregisterPagerFabHost]);
 
   return (
-    <div className={cn("relative flex-shrink-0", className)}>
+    <div className={cn("pl-mobile-txn-pager-host relative flex-shrink-0", className)}>
       {/* Summary FAB — pagination bar ke bilkul upar, right side */}
       {isMobile ? (
         <div
-          className="pointer-events-none absolute bottom-full right-2 z-40 mb-1 flex justify-end"
+          className="pointer-events-none absolute bottom-full left-1/2 z-40 mb-1 flex -translate-x-1/2 justify-center"
           {...mdcNoEdgeSwipeCapture}
         >
           <div className="pointer-events-auto">
@@ -96,15 +102,18 @@ export function MobileTransactionsPager({
           </div>
         </div>
       ) : null}
-      <div className="border-t bg-muted/20 px-2 py-0.5 font-bold">
-        <div className="overflow-x-auto">
-          <div className="flex w-max min-w-full items-center justify-between gap-1.5">
+      <div
+        className="pl-mobile-txn-pager box-border flex h-[30px] min-h-[30px] max-h-[30px] items-center border-t border-blue-300/60 bg-blue-100/80 px-2 py-0 font-bold"
+        data-pl-mobile-txn-pager=""
+      >
+        <div className="min-h-0 w-full overflow-x-auto">
+          <div className="flex h-[30px] w-max min-w-full items-center justify-between gap-1.5">
             <div className="flex min-w-0 items-center gap-1">
               <Button
                 type="button"
                 variant="default"
                 size="sm"
-                className="h-5 shrink-0 px-1.5 text-[10px] font-bold bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
+                className={PAGER_NAV_BTN_CLASS}
                 onClick={goPrevPage}
                 disabled={prevDisabled}
               >
@@ -134,7 +143,8 @@ export function MobileTransactionsPager({
                 onValueChange={(value) => onRowsPerPageChange(Number(value) || 0)}
               >
                 <SelectTrigger
-                  className="h-5 w-[70px] text-[10px] font-bold"
+                  data-pl-mobile-txn-pager-select=""
+                  className="pl-mobile-txn-pager-select h-[22px] w-[70px] shrink-0 border border-blue-300 bg-white px-2 text-[10px] font-bold shadow-sm"
                   aria-label="Rows per page"
                   title="Rows per page"
                 >
@@ -169,7 +179,7 @@ export function MobileTransactionsPager({
                 type="button"
                 variant="default"
                 size="sm"
-                className="h-5 shrink-0 px-1.5 text-[10px] font-bold bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
+                className={PAGER_NEXT_BTN_CLASS}
                 onClick={goNextPage}
                 disabled={nextDisabled}
               >

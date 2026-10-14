@@ -20,6 +20,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills, LedgerViewModeToggleButton } from "@/components/ui/LedgerViewModePills";
+import { LedgerTdsFilterPill } from "@/components/ui/LedgerTdsFilterPill";
 import {
   Card,
   CardHeader,
@@ -68,11 +69,19 @@ import {
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
+import {
+  buildTaxNameById,
+  expandPartyLedgerTdsRows,
+  ledgerTdsFooterColumnMenuKeys,
+  mergeLedgerTdsVisibleColumnsWithPrefs,
+  sortLedgerTdsRowsForDisplay,
+} from "@/lib/partyLedgerTdsView";
 import { mergeLedgerUserDisplayNameMaps } from "@/lib/ledgerUserColumnDisplay";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
+import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -254,7 +263,22 @@ export function GroupDetails({
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const { company, companyId } = useCompany();
   useFyLoadOnDateRangeChange(dateRange);
-  const { vouchers, processedParties, processedAccounts, processedExpenseAccounts, processedAccountGroups, processedExpenseGroups, processedTaxGroups, processedStaffGroups, processedTaxes, processedStaff, processedItems, processedItemGroups, journalAccountNames } = useVouchers();
+  const {
+    vouchers,
+    vouchersAll,
+    processedParties,
+    processedAccounts,
+    processedExpenseAccounts,
+    processedAccountGroups,
+    processedExpenseGroups,
+    processedTaxGroups,
+    processedStaffGroups,
+    processedTaxes,
+    processedStaff,
+    processedItems,
+    processedItemGroups,
+    journalAccountNames,
+  } = useVouchers();
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -719,6 +743,7 @@ export function GroupDetails({
 
   const {
     freezeOverlay: memberFreezeOverlay,
+    closingBalanceRowActions: memberClosingBalanceRowActions,
     closingBalanceActions: memberClosingBalanceActions,
     blockNewTransactions: blockMemberNewTransactions,
   } = useMasterAccountFreezeDetailsChrome({
@@ -731,10 +756,12 @@ export function GroupDetails({
     adjustBalanceActions: memberAdjustBalanceActions,
   });
 
-  const tableClosingBalanceActions =
+  const tableClosingBalanceRowActions =
     liveFreezeTargetParty && groupType === "party"
-      ? memberClosingBalanceActions
+      ? memberClosingBalanceRowActions
       : adjustBalanceClosingActions;
+  const tableClosingBalanceActions =
+    liveFreezeTargetParty && groupType === "party" ? memberClosingBalanceActions : null;
 
   const transactionDates = useMemo(() => {
     const dates = new Set<number>();
@@ -923,17 +950,56 @@ export function GroupDetails({
     [displayTransactions, statusFilter]
   );
 
+  const [tdsLedgerOnly, setTdsLedgerOnly] = useState(false);
+  const tdsLedgerOnlyActive = tdsLedgerOnly && groupType === "party";
+  const taxNameById = useMemo(() => buildTaxNameById(processedTaxes), [processedTaxes]);
+  const vouchersByIdForTds = useMemo(() => {
+    const src = vouchersAll?.length ? vouchersAll : vouchers;
+    return new Map(
+      src.map((v: { id?: string }) => [String(v.id ?? ""), v as Record<string, unknown>])
+    );
+  }, [vouchers, vouchersAll]);
+  const ledgerTableSourceTransactions = useMemo(() => {
+    if (!tdsLedgerOnlyActive) return statusFilteredTransactions;
+    return expandPartyLedgerTdsRows(statusFilteredTransactions, taxNameById, {
+      voucherById: vouchersByIdForTds,
+    });
+  }, [statusFilteredTransactions, tdsLedgerOnlyActive, taxNameById, vouchersByIdForTds]);
+
+  const effectiveVisibleColumns = useMemo(() => {
+    if (tdsLedgerOnlyActive) {
+      return mergeLedgerTdsVisibleColumnsWithPrefs(visibleColumns, balanceMode === "bill_wise");
+    }
+    const base =
+      balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns;
+    return { ...base, tdsTaxable: false, tdsAmount: false };
+  }, [tdsLedgerOnlyActive, balanceMode, visibleColumns]);
+
+  const toggleTdsLedgerOnly = useCallback(() => {
+    setTdsLedgerOnly((prev) => !prev);
+    setCurrentPage(1);
+  }, [setCurrentPage]);
+
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
-  const sortedTransactions = useMemo(
-    () =>
-      recomputeRunningBalanceTopToBottom(
-        sortTransactionsWithFiscalMergeForCompany(
-          filterByUnapprovedOnly(statusFilteredTransactions), "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
-        openingBalanceForPeriod
-      ),
-    [statusFilteredTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
-  );
+  const sortedTransactions = useMemo(() => {
+    const base = filterByUnapprovedOnly(ledgerTableSourceTransactions);
+    if (tdsLedgerOnlyActive) {
+      return sortLedgerTdsRowsForDisplay(base, sortBy, sortOrder);
+    }
+    return recomputeRunningBalanceTopToBottom(
+      sortTransactionsWithFiscalMergeForCompany(base, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
+      openingBalanceForPeriod
+    );
+  }, [
+    ledgerTableSourceTransactions,
+    tdsLedgerOnlyActive,
+    sortBy,
+    sortOrder,
+    filterByUnapprovedOnly,
+    openingBalanceForPeriod,
+    company,
+  ]);
 
   // Statement check mode + desktop tail paging (PartyDetails jaisa)
   const {
@@ -1331,8 +1397,8 @@ export function GroupDetails({
             </button>
           )}
         </div>
-        <div className="flex-shrink-0 border-b px-2 py-1">
-          <p className={cn("text-center text-lg font-bold leading-tight", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+        <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
+          <p className={cn(mdc.mobileTxnBalanceTextLg, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
             {balanceText} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
           </p>
         </div>
@@ -1391,12 +1457,13 @@ export function GroupDetails({
             openingBalanceNarration={(group as any).openingBalanceNarration}
             booksOpeningBalance={booksOpeningForGroup}
             ledgerDateFilterActive={hasLedgerDateFilter}
-            ledgerShowBookOpeningRow={rowsPerPage <= 0 || mobilePaginationMeta.sliceStart === 0}
+            ledgerShowBookOpeningRow={!tdsLedgerOnlyActive && (rowsPerPage <= 0 || mobilePaginationMeta.sliceStart === 0)}
+            hideLedgerOpeningRows={tdsLedgerOnlyActive}
             openingBalancePeriodStartDate={mobileLedgerOpeningPeriodStartDate}
             dateRange={dateRange}
             openingBalanceActions={undefined}
             showNarration={showNarration}
-            visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
+            visibleColumns={effectiveVisibleColumns}
             journalAccountNames={journalAccountNames}
             userNames={mergedUserNames}
             onRowClick={(t) => { openModalInUrl(); handleEditVoucher(t); }}
@@ -1416,6 +1483,7 @@ export function GroupDetails({
             hideBalanceColumn={false}
             isDateChange={false}
             scrollOnlyTransactions
+            closingBalanceRowActions={tableClosingBalanceRowActions}
             closingBalanceActions={tableClosingBalanceActions}
             statusFilter={statusFilter}
             statusFilterAllChecked={statusFilterAllChecked}
@@ -1428,7 +1496,7 @@ export function GroupDetails({
           </div>
         </div>
         <MobileTransactionsPager
-          className="flex-shrink-0 mb-12"
+          className={mdc.ledgerTxnPagerOutside}
           currentPage={currentPage}
           totalItems={filteredMobileTransactions.length}
           rowsPerPage={rowsPerPage}
@@ -1759,6 +1827,9 @@ export function GroupDetails({
                 { value: "bill_wise", label: "Bill wise" },
               ]}
             />
+            {groupType === "party" ? (
+              <LedgerTdsFilterPill active={tdsLedgerOnlyActive} onToggle={toggleTdsLedgerOnly} />
+            ) : null}
             <Button
               variant="chromePill"
               size="sm"
@@ -1786,7 +1857,7 @@ export function GroupDetails({
             groupEntityType="party"
             contextId={group.id}
             showNarration={showNarration}
-            visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
+            visibleColumns={effectiveVisibleColumns}
             openingBalance={desktopPaginationMeta.openingForPage}
             openingBalanceOutstanding={groupOpeningOutstandingForTable}
             openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
@@ -1794,7 +1865,8 @@ export function GroupDetails({
             openingBalanceNarration={(group as any).openingBalanceNarration}
             booksOpeningBalance={booksOpeningForGroup}
             ledgerDateFilterActive={hasLedgerDateFilter}
-            ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0}
+            ledgerShowBookOpeningRow={!tdsLedgerOnlyActive && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
+            hideLedgerOpeningRows={tdsLedgerOnlyActive}
             openingBalancePeriodStartDate={desktopLedgerOpeningPeriodStartDate}
             dateRange={dateRange}
             openingBalanceActions={
@@ -1825,6 +1897,7 @@ export function GroupDetails({
             periodCr={desktopPaginationMeta.periodCrForPage}
             closingBalance={desktopPaginationMeta.closingForPage}
             scrollOnlyTransactions
+            closingBalanceRowActions={tableClosingBalanceRowActions}
             closingBalanceActions={tableClosingBalanceActions}
             statusFilter={statusFilter}
             statusFilterAllChecked={statusFilterAllChecked}
@@ -1853,12 +1926,19 @@ export function GroupDetails({
               />
             <LedgerFooterColumnsMenu>
                 <DropdownMenuContent align="start" className="w-52 p-2">
-                {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
+                {(tdsLedgerOnlyActive
+                  ? ledgerTdsFooterColumnMenuKeys(balanceMode === "bill_wise")
+                  : (Object.keys(COLUMN_LABELS) as TransactionColumnKey[]).filter(
+                      (key) => !["tdsTaxable", "tdsAmount"].includes(key)
+                    )
+                )
                   .filter((key) => key !== "status" || balanceMode === "bill_wise")
                   .map((key) => {
                   const isStatusInStatement = key === "status" && balanceMode === "statement";
                   const isStatusInBillWise = key === "status" && balanceMode === "bill_wise";
                   const isStatusLocked = isStatusInStatement || isStatusInBillWise;
+                  const columnChecked =
+                    isStatusInStatement ? false : isStatusInBillWise ? true : effectiveVisibleColumns[key] !== false;
                   return (
                     <DropdownMenuItem
                       key={key}
@@ -1867,7 +1947,7 @@ export function GroupDetails({
                     >
                       <Checkbox
                         id={`col-${key}-group`}
-                        checked={isStatusInStatement ? false : (isStatusInBillWise ? true : visibleColumns[key] !== false)}
+                        checked={columnChecked}
                         disabled={isStatusLocked}
                         onCheckedChange={isStatusLocked ? undefined : (c) => handleColumnVisibilityChange(key, Boolean(c))}
                       />

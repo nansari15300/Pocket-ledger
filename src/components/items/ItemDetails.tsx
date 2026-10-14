@@ -61,6 +61,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
+import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -219,6 +220,9 @@ export default function ItemDetails({
   userNames,
   onShowAll,
   transactions,
+  dateRange: dateRangeProp,
+  onDateRangeChange,
+  hideMobilePeriodLabelRow = false,
 }: {
   item?: Item;
   onItemUpdated: (updated?: Partial<Item>) => void;
@@ -231,6 +235,9 @@ export default function ItemDetails({
   onBack?: () => void;
   userNames?: Record<string, string>;
   transactions: any[];
+  dateRange?: DateRange;
+  onDateRangeChange?: (dateRange: DateRange | undefined) => void;
+  hideMobilePeriodLabelRow?: boolean;
 }) {
   const { formatDate, formatDateBS, formatCurrency: formatMoney, dateSystem, formatCurrencyForPrint } = useDate();
   const { company, companyId } = useCompany(); 
@@ -247,7 +254,10 @@ export default function ItemDetails({
   const { balanceMode } = useBalanceMode();
   const { can } = usePermissions();
 
-  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  const [internalDateRange, setInternalDateRange] = useState<DateRange | undefined>(undefined);
+  const dateRangeControlled = onDateRangeChange != null;
+  const dateRange = dateRangeControlled ? dateRangeProp : internalDateRange;
+  const setDateRange = dateRangeControlled ? onDateRangeChange! : setInternalDateRange;
   useFyLoadOnDateRangeChange(dateRange);
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
@@ -896,23 +906,24 @@ export default function ItemDetails({
       {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
       <div className="flex flex-col flex-shrink-0 border-b bg-background">
         <MobileDetailSummaryCollapsible>
-        {/* Row 2: Date range label + X icon - Party-style */}
-        <div className="flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5 bg-background">
-          <span className="text-[11px] font-medium leading-tight text-muted-foreground">{dateRangeLabel}</span>
-          {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
-            <button
-              type="button"
-              onClick={() => setDateRange(undefined)}
-              className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
-              aria-label="Clear date filter"
-            >
-              <XCircle className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
+        {!hideMobilePeriodLabelRow ? (
+          <div className="flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5 bg-background">
+            <span className="text-[11px] font-medium leading-tight text-muted-foreground">{dateRangeLabel}</span>
+            {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
+              <button
+                type="button"
+                onClick={() => setDateRange(undefined)}
+                className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
+                aria-label="Clear date filter"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        ) : null}
         {/* Balance — party jaisa center line (unit dropdown same row, h-8) */}
-        <div className="flex flex-shrink-0 items-center justify-center gap-2 border-b bg-background px-2 py-1">
-          <p className={cn("text-center text-lg font-bold leading-tight", headerStockValue >= 0 ? "text-green-600" : "text-red-600")}>
+        <div className={cn(mdc.mobileTxnBalanceRowInline, "bg-background")} {...mdcMobileTxnBalanceRowData}>
+          <p className={cn(mdc.mobileTxnBalanceTextLg, headerStockValue >= 0 ? "text-green-600" : "text-red-600")}>
             {balanceText}{" "}
             {stockView === "qty" ? formatQtyValue(headerStockValue) : formatMoney(Math.abs(headerStockValue), { noSuffix: true })}
           </p>
@@ -982,7 +993,7 @@ export default function ItemDetails({
         </div>
       </div>
     <MobileTransactionsPager
-      className="flex-shrink-0 mb-12"
+      className={mdc.ledgerTxnPagerOutside}
       currentPage={currentPage}
       totalItems={ledgerPagingTransactions.length}
       rowsPerPage={rowsPerPage}

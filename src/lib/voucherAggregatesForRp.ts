@@ -1,3 +1,5 @@
+import { getSalePurchasePartyAmount } from "@/lib/tdsVoucher";
+
 /**
  * useVouchers `voucherAggregates` loop ka pure copy — Receivables/Payables server summary
  * aur client fallback ke processed entity lists ko client jaisa rakhne ke liye (party/staff/tax maps).
@@ -63,10 +65,11 @@ export function buildVoucherAggregateMapsForRp(
     }
 
     if (v.partyId) {
+      const partyAmt = getSalePurchasePartyAmount(v);
       if (["sale", "payment_out", "direct_income"].includes(v.type)) {
-        addVal(partyMap, v.partyId, "debit", amount);
+        addVal(partyMap, v.partyId, "debit", v.type === "sale" || v.type === "sale_service" ? partyAmt : amount);
       } else if (["purchase", "payment_in", "direct_expense"].includes(v.type)) {
-        addVal(partyMap, v.partyId, "credit", amount);
+        addVal(partyMap, v.partyId, "credit", v.type === "purchase" || v.type === "purchase_service" ? partyAmt : amount);
       }
     }
 
@@ -116,6 +119,15 @@ export function buildVoucherAggregateMapsForRp(
           const tAmt = Number(line.taxAmount);
           if (v.type === "purchase") addVal(taxMap, line.taxAccountId, "debit", tAmt);
           else if (v.type === "sale") addVal(taxMap, line.taxAccountId, "credit", tAmt);
+        }
+        if (line.tdsAccountId && line.tdsAmount) {
+          const tdsAmt = Number(line.tdsAmount);
+          if (tdsAmt > 0) {
+            if (v.type === "purchase" || v.type === "purchase_service")
+              addVal(taxMap, line.tdsAccountId, "debit", tdsAmt);
+            else if (v.type === "sale" || v.type === "sale_service")
+              addVal(taxMap, line.tdsAccountId, "credit", tdsAmt);
+          }
         }
 
         if (line.itemId) {

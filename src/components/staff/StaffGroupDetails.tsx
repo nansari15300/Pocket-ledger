@@ -47,7 +47,7 @@ import {
   searchParamsStringForModalClose,
 } from "@/lib/modalUrlSync";
 import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
-import { mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
+import { mdc, mdcMobileTxnBalanceRowData, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { startOfDay, endOfDay, format } from "date-fns";
 import AdCalendar from "../ui/ad-calendar";
@@ -150,6 +150,7 @@ export function StaffGroupDetails({
   onBack,
   userNames,
   groupMemberFilterId = null,
+  hideMobilePeriodLabelRow = false,
 }: {
   group: StaffGroup;
   allGroups: StaffGroup[];
@@ -162,6 +163,7 @@ export function StaffGroupDetails({
   userNames?: Record<string, string>;
   onBack?: () => void;
   groupMemberFilterId?: string | null;
+  hideMobilePeriodLabelRow?: boolean;
 }) {
   useFyLoadOnDateRangeChange(dateRange);
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
@@ -198,7 +200,11 @@ export function StaffGroupDetails({
     [selectedMemberStaff?.fileUrl, selectedMemberStaff?.id]
   );
 
-  const { memberFreezeOverlay, memberClosingBalanceActions } = useGroupMemberAccountLedgerChrome({
+  const {
+    memberFreezeOverlay,
+    memberClosingBalanceRowActions,
+    memberClosingBalanceActions,
+  } = useGroupMemberAccountLedgerChrome({
     companyId,
     collection: STAFF_FREEZE_COLLECTION,
     patchCollection: "staff",
@@ -660,27 +666,29 @@ export function StaffGroupDetails({
             </div>
           ) : null}
           <MobileDetailSummaryCollapsible>
-          <div className="flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5">
-            <span className="text-[11px] font-medium leading-tight text-muted-foreground">
-              {!dateRange || (dateRange.from == null && dateRange.to == null)
-                ? rowsPerPage > 0
-                  ? `Last ${rowsPerPage} Txns`
-                  : "All Txns"
-                : dateRangeLabel}
-            </span>
-            {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
-              <button
-                type="button"
-                onClick={() => onDateRangeChange(undefined)}
-                className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
-                aria-label="Clear date filter"
-              >
-                <XCircle className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-          <div className="flex-shrink-0 border-b px-2 py-1">
-            <p className={cn("text-lg font-bold leading-tight flex justify-center items-baseline gap-px", balanceColorClass)}>
+          {!hideMobilePeriodLabelRow ? (
+            <div className="flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5">
+              <span className="text-[11px] font-medium leading-tight text-muted-foreground">
+                {!dateRange || (dateRange.from == null && dateRange.to == null)
+                  ? rowsPerPage > 0
+                    ? `Last ${rowsPerPage} Txns`
+                    : "All Txns"
+                  : dateRangeLabel}
+              </span>
+              {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
+                <button
+                  type="button"
+                  onClick={() => onDateRangeChange(undefined)}
+                  className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
+                  aria-label="Clear date filter"
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          ) : null}
+          <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
+            <p className={cn(mdc.mobileTxnBalanceTextLgFlex, balanceColorClass)}>
               <span>{formatCurrency(Math.abs(closingBalance), { showDrCr: false })}</span>
               <span className="text-lg">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
             </p>
@@ -751,6 +759,7 @@ export function StaffGroupDetails({
               periodDr={desktopPageLedgerStats.periodDrForPage}
               periodCr={desktopPageLedgerStats.periodCrForPage}
               closingBalance={desktopPageLedgerStats.closingForPage}
+              closingBalanceRowActions={memberClosingBalanceRowActions}
               closingBalanceActions={memberClosingBalanceActions}
               scrollOnlyTransactions
               {...statementCheck.tableProps}
@@ -1184,6 +1193,7 @@ export function StaffGroupDetails({
               periodDr={desktopPageLedgerStats.periodDrForPage}
               periodCr={desktopPageLedgerStats.periodCrForPage}
               closingBalance={desktopPageLedgerStats.closingForPage}
+              closingBalanceRowActions={memberClosingBalanceRowActions}
               closingBalanceActions={memberClosingBalanceActions}
               scrollOnlyTransactions
               hideDebitColumn={false}

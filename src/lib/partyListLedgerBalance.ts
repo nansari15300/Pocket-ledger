@@ -13,6 +13,7 @@ import {
   getPaymentOutPartyLinkAmount,
 } from "@/lib/payment-allocation-utils";
 import { voucherTouchesPartyLedger } from "@/lib/voucherTouchesPartyLedger";
+import { getSalePurchasePartyAmount } from "@/lib/tdsVoucher";
 
 export type PartyLedgerDebitCredit = { debit: number; credit: number };
 
@@ -30,7 +31,13 @@ function toNum(value: unknown): number {
 export function getPartyLedgerTransactionAmounts(transaction: any, partyId: string): PartyLedgerDebitCredit {
   let debit = 0;
   let credit = 0;
-  const amount = toNum(transaction?.total ?? transaction?.amount ?? 0);
+  const amount =
+    transaction?.type === "sale" ||
+    transaction?.type === "sale_service" ||
+    transaction?.type === "purchase" ||
+    transaction?.type === "purchase_service"
+      ? getSalePurchasePartyAmount(transaction)
+      : toNum(transaction?.total ?? transaction?.amount ?? 0);
   const paymentOutPayeeAmount =
     transaction?.type === "payment_out" ? getPaymentOutPartyLinkAmount(transaction) : amount;
   const directExpenseMainAmount =
@@ -105,6 +112,7 @@ function collectPartyIdCandidatesFromVoucher(v: any, partyIdSet: Set<string>): S
     for (const li of v.lineItems) {
       bump(li?.itemId);
       bump(li?.taxAccountId);
+      bump(li?.tdsAccountId);
     }
   }
   if (Array.isArray(v?.items)) {

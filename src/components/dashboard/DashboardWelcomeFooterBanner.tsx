@@ -5,7 +5,10 @@ import { motion } from "framer-motion";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { DashboardWelcomeClockLine } from "@/components/dashboard/DashboardWelcomeClockLine";
 import { proDashboardRibbonClass } from "@/lib/proTheme";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+export const DAYBOOK_SHIFT_DATE_EVENT = "pl-daybook-shift-date";
 
 export type DashboardWelcomeNewYearInfo = {
   event: string;
@@ -23,7 +26,14 @@ type DashboardWelcomeFooterBannerProps = {
   embedded?: boolean;
   /** Recent desktop: flat rows, horizontal line only (no amber box). */
   lineSections?: boolean;
+  /** Daybook desktop: prev/next day on this ribbon (toolbar arrows hidden). */
+  showDaybookDateNav?: boolean;
 };
+
+function dispatchDaybookDateShift(deltaDays: -1 | 1) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(DAYBOOK_SHIFT_DATE_EVENT, { detail: deltaDays }));
+}
 
 /** Greeting + live clock — dashboard tab bar ke upar fixed footer strip. */
 export function DashboardWelcomeFooterBanner({
@@ -33,15 +43,16 @@ export function DashboardWelcomeFooterBanner({
   className,
   embedded = false,
   lineSections = false,
+  showDaybookDateNav = false,
 }: DashboardWelcomeFooterBannerProps) {
   const shellCn = cn(
     "col-span-full overflow-hidden relative py-1 px-2",
     lineSections
-      ? "rounded-none border-0 bg-blue-100 shadow-none dark:border-blue-800 dark:bg-blue-950"
+      ? "rounded-none border-0 bg-background shadow-none"
       : cn(
           proDashboardRibbonClass(3),
           embedded
-            ? "rounded-none border-0 border-b border-amber-300/90 bg-amber-50 shadow-none dark:bg-amber-950/90 dark:border-amber-700/80"
+            ? "rounded-none border-0 bg-background shadow-none"
             : "border shadow-sm",
         ),
     className
@@ -53,7 +64,27 @@ export function DashboardWelcomeFooterBanner({
           {newYearInfo.daysLeft} days to {newYearInfo.year}!
         </div>
       ) : null}
-      <CardHeader className="p-0 text-center space-y-0">
+      <CardHeader className="relative p-0 text-center space-y-0">
+        {showDaybookDateNav ? (
+          <>
+            <button
+              type="button"
+              aria-label="Previous day"
+              className="absolute left-1 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+              onClick={() => dispatchDaybookDateShift(-1)}
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Next day"
+              className="absolute right-1 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+              onClick={() => dispatchDaybookDateShift(1)}
+            >
+              <ChevronRight className="h-5 w-5" />
+            </button>
+          </>
+        ) : null}
         {newYearInfo?.isNewYear ? (
           <div className="flex flex-col items-center justify-center py-0.5">
             <motion.div

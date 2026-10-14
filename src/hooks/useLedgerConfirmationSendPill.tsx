@@ -251,10 +251,11 @@ export function useLedgerConfirmationSendPill<T extends ConfirmableEntity>({
       <Button
         variant="outline"
         size="sm"
+        data-pl-ledger-closing-action-pill=""
         disabled={pending || (contactBlocked && !alreadySent)}
         className={cn(
           LEDGER_HEADER_PILL_CN,
-          "!h-[27px] min-h-[27px] text-xs",
+          "!h-[27px] min-h-[27px] text-xs rounded-full justify-center",
           MASTER_ACCOUNT_CONTACT_TIER_PILL_CN[contactTier],
           (alreadySent || contactBlocked) && "opacity-80"
         )}

@@ -1,4 +1,4 @@
-﻿
+
 
 "use client";
 
@@ -11,6 +11,7 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills, LedgerViewModeToggleButton } from "@/components/ui/LedgerViewModePills";
+import { LedgerTdsFilterPill } from "@/components/ui/LedgerTdsFilterPill";
 import {
   Card,
   CardHeader,
@@ -55,7 +56,7 @@ import {
   nestedLedgerChildDialogShell,
   type MasterEditPresentationMode,
 } from "@/lib/nestedLedgerMasterEditPresentation";
-import { mdc, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
+import { mdc, mdcMobileTxnBalanceRowData, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
 import * as XLSX from "xlsx";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 import { RunningBalanceFullChart } from "@/components/reports/RunningBalanceFullChart";
@@ -168,6 +169,13 @@ import {
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
+import {
+  buildTaxNameById,
+  expandPartyLedgerTdsRows,
+  ledgerTdsFooterColumnMenuKeys,
+  mergeLedgerTdsVisibleColumnsWithPrefs,
+  sortLedgerTdsRowsForDisplay,
+} from "@/lib/partyLedgerTdsView";
 import { mergeLedgerUserDisplayNameMaps } from "@/lib/ledgerUserColumnDisplay";
 import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -292,6 +300,8 @@ export function PartyDetails({
   confirmationFyRange,
   confirmationAllVouchers,
   ledgerPresentationMode = "default",
+  /** Master shell merged header me period label ho to andar wali row mat dikhao (party mobile). */
+  hideMobilePeriodLabelRow = false,
 }: {
   party: Party & { saleTotal?: number; purchaseTotal?: number };
   allParties?: Party[];
@@ -315,6 +325,7 @@ export function PartyDetails({
   confirmationFyRange?: { start: Date; end: Date };
   confirmationAllVouchers?: any[];
   ledgerPresentationMode?: MasterEditPresentationMode;
+  hideMobilePeriodLabelRow?: boolean;
 }) {
   const nestedLedgerNoteDialogShell =
     ledgerPresentationMode === "nested-ledger"
@@ -661,35 +672,39 @@ export function PartyDetails({
     handleFreezeSaved,
   ]);
 
-  const partyClosingBalanceActions = useMemo(() => {
-    const adjustBalance = canShowAdjustBalance ? (
-      <AddVoucherDialog
-        defaultTab="adjustment"
-        allowedTabs={["adjustment"]}
-        defaultVoucherData={{
-          defaultTab: "adjustment",
-          ...(adjustBalanceTarget ? { adjustmentTarget: adjustBalanceTarget } : {}),
-        }}
-      >
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={blockPartyNewTransactions}
-          className={cn(LEDGER_HEADER_PILL_CN, "!h-[27px] min-h-[27px] text-xs")}
-          title="Adjust Balance"
+  const partyClosingBalanceRowActions = useMemo(
+    () =>
+      canShowAdjustBalance ? (
+        <AddVoucherDialog
+          defaultTab="adjustment"
+          allowedTabs={["adjustment"]}
+          defaultVoucherData={{
+            defaultTab: "adjustment",
+            ...(adjustBalanceTarget ? { adjustmentTarget: adjustBalanceTarget } : {}),
+          }}
         >
-          <AdjustBalancePillLabel />
-        </Button>
-      </AddVoucherDialog>
-    ) : null;
-    if (!isPartyFrozen && !partyFreezeToggle && !adjustBalance && !confirmationSendPill) return null;
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={blockPartyNewTransactions}
+            className={cn(LEDGER_HEADER_PILL_CN, "!h-[27px] min-h-[27px] text-xs")}
+            title="Adjust Balance"
+          >
+            <AdjustBalancePillLabel />
+          </Button>
+        </AddVoucherDialog>
+      ) : null,
+    [canShowAdjustBalance, adjustBalanceTarget, blockPartyNewTransactions]
+  );
+
+  const partyClosingBalanceActions = useMemo(() => {
+    if (!isPartyFrozen && !partyFreezeToggle && !confirmationSendPill) return null;
     if (isPartyFrozen) {
       const footerToggle = isMobile && !partyBannerToggleFits ? partyFreezeToggle : null;
       return (
         <div className="flex flex-wrap items-center gap-2">
           {footerToggle}
           {confirmationSendPill}
-          {adjustBalance}
         </div>
       );
     }
@@ -697,7 +712,6 @@ export function PartyDetails({
       <div className="flex flex-wrap items-center gap-2">
         {partyFreezeToggle}
         {confirmationSendPill}
-        {adjustBalance}
       </div>
     );
   }, [
@@ -706,9 +720,6 @@ export function PartyDetails({
     isMobile,
     partyBannerToggleFits,
     partyFreezeToggle,
-    canShowAdjustBalance,
-    adjustBalanceTarget,
-    blockPartyNewTransactions,
   ]);
 
   const partyFreezeOverlay = useMemo(() => {
@@ -973,12 +984,50 @@ export function PartyDetails({
     [displayTransactions, statusFilter]
   );
 
+  const [tdsLedgerOnly, setTdsLedgerOnly] = useState(false);
+  const taxNameById = useMemo(() => buildTaxNameById(processedTaxes), [processedTaxes]);
+  const vouchersByIdForTds = useMemo(() => {
+    const src = vouchersAll?.length ? vouchersAll : vouchers;
+    return new Map(
+      src.map((v: { id?: string }) => [String(v.id ?? ""), v as Record<string, unknown>])
+    );
+  }, [vouchers, vouchersAll]);
+  const ledgerTableSourceTransactions = useMemo(() => {
+    if (!tdsLedgerOnly) return statusFilteredTransactions;
+    return expandPartyLedgerTdsRows(statusFilteredTransactions, taxNameById, {
+      partyId: party.id,
+      voucherById: vouchersByIdForTds,
+    });
+  }, [statusFilteredTransactions, tdsLedgerOnly, taxNameById, party.id, vouchersByIdForTds]);
+
+  const effectiveVisibleColumns = useMemo(() => {
+    if (tdsLedgerOnly) {
+      return mergeLedgerTdsVisibleColumnsWithPrefs(visibleColumns, balanceMode === "bill_wise");
+    }
+    const base =
+      balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns;
+    return { ...base, tdsTaxable: false, tdsAmount: false };
+  }, [tdsLedgerOnly, balanceMode, visibleColumns]);
+
+  const toggleTdsLedgerOnly = useCallback(() => {
+    setTdsLedgerOnly((prev) => !prev);
+    setCurrentPage(1);
+  }, [setCurrentPage]);
+
+  useEffect(() => {
+    setTdsLedgerOnly(false);
+  }, [party.id]);
+
   // Sort state: footer dropdown â€” sirf current page par apply (paging hook); list chronological rahe
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(() => {
+    const base = filterByUnapprovedOnly(ledgerTableSourceTransactions);
+    if (tdsLedgerOnly) {
+      return sortLedgerTdsRowsForDisplay(base, sortBy, sortOrder);
+    }
     const sorted = sortTransactionsWithFiscalMergeForCompany(
-      filterByUnapprovedOnly(statusFilteredTransactions),
+      base,
       "date",
       DEFAULT_TRANSACTION_SORT_ORDER,
       undefined,
@@ -989,7 +1038,10 @@ export function PartyDetails({
     }
     return recomputeRunningBalanceTopToBottom(sorted, ledgerOpeningForRunning);
   }, [
-    statusFilteredTransactions,
+    ledgerTableSourceTransactions,
+    tdsLedgerOnly,
+    sortBy,
+    sortOrder,
     filterByUnapprovedOnly,
     ledgerOpeningForRunning,
     company,
@@ -1585,23 +1637,29 @@ export function PartyDetails({
           ) : null}
           {/* Mobile: date/balance/search â€” footer chevron se collapse */}
           <MobileDetailSummaryCollapsible>
-          {/* Row 2 (center): Date range - compact; no filter = "Last 10 Txns", else date range; cross to reset when filter is on */}
-          <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
-            <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
-            {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
-              <button
-                type="button"
-                onClick={() => onDateRangeChange(undefined)}
-                className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
-                aria-label="Clear date filter"
-              >
-                <XCircle className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
+          {!hideMobilePeriodLabelRow ? (
+            <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
+              <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
+              {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
+                <button
+                  type="button"
+                  onClick={() => onDateRangeChange(undefined)}
+                  className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
+                  aria-label="Clear date filter"
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          ) : null}
           {/* Selected party balance (closing) */}
-          <div className="px-3 py-3 border-b flex-shrink-0">
-            <p className={cn("text-2xl font-bold text-center", headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+          <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
+            <p
+              className={cn(
+                mdc.mobileTxnBalanceText2xl,
+                headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
+              )}
+            >
               {balanceLabel} {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
             </p>
           </div>
@@ -1683,12 +1741,13 @@ export function PartyDetails({
               openingBalanceAttachmentUrls={party.documentFileUrls}
               openingBalanceDate={(party as any).openingBalanceDate}
               ledgerDateFilterActive={hasLedgerDateFilter}
-              ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0}
+              ledgerShowBookOpeningRow={!tdsLedgerOnly && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
+              hideLedgerOpeningRows={tdsLedgerOnly}
               openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               dateRange={dateRange}
               openingBalanceActions={undefined}
               showNarration={showNarration}
-              visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
+              visibleColumns={effectiveVisibleColumns}
               journalAccountNames={resolvedJournalAccountNames}
               userNames={mergedUserNames}
               onRowClick={handleEditVoucher}
@@ -1709,6 +1768,7 @@ export function PartyDetails({
               hideBalanceColumn={false}
               isDateChange={isDateChange}
               scrollOnlyTransactions
+              closingBalanceRowActions={partyClosingBalanceRowActions}
               closingBalanceActions={partyClosingBalanceActions}
               highlightPendingApproval
               statusFilter={statusFilter}
@@ -2186,6 +2246,9 @@ export function PartyDetails({
                 ]}
               />
               ) : null}
+              {!isOpeningBalanceLedger ? (
+                <LedgerTdsFilterPill active={tdsLedgerOnly} onToggle={toggleTdsLedgerOnly} />
+              ) : null}
               <Button
                 variant="outline"
                 size="sm"
@@ -2241,7 +2304,8 @@ export function PartyDetails({
               openingBalanceAttachmentUrls={party.documentFileUrls}
               openingBalanceDate={(party as any).openingBalanceDate}
               ledgerDateFilterActive={hasLedgerDateFilter}
-              ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0}
+              ledgerShowBookOpeningRow={!tdsLedgerOnly && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
+              hideLedgerOpeningRows={tdsLedgerOnly}
               openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               dateRange={dateRange}
               openingBalanceActions={
@@ -2259,7 +2323,7 @@ export function PartyDetails({
                 ) : null
               }
               showNarration={showNarration}
-              visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
+              visibleColumns={effectiveVisibleColumns}
               journalAccountNames={resolvedJournalAccountNames}
               userNames={mergedUserNames}
               onRowClick={handleEditVoucher}
@@ -2280,6 +2344,7 @@ export function PartyDetails({
               hideBalanceColumn={false}
               isDateChange={isDateChange}
               scrollOnlyTransactions
+              closingBalanceRowActions={partyClosingBalanceRowActions}
               closingBalanceActions={partyClosingBalanceActions}
               highlightPendingApproval
               statusFilter={statusFilter}
@@ -2305,12 +2370,19 @@ export function PartyDetails({
               />
               <LedgerFooterColumnsMenu ledgerPresentationMode={ledgerPresentationMode}>
                 <DropdownMenuContent align="start" className="w-52 p-2">
-                  {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
+                  {(tdsLedgerOnly
+                    ? ledgerTdsFooterColumnMenuKeys(balanceMode === "bill_wise")
+                    : (Object.keys(COLUMN_LABELS) as TransactionColumnKey[]).filter(
+                        (key) => !["tdsTaxable", "tdsAmount"].includes(key)
+                      )
+                  )
                     .filter((key) => key !== "status" || balanceMode === "bill_wise")
                     .map((key) => {
                     const isStatusInStatement = key === "status" && balanceMode === "statement";
                     const isStatusInBillWise = key === "status" && balanceMode === "bill_wise";
                     const isStatusLocked = isStatusInStatement || isStatusInBillWise;
+                    const columnChecked =
+                      isStatusInStatement ? false : isStatusInBillWise ? true : effectiveVisibleColumns[key] !== false;
                     return (
                       <DropdownMenuItem
                         key={key}
@@ -2319,7 +2391,7 @@ export function PartyDetails({
                       >
                         <Checkbox
                           id={`col-${key}-party`}
-                          checked={isStatusInStatement ? false : (isStatusInBillWise ? true : visibleColumns[key] !== false)}
+                          checked={columnChecked}
                           disabled={isStatusLocked}
                           onCheckedChange={isStatusLocked ? undefined : (c) => handleColumnVisibilityChange(key, Boolean(c))}
                         />

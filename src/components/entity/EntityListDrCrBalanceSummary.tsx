@@ -54,7 +54,7 @@ export function EntityListDrCrBalanceSummary({
   const amountOptions = { showDrCr: true, hideCurrencySymbol: true } as const;
 
   return (
-    <div className={cn("px-2 pb-1 pt-1.5", className)}>
+    <div className={cn("pl-mlc-footer-summary-row px-2 pb-1 pt-1.5", className)}>
       <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5">
         <SummaryCard
           amount={formatAmount(expenseSystemBalance, amountOptions)}

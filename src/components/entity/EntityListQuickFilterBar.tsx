@@ -35,7 +35,7 @@ const FILTERS: Array<{ key: EntityListQuickFilter; label: string }> = [
 export function EntityListQuickFilterBar({ active, onChange, className, only }: Props) {
   const filters = only?.length ? FILTERS.filter((f) => only.includes(f.key)) : FILTERS;
   return (
-    <div className={cn("border-t border-blue-300/60 bg-blue-100/80 px-2 py-1.5", className)}>
+    <div className={cn("pl-mlc-quick-filter-row border-t border-blue-300/60 bg-blue-100/80 px-2 py-1.5", className)}>
       <div className="overflow-x-auto pl-ledger-footer-scroll">
         <div className="flex w-max items-center gap-1">
           {filters.map((f) => (

@@ -76,11 +76,11 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { collectItemIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesItemLedger";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
-import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
-import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
-import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { MobileMasterDetailHeaderAvatar } from "@/components/entity/MobileMasterDetailHeaderAvatar";
+import { MobileMasterDetailHeaderDateSecondary } from "@/components/entity/MobileMasterDetailHeaderDateSecondary";
+import { mobileEntityDetailShellTitle } from "@/lib/mobileDetailChrome";
 
 type DisplayUnitState = Record<string, string>;
 
@@ -157,6 +157,7 @@ function ItemsPageContent() {
   const [itemDisplayUnits, setItemDisplayUnits] = useState<DisplayUnitState>({});
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  const [itemDetailsDateRange, setItemDetailsDateRange] = useState<DateRange | undefined>(undefined);
   const [groupDetailsDateRange, setGroupDetailsDateRange] = useState<DateRange | undefined>(undefined);
   const [groupMemberFilterId, setGroupMemberFilterId] = useState<string | null>(null);
   const [userNames, setUserNames] = useState<Record<string, string>>(vouchersUserNames || {});
@@ -197,47 +198,29 @@ function ItemsPageContent() {
     const name = group.name;
     return name && String(name).trim() ? String(name).trim() : null;
   }, [selected, activeView, groupMemberFilterId, processedItems, mobileItemsSelectionLabelClassName]);
+  const itemsMasterDetailTitle = activeView === "groups" ? "Item Groups" : "Items";
+  const itemsShellTitle = useMemo(
+    () => mobileEntityDetailShellTitle(isMobile, Boolean(selected), itemsMasterDetailTitle, "Item details"),
+    [isMobile, selected, itemsMasterDetailTitle]
+  );
+  const mobileItemsHeaderSecondary = useMemo((): ReactNode | undefined => {
+    if (!isMobile || !selected) return undefined;
+    const range = activeView === "groups" ? groupDetailsDateRange : itemDetailsDateRange;
+    const onClear =
+      activeView === "groups"
+        ? () => setGroupDetailsDateRange(undefined)
+        : () => setItemDetailsDateRange(undefined);
+    return <MobileMasterDetailHeaderDateSecondary dateRange={range} onClear={onClear} />;
+  }, [isMobile, selected, activeView, itemDetailsDateRange, groupDetailsDateRange]);
   const mobileItemsDetailHeaderAvatar = useMemo(() => {
     if (!isMobile || !selected) return null;
     const selectedEntity = selected as Item | ItemGroup;
     const name = selectedEntity.name || "Item";
-    /** Items master photo `fileUrls[0]` — purana bug: khali `fileUrl` field par preview spin */
     const attachmentUrl = trimEntityFileUrlForPreview(
       (selectedEntity as Item).fileUrls?.[0] ?? (selectedEntity as any).fileUrl
     );
-    const initials = name
-      .split(" ")
-      .filter(Boolean)
-      .map((part) => part[0])
-      .slice(0, 2)
-      .join("")
-      .toUpperCase() || "NA";
-    const openPreview = () => {
-      // Item mobile header avatar: tap to open full preview.
-      if (!attachmentUrl) return;
-      void openAttachmentInApp(attachmentUrl, { title: name });
-    };
-    return (
-      <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
-        <EntityFileAttachmentHover fileUrl={attachmentUrl} triggerClassName="inline-flex rounded-full">
-          <button
-            type="button"
-            className="inline-flex h-full w-full items-center justify-center rounded-full"
-            onClick={openPreview}
-            aria-label={`Preview ${name} avatar`}
-          >
-            <ResolvedEntityAvatar
-              className="h-full w-full text-xs"
-              src={attachmentUrl ?? undefined}
-              alt={name}
-              fallbackText={initials}
-            />
-          </button>
-        </EntityFileAttachmentHover>
-      </div>
-    );
+    return <MobileMasterDetailHeaderAvatar name={name} attachmentUrl={attachmentUrl} />;
   }, [isMobile, selected]);
-  const itemsMasterDetailTitle = activeView === "groups" ? "Item Groups" : "Items";
   useSyncMasterDetailHeaderId("items", selectedItem?.id ?? selectedItemGroupRaw?.id ?? null);
 
   const itemGroupListConfig = useMemo(
@@ -743,6 +726,9 @@ function ItemsPageContent() {
           itemDisplayUnits={itemDisplayUnits}
           setItemDisplayUnit={handleSetItemDisplayUnit}
           userNames={{ ...vouchersUserNames, ...userNames }}
+          dateRange={itemDetailsDateRange}
+          onDateRangeChange={setItemDetailsDateRange}
+          hideMobilePeriodLabelRow={isMobile}
         />
       )}
       {activeView === "groups" && selectedItemGroup && (
@@ -761,6 +747,7 @@ function ItemsPageContent() {
           onDateRangeChange={setGroupDetailsDateRange}
           userNames={{ ...vouchersUserNames, ...userNames }}
           transactions={vouchers}
+          hideMobilePeriodLabelRow={isMobile}
         />
       )}
       {!selected && (
@@ -771,10 +758,11 @@ function ItemsPageContent() {
 
   return (
     <ResponsiveMasterDetail
-      title={itemsMasterDetailTitle}
+      title={itemsShellTitle}
       mobileSelectionLabel={mobileItemsSelectionLabel}
       mobileSelectionLabelClassName={mobileItemsSelectionLabelClassName}
       mobileDetailHeaderEnd={mobileItemsDetailHeaderAvatar}
+      mobileDetailHeaderSecondary={mobileItemsHeaderSecondary}
       balance={
         <span
           className={cn(

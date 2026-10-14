@@ -447,6 +447,44 @@ When the human asks for PL Server fixes (including “make PL like online”):
 - Keep the diff minimal and scoped to that request.
 - Preserve row-click isolation unless they ask to change that too.
 
+## Freeze: Entity ledger txn table — unified H-scroll / width (hard)
+
+**Oct 2026:** Party/bank/staff/tax/expense/item **desktop** entity ledgers: one unified horizontal scroll (ribbon + split thead/body + closing summary + footer pagination), **longest-band width win**, V-scroll must not reset H-scroll, split thead must stay column-aligned with body. **Do not edit unless the human explicitly asks to change entity ledger txn table scroll / width / header–footer alignment in that same message.**
+
+### Frozen paths (do not touch casually)
+
+- `src/lib/ledgerUnifiedContentWidth.ts` — natural band measure, footer row sum, stabilize px, `computeLedgerUnifiedTableMinPx`
+- `src/components/vouchers/LedgerTxnScrollColumn.tsx` — unified scroll column shell (header / table / footer)
+- `src/components/vouchers/LedgerDesktopFooter.tsx` — footer measure row (`data-pl-ledger-footer-measure-row`), shell width behavior
+- `src/lib/ledgerHeaderChrome.ts` — `LEDGER_TXN_SCROLL_*`, scroll host / inner / table-host class strings used by entity ledgers
+- `src/components/vouchers/TransactionsTable.tsx` — **unified-scroll / split-scroll only:** `syncDashboardRecentHorizontalScroll`, `ledgerUnifiedHScrollActive`, `applyUnifiedTableWidthVar`, `ledgerHostClientWidth`, `effectiveSplitScrollColWidths`, split thead/body/fixed-summary/footer H-scroll gates (not approve, mobile card title, bill-wise collapsible — those have their own freezes)
+- `src/app/globals.css` — blocks tagged **`data-pl-ledger-txn-unified-scroll`**, **`data-pl-ledger-txn-page`** unified full-bleed, master-detail `25-75` under `main:has([data-pl-ledger-txn-page])` (search file; do not drive-by edit unrelated globals)
+
+### Stabilized behavior to preserve
+
+- **Single H-scroll owner:** `[data-pl-ledger-txn-unified-scroll]`; hide separate `[data-pl-ledger-txn-hscroll]` bar when unified is active.
+- **Width win:** max(natural ribbon, footer pagination row, closing balance card, column sum, optional `[data-pl-ledger-unified-width-band]`) → `--pl-ledger-txn-table-min-px` + proportional column scale; measure footer via child sum, not stretched shell width.
+- **V vs H scroll:** body vertical scroll must **not** push `scrollLeft=0` onto the unified host; preserve `scrollLeft` across width remeasure when only v-scrollbar gutter changes.
+- **Alignment:** unified host scroll moves inner as one piece — **do not** mirror unified `scrollLeft` onto nested thead scrollport (double shift); thead `overflow-x: hidden` in unified mode.
+- **Layout:** detail pane full bleed with unified scroll; left master list `25-75` grid intact (`min-w-0`, no broken `display:flex` on grid root).
+
+### Do not
+
+- Refactor, rename, or drive-by edit frozen paths while fixing unrelated voucher rows, search, print, or themes.
+- Re-enable per-body or per-footer horizontal scroll syncing that resets unified H position on vertical scroll.
+- Re-enable nested thead horizontal sync on unified host scroll (breaks header/body column alignment).
+- Remove natural footer width measure or re-measure stretched table/shell widths (ResizeObserver / stall loops).
+
+### If the human explicitly asks to change unified txn scroll / width
+
+- Keep the diff minimal and scoped to that request.
+- Preserve: one H-scroll, width win, V-scroll safe H position, header/body/footer same min width.
+- Test at minimum: narrow detail pane + H scroll right + V scroll (H stays); wide pane col fill; bank account with long footer pagination; party group ledger.
+
+### Same file note
+
+`TransactionsTable.tsx` is shared with **Ledger Approve / Approve All** — only edit the half the human asked for; never mix approve changes with unified-scroll changes in one casual diff.
+
 ## Freeze: Dashboard boot — SQLite-first, no UI freeze (hard)
 
 **Sep 2026:** App start, company switch, and navigate to `/dashboard` (web, EXE, APK): show dashboard **immediately** from SQLite; full voucher merge and sync run **in background** without blocking clicks or full-page skeleton. **Do not edit unless the human explicitly asks to change dashboard boot / voucher load UX in that same message.**

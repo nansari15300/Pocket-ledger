@@ -7,6 +7,7 @@ import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { PocketSerwistProvider } from "@/components/serwist/PocketSerwistProvider";
 import { Phase1bRuntimeVerifyShim } from "@/components/Phase1bRuntimeVerifyShim";
 import { StatementCheckedBlinkPrefsBootstrap } from "@/components/vouchers/StatementCheckedBlinkPrefsBootstrap";
+import { CLIENT_HEALTH_EARLY_BOOT_SCRIPT } from "@/lib/clientHealthEarlyBootScript";
 
 export const metadata: Metadata = {
   applicationName: 'Pocket Ledger',
@@ -72,6 +73,8 @@ export default function RootLayout({
             __html: `(function(){try{var REDIR_KEY="pl_web_auth_gate_redirect_v1";var p=location.pathname||"/";var base=(p==="/app"||p.indexOf("/app/")===0)?"/app":"";var inner=base?p.slice(base.length)||"/":p;var seg=(inner.replace(/^\\/+|\\/+$/g,"").split("/")[0]||"").toLowerCase();if(!seg||seg==="billing"||inner==="/")return;var routes=["dashboard","party","staff","bank-cash","items","tax","incomes","gate","settings","reports","payment-in","payment-out","sale","purchase","journal","contra","notes","gallery","messages","admin","backup","recycle-bin","reconciliation","import-export","production","quotations","add-salary","inter-company","sale-note","purchase-note","company","loans","not-authorized","embed"];if(routes.indexOf(seg)<0)return;setTimeout(function(){try{if(sessionStorage.getItem(REDIR_KEY)==="1")return;var txt=(document.body&&document.body.innerText)||"";var gate=document.querySelector("[data-pl-web-auth-gate]");var stuck=gate||/Loading session|Opening sign in|Redirecting to sign in/i.test(txt);if(!stuck)return;sessionStorage.setItem(REDIR_KEY,"1");location.assign(base+"/");}catch(e){}},9000);}catch(e){}})();`,
           }}
         />
+        {/* UI health: React se pehle click/stall track — party navigate freeze par bhi */}
+        <script dangerouslySetInnerHTML={{ __html: CLIENT_HEALTH_EARLY_BOOT_SCRIPT }} />
         <PocketSerwistProvider>
           <Providers>
             <StatementCheckedBlinkPrefsBootstrap />

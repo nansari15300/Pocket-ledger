@@ -80,14 +80,7 @@ export function LedgerFooterPaginationBar({
     ledgerPresentationMode === "nested-ledger" ? NESTED_LEDGER_FOOTER_DROPDOWN_CONTENT_CN : undefined;
 
   return (
-    <div
-      className={cn(
-        ledgerFooterRowCn,
-        "flex-shrink-0 justify-end overflow-x-auto pl-ledger-footer-scroll",
-        !hideSort && "sm:ml-auto",
-        className
-      )}
-    >
+    <div className={cn(ledgerFooterRowCn, "shrink-0", className)}>
       {!hideSort ? (
         <TransactionTableSortDropdown
           sortBy={sortBy}

@@ -39,6 +39,10 @@ import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/useTheme";
 import { PRO_THEME_CLASS, proDashboardRibbonClass } from "@/lib/proTheme";
 import {
+  DEFAULT_SALE_PURCHASE_LINE_COLUMN_LABELS,
+  resolveSalePurchaseLineColumnLabels,
+} from "@/lib/salePurchaseLineColumnLabels";
+import {
   SETTINGS_LEDGER_CARD as VS_CARD_BORDER,
   SETTINGS_LEDGER_PANEL as VS_LEDGER_PANEL,
   SETTINGS_LEDGER_ADD_PREFIX_BTN as VS_ADD_PREFIX_BTN,
@@ -215,6 +219,14 @@ const voucherSettingsSchema = z.object({
   /** Default ON — auto nos include FY span (e.g. PUR-82-83-002) even when ledger FY split is off. */
   autoVoucherIncludeFy: z.boolean(),
   voucherNumberFyFormat: z.enum(["short", "mixed", "full"]),
+  salePurchaseLineColumnLabels: z.object({
+    tax: z.string().max(32),
+    tds: z.string().max(32),
+    taxAmount: z.string().max(32),
+    taxable: z.string().max(32),
+    tdsAmount: z.string().max(32),
+    amount: z.string().max(32),
+  }),
 });
 
 type VoucherSettingsValues = z.infer<typeof voucherSettingsSchema>;
@@ -273,6 +285,7 @@ export function VoucherSettings() {
         recurringVoucherRunScope: "owner_only",
         autoVoucherIncludeFy: true,
         voucherNumberFyFormat: "short",
+        salePurchaseLineColumnLabels: { ...DEFAULT_SALE_PURCHASE_LINE_COLUMN_LABELS },
     },
   });
 
@@ -350,6 +363,7 @@ export function VoucherSettings() {
           (company as any).voucherNumberFyFormat === "mixed" || (company as any).voucherNumberFyFormat === "full"
             ? (company as any).voucherNumberFyFormat
             : "short",
+        salePurchaseLineColumnLabels: resolveSalePurchaseLineColumnLabels(company),
     });
     }
   }, [company, form, planHistoryLimit]);
@@ -407,6 +421,14 @@ export function VoucherSettings() {
         },
         autoVoucherIncludeFy: data.autoVoucherIncludeFy,
         voucherNumberFyFormat: data.voucherNumberFyFormat,
+        salePurchaseLineColumnLabels: {
+          tax: data.salePurchaseLineColumnLabels.tax.trim(),
+          tds: data.salePurchaseLineColumnLabels.tds.trim(),
+          taxAmount: data.salePurchaseLineColumnLabels.taxAmount.trim(),
+          taxable: data.salePurchaseLineColumnLabels.taxable.trim(),
+          tdsAmount: data.salePurchaseLineColumnLabels.tdsAmount.trim(),
+          amount: data.salePurchaseLineColumnLabels.amount.trim(),
+        },
       };
       await persistCompanyRootSettingsPatch({
         companyId,
@@ -643,6 +665,42 @@ export function VoucherSettings() {
                 )}
               </div>
             </div>
+
+            {isCompanyOwner && (
+              <div className="space-y-4">
+                <h3 className={cn("text-lg font-medium pb-2", VS_BORDER_B)}>Sale &amp; Purchase line columns</h3>
+                <CardDescription>
+                  Rename Tax / TDS column labels on sale and purchase item lines for your country (e.g. VAT, WHT). Saved for all users in this company.
+                </CardDescription>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {(
+                    [
+                      ["tax", "Tax column"],
+                      ["tds", "TDS column"],
+                      ["taxAmount", "Tax amount column"],
+                      ["taxable", "Taxable column"],
+                      ["tdsAmount", "TDS amount column"],
+                      ["amount", "Amount column"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <FormField
+                      key={key}
+                      control={form.control}
+                      name={`salePurchaseLineColumnLabels.${key}`}
+                      render={({ field }: any) => (
+                        <FormItem>
+                          <FormLabel>{label}</FormLabel>
+                          <FormControl>
+                            <Input className={VS_FIELD_OUTLINE} {...field} placeholder={DEFAULT_SALE_PURCHASE_LINE_COLUMN_LABELS[key]} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Voucher Edit History — company setting */}
             {isCompanyOwner && (

@@ -21,10 +21,18 @@ export const mdc = {
   dateRow: "flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5",
   dateLabel: "text-[11px] font-medium leading-tight text-muted-foreground",
 
-  /** Closing balance / To Receive row */
-  balanceRow: "flex-shrink-0 border-b px-2 py-1",
-  balanceTextCenter: "text-center text-lg font-bold leading-tight",
-  balanceTextFlex: "text-lg font-bold leading-tight flex justify-center items-baseline gap-px",
+  /** Closing balance row — mobile: H-line se text 3px (`data-pl-mobile-txn-balance-row`) */
+  balanceRow: "flex-shrink-0 border-b px-3 py-[3px]",
+  mobileTxnBalanceRow: "flex-shrink-0 border-b px-3 py-[3px]",
+  /** Item stock row: unit select same line */
+  mobileTxnBalanceRowInline: "flex flex-shrink-0 items-center justify-center gap-2 border-b px-2 py-[3px]",
+  mobileTxnBalanceText2xl: "m-0 text-center text-2xl font-bold leading-tight",
+  mobileTxnBalanceText2xlFlex: "m-0 text-2xl font-bold leading-tight flex justify-center items-baseline gap-px",
+  mobileTxnBalanceTextLg: "m-0 text-center text-lg font-bold leading-tight",
+  mobileTxnBalanceTextLgFlex: "m-0 text-lg font-bold leading-tight flex justify-center items-baseline gap-px",
+  /** @deprecated use mobileTxnBalanceTextLg* */
+  balanceTextCenter: "m-0 text-center text-lg font-bold leading-tight",
+  balanceTextFlex: "m-0 text-lg font-bold leading-tight flex justify-center items-baseline gap-px",
 
   /** Combobox + edit + search toolbar */
   toolbarRow: "flex-shrink-0 border-b px-2 py-1",
@@ -48,7 +56,7 @@ export const mdc = {
     "bottom-[calc(env(safe-area-inset-bottom,0px)+3.25rem)]",
   /** Pagination row ke just upar — MobileTransactionsPager wrapper me absolute */
   summaryFabInline:
-    "pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-md hover:bg-muted active:scale-95",
+    "pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-blue-500 bg-blue-100 text-blue-600 shadow-lg hover:bg-blue-200 active:scale-95",
   summaryFabIcon: "h-5 w-5",
 
   /** Report register detail back (Sale/Purchase/Payment … mobile) */
@@ -77,6 +85,9 @@ export const mdc = {
   masterTitle: "shrink-0 text-sm font-bold",
   masterSelectionName: "min-w-0 truncate text-xs font-medium",
   masterAvatarSlot: "flex h-7 w-7 items-center justify-center border-l border-border p-px",
+  /** List dock chevron jaisa — merged header avatar jab photo na ho */
+  mobileHeaderAvatarNoPhoto: "border-blue-500 bg-blue-100",
+  mobileHeaderAvatarNoPhotoFallback: "bg-blue-100 text-blue-600 pl-mobile-header-avatar-fallback",
 
   /** AccountDetails report chrome (Contra/Journal mobile) */
   reportChromeHeader: "z-10 flex flex-shrink-0 flex-col gap-1 border-b bg-background px-2 py-1",
@@ -94,8 +105,26 @@ export const mdc = {
   /** @deprecated use reportTxnPagerOutside — pager ab scroll ke andar nahi */
   reportTxnPagerInScroll:
     "flex-shrink-0 border-t bg-background/95 z-40 mb-[calc(env(safe-area-inset-bottom,0px)+3.25rem)]",
-  ledgerTxnPagerOutside: "flex-shrink-0 mb-12",
+  /** Action footer (Receive/Pay…) ke upar flush — ~36px + safe area */
+  ledgerTxnPagerOutside:
+    "flex-shrink-0 mb-[calc(env(safe-area-inset-bottom,0px)+2.25rem)]",
 } as const;
+
+/** Theme `.rounded-lg.border` black override se exclude — list dock chevron blue */
+export const mdcMobileHeaderAvatarNoPhotoData = { "data-pl-mobile-header-avatar-no-photo": "" } as const;
+
+export const mdcMobileTxnBalanceRowData = { "data-pl-mobile-txn-balance-row": "" } as const;
+
+/** Mobile list → detail: shell title (e.g. "Party details" + naam merged header). */
+export function mobileEntityDetailShellTitle(
+  isMobile: boolean,
+  hasSelection: boolean,
+  listTitle: string,
+  entityDetailTitle: string
+): string {
+  if (isMobile && hasSelection) return entityDetailTitle;
+  return listTitle;
+}
 
 /** Mobile txn list scroll wrapper — report vs ledger detail */
 export function mobileTxnScrollBodyClass(isReportMobileChrome: boolean): string {

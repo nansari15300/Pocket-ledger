@@ -49,6 +49,8 @@ export const COLUMN_LABELS: Record<TransactionColumnKey, string> = {
   date: "Date",
   type: "Type",
   voucherNo: "Voucher No.",
+  tdsTaxable: "Taxable",
+  tdsAmount: "TDS Amount",
   user: "User",
   file: "File",
   dr: "Dr",

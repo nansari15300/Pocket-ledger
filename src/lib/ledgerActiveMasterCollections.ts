@@ -1,3 +1,8 @@
+import {
+  dashboardMasterCollectionPathsForTab,
+  readDashboardActiveTabForBootstrap,
+} from "@/lib/dashboardTabPanels";
+
 /** Voucher forms + cross-device master live sync — shared route → collection scope. */
 
 export const VOUCHER_FORM_MASTER_COLLECTION_PATHS = new Set([
@@ -42,6 +47,8 @@ export function activeMasterCollectionPathsForRoute(
   if (route.startsWith("/gallery")) return new Set(["vouchers"]);
   if (route === "/reports" || route === "/reports/") return new Set(["vouchers"]);
   if (route.startsWith("/reports/")) return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
-  if (route.startsWith("/dashboard")) return new Set(["vouchers"]);
+  if (route.startsWith("/dashboard")) {
+    return dashboardMasterCollectionPathsForTab(readDashboardActiveTabForBootstrap());
+  }
   return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
 }

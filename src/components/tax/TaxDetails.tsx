@@ -1,4 +1,4 @@
-﻿
+
 "use client";
 
 import * as React from "react";
@@ -38,7 +38,7 @@ import { format, startOfDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { nestedLedgerChildDialogShell } from "@/lib/nestedLedgerMasterEditPresentation";
-import { mdc, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
+import { mdc, mdcMobileTxnBalanceRowData, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
 import * as XLSX from "xlsx";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 import {
@@ -199,6 +199,7 @@ interface TaxDetailsProps {
   mobileFooterVariant?: "ledger" | "report";
   mobileReportStickyTitle?: string;
   ledgerPresentationMode?: import("@/lib/nestedLedgerMasterEditPresentation").MasterEditPresentationMode;
+  hideMobilePeriodLabelRow?: boolean;
 }
 
 export function TaxDetails({
@@ -218,6 +219,7 @@ export function TaxDetails({
   mobileFooterVariant = "ledger",
   mobileReportStickyTitle,
   ledgerPresentationMode = "default",
+  hideMobilePeriodLabelRow = false,
 }: TaxDetailsProps) {
   const nestedLedgerNoteDialogShell =
     ledgerPresentationMode === "nested-ledger"
@@ -288,6 +290,7 @@ export function TaxDetails({
 
   const {
     freezeOverlay: taxFreezeOverlay,
+    closingBalanceRowActions: taxClosingBalanceRowActions,
     closingBalanceActions: taxClosingBalanceActions,
   } = useMasterAccountFreezeDetailsChrome({
     companyId,
@@ -429,7 +432,10 @@ export function TaxDetails({
     vouchers.forEach((v) => {
       const isRelevant =
         v.taxAccountId === tax.id ||
-        (Array.isArray(v.lineItems) && v.lineItems.some((line: any) => line.taxAccountId === tax.id)) ||
+        (Array.isArray(v.lineItems) &&
+          v.lineItems.some(
+            (line: any) => line.taxAccountId === tax.id || line.tdsAccountId === tax.id
+          )) ||
         (v.type === 'note' && v.context === 'Tax' && v.entityId === tax.id) ||
         (v.type === 'journal' && Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId === tax.id));
 
@@ -904,23 +910,25 @@ export function TaxDetails({
           ) : null}
           {/* Mobile: date/balance/search â€” footer chevron se collapse (group pages jaisa) */}
           <MobileDetailSummaryCollapsible>
-          <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
-            <span className="text-xs font-medium text-muted-foreground">
-              {dateRangeLabel}
-            </span>
-            {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
-              <button
-                type="button"
-                onClick={() => onDateRangeChange(undefined)}
-                className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
-                aria-label="Clear date filter"
-              >
-                <XCircle className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-          <div className="px-3 py-2 border-b flex-shrink-0">
-            <p className={cn("text-2xl font-bold text-center", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+          {!hideMobilePeriodLabelRow ? (
+            <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
+              <span className="text-xs font-medium text-muted-foreground">
+                {dateRangeLabel}
+              </span>
+              {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
+                <button
+                  type="button"
+                  onClick={() => onDateRangeChange(undefined)}
+                  className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
+                  aria-label="Clear date filter"
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          ) : null}
+          <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
+            <p className={cn(mdc.mobileTxnBalanceText2xl, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
               {balanceLabel} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
             </p>
           </div>
@@ -1016,6 +1024,7 @@ export function TaxDetails({
               closingBalance={desktopPaginationMeta.closingForPage}
               isTaxContext={isTaxContext ?? true}
               scrollOnlyTransactions
+              closingBalanceRowActions={taxClosingBalanceRowActions}
               closingBalanceActions={taxClosingBalanceActions}
               statusFilter={statusFilter}
               statusFilterAllChecked={statusFilterAllChecked}
@@ -1510,13 +1519,11 @@ export function TaxDetails({
                   setActiveFilter={setActiveFilter}
                   isTaxContext={isTaxContext ?? true}
                   scrollOnlyTransactions
-                  closingBalanceActions={taxClosingBalanceActions}
+                  closingBalanceRowActions={taxClosingBalanceRowActions}
+              closingBalanceActions={taxClosingBalanceActions}
                   highlightPendingApproval
                 />
                 </MasterAccountFreezeTxnShell>
-            {paginatedTransactions.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">No transactions found for this tax ledger in the selected period.</div>
-            )}
           </>
           }
           footer={

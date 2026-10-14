@@ -40,7 +40,8 @@ import {
   getAllocatedByVoucherIdFromPurchase,
   getAllocatedByVoucherIdFromSale,
   getAllocatedByVoucherIdFromJournal,
-  getBillWiseAllocatedToTarget,
+  buildBillWiseIncomingAllocationMaps,
+  getBillWiseAllocatedToTargetWithMaps,
   isSaleOrPurchaseBillVoucherType,
   getPaymentStatus as getPaymentStatusResult,
   getPaymentInRemaining,
@@ -55,6 +56,11 @@ import {
   getTaxableFromAllocation,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
+import { getSalePurchaseBillWiseTargetTotal, getSalePurchasePartyAmount } from "@/lib/tdsVoucher";
+import {
+  salePurchaseDiscountExpenseLedgerAmounts,
+  salePurchaseTaxableAmount,
+} from "@/lib/salePurchaseDiscountAdjustment";
 import { resolveLedgerTransactionUserDisplayName } from "@/lib/ledgerUserColumnDisplay";
 import {
   getInterCompanyLedgerAmounts,
@@ -139,8 +145,8 @@ export const getTransactionAmounts = (
     
     // Sale/Purchase edits often update `total`; prefer it over stale legacy `amount`.
     // Other voucher types still keep the old fallback behavior for 0-safe rows.
-    const amount = ['sale', 'purchase'].includes(transaction.type)
-        ? toNum(transaction.total || transaction.amount || 0)
+    const amount = ['sale', 'purchase', 'sale_service', 'purchase_service'].includes(transaction.type)
+        ? getSalePurchasePartyAmount(transaction)
         : toNum(transaction.amount || transaction.total || 0);
     const paymentOutPayeeAmount =
         transaction.type === 'payment_out' ? getPaymentOutPartyLinkAmount(transaction) : amount;
@@ -155,9 +161,7 @@ export const getTransactionAmounts = (
         transaction.type === 'contra' ? Number(transaction.otherChargeAmount || 0) || 0 : 0;
 
     if (['sale', 'purchase'].includes(transaction.type)) {
-      const subTotal = toNum(transaction.subTotal);
-      const discount = toNum(transaction.discount);
-      taxableAmount = subTotal > 0 ? (subTotal - discount) : amount;
+      taxableAmount = salePurchaseTaxableAmount(transaction);
     } else {
       taxableAmount = amount;
     }
@@ -183,10 +187,18 @@ export const getTransactionAmounts = (
                 if (transaction.type === 'purchase') debit += taxableAmount;
             }
             else if (entity && transaction.partyId === entity.id) {
-                if (["sale", "sale_service", "direct_income"].includes(transaction.type)) debit += amount;
+                if (["sale", "sale_service", "direct_income"].includes(transaction.type)) {
+                  debit +=
+                    transaction.type === "direct_income"
+                      ? amount
+                      : getSalePurchasePartyAmount(transaction);
+                }
                 if (transaction.type === "payment_out") debit += paymentOutPayeeAmount;
                 if (["purchase", "purchase_service", "payment_in", "direct_expense"].includes(transaction.type)) {
-                    credit += transaction.type === "direct_expense" ? directExpenseMainAmount : amount;
+                  if (transaction.type === "direct_expense") credit += directExpenseMainAmount;
+                  else if (["purchase", "purchase_service"].includes(transaction.type))
+                    credit += getSalePurchasePartyAmount(transaction);
+                  else credit += toNum(transaction.amount || transaction.total || 0);
                 }
             }
             if (entity && transaction.type === 'payment_out' && transaction.otherChargeAccountId === entity.id) {
@@ -347,7 +359,13 @@ export const getTransactionAmounts = (
                     debit += taxableAmount;
                 }
             }
-            
+
+            if (transaction.type === 'sale' || transaction.type === 'purchase') {
+                const disc = salePurchaseDiscountExpenseLedgerAmounts(transaction, entity.id);
+                debit += disc.debit;
+                credit += disc.credit;
+            }
+
             if (isRegularJournalLikeVoucher(transaction)) {
                 const journalAmt = sumJournalAmountsForAccount(transaction.entries, entity.id);
                 debit += journalAmt.debit;
@@ -767,6 +785,18 @@ export const getStaffTransactionAmounts = (transaction: any, staffIds: string[],
   return { debit, credit, taxRate, taxableAmount, taxAmount, quantity };
 };
 
+function voucherLineTouchesTaxLedgerAccount(
+  line: { itemId?: string; taxAccountId?: string; tdsAccountId?: string },
+  accountId: string
+): boolean {
+  if (!accountId) return false;
+  return (
+    line.itemId === accountId ||
+    line.taxAccountId === accountId ||
+    line.tdsAccountId === accountId
+  );
+}
+
 export const getTaxTransactionAmounts = (transaction: any, taxAccountId: string, processedTaxes: any[]) => {
     let debit = 0;
     let credit = 0;
@@ -808,6 +838,14 @@ export const getTaxTransactionAmounts = (transaction: any, taxAccountId: string,
                 if (transaction.type === 'purchase') debit += taxAmt;
                 else if (transaction.type === 'sale') credit += taxAmt;
             }
+            if (line.tdsAccountId === taxAccountId) {
+                const tdsAmt = Number(line.tdsAmount || 0);
+                if (tdsAmt > 0) {
+                    taxAmount += tdsAmt;
+                    if (transaction.type === "purchase") credit += tdsAmt;
+                    else if (transaction.type === "sale" || transaction.type === "sale_service") debit += tdsAmt;
+                }
+            }
         });
         if (taxableAmount > 0 && taxAmount > 0 && taxRate === 0) {
             taxRate = (taxAmount / taxableAmount) * 100;
@@ -847,6 +885,21 @@ export const getTaxTransactionAmounts = (transaction: any, taxAccountId: string,
     return { debit, credit, taxableAmount, taxAmount, taxRate, quantity };
 };
 
+const IDLE_USE_TRANSACTIONS_RESULT = {
+  processedTransactions: [] as any[],
+  daybookTransactions: [] as any[],
+  totalTransactions: 0,
+  openingBalanceForPeriod: 0,
+  periodDr: 0,
+  periodCr: 0,
+  closingBalance: 0,
+  daybookSummary: null as any,
+  openingBalanceOutstanding: 0,
+  openingBalanceLinkedVoucherNos: [] as string[],
+  periodOpeningUnavailable: false,
+  periodOpeningLoading: false,
+};
+
 export function useTransactions(
     entity: Entity | null | undefined,
     context: Context,
@@ -863,14 +916,29 @@ export function useTransactions(
     /** Daybook: sirf is user ke vouchers (summary + table); null/undefined = sab users */
     daybookUserIdFilter?: string | null,
     /** Dashboard Recent: running balance column off — skip books walk + per-row balance. */
-    skipRunningBalance?: boolean
+    skipRunningBalance?: boolean,
+    /** false = skip heavy voucher scan (inactive dashboard tab). */
+    transactionsComputationEnabled: boolean = true
 ) {
     const { vouchers, processedTaxes } = useVouchers();
     const { company, companyId } = useCompany();
     const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
     const fy = useFyVoucherScope();
 
+    const useExplicitDaybookVoucherList =
+      context === "daybook" &&
+      entity != null &&
+      typeof entity === "object" &&
+      "id" in entity &&
+      String((entity as { id?: string }).id) === "daybook" &&
+      Array.isArray(passedTransactions);
+
+    const vouchersForMemo = useExplicitDaybookVoucherList ? passedTransactions! : vouchers;
+
     const result = useMemo(() => {
+        if (!transactionsComputationEnabled) {
+          return IDLE_USE_TRANSACTIONS_RESULT;
+        }
         if (!entity) {
              return {
                processedTransactions: [],
@@ -898,7 +966,9 @@ export function useTransactions(
             entity.id === "all" &&
             Array.isArray(passedTransactions) &&
             (Boolean(transactionContext) || isReportAllAccountView);
-        let transactionsToProcess = shouldUseScopedPassedTransactions
+        let transactionsToProcess = useExplicitDaybookVoucherList
+            ? (passedTransactions ?? [])
+            : shouldUseScopedPassedTransactions
             ? (passedTransactions ?? [])
             : (vouchers ?? []);
         if (context === "party" && !shouldUseScopedPassedTransactions) {
@@ -975,8 +1045,18 @@ export function useTransactions(
 
                     const isMemberLinked =
                         (Array.isArray(v.lineItems) &&
-                          v.lineItems.some((li: any) => memberIds.has(li.itemId) || memberIds.has(li.taxAccountId))) ||
-                        v.items?.some((li: any) => memberIds.has(li.itemId)) ||
+                          v.lineItems.some(
+                            (li: any) =>
+                              memberIds.has(li.itemId) ||
+                              memberIds.has(li.taxAccountId) ||
+                              memberIds.has(li.tdsAccountId)
+                          )) ||
+                        v.items?.some(
+                          (li: any) =>
+                            memberIds.has(li.itemId) ||
+                            memberIds.has(li.taxAccountId) ||
+                            memberIds.has(li.tdsAccountId)
+                        ) ||
                         (Array.isArray(v.entries) &&
                           v.entries.some((e: any) => memberIds.has(e.accountId))) ||
                         memberIds.has(v.partyId) ||
@@ -1073,8 +1153,9 @@ export function useTransactions(
                 v.purchaseAccountId === entity.id ||
                 (v.type === "payment_out" && v.otherChargeAccountId === entity.id) ||
                 (v.type === "direct_expense" && v.otherChargeAccountId === entity.id) ||
-                (Array.isArray(v.lineItems) && v.lineItems.some((li: any) => li.itemId === entity.id || li.taxAccountId === entity.id)) ||
-                v.items?.some((li: any) => li.itemId === entity.id) || 
+                (Array.isArray(v.lineItems) &&
+                  v.lineItems.some((li: any) => voucherLineTouchesTaxLedgerAccount(li, entity.id))) ||
+                v.items?.some((li: any) => voucherLineTouchesTaxLedgerAccount(li, entity.id)) ||
                 (Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId === entity.id)) ||
                 (v.type === 'note' && v.entityId === entity.id) ||
                     (v.type === 'contra' && (v.fromAccountId === entity.id || v.toAccountId === entity.id)) ||
@@ -1530,6 +1611,10 @@ export function useTransactions(
         const allocatedToPurchaseFromSale = (isBillWiseContext || isStaffContext || isTaxContext || isExpenseContext) ? getAllocatedByVoucherIdFromSale(vouchers) : new Map<string, number>();
         // Journal bill-wise link: journal se sale/purchase ko allocate hone wala amount – PUR row balance update ke liye.
         const allocatedFromJournal = (isBillWiseContext || isTaxContext || isExpenseContext) ? getAllocatedByVoucherIdFromJournal(vouchers) : new Map<string, number>();
+        const billWiseIncomingMaps =
+          isBillWiseContext || isTaxContext || isExpenseContext
+            ? buildBillWiseIncomingAllocationMaps(vouchers ?? [])
+            : null;
         const entityIdForLinks = entity && 'id' in entity ? (entity as any).id : undefined;
         // Keep Journal link visibility entity-aware (party/staff/account), same behavior users expect from payment in/out flow.
         const shouldScopeJournalLinksByEntity =
@@ -1677,27 +1762,17 @@ export function useTransactions(
                 let paymentStatus: string | undefined;
                 let isOverdue = false;
                 let outstanding: number | undefined;
-                if (isBillWiseContext && isSaleOrPurchaseBillVoucherType(t.type)) {
-                    const total = Number(t.total ?? t.amount ?? ((t.subTotal ?? 0) - (t.discount ?? 0) + (t.tax ?? 0))) || 0;
-                    const allocated = getBillWiseAllocatedToTarget(t, String(t.id), vouchers);
-                    const result = getPaymentStatusResult(total, allocated, t.dueDate);
-                    paymentStatus = result.isOverdue ? 'overdue' : result.status;
-                    isOverdue = result.isOverdue;
-                    outstanding = result.outstanding;
-                }
-                // Tax ledger: Sale / Purchase – show Paid/Unpaid/Partial/Overdue (same as party bill-wise)
-                if (isTaxContext && isSaleOrPurchaseBillVoucherType(t.type)) {
-                    const total = Number(t.total ?? t.amount ?? ((t.subTotal ?? 0) - (t.discount ?? 0) + (t.tax ?? 0))) || 0;
-                    const allocated = getBillWiseAllocatedToTarget(t, String(t.id), vouchers);
-                    const result = getPaymentStatusResult(total, allocated, t.dueDate);
-                    paymentStatus = result.isOverdue ? 'overdue' : result.status;
-                    isOverdue = result.isOverdue;
-                    outstanding = result.outstanding;
-                }
-                // Income & Expense ledger: Sale / Purchase – show Paid/Unpaid/Partial/Overdue (same as tax)
-                if (isExpenseContext && isSaleOrPurchaseBillVoucherType(t.type)) {
-                    const total = Number(t.total ?? t.amount ?? ((t.subTotal ?? 0) - (t.discount ?? 0) + (t.tax ?? 0))) || 0;
-                    const allocated = getBillWiseAllocatedToTarget(t, String(t.id), vouchers);
+                if (
+                  billWiseIncomingMaps &&
+                  (isBillWiseContext || isTaxContext || isExpenseContext) &&
+                  isSaleOrPurchaseBillVoucherType(t.type)
+                ) {
+                    const total = getSalePurchaseBillWiseTargetTotal(t);
+                    const allocated = getBillWiseAllocatedToTargetWithMaps(
+                      t,
+                      String(t.id),
+                      billWiseIncomingMaps
+                    );
                     const result = getPaymentStatusResult(total, allocated, t.dueDate);
                     paymentStatus = result.isOverdue ? 'overdue' : result.status;
                     isOverdue = result.isOverdue;
@@ -2224,7 +2299,7 @@ export function useTransactions(
             const accountById = new Map(ledgerAccounts.map((a) => [String(a.id), a]));
             daybookSummary = buildDaybookDailySummary({
                 accounts: ledgerAccounts as any[],
-                vouchers: vouchers ?? transactionsToProcess,
+                vouchers: transactionsToProcess,
                 selectedDay: startOfDay(dateRange.from),
                 userIdFilter: daybookUserIdFilter,
                 getLedgerAmounts: (v, accountId) => {
@@ -2413,7 +2488,33 @@ export function useTransactions(
             periodOpeningLoading,
         };
 
-  }, [entity, context, vouchers, companyId, dateRange, stockView, entityList, transactionContext, filters, voucherTypes, formatDate, formatDateBS, journalAccountNames, userNames, formatCurrency, daybookUserIdFilter, skipRunningBalance, company, fy.enabled, fy.activeScope, fy.openingBalances, fy.openingBalancesLoadStatus]);
+  }, [
+    transactionsComputationEnabled,
+    useExplicitDaybookVoucherList,
+    entity,
+    context,
+    vouchersForMemo,
+    companyId,
+    dateRange,
+    stockView,
+    entityList,
+    passedTransactions,
+    transactionContext,
+    filters,
+    voucherTypes,
+    formatDate,
+    formatDateBS,
+    journalAccountNames,
+    userNames,
+    formatCurrency,
+    daybookUserIdFilter,
+    skipRunningBalance,
+    company,
+    fy.enabled,
+    fy.activeScope,
+    fy.openingBalances,
+    fy.openingBalancesLoadStatus,
+  ]);
 
   return result;
 }
