@@ -32,7 +32,7 @@ import {
 } from "@/lib/interCompany/icPeerCompanyGroups";
 import { sortIcMemberParties, sortPartyListRows } from "@/lib/interCompany/partyListRowSort";
 import { partyListRowMatchesSearch } from "@/lib/interCompany/partyListRowSearch";
-import { ChevronDown } from "lucide-react";
+import { MasterListChromeChevronToggle } from "@/components/layout/MasterListChromeChevronToggle";
 import { toggleGroupListAccordionExpand } from "@/lib/groupListExpand";
 
 const getInitials = (name: string) => {
@@ -385,7 +385,9 @@ export const PartyList = React.memo(({
                               <MasterAccountFreezeListBadge className="mt-0.5" />
                             ) : null}
                           </div>
-                          {expandControl}
+                          {expandControl ? (
+                            <div className="ml-auto shrink-0 self-center pl-1">{expandControl}</div>
+                          ) : null}
                         </div>
                       </div>
                     );
@@ -438,7 +440,9 @@ export const PartyList = React.memo(({
                             ) : null}
                           </span>
                         </MasterListNameTooltip>
-                        {expandControl}
+                        {expandControl ? (
+                          <div className="ml-auto shrink-0 self-center pl-1">{expandControl}</div>
+                        ) : null}
                       </div>
                     </div>
                     <p className={amountClassName}>{amountText}</p>
@@ -447,22 +451,18 @@ export const PartyList = React.memo(({
                 };
 
                 const expandControl = isIcPeerCompanyGroup ? (
-                  <button
-                    type="button"
-                    aria-expanded={isExpanded}
-                    aria-label={isExpanded ? "Collapse accounts" : "Expand accounts"}
-                    className="mt-0.5 shrink-0 self-start rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                  <MasterListChromeChevronToggle
+                    variant="row"
+                    expanded={isExpanded}
+                    ariaLabelWhenExpanded="Collapse accounts"
+                    ariaLabelWhenCollapsed="Expand accounts"
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
                       toggleIcCompanyExpanded(party.id);
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
-                  >
-                    <ChevronDown
-                      className={cn("h-3.5 w-3.5 transition-transform", !isExpanded && "-rotate-90")}
-                    />
-                  </button>
+                  />
                 ) : null;
 
                 const cardContent = renderCardContent(

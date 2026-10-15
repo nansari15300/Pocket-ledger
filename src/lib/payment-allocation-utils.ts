@@ -8,6 +8,9 @@ import { getSalePurchaseBillWiseTargetTotal } from "@/lib/tdsVoucher";
 /** Special voucherId used when allocating payment to party/staff opening balance. */
 export const OPENING_BALANCE_VOUCHER_ID = "opening_balance";
 
+/** Entity leg of a multi-account voucher (same voucherNo, separate bill-wise link identity). */
+export type BillWiseEntityKind = "staff" | "tax" | "party" | "tds";
+
 export type Allocation = {
   voucherId: string;
   amount: number;
@@ -19,7 +22,91 @@ export type Allocation = {
   netAmount?: number;
   /** Journal bill-wise: party/staff account id for which this allocation applies */
   linkedAccountId?: string;
+  /**
+   * Entity-scoped link id: `${voucherId}::staff|tax|party|tds::${accountId}`.
+   * Display still uses voucherNumber from voucherId; matching uses this so ADD-SAL staff vs tax stay separate.
+   */
+  entityTxnId?: string;
 };
+
+const ENTITY_TXN_SEP = "::";
+
+export function buildBillWiseEntityTxnId(args: {
+  voucherId: string;
+  entityKind: BillWiseEntityKind;
+  accountId: string;
+}): string {
+  const voucherId = String(args.voucherId || "").trim();
+  const accountId = String(args.accountId || "").trim();
+  const entityKind = args.entityKind;
+  if (!voucherId || !accountId) return voucherId;
+  return `${voucherId}${ENTITY_TXN_SEP}${entityKind}${ENTITY_TXN_SEP}${accountId}`;
+}
+
+export function parseBillWiseEntityTxnId(
+  id: string | null | undefined
+): { voucherId: string; entityKind: BillWiseEntityKind; accountId: string } | null {
+  const raw = String(id || "").trim();
+  if (!raw) return null;
+  const parts = raw.split(ENTITY_TXN_SEP);
+  if (parts.length !== 3) return null;
+  const [voucherId, kind, accountId] = parts;
+  if (!voucherId || !accountId) return null;
+  if (kind !== "staff" && kind !== "tax" && kind !== "party" && kind !== "tds") return null;
+  return { voucherId, entityKind: kind, accountId };
+}
+
+export function allocationEntityTxnId(a: Allocation | null | undefined): string {
+  return String((a as { entityTxnId?: string } | null)?.entityTxnId ?? "").trim();
+}
+
+/** True when this allocation contributes to the given entity leg. */
+export function allocationMatchesEntityScope(
+  alloc: Allocation | null | undefined,
+  _targetVoucher: any,
+  scope: { entityKind: BillWiseEntityKind; accountId: string }
+): boolean {
+  if (!alloc?.voucherId || !scope.accountId) return false;
+
+  const stored = allocationEntityTxnId(alloc);
+  if (stored) {
+    const parsed = parseBillWiseEntityTxnId(stored);
+    if (!parsed) return false;
+    return (
+      parsed.entityKind === scope.entityKind &&
+      String(parsed.accountId) === String(scope.accountId)
+    );
+  }
+
+  const linked = String((alloc as { linkedAccountId?: string }).linkedAccountId ?? "").trim();
+  if (linked && linked !== String(scope.accountId)) return false;
+
+  const taxAmt = Number((alloc as { taxAmount?: number }).taxAmount) || 0;
+  const netAmt = Number((alloc as { netAmount?: number }).netAmount) || 0;
+  const taxableAmt = Number((alloc as { taxableAmount?: number }).taxableAmount) || 0;
+  const plainAmt = Number(alloc.amount) || 0;
+
+  if (scope.entityKind === "tax" || scope.entityKind === "tds") {
+    return taxAmt > 0;
+  }
+
+  // staff / party: tax-only rows do not match
+  if (taxAmt > 0 && netAmt <= 0 && taxableAmt <= 0 && (plainAmt <= 0 || plainAmt === taxAmt)) {
+    return false;
+  }
+  return netAmt > 0 || taxableAmt > 0 || plainAmt > 0;
+}
+
+/** Portion of an allocation that counts toward a given entity leg. */
+export function getAllocationAmountForEntityScope(
+  alloc: Allocation,
+  scope: { entityKind: BillWiseEntityKind; accountId: string },
+  targetVoucher?: any
+): number {
+  if (!allocationMatchesEntityScope(alloc, targetVoucher, scope)) return 0;
+  if (scope.entityKind === "tax" || scope.entityKind === "tds") return getTaxFromAllocation(alloc);
+  return getNetFromAllocation(alloc) + getTaxableFromAllocation(alloc);
+}
 
 /** For backward compatibility: total allocated = amount. If taxable/tax/net set, amount should equal their sum. */
 export function getAllocationTotal(a: Allocation | { voucherId?: string; amount?: number; taxableAmount?: number; taxAmount?: number; netAmount?: number; linkedAccountId?: string }): number {
@@ -82,6 +169,36 @@ export function getJournalStaffDrAmount(voucher: any, staffId: string): number |
   if (!entry) return null;
   const debit = Number(entry.debit) || 0;
   return debit > 0 ? debit : null;
+}
+
+/** Tax account Dr amount on a manual journal (excludes add_salary journals). */
+export function getJournalTaxDrAmount(voucher: any, taxAccountId: string): number | null {
+  if (voucher?.type !== "journal" || voucher?.subType === "add_salary" || !Array.isArray(voucher?.entries)) {
+    return null;
+  }
+  const entry = voucher.entries.find((e: any) => String(e?.accountId ?? "") === String(taxAccountId));
+  if (!entry) return null;
+  const debit = Number(entry.debit) || 0;
+  return debit > 0 ? debit : null;
+}
+
+/** Remaining linkable amount on a journal row for one tax Dr line. */
+export function getJournalRemainingForTax(voucher: any, taxAccountId: string): number {
+  const total = getJournalTaxDrAmount(voucher, taxAccountId);
+  if (total == null) return 0;
+  const allocations = ((voucher.allocations as Allocation[] | undefined) || []).filter((a) => {
+    const lid = String((a as any).linkedAccountId ?? "");
+    const et = String((a as any).entityTxnId ?? "");
+    if (et.includes("::tax::") && !et.endsWith(`::${taxAccountId}`)) return false;
+    return !lid || lid === String(taxAccountId);
+  });
+  const allocated = allocations.reduce((s, a) => {
+    const tax = getTaxFromAllocation(a);
+    if (tax > 0) return s + tax;
+    if (getNetFromAllocation(a) > 0 || getTaxableFromAllocation(a) > 0) return s;
+    return s + getAllocationTotal(a);
+  }, 0);
+  return Math.max(0, total - allocated);
 }
 
 export function isSalaryBillWiseSourceVoucher(v: any): boolean {

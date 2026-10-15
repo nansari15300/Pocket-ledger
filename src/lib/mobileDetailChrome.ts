@@ -2,6 +2,7 @@
  * Mobile detail / register chrome — ek spacing scale (party, group, staff, bank, tax, items, reports).
  * Upar ka header/balance/toolbar compact; neeche txn list ko zyada scroll height.
  */
+import { LEDGER_HEADER_AVATAR_BOX_CN } from "@/lib/ledgerHeaderChrome";
 
 /** Left edge menu swipe / `preventDefault` strip se exclude — back row + header buttons */
 export const mdcNoEdgeSwipeCapture = {
@@ -18,14 +19,17 @@ export const mdc = {
   entityName: "min-w-0 flex-1 truncate text-xs font-medium",
 
   /** "All Time" / date range chip */
-  dateRow: "flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5",
+  dateRow: "flex flex-shrink-0 items-center justify-center gap-1 border-b border-blue-300/80 px-2 py-0.5",
+  mobileTxnDateRow: "flex flex-shrink-0 items-center justify-center gap-1 border-b border-blue-300/80 px-2 py-0.5",
   dateLabel: "text-[11px] font-medium leading-tight text-muted-foreground",
 
   /** Closing balance row — mobile: H-line se text 3px (`data-pl-mobile-txn-balance-row`) */
-  balanceRow: "flex-shrink-0 border-b px-3 py-[3px]",
-  mobileTxnBalanceRow: "flex-shrink-0 border-b px-3 py-[3px]",
+  balanceRow: "flex-shrink-0 border-b border-blue-300/80 px-3 py-[3px]",
+  mobileTxnBalanceRow:
+    "flex w-full flex-shrink-0 items-center justify-center border-b border-blue-300/80 px-3 py-[3px] text-center",
   /** Item stock row: unit select same line */
-  mobileTxnBalanceRowInline: "flex flex-shrink-0 items-center justify-center gap-2 border-b px-2 py-[3px]",
+  mobileTxnBalanceRowInline:
+    "flex flex-shrink-0 items-center justify-center gap-2 border-b border-blue-300/80 px-2 py-[3px]",
   mobileTxnBalanceText2xl: "m-0 text-center text-2xl font-bold leading-tight",
   mobileTxnBalanceText2xlFlex: "m-0 text-2xl font-bold leading-tight flex justify-center items-baseline gap-px",
   mobileTxnBalanceTextLg: "m-0 text-center text-lg font-bold leading-tight",
@@ -34,19 +38,21 @@ export const mdc = {
   balanceTextCenter: "m-0 text-center text-lg font-bold leading-tight",
   balanceTextFlex: "m-0 text-lg font-bold leading-tight flex justify-center items-baseline gap-px",
 
-  /** Combobox + edit + search toolbar */
-  toolbarRow: "flex-shrink-0 border-b px-2 py-1",
-  toolbarInner: "flex items-stretch gap-1.5",
-  comboboxWrap: "h-8 min-w-0 flex-1 [&_button]:h-8 [&_button]:text-xs",
-  /** Bank/Cash combobox — green ring; `border` (not `border-2`) taaki h-8 row party jitni compact rahe */
-  comboboxTriggerBank:
-    "w-full min-w-0 border border-green-600 focus-visible:ring-2 focus-visible:ring-green-600/35",
-  iconBtn: "h-8 w-8 flex-shrink-0",
-  iconSm: "h-3.5 w-3.5",
-  searchWrap: "relative h-8 min-w-0 flex-1",
-  searchIcon:
-    "pointer-events-none absolute left-2 top-1/2 z-10 h-3 w-3 -translate-y-1/2 text-muted-foreground",
-  searchInput: "h-8 w-full min-w-0 pl-7 text-xs",
+  /** Entity picker + edit + search — 2px from H-lines; combobox = search box (CSS on data attr) */
+  mobileTxnToolbarRow:
+    "flex-shrink-0 border-b border-blue-300/80 px-[2px] py-[2px] box-border",
+  /** Pagination strip ke turant neeche — pager ke saath ek band (CSS se pager border-bottom hata). */
+  mobileTxnToolbarRowBelowPager:
+    "flex-shrink-0 px-[2px] pt-[2px] pb-0 box-border",
+  mobileTxnToolbarInner: "flex min-w-0 items-stretch gap-[2px]",
+  mobileTxnToolbarInnerContent: "flex min-w-0 flex-1 items-stretch gap-[2px]",
+  mobileTxnToolbarPickerWrap: "min-w-0 flex-1 [&_button[role=combobox]]:w-full [&_button[role=combobox]]:min-w-0",
+  mobileTxnToolbarEditBtn:
+    "h-[var(--pl-mobile-txn-toolbar-h,2.25rem)] w-8 min-w-8 shrink-0 rounded-md border-blue-300 bg-white shadow-sm",
+  mobileTxnToolbarSearchWrap: "relative min-w-0 flex-1",
+  mobileTxnToolbarSearchIcon:
+    "pointer-events-none absolute left-2 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground",
+  mobileTxnToolbarSearchInput: "w-full min-w-0 pl-8 text-sm",
 
   /** Summary collapse FAB — fixed (report list, bina pager); z-40 = dialog overlay (z-50) ke neeche */
   summaryFab:
@@ -56,7 +62,7 @@ export const mdc = {
     "bottom-[calc(env(safe-area-inset-bottom,0px)+3.25rem)]",
   /** Pagination row ke just upar — MobileTransactionsPager wrapper me absolute */
   summaryFabInline:
-    "pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-blue-500 bg-blue-100 text-blue-600 shadow-lg hover:bg-blue-200 active:scale-95",
+    "pointer-events-auto flex items-center justify-center rounded-full border border-blue-300 bg-blue-100 shadow-[0_1px_2px_rgba(15,23,42,0.06)] hover:bg-blue-200/80 active:scale-95",
   summaryFabIcon: "h-5 w-5",
 
   /** Report register detail back (Sale/Purchase/Payment … mobile) */
@@ -81,10 +87,14 @@ export const mdc = {
   listSectionTitle: "text-xs font-semibold",
 
   /** Master-detail shell (ResponsiveMasterDetail mobile detail) */
-  masterBackRow: "flex flex-shrink-0 items-center gap-1 border-b px-2 py-0.5",
+  masterBackRow: "pl-mobile-entity-detail-header flex flex-shrink-0 items-center gap-1 border-b px-2 py-0.5",
   masterTitle: "shrink-0 text-sm font-bold",
   masterSelectionName: "min-w-0 truncate text-xs font-medium",
   masterAvatarSlot: "flex h-7 w-7 items-center justify-center border-l border-border p-px",
+  /** Merged header avatar — photo add par bhi same square (stretch mat) */
+  mobileHeaderAvatarBox: LEDGER_HEADER_AVATAR_BOX_CN,
+  /** Photo ho — list dock search jaisa light blue border */
+  mobileHeaderAvatarWithPhoto: "border-blue-300 bg-white",
   /** List dock chevron jaisa — merged header avatar jab photo na ho */
   mobileHeaderAvatarNoPhoto: "border-blue-500 bg-blue-100",
   mobileHeaderAvatarNoPhotoFallback: "bg-blue-100 text-blue-600 pl-mobile-header-avatar-fallback",
@@ -105,15 +115,20 @@ export const mdc = {
   /** @deprecated use reportTxnPagerOutside — pager ab scroll ke andar nahi */
   reportTxnPagerInScroll:
     "flex-shrink-0 border-t bg-background/95 z-40 mb-[calc(env(safe-area-inset-bottom,0px)+3.25rem)]",
-  /** Action footer (Receive/Pay…) ke upar flush — ~36px + safe area */
-  ledgerTxnPagerOutside:
-    "flex-shrink-0 mb-[calc(env(safe-area-inset-bottom,0px)+2.25rem)]",
+  /** Pager + toolbar — fixed stack CSS (`globals.css` + action footer); no extra margin row. */
+  ledgerTxnPagerOutside: "flex-shrink-0",
+  /** Ledger txn scroll — bottom pad clears fixed pager + toolbar + action footer (globals). */
+  mobileLedgerTxnScrollPad: "pl-mobile-ledger-txn-scroll-pad",
 } as const;
 
 /** Theme `.rounded-lg.border` black override se exclude — list dock chevron blue */
+export const mdcMobileHeaderAvatarData = { "data-pl-mobile-header-avatar": "" } as const;
 export const mdcMobileHeaderAvatarNoPhotoData = { "data-pl-mobile-header-avatar-no-photo": "" } as const;
 
 export const mdcMobileTxnBalanceRowData = { "data-pl-mobile-txn-balance-row": "" } as const;
+export const mdcMobileTxnDateRowData = { "data-pl-mobile-txn-date-row": "" } as const;
+export const mdcMobileTxnToolbarRowData = { "data-pl-mobile-txn-toolbar-row": "" } as const;
+export const mdcMobileTxnToolbarEditData = { "data-pl-mobile-txn-toolbar-edit": "" } as const;
 
 /** Mobile list → detail: shell title (e.g. "Party details" + naam merged header). */
 export function mobileEntityDetailShellTitle(
@@ -128,5 +143,7 @@ export function mobileEntityDetailShellTitle(
 
 /** Mobile txn list scroll wrapper — report vs ledger detail */
 export function mobileTxnScrollBodyClass(isReportMobileChrome: boolean): string {
-  return isReportMobileChrome ? mdc.reportTxnScrollBody : mdc.ledgerTxnScrollBody;
+  return isReportMobileChrome
+    ? mdc.reportTxnScrollBody
+    : `${mdc.ledgerTxnScrollBody} ${mdc.mobileLedgerTxnScrollPad}`;
 }

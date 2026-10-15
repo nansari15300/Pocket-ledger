@@ -84,7 +84,7 @@ export function LedgerViewModeToggleButton<T extends string>({
     <Button
       type="button"
       className={cn(
-        "flex-1 h-6 min-w-0 rounded-md text-xs font-medium",
+        "flex-1 min-h-0 min-w-0 flex-1 rounded-md text-sm font-semibold",
         onAlternateMode
           ? "bg-orange-600 hover:bg-orange-700 text-white"
           : "bg-violet-600 hover:bg-violet-700 text-white",

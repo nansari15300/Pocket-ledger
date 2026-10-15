@@ -6,7 +6,10 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { Search } from "lucide-react";
+import { Search, Pencil } from "lucide-react";
+import { EditStaffDialog } from "@/components/staff/EditStaffDialog";
+import { EditStaffGroupDialog } from "@/components/staff/EditStaffGroupDialog";
+import { LEDGER_HEADER_AVATAR_PEN_CN } from "@/lib/ledgerHeaderChrome";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -32,7 +35,7 @@ import type { Staff, StaffGroup } from "@/components/staff/types";
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
-import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import { applyMasterDetailBackToListUrl, masterDetailListHref } from "@/lib/masterDetailListPath";
 import { browserHistoryHref } from "@/lib/webAppBasePath";
 import {
   masterDetailTabHref,
@@ -85,6 +88,7 @@ import { staffGroupAccountMove } from "@/lib/masterEntityGroupAccountMove";
 import { STAFF_ENTITY_GROUP_PRESET } from "@/lib/masterEntityGroupFormPresets";
 import {
   appendMasterEntitySystemBranchGroups,
+  isMasterEntitySystemGroupId,
   resolveMasterEntityGroupForSelection,
   resolveStaffListGroupBucketId,
 } from "@/lib/masterEntitySystemGroups";
@@ -145,13 +149,16 @@ function StaffPageContent() {
   const [activeView, setActiveView] = useState("staff");
   const { isMobile, selected, setSelected } = useResponsiveListLayout<Staff | StaffGroup>(`staff_view_${activeView}`);
 
-  const onBackToList = useCallback(() => {
-    setSelected(null);
-    router.replace(masterDetailListHref("staff"), { scroll: false });
-  }, [setSelected, router]);
-  useRegisterMasterDetailHardwareBack("staff", onBackToList);
   const useQueryNav = useMasterDetailQueryNav();
   const pendingStaffSelectIdRef = useRef<string | null>(null);
+  const onBackToList = useCallback(() => {
+    pendingStaffSelectIdRef.current = null;
+    // Pehle URL clear — warna sync effect purani ?selected= se detail wapas kholta hai
+    const href = applyMasterDetailBackToListUrl("staff");
+    setSelected(null);
+    router.replace(href, { scroll: false });
+  }, [setSelected, router]);
+  useRegisterMasterDetailHardwareBack("staff", onBackToList);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [staffListQuickFilter, setStaffListQuickFilter] = useState<EntityListQuickFilter>("default");
@@ -188,6 +195,10 @@ function StaffPageContent() {
     if (!patch?.id || !selectedStaffRaw || selectedStaffRaw.id !== patch.id) return;
     setSelected({ ...selectedStaffRaw, ...patch });
   }, [setSelected, selectedStaffRaw]);
+  const handleStaffGroupUpdated = useCallback((patch?: Partial<StaffGroup>) => {
+    if (!patch?.id || !selectedGroupRaw || selectedGroupRaw.id !== patch.id) return;
+    setSelected({ ...selectedGroupRaw, ...patch });
+  }, [setSelected, selectedGroupRaw]);
   const mobileStaffSelectionLabelClassName = useMemo(() => {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as Staff | StaffGroup).balance);
@@ -212,23 +223,30 @@ function StaffPageContent() {
     const name = group.name;
     return name && String(name).trim() ? String(name).trim() : null;
   }, [selected, activeView, groupMemberFilterId, processedStaff, mobileStaffSelectionLabelClassName]);
+  const [staffLedgerSplitMode, setStaffLedgerSplitMode] = useState<"tax" | "salary">("salary");
+  const staffDateRangeClearRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    setStaffLedgerSplitMode("salary");
+  }, [selected?.id]);
+  const staffDetailShellLabel =
+    staffLedgerSplitMode === "tax" ? "Staff tax details" : "Staff salary details";
   const staffShellTitle = useMemo(
-    () => mobileEntityDetailShellTitle(isMobile, Boolean(selected), "Staff", "Staff details"),
-    [isMobile, selected]
+    () => mobileEntityDetailShellTitle(isMobile, Boolean(selected), "Staff", staffDetailShellLabel),
+    [isMobile, selected, staffDetailShellLabel]
   );
   const mobileStaffHeaderSecondary = useMemo((): ReactNode | undefined => {
     if (!isMobile || !selected) return undefined;
     return (
-      <MobileMasterDetailHeaderDateSecondary dateRange={dateRange} onClear={() => setDateRange(undefined)} />
+      <MobileMasterDetailHeaderDateSecondary
+        dateRange={dateRange}
+        onClear={() => {
+          // StaffDetails local search + date sync (top X = search clear)
+          if (staffDateRangeClearRef.current) staffDateRangeClearRef.current();
+          else setDateRange(undefined);
+        }}
+      />
     );
   }, [isMobile, selected, dateRange]);
-  const mobileStaffDetailHeaderAvatar = useMemo(() => {
-    if (!isMobile || !selected) return null;
-    const selectedEntity = selected as Staff | StaffGroup;
-    const name = selectedEntity.name || STAFF_ENTITY_LABEL;
-    const attachmentUrl = trimEntityFileUrlForPreview((selectedEntity as any).fileUrl);
-    return <MobileMasterDetailHeaderAvatar name={name} attachmentUrl={attachmentUrl} />;
-  }, [isMobile, selected]);
   useSyncMasterDetailHeaderId("staff", selectedStaff?.id ?? selectedGroupRaw?.id ?? null);
 
   const processedStaffGroups = useMemo(() => {
@@ -258,6 +276,80 @@ function StaffPageContent() {
         : null,
     [selectedGroupRaw, processedStaffGroups, companyId]
   );
+
+  const mobileStaffDetailHeaderAvatar = useMemo(() => {
+    if (!isMobile || !selected) return null;
+
+    if (activeView === "staff" && selectedStaff) {
+      const staff = selectedStaff;
+      const name = staff.name || STAFF_ENTITY_LABEL;
+      const attachmentUrl = trimEntityFileUrlForPreview((staff as any).fileUrl);
+      const hasTransactions = (staff.debit ?? 0) !== 0 || (staff.credit ?? 0) !== 0;
+      return (
+        <MobileMasterDetailHeaderAvatar
+          name={name}
+          attachmentUrl={attachmentUrl}
+          editTrigger={
+            <EditStaffDialog
+              staff={staff}
+              allGroups={processedStaffGroups}
+              onStaffUpdated={handleStaffUpdated}
+              onStaffDeleted={() => setSelected(null)}
+              hasTransactions={hasTransactions}
+            >
+              <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit staff">
+                <Pencil className="h-2.5 w-2.5" aria-hidden />
+              </button>
+            </EditStaffDialog>
+          }
+        />
+      );
+    }
+
+    if (activeView === "groups" && selectedGroup) {
+      const group = selectedGroup;
+      const name = group.name || STAFF_ENTITY_LABEL;
+      const attachmentUrl = trimEntityFileUrlForPreview((group as any).fileUrl);
+      const isSystemBranchGroup = isMasterEntitySystemGroupId(STAFF_ENTITY_GROUP_PRESET, group.id);
+      const hasAccounts =
+        processedStaff.some((s) => s.groupId === group.id) ||
+        processedStaffGroups.some((g) => g.parentId === group.id);
+      return (
+        <MobileMasterDetailHeaderAvatar
+          name={name}
+          attachmentUrl={attachmentUrl}
+          editTrigger={
+            !isSystemBranchGroup ? (
+              <EditStaffGroupDialog
+                group={group}
+                allGroups={processedStaffGroups}
+                onGroupUpdated={handleStaffGroupUpdated}
+                onGroupDeleted={() => setSelected(null)}
+                hasAccounts={hasAccounts}
+              >
+                <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit group">
+                  <Pencil className="h-2.5 w-2.5" aria-hidden />
+                </button>
+              </EditStaffGroupDialog>
+            ) : undefined
+          }
+        />
+      );
+    }
+
+    return null;
+  }, [
+    isMobile,
+    selected,
+    activeView,
+    selectedStaff,
+    selectedGroup,
+    processedStaff,
+    processedStaffGroups,
+    handleStaffUpdated,
+    handleStaffGroupUpdated,
+    setSelected,
+  ]);
 
   const processedStaffGroupsForList = useMemo(() => {
     if (!showOnlyStaffGroupsWithPendingApproval || !showApproveOnList) return processedStaffGroups;
@@ -674,6 +766,10 @@ function StaffPageContent() {
       onDateRangeChange={setDateRange}
       userNames={userNames}
       hideMobilePeriodLabelRow={isMobile}
+      onLedgerSplitModeChange={setStaffLedgerSplitMode}
+      onRegisterClearDateRange={(fn) => {
+        staffDateRangeClearRef.current = fn;
+      }}
     />
   ) : activeView === "groups" && selectedGroup ? (
     <StaffGroupDetails

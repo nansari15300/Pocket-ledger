@@ -150,6 +150,7 @@ import {
 import {
   applyHiddenLedgerOpeningAmountAdjustments,
   patchFyOpeningRowsBillWiseBalances,
+  signedBillWiseOutstandingForRow,
   signedFyOpeningRowAmount,
   signedToOpeningDrCr,
 } from "@/lib/billWiseOpeningBalanceSum";
@@ -206,6 +207,8 @@ import {
   LEDGER_TDS_USER_CELL_PAD_CN,
   LEDGER_TDS_ROW_TEXT_CELL_PAD_CN,
   LEDGER_TDS_DR_CR_CELL_PAD_CN,
+  LEDGER_TDS_DR_CR_COL_PX,
+  LEDGER_TDS_DR_CR_AMOUNT_CELL_CN,
   LEDGER_BOTH_DATE_BS_AD_GAP_PX,
   LEDGER_BOTH_DATE_BS_CELL_PAD_CN,
   LEDGER_ENTITY_DATE_BS_COL_PX,
@@ -219,6 +222,7 @@ import {
   LEDGER_TXN_BALANCE_TO_MENU_PAD_CN,
   LEDGER_TXN_ROW_MENU_COL_PX,
   LEDGER_TXN_ROW_MENU_CELL_CN,
+  measureLedgerTxnVerticalScrollPads,
   LEDGER_TXN_BODY_CELL_PAD_CN,
   LEDGER_TXN_COL_MAX_GAP_PAD_CN,
   LEDGER_TXN_DR_CR_AMOUNT_CELL_CN,
@@ -361,6 +365,8 @@ interface TransactionsTableProps {
   closingBalanceRowActions?: React.ReactNode;
   /** Second row (mobile) / before label (desktop) — Freeze, Send Statement, etc. */
   closingBalanceActions?: React.ReactNode;
+  /** Footer closing label (default "Closing Balance"; party TDS details uses "TDS Closing Balance"). */
+  closingBalanceLabel?: string;
   onDeleteVoucher?: (transaction: any) => void;
   /** Row menu: recycle bin (corrupt / master-missing vouchers — sirf id se). */
   onMoveVoucherToRecycleBin?: (transaction: any) => void;
@@ -477,6 +483,7 @@ export function TransactionsTable({
   openingBalanceLeftContent,
   closingBalanceRowActions,
   closingBalanceActions,
+  closingBalanceLabel = "Closing Balance",
   onDeleteVoucher,
   onMoveVoucherToRecycleBin,
   onHistoryVoucher,
@@ -948,14 +955,20 @@ export function TransactionsTable({
     refreshPendingOutboxVoucherIds,
   ]);
   const showApproveAllOnPage = approveAllTargets.length > 0;
-  // Statement view = running balance. Bill wise: Party/Staff show per-row outstanding (closing balance); others show running balance.
+  // Statement view = running balance. Bill wise: Party/Staff/Tax show per-row outstanding (closing balance).
   const isBillWiseMode = resolvedBalanceMode === "bill_wise";
-  // Party/Staff bill-wise only: show per-row outstanding (per row closing balance), including journal. Daybook/account/expense/tax bill-wise: running balance.
+  /** Party TDS details (Taxable / TDS Amount cols) — bill-wise still uses per-row outstanding. */
+  const isPartyTdsLedgerTable =
+    Boolean(visibleColumns?.tdsTaxable) || Boolean(visibleColumns?.tdsAmount);
+  // Party/Staff/Tax (+ party TDS details) bill-wise: per-row outstanding. Daybook/account/expense keep running unless listed here.
   const shouldUseOutstandingBalance =
     isBillWiseMode &&
     (context === "party" ||
       context === "staff" ||
-      (context === "group" && (groupEntityType === "party" || groupEntityType === "staff")));
+      context === "tax" ||
+      isPartyTdsLedgerTable ||
+      (context === "group" &&
+        (groupEntityType === "party" || groupEntityType === "staff" || groupEntityType === "tax")));
   const billWiseLinkPreviewEnabled = isBillWiseMode && shouldUseOutstandingBalance;
   const [billWiseLinkPreview, setBillWiseLinkPreview] = useState<BillWiseLinkPreviewSelection | null>(null);
   const fyPatchedLedgerRows = useMemo(() => {
@@ -1480,11 +1493,13 @@ export function TransactionsTable({
   const renderHeaderWithFilter = (key: string, label: string, isNumeric: boolean = false, minWidthPx?: number) => {
     const isFiltered = !!(filters && filters[key]) || (key === 'type' && voucherTypes && !voucherTypes.includes('all'));
     const hasTdsLedgerCols = showCol("tdsTaxable") || showCol("tdsAmount");
-    const tdsTaxableHeaderCenter = hasTdsLedgerCols && key === "tdsTaxable";
+    // Status body pills are centered — keep header label over the pill (not left-aligned).
+    const statusHeaderCenter = key === "status";
+    // Same as Account Details: numeric headers right-aligned (Taxable / TDS Amount / Dr / Cr / Balance).
     const thClass = cn(
       "p-0",
       isNumeric && "text-right",
-      tdsTaxableHeaderCenter && "text-center"
+      statusHeaderCenter && "text-center"
     );
     const innerPadding =
       ensureMinGaps && key === "balance"
@@ -1608,22 +1623,13 @@ export function TransactionsTable({
             "flex w-full items-center gap-1 font-bold py-3 text-black whitespace-nowrap",
             innerPadding,
             isFiltered ? "text-red-600" : "text-black",
-            isNumeric ? "justify-end" : tdsTaxableHeaderCenter ? "justify-center" : "justify-start"
+            isNumeric ? "justify-end" : statusHeaderCenter ? "justify-center" : "justify-start"
           )}
         >
-          {isNumeric ? (
-            <>
-              {(setFilters || (key === "type" && onVoucherTypeChange)) &&
-                renderFilterPopover(cn(txnTableIconBtnCn, "h-6 w-6 shrink-0"))}
-              <span>{label}</span>
-            </>
-          ) : (
-            <>
-              <span>{label}</span>
-              {(setFilters || (key === "type" && onVoucherTypeChange)) &&
-                renderFilterPopover(cn(txnTableIconBtnCn, "h-6 w-6 shrink-0"))}
-            </>
-          )}
+          {/* Label pehle, filter right — Debit/Credit/Balance; Status centered over row pill. */}
+          <span>{label}</span>
+          {(setFilters || (key === "type" && onVoucherTypeChange)) &&
+            renderFilterPopover(cn(txnTableIconBtnCn, "h-6 w-6 shrink-0"))}
         </div>
       </TableHead>
     );
@@ -2674,10 +2680,18 @@ export function TransactionsTable({
       context === "party" ||
       context === "group" ||
       context === "note");
-  // Bill-wise in mobile card: party, group, staff, account (same as party details / bank details)
-  const isBillWiseCardContext = resolvedBalanceMode === "bill_wise" && (context === "party" || context === "group" || context === "staff" || context === "account");
-  // In party/staff/group billwise view, status shows only bill-wise link voucher no (not spend-wise RCPT/PYMT/Contra).
-  const statusBillWiseOnly = resolvedBalanceMode === "bill_wise" && (context === "party" || context === "staff" || context === "group");
+  // Bill-wise in mobile card: party, group, staff, account, tax
+  const isBillWiseCardContext =
+    resolvedBalanceMode === "bill_wise" &&
+    (context === "party" ||
+      context === "group" ||
+      context === "staff" ||
+      context === "account" ||
+      context === "tax");
+  // In party/staff/group/tax billwise view, status shows only bill-wise link voucher no (not spend-wise RCPT/PYMT/Contra).
+  const statusBillWiseOnly =
+    resolvedBalanceMode === "bill_wise" &&
+    (context === "party" || context === "staff" || context === "group" || context === "tax");
   /** Desktop entity ledgers: fixed thead strip + body scroll (same as Dashboard Recent). */
   const ledgerDesktopSplitScrollGate = !useMobileCardView && !dashboardRecentFyAttachmentGate;
   const daybookPartyTableGate =
@@ -2853,8 +2867,13 @@ export function TransactionsTable({
     }
     if (showCol("tdsTaxable")) w.push(LEDGER_TDS_TAXABLE_COL_PX);
     if (showCol("tdsAmount")) w.push(LEDGER_TDS_AMOUNT_COL_PX);
-    if (showCol("dr") && !hideDebitColumn) w.push(100);
-    if (showCol("cr") && !hideCreditColumn) w.push(100);
+    // TDS details: Dr/Cr race = badge/amount content width (not bare 100px).
+    if (showCol("dr") && !hideDebitColumn) {
+      w.push(hasTdsLedgerCols ? LEDGER_TDS_DR_CR_COL_PX : LEDGER_TXN_DR_CR_COL_PX);
+    }
+    if (showCol("cr") && !hideCreditColumn) {
+      w.push(hasTdsLedgerCols ? LEDGER_TDS_DR_CR_COL_PX : LEDGER_TXN_DR_CR_COL_PX);
+    }
     if (showCol("status") && !hideStatusColumn) w.push(95);
     if (showCol("runningBalance") && !hideBalanceColumn) w.push(LEDGER_ENTITY_BALANCE_COL_PX);
     w.push(LEDGER_TXN_ROW_MENU_COL_PX);
@@ -2937,6 +2956,8 @@ export function TransactionsTable({
   const lastUnifiedScaleTargetRef = useRef(0);
   const lastUnifiedTableMinRef = useRef(0);
   const unifiedWidthApplyingRef = useRef(false);
+  /** Survives width remount (Show/Hide linked, row count) — cleanup must not lose H position. */
+  const ledgerUnifiedScrollLeftRef = useRef(0);
 
   const effectiveSplitScrollColWidths = useMemo((): (number | string)[] => {
     if (!splitScrollColProportionalGate || splitScrollColWidths.length === 0) return splitScrollColWidths;
@@ -3021,21 +3042,34 @@ export function TransactionsTable({
       if (unifiedWidthApplyingRef.current) return;
       unifiedWidthApplyingRef.current = true;
       try {
-        const savedUnifiedScrollLeft = host.scrollLeft;
+        // Prefer live scrollLeft; if CSS remount clamped to 0, keep last user/host position.
+        const savedUnifiedScrollLeft = Math.max(
+          host.scrollLeft,
+          ledgerUnifiedScrollLeftRef.current
+        );
         const hostW = Math.ceil(host.getBoundingClientRect().width || host.clientWidth || 0);
 
         const bodyEl = tableContainerRef.current;
-        let vScrollPad = 0;
-        if (bodyEl && bodyEl.scrollHeight > bodyEl.clientHeight + 1) {
-          vScrollPad = Math.max(0, bodyEl.offsetWidth - bodyEl.clientWidth);
-        }
-        const padVar = `${vScrollPad}px`;
         const isDaybookUnifiedHost = host.hasAttribute("data-pl-daybook-unified-scroll");
-        const bodyPadVarName = isDaybookUnifiedHost
-          ? "--pl-daybook-txn-body-vscroll-pad"
-          : "--pl-ledger-txn-body-vscroll-pad";
-        if (host.style.getPropertyValue(bodyPadVarName) !== padVar) {
-          host.style.setProperty(bodyPadVarName, padVar);
+        if (bodyEl) {
+          const { headerPadPx, bodyPadPx } = measureLedgerTxnVerticalScrollPads(bodyEl);
+          const headerPadVar = `${headerPadPx}px`;
+          const bodyPadVar = `${bodyPadPx}px`;
+          if (isDaybookUnifiedHost) {
+            const shell = bodyEl.closest(".pl-ledger-detail-table-shell") as HTMLElement | null;
+            if (shell) {
+              if (shell.style.getPropertyValue("--pl-dashboard-recent-txn-header-vscroll-pad") !== headerPadVar) {
+                shell.style.setProperty("--pl-dashboard-recent-txn-header-vscroll-pad", headerPadVar);
+              }
+              if (shell.style.getPropertyValue("--pl-dashboard-recent-txn-body-vscroll-pad") !== bodyPadVar) {
+                shell.style.setProperty("--pl-dashboard-recent-txn-body-vscroll-pad", bodyPadVar);
+              }
+            }
+          } else {
+            if (host.style.getPropertyValue("--pl-ledger-txn-body-vscroll-pad") !== headerPadVar) {
+              host.style.setProperty("--pl-ledger-txn-body-vscroll-pad", headerPadVar);
+            }
+          }
         }
 
         let baseColSum = 0;
@@ -3113,6 +3147,7 @@ export function TransactionsTable({
         if (host.scrollLeft !== restoredLeft) {
           host.scrollLeft = restoredLeft;
         }
+        ledgerUnifiedScrollLeftRef.current = restoredLeft;
       } finally {
         unifiedWidthApplyingRef.current = false;
       }
@@ -3123,13 +3158,22 @@ export function TransactionsTable({
     const ro = new ResizeObserver(() => scheduleApplyUnifiedTableWidthVar());
     ro.observe(host);
     const bodyEl = tableContainerRef.current;
-    if (bodyEl) ro.observe(bodyEl);
     const onBodyScroll = () => scheduleApplyUnifiedTableWidthVar();
     bodyEl?.addEventListener("scroll", onBodyScroll, { passive: true });
+    const onHostScroll = () => {
+      if (unifiedWidthApplyingRef.current) return;
+      ledgerUnifiedScrollLeftRef.current = host.scrollLeft;
+    };
+    host.addEventListener("scroll", onHostScroll, { passive: true });
     window.addEventListener("resize", scheduleApplyUnifiedTableWidthVar);
     return () => {
+      // Capture before removing min-width — that clamp would zero scrollLeft.
+      if (host.scrollLeft > 0) {
+        ledgerUnifiedScrollLeftRef.current = host.scrollLeft;
+      }
       unifiedLedgerWidthApplyRef.current = null;
       bodyEl?.removeEventListener("scroll", onBodyScroll);
+      host.removeEventListener("scroll", onHostScroll);
       ro.disconnect();
       if (widthApplyFrame) cancelAnimationFrame(widthApplyFrame);
       window.removeEventListener("resize", scheduleApplyUnifiedTableWidthVar);
@@ -3138,7 +3182,13 @@ export function TransactionsTable({
       host.style.removeProperty("--pl-ledger-txn-table-min-px");
       host.style.removeProperty("--pl-daybook-txn-table-min-px");
       host.style.removeProperty("--pl-ledger-txn-body-vscroll-pad");
-      host.style.removeProperty("--pl-daybook-txn-body-vscroll-pad");
+      if (host.hasAttribute("data-pl-daybook-unified-scroll")) {
+        const shell = tableContainerRef.current?.closest(".pl-ledger-detail-table-shell") as
+          | HTMLElement
+          | null;
+        shell?.style.removeProperty("--pl-dashboard-recent-txn-header-vscroll-pad");
+        shell?.style.removeProperty("--pl-dashboard-recent-txn-body-vscroll-pad");
+      }
     };
   }, [
     splitScrollColProportionalGate,
@@ -3159,10 +3209,22 @@ export function TransactionsTable({
     unifiedLedgerWidthApplyRef.current?.();
   }, [splitScrollColProportionalGate, ledgerHostClientWidth]);
 
-  /** Daybook date change: txn rows swap — width var dubara lagao (H-scroll na gayab ho). */
+  /**
+   * Row count change (daybook date / Show–Hide linked trxn): remasure width and
+   * re-apply preserved H-scroll so scrollLeft does not jump left.
+   */
   useLayoutEffect(() => {
-    if (!daybookPartyTableGate) return;
-    const run = () => unifiedLedgerWidthApplyRef.current?.();
+    if (!splitScrollColProportionalGate) return;
+    const preserved = ledgerUnifiedScrollLeftRef.current;
+    const run = () => {
+      unifiedLedgerWidthApplyRef.current?.();
+      const host = resolveUnifiedHorizontalScrollHost();
+      if (!host || preserved <= 0) return;
+      const maxScrollLeft = Math.max(0, host.scrollWidth - host.clientWidth);
+      const left = Math.min(preserved, maxScrollLeft);
+      if (host.scrollLeft !== left) host.scrollLeft = left;
+      ledgerUnifiedScrollLeftRef.current = left;
+    };
     run();
     const id1 = requestAnimationFrame(run);
     const id2 = requestAnimationFrame(() => requestAnimationFrame(run));
@@ -3170,7 +3232,7 @@ export function TransactionsTable({
       cancelAnimationFrame(id1);
       cancelAnimationFrame(id2);
     };
-  }, [daybookPartyTableGate, transactions.length]);
+  }, [splitScrollColProportionalGate, transactions.length, resolveUnifiedHorizontalScrollHost]);
 
   useEffect(() => {
     if (!desktopSplitTableScrollGate) return;
@@ -3189,13 +3251,14 @@ export function TransactionsTable({
       );
       setDashboardRecentHScrollWidth(w);
       if (dashboardRecentFyAttachmentGate && shell && body) {
-        let vScrollPad = 0;
-        if (body.scrollHeight > body.clientHeight + 1) {
-          vScrollPad = Math.max(0, body.offsetWidth - body.clientWidth);
+        const { headerPadPx, bodyPadPx } = measureLedgerTxnVerticalScrollPads(body);
+        const headerPadVar = `${headerPadPx}px`;
+        const bodyPadVar = `${bodyPadPx}px`;
+        if (shell.style.getPropertyValue("--pl-dashboard-recent-txn-header-vscroll-pad") !== headerPadVar) {
+          shell.style.setProperty("--pl-dashboard-recent-txn-header-vscroll-pad", headerPadVar);
         }
-        const padVar = `${vScrollPad}px`;
-        if (shell.style.getPropertyValue("--pl-dashboard-recent-txn-body-vscroll-pad") !== padVar) {
-          shell.style.setProperty("--pl-dashboard-recent-txn-body-vscroll-pad", padVar);
+        if (shell.style.getPropertyValue("--pl-dashboard-recent-txn-body-vscroll-pad") !== bodyPadVar) {
+          shell.style.setProperty("--pl-dashboard-recent-txn-body-vscroll-pad", bodyPadVar);
         }
       }
       if (intrinsicDateTypeCols && header && body) {
@@ -3240,17 +3303,28 @@ export function TransactionsTable({
         }
       }
     };
-    measureRecentHorizontalScrollWidth();
-    const ro = new ResizeObserver(() => measureRecentHorizontalScrollWidth());
-    if (tableContainerRef.current) ro.observe(tableContainerRef.current);
+    let measureRecentFrame = 0;
+    const scheduleMeasureRecentHorizontalScrollWidth = () => {
+      if (measureRecentFrame) cancelAnimationFrame(measureRecentFrame);
+      measureRecentFrame = requestAnimationFrame(() => {
+        measureRecentFrame = 0;
+        measureRecentHorizontalScrollWidth();
+      });
+    };
+    scheduleMeasureRecentHorizontalScrollWidth();
+    const ro = new ResizeObserver(() => scheduleMeasureRecentHorizontalScrollWidth());
     if (dashboardRecentHeaderScrollRef.current) ro.observe(dashboardRecentHeaderScrollRef.current);
-    window.addEventListener("resize", measureRecentHorizontalScrollWidth);
+    const shellForRo = tableContainerRef.current?.closest(".pl-ledger-detail-table-shell");
+    if (shellForRo instanceof HTMLElement) ro.observe(shellForRo);
+    window.addEventListener("resize", scheduleMeasureRecentHorizontalScrollWidth);
     return () => {
       ro.disconnect();
-      window.removeEventListener("resize", measureRecentHorizontalScrollWidth);
+      if (measureRecentFrame) cancelAnimationFrame(measureRecentFrame);
+      window.removeEventListener("resize", scheduleMeasureRecentHorizontalScrollWidth);
       const shell = tableContainerRef.current?.closest(".pl-ledger-detail-table-shell") as
         | HTMLElement
         | null;
+      shell?.style.removeProperty("--pl-dashboard-recent-txn-header-vscroll-pad");
       shell?.style.removeProperty("--pl-dashboard-recent-txn-body-vscroll-pad");
     };
   }, [
@@ -3738,11 +3812,16 @@ export function TransactionsTable({
           credit = 0;
         }
       }
-      // Keep mobile card balance behavior aligned with table: party/staff use running balance instead of outstanding.
+      // Bill-wise mobile card: outstanding (same sign rules as table / signedBillWiseOutstandingForRow).
       const useOutstanding = shouldUseOutstandingBalance && isBillWiseCardContext && (t.outstanding != null);
       if (useOutstanding) {
-        const out = Number(t.outstanding) ?? 0;
-        balance = t.type === "purchase" || t.type === "payment_out" || t.type === "direct_expense" ? -out : out;
+        const signed = signedBillWiseOutstandingForRow(t, context, groupEntityType);
+        if (signed != null) balance = signed;
+        else {
+          const out = Number(t.outstanding) ?? 0;
+          balance =
+            t.type === "purchase" || t.type === "payment_out" || t.type === "direct_expense" ? -out : out;
+        }
       }
       if (context === "item" && stockView === "qty" && item) {
         debit = debit / conversionFactor;
@@ -4483,7 +4562,7 @@ export function TransactionsTable({
                       {closingBalanceRowActions}
                     </div>
                   ) : null}
-                  <span className="shrink-0 text-xs font-semibold text-muted-foreground">Closing Balance</span>
+                  <span className="shrink-0 text-xs font-semibold text-muted-foreground">{closingBalanceLabel}</span>
                   <span className="shrink-0 text-sm font-semibold">{formatFooterBalance(footerClosingBalance)}</span>
                 </div>
               ) : null}
@@ -4673,14 +4752,14 @@ export function TransactionsTable({
           renderHeaderWithFilter(
             "tdsTaxable",
             "Taxable",
-            !tdsLedgerTableLayout,
+            true,
             ensureMinGaps ? LEDGER_TDS_TAXABLE_COL_PX : undefined
           )}
         {showCol("tdsAmount") &&
           renderHeaderWithFilter(
             "tdsAmount",
             "TDS Amount",
-            !tdsLedgerTableLayout,
+            true,
             ensureMinGaps ? LEDGER_TDS_AMOUNT_COL_PX : undefined
           )}
         {showCol("dr") &&
@@ -4689,7 +4768,11 @@ export function TransactionsTable({
             "debit",
             debitHeaderLabel,
             true,
-            ensureMinGaps ? LEDGER_TXN_DR_CR_COL_PX : undefined
+            ensureMinGaps
+              ? tdsLedgerTableLayout
+                ? LEDGER_TDS_DR_CR_COL_PX
+                : LEDGER_TXN_DR_CR_COL_PX
+              : undefined
           )}
         {showCol("cr") &&
           !hideCreditColumn &&
@@ -4697,7 +4780,11 @@ export function TransactionsTable({
             "credit",
             creditHeaderLabel,
             true,
-            ensureMinGaps ? LEDGER_TXN_DR_CR_COL_PX : undefined
+            ensureMinGaps
+              ? tdsLedgerTableLayout
+                ? LEDGER_TDS_DR_CR_COL_PX
+                : LEDGER_TXN_DR_CR_COL_PX
+              : undefined
           )}
         {showCol("status") && !hideStatusColumn && renderHeaderWithFilter("status", "Status", false, ensureMinGaps ? 95 : undefined)}
         {showCol("runningBalance") &&
@@ -4823,8 +4910,7 @@ export function TransactionsTable({
           {showCol("tdsTaxable") && (
             <TableCell
               className={cn(
-                tdsLedgerTableLayout ? "text-center" : "text-right",
-                "font-semibold tabular-nums align-middle",
+                "text-right font-semibold tabular-nums align-middle",
                 ensureMinGaps && LEDGER_TDS_TAXABLE_CELL_PAD_CN
               )}
               style={ensureMinGaps ? { minWidth: `${LEDGER_TDS_TAXABLE_COL_PX}px` } : undefined}
@@ -4835,8 +4921,7 @@ export function TransactionsTable({
           {showCol("tdsAmount") && (
             <TableCell
               className={cn(
-                tdsLedgerTableLayout ? "text-left" : "text-right",
-                "font-semibold tabular-nums align-middle",
+                "text-right font-semibold tabular-nums align-middle",
                 ensureMinGaps && LEDGER_TDS_AMOUNT_CELL_PAD_CN
               )}
               style={ensureMinGaps ? { minWidth: `${LEDGER_TDS_AMOUNT_COL_PX}px` } : undefined}
@@ -4847,13 +4932,21 @@ export function TransactionsTable({
           {showCol("dr") && !hideDebitColumn && (
             <TableCell
               className={cn(
-                "font-semibold text-green-700 align-middle",
+                "font-semibold text-green-700 align-middle text-right",
                 ensureMinGaps &&
                   (tdsLedgerTableLayout
-                    ? cn(LEDGER_TDS_DR_CR_CELL_PAD_CN, "text-right tabular-nums")
+                    ? LEDGER_TDS_DR_CR_AMOUNT_CELL_CN
                     : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN)
               )}
-              style={ensureMinGaps ? { minWidth: `${LEDGER_TXN_DR_CR_COL_PX}px` } : undefined}
+              style={
+                ensureMinGaps
+                  ? {
+                      minWidth: `${
+                        tdsLedgerTableLayout ? LEDGER_TDS_DR_CR_COL_PX : LEDGER_TXN_DR_CR_COL_PX
+                      }px`,
+                    }
+                  : undefined
+              }
             >
               {formatFooterAmount(footerTotalDr)}
             </TableCell>
@@ -4861,13 +4954,21 @@ export function TransactionsTable({
           {showCol("cr") && !hideCreditColumn && (
             <TableCell
               className={cn(
-                "font-semibold text-red-700 align-middle",
+                "font-semibold text-red-700 align-middle text-right",
                 ensureMinGaps &&
                   (tdsLedgerTableLayout
-                    ? cn(LEDGER_TDS_DR_CR_CELL_PAD_CN, "text-right tabular-nums")
+                    ? LEDGER_TDS_DR_CR_AMOUNT_CELL_CN
                     : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN)
               )}
-              style={ensureMinGaps ? { minWidth: `${LEDGER_TXN_DR_CR_COL_PX}px` } : undefined}
+              style={
+                ensureMinGaps
+                  ? {
+                      minWidth: `${
+                        tdsLedgerTableLayout ? LEDGER_TDS_DR_CR_COL_PX : LEDGER_TXN_DR_CR_COL_PX
+                      }px`,
+                    }
+                  : undefined
+              }
             >
               {formatFooterAmount(footerTotalCr)}
             </TableCell>
@@ -4952,7 +5053,7 @@ export function TransactionsTable({
                     {closingBalanceActions}
                   </div>
                 ) : null}
-                <span className="shrink-0 text-right">Closing Balance</span>
+                <span className="shrink-0 text-right">{closingBalanceLabel}</span>
               </div>
             </div>
           </TableCell>
@@ -5550,7 +5651,10 @@ export function TransactionsTable({
           className={cn(
             "w-full shrink-0 overflow-y-hidden pl-dashboard-recent-txn-header-scroll pl-dashboard-recent-hide-hscroll",
             ledgerUnifiedHScrollActive
-              ? "min-w-full max-w-none overflow-x-hidden"
+              ? cn(
+                  "max-w-none overflow-x-hidden",
+                  dashboardRecentFyAttachmentGate ? "min-w-0" : "min-w-full"
+                )
               : "min-w-0 max-w-full overflow-x-auto"
           )}
           onScroll={
@@ -5583,10 +5687,11 @@ export function TransactionsTable({
         {...(dashboardRecentFyAttachmentGate ? { "data-pl-dashboard-recent-txn": "" } : {})}
         {...(ledgerDesktopSplitScrollGate ? { "data-pl-ledger-txn": "" } : {})}
         className={cn(
-          "w-full min-w-full pl-ledger-txn-scroll-native outline-none focus:outline-none",
+          "w-full pl-ledger-txn-scroll-native outline-none focus:outline-none",
           desktopSplitTableScrollGate
             ? cn(
-                "min-h-0 min-w-0 max-w-full flex-1 overflow-y-auto pl-dashboard-recent-hide-hscroll",
+                "min-h-0 max-w-full flex-1 overflow-y-auto pl-dashboard-recent-hide-hscroll",
+                dashboardRecentFyAttachmentGate ? "min-w-0" : "min-w-full",
                 ledgerUnifiedHScrollActive
                   ? "overflow-x-hidden [scrollbar-gutter:auto]"
                   : "overflow-x-auto [scrollbar-gutter:auto]"

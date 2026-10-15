@@ -2,7 +2,8 @@
 
 import React, { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, Users } from "lucide-react";
+import { Users } from "lucide-react";
+import { MasterListChromeChevronToggle } from "@/components/layout/MasterListChromeChevronToggle";
 import { motion, AnimatePresence } from "framer-motion";
 import type { Party, Group } from "@/components/party/types";
 import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
@@ -278,7 +279,9 @@ export function IcCompanyGroupTabListTree({
               ) : null}
             </span>
           </MasterListNameTooltip>
-          {expandControl}
+          {expandControl ? (
+            <div className="ml-auto shrink-0 self-center pl-1">{expandControl}</div>
+          ) : null}
         </div>
       </div>
       <p
@@ -293,22 +296,18 @@ export function IcCompanyGroupTabListTree({
   );
 
   const level1ExpandControl = (
-    <button
-      type="button"
-      aria-expanded={level1Expanded}
-      aria-label={level1Expanded ? "Collapse IC companies" : "Expand IC companies"}
-      className="mt-0.5 shrink-0 self-start rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+    <MasterListChromeChevronToggle
+      variant="row"
+      expanded={level1Expanded}
+      ariaLabelWhenExpanded="Collapse IC companies"
+      ariaLabelWhenCollapsed="Expand IC companies"
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
         toggleLevel1();
       }}
       onPointerDown={(e) => e.stopPropagation()}
-    >
-      <ChevronDown
-        className={cn("h-3.5 w-3.5 transition-transform", !level1Expanded && "-rotate-90")}
-      />
-    </button>
+    />
   );
 
   const level1Content = renderCardContent(
@@ -355,22 +354,18 @@ export function IcCompanyGroupTabListTree({
             ) || (pendingApprovalByPartyId[peerCompany.id] ?? 0);
 
           const peerExpandControl = (
-            <button
-              type="button"
-              aria-expanded={isPeerExpanded}
-              aria-label={isPeerExpanded ? "Collapse accounts" : "Expand accounts"}
-              className="mt-0.5 shrink-0 self-start rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            <MasterListChromeChevronToggle
+              variant="row"
+              expanded={isPeerExpanded}
+              ariaLabelWhenExpanded="Collapse accounts"
+              ariaLabelWhenCollapsed="Expand accounts"
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 togglePeerCompany(peerCompany.id);
               }}
               onPointerDown={(e) => e.stopPropagation()}
-            >
-              <ChevronDown
-                className={cn("h-3.5 w-3.5 transition-transform", !isPeerExpanded && "-rotate-90")}
-              />
-            </button>
+            />
           );
 
           const sortedMembers = sortIcMemberParties(members, quickFilter);

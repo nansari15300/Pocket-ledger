@@ -11,7 +11,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Search, Landmark } from "lucide-react";
+import { Search, Landmark, Pencil } from "lucide-react";
+import { EditAccountDialog } from "@/components/bank-cash/EditAccountDialog";
+import { EditAccountGroupDialog } from "@/components/bank-cash/EditAccountGroupDialog";
+import { LEDGER_HEADER_AVATAR_PEN_CN } from "@/lib/ledgerHeaderChrome";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -43,7 +46,7 @@ import { userCanViewSpecialAccountBalance, userIsSpecialAccountOwner } from "@/l
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
-import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import { applyMasterDetailBackToListUrl } from "@/lib/masterDetailListPath";
 import { browserHistoryHref } from "@/lib/webAppBasePath";
 import {
   masterDetailTabHref,
@@ -148,17 +151,11 @@ function BankCashPageContent() {
   const { isMobile, selected, setSelected } = useResponsiveListLayout<Account | AccountGroup>(`bank_cash_view_${activeView}`);
   const useQueryNav = useMasterDetailQueryNav();
 
-  // Detail → list: replace + Android hardware back (push le history double hunchha)
+  // Detail → list: pehle URL clear (sync effect race) + replace + hardware back
   const onBackToList = useCallback(() => {
+    pendingBankSelectIdRef.current = null;
+    const href = applyMasterDetailBackToListUrl("bank-cash");
     setSelected(null);
-    const href = masterDetailListHref("bank-cash");
-    if (typeof window !== "undefined") {
-      try {
-        window.history.replaceState(window.history.state, "", browserHistoryHref(href));
-      } catch {
-        /* ignore */
-      }
-    }
     router.replace(href, { scroll: false });
   }, [setSelected, router]);
   useRegisterMasterDetailHardwareBack("bank-cash", onBackToList);
@@ -192,6 +189,10 @@ function BankCashPageContent() {
     if (!patch?.id || !selectedAccountRaw || selectedAccountRaw.id !== patch.id) return;
     setSelected({ ...selectedAccountRaw, ...patch });
   }, [setSelected, selectedAccountRaw]);
+  const handleAccountGroupUpdated = useCallback((patch?: Partial<AccountGroup>) => {
+    if (!patch?.id || !selectedGroupRaw || selectedGroupRaw.id !== patch.id) return;
+    setSelected({ ...selectedGroupRaw, ...patch });
+  }, [setSelected, selectedGroupRaw]);
   // Account row = `accountName`; group row = `name` — sirf `.name` se bank detail header khali rehta tha
   const mobileBankCashSelectionLabelClassName = useMemo(() => {
     if (!selected) return undefined;
@@ -237,17 +238,6 @@ function BankCashPageContent() {
         : () => setAccountDetailsDateRange(undefined);
     return <MobileMasterDetailHeaderDateSecondary dateRange={range} onClear={onClear} />;
   }, [isMobile, selected, activeView, accountDetailsDateRange, groupDetailsDateRange]);
-  const mobileBankDetailHeaderEnd = useMemo(() => {
-    if (!isMobile || !selected) return null;
-    const selectedEntity = selected as Account | AccountGroup;
-    const name =
-      activeView !== "groups"
-        ? (String((selectedEntity as Account).accountName || "").trim() || "Account")
-        : (String((selectedEntity as AccountGroup).name || "").trim() || "Account");
-    const attachmentUrl = trimEntityFileUrlForPreview((selectedEntity as any).fileUrl);
-    return <MobileMasterDetailHeaderAvatar name={name} attachmentUrl={attachmentUrl} />;
-  }, [isMobile, selected, activeView]);
-  
   const isSpecialAccountOwner = userIsSpecialAccountOwner(
     String(user?.email || user?.uid || ""),
     company
@@ -302,6 +292,84 @@ function BankCashPageContent() {
     [selectedGroupRaw, processedAccountGroups, companyId]
   );
 
+  const mobileBankDetailHeaderEnd = useMemo(() => {
+    if (!isMobile || !selected) return null;
+
+    if (activeView !== "groups" && selectedAccount) {
+      const account = selectedAccount;
+      const name = String(account.accountName || "").trim() || "Account";
+      const attachmentUrl = trimEntityFileUrlForPreview((account as any).fileUrl);
+      const canEditAccount =
+        account.id !== "all" && (!account.isSpecial || can("manage_special_bank_accounts"));
+      const hasTransactions = (account.debit ?? 0) !== 0 || (account.credit ?? 0) !== 0;
+      return (
+        <MobileMasterDetailHeaderAvatar
+          name={name}
+          attachmentUrl={attachmentUrl}
+          editTrigger={
+            canEditAccount ? (
+              <EditAccountDialog
+                account={account}
+                allAccounts={processedAccounts}
+                onAccountUpdated={handleAccountUpdated}
+                onAccountDeleted={() => setSelected(null)}
+                hasTransactions={hasTransactions}
+              >
+                <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit account">
+                  <Pencil className="h-2.5 w-2.5" aria-hidden />
+                </button>
+              </EditAccountDialog>
+            ) : undefined
+          }
+        />
+      );
+    }
+
+    if (activeView === "groups" && selectedGroup) {
+      const group = selectedGroup;
+      const name = String(group.name || "").trim() || "Account";
+      const attachmentUrl = trimEntityFileUrlForPreview((group as any).fileUrl);
+      const isSystemBranchGroup = isMasterEntitySystemGroupId(BANK_ENTITY_GROUP_PRESET, group.id);
+      const hasAccounts =
+        processedAccounts.some((a) => a.groupId === group.id) ||
+        processedAccountGroups.some((g) => g.parentId === group.id);
+      return (
+        <MobileMasterDetailHeaderAvatar
+          name={name}
+          attachmentUrl={attachmentUrl}
+          editTrigger={
+            !isSystemBranchGroup ? (
+              <EditAccountGroupDialog
+                group={group}
+                allGroups={processedAccountGroups}
+                onGroupUpdated={handleAccountGroupUpdated}
+                onGroupDeleted={() => setSelected(null)}
+                hasAccounts={hasAccounts}
+              >
+                <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit group">
+                  <Pencil className="h-2.5 w-2.5" aria-hidden />
+                </button>
+              </EditAccountGroupDialog>
+            ) : undefined
+          }
+        />
+      );
+    }
+
+    return null;
+  }, [
+    isMobile,
+    selected,
+    activeView,
+    selectedAccount,
+    selectedGroup,
+    processedAccounts,
+    processedAccountGroups,
+    can,
+    handleAccountUpdated,
+    handleAccountGroupUpdated,
+    setSelected,
+  ]);
 
   // ========== MEMORY LOGIC ==========
   usePageMemory(

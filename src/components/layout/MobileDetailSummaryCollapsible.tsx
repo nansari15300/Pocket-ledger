@@ -3,6 +3,7 @@
 /**
  * Mobile-only: date / balance / filters summary — collapse state; fixed FAB provider se ek hi.
  */
+import * as React from "react";
 import type { ReactNode } from "react";
 import { useEffect } from "react";
 import { cn } from "@/lib/utils";
@@ -13,6 +14,12 @@ export type MobileDetailSummaryCollapsibleProps = {
   children: ReactNode;
   className?: string;
 };
+
+function isPinnedBalanceRow(child: ReactNode): boolean {
+  if (!React.isValidElement(child)) return false;
+  const props = child.props as Record<string, unknown>;
+  return props["data-pl-mobile-txn-balance-row"] === "";
+}
 
 export function MobileDetailSummaryCollapsible({
   children,
@@ -33,10 +40,20 @@ export function MobileDetailSummaryCollapsible({
     return <>{children}</>;
   }
 
+  const collapsibleParts: ReactNode[] = [];
+  const pinnedParts: ReactNode[] = [];
+  React.Children.forEach(children, (child) => {
+    if (isPinnedBalanceRow(child)) pinnedParts.push(child);
+    else collapsibleParts.push(child);
+  });
+
   return (
     <>
-      {!collapsed ? (
-        <div className={cn("flex flex-shrink-0 flex-col", className)}>{children}</div>
+      {!collapsed && collapsibleParts.length > 0 ? (
+        <div className={cn("flex flex-shrink-0 flex-col", className)}>{collapsibleParts}</div>
+      ) : null}
+      {pinnedParts.length > 0 ? (
+        <div className={cn("flex flex-shrink-0 flex-col", className)}>{pinnedParts}</div>
       ) : null}
     </>
   );

@@ -56,6 +56,18 @@ export function MobileDetailSummaryCollapseProvider({
     setCollapsedState(readStoredCollapsed());
   }, []);
 
+  /** Footer stack (pager / toolbar / action row) — CSS + scroll inset sync */
+  React.useEffect(() => {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    if (collapsed) {
+      root.setAttribute("data-pl-mobile-detail-summary-collapsed", "");
+    } else {
+      root.removeAttribute("data-pl-mobile-detail-summary-collapsed");
+    }
+    return () => root.removeAttribute("data-pl-mobile-detail-summary-collapsed");
+  }, [collapsed]);
+
   const registerPagerFabHost = React.useCallback(() => {
     setPagerFabHostCount((c) => c + 1);
   }, []);

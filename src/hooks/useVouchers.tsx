@@ -47,6 +47,7 @@ import {
   mirrorDocEditTimeMs,
   type BrowserDbCollectionBumpDetail,
 } from "@/lib/localCompanyDocMirror";
+import { listVoucherMirrorRowsIncrementally } from "@/lib/incrementalVoucherMirrorRead";
 import { getLocalAuthToken, getLocalAuthUser, LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
 import {
   mergeRemoteSnapshotWithLocalOnlyDocs,
@@ -809,6 +810,12 @@ function scheduleIdleWork(work: () => void): void {
   setTimeout(work, 16);
 }
 
+/** Voucher rows are parsed in cooperative slices; masters keep the normal small-list reader. */
+function listCompanyCollectionForVoucherUi(companyId: string, collectionPath: string): Promise<any[]> {
+  if (collectionPath === "vouchers") return listVoucherMirrorRowsIncrementally(companyId);
+  return listCompanyDocsFromBrowserDb(companyId, collectionPath, { forBackupMerge: true });
+}
+
 function isDashboardVouchersOnlyPrefetch(
   pathname: string,
   collections: ReadonlyArray<{ path: string }>
@@ -841,7 +848,8 @@ function loadVouchersFromSqliteFastFirst(args: {
             date: r.date || null,
             amount: Number(r.amount || 0),
           })),
-          orderByField
+          orderByField,
+          "vouchers"
         );
       });
       onLiteApplied?.();
@@ -850,7 +858,7 @@ function loadVouchersFromSqliteFastFirst(args: {
     .then(() => {
       scheduleIdleWork(() => {
         if (isStale()) return;
-        void listCompanyDocsFromBrowserDb(companyId, "vouchers", { forBackupMerge: true })
+        void listVoucherMirrorRowsIncrementally(companyId)
           .then((cached) => {
             if (isStale()) return;
             startTransition(() => {
@@ -2059,7 +2067,7 @@ export const VoucherProvider = ({
                 if (cancelled && !opts?.stableKey) return;
                 if (opts?.stableKey && stableLiveVoucherListenerRef.current?.key !== opts.stableKey) return;
                 try {
-                  const cached = await listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true });
+                  const cached = await listCompanyCollectionForVoucherUi(companyId, path);
                   const alive = (cached as any[]).filter((x) => x?.isDeleted !== true);
                   commitCollectionListSetter(path, setter, sqliteCachedRowsForSetter(alive, orderByField));
                 } catch {
@@ -2092,7 +2100,7 @@ export const VoucherProvider = ({
         }, (error: any) => {
           try {
             if (error?.code === 'unavailable' || error?.code === 'deadline-exceeded' || error?.message?.includes('network')) {
-              listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+              listCompanyCollectionForVoucherUi(companyId, path)
                 .then((cached) => {
                   if ((cancelled && !opts?.stableKey) || !cached.length) return;
                   if (opts?.stableKey && stableLiveVoucherListenerRef.current?.key !== opts.stableKey) return;
@@ -2125,7 +2133,7 @@ export const VoucherProvider = ({
                   console.warn(
                     `[Firestore] PERMISSION_DENIED (shared user): SQLite fallback, skip clearCompanyId — companies/${companyId}/${path}`
                   );
-                  listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+                  listCompanyCollectionForVoucherUi(companyId, path)
                     .then((cached) => {
                       if ((cancelled && !opts?.stableKey) || !cached.length) return;
                       if (opts?.stableKey && stableLiveVoucherListenerRef.current?.key !== opts.stableKey) return;
@@ -2169,7 +2177,7 @@ export const VoucherProvider = ({
         String(coPrefetch?.storageOption || "").toLowerCase() === "firebase";
       if (prefetchFromSqlite) {
         for (const { path: p, setter: setCol, orderByField: obf } of collectionsToFetch) {
-          listCompanyDocsFromBrowserDb(companyId, p, { forBackupMerge: true })
+          listCompanyCollectionForVoucherUi(companyId, p)
             .then((cached) => {
               if (cancelled || !cached.length) return;
               const alive = (cached as any[]).filter((x) => x?.isDeleted !== true);
@@ -2402,7 +2410,7 @@ export const VoucherProvider = ({
         }
         if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return;
         try {
-          const cached = await listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true });
+          const cached = await listVoucherMirrorRowsIncrementally(companyId);
           applySqliteRows(setter, cached, orderByField, path);
         } catch {
           /* ignore */
@@ -2526,10 +2534,10 @@ export const VoucherProvider = ({
         if (sqliteCollectionWarmWithRows(path)) continue;
         try {
           if (path === "vouchers") {
-            const cached = await listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true });
+            const cached = await listCompanyCollectionForVoucherUi(companyId, path);
             applySqliteRows(setter, cached, orderByField, path);
           } else {
-            const cached = await listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true });
+            const cached = await listCompanyCollectionForVoucherUi(companyId, path);
             applySqliteRows(setter, cached, orderByField, path);
           }
         } catch {
@@ -2609,7 +2617,7 @@ export const VoucherProvider = ({
           ) {
             return;
           }
-          const cached = await listCompanyDocsFromBrowserDb(bumpCompanyId, coll, { forBackupMerge: true });
+          const cached = await listCompanyCollectionForVoucherUi(bumpCompanyId, coll);
           if (
             bumpCompanyId !== String(companyIdForWipeGuardRef.current || "").trim() ||
             bumpEpoch !== companyDataLoadEpochRef.current
@@ -2861,7 +2869,7 @@ export const VoucherProvider = ({
       if (!d?.companyId || d.companyId !== companyId) return;
       const restoreCompanyId = String(d.companyId).trim();
       const restoreEpoch = companyDataLoadEpochRef.current;
-      listCompanyDocsFromBrowserDb(restoreCompanyId, "vouchers", { forBackupMerge: true })
+      listVoucherMirrorRowsIncrementally(restoreCompanyId)
         .then((cached) => {
           if (
             restoreCompanyId !== String(companyIdForWipeGuardRef.current || "").trim() ||
@@ -3428,7 +3436,8 @@ export const VoucherProvider = ({
                 }
                 if (line.tdsAccountId && line.tdsAmount) {
                       const tdsAmt = Number(line.tdsAmount);
-                      if (tdsAmt > 0) {
+                      // Unverified TDS stays visible on tax ledger but does not move list/header balance.
+                      if (tdsAmt > 0 && v.isTdsVerified === true) {
                         if (v.type === "purchase" || v.type === "purchase_service")
                           addVal(taxMap, line.tdsAccountId, "credit", tdsAmt);
                         else if (v.type === "sale" || v.type === "sale_service")
@@ -3496,7 +3505,13 @@ export const VoucherProvider = ({
                        addVal(staffMap, entry.accountId, 'debit', d); addVal(staffMap, entry.accountId, 'credit', c);
                     }
                     addVal(accountMap, entry.accountId, 'debit', d); addVal(accountMap, entry.accountId, 'credit', c);
-                    addVal(taxMap, entry.accountId, 'debit', d); addVal(taxMap, entry.accountId, 'credit', c);
+                    // Add Salary tax legs: only Verified amounts count toward tax list balance.
+                    const skipUnverifiedAddSalaryTax =
+                      v.subType === "add_salary" && entry.isTdsVerified !== true;
+                    if (!skipUnverifiedAddSalaryTax) {
+                      addVal(taxMap, entry.accountId, "debit", d);
+                      addVal(taxMap, entry.accountId, "credit", c);
+                    }
                     addVal(expenseMap, entry.accountId, 'debit', d); addVal(expenseMap, entry.accountId, 'credit', c);
                 }
             });
@@ -3933,12 +3948,13 @@ export const useVouchers = () => {
       fy.hydratedVouchers || [],
       context.vouchers || []
     );
+    // Soft-delete live patch ke baad FY hydrate me tombstone na dikhe (refresh ke bina).
     return filterVouchersToFyScope(
       merged,
       fy.activeScope,
       fy.loadedRanges,
       fy.scopedVoucherIds
-    );
+    ).filter((v: { isDeleted?: boolean }) => v?.isDeleted !== true);
   }, [
     context.vouchers,
     fy.enabled,
@@ -3959,7 +3975,7 @@ export const useVouchers = () => {
       fy.activeScope,
       fy.loadedRanges,
       fy.scopedVoucherIds
-    );
+    ).filter((v: { isDeleted?: boolean }) => v?.isDeleted !== true);
   }, [
     context.vouchersAll,
     fy.enabled,

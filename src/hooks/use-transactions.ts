@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useRef } from "react";
 import { startOfDay, endOfDay } from "date-fns";
 import { buildDaybookDailySummary } from "@/lib/accountLedgerDaySummary";
 import type { Party, Group } from "@/components/party/types";
@@ -54,6 +54,8 @@ import {
   getNetFromAllocation,
   getTaxFromAllocation,
   getTaxableFromAllocation,
+  getAllocationAmountForEntityScope,
+  allocationMatchesEntityScope,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
 import { getSalePurchaseBillWiseTargetTotal, getSalePurchasePartyAmount } from "@/lib/tdsVoucher";
@@ -75,6 +77,12 @@ import {
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { formatInterCompanyLedgerVoucherNumber } from "@/lib/interCompany/interCompanyVoucherDisplay";
 import { getJournalVoucherLegs, sumJournalAmountsForAccount } from "@/lib/journalLedgerAmounts";
+import {
+  isSalePurchaseTdsVerifyLedgerContext,
+  isUnverifiedTaxTdsBalanceRow,
+  resolveSalePurchaseTdsVerifyLabel,
+} from "@/lib/partyLedgerTdsView";
+import { statementCheckedMessageColumn } from "@/lib/statementCheckRowMessage";
 
 export {
   computeAccountLedgerDaySummary,
@@ -885,6 +893,18 @@ export const getTaxTransactionAmounts = (transaction: any, taxAccountId: string,
     return { debit, credit, taxableAmount, taxAmount, taxRate, quantity };
 };
 
+/** Tax ledger books balance: Unverified TDS legs contribute 0 (UI still shows dim amount). */
+function taxLedgerBooksBalanceAmounts(
+  transaction: any,
+  taxAccountId: string,
+  amounts: { debit: number; credit: number }
+): { debit: number; credit: number } {
+  if (isUnverifiedTaxTdsBalanceRow(transaction, taxAccountId)) {
+    return { debit: 0, credit: 0 };
+  }
+  return amounts;
+}
+
 const IDLE_USE_TRANSACTIONS_RESULT = {
   processedTransactions: [] as any[],
   daybookTransactions: [] as any[],
@@ -899,6 +919,33 @@ const IDLE_USE_TRANSACTIONS_RESULT = {
   periodOpeningUnavailable: false,
   periodOpeningLoading: false,
 };
+
+/** Stable daybook entity — never inline `{ id: "daybook", items: [] }` in render (recomputes entire ledger). */
+export const DAYBOOK_TRANSACTIONS_ENTITY = Object.freeze({
+  id: "daybook",
+  items: [] as any[],
+});
+
+/** Stable empty list for idle dashboard Recent pipeline. */
+export const EMPTY_TRANSACTIONS_LIST: any[] = [];
+
+function entityMemoDepKey(
+  entity: Entity | null | undefined,
+  context: Context
+): string {
+  if (!entity || typeof entity !== "object") return "";
+  const id = "id" in entity ? String((entity as { id?: string }).id ?? "") : "";
+  if (context === "daybook" || context === "other") return id;
+  if (context === "group" && "items" in entity) {
+    const items = ((entity as { items?: { id?: string }[] }).items || [])
+      .map((i) => String(i?.id ?? ""))
+      .join(",");
+    return `${id}|g|${items}`;
+  }
+  const anyE = entity as Record<string, unknown>;
+  const ob = Number(anyE.openingBalance ?? anyE.balance ?? 0);
+  return `${id}|${ob}`;
+}
 
 export function useTransactions(
     entity: Entity | null | undefined,
@@ -918,7 +965,9 @@ export function useTransactions(
     /** Dashboard Recent: running balance column off — skip books walk + per-row balance. */
     skipRunningBalance?: boolean,
     /** false = skip heavy voucher scan (inactive dashboard tab). */
-    transactionsComputationEnabled: boolean = true
+    transactionsComputationEnabled: boolean = true,
+    /** Tax statement hides Status; skip its bill-wise allocation/link scans until needed. */
+    includeTaxBillWiseStatus: boolean = true
 ) {
     const { vouchers, processedTaxes } = useVouchers();
     const { company, companyId } = useCompany();
@@ -935,7 +984,22 @@ export function useTransactions(
 
     const vouchersForMemo = useExplicitDaybookVoucherList ? passedTransactions! : vouchers;
 
+    // Display-name maps change identity often; do not re-scan all vouchers when only labels update.
+    const userNamesForFilterRef = useRef(userNames);
+    userNamesForFilterRef.current = userNames;
+    const journalAccountNamesForFilterRef = useRef(journalAccountNames);
+    journalAccountNamesForFilterRef.current = journalAccountNames;
+
+    const entityDepKey = entityMemoDepKey(entity, context);
+    const dateRangeFromMs = dateRange?.from?.getTime() ?? 0;
+    const dateRangeToMs = dateRange?.to?.getTime() ?? 0;
+    const fyScopeKey = fy.activeScope
+      ? `${fy.activeScope.policy}:${fy.activeScope.range?.fromMs ?? 0}:${fy.activeScope.range?.toMs ?? 0}`
+      : "";
+
     const result = useMemo(() => {
+        const userNames = userNamesForFilterRef.current;
+        const journalAccountNames = journalAccountNamesForFilterRef.current;
         if (!transactionsComputationEnabled) {
           return IDLE_USE_TRANSACTIONS_RESULT;
         }
@@ -1255,6 +1319,36 @@ export function useTransactions(
                 const displayVoucherNo = getDisplayVoucherNumber(t);
                 const dateBs = d ? formatDateBS(d) : "";
                 const dateAd = d ? formatDate(d) : "";
+                const filterGroupFirstItem =
+                  context === "group" && Array.isArray((entity as { items?: any[] })?.items)
+                    ? ((entity as { items?: any[] }).items?.[0] ?? null)
+                    : null;
+                const filterGroupEntityType =
+                  filterGroupFirstItem && "rate" in filterGroupFirstItem && !("accountType" in filterGroupFirstItem)
+                    ? ("tax" as const)
+                    : filterGroupFirstItem && "salary" in filterGroupFirstItem
+                      ? ("staff" as const)
+                      : filterGroupFirstItem && context === "group"
+                        ? ("party" as const)
+                        : undefined;
+                const filterContextId =
+                  context === "tax" || context === "party" || context === "staff" || context === "group"
+                    ? String((entity as { id?: string })?.id ?? "")
+                    : undefined;
+                const salePurchaseTdsVerifyLabel = isSalePurchaseTdsVerifyLedgerContext(
+                  context,
+                  filterGroupEntityType
+                )
+                  ? resolveSalePurchaseTdsVerifyLabel(t, {
+                      context,
+                      contextId: filterContextId,
+                      groupEntityType: filterGroupEntityType,
+                    })
+                  : null;
+                const salePurchaseTdsVerifyCol =
+                  salePurchaseTdsVerifyLabel != null
+                    ? statementCheckedMessageColumn(debit, credit)
+                    : null;
                 // Har key sirf usi column ka visible text — kabhi dusri column fields se match mat karo
                 const columnFieldsByKey: Record<string, unknown[]> = {
                     syncStatus: [
@@ -1263,11 +1357,27 @@ export function useTransactions(
                     date: [dateBs, dateAd, entryClock].filter(Boolean),
                     date_bs: [dateBs, entryClock].filter(Boolean),
                     date_ad: [dateAd, entryClock].filter(Boolean),
-                    type: typeColumnFilterHaystackFields(t),
+                    type: typeColumnFilterHaystackFields(t, {
+                      context,
+                      contextId: context === "tax" ? String((entity as { id?: string })?.id ?? "") : undefined,
+                      groupEntityType: filterGroupEntityType === "tax" ? "tax" : undefined,
+                    }),
                     voucherNumber: [displayVoucherNo],
                     user: [userName],
-                    debit: [debit, debitStr],
-                    credit: [credit, creditStr],
+                    debit: [
+                      debit,
+                      debitStr,
+                      ...(salePurchaseTdsVerifyCol === "debit" && salePurchaseTdsVerifyLabel
+                        ? [salePurchaseTdsVerifyLabel]
+                        : []),
+                    ],
+                    credit: [
+                      credit,
+                      creditStr,
+                      ...(salePurchaseTdsVerifyCol === "credit" && salePurchaseTdsVerifyLabel
+                        ? [salePurchaseTdsVerifyLabel]
+                        : []),
+                    ],
                     status: [t.paymentStatus, t.status, t.isApproved === true ? "approved" : "unapproved"],
                     balance: [balanceValue, Math.abs(balanceValue), balanceAbsStr, `${balanceAbsStr} ${balanceSide}`, balanceSide],
                 };
@@ -1438,6 +1548,39 @@ export function useTransactions(
         const isDefaultLedgerView = !effectiveDateRange?.from && !effectiveDateRange?.to;
 
         const openingBalanceDateForEntity = safeToDate((entity as any)?.openingBalanceDate);
+        const taxLedgerEntityIdForBalance =
+          context === "tax" && entity && typeof entity === "object" && "id" in entity
+            ? String((entity as { id?: string }).id || "").trim()
+            : "";
+        const taxGroupMemberIdsForBalance =
+          context === "group" && entity && "items" in entity
+            ? (() => {
+                const items = ((entity as EntityWithItems).items || []) as any[];
+                const first = items[0];
+                const isTaxGrp = !!(first && "rate" in first && !("accountType" in first));
+                return isTaxGrp
+                  ? items.map((it) => String(it?.id || "").trim()).filter(Boolean)
+                  : ([] as string[]);
+              })()
+            : ([] as string[]);
+        /** Display amounts stay full; books / closing walk skips Unverified TDS legs. */
+        const amountsForBooksBalance = (t: any, amounts: { debit: number; credit: number }) => {
+          if (taxLedgerEntityIdForBalance) {
+            return taxLedgerBooksBalanceAmounts(t, taxLedgerEntityIdForBalance, amounts);
+          }
+          if (taxGroupMemberIdsForBalance.length > 0) {
+            let debit = 0;
+            let credit = 0;
+            for (const taxId of taxGroupMemberIdsForBalance) {
+              const part = getTaxTransactionAmounts(t, taxId, entityList || []);
+              const bal = taxLedgerBooksBalanceAmounts(t, taxId, part);
+              debit += bal.debit;
+              credit += bal.credit;
+            }
+            return { debit, credit };
+          }
+          return amounts;
+        };
         const isPrePeriodLedgerTxn = (t: any, beforeDate: Date) => {
             const transactionDate = safeToDate(t.date);
             if (!transactionDate) return false;
@@ -1458,7 +1601,10 @@ export function useTransactions(
           sorted
             .filter((t) => isPrePeriodLedgerTxn(t, beforeDate))
             .reduce((balance, t) => {
-              const amounts = getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes);
+              const amounts = amountsForBooksBalance(
+                t,
+                getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes)
+              );
               return balance + amounts.debit - amounts.credit;
             }, base);
 
@@ -1561,12 +1707,13 @@ export function useTransactions(
             ) {
               continue;
             }
-            const amounts = getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes);
+            const rawAmounts = getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes);
+            const amounts = amountsForBooksBalance(t, rawAmounts);
             if (
               context !== "daybook" &&
               context !== "other" &&
-              amounts.debit === 0 &&
-              amounts.credit === 0 &&
+              rawAmounts.debit === 0 &&
+              rawAmounts.credit === 0 &&
               t.type !== "note"
             ) {
               const entityIdForIc =
@@ -1598,21 +1745,23 @@ export function useTransactions(
         const isJournalAllView = context === 'group' && entity && entity.id === 'all' && (entity as any).accountType === 'journal_view';
 
         const isDaybookContext = context === 'daybook';
-        // Bill-wise payment status for party/group; daybook table does not show status/links — skip heavy bill-wise pass.
-        const isBillWiseContext = context === 'party' || context === 'group';
-        const isStaffContext = context === 'staff' || context === 'group';
         const firstItemForContext = context === 'group' && entity && 'items' in entity ? ((entity as EntityWithItems).items || [])[0] : null;
         const isTaxGroupContext = !!(firstItemForContext && 'rate' in firstItemForContext && !('accountType' in firstItemForContext));
         const isTaxContext = context === 'tax' || context === 'tax_group' || isTaxGroupContext;
+        // Tax group uses the generic "group" context, but it should build bill-wise
+        // indexes only when its Status column is active.
+        const isBillWiseContext = context === 'party' || (context === 'group' && !isTaxGroupContext);
+        const isStaffContext = context === 'staff' || (context === 'group' && !isTaxGroupContext);
+        const needsTaxBillWiseStatus = isTaxContext && includeTaxBillWiseStatus;
         const isExpenseContext = context === 'expense';
-        const allocatedBySale = (isBillWiseContext || isTaxContext || isExpenseContext) ? getAllocatedByVoucherId(vouchers) : new Map<string, number>();
-        const allocatedByPurchase = (isBillWiseContext || isStaffContext || isTaxContext || isExpenseContext) ? getAllocatedByVoucherIdFromPaymentOuts(vouchers) : new Map<string, number>();
-        const allocatedToSaleFromPurchase = (isBillWiseContext || isTaxContext || isExpenseContext) ? getAllocatedByVoucherIdFromPurchase(vouchers) : new Map<string, number>();
-        const allocatedToPurchaseFromSale = (isBillWiseContext || isStaffContext || isTaxContext || isExpenseContext) ? getAllocatedByVoucherIdFromSale(vouchers) : new Map<string, number>();
+        const allocatedBySale = (isBillWiseContext || needsTaxBillWiseStatus || isExpenseContext) ? getAllocatedByVoucherId(vouchers) : new Map<string, number>();
+        const allocatedByPurchase = (isBillWiseContext || isStaffContext || needsTaxBillWiseStatus || isExpenseContext) ? getAllocatedByVoucherIdFromPaymentOuts(vouchers) : new Map<string, number>();
+        const allocatedToSaleFromPurchase = (isBillWiseContext || needsTaxBillWiseStatus || isExpenseContext) ? getAllocatedByVoucherIdFromPurchase(vouchers) : new Map<string, number>();
+        const allocatedToPurchaseFromSale = (isBillWiseContext || isStaffContext || needsTaxBillWiseStatus || isExpenseContext) ? getAllocatedByVoucherIdFromSale(vouchers) : new Map<string, number>();
         // Journal bill-wise link: journal se sale/purchase ko allocate hone wala amount – PUR row balance update ke liye.
-        const allocatedFromJournal = (isBillWiseContext || isTaxContext || isExpenseContext) ? getAllocatedByVoucherIdFromJournal(vouchers) : new Map<string, number>();
+        const allocatedFromJournal = (isBillWiseContext || needsTaxBillWiseStatus || isExpenseContext) ? getAllocatedByVoucherIdFromJournal(vouchers) : new Map<string, number>();
         const billWiseIncomingMaps =
-          isBillWiseContext || isTaxContext || isExpenseContext
+          isBillWiseContext || needsTaxBillWiseStatus || isExpenseContext
             ? buildBillWiseIncomingAllocationMaps(vouchers ?? [])
             : null;
         const entityIdForLinks = entity && 'id' in entity ? (entity as any).id : undefined;
@@ -1684,7 +1833,7 @@ export function useTransactions(
         const voucherById = new Map<string, any>();
         const allocEdgesByTargetId = new Map<string, Array<{ src: any; alloc: unknown }>>();
         const spendWisePayOutsByLinkedReceiptId = new Map<string, any[]>();
-        if (!isDaybookContext) {
+        if (!isDaybookContext && (!isTaxContext || includeTaxBillWiseStatus)) {
           for (const v of vouchers as any[]) {
             const vid = String(v?.id ?? "");
             if (vid) voucherById.set(vid, v);
@@ -1715,22 +1864,38 @@ export function useTransactions(
           v?.type === "direct_expense" ||
           isRegularJournalLikeVoucher(v);
 
-        const getStaffAddSalaryNetAllocated = (salaryVoucherId: string) =>
+        const getStaffAddSalaryNetAllocated = (salaryVoucherId: string, staffAccountId: string) =>
           (allocEdgesByTargetId.get(String(salaryVoucherId)) ?? []).reduce((sum, { src, alloc }) => {
             if (!isStaffSalaryBillWiseSource(src)) return sum;
-            const a = alloc as { taxAmount?: number; netAmount?: number; taxableAmount?: number; amount?: number };
-            return sum + getNetFromAllocation(a as any) + getTaxableFromAllocation(a as any);
+            const target = voucherById.get(String(salaryVoucherId));
+            return (
+              sum +
+              getAllocationAmountForEntityScope(
+                alloc as any,
+                { entityKind: "staff", accountId: String(staffAccountId || "") },
+                target
+              )
+            );
           }, 0);
 
-        const getStaffAddSalaryTaxAllocated = (salaryVoucherId: string) =>
+        const getStaffAddSalaryTaxAllocated = (salaryVoucherId: string, taxAccountId: string) =>
           (allocEdgesByTargetId.get(String(salaryVoucherId)) ?? []).reduce((sum, { src, alloc }) => {
             if (!isStaffSalaryBillWiseSource(src)) return sum;
-            return sum + getTaxFromAllocation(alloc as any);
+            const target = voucherById.get(String(salaryVoucherId));
+            return (
+              sum +
+              getAllocationAmountForEntityScope(
+                alloc as any,
+                { entityKind: "tax", accountId: String(taxAccountId || "") },
+                target
+              )
+            );
           }, 0);
 
         const withBalance = transactionsToDisplay
             .map(t => {
                 const amounts = getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes);
+                const booksAmounts = amountsForBooksBalance(t, amounts);
                 
                 // Filter out transactions with zero amounts for individual accounts/groups (so irrelevant txns don't show)
                 // Exception: Note vouchers; unapproved IC placeholder (pink row, balance 0) — bank approve se pehle
@@ -1750,11 +1915,11 @@ export function useTransactions(
                   } else if (isJournalAllView && (t.type === 'journal' || t.type === 'adjustment')) {
                       // For journal transactions in "all" view, running balance should remain at opening balance
                       // Since journals balance (debit = credit), debit - credit = 0, so balance doesn't change
-                      runningBalance += amounts.debit - amounts.credit; // This will be 0 for balanced journal entries
+                      runningBalance += booksAmounts.debit - booksAmounts.credit; // This will be 0 for balanced journal entries
                   } else if (t.type === "inter_company" && (t as { isApproved?: boolean }).isApproved !== true) {
                       // IC unapproved — row dikhe, balance approve tak mat badlo
                   } else {
-                      runningBalance += amounts.debit - amounts.credit;
+                      runningBalance += booksAmounts.debit - booksAmounts.credit;
                   }
                 }
 
@@ -1764,19 +1929,56 @@ export function useTransactions(
                 let outstanding: number | undefined;
                 if (
                   billWiseIncomingMaps &&
-                  (isBillWiseContext || isTaxContext || isExpenseContext) &&
+                  (isBillWiseContext || needsTaxBillWiseStatus || isExpenseContext) &&
                   isSaleOrPurchaseBillVoucherType(t.type)
                 ) {
-                    const total = getSalePurchaseBillWiseTargetTotal(t);
-                    const allocated = getBillWiseAllocatedToTargetWithMaps(
-                      t,
-                      String(t.id),
-                      billWiseIncomingMaps
-                    );
-                    const result = getPaymentStatusResult(total, allocated, t.dueDate);
-                    paymentStatus = result.isOverdue ? 'overdue' : result.status;
-                    isOverdue = result.isOverdue;
-                    outstanding = result.outstanding;
+                    if (needsTaxBillWiseStatus && entity && "id" in entity) {
+                      const taxId = String((entity as any).id || "");
+                      // VAT/Sales Tax → taxAccountId; TDS → tdsAccountId (same as getTaxTransactionAmounts).
+                      const total = Array.isArray((t as any).lineItems)
+                        ? (t as any).lineItems.reduce((s: number, li: any) => {
+                            if (String(li?.taxAccountId ?? "") === taxId) {
+                              return s + (Number(li?.taxAmount) || 0);
+                            }
+                            if (String(li?.tdsAccountId ?? "") === taxId) {
+                              return s + (Number(li?.tdsAmount) || 0);
+                            }
+                            return s;
+                          }, 0)
+                        : Number((t as any).taxAmount) || 0;
+                      const allocated = (allocEdgesByTargetId.get(String(t.id)) ?? []).reduce(
+                        (sum, { alloc }) =>
+                          sum +
+                          Math.max(
+                            getAllocationAmountForEntityScope(
+                              alloc as any,
+                              { entityKind: "tax", accountId: taxId },
+                              t
+                            ),
+                            getAllocationAmountForEntityScope(
+                              alloc as any,
+                              { entityKind: "tds", accountId: taxId },
+                              t
+                            )
+                          ),
+                        0
+                      );
+                      const result = getPaymentStatusResult(total, allocated, t.dueDate);
+                      paymentStatus = result.isOverdue ? "overdue" : result.status;
+                      isOverdue = result.isOverdue;
+                      outstanding = result.outstanding;
+                    } else {
+                      const total = getSalePurchaseBillWiseTargetTotal(t);
+                      const allocated = getBillWiseAllocatedToTargetWithMaps(
+                        t,
+                        String(t.id),
+                        billWiseIncomingMaps
+                      );
+                      const result = getPaymentStatusResult(total, allocated, t.dueDate);
+                      paymentStatus = result.isOverdue ? "overdue" : result.status;
+                      isOverdue = result.isOverdue;
+                      outstanding = result.outstanding;
+                    }
                 }
                 // Bill-wise: payment_in / payment_out - Settled when remaining 0. getPaymentInRemaining already includes t.allocations (journal link bilateral sync ke baad bhi).
                 if (isBillWiseContext && (t.type === 'payment_in' || t.type === 'payment_out' || t.type === 'direct_income' || t.type === 'direct_expense')) {
@@ -1856,7 +2058,7 @@ export function useTransactions(
                             ? openedFromEntityId
                             : undefined;
                 // Tax account ledger: show Paid/Partial/Unpaid for payment_in, payment_out, direct_income, direct_expense involving this tax
-                if ((context === 'tax' || context === 'tax_group') && (t.type === 'payment_in' || t.type === 'payment_out' || t.type === 'direct_income' || t.type === 'direct_expense')) {
+                if (needsTaxBillWiseStatus && (t.type === 'payment_in' || t.type === 'payment_out' || t.type === 'direct_income' || t.type === 'direct_expense')) {
                     const remaining = t.type === 'payment_in' || t.type === 'direct_income' ? getPaymentInRemaining(t) : getPaymentOutRemaining(t);
                     const hasAllocations = ((t.allocations as { voucherId: string; amount: number }[] | undefined) || []).length > 0;
                     if (remaining <= 0) {
@@ -1896,9 +2098,12 @@ export function useTransactions(
                 };
                 // Staff ledger: Add Salary behaves like a bill – paid via Payment Out and/or Opening Balance; show Paid/Unpaid/Partial/Overdue.
                 if (isStaffContext && t.type === 'journal' && t.subType === 'add_salary') {
+                    const staffAccountId = entity && 'id' in entity ? String((entity as any).id || '') : '';
                     const total = getAddSalaryNetTotal(t);
                     // Payment out, direct expense, and manual journal Dr → salary links all reduce outstanding.
-                    const allocated = getStaffAddSalaryNetAllocated(t.id) + (Number((t as any).openingBalanceAllocated) || 0);
+                    const allocated =
+                      getStaffAddSalaryNetAllocated(t.id, staffAccountId) +
+                      (Number((t as any).openingBalanceAllocated) || 0);
                     const result = getPaymentStatusResult(total, allocated, t.dueDate);
                     paymentStatus = result.isOverdue ? 'overdue' : result.status;
                     isOverdue = result.isOverdue;
@@ -1924,10 +2129,18 @@ export function useTransactions(
                         outstanding = remaining;
                     }
                 }
-                // Tax ledger (single tax details): Add Salary – show Paid/Unpaid/Partial/Overdue same as staff
-                if (isTaxContext && t.type === 'journal' && t.subType === 'add_salary') {
-                    const total = getAddSalaryNetTotal(t);
-                    const allocated = getStaffAddSalaryTaxAllocated(t.id);
+                // Tax ledger: Add Salary — total = is tax account ka credit (staff net nahi)
+                if (needsTaxBillWiseStatus && t.type === 'journal' && t.subType === 'add_salary') {
+                    const taxId = entity && 'id' in entity ? String((entity as any).id || '') : '';
+                    const total = Array.isArray(t.entries)
+                      ? t.entries
+                          .filter(
+                            (e: any) =>
+                              String(e?.accountId ?? '') === taxId && (Number(e.credit) || 0) > 0
+                          )
+                          .reduce((s: number, e: any) => s + (Number(e.credit) || 0), 0)
+                      : Number(amounts.credit) || 0;
+                    const allocated = getStaffAddSalaryTaxAllocated(t.id, taxId);
                     const result = getPaymentStatusResult(total, allocated, t.dueDate);
                     paymentStatus = result.isOverdue ? 'overdue' : result.status;
                     isOverdue = result.isOverdue;
@@ -1961,15 +2174,23 @@ export function useTransactions(
                     t.type === 'payment_out' ||
                     t.type === 'direct_expense'
                 );
-                if ((isBillWiseContext || context === 'account' || context === 'tax' || context === 'tax_group' || context === 'expense' || staffShowLinkDetails) && (paymentStatus != null || t.type === 'sale' || t.type === 'purchase' || t.type === 'payment_in' || t.type === 'payment_out' || t.type === 'direct_income' || t.type === 'direct_expense' || t.type === 'journal' || t.type === 'adjustment' || t.type === 'inter_company')) {
+                if ((isBillWiseContext || context === 'account' || needsTaxBillWiseStatus || context === 'expense' || staffShowLinkDetails) && (paymentStatus != null || t.type === 'sale' || t.type === 'purchase' || t.type === 'payment_in' || t.type === 'payment_out' || t.type === 'direct_income' || t.type === 'direct_expense' || t.type === 'journal' || t.type === 'adjustment' || t.type === 'inter_company')) {
                     if (t.type === 'sale' || t.type === 'purchase') {
                         const payTypes = t.type === 'sale' ? ['payment_in', 'direct_income', 'purchase', 'purchase_service', 'journal', 'adjustment', 'inter_company'] : ['payment_out', 'direct_expense', 'sale', 'sale_service', 'journal', 'adjustment', 'inter_company'];
                         const partyId = String((t as any).partyId ?? '');
+                        const taxIdForLinks =
+                          needsTaxBillWiseStatus && entity && "id" in entity
+                            ? String((entity as any).id || "")
+                            : "";
                         /** Ek source voucher se multiple allocations same target ko push na duplice kare — pehle `some()` jaisa ek no per source */
                         const seenSrcForLinkedFrom = new Set<string>();
-                        for (const { src: v } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
+                        for (const { src: v, alloc } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
                             if (!payTypes.includes(v.type)) continue;
-                            if (entityIdForLinks && partyId) {
+                            // Tax ledger: any allocation to this bill (tax/TDS/plain) shows under Status.
+                            // Do not use partyId filter with tax entityId — that hid Paid purchase links.
+                            if (taxIdForLinks) {
+                              if (getAllocationTotal(alloc as any) <= 0) continue;
+                            } else if (entityIdForLinks && partyId) {
                                 if (v.type === 'journal' || v.type === 'adjustment') {
                                     const touchesParty = String((v as any).partyId ?? '') === partyId ||
                                         (Array.isArray((v as any).entries) && (v as any).entries.some((e: any) => String(e?.accountId ?? '') === partyId)) ||
@@ -2000,17 +2221,31 @@ export function useTransactions(
                         });
                         // Do NOT set linkedToVoucherNos = [myNo] when no outgoing — avoids self-ref "to Sale Inv - 003"
                     } else if (t.type === 'journal' && t.subType === 'add_salary') {
-                        /** Payment out / expense / manual journal edges → salary voucher id. */
+                        /** Payment out / expense / manual journal edges → salary voucher id (entity-scoped). */
                         const seenSalarySources = new Set<string>();
-                        for (const { src: v } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
+                        const salaryTarget = voucherById.get(String(t.id)) ?? t;
+                        const linkScope =
+                          needsTaxBillWiseStatus && entity && "id" in entity
+                            ? ({ entityKind: "tax" as const, accountId: String((entity as any).id || "") })
+                            : isStaffContext && entity && "id" in entity
+                              ? ({ entityKind: "staff" as const, accountId: String((entity as any).id || "") })
+                              : null;
+                        for (const { src: v, alloc } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
                             if (!isStaffSalaryBillWiseSource(v)) continue;
+                            if (
+                              linkScope &&
+                              !allocationMatchesEntityScope(alloc as any, salaryTarget, linkScope)
+                            ) {
+                              continue;
+                            }
                             if (seenSalarySources.has(String(v.id ?? ""))) continue;
                             seenSalarySources.add(String(v.id ?? ""));
                             const no = v.voucherNumber ?? v.voucher_number ?? '';
                             if (no) linkedFromVoucherNos.push(no);
                         }
                         // When salary is linked from Opening Balance, show OB as the source instead of a fake self-link.
-                        if (Number((t as any).openingBalanceAllocated) > 0) {
+                        // Tax ledger: OB on staff net must not appear as tax link source.
+                        if (!needsTaxBillWiseStatus && Number((t as any).openingBalanceAllocated) > 0) {
                             linkedFromVoucherNos.push("Opening Balance");
                         }
                     } else if (t.type === 'adjustment') {
@@ -2287,9 +2522,22 @@ export function useTransactions(
             })
             .filter((t): t is NonNullable<typeof t> => t !== null);    
         
-        // Recalculate totals after filtering out zero-amount transactions
-        const periodDr = withBalance.reduce((sum, t) => sum + (t.debit || 0), 0);
-        const periodCr = withBalance.reduce((sum, t) => sum + (t.credit || 0), 0);
+        // Recalculate totals after filtering out zero-amount transactions.
+        // Tax: Unverified TDS amounts stay on the row (dim / Waiting) but are excluded from period/closing.
+        const periodDr = withBalance.reduce((sum, t) => {
+          const bal = amountsForBooksBalance(t, {
+            debit: Number(t.debit) || 0,
+            credit: Number(t.credit) || 0,
+          });
+          return sum + bal.debit;
+        }, 0);
+        const periodCr = withBalance.reduce((sum, t) => {
+          const bal = amountsForBooksBalance(t, {
+            debit: Number(t.debit) || 0,
+            credit: Number(t.credit) || 0,
+          });
+          return sum + bal.credit;
+        }, 0);
         const closing = openingBalanceForPeriod + periodDr - periodCr;
         
         let daybookSummary: any = null;
@@ -2491,27 +2739,26 @@ export function useTransactions(
   }, [
     transactionsComputationEnabled,
     useExplicitDaybookVoucherList,
-    entity,
+    entityDepKey,
     context,
     vouchersForMemo,
     companyId,
-    dateRange,
+    dateRangeFromMs,
+    dateRangeToMs,
     stockView,
     entityList,
     passedTransactions,
     transactionContext,
     filters,
     voucherTypes,
-    formatDate,
-    formatDateBS,
-    journalAccountNames,
-    userNames,
-    formatCurrency,
     daybookUserIdFilter,
     skipRunningBalance,
-    company,
+    includeTaxBillWiseStatus,
+    company?.id,
+    company?.country,
+    company?.fiscalSplitMode,
     fy.enabled,
-    fy.activeScope,
+    fyScopeKey,
     fy.openingBalances,
     fy.openingBalancesLoadStatus,
   ]);

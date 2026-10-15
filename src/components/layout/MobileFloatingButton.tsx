@@ -138,14 +138,14 @@ export function MobileFloatingButton() {
         className={cn(
           "fixed left-1/2 -translate-x-1/2 z-50",
           "transition-[opacity,bottom] duration-300",
-          !liftFabAboveRecentStrip && "bottom-20",
+          !liftFabAboveRecentStrip && "bottom-[calc(5rem+10px)]",
           showButton ? "opacity-100" : "opacity-0 pointer-events-none"
         )}
         style={
           liftFabAboveRecentStrip
             ? {
                 // ~footer (38px) + 2-row strip (~74px reserve) + chhota gap — Unapproved / row clear
-                bottom: "calc(8.5rem + env(safe-area-inset-bottom, 0px))",
+                bottom: "calc(8.5rem + 10px + env(safe-area-inset-bottom, 0px))",
               }
             : undefined
         }
@@ -153,8 +153,9 @@ export function MobileFloatingButton() {
         <Button
           size="lg"
           className={cn(
-            "h-7 px-4 rounded-full shadow-lg",
-            "bg-primary hover:bg-primary/90",
+            /* h-7 (28px) + 50% height → 42px; width unchanged (px-4) */
+            "h-[42px] min-h-[42px] max-h-[42px] px-4 rounded-full shadow-lg",
+            "border border-green-400/90 bg-green-100 text-green-900 hover:bg-green-200 hover:text-green-950",
             "flex items-center justify-center gap-1.5",
             "animate-in fade-in zoom-in duration-200"
           )}

@@ -6,9 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 import { useMobileDetailSummaryCollapsed } from "@/contexts/MobileDetailSummaryCollapseContext";
-import { MobileDetailSummaryFloatingToggle } from "@/components/layout/MobileDetailSummaryFloatingToggle";
+import { MobileLedgerFooterChevronFab } from "@/components/layout/MobileLedgerFooterChevronFab";
 import { ROWS_PER_PAGE_OPTIONS_MOBILE } from "@/lib/rowsPerPageSelect";
 
 type Props = {
@@ -28,15 +27,18 @@ type Props = {
   includeAllOption?: boolean;
   /** Popup ledger: summary toggle ko us popup ke overlay ke upar bhi dikhaye. */
   showSummaryToggleInOverlay?: boolean;
+  /** Entity picker + search — pagination strip ke neeche (fixed footer ke upar). */
+  txnToolbar?: React.ReactNode;
 };
 
 const PAGE_SIZE_OPTIONS = ROWS_PER_PAGE_OPTIONS_MOBILE;
 
-/** 30px pager row ke andar — thoda bada label, height na badhe */
+const PAGER_ROW_H =
+  "h-[var(--pl-mobile-txn-footer-row-h,2.25rem)] min-h-[var(--pl-mobile-txn-footer-row-h,2.25rem)] max-h-[var(--pl-mobile-txn-footer-row-h,2.25rem)]";
 const PAGER_NAV_BTN_CLASS =
-  "h-5 min-h-0 shrink-0 px-2 py-0 text-xs leading-none font-bold bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-200 disabled:text-gray-500";
+  "h-[calc(var(--pl-mobile-txn-footer-row-h,2.25rem)-6px)] min-h-0 shrink-0 px-2.5 py-0 text-sm leading-none font-bold bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-200 disabled:text-gray-500";
 const PAGER_NEXT_BTN_CLASS =
-  "h-5 min-h-0 shrink-0 px-2 py-0 text-xs leading-none font-bold bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-200 disabled:text-gray-500";
+  "h-[calc(var(--pl-mobile-txn-footer-row-h,2.25rem)-6px)] min-h-0 shrink-0 px-2.5 py-0 text-sm leading-none font-bold bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-200 disabled:text-gray-500";
 
 export function MobileTransactionsPager({
   currentPage,
@@ -50,9 +52,10 @@ export function MobileTransactionsPager({
   showSummaryToggleInOverlay = false,
   pagingMode = "newest-first",
   includeAllOption = true,
+  txnToolbar,
 }: Props) {
   const isMobile = useIsMobile();
-  const { registerPagerFabHost, unregisterPagerFabHost } = useMobileDetailSummaryCollapsed();
+  const { collapsed, registerPagerFabHost, unregisterPagerFabHost } = useMobileDetailSummaryCollapsed();
   const totalPages = Math.max(1, rowsPerPage > 0 ? Math.ceil(totalItems / rowsPerPage) : 1);
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
   const useEdgePoolNav = edgeCounts != null && rowsPerPage > 0;
@@ -87,27 +90,26 @@ export function MobileTransactionsPager({
   }, [isMobile, registerPagerFabHost, unregisterPagerFabHost]);
 
   return (
-    <div className={cn("pl-mobile-txn-pager-host relative flex-shrink-0", className)}>
-      {/* Summary FAB — pagination bar ke bilkul upar, right side */}
-      {isMobile ? (
-        <div
-          className="pointer-events-none absolute bottom-full left-1/2 z-40 mb-1 flex -translate-x-1/2 justify-center"
-          {...mdcNoEdgeSwipeCapture}
-        >
-          <div className="pointer-events-auto">
-            <MobileDetailSummaryFloatingToggle
-              placement="inline"
-              allowInOverlay={showSummaryToggleInOverlay}
-            />
-          </div>
-        </div>
-      ) : null}
+    <div
+      className={cn("pl-mobile-txn-pager-host relative flex-shrink-0", className)}
+      {...(txnToolbar ? { "data-pl-mobile-txn-pager-has-toolbar": "" } : {})}
+    >
+      {!collapsed ? (
       <div
-        className="pl-mobile-txn-pager box-border flex h-[30px] min-h-[30px] max-h-[30px] items-center border-t border-blue-300/60 bg-blue-100/80 px-2 py-0 font-bold"
+        className={cn(
+          "pl-mobile-txn-pager box-border flex items-center border-t border-blue-300/60 bg-blue-100/80 px-2 py-0 font-bold",
+          PAGER_ROW_H
+        )}
         data-pl-mobile-txn-pager=""
+        data-pl-mobile-txn-pager-strip=""
       >
         <div className="min-h-0 w-full overflow-x-auto">
-          <div className="flex h-[30px] w-max min-w-full items-center justify-between gap-1.5">
+          <div
+            className={cn(
+              "flex w-max min-w-full items-center justify-between gap-1.5",
+              PAGER_ROW_H
+            )}
+          >
             <div className="flex min-w-0 items-center gap-1">
               <Button
                 type="button"
@@ -121,7 +123,7 @@ export function MobileTransactionsPager({
               </Button>
               {edgeCounts != null && rowsPerPage > 0 ? (
                 <span
-                  className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-bold tabular-nums text-muted-foreground"
+                  className="min-w-[1.25rem] shrink-0 text-center text-sm font-bold tabular-nums text-muted-foreground"
                   title="Transactions available via Prev"
                   aria-label={`${edgeCounts.before} transactions via Prev`}
                 >
@@ -131,7 +133,7 @@ export function MobileTransactionsPager({
             </div>
             <div
               className={cn(
-                "flex shrink-0 items-center gap-1 text-[10px] font-bold",
+                "flex shrink-0 items-center gap-1 text-sm font-bold",
                 trimSummary && "flex-1 justify-center min-w-0"
               )}
             >
@@ -144,7 +146,7 @@ export function MobileTransactionsPager({
               >
                 <SelectTrigger
                   data-pl-mobile-txn-pager-select=""
-                  className="pl-mobile-txn-pager-select h-[22px] w-[70px] shrink-0 border border-blue-300 bg-white px-2 text-[10px] font-bold shadow-sm"
+                  className="pl-mobile-txn-pager-select h-[calc(var(--pl-mobile-txn-footer-row-h,2.25rem)-6px)] w-[76px] shrink-0 border border-blue-300 bg-white px-2 text-sm font-bold shadow-sm"
                   aria-label="Rows per page"
                   title="Rows per page"
                 >
@@ -168,7 +170,7 @@ export function MobileTransactionsPager({
             <div className="flex min-w-0 items-center gap-1">
               {edgeCounts != null && rowsPerPage > 0 ? (
                 <span
-                  className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-bold tabular-nums text-muted-foreground"
+                  className="min-w-[1.25rem] shrink-0 text-center text-sm font-bold tabular-nums text-muted-foreground"
                   title="Transactions available via Next"
                   aria-label={`${edgeCounts.after} transactions via Next`}
                 >
@@ -189,6 +191,9 @@ export function MobileTransactionsPager({
           </div>
         </div>
       </div>
+      ) : null}
+      {txnToolbar}
+      {isMobile && txnToolbar ? <MobileLedgerFooterChevronFab /> : null}
     </div>
   );
 }

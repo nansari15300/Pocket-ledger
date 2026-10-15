@@ -15,9 +15,9 @@ export const chromeProPillTextMutedCn = "text-blue-400";
 /** Footer span pills — button variant jaisa */
 export const chromePillBase = chromeProPillCn;
 
-/** Active / selected pill — green border (header view-mode pills, …); PC footer toggles is se alag — hamesha blue chrome. */
+/** Active / selected pill — 1px green border only (no thick/ring); PC footer toggles is se alag — hamesha blue chrome. */
 export const chromePillActive =
-  "!border-2 !border-green-600 !bg-green-50/90 !text-green-900 ring-2 ring-green-600/40 hover:!bg-green-100/90";
+  "!border !border-green-600 !bg-green-50/90 !text-green-900 ring-0 shadow-none hover:!bg-green-100/90";
 
 export function chromePillBtn(active?: boolean, className?: string) {
   return cn(chromePillBase, active && chromePillActive, className);

@@ -61,6 +61,17 @@ import {
 } from "@/lib/reports/anusuchi13Confirmation";
 import { resolveCompanyFiscalYearDates } from "@/lib/companyFyVoucherSuggestion";
 import {
+    buildDashboardScopeFromApply,
+    dashboardScopeToFilterMode,
+    defaultDashboardSummaryCardScope,
+    entityMasterDateInDashboardScope,
+    filterVouchersByDashboardScope,
+    formatDashboardScopeHint,
+    migrateDashboardScopeOnDateSystemChange,
+    type DashboardScopeApplyPayload,
+    type DashboardSummaryCardScope,
+} from "@/lib/dashboardSummaryCardScope";
+import {
     computeReceivablesPayablesFinancialSummary,
 } from "@/lib/receivablesPayablesFinancialSummary";
 import { computeRpReceivePayAtDayEnds, type RpSeriesEntity } from "@/lib/receivablesPayablesLedgerAmounts";
@@ -623,7 +634,9 @@ export function FinancialSummaryCards({
     const [cashFlowDateRange, setCashFlowDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
     const [taxDateRange, setTaxDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
     const [stockDateRange, setStockDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
-    const [voucherStatsDateRange, setVoucherStatsDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
+    const [dashboardCardScopes, setDashboardCardScopes] = useState<
+        Record<string, DashboardSummaryCardScope>
+    >({});
 
     const previousDateSystemRef = useRef(dateSystem);
     useEffect(() => {
@@ -641,7 +654,17 @@ export function FinancialSummaryCards({
         keepCurrentMonthMode(setCashFlowDateRange);
         keepCurrentMonthMode(setTaxDateRange);
         keepCurrentMonthMode(setStockDateRange);
-        keepCurrentMonthMode(setVoucherStatsDateRange);
+        setDashboardCardScopes((prev) => {
+            const out = { ...prev };
+            for (const key of Object.keys(out)) {
+                out[key] = migrateDashboardScopeOnDateSystemChange(
+                    out[key],
+                    previousDateSystem,
+                    dateSystem,
+                );
+            }
+            return out;
+        });
         previousDateSystemRef.current = dateSystem;
     }, [dateSystem]);
 
@@ -1921,11 +1944,6 @@ export function FinancialSummaryCards({
         return { debit, credit };
     };
 
-    const voucherStatsRangeLabel = useMemo(
-        () => formatMonthYearRangeLabel(voucherStatsDateRange, dateSystem),
-        [voucherStatsDateRange, dateSystem]
-    );
-
     const companyCountry = company?.country || "Nepal";
     const companyFyDates = useMemo(() => resolveCompanyFiscalYearDates(company), [company]);
     const runningFyKey = useMemo(
@@ -1946,238 +1964,151 @@ export function FinancialSummaryCards({
         });
     }, [vouchers, companyCountry, companyFyDates, runningFyKey]);
 
-    type EntitySummaryFyPick = "current" | "all" | string;
-    type EntitySummaryPeriodPick = "fy_full" | "current_month";
-    const [entitySummaryFyPick, setEntitySummaryFyPick] = useState<EntitySummaryFyPick>("current");
-    const [entitySummaryPeriodPick, setEntitySummaryPeriodPick] =
-        useState<EntitySummaryPeriodPick>("current_month");
-
-    const entitySummaryEffectiveRange = useMemo((): { from: Date; to: Date } | null => {
-        const monthOnly = () => {
-            const m = getCurrentMonthDateRange(dateSystem);
-            if (!m?.from) return null;
-            return {
-                from: startOfDay(m.from),
-                to: endOfDay(m.to ?? m.from),
-            };
-        };
-        if (entitySummaryFyPick === "all") {
-            return entitySummaryPeriodPick === "current_month" ? monthOnly() : null;
-        }
-        const fyKey = entitySummaryFyPick === "current" ? runningFyKey : entitySummaryFyPick;
-        const { start, end } = getFiscalRangeForFyKey(companyCountry, fyKey, companyFyDates);
-        const fyFrom = startOfDay(start);
-        const fyTo = endOfDay(end);
-        if (entitySummaryPeriodPick !== "current_month") {
-            return { from: fyFrom, to: fyTo };
-        }
-        const month = monthOnly();
-        if (!month) return { from: fyFrom, to: fyTo };
-        const from = month.from > fyFrom ? month.from : fyFrom;
-        const to = month.to < fyTo ? month.to : fyTo;
-        return { from, to };
-    }, [
-        entitySummaryFyPick,
-        entitySummaryPeriodPick,
-        runningFyKey,
-        companyCountry,
-        companyFyDates,
-        dateSystem,
-    ]);
-
-    const entitySummaryDateInRange = useCallback(
-        (d: Date | null | undefined) => {
-            if (!d) return false;
-            if (!entitySummaryEffectiveRange) return true;
-            return d >= entitySummaryEffectiveRange.from && d <= entitySummaryEffectiveRange.to;
-        },
-        [entitySummaryEffectiveRange],
+    const defaultDashboardCardScope = useMemo(
+        () => defaultDashboardSummaryCardScope(dateSystem),
+        [dateSystem],
     );
 
-    const voucherStatsFilteredVouchers = useMemo(() => {
-        let filtered = vouchers || [];
-        if (entitySummaryEffectiveRange) {
-            filtered = filtered.filter((v) => entitySummaryDateInRange(safeToDate(v.date)));
-        }
-        if (voucherStatsDateRange?.from) {
-            const fromDate = startOfDay(voucherStatsDateRange.from);
-            const toDate = voucherStatsDateRange.to ? endOfDay(voucherStatsDateRange.to) : endOfDay(fromDate);
-            filtered = filtered.filter((v) => {
-                const txDate = safeToDate(v.date);
-                return txDate && txDate >= fromDate && txDate <= toDate;
+    const dashboardScopeContext = useMemo(
+        () => ({
+            dateSystem,
+            runningFyKey,
+            companyCountry,
+            companyFyDates,
+        }),
+        [dateSystem, runningFyKey, companyCountry, companyFyDates],
+    );
+
+    const allDashboardScopeCardKeys = [
+        ...statCardData.map((c) => c.type),
+        "entity:parties",
+        "entity:staff",
+        "entity:bank_cash",
+        "entity:items",
+        "entity:vouchers",
+    ];
+
+    const resolveDashboardCardScope = useCallback(
+        (cardKey: string): DashboardSummaryCardScope =>
+            dashboardCardScopes[cardKey] ?? defaultDashboardCardScope,
+        [dashboardCardScopes, defaultDashboardCardScope],
+    );
+
+    const handleDashboardScopeApply = useCallback(
+        (cardKey: string, payload: DashboardScopeApplyPayload) => {
+            const nextScope = buildDashboardScopeFromApply(payload, dateSystem);
+            setDashboardCardScopes((prev) => {
+                const keys = payload.applyOnAll ? allDashboardScopeCardKeys : [cardKey];
+                const out = { ...prev };
+                for (const k of keys) out[k] = nextScope;
+                return out;
             });
-        }
-        return filtered;
-    }, [vouchers, entitySummaryEffectiveRange, entitySummaryDateInRange, voucherStatsDateRange]);
-
-    const entityMasterDateInRange = useCallback(
-        (d: Date | null | undefined) => {
-            if (!entitySummaryDateInRange(d)) return false;
-            if (entitySummaryPeriodPick === "current_month") return true;
-            if (voucherStatsDateRange?.from) {
-                if (!d) return false;
-                const fromDate = startOfDay(voucherStatsDateRange.from);
-                const toDate = endOfDay(voucherStatsDateRange.to ?? voucherStatsDateRange.from);
-                return d >= fromDate && d <= toDate;
-            }
-            return true;
         },
-        [entitySummaryDateInRange, entitySummaryPeriodPick, voucherStatsDateRange],
+        [dateSystem, statCardData],
     );
 
-    const entityFilteredParties = useMemo(
-        () =>
-            processedParties.filter((p: any) =>
-                entityMasterDateInRange(pickEntityCreatedAt(p)),
+    const formatScopeHintForCard = useCallback(
+        (cardKey: string) =>
+            formatDashboardScopeHint(resolveDashboardCardScope(cardKey), {
+                ...dashboardScopeContext,
+                formatDate,
+                formatDateBS,
+            }),
+        [resolveDashboardCardScope, dashboardScopeContext, formatDate, formatDateBS],
+    );
+
+    const entityScopedLists = useMemo(() => {
+        const partiesScope = resolveDashboardCardScope("entity:parties");
+        const staffScope = resolveDashboardCardScope("entity:staff");
+        const bankCashScope = resolveDashboardCardScope("entity:bank_cash");
+        const itemsScope = resolveDashboardCardScope("entity:items");
+        const vouchersScope = resolveDashboardCardScope("entity:vouchers");
+        return {
+            parties: processedParties.filter(
+                (p: any) =>
+                    entityMasterDateInDashboardScope(
+                        pickEntityCreatedAt(p),
+                        partiesScope,
+                        dashboardScopeContext,
+                    ),
             ),
-        [processedParties, entityMasterDateInRange],
-    );
-    const entityFilteredStaff = useMemo(
-        () =>
-            processedStaff.filter((s: any) => entityMasterDateInRange(pickEntityCreatedAt(s))),
-        [processedStaff, entityMasterDateInRange],
-    );
-    const entityFilteredAccounts = useMemo(
-        () =>
-            processedAccounts.filter((a: any) =>
-                entityMasterDateInRange(pickEntityCreatedAt(a)),
+            staff: processedStaff.filter((s: any) =>
+                entityMasterDateInDashboardScope(
+                    pickEntityCreatedAt(s),
+                    staffScope,
+                    dashboardScopeContext,
+                ),
             ),
-        [processedAccounts, entityMasterDateInRange],
-    );
-    const entityFilteredItems = useMemo(
-        () =>
-            processedItems.filter((i: any) => entityMasterDateInRange(pickEntityCreatedAt(i))),
-        [processedItems, entityMasterDateInRange],
-    );
-
-    const entityVouchersFiltered = useMemo(
-        () =>
-            (vouchers || []).filter((v) => entitySummaryDateInRange(safeToDate(v.date))),
-        [vouchers, entitySummaryDateInRange],
-    );
-
-    const entitySummaryScopeHint = useMemo(() => {
-        if (!entitySummaryEffectiveRange) {
-            return entitySummaryFyPick === "all" ? "All FY · all dates" : "";
-        }
-        const fmt = (d: Date) => (dateSystem === "BS" ? formatDateBS(d) : formatDate(d));
-        const range = `${fmt(entitySummaryEffectiveRange.from)} → ${fmt(entitySummaryEffectiveRange.to)}`;
-        if (entitySummaryPeriodPick === "current_month") {
-            return `Current month (within FY) · ${range}`;
-        }
-        if (entitySummaryFyPick === "all") return range;
-        const fyKey = entitySummaryFyPick === "current" ? runningFyKey : entitySummaryFyPick;
-        return `${formatAnusuchi13FyRangeLabel(companyCountry, fyKey, fmt)} · ${range}`;
+            accounts: processedAccounts.filter((a: any) =>
+                entityMasterDateInDashboardScope(
+                    pickEntityCreatedAt(a),
+                    bankCashScope,
+                    dashboardScopeContext,
+                ),
+            ),
+            items: processedItems.filter((i: any) =>
+                entityMasterDateInDashboardScope(
+                    pickEntityCreatedAt(i),
+                    itemsScope,
+                    dashboardScopeContext,
+                ),
+            ),
+            vouchers: filterVouchersByDashboardScope(
+                vouchers,
+                vouchersScope,
+                dashboardScopeContext,
+                safeToDate,
+            ),
+        };
     }, [
-        entitySummaryEffectiveRange,
-        entitySummaryFyPick,
-        entitySummaryPeriodPick,
-        runningFyKey,
-        companyCountry,
-        dateSystem,
-        formatDate,
-        formatDateBS,
+        resolveDashboardCardScope,
+        dashboardScopeContext,
+        processedParties,
+        processedStaff,
+        processedAccounts,
+        processedItems,
+        vouchers,
     ]);
 
-    const dashboardMonthFilterMode = useMemo((): MonthYearFilterMode => {
-        if (entitySummaryPeriodPick === "current_month") return "current";
-        if (!voucherStatsDateRange?.from) return "full_fy";
-        return "custom";
-    }, [entitySummaryPeriodPick, voucherStatsDateRange]);
+    /** @deprecated Per-card scope — keep aliases so chart/summary paths stay stable. */
+    const entityFilteredParties = entityScopedLists.parties;
+    const entityFilteredStaff = entityScopedLists.staff;
+    const entityFilteredAccounts = entityScopedLists.accounts;
+    const entityFilteredItems = entityScopedLists.items;
+    const entityVouchersFiltered = entityScopedLists.vouchers;
 
-    const onDashboardMonthFilterMode = useCallback((mode: MonthYearFilterMode) => {
-        if (mode === "current") {
-            setEntitySummaryPeriodPick("current_month");
-            setVoucherStatsDateRange(getCurrentMonthDateRange(dateSystem));
-            return;
-        }
-        if (mode === "full_fy") {
-            setEntitySummaryPeriodPick("fy_full");
-            setVoucherStatsDateRange(undefined);
-            return;
-        }
-        setEntitySummaryPeriodPick("fy_full");
-        if (mode === "all") {
-            setVoucherStatsDateRange(undefined);
-        }
-    }, [dateSystem]);
-
-    const dashboardFyPickLabel =
-        entitySummaryFyPick === "current"
-            ? `FY ${runningFyKey}`
-            : entitySummaryFyPick === "all"
-              ? "All FY"
-              : entitySummaryFyPick;
-
-    const renderDashboardSummaryScopeControls = () => (
-        <div className="flex shrink-0 items-center gap-1">
-            <Popover modal={false}>
-                <PopoverTrigger asChild>
-                    <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className={DASHBOARD_SUMMARY_BLUE_PILL_CN}
-                        title={entitySummaryScopeHint}
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        {dashboardFyPickLabel}
-                    </Button>
-                </PopoverTrigger>
-                <PopoverContent align="end" className="z-[9999] w-48 p-2" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex flex-col gap-1">
-                        <Button
-                            type="button"
-                            variant={entitySummaryFyPick === "current" ? "default" : "ghost"}
-                            size="sm"
-                            className="h-8 justify-start text-xs"
-                            onClick={() => setEntitySummaryFyPick("current")}
-                        >
-                            Current FY ({runningFyKey})
-                        </Button>
-                        <Button
-                            type="button"
-                            variant={entitySummaryFyPick === "all" ? "default" : "ghost"}
-                            size="sm"
-                            className="h-8 justify-start text-xs"
-                            onClick={() => setEntitySummaryFyPick("all")}
-                        >
-                            All FY
-                        </Button>
-                        {entityVoucherFyKeys
-                            .filter((k) => k !== runningFyKey)
-                            .map((fyKey) => (
-                                <Button
-                                    key={fyKey}
-                                    type="button"
-                                    variant={entitySummaryFyPick === fyKey ? "default" : "ghost"}
-                                    size="sm"
-                                    className="h-8 justify-start text-xs"
-                                    onClick={() => setEntitySummaryFyPick(fyKey)}
-                                >
-                                    {fyKey}
-                                </Button>
-                            ))}
-                    </div>
-                </PopoverContent>
-            </Popover>
+    const renderDashboardSummaryScopeControls = (cardKey: string) => {
+        const scope = resolveDashboardCardScope(cardKey);
+        return (
             <MonthYearFilter
-                dateRange={voucherStatsDateRange}
-                setDateRange={setVoucherStatsDateRange}
+                dateRange={scope.dateRange}
+                setDateRange={() => {}}
                 dateSystem={dateSystem}
                 showFullFyOption
+                showDashboardFyScope
+                dashboardFyPick={scope.fyPick}
+                runningFyKey={runningFyKey}
+                extraFyKeys={entityVoucherFyKeys}
+                showApplyOnAll
                 triggerClassName={DASHBOARD_SUMMARY_BLUE_PILL_CN}
-                filterMode={dashboardMonthFilterMode}
-                onFilterModeChange={onDashboardMonthFilterMode}
+                filterMode={dashboardScopeToFilterMode(scope)}
+                onDashboardScopeApply={(payload) => handleDashboardScopeApply(cardKey, payload)}
             />
-        </div>
-    );
+        );
+    };
 
     const stats = useMemo(() => {
         if (!vouchers) return { otherStats: statCardData.map(s => ({ ...s, total: 0, count: 0 })) };
 
         const otherStats = statCardData.map((card) => {
-            const filteredVouchers = voucherStatsFilteredVouchers.filter((v) => {
+            const cardScope = resolveDashboardCardScope(card.type);
+            const scopedVouchers = filterVouchersByDashboardScope(
+                vouchers,
+                cardScope,
+                dashboardScopeContext,
+                safeToDate,
+            );
+            const filteredVouchers = scopedVouchers.filter((v) => {
                 if (card.type === 'journal') return v.type === 'journal' && !v.subType;
                 if (card.type === 'add_salary') return v.type === 'journal' && v.subType === 'add_salary';
                 if (card.type === 'pay_salary') return voucherCountsAsDashboardPaySalary(v);
@@ -2196,11 +2127,11 @@ export function FinancialSummaryCards({
         });
 
         return { otherStats };
-    }, [vouchers, voucherStatsFilteredVouchers]);
+    }, [vouchers, resolveDashboardCardScope, dashboardScopeContext]);
 
     // Chart tab: har voucher-type card ke liye din (AD calendar day) par total amount — dashboard totals se same filter/amount rules.
     const voucherStatDateChartData = useMemo(() => {
-        if (!showVoucherDateCharts || !voucherStatsFilteredVouchers.length) return {} as Record<string, { name: string; amount: number }[]>;
+        if (!showVoucherDateCharts || !vouchers?.length) return {} as Record<string, { name: string; amount: number }[]>;
         const matchCard = (v: any, cardType: string) => {
             if (cardType === "journal") return v.type === "journal" && !v.subType;
             if (cardType === "add_salary") return v.type === "journal" && v.subType === "add_salary";
@@ -2216,7 +2147,14 @@ export function FinancialSummaryCards({
         };
         const out: Record<string, { name: string; amount: number }[]> = {};
         for (const card of statCardData) {
-            const filtered = voucherStatsFilteredVouchers.filter((v) => matchCard(v, card.type));
+            const cardScope = resolveDashboardCardScope(card.type);
+            const scopedVouchers = filterVouchersByDashboardScope(
+                vouchers,
+                cardScope,
+                dashboardScopeContext,
+                safeToDate,
+            );
+            const filtered = scopedVouchers.filter((v) => matchCard(v, card.type));
             const dayMap = new Map<string, number>();
             for (const v of filtered) {
                 const d = safeToDate(v.date);
@@ -2233,7 +2171,15 @@ export function FinancialSummaryCards({
             });
         }
         return out;
-    }, [showVoucherDateCharts, voucherStatsFilteredVouchers, dateSystem, formatDate, formatDateBS]);
+    }, [
+        showVoucherDateCharts,
+        vouchers,
+        resolveDashboardCardScope,
+        dashboardScopeContext,
+        dateSystem,
+        formatDate,
+        formatDateBS,
+    ]);
 
     // Chart tab: Cash Flow card — voucher date + card wala month filter; 3 mini bars (in / out / net).
     const dashboardCashFlowDailyTri = useMemo(() => {
@@ -2494,84 +2440,84 @@ export function FinancialSummaryCards({
     // Chart tab: entity count cards — master `createdAt` se din-wise adds (Parties / Staff / Bank+Cash / Items).
     const entityChartPartiesDaily = useMemo(() => {
         if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
-        const partyDates = entityFilteredParties
+        const partyDates = entityScopedLists.parties
             .filter((p: any) => !DASHBOARD_CHART_EXCLUDE_PARTY_IDS.has(p.id) && !p.isSystemAccount)
             .map((p: any) => pickEntityCreatedAt(p));
         return buildDailyCountChart(partyDates, dateSystem, formatDate, formatDateBS);
-    }, [showVoucherDateCharts, entityFilteredParties, dateSystem, formatDate, formatDateBS]);
+    }, [showVoucherDateCharts, entityScopedLists.parties, dateSystem, formatDate, formatDateBS]);
 
     const entityChartStaffDaily = useMemo(() => {
         if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
         return buildDailyCountChart(
-            entityFilteredStaff.map((s: any) => pickEntityCreatedAt(s)),
+            entityScopedLists.staff.map((s: any) => pickEntityCreatedAt(s)),
             dateSystem,
             formatDate,
             formatDateBS
         );
-    }, [showVoucherDateCharts, entityFilteredStaff, dateSystem, formatDate, formatDateBS]);
+    }, [showVoucherDateCharts, entityScopedLists.staff, dateSystem, formatDate, formatDateBS]);
 
     const entityChartBankCashDaily = useMemo(() => {
         if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
-        const dates = entityFilteredAccounts
+        const dates = entityScopedLists.accounts
             .filter((a: any) => a.accountType === "Bank" || a.accountType === "Cash")
             .map((a: any) => pickEntityCreatedAt(a));
         return buildDailyCountChart(dates, dateSystem, formatDate, formatDateBS);
-    }, [showVoucherDateCharts, entityFilteredAccounts, dateSystem, formatDate, formatDateBS]);
+    }, [showVoucherDateCharts, entityScopedLists.accounts, dateSystem, formatDate, formatDateBS]);
 
     const entityChartItemsDaily = useMemo(() => {
         if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
         return buildDailyCountChart(
-            entityFilteredItems.map((i: any) => pickEntityCreatedAt(i)),
+            entityScopedLists.items.map((i: any) => pickEntityCreatedAt(i)),
             dateSystem,
             formatDate,
             formatDateBS
         );
-    }, [showVoucherDateCharts, entityFilteredItems, dateSystem, formatDate, formatDateBS]);
+    }, [showVoucherDateCharts, entityScopedLists.items, dateSystem, formatDate, formatDateBS]);
 
     const entityChartPartiesPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
-        const partyDates = entityFilteredParties
+        const partyDates = entityScopedLists.parties
             .filter((p: any) => !DASHBOARD_CHART_EXCLUDE_PARTY_IDS.has(p.id) && !p.isSystemAccount)
             .map((p: any) => pickEntityCreatedAt(p));
         return buildDailyCountPointsByDay(partyDates);
-    }, [showVoucherDateCharts, entityFilteredParties]);
+    }, [showVoucherDateCharts, entityScopedLists.parties]);
 
     const entityChartStaffPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
-        return buildDailyCountPointsByDay(entityFilteredStaff.map((s: any) => pickEntityCreatedAt(s)));
-    }, [showVoucherDateCharts, entityFilteredStaff]);
+        return buildDailyCountPointsByDay(entityScopedLists.staff.map((s: any) => pickEntityCreatedAt(s)));
+    }, [showVoucherDateCharts, entityScopedLists.staff]);
 
     const entityChartBankCashPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
-        const dates = entityFilteredAccounts
+        const dates = entityScopedLists.accounts
             .filter((a: any) => a.accountType === "Bank" || a.accountType === "Cash")
             .map((a: any) => pickEntityCreatedAt(a));
         return buildDailyCountPointsByDay(dates);
-    }, [showVoucherDateCharts, entityFilteredAccounts]);
+    }, [showVoucherDateCharts, entityScopedLists.accounts]);
 
     const entityChartItemsPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
-        return buildDailyCountPointsByDay(entityFilteredItems.map((i: any) => pickEntityCreatedAt(i)));
-    }, [showVoucherDateCharts, entityFilteredItems]);
+        return buildDailyCountPointsByDay(entityScopedLists.items.map((i: any) => pickEntityCreatedAt(i)));
+    }, [showVoucherDateCharts, entityScopedLists.items]);
 
     /** Total Vouchers card: voucher `date` par din-wise count (mini chart). */
     const entityChartVouchersDaily = useMemo(() => {
         if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
-        const dates = entityVouchersFiltered.map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
+        const dates = entityScopedLists.vouchers.map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
         return buildDailyCountChart(dates, dateSystem, formatDate, formatDateBS);
-    }, [showVoucherDateCharts, entityVouchersFiltered, dateSystem, formatDate, formatDateBS]);
+    }, [showVoucherDateCharts, entityScopedLists.vouchers, dateSystem, formatDate, formatDateBS]);
 
     const entityChartVouchersCountPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
-        const dates = entityVouchersFiltered.map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
+        const dates = entityScopedLists.vouchers.map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
         return buildDailyCountPointsByDay(dates);
-    }, [showVoucherDateCharts, entityVouchersFiltered]);
+    }, [showVoucherDateCharts, entityScopedLists.vouchers]);
 
     /** View full popup: us din sab vouchers ka total amount (`total`/`amount`). */
     const voucherAmountPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
         const dayMap = new Map<string, number>();
-        for (const v of entityVouchersFiltered) {
+        for (const v of entityScopedLists.vouchers) {
             const d = safeToDate(v.date);
             if (!d) continue;
             const k = format(startOfDay(d), "yyyy-MM-dd");
@@ -2581,7 +2527,7 @@ export function FinancialSummaryCards({
         return Array.from(dayMap.entries())
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([dayKey, amount]) => ({ dayKey, amount }));
-    }, [showVoucherDateCharts, entityVouchersFiltered]);
+    }, [showVoucherDateCharts, entityScopedLists.vouchers]);
 
     // Chart tab: Stock — item master create date se daily add count.
     const dashboardStockItemAdds = useMemo(() => {
@@ -2892,7 +2838,7 @@ export function FinancialSummaryCards({
                 <CardHeader className="space-y-1 p-3 pb-1">
                     <div className="flex min-w-0 items-center justify-between gap-1">
                         <CardTitle className="min-w-0 truncate text-sm">{stat.title}</CardTitle>
-                        {renderDashboardSummaryScopeControls()}
+                        {renderDashboardSummaryScopeControls(stat.type)}
                     </div>
                 </CardHeader>
                 <CardContent className="flex flex-1 flex-col p-3 pt-0">
@@ -4430,7 +4376,11 @@ export function FinancialSummaryCards({
                     {[
                         {
                             title: "Total Parties",
-                            value: entityFilteredParties.length,
+                            scopeKey: "entity:parties",
+                            value: entityScopedLists.parties.filter(
+                                (p: any) =>
+                                    !DASHBOARD_CHART_EXCLUDE_PARTY_IDS.has(p.id) && !p.isSystemAccount,
+                            ).length,
                             chart: showVoucherDateCharts ? entityChartPartiesDaily : null,
                             chartLabel: "Parties added/day",
                             chartColor: "#2563eb",
@@ -4438,7 +4388,8 @@ export function FinancialSummaryCards({
                         },
                         {
                             title: "Total Staff",
-                            value: entityFilteredStaff.length,
+                            scopeKey: "entity:staff",
+                            value: entityScopedLists.staff.length,
                             chart: showVoucherDateCharts ? entityChartStaffDaily : null,
                             chartLabel: "Staff added/day",
                             chartColor: "#059669",
@@ -4446,7 +4397,10 @@ export function FinancialSummaryCards({
                         },
                         {
                             title: "Bank/Cash Acc",
-                            value: entityFilteredAccounts.length,
+                            scopeKey: "entity:bank_cash",
+                            value: entityScopedLists.accounts.filter(
+                                (a: any) => a.accountType === "Bank" || a.accountType === "Cash",
+                            ).length,
                             chart: showVoucherDateCharts ? entityChartBankCashDaily : null,
                             chartLabel: "Bank & Cash a/c added/day",
                             chartColor: "#1d4ed8",
@@ -4454,7 +4408,8 @@ export function FinancialSummaryCards({
                         },
                         {
                             title: "Total Items",
-                            value: entityFilteredItems.length,
+                            scopeKey: "entity:items",
+                            value: entityScopedLists.items.length,
                             chart: showVoucherDateCharts ? entityChartItemsDaily : null,
                             chartLabel: "Items added/day",
                             chartColor: "#0d9488",
@@ -4462,7 +4417,8 @@ export function FinancialSummaryCards({
                         },
                         {
                             title: "Total Vouchers",
-                            value: entityVouchersFiltered.length,
+                            scopeKey: "entity:vouchers",
+                            value: entityScopedLists.vouchers.length,
                             chart: showVoucherDateCharts ? entityChartVouchersDaily : null,
                             chartLabel: "Vouchers added/day (count)",
                             chartColor: "#6366f1",
@@ -4475,22 +4431,24 @@ export function FinancialSummaryCards({
                                   }
                                 : undefined,
                         },
-                    ].map((item, idx) => (
+                    ].map((item, idx) => {
+                        const cardScopeHint = formatScopeHintForCard(item.scopeKey);
+                        return (
                         <Card key={item.title} className={`min-w-0 flex-1 overflow-hidden ${dashboardCardRibbonClass} ${ribbonTone(idx + 2)}`}>
                             <CardHeader className="space-y-1 p-3 pb-1">
                                 <div className="flex min-w-0 items-center justify-between gap-1">
                                     <CardTitle className="min-w-0 shrink truncate text-sm">{item.title}</CardTitle>
-                                    {renderDashboardSummaryScopeControls()}
+                                    {renderDashboardSummaryScopeControls(item.scopeKey)}
                                 </div>
                             </CardHeader>
                             <CardContent className="p-3 pt-0">
                                 <div className="text-2xl font-bold">{item.value}</div>
-                                {entitySummaryScopeHint ? (
+                                {cardScopeHint ? (
                                     <p
                                         className="mt-0.5 truncate text-[10px] text-muted-foreground"
-                                        title={entitySummaryScopeHint}
+                                        title={cardScopeHint}
                                     >
-                                        {entitySummaryScopeHint}
+                                        {cardScopeHint}
                                     </p>
                                 ) : null}
                                 {item.chart && (
@@ -4507,7 +4465,8 @@ export function FinancialSummaryCards({
                                 )}
                             </CardContent>
                         </Card>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
         </div>

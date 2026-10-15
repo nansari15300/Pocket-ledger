@@ -16,7 +16,7 @@ import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { mlc } from "@/lib/mobileListChrome";
-import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import { applyMasterDetailBackToListUrl, masterDetailListHref } from "@/lib/masterDetailListPath";
 import { consumeMasterDetailSidebarListNav } from "@/lib/masterDetailSidebarNav";
 import { browserHistoryHref } from "@/lib/webAppBasePath";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
@@ -233,7 +233,8 @@ function QuotationsPageContent() {
 
   const onBackToList = useCallback(() => {
     closeForm(false);
-    router.replace(masterDetailListHref("quotations"), { scroll: false });
+    const href = applyMasterDetailBackToListUrl("quotations");
+    router.replace(href, { scroll: false });
   }, [closeForm, router]);
 
   const onHardwareBack = useCallback(() => {

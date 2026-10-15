@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
-import { mdc, mdcMobileHeaderAvatarNoPhotoData } from "@/lib/mobileDetailChrome";
+import { mdc, mdcMobileHeaderAvatarData, mdcMobileHeaderAvatarNoPhotoData } from "@/lib/mobileDetailChrome";
+import { LEDGER_HEADER_AVATAR_CN } from "@/lib/ledgerHeaderChrome";
 
 function initialsFromName(name: string): string {
   return (
@@ -25,11 +26,14 @@ export function MobileMasterDetailHeaderAvatar({
   attachmentUrl,
   fallbackSlot,
   previewTitle,
+  editTrigger,
 }: {
   name: string;
   attachmentUrl?: string | null;
   fallbackSlot?: React.ReactNode;
   previewTitle?: string;
+  /** e.g. EditPartyDialog trigger — desktop ribbon pen jaisa overlay */
+  editTrigger?: React.ReactNode;
 }) {
   const label = previewTitle ?? name;
   const initials = initialsFromName(name || "NA");
@@ -40,26 +44,34 @@ export function MobileMasterDetailHeaderAvatar({
   };
 
   return (
-    <EntityFileAttachmentHover fileUrl={attachmentUrl ?? undefined} triggerClassName="inline-flex h-full w-full">
-      <button
-        type="button"
-        {...(!hasAvatarImage ? mdcMobileHeaderAvatarNoPhotoData : {})}
-        className={cn(
-          "inline-flex h-full w-full min-h-[2.75rem] items-stretch justify-center overflow-hidden rounded-lg border",
-          hasAvatarImage ? "border-border/80 bg-muted/30" : mdc.mobileHeaderAvatarNoPhoto
-        )}
-        onClick={openPreview}
-        aria-label={`Preview ${label} avatar`}
+    <div className={cn(LEDGER_HEADER_AVATAR_CN, "inline-flex shrink-0")}>
+      <EntityFileAttachmentHover
+        fileUrl={attachmentUrl ?? undefined}
+        triggerClassName={cn("inline-flex", mdc.mobileHeaderAvatarBox)}
       >
-        <ResolvedEntityAvatar
-          className="h-full w-full rounded-lg text-sm font-semibold"
-          src={attachmentUrl ?? undefined}
-          alt={label}
-          fallbackText={initials}
-          fallbackSlot={fallbackSlot}
-          fallbackClassName={hasAvatarImage ? undefined : mdc.mobileHeaderAvatarNoPhotoFallback}
-        />
-      </button>
-    </EntityFileAttachmentHover>
+        <button
+          type="button"
+          {...mdcMobileHeaderAvatarData}
+          {...(!hasAvatarImage ? mdcMobileHeaderAvatarNoPhotoData : {})}
+          className={cn(
+            "inline-flex items-center justify-center overflow-hidden rounded-lg border p-0",
+            mdc.mobileHeaderAvatarBox,
+            hasAvatarImage ? mdc.mobileHeaderAvatarWithPhoto : mdc.mobileHeaderAvatarNoPhoto
+          )}
+          onClick={openPreview}
+          aria-label={`Preview ${label} avatar`}
+        >
+          <ResolvedEntityAvatar
+            className={cn(mdc.mobileHeaderAvatarBox, "rounded-lg text-sm font-semibold [&_img]:object-cover")}
+            src={attachmentUrl ?? undefined}
+            alt={label}
+            fallbackText={initials}
+            fallbackSlot={fallbackSlot}
+            fallbackClassName={hasAvatarImage ? undefined : mdc.mobileHeaderAvatarNoPhotoFallback}
+          />
+        </button>
+      </EntityFileAttachmentHover>
+      {editTrigger}
+    </div>
   );
 }

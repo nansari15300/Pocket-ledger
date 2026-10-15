@@ -20,6 +20,8 @@ export function useEnsureEntityMinTxnsInScope(params: {
   entityKind: MasterLedgerEntityKind;
   entityTxnCount: number;
   minTxn?: number;
+  /** Cap auto FY widen (default: full SQLite count). Tax TDS: use minTxn so default “Last N” does not load entire history. */
+  maxAutoWidenTarget?: number;
   enabled?: boolean;
 }): void {
   const { company } = useCompany();
@@ -27,6 +29,10 @@ export function useEnsureEntityMinTxnsInScope(params: {
   const fy = useFyVoucherScope();
   const wideningRef = useRef(false);
   const lastEntityRef = useRef("");
+  /** One widen pass per entity+target — avoid repeat FY walks when scope stalls below SQLite count. */
+  const widenFinishedKeyRef = useRef<string | null>(null);
+  const fyRef = useRef(fy);
+  fyRef.current = fy;
   const [fullEntityTxnCount, setFullEntityTxnCount] = useState<number | null>(null);
 
   const {
@@ -35,6 +41,7 @@ export function useEnsureEntityMinTxnsInScope(params: {
     entityKind,
     entityTxnCount,
     minTxn = MASTER_LEDGER_DEFAULT_TXN_COUNT,
+    maxAutoWidenTarget,
     enabled = true,
   } = params;
 
@@ -42,8 +49,15 @@ export function useEnsureEntityMinTxnsInScope(params: {
 
   useEffect(() => {
     setFullEntityTxnCount(null);
+    widenFinishedKeyRef.current = null;
     if (!enabled || !entityId || entityId === "all" || !companyId || fiscalMergeFullLoad) return;
     if (!isDefaultLedgerDateRange(dateRange)) return;
+
+    // Capped default (e.g. tax Last N): do NOT load/parse entire SQLite vouchers just to count.
+    if (typeof maxAutoWidenTarget === "number" && maxAutoWidenTarget > 0) {
+      setFullEntityTxnCount(maxAutoWidenTarget);
+      return;
+    }
 
     let cancelled = false;
     void countEntityVouchersInSqliteFull(companyId, entityId, entityKind)
@@ -65,9 +79,15 @@ export function useEnsureEntityMinTxnsInScope(params: {
     dateRange?.from,
     dateRange?.to,
     fiscalMergeFullLoad,
+    maxAutoWidenTarget,
   ]);
 
-  const targetTxnCount = Math.max(minTxn, fullEntityTxnCount ?? minTxn);
+  const sqliteTarget = fullEntityTxnCount ?? minTxn;
+  const cappedTarget =
+    maxAutoWidenTarget != null
+      ? Math.min(sqliteTarget, Math.max(minTxn, maxAutoWidenTarget))
+      : sqliteTarget;
+  const targetTxnCount = Math.max(minTxn, cappedTarget);
   const needsWiden = entityTxnCount < targetTxnCount;
 
   useEffect(() => {
@@ -79,27 +99,26 @@ export function useEnsureEntityMinTxnsInScope(params: {
     if (fullEntityTxnCount == null && entityTxnCount >= minTxn) return;
     if (wideningRef.current) return;
 
-    const widenKey = `${companyId}:${entityId}:${entityKind}`;
-    if (lastEntityRef.current === widenKey && entityTxnCount === 0) {
-      // Allow one retry per entity when still empty after prior widen attempt.
-    }
+    const widenKey = `${companyId}:${entityId}:${entityKind}:${targetTxnCount}`;
+    if (widenFinishedKeyRef.current === widenKey) return;
 
     wideningRef.current = true;
     lastEntityRef.current = widenKey;
 
     void widenFyScopeUntilEntityMinTxns({
       company,
-      fy,
+      fy: fyRef.current,
       entityId,
       entityKind,
       minTxn,
-      targetTxnCount: fullEntityTxnCount ?? undefined,
+      targetTxnCount,
     })
       .catch((err) => {
         console.warn("[useEnsureEntityMinTxnsInScope]", err);
       })
       .finally(() => {
         wideningRef.current = false;
+        widenFinishedKeyRef.current = widenKey;
       });
   }, [
     enabled,
@@ -115,7 +134,7 @@ export function useEnsureEntityMinTxnsInScope(params: {
     fiscalMergeFullLoad,
     needsWiden,
     fullEntityTxnCount,
+    targetTxnCount,
     company,
-    fy,
   ]);
 }

@@ -6,7 +6,7 @@ import { isEmbeddedDeviceLockShell } from "@/lib/embeddedDeviceLock";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Share2, Loader2, Hash, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange, LockKeyhole, Cloud, Server } from "lucide-react";
+import { Share2, Loader2, Hash, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange, LockKeyhole, Cloud, Server, Link2 } from "lucide-react";
 import { ManageShare } from "@/components/company/ManageShare";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
@@ -19,6 +19,7 @@ import { HandoverManager } from "@/components/settings/HandoverManager";
 import { CompanySettings } from "@/components/settings/CompanySettings";
 import { DangerZone } from "@/components/settings/DangerZone";
 import { CurrencySettings } from "@/components/settings/CurrencySettings";
+import { LinkAllocationSettings } from "@/components/settings/LinkAllocationSettings";
 import { NotificationSettings } from "@/components/settings/NotificationSettings";
 import { FiscalSplitSettings } from "@/components/settings/FiscalSplitSettings";
 import { AppLockSettings } from "@/components/settings/AppLockSettings";
@@ -84,6 +85,7 @@ const settingsNavItems = [
     // EXE/APK: 6-digit PIN + optional biometric — nav mein sirf native shell par (neeche `shellLockEligible` filter).
     { id: "app_lock", title: "App Lock", icon: LockKeyhole, permission: "configure_company_settings" as const, href: null },
     { id: "voucher", title: "Voucher Settings", icon: FileDigit, permission: "configure_company_settings" as const, href: null },
+    { id: "link_allocation", title: "Link allocation", icon: Link2, permission: "configure_company_settings" as const, href: null },
     { id: "theme", title: "Theme Settings", icon: Palette, permission: "configure_company_settings" as const, href: null },
     { id: "animation", title: "Animation Settings", icon: Zap, permission: "configure_company_settings" as const, href: null },
     { id: "decimals", title: "Decimal Settings", icon: Hash, permission: "configure_company_settings" as const, href: null },
@@ -562,6 +564,8 @@ function SettingsPageContent() {
                 return <AppLockSettings />;
             case "voucher":
                 return can('configure_company_settings') ? <VoucherSettings /> : null;
+            case "link_allocation":
+                return can("configure_company_settings") ? <LinkAllocationSettings /> : null;
             case "theme":
                 return canOpenThemeOrAnimation ? (
                     <ThemeSettings localOnlyHint={sharedLocalAppearanceOnly} />

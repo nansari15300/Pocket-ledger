@@ -793,6 +793,27 @@ let flushVoucherOutboxQueued = false;
  */
 let flushVoucherOutboxFollowUpOptions: FlushVoucherOutboxOptions | undefined;
 
+/**
+ * Firestore `permission-denied` on a collection (e.g. loan_schedules rules) must not
+ * retry every queued row every 8s — that blocks the tab (tax page stays on screen, clicks do nothing).
+ * One deny parks that company+collection for this session; other collections still flush.
+ */
+const permissionDeniedOutboxKeys = new Set<string>();
+
+function outboxPermissionKey(companyId: string, collectionName: string): string {
+  return `${companyId}:${collectionName}`;
+}
+
+function isOutboxPermissionDenied(e: unknown): boolean {
+  const code = String((e as { code?: string })?.code ?? "");
+  const message = String((e as { message?: string })?.message ?? "");
+  return (
+    code === "permission-denied" ||
+    code === "PERMISSION_DENIED" ||
+    message.toLowerCase().includes("missing or insufficient permissions")
+  );
+}
+
 export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): Promise<{ ok: number; failed: number }> {
   if (flushVoucherOutboxInFlight) {
     flushVoucherOutboxQueued = true;
@@ -905,6 +926,11 @@ async function flushVoucherOutboxImpl(options?: FlushVoucherOutboxOptions): Prom
   let ok = 0;
   let failed = 0;
   for (const row of rows) {
+    const denyKey = outboxPermissionKey(row.company_id, row.collection_name);
+    if (permissionDeniedOutboxKeys.has(denyKey)) {
+      failed++;
+      continue;
+    }
     try {
       if (row.payload_hash) {
         const h = await computeSha256HexFromStringUtf8(row.payload);
@@ -1295,7 +1321,24 @@ async function flushVoucherOutboxImpl(options?: FlushVoucherOutboxOptions): Prom
           /* fall through */
         }
       }
-      console.warn("[flushVoucherOutbox] row failed", row.outbox_id, e);
+      if (isOutboxPermissionDenied(e)) {
+        if (!permissionDeniedOutboxKeys.has(denyKey)) {
+          permissionDeniedOutboxKeys.add(denyKey);
+          console.warn(
+            "[flushVoucherOutbox] permission-denied — pausing this collection for this session",
+            row.collection_name,
+            row.company_id
+          );
+        }
+        failed++;
+        continue;
+      }
+      console.warn(
+        "[flushVoucherOutbox] row failed",
+        row.outbox_id,
+        row.collection_name,
+        (e as { code?: string })?.code || (e as { message?: string })?.message || e
+      );
       failed++;
       // One bad row should not block the entire outbox forever; keep flushing remaining rows.
       continue;

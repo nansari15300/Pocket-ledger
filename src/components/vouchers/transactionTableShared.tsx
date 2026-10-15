@@ -35,10 +35,17 @@ import { cn } from "@/lib/utils";
 import { isTransactionColumnVisible } from "@/lib/transactionVisibleColumnShow";
 import {
   LEDGER_TDS_ROW_FLAG,
+  SALE_PURCHASE_TDS_UNVERIFIED_MESSAGE,
+  SALE_PURCHASE_TDS_VERIFIED_MESSAGE,
   isLedgerTdsTableRow,
+  isSalePurchaseTdsVerifyLedgerContext,
+  isUnverifiedLedgerTdsBillRow,
+  isUnverifiedTaxTdsBalanceRow,
   ledgerTdsRowAmountToneClass,
   ledgerTdsTypeDisplayLabel,
   ledgerTdsTypePillDrCrSide,
+  resolveSalePurchaseTdsVerifyLabel,
+  taxAccountIsTdsVerifyLegOnVoucher,
 } from "@/lib/partyLedgerTdsView";
 import { Switch } from "@/components/ui/switch";
 import { isLedgerTransactionPeerPendingChange, isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
@@ -68,7 +75,8 @@ import {
   LEDGER_TDS_VOUCHER_NO_COL_PX,
   LEDGER_TDS_USER_CELL_PAD_CN,
   LEDGER_TDS_ROW_TEXT_CELL_PAD_CN,
-  LEDGER_TDS_DR_CR_CELL_PAD_CN,
+  LEDGER_TDS_DR_CR_AMOUNT_CELL_CN,
+  LEDGER_TDS_DR_CR_COL_PX,
   LEDGER_TDS_FILE_COL_PX,
   LEDGER_TDS_FILE_CELL_PAD_CN,
   LEDGER_BOTH_DATE_BS_AD_GAP_PX,
@@ -482,7 +490,26 @@ export const formatQuantity = (val: number) =>
     maximumFractionDigits: 2,
   });
 
-export const getDisplayType = (t: any) => {
+export type GetDisplayTypeOpts = {
+  context?: string;
+  contextId?: string;
+  groupEntityType?: string | null;
+};
+
+/** Tax ledger: sale/purchase jo TDS account pe aaye — type me TDS sale / TDS Purchase. */
+function taxLedgerSalePurchaseHitsTds(t: any, taxAccountId?: string): boolean {
+  const lines = Array.isArray(t?.lineItems) ? t.lineItems : [];
+  if (lines.length === 0) return false;
+  const taxId = String(taxAccountId ?? "").trim();
+  return lines.some((li: any) => {
+    const tdsAmt = Number(li?.tdsAmount) || 0;
+    if (tdsAmt <= 0) return false;
+    if (!taxId) return Boolean(String(li?.tdsAccountId ?? "").trim());
+    return String(li?.tdsAccountId ?? "").trim() === taxId;
+  });
+}
+
+export const getDisplayType = (t: any, opts?: GetDisplayTypeOpts) => {
   if (!t.type) return "";
   if (t.type === FY_OPENING_ROW_TYPE) {
     const pill = String(t._ledgerOpeningPillLabel || "").trim();
@@ -492,20 +519,40 @@ export const getDisplayType = (t: any) => {
     return "fy opening";
   }
   if (t.type === "journal" && t.subType === "add_salary") return "Add Salary";
+  if (t.type === "journal" && t.isTdsJournal === true) return "TDS Journal";
   if (t.type === "inter_company") return "Inter Company";
   if (t.type === "tds" || t._ledgerTdsRow || t[LEDGER_TDS_ROW_FLAG]) {
     return ledgerTdsTypeDisplayLabel(t._ledgerTdsSide);
+  }
+  const isTaxLedgerCtx =
+    opts?.context === "tax" || (opts?.context === "group" && opts?.groupEntityType === "tax");
+  if (
+    isTaxLedgerCtx &&
+    (t.type === "sale" ||
+      t.type === "sale_service" ||
+      t.type === "purchase" ||
+      t.type === "purchase_service") &&
+    taxLedgerSalePurchaseHitsTds(t, opts?.contextId)
+  ) {
+    if (t.type === "purchase" || t.type === "purchase_service") return "TDS Purchase";
+    return "TDS sale";
   }
   return t.type.replace(/_/g, " ");
 };
 
 /** Type column header filter haystack — display label + raw type + common shortcuts (e.g. ic → Inter Company). */
-export function typeColumnFilterHaystackFields(t: any): unknown[] {
-  const displayType = getDisplayType(t);
+export function typeColumnFilterHaystackFields(t: any, opts?: GetDisplayTypeOpts): unknown[] {
+  const displayType = getDisplayType(t, opts);
   const rawType = String(t?.type || "").trim();
   const fields: unknown[] = [displayType, rawType, rawType.replace(/_/g, " ")];
   if (rawType === "inter_company") {
     fields.push("ic", "intercompany", "inter co");
+  }
+  if (rawType === "journal" && t?.isTdsJournal === true) {
+    fields.push("TDS Journal", "tds journal", "tds");
+  }
+  if (displayType === "TDS sale" || displayType === "TDS Purchase") {
+    fields.push("TDS sale", "TDS Purchase", "tds sale", "tds purchase", "tds");
   }
   return fields;
 }
@@ -1050,6 +1097,24 @@ export const getStatusLabel = (t: any, context?: string) => {
   }
   if (t.type === "contra") return "Contra";
   if (t.type === "adjustment") return "Adjustment";
+  // Party TDS details rows — Paid / Unpaid / Partial / Overdue from TDS-leg (or parent) paymentStatus.
+  if (t.type === "tds" || (t as any)._ledgerTdsRow) {
+    const status = (t as any).paymentStatus;
+    if (status === "paid") return "Paid";
+    if (status === "unpaid") return "Unpaid";
+    if (status === "partially_paid") return "Partial";
+    if (status === "overdue" || (t as any).isOverdue) return "Overdue";
+    return "Unpaid";
+  }
+  // Linked settlement payment/journal on party TDS details (entity-wise).
+  if ((t as any)._ledgerTdsSettlementRow) {
+    const status = (t as any).paymentStatus;
+    if (status === "paid") return "Paid";
+    if (status === "unpaid") return "Unpaid";
+    if (status === "partially_paid") return "Partial";
+    if (status === "overdue" || (t as any).isOverdue) return "Overdue";
+    return "Unpaid";
+  }
   // Bill-wise journal: use paymentStatus (Paid/Partial/Unpaid) when set by use-transactions, same as sale/purchase.
   if (t.type === "journal" && !isAddSalary) {
     const status = (t as any).paymentStatus;
@@ -1710,6 +1775,53 @@ export const TransactionRow = React.memo(
     const ledgerTdsAmountToneCn = isLedgerTdsRow ? ledgerTdsRowAmountToneClass(transaction) : null;
     const tdsLedgerRowLayout = ensureMinGaps && (showCol("tdsTaxable") || showCol("tdsAmount"));
     const tdsRowTextPadCn = tdsLedgerRowLayout ? LEDGER_TDS_ROW_TEXT_CELL_PAD_CN : null;
+    const salePurchaseTdsVerifyLabel = isSalePurchaseTdsVerifyLedgerContext(context, groupEntityType)
+      ? resolveSalePurchaseTdsVerifyLabel(transaction, { context, contextId, groupEntityType })
+      : null;
+    const salePurchaseTdsVerifyCol =
+      salePurchaseTdsVerifyLabel != null ? statementCheckedMessageColumn(debit, credit) : null;
+    const isTaxPageTdsVerifyRow =
+      context === "tax" || (context === "group" && groupEntityType === "tax");
+    const taxCtxIdForTdsBalance = isTaxPageTdsVerifyRow ? String(contextId ?? "").trim() : "";
+    const isTaxTdsUnverifiedRow = Boolean(
+      taxCtxIdForTdsBalance && isUnverifiedTaxTdsBalanceRow(transaction, taxCtxIdForTdsBalance)
+    );
+    const isTaxTdsVerifiedRow = Boolean(
+      taxCtxIdForTdsBalance &&
+        taxAccountIsTdsVerifyLegOnVoucher(transaction, taxCtxIdForTdsBalance) &&
+        salePurchaseTdsVerifyLabel === SALE_PURCHASE_TDS_VERIFIED_MESSAGE
+    );
+    // Party/staff TDS details: same dim + Waiting as tax page for Unverified bill legs.
+    const isPartyStaffTdsUnverifiedRow = Boolean(isUnverifiedLedgerTdsBillRow(transaction));
+    const isPartyStaffTdsVerifiedRow = Boolean(
+      isLedgerTdsRow &&
+        !isPartyStaffTdsUnverifiedRow &&
+        salePurchaseTdsVerifyLabel === SALE_PURCHASE_TDS_VERIFIED_MESSAGE
+    );
+    const isTdsUnverifiedBooksRow = isTaxTdsUnverifiedRow || isPartyStaffTdsUnverifiedRow;
+    const isTdsVerifiedBooksRow = isTaxTdsVerifiedRow || isPartyStaffTdsVerifiedRow;
+    const taxTdsAmountWeightCn = isTdsUnverifiedBooksRow
+      ? "font-normal opacity-45"
+      : isTdsVerifiedBooksRow
+        ? "font-bold"
+        : null;
+    const salePurchaseTdsVerifyBadge = salePurchaseTdsVerifyLabel ? (
+      <span
+        className={cn(
+          // italic glyphs stick out of the box — extra pr + w-max/shrink-0 so the fill covers the full label
+          "inline-flex w-max shrink-0 items-center justify-center whitespace-nowrap rounded-md border box-border pl-2.5 pr-3.5 py-1 text-sm font-bold italic leading-none",
+          salePurchaseTdsVerifyLabel === SALE_PURCHASE_TDS_VERIFIED_MESSAGE
+            ? "border-green-600 bg-green-100 text-green-800 dark:border-green-500 dark:bg-green-950/40 dark:text-green-200"
+            : "border-amber-500 bg-amber-100 text-amber-900 dark:border-amber-500 dark:bg-amber-950/40 dark:text-amber-200"
+        )}
+      >
+        {salePurchaseTdsVerifyLabel}
+      </span>
+    ) : null;
+    const tdsVerifyDrCrMinPx =
+      tdsLedgerRowLayout || salePurchaseTdsVerifyLabel != null
+        ? LEDGER_TDS_DR_CR_COL_PX
+        : LEDGER_TXN_DR_CR_COL_PX;
 
     // Blink animation: Dr/Cr/Balance numerals + Dr/Cr suffix only — not group border / full cell (see MainRow, no row-level animate).
     const activeBlinkModes = Array.isArray(blinkMode) ? blinkMode : [];
@@ -1990,7 +2102,7 @@ export const TransactionRow = React.memo(
                   "w-fit max-w-none shrink-0 whitespace-nowrap"
                 )}
               >
-                {hlForColumn("type")(getDisplayType(transaction))}
+                {hlForColumn("type")(getDisplayType(transaction, { context, contextId, groupEntityType }))}
               </Badge>
             ) : (
               <Badge
@@ -2005,7 +2117,7 @@ export const TransactionRow = React.memo(
                   "w-fit max-w-none shrink-0 whitespace-nowrap"
                 )}
               >
-                {hlForColumn("type")(getDisplayType(transaction))}
+                {hlForColumn("type")(getDisplayType(transaction, { context, contextId, groupEntityType }))}
               </Badge>
             )}
           </TableCell>
@@ -2223,8 +2335,8 @@ export const TransactionRow = React.memo(
         {showCol("tdsTaxable") && (
           <TableCell
             className={cn(
-              tdsLedgerRowLayout ? "text-center" : "text-right",
-              "tabular-nums align-middle",
+              // Same as Account Details amounts: right-aligned under numeric header.
+              "text-right tabular-nums align-middle",
               ledgerTdsAmountToneCn,
               tdsRowTextPadCn ?? (ensureMinGaps && LEDGER_TDS_TAXABLE_CELL_PAD_CN)
             )}
@@ -2236,35 +2348,38 @@ export const TransactionRow = React.memo(
         {showCol("tdsAmount") && (
           <TableCell
             className={cn(
-              tdsLedgerRowLayout ? "text-left" : "text-right",
-              "tabular-nums align-middle",
+              "text-right tabular-nums align-middle",
               ledgerTdsAmountToneCn ?? "font-semibold",
               tdsRowTextPadCn ?? (ensureMinGaps && LEDGER_TDS_AMOUNT_CELL_PAD_CN)
             )}
             style={ensureMinGaps ? { minWidth: `${LEDGER_TDS_AMOUNT_COL_PX}px` } : undefined}
           >
-            {renderHlDrCr(formatAmountCell(Number(transaction._tdsAmount) || 0), "credit")}
+            {/* Settlement (linked) rows: amount only in Dr/Cr — blank TDS Amount. */}
+            {(transaction as { _ledgerTdsSettlementRow?: boolean })._ledgerTdsSettlementRow
+              ? renderHlDrCr("-", "credit")
+              : renderHlDrCr(formatAmountCell(Number(transaction._tdsAmount) || 0), "credit")}
           </TableCell>
         )}
         {showCol("dr") && (
           <TableCell
             className={cn(
               "text-right tabular-nums",
-              ledgerTdsAmountToneCn ?? "font-semibold text-green-700",
+              taxTdsAmountWeightCn
+                ? cn(taxTdsAmountWeightCn, "text-green-700")
+                : ledgerTdsAmountToneCn ?? "font-semibold text-green-700",
               ensureMinGaps &&
-                (tdsLedgerRowLayout
-                  ? cn(LEDGER_TDS_DR_CR_CELL_PAD_CN, "min-w-[100px]")
+                (tdsLedgerRowLayout || salePurchaseTdsVerifyLabel != null
+                  ? LEDGER_TDS_DR_CR_AMOUNT_CELL_CN
                   : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN)
             )}
-            style={ensureMinGaps ? { minWidth: `${LEDGER_TXN_DR_CR_COL_PX}px` } : undefined}
+            style={ensureMinGaps ? { minWidth: `${tdsVerifyDrCrMinPx}px` } : undefined}
           >
             {isFyOpeningRow ? (
               renderFyOpeningDrCrCell("dr")
+            ) : salePurchaseTdsVerifyCol === "debit" && salePurchaseTdsVerifyBadge ? (
+              <span className="inline-flex w-full justify-end">{salePurchaseTdsVerifyBadge}</span>
             ) : isStatementChecked && statementCheckedMessageColumn(debit, credit) === "debit" ? (
-              <StatementCheckedRowMessageLabel
-                className="w-full"
-                align="end"
-              />
+              <StatementCheckedRowMessageLabel className="w-full" align="end" />
             ) : (
               renderHlDrCr(formatAmountCell(debit), "debit")
             )}
@@ -2274,21 +2389,22 @@ export const TransactionRow = React.memo(
           <TableCell
             className={cn(
               "text-right tabular-nums",
-              ledgerTdsAmountToneCn ?? "font-semibold text-red-700",
+              taxTdsAmountWeightCn
+                ? cn(taxTdsAmountWeightCn, "text-red-700")
+                : ledgerTdsAmountToneCn ?? "font-semibold text-red-700",
               ensureMinGaps &&
-                (tdsLedgerRowLayout
-                  ? cn(LEDGER_TDS_DR_CR_CELL_PAD_CN, "min-w-[100px]")
+                (tdsLedgerRowLayout || salePurchaseTdsVerifyLabel != null
+                  ? LEDGER_TDS_DR_CR_AMOUNT_CELL_CN
                   : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN)
             )}
-            style={ensureMinGaps ? { minWidth: `${LEDGER_TXN_DR_CR_COL_PX}px` } : undefined}
+            style={ensureMinGaps ? { minWidth: `${tdsVerifyDrCrMinPx}px` } : undefined}
           >
             {isFyOpeningRow ? (
               renderFyOpeningDrCrCell("cr")
+            ) : salePurchaseTdsVerifyCol === "credit" && salePurchaseTdsVerifyBadge ? (
+              <span className="inline-flex w-full justify-end">{salePurchaseTdsVerifyBadge}</span>
             ) : isStatementChecked && statementCheckedMessageColumn(debit, credit) === "credit" ? (
-              <StatementCheckedRowMessageLabel
-                className="w-full"
-                align="end"
-              />
+              <StatementCheckedRowMessageLabel className="w-full" align="end" />
             ) : (
               renderHlDrCr(formatAmountCell(credit), "credit")
             )}
@@ -2418,17 +2534,23 @@ export const TransactionRow = React.memo(
             return (
               <TableCell
                 className={cn(
-                  "text-right font-semibold tabular-nums",
-                  balanceToneCn,
+                  "text-right tabular-nums",
+                  isTdsUnverifiedBooksRow ? "font-semibold text-amber-700" : "font-semibold",
+                  !isTdsUnverifiedBooksRow && balanceToneCn,
+                  isTdsVerifiedBooksRow && "font-bold",
                   ensureMinGaps && LEDGER_TXN_BALANCE_TO_MENU_PAD_CN
                 )}
                 style={ensureMinGaps ? { minWidth: LEDGER_ENTITY_BALANCE_COL_PX } : undefined}
-                {...(isZeroBalance && !isLedgerTdsRow ? { "data-cell-settled": "true" } : {})}
+                {...(isZeroBalance && !isLedgerTdsRow && !isTdsUnverifiedBooksRow
+                  ? { "data-cell-settled": "true" }
+                  : {})}
               >
                 {isBalanceMasked ? (
                   "*****"
                 ) : isFyOpeningRow && !showOpeningBalanceAmount ? (
                   "-"
+                ) : isTdsUnverifiedBooksRow ? (
+                  <span className="font-semibold italic text-amber-700">Waiting</span>
                 ) : isZeroBalance && !isLedgerTdsRow ? (
                   <span
                     className={cn(
@@ -2442,6 +2564,7 @@ export const TransactionRow = React.memo(
                   <span
                     className={cn(
                       "inline",
+                      isTdsVerifiedBooksRow && "font-bold",
                       shouldAnimateSpendWiseAmountText && !isZeroBalance && "animate-spend-wise-balance-blink"
                     )}
                   >

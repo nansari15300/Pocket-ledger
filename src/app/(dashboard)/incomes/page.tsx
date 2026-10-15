@@ -10,7 +10,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Search, DollarSign, Users } from "lucide-react";
+import { Search, DollarSign, Users, Pencil } from "lucide-react";
+import { EditExpenseAccountDialog } from "@/components/expenses/EditExpenseAccountDialog";
+import { EditExpenseGroupDialog } from "@/components/expenses/EditExpenseGroupDialog";
+import { LEDGER_HEADER_AVATAR_PEN_CN } from "@/lib/ledgerHeaderChrome";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -36,7 +39,7 @@ import { firestore } from "@/lib/firebase";
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
-import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import { applyMasterDetailBackToListUrl, masterDetailListHref } from "@/lib/masterDetailListPath";
 import { browserHistoryHref } from "@/lib/webAppBasePath";
 import {
   masterDetailTabHref,
@@ -180,8 +183,10 @@ function IncomeExpensePageContent() {
   const useQueryNav = useMasterDetailQueryNav();
 
   const onBackToList = useCallback(() => {
+    pendingIncomesSelectIdRef.current = null;
+    const href = applyMasterDetailBackToListUrl("incomes");
     setSelected(null);
-    router.replace(masterDetailListHref("incomes"), { scroll: false });
+    router.replace(href, { scroll: false });
   }, [setSelected, router]);
   useRegisterMasterDetailHardwareBack("incomes", onBackToList);
 
@@ -252,13 +257,6 @@ function IncomeExpensePageContent() {
         : () => setAccountDetailsDateRange(undefined);
     return <MobileMasterDetailHeaderDateSecondary dateRange={range} onClear={onClear} />;
   }, [isMobile, selected, activeView, accountDetailsDateRange, groupDetailsDateRange]);
-  const mobileIncomesDetailHeaderAvatar = useMemo(() => {
-    if (!isMobile || !selected) return null;
-    const selectedEntity = selected as ExpenseAccount | ExpenseGroup;
-    const name = selectedEntity.name || "Account";
-    const attachmentUrl = trimEntityFileUrlForPreview((selectedEntity as any).fileUrl);
-    return <MobileMasterDetailHeaderAvatar name={name} attachmentUrl={attachmentUrl} />;
-  }, [isMobile, selected]);
   useSyncMasterDetailHeaderId("incomes", selectedAccount?.id ?? selectedGroupRaw?.id ?? null);
   const incomesMenuEnabled = featureConfig.incomes !== false;
   const incomesListEnabled = incomesMenuEnabled && featureConfig.incomes_list !== false;
@@ -305,6 +303,83 @@ function IncomeExpensePageContent() {
         : null,
     [selectedGroupRaw, processedExpenseGroups, companyId]
   );
+
+  const mobileIncomesDetailHeaderAvatar = useMemo(() => {
+    if (!isMobile || !selected) return null;
+
+    if (activeView === "accounts" && selectedAccount) {
+      const account = selectedAccount;
+      const name = account.name || "Account";
+      const attachmentUrl = trimEntityFileUrlForPreview((account as any).fileUrl);
+      const canEdit =
+        account.id !== "all" &&
+        account.id !== "sales_account" &&
+        account.id !== "purchase_account";
+      const hasTransactions = (account.debit ?? 0) !== 0 || (account.credit ?? 0) !== 0;
+      return (
+        <MobileMasterDetailHeaderAvatar
+          name={name}
+          attachmentUrl={attachmentUrl}
+          editTrigger={
+            canEdit ? (
+              <EditExpenseAccountDialog
+                account={account}
+                onAccountUpdated={() => {}}
+                onAccountDeleted={() => setSelected(null)}
+                hasTransactions={hasTransactions}
+              >
+                <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit account">
+                  <Pencil className="h-2.5 w-2.5" aria-hidden />
+                </button>
+              </EditExpenseAccountDialog>
+            ) : undefined
+          }
+        />
+      );
+    }
+
+    if (activeView === "groups" && selectedGroup) {
+      const group = selectedGroup;
+      const name = group.name || "Account";
+      const attachmentUrl = trimEntityFileUrlForPreview((group as any).fileUrl);
+      const isSystemBranchGroup = isMasterEntitySystemGroupId(EXPENSE_ENTITY_GROUP_PRESET, group.id);
+      const hasAccounts =
+        processedExpenseAccounts.some((a) => a.groupId === group.id) ||
+        processedExpenseGroups.some((g) => g.parentId === group.id);
+      return (
+        <MobileMasterDetailHeaderAvatar
+          name={name}
+          attachmentUrl={attachmentUrl}
+          editTrigger={
+            !isSystemBranchGroup ? (
+              <EditExpenseGroupDialog
+                group={group}
+                allGroups={processedExpenseGroups}
+                onGroupUpdated={() => {}}
+                onGroupDeleted={() => setSelected(null)}
+                hasAccounts={hasAccounts}
+              >
+                <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit group">
+                  <Pencil className="h-2.5 w-2.5" aria-hidden />
+                </button>
+              </EditExpenseGroupDialog>
+            ) : undefined
+          }
+        />
+      );
+    }
+
+    return null;
+  }, [
+    isMobile,
+    selected,
+    activeView,
+    selectedAccount,
+    selectedGroup,
+    processedExpenseAccounts,
+    processedExpenseGroups,
+    setSelected,
+  ]);
 
   useEffect(() => {
     if (!companyId) return;

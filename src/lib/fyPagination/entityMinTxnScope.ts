@@ -34,6 +34,15 @@ type FyScopeCompany = CompanyStorageRow & { country?: string };
 
 const MAX_WIDEN_MONTHS = 120;
 
+/** Cached once — bsToAd(BS min year) hits datex-bs day-walk (~8k steps) if NepaliDate rejects the year. */
+let cachedBsCalendarFloorMs: number | null = null;
+function bsCalendarFloorMs(): number {
+  if (cachedBsCalendarFloorMs == null) {
+    cachedBsCalendarFloorMs = atNoonAd(bsToAd({ y: BS_CALENDAR_MIN_YEAR, m: 1, d: 1 })).getTime();
+  }
+  return cachedBsCalendarFloorMs;
+}
+
 function ledgerIdEq(a: unknown, b: string): boolean {
   const nb = String(b ?? "").trim();
   if (!nb) return false;
@@ -159,12 +168,18 @@ export async function widenFyScopeUntilEntityMinTxns(params: {
       : await countEntityVouchersInSqliteFull(companyId, entityId, entityKind);
   const targetCount = Math.max(minTxn, fullEntityCount);
 
-  const absoluteFloorMs = atNoonAd(bsToAd({ y: BS_CALENDAR_MIN_YEAR, m: 1, d: 1 })).getTime();
+  // A normal “Last N” expansion is only a few months back.  Computing the
+  // exact BS floor can invoke datex-bs's long day-walk, so defer it until we
+  // are actually close to that boundary.  The guard is deliberately later
+  // than the real BS floor; the exact check still decides the final limit.
+  const calendarFloorGuardMs = new Date(BS_CALENDAR_MIN_YEAR - 56, 0, 1).getTime();
   let scope: FyActiveScope = fy.activeScope;
   let stagnantPasses = 0;
   let lastCount = -1;
 
   for (let i = 0; i < MAX_WIDEN_MONTHS; i++) {
+    // Keep tax/ledger clicks responsive during multi-month FY widen.
+    if (i > 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const rows = await listVouchersFromBrowserDbByDateRange(companyId, scope.range);
     const count = countEntityVouchersInList(rows, entityId, entityKind);
     if (count >= targetCount) return;
@@ -175,7 +190,8 @@ export async function widenFyScopeUntilEntityMinTxns(params: {
 
     const monthCursor = subMonths(new Date(scope.range.fromMs), 1);
     const newFromMs = startOfDay(startOfMonth(monthCursor)).getTime();
-    if (newFromMs >= scope.range.fromMs || newFromMs < absoluteFloorMs) return;
+    if (newFromMs >= scope.range.fromMs) return;
+    if (newFromMs < calendarFloorGuardMs && newFromMs < bsCalendarFloorMs()) return;
 
     const newRange: FyDateRangeMs = { fromMs: newFromMs, toMs: scope.range.toMs };
 

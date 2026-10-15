@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useMemo, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { MasterListChromeChevronToggle } from "@/components/layout/MasterListChromeChevronToggle";
 import { cn } from "@/lib/utils";
 import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import { GroupListMemberMotionList } from "@/components/entity/GroupListMemberMotionList";
@@ -68,22 +68,18 @@ export function ExpandableGroupListTree<T extends GroupListSortableMember & { id
   }, [members, quickFilter, memberSortName]);
 
   const expandControl = hasMembers ? (
-    <button
-      type="button"
-      aria-expanded={expanded}
-      aria-label={expanded ? `Collapse ${expandAriaLabel}` : `Expand ${expandAriaLabel}`}
-      className="mt-0.5 shrink-0 self-start rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+    <MasterListChromeChevronToggle
+      variant="row"
+      expanded={expanded}
+      ariaLabelWhenExpanded={`Collapse ${expandAriaLabel}`}
+      ariaLabelWhenCollapsed={`Expand ${expandAriaLabel}`}
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
         toggleExpanded();
       }}
       onPointerDown={(e) => e.stopPropagation()}
-    >
-      <ChevronDown
-        className={cn("h-3.5 w-3.5 transition-transform", !expanded && "-rotate-90")}
-      />
-    </button>
+    />
   ) : null;
 
   if (!hasMembers) {

@@ -45,6 +45,14 @@ import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
 import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { MobileEntityLedgerFooterPrintButton } from "@/components/entity/MobileEntityLedgerFooterPrintButton";
+import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
   patchMasterDetailUrlAfterModalClose,
@@ -67,6 +75,9 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_BOX_CN,
+  LEDGER_HEADER_AVATAR_TRIGGER_CN,
+  LEDGER_HEADER_AVATAR_IMAGE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
@@ -321,7 +332,24 @@ export function TaxGroupDetails({
     () => ({ ...group, items: taxesInGroup }),
     [group, taxesInGroup]
   );
-  const { openingBalanceForPeriod, processedTransactions, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(groupTransactionEntity, "group", dateRange, undefined, processedTaxes, undefined, undefined, filters, undefined, undefined, userNames);
+  const { openingBalanceForPeriod, processedTransactions, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(
+    groupTransactionEntity,
+    "group",
+    dateRange,
+    undefined,
+    processedTaxes,
+    undefined,
+    undefined,
+    filters,
+    undefined,
+    undefined,
+    userNames,
+    undefined,
+    undefined,
+    undefined,
+    true,
+    balanceMode === "bill_wise"
+  );
   
   const transactionDates = useMemo(() => {
     const dates = new Set<number>();
@@ -427,6 +455,10 @@ export function TaxGroupDetails({
     () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, includeNotesInTable]
   );
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(displayTransactions),
+    [displayTransactions]
+  );
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
@@ -526,6 +558,7 @@ export function TaxGroupDetails({
     ledgerOpeningForRunning: openingBalanceForPeriod,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
+    taxGroupMemberIdsForBooks: taxesInGroup.map((t) => String(t?.id || "").trim()).filter(Boolean),
     company,
   });
 
@@ -623,6 +656,38 @@ export function TaxGroupDetails({
     );
   };
 
+  const mobileEntityTxnToolbar = (
+    <MobileEntityTxnToolbarRow placement="belowPager">
+      <MobileEntityTxnToolbarPicker>
+        <Combobox
+          options={groupDropdownOptions}
+          value={group?.id || ""}
+          onChange={(value) => {
+            if (value && value !== group.id) router.push(`/tax/group/${value}`);
+          }}
+          placeholder="Select group"
+        />
+      </MobileEntityTxnToolbarPicker>
+      <MobileEntityTxnToolbarUnapprovedBadge
+        count={mobileUnapprovedTxnCount}
+        pressed={unapprovedOnly}
+        onToggle={toggleUnapprovedOnly}
+      />
+      <MobileEntityTxnToolbarSearch>
+        <Search className={mdc.mobileTxnToolbarSearchIcon} />
+        <Input
+          placeholder="Search transactions"
+          className={mdc.mobileTxnToolbarSearchInput}
+          value={mobileSearchTerm}
+          onChange={(e) => {
+            setMobileSearchTerm(e.target.value);
+            setCurrentPage(1);
+          }}
+        />
+      </MobileEntityTxnToolbarSearch>
+    </MobileEntityTxnToolbarRow>
+  );
+
   if (isMobile) {
     return (
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
@@ -656,49 +721,13 @@ export function TaxGroupDetails({
               {balanceText} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
             </p>
           </div>
-          <div className="p-2 border-b flex-shrink-0">
-            <div className="flex items-stretch gap-2">
-              <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
-                <Combobox
-                  options={groupDropdownOptions}
-                  value={group?.id || ""}
-                  onChange={(value) => {
-                    if (value && value !== group.id) router.push(`/tax/group/${value}`);
-                  }}
-                  placeholder="Select group"
-                />
-              </div>
-              {!isSystemBranchGroup && (
-                <EditTaxGroupDialog
-                  group={group}
-                  allGroups={allGroups}
-                  onGroupUpdated={onGroupUpdated}
-                  onGroupDeleted={onGroupDeleted}
-                  hasAccounts={taxesInGroup.length > 0 || childGroups.length > 0}
-                >
-                  <Button variant="outline" size="icon" className="h-9 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditTaxGroupDialog>
-              )}
-              <div className="flex-1 min-w-0 h-9 relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-                <Input
-                  placeholder="Search transactions"
-                  className="pl-8 h-9 text-sm w-full min-w-0"
-                  value={mobileSearchTerm}
-                  onChange={(e) => {
-                    setMobileSearchTerm(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                />
-              </div>
-            </div>
-          </div>
           </MobileDetailSummaryCollapsible>
           <div className="flex min-h-0 flex-1 flex-col">
             <div
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y"
+              className={cn(
+                "min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y pl-ledger-txn-scroll-native",
+                mdc.mobileLedgerTxnScrollPad
+              )}
               style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
             >
             <div className="pb-2">
@@ -736,7 +765,7 @@ export function TaxGroupDetails({
             </div>
             </div>
             <MobileTransactionsPager
-              className="mt-auto shrink-0 mb-12"
+              className={cn("mt-auto shrink-0", mdc.ledgerTxnPagerOutside)}
               currentPage={currentPage}
               totalItems={filteredMobileTransactions.length}
               rowsPerPage={rowsPerPage}
@@ -746,16 +775,18 @@ export function TaxGroupDetails({
               }}
               onPageChange={setCurrentPage}
               edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+              txnToolbar={mobileEntityTxnToolbar}
             />
           </div>
         </div>
-        <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+        <div
+          className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5"
+          data-pl-mobile-ledger-action-footer=""
+        >
           <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("sale"); openModalInUrl(); }}>
             New Sale
           </Button>
-          <Button className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("purchase"); openModalInUrl(); }}>
-            New Purchase
-          </Button>
+          <MobileEntityLedgerFooterPrintButton onClick={handlePrint} />
           <AddVoucherDialog
             isOpen={!!mobileFooterDialogOpen}
             onOpenChange={(open: boolean) => {
@@ -931,10 +962,10 @@ export function TaxGroupDetails({
                   <>
                     <EntityFileAttachmentHover
                       fileUrl={selectedMemberAttachmentUrl}
-                      triggerClassName="inline-flex rounded-full"
+                      triggerClassName={LEDGER_HEADER_AVATAR_TRIGGER_CN}
                     >
                       <ResolvedEntityAvatar
-                        className="h-12 w-12 flex-shrink-0 text-lg"
+                        className={LEDGER_HEADER_AVATAR_IMAGE_CN}
                         companyId={selectedMemberTax.companyId}
                         src={selectedMemberAttachmentUrl ?? undefined}
                         alt={selectedMemberTax.name}
@@ -955,7 +986,7 @@ export function TaxGroupDetails({
                   </>
                 ) : (
                   <>
-                    <Avatar className="h-12 w-12 text-lg">
+                    <Avatar className={cn(LEDGER_HEADER_AVATAR_BOX_CN, "rounded-lg text-lg")}>
                       <AvatarFallback className="bg-muted text-muted-foreground">
                         {getInitials(group.name)}
                       </AvatarFallback>

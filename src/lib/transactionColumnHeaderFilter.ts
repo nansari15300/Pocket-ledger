@@ -18,13 +18,29 @@ export function columnHaystackMatchesFilter(haystack: string, rawSearchTerm: str
   return tokens.every((tok) => hay.includes(tok));
 }
 
-/** Amount columns: formatted text + numeric-only haystack (Rs., commas ignore). */
+/** Amount columns: number search + text labels (e.g. TDS Verified / Unverified in empty Dr/Cr). */
 export function amountColumnHaystackMatchesFilter(
   displayHaystack: string,
   rawSearchTerm: string
 ): boolean {
-  if (columnHaystackMatchesFilter(displayHaystack, rawSearchTerm)) return true;
   const tokens = normalizeColumnFilterTokens(rawSearchTerm);
+  if (tokens.length === 0) return true;
+  const hay = String(displayHaystack || "")
+    .toLowerCase()
+    .replace(/,/g, " ");
+
+  // Text first — "verified" must not match "unverified".
+  const textOk = tokens.every((tok) => {
+    if (tok === "verified") {
+      return hay.includes("tds verified") || (/\bverified\b/.test(hay) && !hay.includes("unverified"));
+    }
+    if (tok === "unverified") {
+      return hay.includes("unverified");
+    }
+    return hay.includes(tok);
+  });
+  if (textOk) return true;
+
   const numericTokens = tokens.map((t) => t.replace(/[^0-9.]/g, "")).filter(Boolean);
   if (numericTokens.length === 0) return false;
   const clean = String(displayHaystack || "").replace(/[^0-9.-]/g, "");

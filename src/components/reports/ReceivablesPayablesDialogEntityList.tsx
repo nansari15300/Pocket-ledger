@@ -6,6 +6,7 @@ import { highlightQueryInText } from "@/lib/highlightQueryInText";
 import { useDate } from "@/hooks/useDate";
 import { motion, AnimatePresence } from "framer-motion";
 import { CheckCircle2, ChevronDown, Plus, X } from "lucide-react";
+import { MasterListChromeChevronToggle } from "@/components/layout/MasterListChromeChevronToggle";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import BsDatePicker from "@/components/ui/BsDatePicker";
@@ -450,20 +451,18 @@ function RpIcCompanyExpandChevron({
   onToggle: () => void;
 }) {
   return (
-    <button
-      type="button"
-      aria-expanded={expanded}
-      aria-label={expanded ? "Collapse IC company accounts" : "Expand IC company accounts"}
-      className="mt-0.5 shrink-0 self-start rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+    <MasterListChromeChevronToggle
+      variant="row"
+      expanded={expanded}
+      ariaLabelWhenExpanded="Collapse IC company accounts"
+      ariaLabelWhenCollapsed="Expand IC company accounts"
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
         onToggle();
       }}
       onPointerDown={(e) => e.stopPropagation()}
-    >
-      <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !expanded && "-rotate-90")} />
-    </button>
+    />
   );
 }
 

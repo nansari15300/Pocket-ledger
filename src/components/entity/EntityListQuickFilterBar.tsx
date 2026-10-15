@@ -35,16 +35,21 @@ const FILTERS: Array<{ key: EntityListQuickFilter; label: string }> = [
 export function EntityListQuickFilterBar({ active, onChange, className, only }: Props) {
   const filters = only?.length ? FILTERS.filter((f) => only.includes(f.key)) : FILTERS;
   return (
-    <div className={cn("pl-mlc-quick-filter-row border-t border-blue-300/60 bg-blue-100/80 px-2 py-1.5", className)}>
-      <div className="overflow-x-auto pl-ledger-footer-scroll">
-        <div className="flex w-max items-center gap-1">
+    <div
+      className={cn(
+        "pl-mlc-quick-filter-row w-full min-w-0 border-t border-blue-300/60 bg-blue-100/80 px-2 py-[2px]",
+        className,
+      )}
+    >
+      <div className="w-full min-w-0 overflow-x-auto pl-ledger-footer-scroll">
+        <div className="pl-mlc-quick-filter-inner flex min-w-full w-full items-center gap-[2px]">
           {filters.map((f) => (
             <Button
               key={f.key}
               type="button"
               size="sm"
               variant={active === f.key ? "default" : "outline"}
-              className="h-7 whitespace-nowrap px-2 text-[11px]"
+              className="pl-mlc-quick-filter-pill h-7 min-w-0 px-2 text-[11px] whitespace-nowrap"
               onClick={() => onChange(f.key)}
             >
               {f.label}

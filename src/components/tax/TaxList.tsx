@@ -25,6 +25,7 @@ import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachm
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { plHang, plHangEnsureLongTaskObserver, plHangStart } from "@/lib/plHangDiag";
 
 export function TaxList({ 
     taxes, 
@@ -171,11 +172,58 @@ export function TaxList({
                   <motion.li key={tax.id} layoutDependency={displayOrderKey} {...rowMotionProps}>
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
-                      <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
+                      // preventDefault: Link soft-nav + handleSelect replaceState dono mat chalao (double mount hang).
+                      <Link
+                        prefetch={false}
+                        href={href}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          console.log("[TaxList.click] link", {
+                            id: tax.id,
+                            name: tax.name,
+                            t: typeof performance !== "undefined" ? performance.now() : Date.now(),
+                          });
+                          plHangEnsureLongTaskObserver();
+                          const end = plHangStart("TaxList.click", {
+                            id: String(tax.id || ""),
+                            name: String(tax.name || ""),
+                            via: "link",
+                          });
+                          onSelectTax(tax);
+                          end();
+                          requestAnimationFrame(() => {
+                            console.log("[TaxList.click] rAF1 after link select", { id: tax.id });
+                            plHang("TaxList.rAF1 after click");
+                          });
+                        }}
+                        className="block min-w-0 max-w-full overflow-hidden"
+                      >
                         <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                       </Link>
                     ) : (
-                      <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectTax(tax)}>
+                      <MasterListRow
+                        selected={isSelected}
+                        className={cardClassName}
+                        onClick={() => {
+                          console.log("[TaxList.click] row", {
+                            id: tax.id,
+                            name: tax.name,
+                            t: typeof performance !== "undefined" ? performance.now() : Date.now(),
+                          });
+                          plHangEnsureLongTaskObserver();
+                          const end = plHangStart("TaxList.click", {
+                            id: String(tax.id || ""),
+                            name: String(tax.name || ""),
+                            via: "row",
+                          });
+                          onSelectTax(tax);
+                          end();
+                          requestAnimationFrame(() => {
+                            console.log("[TaxList.click] rAF1 after row select", { id: tax.id });
+                            plHang("TaxList.rAF1 after click");
+                          });
+                        }}
+                      >
                         {cardContent}
                       </MasterListRow>
                     )}

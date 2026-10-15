@@ -90,6 +90,9 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_BOX_CN,
+  LEDGER_HEADER_AVATAR_TRIGGER_CN,
+  LEDGER_HEADER_AVATAR_IMAGE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
@@ -110,6 +113,14 @@ import { useFyLoadOnDateRangeChange } from "@/hooks/useFyLoadOnDateRangeChange";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
+import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { MobileEntityLedgerFooterPrintButton } from "@/components/entity/MobileEntityLedgerFooterPrintButton";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { EditItemGroupDialog } from "./EditItemGroupDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -504,6 +515,10 @@ export function ItemGroupDetails({
     () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, includeNotesInTable]
   );
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(displayTransactions),
+    [displayTransactions]
+  );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
@@ -730,6 +745,39 @@ export function ItemGroupDetails({
     if (typeof window !== "undefined") sessionStorage.setItem("itemPartyColumnVisible", checked ? "true" : "false");
   };
 
+  const mobileEntityTxnToolbar = (
+    <MobileEntityTxnToolbarRow placement="belowPager">
+      <MobileEntityTxnToolbarPicker>
+        <Combobox
+          options={groupReportOptions}
+          value={group.id}
+          onChange={(value) => {
+            const g = allGroups.find((gr) => gr.id === value);
+            if (g && value !== group.id) router.push(`/items/group/${value}`);
+          }}
+          placeholder="Select a group"
+        />
+      </MobileEntityTxnToolbarPicker>
+      <MobileEntityTxnToolbarUnapprovedBadge
+        count={mobileUnapprovedTxnCount}
+        pressed={unapprovedOnly}
+        onToggle={toggleUnapprovedOnly}
+      />
+      <MobileEntityTxnToolbarSearch>
+        <Search className={mdc.mobileTxnToolbarSearchIcon} />
+        <Input
+          placeholder="Search transactions"
+          className={mdc.mobileTxnToolbarSearchInput}
+          value={mobileSearchTerm}
+          onChange={(e) => {
+            setMobileSearchTerm(e.target.value);
+            setCurrentPage(1);
+          }}
+        />
+      </MobileEntityTxnToolbarSearch>
+    </MobileEntityTxnToolbarRow>
+  );
+
   if (isMobile) {
     return (
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
@@ -754,7 +802,7 @@ export function ItemGroupDetails({
               </div>
             ) : null}
             <div
-              className={cn(mdc.mobileTxnBalanceRow, "flex items-center justify-between gap-2 bg-background")}
+              className={cn(mdc.mobileTxnBalanceRow, "flex items-center justify-between gap-2")}
               {...mdcMobileTxnBalanceRowData}
             >
               <span className="m-0 flex-1 text-sm font-medium leading-tight text-muted-foreground">
@@ -763,38 +811,6 @@ export function ItemGroupDetails({
               <span className={cn("m-0 text-2xl font-bold leading-tight", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
                 {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
               </span>
-            </div>
-            <div className="p-2 border-b flex items-stretch gap-2 flex-shrink-0 bg-background">
-              <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
-                <Combobox
-                  options={groupReportOptions}
-                  value={group.id}
-                  onChange={(value) => {
-                    const g = allGroups.find((gr) => gr.id === value);
-                    if (g && value !== group.id) router.push(`/items/group/${value}`);
-                  }}
-                  placeholder="Select a group"
-                />
-              </div>
-              {!isSystemBranchGroup && (
-                <EditItemGroupDialog group={group} allGroups={allGroups} onGroupUpdated={onGroupUpdated} onGroupDeleted={onGroupDeleted} hasAccounts={itemsInGroup.length > 0 || childGroups.length > 0}>
-                  <Button variant="outline" size="icon" className="h-9 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditItemGroupDialog>
-              )}
-              <div className="flex-1 min-w-0 h-9 relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-                <Input
-                  placeholder="Search transactions"
-                  className="pl-8 h-9 text-sm w-full min-w-0"
-                  value={mobileSearchTerm}
-                  onChange={(e) => {
-                    setMobileSearchTerm(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                />
-              </div>
             </div>
           </div>
           </MobileDetailSummaryCollapsible>
@@ -815,16 +831,18 @@ export function ItemGroupDetails({
               }}
               onPageChange={setCurrentPage}
               edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+              txnToolbar={mobileEntityTxnToolbar}
             />
           </div>
         </div>
-        <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+        <div
+          className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5"
+          data-pl-mobile-ledger-action-footer=""
+        >
           <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("sale"); openModalInUrl(); }}>
             New Sale
           </Button>
-          <Button className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("purchase"); openModalInUrl(); }}>
-            New Purchase
-          </Button>
+          <MobileEntityLedgerFooterPrintButton onClick={handlePrint} />
           <AddVoucherDialog
             isOpen={!!mobileFooterDialogOpen}
             onOpenChange={(open: boolean) => {
@@ -988,10 +1006,10 @@ export function ItemGroupDetails({
                   <>
                     <EntityFileAttachmentHover
                       fileUrl={selectedMemberAttachmentUrl}
-                      triggerClassName="inline-flex rounded-full"
+                      triggerClassName={LEDGER_HEADER_AVATAR_TRIGGER_CN}
                     >
                       <ResolvedEntityAvatar
-                        className="h-12 w-12 flex-shrink-0 text-lg"
+                        className={LEDGER_HEADER_AVATAR_IMAGE_CN}
                         companyId={selectedMemberItem.companyId}
                         src={selectedMemberAttachmentUrl ?? undefined}
                         alt={selectedMemberItem.name}
@@ -1011,7 +1029,7 @@ export function ItemGroupDetails({
                   </>
                 ) : (
                   <>
-                    <Avatar className="h-12 w-12 text-lg">
+                    <Avatar className={cn(LEDGER_HEADER_AVATAR_BOX_CN, "rounded-lg text-lg")}>
                       <AvatarFallback className="bg-muted text-muted-foreground">
                         {getInitials(group.name)}
                       </AvatarFallback>

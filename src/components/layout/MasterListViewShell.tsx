@@ -1,10 +1,9 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { MasterListChromeChevronToggle } from "@/components/layout/MasterListChromeChevronToggle";
 import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListChrome";
-import { mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
@@ -64,24 +63,47 @@ export function MasterListViewShell({
     <EntityListQuickFilterBar
       active={quickFilter}
       onChange={onQuickFilterChange}
-      className={footerSummary ? "border-t-0 pt-0" : undefined}
+      className="border-0 bg-transparent py-0"
     />
   ) : null;
 
   const footerDock = showQuickFilter || footerSummary ? (
-    <div className="flex-shrink-0 border-t border-blue-300/60 bg-blue-100/80">
+    <div
+      className={cn(
+        "pl-mlc-footer-stack w-full min-w-0 flex-shrink-0",
+        !isMobile && "border-t border-blue-300/60 bg-blue-100/80",
+      )}
+    >
       {footerSummary}
       {quickFilterBar}
     </div>
   ) : null;
 
+  const dockChevronToggle = isMobile ? (
+    <MasterListChromeChevronToggle
+      expanded={!dockCollapsed}
+      onClick={toggleDock}
+      variant="row"
+      className="ml-auto flex-shrink-0"
+      ariaLabelWhenExpanded="Hide list footer rows"
+      ariaLabelWhenCollapsed="Show list footer rows"
+    />
+  ) : null;
+
   const mobileDock = isMobile ? (
     <div className={mlc.mobileListDock} data-pl-mobile-list-dock="">
-      {tabs ? <div className={mlc.tabsRow}>{tabs}</div> : null}
-      {sectionLabel}
-      {actionRow}
-      {searchRow}
-      {footerDock}
+      <div className="pl-mlc-dock-panel flex w-full min-w-0 flex-col gap-0 bg-blue-100/80 px-[2px] pb-[2px] pt-[2px] dark:bg-blue-950/35">
+        {tabs ? (
+          <div className={cn(mlc.tabsRow, "flex items-center gap-[2px] border-b-0")}>
+            <div className="min-w-0 flex-1">{tabs}</div>
+            {dockChevronToggle}
+          </div>
+        ) : null}
+        {sectionLabel}
+        {actionRow}
+        {searchRow}
+        {footerDock}
+      </div>
     </div>
   ) : null;
 
@@ -95,21 +117,15 @@ export function MasterListViewShell({
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {!isMobile ? sectionLabel : null}
         <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
-        {isMobile ? (
-          <button
-            type="button"
+        {isMobile && (dockCollapsed || !tabs) ? (
+          <MasterListChromeChevronToggle
+            expanded={!dockCollapsed}
             onClick={toggleDock}
-            className="pointer-events-auto absolute bottom-2 left-1/2 z-30 flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full border border-blue-500 bg-blue-100 text-blue-600 shadow-lg hover:bg-blue-200 active:scale-95"
-            aria-expanded={!dockCollapsed}
-            aria-label={dockCollapsed ? "Show list footer rows" : "Hide list footer rows"}
-            {...mdcNoEdgeSwipeCapture}
-          >
-            {dockCollapsed ? (
-              <ChevronDown className="h-5 w-5" aria-hidden />
-            ) : (
-              <ChevronUp className="h-5 w-5" aria-hidden />
-            )}
-          </button>
+            variant="row"
+            className="pl-mobile-list-dock-fab pointer-events-auto absolute bottom-2 right-2 z-30 h-10 w-10 min-h-10 min-w-10"
+            ariaLabelWhenExpanded="Hide list footer rows"
+            ariaLabelWhenCollapsed="Show list footer rows"
+          />
         ) : null}
         {!isMobile ? footerDock : null}
       </div>

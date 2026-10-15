@@ -61,6 +61,8 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_TRIGGER_CN,
+  LEDGER_HEADER_AVATAR_IMAGE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
@@ -432,10 +434,10 @@ export function PayeeDetails({
               <div className={LEDGER_HEADER_AVATAR_CN}>
                 <EntityFileAttachmentHover
                   fileUrl={trimEntityFileUrlForPreview(party.fileUrl)}
-                  triggerClassName="inline-flex rounded-full"
-                >
-                  <ResolvedEntityAvatar
-                    className="h-12 w-12 text-lg flex-shrink-0"
+                triggerClassName={LEDGER_HEADER_AVATAR_TRIGGER_CN}
+              >
+                <ResolvedEntityAvatar
+                  className={LEDGER_HEADER_AVATAR_IMAGE_CN}
                     src={trimEntityFileUrlForPreview(party.fileUrl) ?? undefined}
                     alt={party.name}
                     fallbackSlot={<span className="text-muted-foreground">{getEntityIcon(party.type, party)}</span>}

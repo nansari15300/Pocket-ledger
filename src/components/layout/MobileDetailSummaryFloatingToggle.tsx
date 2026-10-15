@@ -5,9 +5,8 @@
  */
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
+import { MasterListChromeChevronToggle } from "@/components/layout/MasterListChromeChevronToggle";
 import { useMobileDetailSummaryCollapsed } from "@/contexts/MobileDetailSummaryCollapseContext";
 import { useAppModalOverlayOpen } from "@/hooks/useAppModalOverlayOpen";
 
@@ -35,31 +34,22 @@ export function MobileDetailSummaryFloatingToggle({
     return null;
   }
 
-  const button = (
-    <button
-      type="button"
-      onClick={toggle}
-      className={cn(
-        "pointer-events-auto",
-        placement === "inline" ? mdc.summaryFabInline : cn(mdc.summaryFab, mdc.summaryFabPosition)
-      )}
-      aria-expanded={!collapsed}
-      aria-label={collapsed ? "Show summary and filters" : "Hide summary and filters"}
-      {...mdcNoEdgeSwipeCapture}
-    >
-      {collapsed ? (
-        <ChevronDown className={mdc.summaryFabIcon} aria-hidden />
-      ) : (
-        <ChevronUp className={mdc.summaryFabIcon} aria-hidden />
-      )}
-    </button>
+  const toggleEl = (
+    <MasterListChromeChevronToggle
+      expanded={!collapsed}
+      onClick={() => toggle()}
+      variant={placement === "inline" ? "inline" : "floating"}
+      className={cn(placement === "inline" && "pointer-events-auto")}
+      ariaLabelWhenExpanded="Hide summary and filters"
+      ariaLabelWhenCollapsed="Show summary and filters"
+    />
   );
 
   if (placement === "inline") {
-    return button;
+    return toggleEl;
   }
 
   if (!mounted || typeof document === "undefined") return null;
 
-  return createPortal(button, document.body);
+  return createPortal(toggleEl, document.body);
 }

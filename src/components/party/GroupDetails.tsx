@@ -83,6 +83,14 @@ import { cn } from "@/lib/utils";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
 import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { MobileEntityLedgerFooterPrintButton } from "@/components/entity/MobileEntityLedgerFooterPrintButton";
+import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
   patchMasterDetailUrlAfterModalClose,
@@ -103,6 +111,9 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_BOX_CN,
+  LEDGER_HEADER_AVATAR_TRIGGER_CN,
+  LEDGER_HEADER_AVATAR_IMAGE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
@@ -965,6 +976,10 @@ export function GroupDetails({
       voucherById: vouchersByIdForTds,
     });
   }, [statusFilteredTransactions, tdsLedgerOnlyActive, taxNameById, vouchersByIdForTds]);
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(ledgerTableSourceTransactions),
+    [ledgerTableSourceTransactions]
+  );
 
   const effectiveVisibleColumns = useMemo(() => {
     if (tdsLedgerOnlyActive) {
@@ -1379,6 +1394,38 @@ export function GroupDetails({
   });
   TransactionRow.displayName = "TransactionRow";
 
+  const mobileEntityTxnToolbar = (
+    <MobileEntityTxnToolbarRow placement="belowPager">
+      <MobileEntityTxnToolbarPicker>
+        <Combobox
+          options={groupDropdownOptions}
+          value={group?.id || ""}
+          onChange={(value) => {
+            if (value && value !== group.id) router.push(`/party?view=groups&selected=${value}`);
+          }}
+          placeholder="Select group"
+        />
+      </MobileEntityTxnToolbarPicker>
+      <MobileEntityTxnToolbarUnapprovedBadge
+        count={mobileUnapprovedTxnCount}
+        pressed={unapprovedOnly}
+        onToggle={toggleUnapprovedOnly}
+      />
+      <MobileEntityTxnToolbarSearch>
+        <Search className={mdc.mobileTxnToolbarSearchIcon} />
+        <Input
+          placeholder="Search transactions"
+          className={mdc.mobileTxnToolbarSearchInput}
+          value={mobileSearchTerm}
+          onChange={(e) => {
+            setMobileSearchTerm(e.target.value);
+            setCurrentPage(1);
+          }}
+        />
+      </MobileEntityTxnToolbarSearch>
+    </MobileEntityTxnToolbarRow>
+  );
+
   const renderMobileView = () => (
     <>
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
@@ -1401,40 +1448,6 @@ export function GroupDetails({
           <p className={cn(mdc.mobileTxnBalanceTextLg, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
             {balanceText} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
           </p>
-        </div>
-        {/* Group dropdown + Edit icon + Search - same size as Party Details (equal width & height, edit h-9 w-8) */}
-        <div className="flex-shrink-0 border-b px-2 py-1">
-          <div className="flex items-stretch gap-1.5">
-            <div className="h-8 min-w-0 flex-1 [&_button]:h-8 [&_button]:text-xs">
-              <Combobox
-                options={groupDropdownOptions}
-                value={group?.id || ""}
-                onChange={(value) => {
-                  if (value && value !== group.id) router.push(`/party?view=groups&selected=${value}`);
-                }}
-                placeholder="Select group"
-              />
-            </div>
-            {!isAutoSyntheticPartyGroup && (
-              <EditGroupDialog group={group} allGroups={allGroups} onGroupUpdated={onGroupUpdated} onGroupDeleted={onGroupDeleted} hasAccounts={partiesInGroup.length > 0 || childGroups.length > 0}>
-                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
-                  <Edit className="h-3.5 w-3.5" />
-                </Button>
-              </EditGroupDialog>
-            )}
-            <div className="relative h-8 min-w-0 flex-1">
-              <Search className="pointer-events-none absolute left-2 top-1/2 z-10 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Search transactions"
-                className="h-8 w-full min-w-0 pl-7 text-xs"
-                value={mobileSearchTerm}
-                onChange={(e) => {
-                  setMobileSearchTerm(e.target.value);
-                  setCurrentPage(1);
-                }}
-              />
-            </div>
-          </div>
         </div>
         </MobileDetailSummaryCollapsible>
         {/* scroll-touch + inline style for APK/WebView touch scroll */}
@@ -1506,9 +1519,13 @@ export function GroupDetails({
           }}
           onPageChange={setCurrentPage}
           edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+          txnToolbar={mobileEntityTxnToolbar}
         />
       </div>
-      <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+      <div
+        className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5"
+        data-pl-mobile-ledger-action-footer=""
+      >
         {/* Mobile footer: ek button — Statement ↔ Bill wise toggle */}
         <LedgerViewModeToggleButton
           value={balanceMode}
@@ -1521,9 +1538,7 @@ export function GroupDetails({
         <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("sale"); openModalInUrl(); }}>
           New Sale
         </Button>
-        <Button className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("purchase"); openModalInUrl(); }}>
-          New Purchase
-        </Button>
+        <MobileEntityLedgerFooterPrintButton onClick={handlePrint} />
         <AddVoucherDialog
           isOpen={!!mobileFooterDialogOpen}
           onOpenChange={(open: boolean) => {
@@ -1640,10 +1655,10 @@ export function GroupDetails({
                 <>
                   <EntityFileAttachmentHover
                     fileUrl={selectedMemberAttachmentUrl}
-                    triggerClassName="inline-flex rounded-full"
+                    triggerClassName={LEDGER_HEADER_AVATAR_TRIGGER_CN}
                   >
                     <ResolvedEntityAvatar
-                      className="h-12 w-12 flex-shrink-0 text-lg"
+                      className={LEDGER_HEADER_AVATAR_IMAGE_CN}
                       companyId={headerIdentityParty.companyId}
                       src={selectedMemberAttachmentUrl ?? undefined}
                       alt={headerIdentityParty.name}
@@ -1663,7 +1678,7 @@ export function GroupDetails({
                 </>
               ) : (
                 <>
-                  <Avatar className="h-12 w-12 text-lg">
+                  <Avatar className={cn(LEDGER_HEADER_AVATAR_BOX_CN, "rounded-lg text-lg")}>
                     <AvatarFallback className="bg-muted text-muted-foreground">
                       <Users className="h-6 w-6" />
                     </AvatarFallback>

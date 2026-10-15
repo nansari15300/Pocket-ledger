@@ -166,3 +166,164 @@ export function mapTransactionsForStaffTaxDetailsView(
     })
     .filter(Boolean) as any[];
 }
+
+/**
+ * Staff ledger split: sirf 2 mode (Staff details hata diya).
+ * - salary = full staff account txns; ADD-SAL pe taxable (gross) amount
+ * - tax = tax page parity (tax amount only)
+ */
+export type StaffLedgerSplitMode = "tax" | "salary";
+
+export function staffLedgerSplitShellTitle(mode: StaffLedgerSplitMode): string {
+  return mode === "tax" ? "Staff tax details" : "Staff salary details";
+}
+
+/** Pill = dusra mode (toggle). */
+export function staffLedgerSplitPillLabel(mode: StaffLedgerSplitMode): string {
+  return mode === "salary" ? "Tax Details" : "Salary Details";
+}
+
+export function nextStaffLedgerSplitMode(mode: StaffLedgerSplitMode): StaffLedgerSplitMode {
+  return mode === "salary" ? "tax" : "salary";
+}
+
+/** Full staff ledger + ADD-SAL rows show taxable (gross) amount only. */
+export function mapTransactionsForStaffSalaryDetailsView(
+  transactions: any[],
+  staffId: string,
+  processedTaxes: any[]
+): any[] {
+  return (transactions || []).map((t) => {
+    if (!isStaffAddSalaryVoucher(t, staffId, processedTaxes)) return t;
+    const row = extractStaffAddSalaryTaxRow(t, staffId, processedTaxes);
+    if (!row) return t;
+    const taxable = Number(row.taxableAmount) || 0;
+    return {
+      ...t,
+      debit: 0,
+      credit: taxable,
+      taxAmount: row.taxAmount,
+      taxableAmount: taxable,
+      taxRate: row.taxRate,
+      _staffLedgerSplitMode: "salary",
+      _staffTaxDetailsDebitAccountId: row.debitAccountId,
+    };
+  });
+}
+
+function staffIdEq(a: unknown, b: unknown): boolean {
+  return String(a ?? "") === String(b ?? "");
+}
+
+function resolveAddSalaryTaxAccountId(
+  voucher: any,
+  staffId: string,
+  processedTaxes: any[]
+): string | null {
+  if (!Array.isArray(voucher?.entries)) return null;
+  const staffRows = staffCreditEntries(voucher, processedTaxes);
+  const staffRowIndex = staffRows.findIndex((e: any) => staffIdEq(e.accountId, staffId));
+  if (staffRowIndex < 0) return null;
+  const taxEntry = findStaffTaxEntry(voucher, staffId, staffRowIndex, processedTaxes);
+  const tid = taxEntry?.accountId ? String(taxEntry.accountId) : "";
+  return tid || null;
+}
+
+/**
+ * Tax page parity for this staff: same vouchers/amounts as tax ledger filtered by opposite = staff
+ * (ADD-SAL tax credit, tax payment out/in, …) via `getTaxTransactionAmounts`.
+ *
+ * `getOppositeIds` should be taxOppositeAccountFilter.getTaxOppositeAccountIdsFromVoucher
+ * (passed in to avoid circular import with this module).
+ */
+export function mapTransactionsForStaffTaxPageView(
+  vouchers: any[],
+  staffId: string,
+  processedTaxes: any[],
+  getTaxAmounts: (
+    transaction: any,
+    taxAccountId: string,
+    taxes: any[]
+  ) => { debit: number; credit: number; taxableAmount: number; taxAmount: number; taxRate: number },
+  getOppositeIds?: (
+    voucher: any,
+    taxAccountId: string,
+    taxes: any[]
+  ) => string[]
+): any[] {
+  if (!staffId || staffId === "all") return [];
+  const taxes = processedTaxes || [];
+  const sid = String(staffId);
+  const rowsById = new Map<string, any>();
+
+  const pushTaxRow = (v: any, matchedTaxId: string) => {
+    if (!matchedTaxId || !v) return;
+    const amounts = getTaxAmounts(v, matchedTaxId, taxes);
+    const debit = Number(amounts.debit) || 0;
+    const credit = Number(amounts.credit) || 0;
+    if (debit === 0 && credit === 0) return;
+    const id = String(v.id || "");
+    if (!id || rowsById.has(id)) return;
+    rowsById.set(id, {
+      ...v,
+      debit,
+      credit,
+      taxAmount: amounts.taxAmount,
+      taxableAmount: amounts.taxableAmount,
+      taxRate: amounts.taxRate,
+      _staffLedgerSplitMode: "tax",
+      _staffTaxDetailsMode: true,
+      _staffTaxAccountId: matchedTaxId,
+    });
+  };
+
+  for (const v of vouchers || []) {
+    if (!v || v.type === "note") continue;
+
+    // 1) Tax-page opposite match (same helper as Tax details account filter)
+    if (taxes.length && getOppositeIds) {
+      let matchedTaxId: string | null = null;
+      for (const tax of taxes) {
+        const tid = String(tax?.id || "");
+        if (!tid) continue;
+        const oppositeIds = getOppositeIds(v, tid, taxes) || [];
+        if (oppositeIds.some((id) => staffIdEq(id, sid))) {
+          matchedTaxId = tid;
+          break;
+        }
+      }
+      if (matchedTaxId) {
+        pushTaxRow(v, matchedTaxId);
+        continue;
+      }
+    }
+
+    // 2) Fallback: this staff's ADD-SAL with a tax line (staff ledger always has these)
+    if (!isStaffAddSalaryVoucher(v, sid, taxes)) continue;
+    const row = extractStaffAddSalaryTaxRow(v, sid, taxes);
+    if (!row || !(Number(row.taxAmount) > 0)) continue;
+    const taxId =
+      resolveAddSalaryTaxAccountId(v, sid, taxes) ||
+      (taxes.length ? String(taxes[0]?.id || "") : "");
+    if (taxId) {
+      pushTaxRow(v, taxId);
+      continue;
+    }
+    // No tax master list — still show extracted tax credit so staff tax view is not empty
+    const id = String(v.id || "");
+    if (!id || rowsById.has(id)) continue;
+    rowsById.set(id, {
+      ...v,
+      debit: 0,
+      credit: Number(row.taxAmount) || 0,
+      taxAmount: row.taxAmount,
+      taxableAmount: row.taxableAmount,
+      taxRate: row.taxRate,
+      _staffLedgerSplitMode: "tax",
+      _staffTaxDetailsMode: true,
+    });
+  }
+
+  return Array.from(rowsById.values());
+}
+

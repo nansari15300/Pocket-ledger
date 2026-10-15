@@ -12,6 +12,8 @@ export function filterTransactionsForStatementCheckMode<T extends { id?: string;
 
 /**
  * Check mode: hidden rows hatao + running balance dubara (hidden Dr/Cr chain me nahi).
+ * When `booksDrCrForRow` is set (tax / party TDS Unverified → 0), always rebalance so
+ * Dated Opening / prior-page carry never includes Unverified legs — even with check mode off.
  */
 export function applyStatementCheckModeHiddenToLedgerList<T extends { id?: string; _rowKey?: string }>(
   transactions: readonly T[],
@@ -19,11 +21,17 @@ export function applyStatementCheckModeHiddenToLedgerList<T extends { id?: strin
     checkModeActive: boolean;
     hiddenIds: ReadonlySet<string>;
     openingBalance: number;
+    booksDrCrForRow?: (tx: any) => { debit: number; credit: number };
   }
 ): T[] {
   const filtered = options.checkModeActive
     ? filterTransactionsForStatementCheckMode([...transactions], options.hiddenIds)
     : [...transactions];
+  if (options.booksDrCrForRow) {
+    return recomputeRunningBalanceTopToBottom(filtered, options.openingBalance, {
+      booksDrCrForRow: options.booksDrCrForRow,
+    });
+  }
   if (!options.checkModeActive || options.hiddenIds.size === 0) return filtered;
   return recomputeRunningBalanceTopToBottom(filtered, options.openingBalance);
 }

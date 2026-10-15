@@ -16,15 +16,12 @@ import {
   CardContent,
 } from "@/components/ui/card";
 import {
-  Edit,
-  Printer,
   Calendar as CalendarIcon,
   ChevronsLeft,
   ChevronLeft,
   ChevronRight,
   ChevronsRight,
   FilePlus,
-  FileText,
   MoreVertical,
   XCircle,
   ArrowLeft,
@@ -34,6 +31,7 @@ import {
   Pencil,
 } from "lucide-react";
 import { StaffAccountFallbackIcon } from "@/components/entity/StaffEntityIcon";
+import { MobileEntityLedgerFooterPrintButton } from "@/components/entity/MobileEntityLedgerFooterPrintButton";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { format, startOfDay, endOfDay } from "date-fns";
@@ -91,6 +89,7 @@ import {
   LEDGER_HEADER_BALANCE_LABEL_CN,
   LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_BALANCE_CN,
+  LEDGER_HEADER_TDS_BALANCE_CARD_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
@@ -108,6 +107,12 @@ import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillLabel";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
+import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
 import { HistoryDialog } from "../vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "../vouchers/LinkAdvancesToVoucherDialog";
 import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
@@ -124,14 +129,34 @@ import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColum
 
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
-import { LedgerFooterCheckboxPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
-import { mapTransactionsForStaffTaxDetailsView } from "@/lib/staffTaxDetailsLedger";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import {
+  mapTransactionsForStaffSalaryDetailsView,
+  mapTransactionsForStaffTaxPageView,
+  type StaffLedgerSplitMode,
+} from "@/lib/staffTaxDetailsLedger";
+import {
+  expandStaffLedgerTdsRows,
+  summarizeStaffTdsBalances,
+} from "@/lib/staffLedgerTdsView";
+import {
+  buildTaxNameById,
+  ledgerTdsFooterColumnMenuKeys,
+  mergeLedgerTdsVisibleColumnsWithPrefs,
+  sortLedgerTdsRowsForDisplay,
+} from "@/lib/partyLedgerTdsView";
+import { getTaxTransactionAmounts } from "@/hooks/use-transactions";
+import { getTaxOppositeAccountIdsFromVoucher } from "@/lib/taxOppositeAccountFilter";
+import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
 import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
 import {
   ledgerDetailSessionStorageKey,
+  readStaffTdsLedgerMode,
   writeLedgerDetailSessionSnapshot,
+  writeStaffTdsLedgerMode,
   type LedgerDetailViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
 import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
@@ -171,7 +196,6 @@ import { ledgerMasterDateRangeLabel } from "@/lib/ledgerMasterDefaultView";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { toast } from "sonner";
-import { LedgerHeaderTogglePill } from "@/components/ui/LedgerHeaderTogglePill";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
   BillWiseAutoLinkPromptDialog,
@@ -207,6 +231,8 @@ export function StaffDetails({
   mobileReportStickyTitle,
   ledgerPresentationMode = "default",
   hideMobilePeriodLabelRow = false,
+  onLedgerSplitModeChange,
+  onRegisterClearDateRange,
 }: {
   staff: Staff;
   allGroups?: StaffGroup[];
@@ -227,6 +253,10 @@ export function StaffDetails({
   ledgerPresentationMode?: import("@/lib/nestedLedgerMasterEditPresentation").MasterEditPresentationMode;
   /** Mobile merged master-detail header already shows period label */
   hideMobilePeriodLabelRow?: boolean;
+  /** tax | salary — parent updates "Staff tax/salary details" shell title */
+  onLedgerSplitModeChange?: (mode: StaffLedgerSplitMode) => void;
+  /** Top header X — same clear as search/calendar (date + search label) */
+  onRegisterClearDateRange?: (clearFn: (() => void) | null) => void;
 }) {
   const nestedLedgerNoteDialogShell =
     ledgerPresentationMode === "nested-ledger"
@@ -387,7 +417,13 @@ export function StaffDetails({
 
   // Desktop Calendar State
   const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
-  const [taxDetailsMode, setTaxDetailsMode] = useState(false);
+  const [ledgerSplitMode, setLedgerSplitMode] = useState<StaffLedgerSplitMode>(() =>
+    companyId && initialStaff?.id && readStaffTdsLedgerMode(companyId, initialStaff.id) ? "tax" : "salary"
+  );
+  const [showTdsLinkedTrxn, setShowTdsLinkedTrxn] = useState(true);
+  const taxDetailsMode = ledgerSplitMode === "tax";
+  /** TDS details hides books opening; salary = full account with taxable ADD-SAL. */
+  const hideBooksOpeningForSplit = taxDetailsMode;
   
   // Local State for Calendar Buffer
   const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
@@ -484,6 +520,8 @@ export function StaffDetails({
   const clearFilters = () => {
     handleDateRangeChange(undefined);
     setTempDateRange(undefined);
+    setMobileSearchTerm("");
+    setIsDateSearchMode(false);
     setFilters({});
   };
 
@@ -630,41 +668,176 @@ export function StaffDetails({
     [processedTransactions, includeNotesInTable]
   );
 
-  const ledgerSourceTransactions = useMemo(() => {
-    if (!taxDetailsMode) return displayTransactions;
-    return mapTransactionsForStaffTaxDetailsView(
-      displayTransactions,
-      staff.id,
-      processedTaxes || []
-    );
-  }, [displayTransactions, taxDetailsMode, staff.id, processedTaxes]);
+  const taxNameById = useMemo(() => buildTaxNameById(processedTaxes), [processedTaxes]);
 
-  const taxDetailsOpeningForRunning = taxDetailsMode ? 0 : ledgerOpeningForRunning;
-  const effectiveBalanceMode = taxDetailsMode ? "statement" : balanceMode;
+  const vouchersByIdForTds = useMemo(() => {
+    const byId = new Map<string, Record<string, unknown>>();
+    const allSource = vouchersAll?.length ? vouchersAll : vouchers;
+    for (const v of allSource || []) {
+      if (v?.id) byId.set(String(v.id), v as Record<string, unknown>);
+    }
+    for (const v of displayTransactions || []) {
+      if (v?.id) byId.set(String(v.id), v as Record<string, unknown>);
+    }
+    return byId;
+  }, [vouchers, vouchersAll, displayTransactions]);
+
+  const staffTaxPageRows = useMemo(() => {
+    let rows = mapTransactionsForStaffTaxPageView(
+      Array.from(vouchersByIdForTds.values()),
+      staff.id,
+      processedTaxes || [],
+      getTaxTransactionAmounts,
+      getTaxOppositeAccountIdsFromVoucher
+    );
+    const range = dateRange ?? parentDateRange;
+    if (range?.from || range?.to) {
+      const fromMs = range.from ? startOfDay(range.from).getTime() : null;
+      const toMs = range.to ? endOfDay(range.to).getTime() : null;
+      rows = rows.filter((t) => {
+        const d =
+          parseFirestoreDateFieldToJsDate(t.date) ??
+          parseFirestoreDateFieldToJsDate((t as any).createdAt);
+        if (!d) return true;
+        const ms = d.getTime();
+        if (fromMs != null && ms < fromMs) return false;
+        if (toMs != null && ms > toMs) return false;
+        return true;
+      });
+    }
+    return rows as Record<string, unknown>[];
+  }, [
+    vouchersByIdForTds,
+    staff.id,
+    processedTaxes,
+    dateRange,
+    parentDateRange,
+  ]);
+
+  const staffTdsExpandOptions = useMemo(
+    () => ({
+      staffId: staff.id,
+      processedTaxes: processedTaxes || [],
+      taxNameById,
+      voucherById: vouchersByIdForTds,
+      includeSettlements: showTdsLinkedTrxn,
+    }),
+    [staff.id, processedTaxes, taxNameById, vouchersByIdForTds, showTdsLinkedTrxn]
+  );
+
+  const staffTdsBalanceSummary = useMemo(
+    () =>
+      summarizeStaffTdsBalances(staffTaxPageRows, {
+        ...staffTdsExpandOptions,
+        includeSettlements: true,
+      }),
+    [staffTaxPageRows, staffTdsExpandOptions]
+  );
+
+  /** Show TDS card whenever staff has salary TDS history (even if fully settled). */
+  const staffHasTdsHistory = useMemo(
+    () =>
+      expandStaffLedgerTdsRows(staffTaxPageRows, {
+        ...staffTdsExpandOptions,
+        includeSettlements: false,
+      }).length > 0,
+    [staffTaxPageRows, staffTdsExpandOptions]
+  );
+
+  const ledgerSourceTransactions = useMemo(() => {
+    if (ledgerSplitMode === "salary") {
+      return mapTransactionsForStaffSalaryDetailsView(
+        displayTransactions,
+        staff.id,
+        processedTaxes || []
+      );
+    }
+    return expandStaffLedgerTdsRows(staffTaxPageRows, staffTdsExpandOptions);
+  }, [
+    displayTransactions,
+    ledgerSplitMode,
+    staff.id,
+    processedTaxes,
+    staffTaxPageRows,
+    staffTdsExpandOptions,
+  ]);
+
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(ledgerSourceTransactions),
+    [ledgerSourceTransactions]
+  );
+
+  const taxDetailsOpeningForRunning = hideBooksOpeningForSplit ? 0 : ledgerOpeningForRunning;
+  const effectiveBalanceMode = taxDetailsMode ? "bill_wise" : balanceMode;
   const canUseStaffTaxDetails = !isAllVouchersView && staff.id !== "all";
 
-  useEffect(() => {
-    if (!canUseStaffTaxDetails && taxDetailsMode) {
-      setTaxDetailsMode(false);
+  const effectiveVisibleColumns = useMemo(() => {
+    if (taxDetailsMode) {
+      return mergeLedgerTdsVisibleColumnsWithPrefs(visibleColumns, true);
     }
-  }, [canUseStaffTaxDetails, taxDetailsMode, staff.id]);
+    return {
+      ...visibleColumns,
+      tdsTaxable: false,
+      tdsAmount: false,
+      ...(effectiveBalanceMode === "bill_wise" ? { status: true } : {}),
+    };
+  }, [taxDetailsMode, visibleColumns, effectiveBalanceMode]);
 
-  const toggleTaxDetailsMode = useCallback(() => {
-    setTaxDetailsMode((prev) => !prev);
+  const openStaffLedgerDetails = useCallback(() => {
+    setLedgerSplitMode("salary");
+    if (companyId && staff?.id) writeStaffTdsLedgerMode(companyId, staff.id, false);
     setCurrentPage(1);
-  }, []);
+  }, [companyId, staff?.id, setCurrentPage]);
+
+  const openStaffTdsLedgerDetails = useCallback(() => {
+    setLedgerSplitMode("tax");
+    if (companyId && staff?.id) writeStaffTdsLedgerMode(companyId, staff.id, true);
+    setCurrentPage(1);
+  }, [companyId, staff?.id, setCurrentPage]);
+
+  useEffect(() => {
+    if (!canUseStaffTaxDetails && ledgerSplitMode !== "salary") {
+      setLedgerSplitMode("salary");
+    }
+  }, [canUseStaffTaxDetails, ledgerSplitMode, staff.id]);
+
+  useEffect(() => {
+    onLedgerSplitModeChange?.(ledgerSplitMode);
+  }, [ledgerSplitMode, onLedgerSplitModeChange]);
+
+  useEffect(() => {
+    setLedgerSplitMode(
+      companyId && staff.id && readStaffTdsLedgerMode(companyId, staff.id) ? "tax" : "salary"
+    );
+    setShowTdsLinkedTrxn(true);
+  }, [companyId, staff.id]);
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
-  const sortedTransactions = useMemo(
-    () =>
-      recomputeRunningBalanceTopToBottom(
-        sortTransactionsWithFiscalMergeForCompany(
-          filterByUnapprovedOnly(ledgerSourceTransactions), "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
-        taxDetailsOpeningForRunning
+  const sortedTransactions = useMemo(() => {
+    const base = filterByUnapprovedOnly(ledgerSourceTransactions);
+    if (taxDetailsMode) {
+      return sortLedgerTdsRowsForDisplay(base, sortBy, sortOrder);
+    }
+    return recomputeRunningBalanceTopToBottom(
+      sortTransactionsWithFiscalMergeForCompany(
+        base,
+        "date",
+        DEFAULT_TRANSACTION_SORT_ORDER,
+        undefined,
+        company
       ),
-    [ledgerSourceTransactions, filterByUnapprovedOnly, taxDetailsOpeningForRunning, company]
-  );
+      taxDetailsOpeningForRunning
+    );
+  }, [
+    ledgerSourceTransactions,
+    filterByUnapprovedOnly,
+    taxDetailsMode,
+    sortBy,
+    sortOrder,
+    taxDetailsOpeningForRunning,
+    company,
+  ]);
 
   useEnsureEntityMinTxnsInScope({
     dateRange,
@@ -674,17 +847,39 @@ export function StaffDetails({
     enabled: Boolean(staff?.id),
   });
 
-  /** Top header = table last running balance (Book Opening included). */
+  /**
+   * Account Balance card — always staff salary account closing (never TDS row running balance).
+   * TDS Balance card uses `staffTdsBalanceSummary` separately.
+   */
   const headerClosingBalance = useMemo(() => {
-    const list = sortedTransactions as any[];
-    if (list.length > 0) {
-      const last = list[list.length - 1];
-      const bal = last?.balance ?? last?.runningBalance;
-      if (typeof bal === "number" && Number.isFinite(bal)) return bal;
+    if (
+      !dateRange?.from &&
+      !dateRange?.to &&
+      typeof closingBalance === "number" &&
+      Number.isFinite(closingBalance)
+    ) {
+      return closingBalance;
     }
-    return taxDetailsOpeningForRunning + (Number(periodDr) || 0) - (Number(periodCr) || 0);
-  }, [sortedTransactions, taxDetailsOpeningForRunning, periodDr, periodCr]);
-  
+    if (!taxDetailsMode) {
+      const list = sortedTransactions as any[];
+      if (list.length > 0) {
+        const last = list[list.length - 1];
+        const bal = last?.balance ?? last?.runningBalance;
+        if (typeof bal === "number" && Number.isFinite(bal)) return bal;
+      }
+    }
+    return ledgerOpeningForRunning + (Number(periodDr) || 0) - (Number(periodCr) || 0);
+  }, [
+    dateRange?.from,
+    dateRange?.to,
+    closingBalance,
+    taxDetailsMode,
+    sortedTransactions,
+    ledgerOpeningForRunning,
+    periodDr,
+    periodCr,
+  ]);
+
   // Statement check mode + desktop tail paging (PartyDetails jaisa)
   const {
     statementCheck,
@@ -699,11 +894,14 @@ export function StaffDetails({
     searchFilteredTransactions: sortedTransactions,
     rowsPerPage,
     currentPage,
-    ledgerOpeningForRunning,
+    ledgerOpeningForRunning: taxDetailsOpeningForRunning,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
     company,
   });
+
+  /** Footer Closing Balance: TDS details → TDS net; else staff account closing. */
+  const ledgerFooterClosingBalance = desktopPaginationMeta.closingForPage;
 
   useLedgerDetailSessionMemory({
     companyId: companyId ?? undefined,
@@ -778,7 +976,7 @@ export function StaffDetails({
           periodCrForPage: desktopPaginationMeta.periodCrForPage,
           closingForPage: desktopPaginationMeta.closingForPage,
           booksOpeningBalance: masterStaffOpening,
-          ledgerShowBookOpeningRow: !taxDetailsMode && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0),
+          ledgerShowBookOpeningRow: !hideBooksOpeningForSplit && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0),
           ledgerDateFilterActive: hasLedgerDateFilter,
           openingBalancePeriodStartDate: dateRange?.from,
           masterOpeningBalanceDate: (staff as any).openingBalanceDate,
@@ -828,7 +1026,7 @@ export function StaffDetails({
         periodCrForPage: desktopPaginationMeta.periodCrForPage,
         closingForPage: desktopPaginationMeta.closingForPage,
         booksOpeningBalance: masterStaffOpening,
-        ledgerShowBookOpeningRow: !taxDetailsMode && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0),
+        ledgerShowBookOpeningRow: !hideBooksOpeningForSplit && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0),
         ledgerDateFilterActive: hasLedgerDateFilter,
         openingBalancePeriodStartDate: dateRange?.from,
         masterOpeningBalanceDate: (staff as any).openingBalanceDate,
@@ -847,7 +1045,7 @@ export function StaffDetails({
     includeNotesInTable,
     userNames,
     masterStaffOpening,
-    taxDetailsMode,
+    hideBooksOpeningForSplit,
     rowsPerPage,
     hasLedgerDateFilter,
     dateRange,
@@ -899,7 +1097,7 @@ export function StaffDetails({
           periodCrForPage: desktopPaginationMeta.periodCrForPage,
           closingForPage: desktopPaginationMeta.closingForPage,
           booksOpeningBalance: masterStaffOpening,
-          ledgerShowBookOpeningRow: !taxDetailsMode && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0),
+          ledgerShowBookOpeningRow: !hideBooksOpeningForSplit && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0),
           ledgerDateFilterActive: hasLedgerDateFilter,
           openingBalancePeriodStartDate: dateRange?.from,
           masterOpeningBalanceDate: (staff as any).openingBalanceDate,
@@ -910,14 +1108,33 @@ export function StaffDetails({
     );
   };
 
+  // Search box me date label dikhao, lekin TEXT filter mat lagao (FY pe 0 txn bug).
+  // Clear date → search bhi clear (top X aur calendar dono sync).
   useEffect(() => {
-    if (isMobile && dateRange?.from) {
+    if (!isMobile) return;
+    if (dateRange?.from) {
       const from = formatDate(dateRange.from);
       const to = dateRange.to ? formatDate(dateRange.to) : from;
       setMobileSearchTerm(from === to ? from : `${from} to ${to}`);
       setIsDateSearchMode(true);
+    } else if (isDateSearchMode) {
+      setMobileSearchTerm("");
+      setIsDateSearchMode(false);
     }
-  }, [dateRange, isMobile, formatDate]);
+  }, [dateRange, isMobile, formatDate, isDateSearchMode]);
+
+  const clearDateRangeEverywhere = useCallback(() => {
+    handleDateRangeChange(undefined);
+    setMobileSearchTerm("");
+    setIsDateSearchMode(false);
+    setTempDateRange(undefined);
+    setCurrentPage(1);
+  }, [handleDateRangeChange]);
+
+  useEffect(() => {
+    onRegisterClearDateRange?.(clearDateRangeEverywhere);
+    return () => onRegisterClearDateRange?.(null);
+  }, [clearDateRangeEverywhere, onRegisterClearDateRange]);
   
     const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     if (!adDate) return;
@@ -946,7 +1163,8 @@ export function StaffDetails({
   };
   
   const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return sortedTransactions;
+    // Date label search box me dikhe — dateRange already filters; text-match se FY pe 0 txn ho jata tha
+    if (!mobileSearchTerm || isDateSearchMode) return sortedTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
     return sortedTransactions.filter(t => {
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
@@ -962,7 +1180,7 @@ export function StaffDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, staff.id]);
+  }, [sortedTransactions, mobileSearchTerm, isDateSearchMode, formatDate, formatDateBS, mobileSearchNames, staff.id]);
   const mobileTransactionsToShow = useMemo(() => {
     const list = filteredMobileTransactions;
     if (rowsPerPage <= 0) return list;
@@ -1107,11 +1325,70 @@ export function StaffDetails({
     // All Salary / all-vouchers: sirf ek title — "Add Salary · All Salary Vouchers" duplicate na ho.
     const reportHeaderTitleOnly = isReportMobileChrome && (isAllVouchersView || staff.id === "all");
     const handleMobilePrint = balanceMode === "bill_wise" ? handlePrintBillWise : handlePrintStatement;
+    const balanceLabel = headerClosingBalance >= 0 ? "To Receive" : "To Pay";
+
+    const mobileEntityTxnToolbar = (
+      <MobileEntityTxnToolbarRow placement="belowPager">
+        {!hideReportStaffPicker && allStaff && allStaff.length > 0 && (
+          <MobileEntityTxnToolbarPicker>
+            <Combobox
+              options={[
+                ...allStaff.map((s) => ({
+                  value: s.id,
+                  label: s.name,
+                })),
+                ...(onShowAll ? [{ value: "all-vouchers", label: "All Vouchers", isSpecial: true }] : []),
+              ]}
+              value={isAllVouchersView ? "all-vouchers" : (staff?.id || "")}
+              onChange={(value) => {
+                if (value === "all-vouchers") {
+                  onShowAll?.();
+                  return;
+                }
+                if (value === "add-new") {
+                  router.push("/staff");
+                  return;
+                }
+                if (value && value !== staff.id) {
+                  if (onSelectStaff) onSelectStaff(value);
+                  else router.push(`/staff?selected=${value}`);
+                }
+              }}
+              placeholder="Select staff"
+              addNewLabel="+ Add New Staff"
+              maxVisibleOptions={15}
+            />
+          </MobileEntityTxnToolbarPicker>
+        )}
+        <MobileEntityTxnToolbarUnapprovedBadge
+          count={mobileUnapprovedTxnCount}
+          pressed={unapprovedOnly}
+          onToggle={toggleUnapprovedOnly}
+        />
+        <MobileEntityTxnToolbarSearch>
+          <Search className={mdc.mobileTxnToolbarSearchIcon} />
+          <Input
+            placeholder="Search transactions"
+            className={mdc.mobileTxnToolbarSearchInput}
+            value={mobileSearchTerm}
+            onChange={(e) => {
+              const next = e.target.value;
+              setMobileSearchTerm(next);
+              setCurrentPage(1);
+              if (!next) {
+                // Search clear = date clear (top X aur search sync)
+                if (isDateSearchMode || dateRange?.from) clearDateRangeEverywhere();
+                else setIsDateSearchMode(false);
+              }
+            }}
+          />
+        </MobileEntityTxnToolbarSearch>
+      </MobileEntityTxnToolbarRow>
+    );
 
     return (
     <>
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
-      {/* Mobile: scroll area extends to footer; ledger uses pb-36 for fixed bars; report uses in-flow pager + mb-12 */}
       {isReportMobileChrome && onBack ? (
         <header className="sticky top-0 z-10 flex-shrink-0 border-b bg-white p-3 dark:bg-card">
           <div className="flex min-w-0 items-center gap-2">
@@ -1165,7 +1442,7 @@ export function StaffDetails({
             (dateRange.from != null || dateRange.to != null) && (
               <button
                 type="button"
-                onClick={() => handleDateRangeChange(undefined)}
+                onClick={clearDateRangeEverywhere}
                 className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
                 aria-label="Clear date filter"
               >
@@ -1174,128 +1451,72 @@ export function StaffDetails({
             )}
         </div>
       ) : null}
-      {/* Balance - same as bank mobile: amount + Dr/Cr */}
-      <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
-        <p className={cn(mdc.mobileTxnBalanceTextLg, headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-          {headerClosingBalance === 0
-            ? "Settled Up"
-            : formatCurrency(headerClosingBalance, { showDrCr: true })}
-        </p>
-      </div>
-      {canUseStaffTaxDetails && !isReportMobileChrome && (
-        <div className="flex flex-shrink-0 border-b px-2 py-1">
-          <Button
-            type="button"
-            variant={taxDetailsMode ? "default" : "outline"}
-            size="sm"
-            className="h-7 shrink-0 px-2 text-xs"
-            onClick={toggleTaxDetailsMode}
-          >
-            Tax Details
-          </Button>
-        </div>
-      )}
-      {/* Staff dropdown + Edit + Search */}
-      <div className="flex-shrink-0 border-b px-2 py-1">
-        <div className="flex items-stretch gap-1.5">
-          {!hideReportStaffPicker && allStaff && allStaff.length > 0 && (
-            <div className="h-8 min-w-0 flex-1 [&_button]:h-8 [&_button]:text-xs">
-              <Combobox
-                options={[
-                  ...allStaff.map((s) => ({
-                    value: s.id,
-                    label: s.name,
-                  })),
-                  // Dropdown-only All Vouchers action: keep at list bottom instead of separate button.
-                  ...(onShowAll ? [{ value: "all-vouchers", label: "All Vouchers", isSpecial: true }] : []),
-                ]}
-                value={isAllVouchersView ? "all-vouchers" : (staff?.id || "")}
-                onChange={(value) => {
-                  // Dropdown quick actions: switch selected staff or jump to create-staff page from "Add New".
-                  if (value === "all-vouchers") {
-                    onShowAll?.();
-                    return;
-                  }
-                  if (value === "add-new") {
-                    router.push("/staff");
-                    return;
-                  }
-                  if (value && value !== staff.id) {
-                    // Report view compatibility: prefer local selection callback over route navigation.
-                    if (onSelectStaff) {
-                      onSelectStaff(value);
-                    } else {
-                      router.push(`/staff?selected=${value}`);
-                    }
-                  }
-                }}
-                placeholder="Select staff"
-                addNewLabel="+ Add New Staff"
-                maxVisibleOptions={15}
-              />
-            </div>
+      {/* Account Balance + TDS Balance cards (party TDS parity) */}
+      <button
+        type="button"
+        className={cn(mdc.mobileTxnBalanceRow, "w-full text-left cursor-pointer")}
+        {...mdcMobileTxnBalanceRowData}
+        onClick={openStaffLedgerDetails}
+        aria-pressed={!taxDetailsMode}
+      >
+        <p
+          className={cn(
+            mdc.mobileTxnBalanceText2xl,
+            headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
           )}
-          {isAllVouchersView ? (
-            // All-vouchers mode safety: editing is disabled because no single staff is selected.
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-8 w-8 flex-shrink-0"
-              disabled
-              aria-disabled="true"
-            >
-              <Edit className="h-4 w-4" />
-            </Button>
+        >
+          {headerClosingBalance === 0 ? (
+            "Settled Up"
           ) : (
-            <EditStaffDialog
-              staff={staff}
-              allGroups={allGroups}
-              onStaffUpdated={handleStaffUpdated}
-              onStaffDeleted={() => onStaffDeleted(staff.id)}
-              isOpen={isEditStaffDialogOpen}
-              onOpenChange={(open: boolean) => {
-                setIsEditStaffDialogOpen(open);
-                if (open) {
-                  openingModalRef.current = true;
-                  openModalInUrl();
-                } else {
-                  closeModalInUrl();
-                }
-              }}
-            >
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-8 flex-shrink-0"
-              >
-                <Edit className="h-4 w-4" />
-              </Button>
-            </EditStaffDialog>
+            <>
+              {balanceLabel}{" "}
+              {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
+            </>
           )}
-          <div className="relative h-8 min-w-0 flex-1">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-            <Input
-              placeholder="Search transactions"
-              className="h-8 w-full min-w-0 pl-7 text-xs"
-              value={mobileSearchTerm}
-              onChange={(e) => {
-                setMobileSearchTerm(e.target.value);
-                setCurrentPage(1);
-                if (!e.target.value) {
-                  setIsDateSearchMode(false);
-                }
-              }}
-            />
-          </div>
+        </p>
+      </button>
+      {canUseStaffTaxDetails && staffHasTdsHistory && !isReportMobileChrome ? (
+        <div className="flex w-full items-end gap-2 px-2 pb-1">
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 flex-col gap-0.5 text-left cursor-pointer"
+            onClick={openStaffTdsLedgerDetails}
+            aria-pressed={taxDetailsMode}
+          >
+            <span className="text-[10px] font-semibold tracking-wide text-muted-foreground">
+              TDS Balance
+            </span>
+            {staffTdsBalanceSummary.purchaseTds > 0 ? (
+              <span className="text-sm font-bold text-red-600">
+                {formatCurrency(-staffTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+              </span>
+            ) : staffTdsBalanceSummary.saleTds > 0 ? (
+              <span className="text-sm font-bold text-green-600">
+                {formatCurrency(staffTdsBalanceSummary.saleTds, { showDrCr: true })}
+              </span>
+            ) : (
+              <span className="text-sm font-bold text-muted-foreground">Settled</span>
+            )}
+          </button>
+          {taxDetailsMode ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setShowTdsLinkedTrxn((v) => !v)}
+              className="h-7 shrink-0 px-2 text-xs"
+            >
+              {showTdsLinkedTrxn ? "Hide linked trxn" : "Show linked trxn"}
+            </Button>
+          ) : null}
         </div>
-      </div>
+      ) : null}
       </MobileDetailSummaryCollapsible>
-      {/* Transactions list - extends to footer line */}
       {/* scroll-touch + inline style for APK/WebView touch scroll */}
       <div
         className={mobileTxnScrollBodyClass(isReportMobileChrome)}
       >
-        <div className={isReportMobileChrome ? "pb-2" : "pb-36"}>
+        <div className={isReportMobileChrome ? "pb-2" : "pb-24"}>
         {isReportMobileChrome && mobileReportView === "chart" ? (
           <RunningBalanceFullChart
             transactions={filteredMobileTransactions}
@@ -1307,15 +1528,15 @@ export function StaffDetails({
           overlay={staffFreezeOverlay}
         >
         <TransactionsTable
-          key={`staff-mobile-${staff.id}-${taxDetailsMode ? "tax" : "stmt"}-${currentPage}-${rowsPerPage}`}
+          key={`staff-mobile-${staff.id}-${ledgerSplitMode}-${currentPage}-${rowsPerPage}`}
           transactions={mobileTransactionsToShow}
           context="staff"
           contextId={staff.id}
-          openingBalance={taxDetailsMode ? 0 : mobilePaginationMeta.openingForPage}
-          booksOpeningBalance={taxDetailsMode ? 0 : masterStaffOpening}
+          openingBalance={hideBooksOpeningForSplit ? 0 : mobilePaginationMeta.openingForPage}
+          booksOpeningBalance={hideBooksOpeningForSplit ? 0 : masterStaffOpening}
           ledgerDateFilterActive={hasLedgerDateFilter}
-          ledgerShowBookOpeningRow={!taxDetailsMode && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
-          hideLedgerOpeningRows={taxDetailsMode}
+          ledgerShowBookOpeningRow={!hideBooksOpeningForSplit && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
+          hideLedgerOpeningRows={hideBooksOpeningForSplit}
           openingBalancePeriodStartDate={dateRange?.from}
           dateRange={dateRange}
           openingBalanceOutstanding={openingBalanceOutstanding}
@@ -1325,16 +1546,13 @@ export function StaffDetails({
           openingBalanceDate={(staff as any).openingBalanceDate}
           openingBalanceActions={undefined}
           showNarration={showNarration}
-          visibleColumns={
-            effectiveBalanceMode === "bill_wise"
-              ? { ...visibleColumns, status: true }
-              : visibleColumns
-          }
+          visibleColumns={effectiveVisibleColumns}
           journalAccountNames={{}}
           accountNames={accountNamesMap}
           periodDr={mobilePaginationMeta.periodDrForPage}
           periodCr={mobilePaginationMeta.periodCrForPage}
           closingBalance={mobilePaginationMeta.closingForPage}
+          closingBalanceLabel={taxDetailsMode ? "TDS Closing Balance" : undefined}
           onRowClick={handleEditVoucher}
           onHistoryVoucher={handleHistoryVoucher}
           onAddLink={handleAddLink}
@@ -1346,11 +1564,9 @@ export function StaffDetails({
           isAllVouchersView={isAllVouchersView}
           hideDebitColumn={false}
           hideCreditColumn={false}
-          debitColumnHeaderLabel={taxDetailsMode ? "Tax" : undefined}
-          creditColumnHeaderLabel={taxDetailsMode ? "Salary" : undefined}
           scrollOnlyTransactions
-          closingBalanceRowActions={staffClosingBalanceRowActions}
-          closingBalanceActions={staffClosingBalanceActions}
+          closingBalanceRowActions={taxDetailsMode ? undefined : staffClosingBalanceRowActions}
+          closingBalanceActions={taxDetailsMode ? undefined : staffClosingBalanceActions}
           {...statementCheck.tableProps}
         />
         </MasterAccountFreezeTxnShell>
@@ -1369,13 +1585,12 @@ export function StaffDetails({
           }}
           onPageChange={setCurrentPage}
           edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+          txnToolbar={mobileEntityTxnToolbar}
         />
       ) : null}
       {!isReportMobileChrome ? (
-      <div className="fixed bottom-9 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur px-2 py-1">
-        {/* Staff-page style: keep pager fixed just above bottom action buttons. */}
         <MobileTransactionsPager
-          className="mb-0"
+          className={mdc.ledgerTxnPagerOutside}
           currentPage={currentPage}
           totalItems={filteredMobileTransactions.length}
           rowsPerPage={rowsPerPage}
@@ -1385,9 +1600,9 @@ export function StaffDetails({
           }}
           onPageChange={setCurrentPage}
           edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+          txnToolbar={mobileEntityTxnToolbar}
         />
-          </div>
-        ) : null}
+      ) : null}
     </div>
     {isReportMobileChrome ? (
       <>
@@ -1488,20 +1703,15 @@ export function StaffDetails({
         </Drawer>
       </>
     ) : (
-      <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-        <Button
-          type="button"
-          className="flex-1 h-6 min-w-0 rounded-md bg-slate-700 hover:bg-slate-800 text-white text-xs font-medium"
-          onClick={handleMobilePrint}
-        >
-          <Printer className="mr-1 h-3.5 w-3.5" />
-          Print
-        </Button>
-        {/* Mobile: ek button — Statement ? Bill wise toggle (Party ledger jaisa). */}
+      <div
+        className="fixed bottom-0 left-0 right-0 border-t bg-background/95 backdrop-blur z-50 flex items-stretch justify-around"
+        data-pl-mobile-ledger-action-footer=""
+      >
+        {/* Mobile: ek button — Statement ↔ Bill wise toggle (Party ledger jaisa). */}
         <Button
           type="button"
           className={cn(
-            "flex-1 h-6 min-w-0 rounded-md text-xs font-medium",
+            "flex-1 min-h-0 min-w-0 rounded-md text-sm font-semibold",
             balanceMode === "bill_wise"
               ? "bg-orange-600 hover:bg-orange-700 text-white"
               : "bg-violet-600 hover:bg-violet-700 text-white"
@@ -1525,7 +1735,7 @@ export function StaffDetails({
             }
           }}
         >
-          <Button className="flex-1 h-6 min-w-0 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium">
+          <Button className="flex-1 min-h-0 min-w-0 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-semibold">
             Pay Salary
           </Button>
         </AddVoucherDialog>
@@ -1543,10 +1753,11 @@ export function StaffDetails({
             }
           }}
         >
-          <Button className="flex-1 h-6 min-w-0 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium">
+          <Button className="flex-1 min-h-0 min-w-0 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold">
             Add Salary
           </Button>
         </AddVoucherDialog>
+        <MobileEntityLedgerFooterPrintButton onClick={handleMobilePrint} />
         <Drawer
           open={isCalendarOpen}
           onOpenChange={(open: boolean) => {
@@ -1560,8 +1771,8 @@ export function StaffDetails({
           }}
         >
           <DrawerTrigger asChild>
-            <Button className="flex-1 h-6 min-w-0 rounded-md text-xs font-medium px-1 bg-pink-600 hover:bg-pink-700 text-white">
-              <CalendarIcon className="h-3.5 w-3.5 shrink-0" />
+            <Button className="flex-1 min-h-0 min-w-0 rounded-md text-sm font-semibold px-1 bg-pink-600 hover:bg-pink-700 text-white">
+              <CalendarIcon className="h-4 w-4 shrink-0" />
             </Button>
           </DrawerTrigger>
           <DrawerContent>
@@ -1681,14 +1892,44 @@ export function StaffDetails({
             <div className={LEDGER_HEADER_NAME_CARD_CN}>
               <h2 className={LEDGER_HEADER_TITLE_CN} title={staff.name}>{staff.name}</h2>
             </div>
-            <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
+            <button
+              type="button"
+              className={cn(LEDGER_HEADER_BALANCE_CARD_CN, "cursor-pointer")}
+              onClick={openStaffLedgerDetails}
+              aria-pressed={!taxDetailsMode}
+              title="Staff account balance details"
+            >
               <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
-                <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
+                <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Account Balance</span>
                 <div className={cn(LEDGER_HEADER_BALANCE_CN, headerClosingBalance < 0 ? "text-red-600" : "text-green-600")}>
                   {formatCurrency(headerClosingBalance, { showDrCr: true })}
                 </div>
               </div>
-            </div>
+            </button>
+            {canUseStaffTaxDetails && staffHasTdsHistory ? (
+              <button
+                type="button"
+                className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "cursor-pointer")}
+                onClick={openStaffTdsLedgerDetails}
+                aria-pressed={taxDetailsMode}
+                title="TDS Balance details"
+              >
+                <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                  <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>TDS Balance</span>
+                  {staffTdsBalanceSummary.purchaseTds > 0 ? (
+                    <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-red-600")}>
+                      {formatCurrency(-staffTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+                    </div>
+                  ) : staffTdsBalanceSummary.saleTds > 0 ? (
+                    <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-green-600")}>
+                      {formatCurrency(staffTdsBalanceSummary.saleTds, { showDrCr: true })}
+                    </div>
+                  ) : (
+                    <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-muted-foreground")}>Settled</div>
+                  )}
+                </div>
+              </button>
+            ) : null}
           </div>
           <div className={LEDGER_HEADER_PILL_ROW_CN}>
                 <ReconciliationAccountButton accountId={staff.id} />
@@ -1796,14 +2037,22 @@ export function StaffDetails({
               <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
               Add Note
             </Button>
-            {canUseStaffTaxDetails && (
-              <LedgerHeaderTogglePill
-                label="Tax Details"
-                active={taxDetailsMode}
-                onToggle={toggleTaxDetailsMode}
-                groupAriaLabel="Tax details view"
-              />
-            )}
+            {taxDetailsMode ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowTdsLinkedTrxn((v) => !v)}
+                className={LEDGER_HEADER_PILL_CN}
+                title={
+                  showTdsLinkedTrxn
+                    ? "Hide linked settlement payments / journals"
+                    : "Show linked settlement payments / journals"
+                }
+              >
+                {showTdsLinkedTrxn ? "Hide linked trxn" : "Show linked trxn"}
+              </Button>
+            ) : null}
             {onShowAll && (
               <Button variant="chromePill" size="sm" onClick={onShowAll} className={LEDGER_HEADER_PILL_CN}>
                 All Vouchers
@@ -1831,15 +2080,15 @@ export function StaffDetails({
                   overlay={staffFreezeOverlay}
                 >
                 <TransactionsTable
-                  key={`staff-${staff.id}-${taxDetailsMode ? "tax" : "stmt"}-${currentPage}-${rowsPerPage}`}
+                  key={`staff-${staff.id}-${ledgerSplitMode}-${currentPage}-${rowsPerPage}`}
                   transactions={paginatedTransactions}
                   context="staff"
                   contextId={staff.id}
-                  openingBalance={taxDetailsMode ? 0 : desktopPaginationMeta.openingForPage}
-                  booksOpeningBalance={taxDetailsMode ? 0 : masterStaffOpening}
+                  openingBalance={hideBooksOpeningForSplit ? 0 : desktopPaginationMeta.openingForPage}
+                  booksOpeningBalance={hideBooksOpeningForSplit ? 0 : masterStaffOpening}
                   ledgerDateFilterActive={hasLedgerDateFilter}
-                  ledgerShowBookOpeningRow={!taxDetailsMode && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
-                  hideLedgerOpeningRows={taxDetailsMode}
+                  ledgerShowBookOpeningRow={!hideBooksOpeningForSplit && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
+                  hideLedgerOpeningRows={hideBooksOpeningForSplit}
                   openingBalancePeriodStartDate={dateRange?.from}
                   dateRange={dateRange}
                   openingBalanceOutstanding={openingBalanceOutstanding}
@@ -1848,6 +2097,7 @@ export function StaffDetails({
                   openingBalanceAttachmentUrls={staff.documentFileUrls}
                   openingBalanceDate={(staff as any).openingBalanceDate}
                   openingBalanceActions={
+                    !taxDetailsMode ? (
                     <EditStaffDialog
                       staff={staff}
                       allGroups={allGroups}
@@ -1860,14 +2110,16 @@ export function StaffDetails({
                         <MoreVertical className="h-4 w-4 text-muted-foreground" />
                       </Button>
                     </EditStaffDialog>
+                    ) : null
                   }
                   showNarration={showNarration}
-                  visibleColumns={effectiveBalanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
+                  visibleColumns={effectiveVisibleColumns}
                   journalAccountNames={{}}
                   accountNames={accountNamesMap}
                   periodDr={desktopPaginationMeta.periodDrForPage}
                   periodCr={desktopPaginationMeta.periodCrForPage}
-                  closingBalance={desktopPaginationMeta.closingForPage}
+                  closingBalance={ledgerFooterClosingBalance}
+                  closingBalanceLabel={taxDetailsMode ? "TDS Closing Balance" : undefined}
                   onRowClick={handleEditVoucher}
                   onHistoryVoucher={handleHistoryVoucher}
                   onAddLink={handleAddLink}
@@ -1879,18 +2131,16 @@ export function StaffDetails({
                   isAllVouchersView={isAllVouchersView}
                   hideDebitColumn={false}
                   hideCreditColumn={false}
-                  debitColumnHeaderLabel={taxDetailsMode ? "Tax" : undefined}
-                  creditColumnHeaderLabel={taxDetailsMode ? "Salary" : undefined}
                   scrollOnlyTransactions
-                  closingBalanceRowActions={staffClosingBalanceRowActions}
-                  closingBalanceActions={staffClosingBalanceActions}
+                  closingBalanceRowActions={taxDetailsMode ? undefined : staffClosingBalanceRowActions}
+                  closingBalanceActions={taxDetailsMode ? undefined : staffClosingBalanceActions}
                   {...statementCheck.tableProps}
                 />
                 </MasterAccountFreezeTxnShell>
           {paginatedTransactions.length === 0 && (
             <div className="text-center py-8 text-muted-foreground">
               {taxDetailsMode
-                ? "No Add Salary vouchers found for this staff member in the selected period."
+                ? "No TDS ledger transactions found for this staff member in the selected period."
                 : "No transactions found for this staff member in the selected period."}
             </div>
           )}
@@ -1908,12 +2158,23 @@ export function StaffDetails({
               />
             <LedgerFooterColumnsMenu ledgerPresentationMode={ledgerPresentationMode}>
                 <DropdownMenuContent align="start" className="w-52 p-2">
-                {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
+                {(taxDetailsMode
+                  ? ledgerTdsFooterColumnMenuKeys(true)
+                  : (Object.keys(COLUMN_LABELS) as TransactionColumnKey[]).filter(
+                      (key) => !["tdsTaxable", "tdsAmount"].includes(key)
+                    )
+                )
                   .filter((key) => key !== "status" || effectiveBalanceMode === "bill_wise")
                   .map((key) => {
                   const isStatusInStatement = key === "status" && effectiveBalanceMode === "statement";
                   const isStatusInBillWise = key === "status" && effectiveBalanceMode === "bill_wise";
                   const isStatusLocked = isStatusInStatement || isStatusInBillWise;
+                  const columnChecked =
+                    isStatusInStatement
+                      ? false
+                      : isStatusInBillWise
+                        ? true
+                        : effectiveVisibleColumns[key] !== false;
                   return (
                     <DropdownMenuItem
                       key={key}
@@ -1922,7 +2183,7 @@ export function StaffDetails({
                     >
                       <Checkbox
                         id={`col-${key}-staff`}
-                        checked={isStatusInStatement ? false : (isStatusInBillWise ? true : visibleColumns[key] !== false)}
+                        checked={columnChecked}
                         disabled={isStatusLocked}
                         onCheckedChange={isStatusLocked ? undefined : (c) => handleColumnVisibilityChange(key, Boolean(c))}
                       />
@@ -1941,18 +2202,6 @@ export function StaffDetails({
                 onCheckedChange={(c) => setShowNotes(Boolean(c))}
                 label="Note"
               />
-              {canUseStaffTaxDetails && (
-                <button
-                  type="button"
-                  className="inline-flex shrink-0 cursor-pointer border-0 bg-transparent p-0"
-                  onClick={toggleTaxDetailsMode}
-                  aria-pressed={taxDetailsMode}
-                >
-                  <LedgerFooterChromePill active={taxDetailsMode}>
-                    <span className="whitespace-nowrap text-sm font-medium leading-none">Tax Details</span>
-                  </LedgerFooterChromePill>
-                </button>
-              )}
             <StatementCheckModeFooterControls
               idPrefix="staff"
               enabled={statementCheck.checkModeEnabled}
@@ -2035,7 +2284,14 @@ export function StaffDetails({
           }
         }}
         voucher={selectedVoucher}
-        onVoucherCreated={() => setSelectedVoucher(null)}
+        onVoucherCreated={() => {
+          setSelectedVoucher(null);
+          onStaffUpdated({});
+        }}
+        onVoucherAction={(status) => {
+          if (status === "saved") onStaffUpdated({});
+          setSelectedVoucher(null);
+        }}
         ledgerEntityId={staff?.id}
         ledgerOpeningBalanceOutstanding={openingBalanceOutstanding}
         ledgerBooksOpeningBalanceSigned={ledgerOpeningForRunning}

@@ -30,8 +30,6 @@ import {
 } from "@/lib/clientHealthMonitor";
 import { useCompany } from "@/hooks/useCompany";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
-import { countSyncOutboxRowsForCompany } from "@/lib/localVoucherOutbox";
-import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { toast } from "sonner";
 
 function EntryBlock({ entry }: { entry: ClientHealthEntry }) {
@@ -83,23 +81,7 @@ export function ClientHealthMonitorBootstrap() {
     setSnapshot({ ...getClientHealthMonitorSnapshot() });
   }, []);
 
-  const refreshHeavyCounts = useCallback(async (cid: string) => {
-    try {
-      const [outboxPending, vouchers, parties] = await Promise.all([
-        countSyncOutboxRowsForCompany(cid).catch(() => null),
-        listCompanyDocsFromBrowserDb(cid, "vouchers").then((r) => r.length).catch(() => null),
-        listCompanyDocsFromBrowserDb(cid, "parties").then((r) => r.length).catch(() => null),
-      ]);
-      updateClientHealthMonitorSnapshot({
-        outboxPending,
-        sqliteVoucherRows: vouchers,
-        sqlitePartyRows: parties,
-      });
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
+  // Light fields only — SQLite COUNT is ClientHealthMonitorSnapshotSync (never full voucher parse).
   const pushLightSnapshot = useCallback(() => {
     updateClientHealthMonitorSnapshot({
       companyId: companyId ?? undefined,
@@ -107,9 +89,7 @@ export function ClientHealthMonitorBootstrap() {
       route: pathname ?? undefined,
       online,
     });
-    const cid = companyId?.trim();
-    if (cid) void refreshHeavyCounts(cid);
-  }, [company?.name, companyId, online, pathname, refreshHeavyCounts]);
+  }, [company?.name, companyId, online, pathname]);
 
   useEffect(() => {
     setEnabled(isClientHealthMonitorEnabled());
@@ -119,15 +99,12 @@ export function ClientHealthMonitorBootstrap() {
     if (!enabled) return;
     const stop = startClientHealthMonitor();
     syncRing();
-    pushLightSnapshot();
     return stop;
-  }, [enabled, syncRing, pushLightSnapshot]);
+  }, [enabled, syncRing]);
 
   useEffect(() => {
     if (!enabled) return;
     pushLightSnapshot();
-    const id = window.setInterval(() => pushLightSnapshot(), 45_000);
-    return () => window.clearInterval(id);
   }, [enabled, pushLightSnapshot]);
 
   useEffect(() => {
@@ -135,8 +112,8 @@ export function ClientHealthMonitorBootstrap() {
     const onRing = () => syncRing();
     const onSnapshot = () => setSnapshot({ ...getClientHealthMonitorSnapshot() });
     const onAlert = (ev: Event) => {
-      const cid = companyId?.trim();
-      if (cid) void refreshHeavyCounts(cid).finally(syncRing);
+      // Do not re-scan SQLite on stall — that made freezes worse.
+      syncRing();
 
       let reason = "UI problem detected";
       let forceOpen = false;
@@ -148,14 +125,17 @@ export function ClientHealthMonitorBootstrap() {
           const isStallLike = d.source === "stall" || d.source === "recovery";
           forceOpen = Boolean(d.forceOpen && !isStallLike);
           if (isStallLike) {
-            syncRing();
+            // Emergency overlay already has the log — opening diary behind it traps Resume.
+            if (d.forceOpen && !document.getElementById("pl-ui-health-emergency-overlay")) {
+              setAlertHint(reason);
+              setOpen(true);
+            }
             return;
           }
         }
       }
       setAlertHint(reason);
-      if (forceOpen) setOpen(true);
-      syncRing();
+      if (forceOpen && !document.getElementById("pl-ui-health-emergency-overlay")) setOpen(true);
     };
     window.addEventListener(PL_CLIENT_HEALTH_LOG_EVENT, onRing);
     window.addEventListener(PL_CLIENT_HEALTH_SNAPSHOT_EVENT, onSnapshot);
@@ -165,7 +145,7 @@ export function ClientHealthMonitorBootstrap() {
       window.removeEventListener(PL_CLIENT_HEALTH_SNAPSHOT_EVENT, onSnapshot);
       window.removeEventListener(PL_CLIENT_HEALTH_ALERT_EVENT, onAlert);
     };
-  }, [enabled, syncRing, companyId, refreshHeavyCounts]);
+  }, [enabled, syncRing]);
 
   useEffect(() => {
     if (!enabled) return;

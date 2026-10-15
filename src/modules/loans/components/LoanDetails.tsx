@@ -21,6 +21,8 @@ import { cn } from "@/lib/utils";
 import { mlc } from "@/lib/mobileListChrome";
 import {
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_TRIGGER_CN,
+  LEDGER_HEADER_AVATAR_IMAGE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
   LEDGER_HEADER_BALANCE_CN,
@@ -224,9 +226,9 @@ export function LoanDetails({
         <div className={LEDGER_HEADER_OUTER_ROW_CN}>
           <div className={LEDGER_HEADER_IDENTITY_CN}>
             <div className={LEDGER_HEADER_AVATAR_CN}>
-              <EntityFileAttachmentHover fileUrl={headerAttachment} triggerClassName="inline-flex rounded-full">
+              <EntityFileAttachmentHover fileUrl={headerAttachment} triggerClassName={LEDGER_HEADER_AVATAR_TRIGGER_CN}>
                 <ResolvedEntityAvatar
-                  className="h-12 w-12 flex-shrink-0 border text-lg"
+                  className={cn(LEDGER_HEADER_AVATAR_IMAGE_CN, "border")}
                   companyId={loan.companyId}
                   src={headerAttachment ?? undefined}
                   alt={headerName}

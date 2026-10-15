@@ -48,6 +48,14 @@ import {
 } from "@/lib/modalUrlSync";
 import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
 import { mdc, mdcMobileTxnBalanceRowData, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
+import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { MobileEntityLedgerFooterPrintButton } from "@/components/entity/MobileEntityLedgerFooterPrintButton";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { startOfDay, endOfDay, format } from "date-fns";
 import AdCalendar from "../ui/ad-calendar";
@@ -60,6 +68,9 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_BOX_CN,
+  LEDGER_HEADER_AVATAR_TRIGGER_CN,
+  LEDGER_HEADER_AVATAR_IMAGE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
@@ -468,6 +479,10 @@ export function StaffGroupDetails({
     () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, includeNotesInTable]
   );
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(displayTransactions),
+    [displayTransactions]
+  );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
@@ -649,6 +664,36 @@ export function StaffGroupDetails({
   // Staff balance: Cr (Payable) = Red, Dr (Advance) = Green
   const balanceColorClass = closingBalance >= 0 ? "text-green-600" : "text-red-600";
 
+  const mobileEntityTxnToolbar = (
+    <MobileEntityTxnToolbarRow placement="belowPager">
+      <MobileEntityTxnToolbarPicker>
+        <Combobox
+          options={groupDropdownOptions}
+          value={group?.id || ""}
+          onChange={handleGroupComboboxChange}
+          placeholder="Select group"
+        />
+      </MobileEntityTxnToolbarPicker>
+      <MobileEntityTxnToolbarUnapprovedBadge
+        count={mobileUnapprovedTxnCount}
+        pressed={unapprovedOnly}
+        onToggle={toggleUnapprovedOnly}
+      />
+      <MobileEntityTxnToolbarSearch>
+        <Search className={mdc.mobileTxnToolbarSearchIcon} />
+        <Input
+          placeholder="Search transactions"
+          className={mdc.mobileTxnToolbarSearchInput}
+          value={mobileSearchTerm}
+          onChange={(e) => {
+            setMobileSearchTerm(e.target.value);
+            setCurrentPage(1);
+          }}
+        />
+      </MobileEntityTxnToolbarSearch>
+    </MobileEntityTxnToolbarRow>
+  );
+
   if (isMobile) {
     return (
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
@@ -693,45 +738,13 @@ export function StaffGroupDetails({
               <span className="text-lg">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
             </p>
           </div>
-          <div className="flex-shrink-0 border-b px-2 py-1">
-            <div className="flex items-stretch gap-1.5">
-              <div className="h-8 min-w-0 flex-1 [&_button]:h-8 [&_button]:text-xs">
-                <Combobox
-                  options={groupDropdownOptions}
-                  value={group?.id || ""}
-                  onChange={handleGroupComboboxChange}
-                  placeholder="Select group"
-                />
-              </div>
-              <EditStaffGroupDialog
-                group={group}
-                allGroups={allGroups}
-                onGroupUpdated={onGroupUpdated}
-                onGroupDeleted={onGroupDeleted}
-                hasAccounts={staffInGroup.length > 0 || childGroups.length > 0}
-              >
-                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                  <Edit className="h-4 w-4" />
-                </Button>
-              </EditStaffGroupDialog>
-              <div className="relative h-8 min-w-0 flex-1">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-                <Input
-                  placeholder="Search transactions"
-                  className="h-8 w-full min-w-0 pl-7 text-xs"
-                  value={mobileSearchTerm}
-                  onChange={(e) => {
-                    setMobileSearchTerm(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                />
-              </div>
-            </div>
-          </div>
           </MobileDetailSummaryCollapsible>
           <div className="flex min-h-0 flex-1 flex-col">
             <div
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y"
+              className={cn(
+                "min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y pl-ledger-txn-scroll-native",
+                mdc.mobileLedgerTxnScrollPad
+              )}
               style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
             >
             <div className="pb-2">
@@ -768,7 +781,7 @@ export function StaffGroupDetails({
             </div>
             </div>
             <MobileTransactionsPager
-              className="mt-auto shrink-0 mb-12"
+              className={cn("mt-auto shrink-0", mdc.ledgerTxnPagerOutside)}
               currentPage={currentPage}
               totalItems={filteredMobileTransactions.length}
               rowsPerPage={rowsPerPage}
@@ -778,10 +791,14 @@ export function StaffGroupDetails({
               }}
               onPageChange={setCurrentPage}
               edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+              txnToolbar={mobileEntityTxnToolbar}
             />
           </div>
         </div>
-        <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+        <div
+          className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5"
+          data-pl-mobile-ledger-action-footer=""
+        >
           {/* Mobile: header jaisa pill — active mode par green border */}
           <LedgerViewModePills
             className="flex-1 min-w-0"
@@ -813,16 +830,7 @@ export function StaffGroupDetails({
           >
             Pay
           </Button>
-          <Button
-            className="flex-1 h-6 min-w-0 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium"
-            onClick={() => {
-              openingModalRef.current = true;
-              setMobileFooterDialogOpen("add_salary");
-              openModalInUrl();
-            }}
-          >
-            Add Salary
-          </Button>
+          <MobileEntityLedgerFooterPrintButton onClick={() => void handlePrint()} />
           <Drawer
             open={isCalendarOpen}
             onOpenChange={(open) => {
@@ -996,10 +1004,10 @@ export function StaffGroupDetails({
                   <>
                     <EntityFileAttachmentHover
                       fileUrl={selectedMemberAttachmentUrl}
-                      triggerClassName="inline-flex rounded-full"
+                      triggerClassName={LEDGER_HEADER_AVATAR_TRIGGER_CN}
                     >
                       <ResolvedEntityAvatar
-                        className="h-12 w-12 flex-shrink-0 text-lg"
+                        className={LEDGER_HEADER_AVATAR_IMAGE_CN}
                         companyId={selectedMemberStaff.companyId}
                         src={selectedMemberAttachmentUrl ?? undefined}
                         alt={selectedMemberStaff.name}
@@ -1020,7 +1028,7 @@ export function StaffGroupDetails({
                   </>
                 ) : (
                   <>
-                    <Avatar className="h-12 w-12 text-lg">
+                    <Avatar className={cn(LEDGER_HEADER_AVATAR_BOX_CN, "rounded-lg text-lg")}>
                       <AvatarFallback className="bg-muted text-muted-foreground">{getInitials(group.name)}</AvatarFallback>
                     </Avatar>
                     <EditStaffGroupDialog

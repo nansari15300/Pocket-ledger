@@ -51,6 +51,18 @@ export function addBsMonths(y: number, m: number, delta: number): { y: number; m
   return { y: Math.floor(idx / 12), m: (idx % 12) + 1 };
 }
 
+/** datex-bs BSToAD ships with console.log spam + day-walk; mute logs so DevTools does not freeze the tab. */
+function bsToAdIsoViaDatex(bsStr: string): string {
+  const log = console.log;
+  try {
+    // datex-bs debug prints BASE_BS / Target BS / Total days on every call.
+    console.log = () => {};
+    return BSToAD(bsStr);
+  } finally {
+    console.log = log;
+  }
+}
+
 export function bsToAd(bs: BSDate): Date {
   try {
     // NepaliDate constructor uses 0-indexed months (0 = Baisakh, 11 = Chaitra)
@@ -58,7 +70,7 @@ export function bsToAd(bs: BSDate): Date {
     return new Date(ad.year, ad.month, ad.date);
   } catch {
     const bsStr = `${bs.y}-${String(bs.m).padStart(2, "0")}-${String(bs.d).padStart(2, "0")}`;
-    const adIso = BSToAD(bsStr);
+    const adIso = bsToAdIsoViaDatex(bsStr);
     const [y, m, d] = adIso.split("-").map(Number);
     if (!y || !m || !d) throw new Error("BSToAD parse");
     // Local Gregorian day — consistent with NepaliDate.getAD(), not UTC-from-ISO shift.

@@ -4,12 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import {
   PL_CLIENT_HEALTH_ALERT_EVENT,
   PL_CLIENT_HEALTH_LOG_EVENT,
-  engageClientHealthEmergencyBrake,
+  PL_UI_HEALTH_EMERGENCY_OVERLAY_MIN_VISIBLE_MS,
   isClientHealthMonitorEnabled,
   releaseClientHealthEmergencyBrake,
   startClientHealthMonitor,
 } from "@/lib/clientHealthMonitor";
 import {
+  canDismissClientHealthEmergencyOverlay,
   hideClientHealthEmergencyOverlay,
   refreshClientHealthEmergencyOverlayLog,
   showClientHealthEmergencyOverlay,
@@ -44,21 +45,8 @@ export function ClientHealthGlobalBootstrap() {
 
   useEffect(() => {
     if (!enabled) return;
-    const onAlert = (ev: Event) => {
-      const d = ev instanceof CustomEvent ? ev.detail : undefined;
-      const reason =
-        typeof d === "string"
-          ? d
-          : d && typeof d === "object" && "reason" in d
-            ? String((d as { reason?: string }).reason || "UI problem")
-            : "UI problem";
-      engageClientHealthEmergencyBrake(reason);
-      if (!document.getElementById("pl-ui-health-emergency-overlay")) {
-        showClientHealthEmergencyOverlay(reason, () => {
-          hideClientHealthEmergencyOverlay();
-          releaseClientHealthEmergencyBrake();
-        });
-      } else {
+    const onAlert = () => {
+      if (document.getElementById("pl-ui-health-emergency-overlay")) {
         syncOverlayLog();
       }
     };
@@ -72,10 +60,15 @@ export function ClientHealthGlobalBootstrap() {
       if (!ev.ctrlKey || !ev.shiftKey || ev.key.toLowerCase() !== "u") return;
       ev.preventDefault();
       const reason = "Manual UI health diary (Ctrl+Shift+U)";
-      showClientHealthEmergencyOverlay(reason, () => {
-        hideClientHealthEmergencyOverlay();
-        releaseClientHealthEmergencyBrake();
-      });
+      showClientHealthEmergencyOverlay(
+        reason,
+        () => {
+          if (!canDismissClientHealthEmergencyOverlay()) return;
+          hideClientHealthEmergencyOverlay();
+          releaseClientHealthEmergencyBrake();
+        },
+        { minVisibleMs: PL_UI_HEALTH_EMERGENCY_OVERLAY_MIN_VISIBLE_MS }
+      );
       refreshClientHealthEmergencyOverlayLog();
     };
     window.addEventListener("keydown", onKey);

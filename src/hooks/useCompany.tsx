@@ -76,6 +76,7 @@ import {
   getEffectiveNotificationSettings,
   NOTIFICATION_PREFS_CHANGED_EVENT,
 } from "@/lib/localUserNotificationSettings";
+import type { LinkAllocationSettings } from "@/lib/linkAllocationSettings";
 import {
   getLocalFiscalSplitOrDefaults,
   LOCAL_FISCAL_SPLIT_CHANGED_EVENT,
@@ -299,6 +300,11 @@ export type Company = {
     demoteReason?: CompanyDemoteReason;
     /** Enable "Link Payment to Txns" feature (allocate payment to invoices). */
     enableLinkPaymentToTxns?: boolean;
+    /**
+     * Settings → Link allocation: which sources may settle multi-account voucher legs
+     * (Add Salary / Sale / Purchase). Missing = same-entity only (default).
+     */
+    linkAllocation?: LinkAllocationSettings;
     /** Header "Copy ledger" + cross-company party ledger tools — role `copy_ledger_cross_company` bhi chahiye. */
     enableCrossCompanyLedgerCopy?: boolean;
     /** Header Share for Reconciliation + linked account compare — plan + role alag. */
@@ -591,6 +597,7 @@ function mergePlHostCompanyMetaFields(prev: Company, next: Company): Company {
     "allowRateEditing",
     "enableVoucherPrefixSelection",
     "enableLinkPaymentToTxns",
+    "linkAllocation",
     "enableCrossCompanyLedgerCopy",
     "enableShareForReconciliation",
     "spendWiseEnabled",

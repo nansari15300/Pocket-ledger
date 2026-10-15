@@ -20,9 +20,14 @@ export const DAYBOOK_TXN_SCROLL_INNER_CN = cn(
 
 export function DaybookTxnScrollColumn({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div data-pl-daybook-unified-scroll="" className={cn(DAYBOOK_TXN_SCROLL_HOST_CN, className)}>
+    <div
+      data-pl-daybook-unified-scroll=""
+      data-pl-dashboard-recent-shell=""
+      className={cn(DAYBOOK_TXN_SCROLL_HOST_CN, className)}
+      style={{ ["--pl-dashboard-recent-edge-gap" as string]: "2px" }}
+    >
       <div className={DAYBOOK_TXN_SCROLL_INNER_CN}>
-        <div className={LEDGER_TXN_TABLE_HOST_CN}>{children}</div>
+        <div className={cn(LEDGER_TXN_TABLE_HOST_CN, "box-border min-w-0")}>{children}</div>
       </div>
     </div>
   );

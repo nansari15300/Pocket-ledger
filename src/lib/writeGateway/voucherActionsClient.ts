@@ -991,18 +991,27 @@ export async function softDeleteVoucherMoveToRecycleBin(
   } catch {
     /* alert optional */
   }
+  const deleteLivePatch = {
+    isDeleted: true,
+    deletedAt,
+    deletedBy: deletedByUid || "",
+  };
+  // UI turant hatao — SQLite/outbox ke baad refresh wait mat karo (ledger list isDeleted filter).
+  dispatchVoucherLivePatch(companyId, voucherId, deleteLivePatch);
   try {
     await patchVoucherFields(
       companyId,
       voucherId,
-      {
-        isDeleted: true,
-        deletedAt,
-        deletedBy: deletedByUid || "",
-      },
+      deleteLivePatch,
       { forceSqliteFirst: options?.forceSqliteFirst }
     );
   } catch (e) {
+    // Patch fail → optimistic delete undo taaki row ghost na rahe / stuck deleted paint na ho.
+    dispatchVoucherLivePatch(companyId, voucherId, {
+      isDeleted: false,
+      deletedAt: null,
+      deletedBy: "",
+    });
     voucherDeleteDebugLog("soft_delete_patch_error", {
       companyId,
       fsCompanyId,
@@ -2226,24 +2235,60 @@ export async function syncBillWiseAllocationsToTargetVouchers(
         dispatchVoucherLivePatch(companyId, targetId, { allocations: filtered });
       }
     }
+    // Per target: drop reverse legs from this source that are no longer in newAllocations (entityTxnId-aware)
+    const newByTarget = new Map<string, Allocation[]>();
     for (const a of newAllocations) {
       if (!a.voucherId || a.voucherId === OPENING_BALANCE_VOUCHER_ID) continue;
-      const amt = getAllocationTotal(a);
-      if (amt <= 0) continue;
-      const targetId = a.voucherId;
+      if (getAllocationTotal(a) <= 0) continue;
+      const list = newByTarget.get(a.voucherId) ?? [];
+      list.push(a);
+      newByTarget.set(a.voucherId, list);
+    }
+    for (const [targetId, legs] of newByTarget) {
       const data = await getCompanyDocFromBrowserDb(companyId, "vouchers", targetId);
       if (!data) continue;
-      const allocations: Allocation[] = Array.isArray((data as any)?.allocations) ? [...((data as any).allocations as Allocation[])] : [];
-      const idx = allocations.findIndex((x) => x.voucherId === sourceVoucherId);
-      const entry: Allocation = {
-        voucherId: sourceVoucherId,
-        amount: amt,
-        taxAmount: (a as any).taxAmount !== undefined ? Number((a as any).taxAmount) : undefined,
-        netAmount: (a as any).netAmount !== undefined ? Number((a as any).netAmount) : undefined,
-      };
-      if (idx >= 0) allocations[idx] = entry;
-      else allocations.push(entry);
-      const payload = removeUndefined({ ...(data as any), id: targetId, allocations }) as Record<string, unknown>;
+      let allocations: Allocation[] = Array.isArray((data as any)?.allocations)
+        ? [...((data as any).allocations as Allocation[])]
+        : [];
+      const keepEntityKeys = new Set(
+        legs.map((a) => String((a as any).entityTxnId ?? "").trim())
+      );
+      allocations = allocations.filter((x) => {
+        if (x.voucherId !== sourceVoucherId) return true;
+        const et = String((x as any).entityTxnId ?? "").trim();
+        if (!et && keepEntityKeys.has("")) return true;
+        if (et && keepEntityKeys.has(et)) return true;
+        // Drop stale reverse leg from this source
+        return false;
+      });
+      for (const a of legs) {
+        const amt = getAllocationTotal(a);
+        const entityTxnId = (a as any).entityTxnId ? String((a as any).entityTxnId) : undefined;
+        const linkedAccountId = (a as any).linkedAccountId
+          ? String((a as any).linkedAccountId)
+          : undefined;
+        const idx = allocations.findIndex((x) => {
+          if (x.voucherId !== sourceVoucherId) return false;
+          if (entityTxnId) return String((x as any).entityTxnId ?? "") === entityTxnId;
+          return !String((x as any).entityTxnId ?? "").trim();
+        });
+        const entry: Allocation = {
+          voucherId: sourceVoucherId,
+          amount: amt,
+          taxAmount: (a as any).taxAmount !== undefined ? Number((a as any).taxAmount) : undefined,
+          netAmount: (a as any).netAmount !== undefined ? Number((a as any).netAmount) : undefined,
+          taxableAmount:
+            (a as any).taxableAmount !== undefined ? Number((a as any).taxableAmount) : undefined,
+          ...(linkedAccountId ? { linkedAccountId } : {}),
+          ...(entityTxnId ? { entityTxnId } : {}),
+        };
+        if (idx >= 0) allocations[idx] = entry;
+        else allocations.push(entry);
+      }
+      const payload = removeUndefined({ ...(data as any), id: targetId, allocations }) as Record<
+        string,
+        unknown
+      >;
       coerceVoucherDocumentDate(payload);
       await upsertCompanyDocInBrowserDb(companyId, "vouchers", targetId, payload);
       await enqueueVoucherOutbox(companyId, "update", targetId, payload);
@@ -2290,30 +2335,60 @@ export async function syncBillWiseAllocationsToTargetVouchers(
     const out: Allocation = { voucherId: x.voucherId, amount: Number(x.amount) || 0 };
     if ((x as any).taxAmount !== undefined && (x as any).taxAmount !== null) out.taxAmount = Number((x as any).taxAmount);
     if ((x as any).netAmount !== undefined && (x as any).netAmount !== null) out.netAmount = Number((x as any).netAmount);
+    if ((x as any).taxableAmount !== undefined && (x as any).taxableAmount !== null) {
+      out.taxableAmount = Number((x as any).taxableAmount);
+    }
+    if ((x as any).linkedAccountId) out.linkedAccountId = String((x as any).linkedAccountId);
+    if ((x as any).entityTxnId) out.entityTxnId = String((x as any).entityTxnId);
     return out;
   };
 
+  const newByTargetFs = new Map<string, Allocation[]>();
   for (const a of newAllocations) {
     if (!a.voucherId || a.voucherId === OPENING_BALANCE_VOUCHER_ID) continue;
-    const amt = getAllocationTotal(a);
-    if (amt <= 0) continue;
-    const ref = doc(firestore, voucherPath, a.voucherId);
+    if (getAllocationTotal(a) <= 0) continue;
+    const list = newByTargetFs.get(a.voucherId) ?? [];
+    list.push(a);
+    newByTargetFs.set(a.voucherId, list);
+  }
+  for (const [targetId, legs] of newByTargetFs) {
+    const ref = doc(firestore, voucherPath, targetId);
     const snap = await getDoc(ref);
     if (!snap.exists()) continue;
     const data = snap.data();
-    const rawAllocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
-    const allocations = rawAllocations.map(sanitizeAllocation);
-    const idx = allocations.findIndex((x) => x.voucherId === sourceVoucherId);
-    const entry = sanitizeAllocation({
-      voucherId: sourceVoucherId,
-      amount: amt,
-      taxAmount: (a as any).taxAmount,
-      netAmount: (a as any).netAmount,
-    } as Allocation);
-    if (idx >= 0) allocations[idx] = entry;
-    else allocations.push(entry);
+    let allocations: Allocation[] = (Array.isArray(data?.allocations) ? [...data.allocations] : []).map(
+      sanitizeAllocation
+    );
+    const keepEntityKeys = new Set(legs.map((a) => String((a as any).entityTxnId ?? "").trim()));
+    allocations = allocations.filter((x) => {
+      if (x.voucherId !== sourceVoucherId) return true;
+      const et = String((x as any).entityTxnId ?? "").trim();
+      if (!et && keepEntityKeys.has("")) return true;
+      if (et && keepEntityKeys.has(et)) return true;
+      return false;
+    });
+    for (const a of legs) {
+      const amt = getAllocationTotal(a);
+      const entityTxnId = (a as any).entityTxnId ? String((a as any).entityTxnId) : undefined;
+      const idx = allocations.findIndex((x) => {
+        if (x.voucherId !== sourceVoucherId) return false;
+        if (entityTxnId) return String((x as any).entityTxnId ?? "") === entityTxnId;
+        return !String((x as any).entityTxnId ?? "").trim();
+      });
+      const entry = sanitizeAllocation({
+        voucherId: sourceVoucherId,
+        amount: amt,
+        taxAmount: (a as any).taxAmount,
+        netAmount: (a as any).netAmount,
+        taxableAmount: (a as any).taxableAmount,
+        linkedAccountId: (a as any).linkedAccountId,
+        entityTxnId: (a as any).entityTxnId,
+      } as Allocation);
+      if (idx >= 0) allocations[idx] = entry;
+      else allocations.push(entry);
+    }
     await updateDoc(ref, { allocations });
-    await mirrorVoucherDocToBrowserDb(companyId, a.voucherId);
+    await mirrorVoucherDocToBrowserDb(companyId, targetId);
   }
 }
 

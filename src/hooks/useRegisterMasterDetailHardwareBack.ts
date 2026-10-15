@@ -2,9 +2,8 @@
 
 import { useEffect, useRef } from "react";
 import type { MasterDetailListRouteKey } from "@/lib/masterDetailListPath";
-import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import { applyMasterDetailBackToListUrl } from "@/lib/masterDetailListPath";
 import { masterDetailRouteKeyFromPath } from "@/lib/masterDetailSidebarNav";
-import { browserHistoryHref } from "@/lib/webAppBasePath";
 
 /** Har master-detail route ka apna handler — singleton overwrite (bank) se party detail bigadna band */
 const handlersByRoute = new Map<MasterDetailListRouteKey, () => void>();
@@ -15,17 +14,6 @@ export const MASTER_DETAIL_HW_BACK_EVENT = "pl-master-detail-hw-back";
 function readSelectedFromLocation(): boolean {
   if (typeof window === "undefined") return false;
   return new URLSearchParams(window.location.search).has("selected");
-}
-
-function listHrefForRoute(routeKey: MasterDetailListRouteKey): string {
-  const params = new URLSearchParams(window.location.search);
-  const view = params.get("view");
-  const base = masterDetailListHref(routeKey);
-  // Groups tab detail — list URL me view=groups rakho (party, bank, staff, …)
-  if (view === "groups") {
-    return `${base}?view=groups`;
-  }
-  return base;
 }
 
 /** true = handler / fallback le consume garyo, router.back() nagaarnu */
@@ -44,11 +32,10 @@ export function tryConsumeMasterDetailHardwareBack(): boolean {
 
   // Handler miss (race / stale singleton) — URL + event se current route list
   try {
-    const href = listHrefForRoute(routeKey);
-      window.history.replaceState(window.history.state, "", browserHistoryHref(href));
-        window.dispatchEvent(
-          new CustomEvent(MASTER_DETAIL_HW_BACK_EVENT, { detail: { routeKey } })
-        );
+    applyMasterDetailBackToListUrl(routeKey);
+    window.dispatchEvent(
+      new CustomEvent(MASTER_DETAIL_HW_BACK_EVENT, { detail: { routeKey } })
+    );
   } catch {
     return false;
   }
@@ -57,7 +44,7 @@ export function tryConsumeMasterDetailHardwareBack(): boolean {
 
 /**
  * Page mount par register — enabled par mat band karo (detail URL par handler miss fix).
- * handler: setSelected(null) + router.replace(masterDetailListHref(...))
+ * handler: applyMasterDetailBackToListUrl + setSelected(null) + router.replace(...)
  */
 export function useRegisterMasterDetailHardwareBack(
   routeKey: MasterDetailListRouteKey,

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -24,8 +24,26 @@ import { Link2, RotateCcw } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import type { Allocation } from "@/lib/payment-allocation-utils";
-import { getTaxFromAllocation, getNetFromAllocation, getAllocationTotal, autoLink as autoLinkUtil, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import {
+  getTaxFromAllocation,
+  getNetFromAllocation,
+  getAllocationTotal,
+  autoLink as autoLinkUtil,
+  buildBillWiseEntityTxnId,
+  allocationEntityTxnId,
+  getJournalTaxDrAmount,
+  getJournalRemainingForTax,
+  getPaymentOutRemaining,
+  getPaymentInRemaining,
+  OPENING_BALANCE_VOUCHER_ID,
+  type BillWiseEntityKind,
+  type Allocation,
+} from "@/lib/payment-allocation-utils";
+import type { SalePurchaseBillWiseLegKind } from "@/lib/salePurchaseBillWiseLinkLegs";
+import {
+  salePurchaseLinkDialogEyebrow,
+  salePurchaseLinkDialogTitle,
+} from "@/lib/salePurchaseBillWiseLinkLegs";
 import { patchVoucherFields } from "@/lib/voucherActionsClient";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isLocalOnlyMode } from "@/lib/localMode";
@@ -34,6 +52,10 @@ import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCom
 import { dispatchVoucherLivePatch } from "@/lib/voucherFormAttachmentSave";
 import { markLedgerVouchersLocalBillWiseLinked } from "@/lib/ledgerPendingBillWiseLinks";
 import { scheduleVoucherLinkOutboxFlush } from "@/lib/localVoucherOutbox";
+import {
+  collectSalePurchaseTaxAndTdsAccountIds,
+  getSalePurchaseLinkAllocation,
+} from "@/lib/linkAllocationSettings";
 
 const safeToDate = (date: unknown): Date | null => {
   if (!date) return null;
@@ -62,88 +84,227 @@ export type ApplyAdvancesAllocationsParams = {
   targetVoucherId: string;
   targetPartyId: string;
   balanceKind?: "tax" | "net" | "all";
+  /** Entity-scoped leg (party / tax / tds) — only this leg is updated; other legs preserved. */
+  linkEntityKind?: BillWiseEntityKind;
+  linkAccountId?: string;
+  /**
+   * Party-leg cross-entity (Settings → Link allocation): tax / TDS account ids on this
+   * sale/purchase whose payments may also settle the party / taxable amount.
+   */
+  linkCrossEntityTaxAccountIds?: string[];
+  linkCrossEntityTdsAccountIds?: string[];
   linkedAmounts: Record<string, number>;
   vouchers: any[];
   showOBRow: boolean;
 };
 
+function allocationMatchesApplyLeg(
+  a: Allocation,
+  targetVoucherId: string,
+  entityTxnId: string | undefined,
+  linkEntityKind: BillWiseEntityKind | undefined
+): boolean {
+  if (String(a.voucherId) !== String(targetVoucherId)) return false;
+  if (entityTxnId) {
+    const et = allocationEntityTxnId(a);
+    if (et) return et === entityTxnId;
+  }
+  if (linkEntityKind === "tax" || linkEntityKind === "tds") {
+    return getTaxFromAllocation(a) > 0;
+  }
+  if (linkEntityKind === "party" || linkEntityKind === "staff") {
+    if (getTaxFromAllocation(a) > 0 && getNetFromAllocation(a) <= 0) return false;
+    return getAllocationTotal(a) > 0;
+  }
+  return true;
+}
+
 /** Persist bill-wise link allocations to Firestore. Call from voucher form after saving the voucher when using local-only link dialog. */
 export async function applyAdvancesAllocationsToServer(params: ApplyAdvancesAllocationsParams): Promise<void> {
-  const { companyId, mode, targetVoucherId, targetPartyId, balanceKind = "net", linkedAmounts, vouchers, showOBRow } = params;
-  const voucherPath = `companies/${companyId}/vouchers`;
+  const {
+    companyId,
+    mode,
+    targetVoucherId,
+    targetPartyId,
+    balanceKind = "net",
+    linkEntityKind,
+    linkAccountId,
+    linkCrossEntityTaxAccountIds,
+    linkCrossEntityTdsAccountIds,
+    linkedAmounts,
+    vouchers,
+    showOBRow,
+  } = params;
   const updates = Object.entries(linkedAmounts).filter(([, amt]) => Number(amt) > 0);
   const obAmountToSave = Number(linkedAmounts[OPENING_BALANCE_VOUCHER_ID]) || 0;
+  const accountIdForLeg = String(linkAccountId || targetPartyId || "").trim();
+  const entityKind: BillWiseEntityKind =
+    linkEntityKind ||
+    (balanceKind === "tax" ? "tax" : "party");
+  const entityTxnId =
+    accountIdForLeg
+      ? buildBillWiseEntityTxnId({
+          voucherId: targetVoucherId,
+          entityKind,
+          accountId: accountIdForLeg,
+        })
+      : undefined;
+  const isTaxishLeg = entityKind === "tax" || entityKind === "tds";
+  const crossTaxIds = new Set(
+    [...(linkCrossEntityTaxAccountIds || []), ...(linkCrossEntityTdsAccountIds || [])]
+      .map((id) => String(id || "").trim())
+      .filter(Boolean)
+  );
 
-  // Fetch target voucher from Firestore so we derive toRemove from its allocations (Sale↔Purchase: opposite voucher may be missing from vouchers array)
   const targetDoc = await readVoucherDoc(companyId, targetVoucherId);
-  const targetAllocations: Allocation[] = targetDoc
-    ? (Array.isArray((targetDoc as any)?.allocations) ? [...(targetDoc as any).allocations] : [])
-    : [];
-  const toRemoveFromTarget = targetAllocations.filter((a) => a.voucherId && !(Number(linkedAmounts[a.voucherId]) > 0)).map((a) => a.voucherId);
-  const toRemove = toRemoveFromTarget.length > 0 ? toRemoveFromTarget : (() => {
+
+  // Sources that currently have THIS leg to target but are not in the new linkedAmounts → remove only that leg
+  const candidateSources = (() => {
     const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service", "journal", "inter_company"];
     const drTypes = ["payment_out", "direct_expense", "sale", "sale_service", "journal", "inter_company"];
-    const sourceTypes = mode === "sale" ? crTypes : drTypes;
-    return (vouchers as any[])
-      .filter((v) => {
-        if (!sourceTypes.includes(v.type)) return false;
-        if (v.type === "journal") return (v.entries as any[] || []).some((e: any) => String(e?.accountId ?? "") === String(targetPartyId));
-        if (v.type === "inter_company") {
-          const side = mode === "sale" ? "credit" : "debit";
-          const amt = getInterCompanyEntityBillWiseAmount(v, String(targetPartyId), "party");
-          return !!amt && (side === "credit" ? amt.credit > 0 : amt.debit > 0);
+    const taxTypes = ["payment_out", "direct_expense", "journal", "payment_in", "direct_income"];
+    const sourceTypes = isTaxishLeg ? taxTypes : mode === "sale" ? crTypes : drTypes;
+    const partyMatches = (vouchers as any[]).filter((v) => {
+      if (!sourceTypes.includes(v.type)) return false;
+      if (isTaxishLeg) {
+        if (v.type === "journal") return getJournalTaxDrAmount(v, accountIdForLeg) != null;
+        return String(v.taxAccountId ?? "") === accountIdForLeg;
+      }
+      if (v.type === "journal") {
+        return (v.entries as any[] || []).some((e: any) => String(e?.accountId ?? "") === String(targetPartyId));
+      }
+      if (v.type === "inter_company") {
+        const side = mode === "sale" ? "credit" : "debit";
+        const amt = getInterCompanyEntityBillWiseAmount(v, String(targetPartyId), "party");
+        return !!amt && (side === "credit" ? amt.credit > 0 : amt.debit > 0);
+      }
+      return String((v as any).partyId ?? "") === String(targetPartyId);
+    });
+    if (isTaxishLeg || crossTaxIds.size === 0) return partyMatches;
+    // Party leg + Settings allow tax/TDS sources: include those payment/journal rows too (unlink + preserve).
+    const crossMatches = (vouchers as any[]).filter((v) => {
+      if (!taxTypes.includes(v.type)) return false;
+      if (v.type === "journal") {
+        for (const taxId of crossTaxIds) {
+          if (getJournalTaxDrAmount(v, taxId) != null) return true;
         }
-        return String((v as any).partyId ?? "") === String(targetPartyId);
-      })
-      .filter((v) => ((v.allocations as Allocation[] | undefined) || []).some((a) => a.voucherId === targetVoucherId))
-      .filter((v) => !(Number(linkedAmounts[v.id]) > 0))
-      .map((v) => v.id);
+        return false;
+      }
+      return crossTaxIds.has(String(v.taxAccountId ?? ""));
+    });
+    const byId = new Map<string, any>();
+    for (const v of [...partyMatches, ...crossMatches]) byId.set(String(v.id), v);
+    return [...byId.values()];
   })();
 
+  const toRemove = candidateSources
+    .filter((v) =>
+      ((v.allocations as Allocation[] | undefined) || []).some((a) =>
+        allocationMatchesApplyLeg(a, targetVoucherId, entityTxnId, entityKind)
+      )
+    )
+    .filter((v) => !(Number(linkedAmounts[v.id]) > 0))
+    .map((v) => String(v.id));
+
   if (updates.length === 0 && toRemove.length === 0 && !showOBRow) return;
-  if (showOBRow || obAmountToSave > 0) {
+  // Party leg may update OB; tax/tds legs never touch staff/party opening balance.
+  if (!isTaxishLeg && (showOBRow || obAmountToSave > 0 || linkedAmounts[OPENING_BALANCE_VOUCHER_ID] !== undefined)) {
     await patchVoucherFields(companyId, targetVoucherId, { openingBalanceAllocated: obAmountToSave }, { forceSqliteFirst: true });
   }
+
   for (const sourceVoucherId of toRemove) {
     const data = await readVoucherDoc(companyId, sourceVoucherId);
     if (!data) continue;
     const allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
-    const filtered = allocations.filter((a) => a.voucherId !== targetVoucherId);
-    await patchVoucherFields(companyId, sourceVoucherId, { allocations: filtered }, { forceSqliteFirst: true });
-  }
-  // Bilateral unlink: remove from target voucher’s allocations so opposite voucher (Sale/Pur) shows unlinked after Save
-  if (toRemove.length > 0 && targetDoc) {
-    const targetData = targetDoc;
-    const currentTargetAllocations: Allocation[] = Array.isArray(targetData?.allocations) ? [...targetData.allocations] : [];
-    const toRemoveSet = new Set(toRemove);
-    const filteredTarget = currentTargetAllocations.filter((a) => !toRemoveSet.has(a.voucherId));
-    if (filteredTarget.length !== currentTargetAllocations.length) {
-      await patchVoucherFields(companyId, targetVoucherId, { allocations: filteredTarget }, { forceSqliteFirst: true });
+    const filtered = allocations.filter(
+      (a) => !allocationMatchesApplyLeg(a, targetVoucherId, entityTxnId, entityKind)
+    );
+    if (filtered.length !== allocations.length) {
+      await patchVoucherFields(companyId, sourceVoucherId, { allocations: filtered }, { forceSqliteFirst: true });
     }
   }
+
+  if (toRemove.length > 0 && targetDoc) {
+    const currentTargetAllocations: Allocation[] = Array.isArray((targetDoc as any)?.allocations)
+      ? [...(targetDoc as any).allocations]
+      : [];
+    const toRemoveSet = new Set(toRemove);
+    const filteredTarget = currentTargetAllocations.filter((a) => {
+      if (!toRemoveSet.has(String(a.voucherId))) return true;
+      // Only drop reverse rows for this entity leg
+      return !allocationMatchesApplyLeg(
+        { ...a, voucherId: targetVoucherId },
+        targetVoucherId,
+        entityTxnId
+          ? buildBillWiseEntityTxnId({
+              voucherId: String(a.voucherId),
+              entityKind,
+              accountId: accountIdForLeg,
+            })
+          : undefined,
+        entityKind
+      );
+    });
+    // Simpler reverse cleanup: drop reverse entries from sources in toRemove that match this leg's entityTxnId on target
+    const filteredTarget2 = currentTargetAllocations.filter((a) => {
+      if (!toRemoveSet.has(String(a.voucherId))) return true;
+      const et = allocationEntityTxnId(a);
+      if (entityTxnId && et) {
+        // reverse stores source id as voucherId; entityTxnId may still point at target leg
+        return !et.includes(`::${entityKind}::${accountIdForLeg}`);
+      }
+      if (isTaxishLeg) return getTaxFromAllocation(a) <= 0;
+      return false; // party leg remove
+    });
+    if (filteredTarget2.length !== currentTargetAllocations.length) {
+      await patchVoucherFields(companyId, targetVoucherId, { allocations: filteredTarget2 }, { forceSqliteFirst: true });
+    }
+    void filteredTarget;
+  }
+
   for (const [sourceVoucherId, amount] of updates) {
     if (sourceVoucherId === OPENING_BALANCE_VOUCHER_ID) continue;
     const data = await readVoucherDoc(companyId, sourceVoucherId);
     if (!data) continue;
-    const allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
-    const idx = allocations.findIndex((a) => a.voucherId === targetVoucherId);
-    const existing = idx >= 0 ? allocations[idx] : null;
-    const addAmt = Number(amount);
-    const prevTax = existing ? getTaxFromAllocation(existing) : 0;
-    const prevNet = existing ? getNetFromAllocation(existing) : 0;
-    const newTax = balanceKind === "tax" ? prevTax + addAmt : prevTax;
-    const newNet = balanceKind === "net" || balanceKind === "all" ? prevNet + addAmt : prevNet;
-    const newEntry: Allocation = { voucherId: targetVoucherId, amount: newTax + newNet, taxAmount: newTax, netAmount: newNet };
-    const sourceVoucher = (vouchers as any[]).find((v) => v.id === sourceVoucherId);
-    if (sourceVoucher?.type === "journal" || sourceVoucher?.type === "inter_company") {
-      (newEntry as any).linkedAccountId = targetPartyId;
+    let allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
+    // Drop prior row for this leg only, then write fresh amount (dialog sends absolute amounts).
+    allocations = allocations.filter(
+      (a) => !allocationMatchesApplyLeg(a, targetVoucherId, entityTxnId, entityKind)
+    );
+    const amt = Number(amount) || 0;
+    if (amt <= 0) {
+      await patchVoucherFields(companyId, sourceVoucherId, { allocations }, { forceSqliteFirst: true });
+      continue;
     }
-    if (idx >= 0) allocations[idx] = newEntry;
-    else allocations.push(newEntry);
+    const newEntry: Allocation = isTaxishLeg
+      ? {
+          voucherId: targetVoucherId,
+          amount: amt,
+          taxAmount: amt,
+          linkedAccountId: accountIdForLeg,
+          ...(entityTxnId ? { entityTxnId } : {}),
+        }
+      : {
+          voucherId: targetVoucherId,
+          amount: amt,
+          netAmount: amt,
+          linkedAccountId: accountIdForLeg || String(targetPartyId),
+          ...(entityTxnId
+            ? { entityTxnId }
+            : accountIdForLeg
+              ? {
+                  entityTxnId: buildBillWiseEntityTxnId({
+                    voucherId: targetVoucherId,
+                    entityKind: "party",
+                    accountId: accountIdForLeg,
+                  }),
+                }
+              : {}),
+        };
+    allocations.push(newEntry);
     await patchVoucherFields(companyId, sourceVoucherId, { allocations }, { forceSqliteFirst: true });
   }
 
-  // EXE/full_online: live Paid/Partial + hold + priority outbox (stale onSnapshot wipe avoid).
   const affectedIds = new Set<string>([targetVoucherId, ...toRemove, ...updates.map(([id]) => id)]);
   affectedIds.delete(OPENING_BALANCE_VOUCHER_ID);
   const nowTs = Timestamp.now();
@@ -182,6 +343,10 @@ export interface LinkAdvancesToVoucherDialogProps {
   targetLabel?: string;
   /** When set: 'tax'|'net' = link to that portion; 'all' = link to combined (tax+net) for sale/purchase. Default 'net'. */
   balanceKind?: "tax" | "net" | "all";
+  /** Entity-scoped tab: party | tax | tds (expense excluded). */
+  linkLegKind?: SalePurchaseBillWiseLegKind;
+  linkAccountId?: string;
+  linkAccountLabel?: string;
   /** When balanceKind is set, pass outstanding for that kind (total tax/net - linked for that kind). */
   targetOutstandingOverride?: number;
   /** When using onConfirm: pass sale/purchase total so dialog can cap linking correctly after user unticks (like spend wise requiredAmount). */
@@ -207,6 +372,9 @@ export function LinkAdvancesToVoucherDialog({
   targetPartyName,
   targetLabel,
   balanceKind = "net",
+  linkLegKind = "party",
+  linkAccountId,
+  linkAccountLabel,
   targetOutstandingOverride,
   targetTotalAmount,
   partyOpeningBalance = 0,
@@ -215,27 +383,154 @@ export function LinkAdvancesToVoucherDialog({
   initialLinkedAmounts,
   vouchersOverride,
 }: LinkAdvancesToVoucherDialogProps) {
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
   const { vouchers: vouchersFromContext } = useVouchers();
   const vouchers = vouchersOverride && vouchersOverride.length > 0 ? vouchersOverride : vouchersFromContext;
   const { formatDate, formatDateBS, formatCurrency, dateSystem } = useDate();
+  const isTaxishLeg = linkLegKind === "tax" || linkLegKind === "tds";
+  const taxAccountIdForLeg = String(linkAccountId || "").trim();
+  const salePurchaseLinkPrefs = getSalePurchaseLinkAllocation(company, mode);
+  const crossEntityAccountIds = useMemo(() => {
+    if (isTaxishLeg) return { taxAccountIds: [] as string[], tdsAccountIds: [] as string[] };
+    const targetV = (vouchers as any[])?.find((v) => String(v.id) === String(targetVoucherId));
+    const fromLines = collectSalePurchaseTaxAndTdsAccountIds(targetV?.lineItems);
+    return {
+      taxAccountIds: salePurchaseLinkPrefs.allowTaxOnPartyAmount ? fromLines.taxAccountIds : [],
+      tdsAccountIds: salePurchaseLinkPrefs.allowTdsOnPartyAmount ? fromLines.tdsAccountIds : [],
+    };
+  }, [
+    isTaxishLeg,
+    vouchers,
+    targetVoucherId,
+    salePurchaseLinkPrefs.allowTaxOnPartyAmount,
+    salePurchaseLinkPrefs.allowTdsOnPartyAmount,
+  ]);
+  const crossEntityTaxIdSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const id of crossEntityAccountIds.taxAccountIds) s.add(id);
+    for (const id of crossEntityAccountIds.tdsAccountIds) s.add(id);
+    return s;
+  }, [crossEntityAccountIds]);
 
   const { paymentInsWithRemaining, saleOutstanding } = useAdvancesForSale(
-    mode === "sale" ? targetPartyId : null,
-    mode === "sale" ? targetVoucherId : null,
+    mode === "sale" && !isTaxishLeg ? targetPartyId : null,
+    mode === "sale" && !isTaxishLeg ? targetVoucherId : null,
     vouchers
   );
   const { paymentOutsWithRemaining, purchaseOutstanding } = useAdvancesForPurchase(
-    mode === "purchase" ? targetPartyId : null,
-    mode === "purchase" ? targetVoucherId : null,
+    mode === "purchase" && !isTaxishLeg ? targetPartyId : null,
+    mode === "purchase" && !isTaxishLeg ? targetVoucherId : null,
     vouchers
   );
 
-  const baseSourceList = mode === "sale" ? paymentInsWithRemaining : paymentOutsWithRemaining;
+  type AdvanceSourceRow = {
+    id: string;
+    amount: number;
+    allocatedTotal: number;
+    allocatedToOthers: number;
+    remaining: number;
+    date?: unknown;
+    voucherNumber?: string;
+    type: string;
+  };
+
+  const buildTaxAccountSourceRows = React.useCallback(
+    (accountIds: string[]): AdvanceSourceRow[] => {
+      if (!accountIds.length || !vouchers?.length) return [];
+      const idSet = new Set(accountIds.map(String));
+      const rows: AdvanceSourceRow[] = [];
+      for (const v of vouchers as any[]) {
+        if (v.type === "payment_out" || v.type === "direct_expense" || v.type === "payment_in" || v.type === "direct_income") {
+          if (!idSet.has(String(v.taxAccountId ?? ""))) continue;
+          const amount = Number(v.amount ?? v.total ?? 0) || 0;
+          const remaining =
+            v.type === "payment_out" || v.type === "direct_expense"
+              ? getPaymentOutRemaining(v)
+              : getPaymentInRemaining(v);
+          const allocations = (v.allocations as Allocation[] | undefined) || [];
+          const toTarget = allocations
+            .filter((a) => String(a.voucherId) === String(targetVoucherId))
+            .reduce((s, a) => s + getTaxFromAllocation(a) + getNetFromAllocation(a), 0);
+          const linkable = remaining + toTarget;
+          if (linkable <= 0 && toTarget <= 0) continue;
+          rows.push({
+            id: v.id,
+            amount,
+            allocatedTotal: amount - remaining,
+            allocatedToOthers: Math.max(0, amount - remaining - toTarget),
+            remaining: linkable,
+            date: v.date,
+            voucherNumber: v.voucherNumber,
+            type: v.type,
+          });
+          continue;
+        }
+        if (v.type === "journal" && v.subType !== "add_salary") {
+          for (const taxId of idSet) {
+            const dr = getJournalTaxDrAmount(v, taxId);
+            if (dr == null) continue;
+            const remaining = getJournalRemainingForTax(v, taxId);
+            const allocations = (v.allocations as Allocation[] | undefined) || [];
+            const toTarget = allocations
+              .filter((a) => String(a.voucherId) === String(targetVoucherId))
+              .reduce((s, a) => s + getTaxFromAllocation(a) + getNetFromAllocation(a), 0);
+            const linkable = remaining + toTarget;
+            if (linkable <= 0 && toTarget <= 0) continue;
+            rows.push({
+              id: v.id,
+              amount: dr,
+              allocatedTotal: dr - remaining,
+              allocatedToOthers: Math.max(0, dr - remaining - toTarget),
+              remaining: linkable,
+              date: v.date,
+              voucherNumber: v.voucherNumber,
+              type: "journal",
+            });
+            break;
+          }
+        }
+      }
+      return rows.sort((a, b) => {
+        const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
+        const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
+        return dA - dB;
+      });
+    },
+    [vouchers, targetVoucherId]
+  );
+
+  const taxEntitySourceList = useMemo(
+    () => (isTaxishLeg && taxAccountIdForLeg ? buildTaxAccountSourceRows([taxAccountIdForLeg]) : []),
+    [isTaxishLeg, taxAccountIdForLeg, buildTaxAccountSourceRows]
+  );
+
+  const partyCrossEntitySourceList = useMemo(() => {
+    if (isTaxishLeg || crossEntityTaxIdSet.size === 0) return [] as AdvanceSourceRow[];
+    return buildTaxAccountSourceRows([...crossEntityTaxIdSet]);
+  }, [isTaxishLeg, crossEntityTaxIdSet, buildTaxAccountSourceRows]);
+
+  const baseSourceList = useMemo(() => {
+    if (isTaxishLeg) return taxEntitySourceList;
+    const partyList = mode === "sale" ? paymentInsWithRemaining : paymentOutsWithRemaining;
+    if (!partyCrossEntitySourceList.length) return partyList;
+    const byId = new Map<string, AdvanceSourceRow>();
+    for (const r of partyList as AdvanceSourceRow[]) byId.set(String(r.id), r);
+    for (const r of partyCrossEntitySourceList) {
+      if (!byId.has(String(r.id))) byId.set(String(r.id), r);
+    }
+    return [...byId.values()];
+  }, [
+    isTaxishLeg,
+    taxEntitySourceList,
+    mode,
+    paymentInsWithRemaining,
+    paymentOutsWithRemaining,
+    partyCrossEntitySourceList,
+  ]);
 
   const partyOB = Number(partyOpeningBalance) || 0;
-  const showOBInSale = partyOB < 0;
-  const showOBInPurchase = partyOB > 0;
+  const showOBInSale = !isTaxishLeg && partyOB < 0;
+  const showOBInPurchase = !isTaxishLeg && partyOB > 0;
   const obAmount = Math.abs(partyOB);
   // Consumed by sale/purchase: openingBalanceAllocated on their vouchers
   const totalConsumedFromOBByBillwise = (vouchers as any[]).reduce((sum, v) => {
@@ -302,26 +597,87 @@ export function LinkAdvancesToVoucherDialog({
     if (obAllocated > 0) initial[OPENING_BALANCE_VOUCHER_ID] = obAllocated;
     const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service", "journal", "inter_company"];
     const drTypes = ["payment_out", "direct_expense", "sale", "sale_service", "journal", "inter_company"];
-    const srcTypes = mode === "sale" ? crTypes : drTypes;
-    (vouchers as any[])
-      .filter((v) => {
-        if (!srcTypes.includes(v.type)) return false;
-        if (v.type === "journal") return (v.entries as any[] || []).some((e: any) => String(e?.accountId ?? "") === String(targetPartyId));
+    const taxTypes = ["payment_out", "direct_expense", "payment_in", "direct_income", "journal"];
+    const srcTypes = isTaxishLeg ? taxTypes : mode === "sale" ? crTypes : drTypes;
+    const partyLegEntityTxnId = buildBillWiseEntityTxnId({
+      voucherId: targetVoucherId,
+      entityKind: "party",
+      accountId: targetPartyId,
+    });
+    const legEntityTxnId = isTaxishLeg
+      ? taxAccountIdForLeg
+        ? buildBillWiseEntityTxnId({
+            voucherId: targetVoucherId,
+            entityKind: linkLegKind === "tds" ? "tds" : "tax",
+            accountId: taxAccountIdForLeg,
+          })
+        : ""
+      : partyLegEntityTxnId;
+    const matchesSourceFilter = (v: any): boolean => {
+      if (isTaxishLeg) {
+        if (!taxTypes.includes(v.type)) return false;
+        if (v.type === "journal") return getJournalTaxDrAmount(v, taxAccountIdForLeg) != null;
+        return String(v.taxAccountId ?? "") === taxAccountIdForLeg;
+      }
+      if (srcTypes.includes(v.type)) {
+        if (v.type === "journal") {
+          return (v.entries as any[] || []).some((e: any) => String(e?.accountId ?? "") === String(targetPartyId));
+        }
         if (v.type === "inter_company") {
           const amt = getInterCompanyEntityBillWiseAmount(v, String(targetPartyId), "party");
           return !!amt && (mode === "sale" ? amt.credit > 0 : amt.debit > 0);
         }
-        return String((v as any).partyId ?? "") === String(targetPartyId);
-      })
+        if (String((v as any).partyId ?? "") === String(targetPartyId)) return true;
+      }
+      // Party leg + Link allocation: also hydrate tax/TDS payments already linked to party amount.
+      if (crossEntityTaxIdSet.size > 0 && taxTypes.includes(v.type)) {
+        if (v.type === "journal") {
+          for (const taxId of crossEntityTaxIdSet) {
+            if (getJournalTaxDrAmount(v, taxId) != null) return true;
+          }
+          return false;
+        }
+        return crossEntityTaxIdSet.has(String(v.taxAccountId ?? ""));
+      }
+      return false;
+    };
+    (vouchers as any[])
+      .filter(matchesSourceFilter)
       .forEach((v) => {
         const allocations = (v.allocations as Allocation[] | undefined) || [];
-        const entry = allocations.find((a) => a.voucherId === targetVoucherId);
+        const entry = allocations.find((a) => {
+          if (String(a.voucherId) !== String(targetVoucherId)) return false;
+          if (legEntityTxnId) {
+            const et = allocationEntityTxnId(a);
+            if (et) return et === legEntityTxnId;
+          }
+          if (isTaxishLeg) return getTaxFromAllocation(a) > 0;
+          return true;
+        });
         if (!entry) return;
-        const amt = balanceKind === "all" ? getAllocationTotal(entry) : balanceKind === "tax" ? getTaxFromAllocation(entry) : getNetFromAllocation(entry);
+        const amt = isTaxishLeg
+          ? getTaxFromAllocation(entry)
+          : balanceKind === "all"
+            ? getAllocationTotal(entry)
+            : balanceKind === "tax"
+              ? getTaxFromAllocation(entry)
+              : getNetFromAllocation(entry);
         if (amt > 0) initial[v.id] = amt;
       });
     setLinkedAmounts(initial);
-  }, [isOpen, targetVoucherId, targetPartyId, mode, vouchers, balanceKind, initialLinkedAmounts]);
+  }, [
+    isOpen,
+    targetVoucherId,
+    targetPartyId,
+    mode,
+    vouchers,
+    balanceKind,
+    initialLinkedAmounts,
+    isTaxishLeg,
+    taxAccountIdForLeg,
+    linkLegKind,
+    crossEntityTaxIdSet,
+  ]);
 
   const totalLinked = Object.values(linkedAmounts).reduce((s, n) => s + Number(n) || 0, 0);
   const valid = totalLinked <= targetOutstanding && totalLinked >= 0;
@@ -433,7 +789,25 @@ export function LinkAdvancesToVoucherDialog({
         const prevNet = existing ? getNetFromAllocation(existing) : 0;
         const newTax = balanceKind === "tax" ? prevTax + addAmt : prevTax;
         const newNet = balanceKind === "net" || balanceKind === "all" ? prevNet + addAmt : prevNet;
-        const newEntry: Allocation = { voucherId: targetVoucherId, amount: newTax + newNet, taxAmount: newTax, netAmount: newNet };
+        const accountIdForLeg = String(targetPartyId || "").trim();
+        const newEntry: Allocation = {
+          voucherId: targetVoucherId,
+          amount: newTax + newNet,
+          taxAmount: newTax,
+          netAmount: newNet,
+          ...(accountIdForLeg && balanceKind !== "tax"
+            ? {
+                linkedAccountId: accountIdForLeg,
+                entityTxnId: buildBillWiseEntityTxnId({
+                  voucherId: targetVoucherId,
+                  entityKind: "party",
+                  accountId: accountIdForLeg,
+                }),
+              }
+            : accountIdForLeg
+              ? { linkedAccountId: accountIdForLeg }
+              : {}),
+        };
         if (idx >= 0) allocations[idx] = newEntry;
         else allocations.push(newEntry);
         await patchVoucherFields(companyId, sourceVoucherId, { allocations });
@@ -447,10 +821,18 @@ export function LinkAdvancesToVoucherDialog({
     setSaving(false);
   };
 
-  const title = mode === "sale" ? "Link Sale to Linkable Cr Txns" : "Link Purchase to Linkable Dr Txns";
+  const title = salePurchaseLinkDialogTitle(linkLegKind);
   const subLabel = targetLabel || (mode === "sale" ? "Sale" : "Purchase");
   const remainingToLink = Math.max(0, targetOutstanding - totalLinked);
-  const sectionTitle = mode === "sale" ? "Cr transactions (same party)" : "Dr transactions (same party)";
+  const taxLabel = linkAccountLabel || taxAccountIdForLeg || "Tax";
+  const sectionTitle = isTaxishLeg
+    ? `Payment / journal vouchers (same ${linkLegKind === "tds" ? "TDS" : "tax"} · ${taxLabel})`
+    : crossEntityTaxIdSet.size > 0
+      ? `Party + allowed tax/TDS payments (Link allocation)`
+      : mode === "sale"
+        ? "Cr transactions (same party)"
+        : "Dr transactions (same party)";
+  const toAccountLabel = isTaxishLeg ? taxLabel : targetPartyName || "—";
   const isMobile = useIsMobile();
   const targetVoucherDate = safeToDate((targetVoucher as any)?.date);
 
@@ -467,7 +849,9 @@ export function LinkAdvancesToVoucherDialog({
       >
         <DialogHeader className="flex-shrink-0 space-y-0.5 text-center sm:text-center">
           {/* Code (2) = Link payment to this Sale/Purchase popup — so user can say which popup when reporting */}
-          <p className="text-xs text-muted-foreground leading-tight">Link for bill wise (2)</p>
+          <p className="text-xs text-muted-foreground leading-tight">
+            {salePurchaseLinkDialogEyebrow(linkLegKind)} (2)
+          </p>
           <DialogTitle className="text-xl leading-tight">{title}</DialogTitle>
           {targetOutstanding > 0 && (
             <div className="flex flex-wrap items-center justify-center gap-4 text-sm pt-1 hidden md:flex">
@@ -502,7 +886,7 @@ export function LinkAdvancesToVoucherDialog({
                 <tr className="border-b last:border-b-0">
                   <td className="p-2 text-muted-foreground whitespace-nowrap">{targetVoucherDate ? formatDate(targetVoucherDate) : "—"}</td>
                   <td className="p-2 font-medium whitespace-nowrap">{(targetVoucher as any)?.voucherNumber ?? subLabel ?? "—"}</td>
-                  <td className="p-2 whitespace-nowrap">{targetPartyName || "—"}</td>
+                  <td className="p-2 whitespace-nowrap">{toAccountLabel}</td>
                   <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(targetOutstanding, { noSuffix: true })}</td>
                   <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(totalLinked, { noSuffix: true })}</td>
                   <td className="p-2 text-right font-medium whitespace-nowrap">{formatCurrency(remainingToLink, { noSuffix: true })}</td>

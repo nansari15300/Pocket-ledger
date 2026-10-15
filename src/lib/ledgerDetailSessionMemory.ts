@@ -64,3 +64,86 @@ export function clearLedgerDetailOpenVoucher(key: string): void {
     /* ignore */
   }
 }
+
+/** Party Account Balance vs Sale/Pur TDS card — survive refresh for same party. */
+export type PartyTdsLedgerViewMode = "account" | "sale" | "purchase" | "tds";
+
+export function partyTdsLedgerModeStorageKey(companyId: string, partyId: string): string {
+  return `pl-party-tds-ledger-mode:${companyId}:${partyId}`;
+}
+
+/** @deprecated Prefer readPartyTdsLedgerViewMode — kept for boolean callers. */
+export function readPartyTdsLedgerMode(companyId: string, partyId: string): boolean {
+  const mode = readPartyTdsLedgerViewMode(companyId, partyId);
+  return mode !== "account";
+}
+
+export function readPartyTdsLedgerViewMode(
+  companyId: string,
+  partyId: string
+): PartyTdsLedgerViewMode {
+  if (typeof window === "undefined") return "account";
+  try {
+    const v = sessionStorage.getItem(partyTdsLedgerModeStorageKey(companyId, partyId));
+    if (v === "sale" || v === "purchase" || v === "tds") return v;
+    if (v === "1") return "tds";
+    return "account";
+  } catch {
+    return "account";
+  }
+}
+
+/** @deprecated Prefer writePartyTdsLedgerViewMode. */
+export function writePartyTdsLedgerMode(
+  companyId: string,
+  partyId: string,
+  tdsLedgerOnly: boolean
+): void {
+  writePartyTdsLedgerViewMode(companyId, partyId, tdsLedgerOnly ? "tds" : "account");
+}
+
+export function writePartyTdsLedgerViewMode(
+  companyId: string,
+  partyId: string,
+  mode: PartyTdsLedgerViewMode
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(
+      partyTdsLedgerModeStorageKey(companyId, partyId),
+      mode === "account" ? "0" : mode
+    );
+  } catch {
+    /* ignore quota */
+  }
+}
+
+/** Staff Account Balance vs TDS Balance card — survive refresh for same staff. */
+export function staffTdsLedgerModeStorageKey(companyId: string, staffId: string): string {
+  return `pl-staff-tds-ledger-mode:${companyId}:${staffId}`;
+}
+
+export function readStaffTdsLedgerMode(companyId: string, staffId: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return sessionStorage.getItem(staffTdsLedgerModeStorageKey(companyId, staffId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function writeStaffTdsLedgerMode(
+  companyId: string,
+  staffId: string,
+  tdsLedgerOnly: boolean
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(
+      staffTdsLedgerModeStorageKey(companyId, staffId),
+      tdsLedgerOnly ? "1" : "0"
+    );
+  } catch {
+    /* ignore quota */
+  }
+}

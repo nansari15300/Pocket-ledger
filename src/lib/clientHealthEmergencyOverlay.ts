@@ -1,8 +1,20 @@
 "use client";
 
-import { getClientHealthExportText } from "@/lib/clientHealthMonitor";
+import {
+  getClientHealthExportText,
+  isBenignResizeObserverMessage,
+} from "@/lib/clientHealthMonitor";
 
 const OVERLAY_ID = "pl-ui-health-emergency-overlay";
+const DEFAULT_MIN_VISIBLE_MS = 5000;
+
+let overlayVisibleSince = 0;
+let overlayMinVisibleMs = DEFAULT_MIN_VISIBLE_MS;
+
+export function canDismissClientHealthEmergencyOverlay(): boolean {
+  if (!overlayVisibleSince) return true;
+  return Date.now() - overlayVisibleSince >= overlayMinVisibleMs;
+}
 
 function copyText(text: string): void {
   void navigator.clipboard?.writeText(text).catch(() => {
@@ -11,9 +23,20 @@ function copyText(text: string): void {
 }
 
 /** Lightweight full-screen layer — no Radix/React; opens fast after main thread unblocks. */
-export function showClientHealthEmergencyOverlay(reason: string, onResume: () => void): void {
+export function showClientHealthEmergencyOverlay(
+  reason: string,
+  onResume: () => void,
+  opts?: { minVisibleMs?: number }
+): void {
   if (typeof document === "undefined") return;
-  if (document.getElementById(OVERLAY_ID)) return;
+  if (isBenignResizeObserverMessage(reason)) return;
+  const existing = document.getElementById(OVERLAY_ID);
+  if (existing) {
+    overlayMinVisibleMs = opts?.minVisibleMs ?? overlayMinVisibleMs;
+    return;
+  }
+  overlayMinVisibleMs = opts?.minVisibleMs ?? DEFAULT_MIN_VISIBLE_MS;
+  overlayVisibleSince = Date.now();
 
   const root = document.createElement("div");
   root.id = OVERLAY_ID;
@@ -75,10 +98,28 @@ export function showClientHealthEmergencyOverlay(reason: string, onResume: () =>
   refreshBtn.onclick = () => {
     ta.value = getClientHealthExportText();
   };
+  const syncResumeButton = () => {
+    const left = overlayMinVisibleMs - (Date.now() - overlayVisibleSince);
+    if (left <= 0) {
+      resumeBtn.disabled = false;
+      resumeBtn.style.opacity = "1";
+      resumeBtn.style.cursor = "pointer";
+      resumeBtn.textContent = "Resume app";
+      return;
+    }
+    resumeBtn.disabled = true;
+    resumeBtn.style.opacity = "0.55";
+    resumeBtn.style.cursor = "not-allowed";
+    resumeBtn.textContent = `Resume (${Math.ceil(left / 1000)}s)`;
+    window.setTimeout(syncResumeButton, 250);
+  };
+
   resumeBtn.onclick = () => {
+    if (!canDismissClientHealthEmergencyOverlay()) return;
     hideClientHealthEmergencyOverlay();
     onResume();
   };
+  syncResumeButton();
 
   row.append(refreshBtn, copyBtn, resumeBtn);
   card.append(title, desc, reasonEl, ta, row);
@@ -95,6 +136,7 @@ export function showClientHealthEmergencyOverlay(reason: string, onResume: () =>
 
 export function hideClientHealthEmergencyOverlay(): void {
   document.getElementById(OVERLAY_ID)?.remove();
+  overlayVisibleSince = 0;
 }
 
 export function refreshClientHealthEmergencyOverlayLog(): void {

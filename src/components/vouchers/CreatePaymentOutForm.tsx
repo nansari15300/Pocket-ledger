@@ -4097,6 +4097,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           paymentOutVoucherNumber={form.watch("voucherNumber") || undefined}
           paymentOutDate={form.watch("date")}
           partyOpeningBalance={processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0}
+          linkEntityKind="party"
+          linkAccountId={partyId || undefined}
           dialogTitle="Link Payment Out to Linkable Cr Txns"
           onDone={(allocs, _amount) => {
             // Link save only on local; server save when user clicks Save on voucher
@@ -4126,10 +4128,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               <DialogTitle>Link payment to tax</DialogTitle>
             </DialogHeader>
             <p className="text-sm text-muted-foreground">
-              Allocate this payment out to vouchers with outstanding tax for {processedTaxes.find((t) => t.id === taxAccountId)?.name ?? (processedTaxes.find((t) => t.id === taxAccountId) as any)?.label ?? "selected tax"} (e.g. Add Salary tax, sale/purchase tax). This flow mirrors Link to Cr for party.
+              Allocate this payment out to vouchers with outstanding tax for{" "}
+              {processedTaxes.find((t) => t.id === taxAccountId)?.name ??
+                (processedTaxes.find((t) => t.id === taxAccountId) as any)?.label ??
+                "selected tax"}{" "}
+              (e.g. Add Salary tax, sale/purchase tax). Use Add Salary → Link (Tax) to write
+              entity-scoped tax links; staff Payment Out uses separate staff entityTxnId so Status
+              does not cross over.
             </p>
             <div className="flex justify-end pt-2">
-              <Button type="button" variant="outline" onClick={() => setIsLinkToTaxDialogOpen(false)}>Close</Button>
+              <Button type="button" variant="outline" onClick={() => setIsLinkToTaxDialogOpen(false)}>
+                Close
+              </Button>
             </div>
           </DialogContent>
         </Dialog>

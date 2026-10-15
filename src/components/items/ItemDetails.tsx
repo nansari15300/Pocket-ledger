@@ -63,6 +63,14 @@ import { cn } from "@/lib/utils";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
 import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { MobileEntityLedgerFooterPrintButton } from "@/components/entity/MobileEntityLedgerFooterPrintButton";
+import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
   patchMasterDetailUrlAfterModalClose,
@@ -79,6 +87,7 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_ICON_TILE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
@@ -613,6 +622,10 @@ export default function ItemDetails({
     () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, includeNotesInTable]
   );
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(displayTransactions),
+    [displayTransactions]
+  );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
@@ -900,6 +913,40 @@ export default function ItemDetails({
     ...statementCheck.tableProps,
   };
 
+  const mobileEntityTxnToolbar = (
+    <MobileEntityTxnToolbarRow placement="belowPager">
+      <MobileEntityTxnToolbarPicker>
+        <Combobox
+          options={processedItems?.map(p => ({ value: p.id, label: p.name })) ?? []}
+          value={currentItem?.id || ""}
+          onChange={(value) => {
+            if (value && value !== currentItem.id) {
+              router.push(`/items/${value}`);
+            }
+          }}
+          placeholder="Select an item"
+        />
+      </MobileEntityTxnToolbarPicker>
+      <MobileEntityTxnToolbarUnapprovedBadge
+        count={mobileUnapprovedTxnCount}
+        pressed={unapprovedOnly}
+        onToggle={toggleUnapprovedOnly}
+      />
+      <MobileEntityTxnToolbarSearch>
+        <Search className={mdc.mobileTxnToolbarSearchIcon} />
+        <Input
+          placeholder="Search transactions"
+          className={mdc.mobileTxnToolbarSearchInput}
+          value={mobileSearchTerm}
+          onChange={(e) => {
+            setMobileSearchTerm(e.target.value);
+            setCurrentPage(1);
+          }}
+        />
+      </MobileEntityTxnToolbarSearch>
+    </MobileEntityTxnToolbarRow>
+  );
+
   const renderMobileView = () => (
     <>
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
@@ -922,7 +969,7 @@ export default function ItemDetails({
           </div>
         ) : null}
         {/* Balance — party jaisa center line (unit dropdown same row, h-8) */}
-        <div className={cn(mdc.mobileTxnBalanceRowInline, "bg-background")} {...mdcMobileTxnBalanceRowData}>
+        <div className={mdc.mobileTxnBalanceRowInline} {...mdcMobileTxnBalanceRowData}>
           <p className={cn(mdc.mobileTxnBalanceTextLg, headerStockValue >= 0 ? "text-green-600" : "text-red-600")}>
             {balanceText}{" "}
             {stockView === "qty" ? formatQtyValue(headerStockValue) : formatMoney(Math.abs(headerStockValue), { noSuffix: true })}
@@ -941,44 +988,6 @@ export default function ItemDetails({
               </SelectContent>
             </Select>
           ) : null}
-        </div>
-        <div className="flex flex-shrink-0 items-stretch gap-1.5 border-b bg-background px-2 py-1">
-          <div className="h-8 min-w-0 flex-1 [&_button]:h-8 [&_button]:text-xs">
-            <Combobox
-              options={processedItems?.map(p => ({ value: p.id, label: p.name })) ?? []}
-              value={currentItem?.id || ""}
-              onChange={(value) => {
-                  if (value && value !== currentItem.id) {
-                      router.push(`/items/${value}`);
-                  }
-              }}
-              placeholder="Select an item"
-            />
-          </div>
-          {currentItem?.id !== "all" && (
-            <EditItemDialog
-              item={currentItem}
-              onItemUpdated={handleItemUpdated}
-              onItemDeleted={() => onItemDeleted(currentItem!.id)}
-              hasTransactions={processedTransactions.length > 0}
-            >
-              <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                <Edit className="h-3.5 w-3.5" />
-              </Button>
-            </EditItemDialog>
-          )}
-          <div className="relative h-8 min-w-0 flex-1">
-                <Search className="pointer-events-none absolute left-2 top-1/2 z-10 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Search transactions"
-                  className="h-8 w-full min-w-0 pl-7 text-xs"
-                  value={mobileSearchTerm}
-                  onChange={(e) => {
-                    setMobileSearchTerm(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                />
-            </div>
         </div>
         </MobileDetailSummaryCollapsible>
       </div>
@@ -1003,16 +1012,18 @@ export default function ItemDetails({
       }}
       onPageChange={setCurrentPage}
       edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+      txnToolbar={mobileEntityTxnToolbar}
     />
     </div>
     {/* Fixed bottom: New Sale, New Purchase, Calendar - same as Party footer style */}
-    <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+    <div
+      className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5"
+      data-pl-mobile-ledger-action-footer=""
+    >
       <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("sale"); openModalInUrl(); }}>
         New Sale
       </Button>
-      <Button className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("purchase"); openModalInUrl(); }}>
-        New Purchase
-      </Button>
+      <MobileEntityLedgerFooterPrintButton onClick={handlePrint} />
       <AddVoucherDialog
         isOpen={!!mobileFooterDialogOpen}
         onOpenChange={(open: boolean) => {
@@ -1117,8 +1128,8 @@ export default function ItemDetails({
         <div className={LEDGER_HEADER_OUTER_ROW_CN}>
           <div className={LEDGER_HEADER_IDENTITY_CN}>
             <div className={LEDGER_HEADER_AVATAR_CN}>
-              <div className="p-3 bg-muted rounded-full">
-                <Package className="w-6 h-6 text-muted-foreground" />
+              <div className={LEDGER_HEADER_AVATAR_ICON_TILE_CN}>
+                <Package className="h-6 w-6 text-muted-foreground" />
               </div>
               {currentItem.id !== 'all' && (
                 <EditItemDialog

@@ -157,7 +157,11 @@ import { LinkAdvancesToVoucherDialog } from '@/components/vouchers/LinkAdvancesT
 import { LinkPaymentToTxnsDialog } from '@/components/vouchers/LinkPaymentToTxnsDialog';
 import { toast } from 'sonner';
 import { getCompanyDocFromBrowserDb } from '@/lib/localCompanyDocMirror';
-import { useTransactions } from '@/hooks/use-transactions';
+import {
+  useTransactions,
+  DAYBOOK_TRANSACTIONS_ENTITY,
+  EMPTY_TRANSACTIONS_LIST,
+} from '@/hooks/use-transactions';
 import { useFeatureAccess } from '@/hooks/use-feature-access';
 import { FinancialSummaryCards } from '@/components/reports/FinancialSummaryCards';
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
@@ -1106,36 +1110,41 @@ export function DashboardPageContentImpl() {
 
   const journalAccountNames = voucherJournalAccountNames;
 
-  const fetchUserName = React.useCallback(
-    async (userId: string): Promise<string> => {
-        if (!userId) return "N/A";
-        if (userNames[userId] && userNames[userId] !== "Unknown") return userNames[userId];
-        try {
-            // User doc ID may be name_uid format, so query by uid field first
-            const q = query(collection(firestore, "users"), where("uid", "==", userId));
-            const snap = await getDocs(q);
-            let data = snap.docs[0]?.data();
-            
-            if (!data) {
-                // Fallback: doc ID might be uid (legacy)
-                const userDoc = await getDoc(doc(firestore, "users", userId));
-                if (userDoc.exists()) {
-                    data = userDoc.data();
-                }
-            }
-            
-            if (data) {
-                // Get displayName from user document - this is the primary field
-                const displayName = data.displayName || data.name || data.email || null;
-                if (displayName && displayName !== userId && !displayName.match(/^[a-zA-Z0-9_-]{20,}$/)) {
-                    setUserNames(prev => ({...prev, [userId]: displayName}));
-                    return displayName;
-                }
-            }
-        } catch(e) { console.error(e) }
-        return "N/A"; // Return N/A instead of Unknown
-    }, [userNames]
-  );
+  const userNamesRef = useRef(userNames);
+  userNamesRef.current = userNames;
+  const fetchUserName = React.useCallback(async (userId: string): Promise<string> => {
+    if (!userId) return "N/A";
+    const cached = userNamesRef.current[userId];
+    if (cached && cached !== "Unknown") return cached;
+    try {
+      // User doc ID may be name_uid format, so query by uid field first
+      const q = query(collection(firestore, "users"), where("uid", "==", userId));
+      const snap = await getDocs(q);
+      let data = snap.docs[0]?.data();
+
+      if (!data) {
+        // Fallback: doc ID might be uid (legacy)
+        const userDoc = await getDoc(doc(firestore, "users", userId));
+        if (userDoc.exists()) {
+          data = userDoc.data();
+        }
+      }
+
+      if (data) {
+        // Get displayName from user document - this is the primary field
+        const displayName = data.displayName || data.name || data.email || null;
+        if (displayName && displayName !== userId && !displayName.match(/^[a-zA-Z0-9_-]{20,}$/)) {
+          setUserNames((prev) =>
+            prev[userId] === displayName ? prev : { ...prev, [userId]: displayName }
+          );
+          return displayName;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return "N/A"; // Return N/A instead of Unknown
+  }, []);
   
   React.useEffect(() => {
     if (!companyId) {
@@ -1157,15 +1166,16 @@ export function DashboardPageContentImpl() {
   }, [vouchersLoading]);
 
   React.useEffect(() => {
-    if (vouchers.length > 0) {
-        const uidsToFetch = new Set(vouchers.map(v => v.userId).filter(Boolean));
-        uidsToFetch.forEach(uid => {
-            if (!userNames[uid]) {
-                fetchUserName(uid);
-            }
-        });
-    }
-  }, [vouchers, fetchUserName, userNames]);
+    if (vouchers.length === 0) return;
+    const uidsToFetch = new Set(
+      vouchers.map((v) => v.userId).filter(Boolean) as string[]
+    );
+    uidsToFetch.forEach((uid) => {
+      if (!userNamesRef.current[uid]) {
+        void fetchUserName(uid);
+      }
+    });
+  }, [vouchers, fetchUserName]);
 
   // ---------- FINANCIAL SUMMARY CALCULATION (Grouped) — shared + optional server aggregate ----------
   const needPageClientRp =
@@ -1508,9 +1518,11 @@ export function DashboardPageContentImpl() {
     ? undefined
     : resolveDashboardRecentDateRange(recentDateRange, dateSystem);
   const effectiveRecentFilters = recentUnapprovedOnly ? {} : recentFilters;
-  const vouchersForRecentPipeline = dashboardRecentPipelineActive ? vouchers : [];
+  const vouchersForRecentPipeline = dashboardRecentPipelineActive
+    ? vouchers
+    : EMPTY_TRANSACTIONS_LIST;
   const { daybookTransactions: allRecentTransactions } = useTransactions(
-    { id: 'daybook', items: [] },
+    DAYBOOK_TRANSACTIONS_ENTITY,
     'daybook',
     effectiveRecentDateRange,
     undefined,
@@ -1578,6 +1590,7 @@ export function DashboardPageContentImpl() {
     recentSearchSlowBrakeAtRef.current = now;
     engageClientHealthEmergencyBrake(
       `Recent search filter took ${(elapsed / 1000).toFixed(1)}s (threshold 5s). Copy log if needed, then Resume.`,
+      { detectedStallMs: elapsed }
     );
   }, [recentPoolBeforeLimit, recentQuickSearchInput]);
 
@@ -2443,7 +2456,7 @@ export function DashboardPageContentImpl() {
             "w-full",
             recentTransactionsCompact
               ? "overflow-x-auto px-0"
-              : "flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden pb-0 pr-1",
+              : "flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden pb-0",
           )}
           {...(!recentTransactionsCompact && recentFooterRibbonAligned
             ? { "data-pl-dashboard-recent-scroll": "" }
@@ -2677,7 +2690,7 @@ export function DashboardPageContentImpl() {
             ? {
                 paddingTop: RECENT_DESKTOP_EDGE_GAP_PX,
                 paddingLeft: RECENT_DESKTOP_EDGE_GAP_PX,
-                paddingRight: RECENT_DESKTOP_EDGE_GAP_PX,
+                paddingRight: 0,
               }
             : {}),
           ["--pl-dashboard-recent-edge-gap"]: `${RECENT_DESKTOP_EDGE_GAP_PX}px`,

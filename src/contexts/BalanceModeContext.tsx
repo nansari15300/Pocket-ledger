@@ -79,6 +79,6 @@ export function useBalanceMode(): BalanceModeContextType {
 }
 
 /** @internal tests / migration */
-export function __defaultLedgerBalanceViewMode(section: "party" | "staff"): BalanceMode {
+export function __defaultLedgerBalanceViewMode(section: "party" | "staff" | "tax"): BalanceMode {
   return defaultLedgerBalanceViewMode(section);
 }

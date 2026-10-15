@@ -116,6 +116,11 @@ export function sortTransactions<T = any>(
   return [...list].sort(compare);
 }
 
+export type RecomputeRunningBalanceOptions = {
+  /** When set, use these Dr/Cr for the running chain (e.g. tax Unverified TDS → 0). */
+  booksDrCrForRow?: (tx: any) => { debit: number; credit: number };
+};
+
 /**
  * Sirf current page ki rows par sort — poori list ka paging window same rahe (tail page 46–55 wahi rahe).
  * Running balance page opening se dubara compute hota hai display order me.
@@ -125,14 +130,15 @@ export function sortAndRebalancePageTransactions<T = any>(
   openingForPage: number,
   sortBy: TransactionSortBy,
   sortOrder: TransactionSortOrder,
-  fiscalPartitionAts?: Date[]
+  fiscalPartitionAts?: Date[],
+  rebalanceOptions?: RecomputeRunningBalanceOptions
 ): T[] {
   if (!pageRows?.length) return pageRows ?? [];
   const sorted =
     fiscalPartitionAts?.length
       ? sortTransactionsWithFiscalSegments(pageRows, sortBy, sortOrder, undefined, fiscalPartitionAts)
       : sortTransactions(pageRows, sortBy, sortOrder);
-  return recomputeRunningBalanceTopToBottom(sorted, openingForPage);
+  return recomputeRunningBalanceTopToBottom(sorted, openingForPage, rebalanceOptions);
 }
 
 /** Merge divider ke liye din — fiscalPartitionRows.rowSortTime jaisa (segment split). */
@@ -254,7 +260,11 @@ export function stampRunningBalanceFromFullLedger<T extends { id?: string; balan
 }
 
 /** Recompute running balance in current visible order (top to bottom), used after custom sorting in statement view. */
-export function recomputeRunningBalanceTopToBottom<T = any>(list: T[], openingBalance: number): T[] {
+export function recomputeRunningBalanceTopToBottom<T = any>(
+  list: T[],
+  openingBalance: number,
+  options?: RecomputeRunningBalanceOptions
+): T[] {
   let running = Number(openingBalance) || 0;
   return (list || []).map((tx: any) => {
     if (tx?.type === "opening_balance") {
@@ -266,7 +276,10 @@ export function recomputeRunningBalanceTopToBottom<T = any>(list: T[], openingBa
     if (tx?.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
       return { ...tx, runningBalance: running, balance: running } as T;
     }
-    running += (Number(tx?.debit) || 0) - (Number(tx?.credit) || 0);
+    const books = options?.booksDrCrForRow
+      ? options.booksDrCrForRow(tx)
+      : { debit: Number(tx?.debit) || 0, credit: Number(tx?.credit) || 0 };
+    running += (Number(books.debit) || 0) - (Number(books.credit) || 0);
     return { ...tx, runningBalance: running, balance: running } as T;
   });
 }

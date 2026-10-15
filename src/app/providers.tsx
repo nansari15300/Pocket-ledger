@@ -60,6 +60,7 @@ import { DaybookWedgeSyncManager } from "@/components/wedge/DaybookWedgeSyncMana
 import { WebAppBasePathUrlGuard } from "@/components/WebAppBasePathUrlGuard";
 import { PlUiHealthBrakeGate } from "@/components/debug/PlUiHealthBrakeGate";
 import { ClientHealthGlobalBootstrap } from "@/components/debug/ClientHealthGlobalBootstrap";
+import { ClientHealthMonitorBootstrap } from "@/components/debug/ClientHealthMonitorBootstrap";
 import { ClientHealthMonitorSnapshotSync } from "@/components/debug/ClientHealthMonitorSnapshotSync";
 
 /** Local-only app start: sql.js init pehle se — refresh par company turant SQLite se load. */
@@ -116,7 +117,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         }
       });
       try {
-        obs.observe({ type: "longtask", buffered: true } as PerformanceObserverInit);
+        obs.observe({ type: "longtask", buffered: false } as PerformanceObserverInit);
       } catch {
         // Browser without longtask support: skip silently.
       }
@@ -136,6 +137,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
             <GateProvider>
             <CompanyProvider>
                 <ClientHealthMonitorSnapshotSync />
+                <ClientHealthMonitorBootstrap />
                 <EmbeddedStartupPrimeBootstrap />
                 <SqlitePrewarmBootstrap />
                 <CrossCompanyAttachmentAccessBridge />

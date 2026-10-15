@@ -11,7 +11,6 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills, LedgerViewModeToggleButton } from "@/components/ui/LedgerViewModePills";
-import { LedgerTdsFilterPill } from "@/components/ui/LedgerTdsFilterPill";
 import {
   Card,
   CardHeader,
@@ -28,7 +27,6 @@ import {
   ChevronRight,
   ChevronsRight,
   FilePlus,
-  FileText,
   Search,
   Filter,
   XCircle,
@@ -56,7 +54,20 @@ import {
   nestedLedgerChildDialogShell,
   type MasterEditPresentationMode,
 } from "@/lib/nestedLedgerMasterEditPresentation";
-import { mdc, mdcMobileTxnBalanceRowData, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
+import {
+  mdc,
+  mdcMobileTxnBalanceRowData,
+  mdcMobileTxnDateRowData,
+  mobileTxnScrollBodyClass,
+} from "@/lib/mobileDetailChrome";
+import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { MobileEntityLedgerFooterPrintButton } from "@/components/entity/MobileEntityLedgerFooterPrintButton";
 import * as XLSX from "xlsx";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 import { RunningBalanceFullChart } from "@/components/reports/RunningBalanceFullChart";
@@ -151,8 +162,11 @@ import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFi
 import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
 import {
   ledgerDetailSessionStorageKey,
+  readPartyTdsLedgerViewMode,
   writeLedgerDetailSessionSnapshot,
+  writePartyTdsLedgerViewMode,
   type LedgerDetailViewMode,
+  type PartyTdsLedgerViewMode,
 } from "@/lib/ledgerDetailSessionMemory";
 import { LedgerHeaderPrintButton } from "@/components/vouchers/LedgerHeaderPrintButton";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
@@ -175,6 +189,7 @@ import {
   ledgerTdsFooterColumnMenuKeys,
   mergeLedgerTdsVisibleColumnsWithPrefs,
   sortLedgerTdsRowsForDisplay,
+  summarizePartyTdsBalances,
 } from "@/lib/partyLedgerTdsView";
 import { mergeLedgerUserDisplayNameMaps } from "@/lib/ledgerUserColumnDisplay";
 import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
@@ -211,6 +226,7 @@ import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { getLocalAuthUser } from "@/lib/localApiClient";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
+import { MobileLedgerFooterChevronFab } from "@/components/layout/MobileLedgerFooterChevronFab";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { GroupDetailNestedNameHeader } from "@/components/entity/GroupDetailNestedNameHeader";
@@ -224,11 +240,14 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_TRIGGER_CN,
+  LEDGER_HEADER_AVATAR_IMAGE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
   LEDGER_HEADER_BALANCE_STACK_CN,
   LEDGER_HEADER_BALANCE_LABEL_CN,
+  LEDGER_HEADER_TDS_BALANCE_CARD_CN,
   LEDGER_HEADER_TITLE_CN,
   LEDGER_HEADER_BALANCE_CN,
   LEDGER_HEADER_PILL_CN,
@@ -984,7 +1003,12 @@ export function PartyDetails({
     [displayTransactions, statusFilter]
   );
 
-  const [tdsLedgerOnly, setTdsLedgerOnly] = useState(false);
+  const [tdsLedgerViewMode, setTdsLedgerViewMode] = useState<PartyTdsLedgerViewMode>(() =>
+    companyId && party?.id ? readPartyTdsLedgerViewMode(companyId, party.id) : "account"
+  );
+  const tdsLedgerOnly = tdsLedgerViewMode !== "account";
+  /** Party TDS details: show entity-wise linked settlement payments/journals. */
+  const [showTdsLinkedTrxn, setShowTdsLinkedTrxn] = useState(true);
   const taxNameById = useMemo(() => buildTaxNameById(processedTaxes), [processedTaxes]);
   const vouchersByIdForTds = useMemo(() => {
     const src = vouchersAll?.length ? vouchersAll : vouchers;
@@ -994,11 +1018,30 @@ export function PartyDetails({
   }, [vouchers, vouchersAll]);
   const ledgerTableSourceTransactions = useMemo(() => {
     if (!tdsLedgerOnly) return statusFilteredTransactions;
-    return expandPartyLedgerTdsRows(statusFilteredTransactions, taxNameById, {
+    const rows = expandPartyLedgerTdsRows(statusFilteredTransactions, taxNameById, {
       partyId: party.id,
       voucherById: vouchersByIdForTds,
+      includeSettlements: showTdsLinkedTrxn,
     });
-  }, [statusFilteredTransactions, tdsLedgerOnly, taxNameById, party.id, vouchersByIdForTds]);
+    if (tdsLedgerViewMode === "sale" || tdsLedgerViewMode === "purchase") {
+      return rows.filter(
+        (r) => String((r as { _ledgerTdsSide?: unknown })._ledgerTdsSide ?? "").toLowerCase() === tdsLedgerViewMode
+      );
+    }
+    return rows;
+  }, [
+    statusFilteredTransactions,
+    tdsLedgerOnly,
+    tdsLedgerViewMode,
+    taxNameById,
+    party.id,
+    vouchersByIdForTds,
+    showTdsLinkedTrxn,
+  ]);
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(ledgerTableSourceTransactions),
+    [ledgerTableSourceTransactions]
+  );
 
   const effectiveVisibleColumns = useMemo(() => {
     if (tdsLedgerOnly) {
@@ -1009,14 +1052,48 @@ export function PartyDetails({
     return { ...base, tdsTaxable: false, tdsAmount: false };
   }, [tdsLedgerOnly, balanceMode, visibleColumns]);
 
-  const toggleTdsLedgerOnly = useCallback(() => {
-    setTdsLedgerOnly((prev) => !prev);
-    setCurrentPage(1);
-  }, [setCurrentPage]);
+  const setPartyTdsLedgerView = useCallback(
+    (mode: PartyTdsLedgerViewMode) => {
+      setTdsLedgerViewMode(mode);
+      if (companyId && party?.id) writePartyTdsLedgerViewMode(companyId, party.id, mode);
+      setCurrentPage(1);
+    },
+    [companyId, party?.id, setCurrentPage]
+  );
+  const openPartyLedgerDetails = useCallback(() => {
+    setPartyTdsLedgerView("account");
+  }, [setPartyTdsLedgerView]);
+  const openSaleTdsLedgerDetails = useCallback(() => {
+    setPartyTdsLedgerView("sale");
+  }, [setPartyTdsLedgerView]);
+  const openPurTdsLedgerDetails = useCallback(() => {
+    setPartyTdsLedgerView("purchase");
+  }, [setPartyTdsLedgerView]);
+  const tdsClosingBalanceLabel =
+    tdsLedgerViewMode === "sale"
+      ? "Sale TDS Closing Balance"
+      : tdsLedgerViewMode === "purchase"
+        ? "Pur TDS Closing Balance"
+        : tdsLedgerOnly
+          ? "TDS Closing Balance"
+          : undefined;
 
+  const partyTdsBalanceSummary = useMemo(
+    () =>
+      summarizePartyTdsBalances(statusFilteredTransactions as Record<string, unknown>[], taxNameById, {
+        partyId: party.id,
+        voucherById: vouchersByIdForTds,
+      }),
+    [statusFilteredTransactions, taxNameById, party.id, vouchersByIdForTds]
+  );
+  const partyTdsHasSale = partyTdsBalanceSummary.saleTds > 0;
+  const partyTdsHasPur = partyTdsBalanceSummary.purchaseTds > 0;
   useEffect(() => {
-    setTdsLedgerOnly(false);
-  }, [party.id]);
+    setTdsLedgerViewMode(
+      companyId && party.id ? readPartyTdsLedgerViewMode(companyId, party.id) : "account"
+    );
+    setShowTdsLinkedTrxn(true);
+  }, [companyId, party.id]);
 
   // Sort state: footer dropdown â€” sirf current page par apply (paging hook); list chronological rahe
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
@@ -1080,6 +1157,10 @@ export function PartyDetails({
     enabled: Boolean(party?.id && party.id !== "all"),
   });
 
+  /** TDS details: running balance starts at 0 (only TDS Dr/Cr), not party books opening. */
+  const tdsLedgerOpeningForRunning = 0;
+  const ledgerOpeningForPaging = tdsLedgerOnly ? tdsLedgerOpeningForRunning : ledgerOpeningForRunning;
+
   // Statement check mode + tail paging (PC footer Check mode + hidden-row totals)
   const {
     statementCheck,
@@ -1096,20 +1177,25 @@ export function PartyDetails({
     searchFilteredTransactions,
     rowsPerPage,
     currentPage,
-    ledgerOpeningForRunning,
+    ledgerOpeningForRunning: ledgerOpeningForPaging,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
     company,
   });
 
-  /** Default tail view page 1 = newest rows — footer shows full ledger closing, not slice math. */
+  /** Footer Closing Balance: TDS details → TDS net; else party account closing. */
   const ledgerFooterClosingBalance = useMemo(() => {
+    if (tdsLedgerOnly) {
+      if (ledgerClosingAfterHidden != null) return ledgerClosingAfterHidden;
+      return desktopPaginationMeta.closingForPage;
+    }
     if (ledgerClosingAfterHidden != null) return ledgerClosingAfterHidden;
     if (!dateRange?.from && !dateRange?.to && currentPage === 1) {
       return closingBalance;
     }
     return desktopPaginationMeta.closingForPage;
   }, [
+    tdsLedgerOnly,
     ledgerClosingAfterHidden,
     dateRange?.from,
     dateRange?.to,
@@ -1118,13 +1204,14 @@ export function PartyDetails({
     desktopPaginationMeta.closingForPage,
   ]);
 
-  /** Opening Balance ledger header = system equity closing (− master net). */
+  /**
+   * Top BALANCE card — always party account closing (never TDS row running balance).
+   * TDS Balance card uses `partyTdsBalanceSummary` separately.
+   */
   const headerClosingBalance = useMemo(() => {
-    if (ledgerClosingAfterHidden != null) return ledgerClosingAfterHidden;
     if (isOpeningBalanceLedger && openingBalanceLedgerBreakdown) {
       return -openingBalanceLedgerBreakdown.masterTotals.netSigned;
     }
-    // Default "Last N" view: full loaded-set closing (not page slice / FY scope snapshot).
     if (
       !dateRange?.from &&
       !dateRange?.to &&
@@ -1133,21 +1220,32 @@ export function PartyDetails({
     ) {
       return closingBalance;
     }
-    const list = searchFilteredTransactions as any[];
-    if (list.length > 0) {
-      const last = list[list.length - 1];
+    // Date-filtered party closing: use party txn list (not TDS-expanded rows).
+    if (!tdsLedgerOnly && ledgerClosingAfterHidden != null) {
+      return ledgerClosingAfterHidden;
+    }
+    const partyList = (
+      tdsLedgerOnly
+        ? filterByUnapprovedOnly(statusFilteredTransactions)
+        : (searchFilteredTransactions as any[])
+    ) as any[];
+    if (!tdsLedgerOnly && partyList.length > 0) {
+      const last = partyList[partyList.length - 1];
       const bal = last?.balance ?? last?.runningBalance;
       if (typeof bal === "number" && Number.isFinite(bal)) return bal;
     }
     return ledgerOpeningForRunning + (Number(periodDr) || 0) - (Number(periodCr) || 0);
   }, [
-    ledgerClosingAfterHidden,
     isOpeningBalanceLedger,
     openingBalanceLedgerBreakdown,
-    searchFilteredTransactions,
     dateRange?.from,
     dateRange?.to,
     closingBalance,
+    tdsLedgerOnly,
+    ledgerClosingAfterHidden,
+    filterByUnapprovedOnly,
+    statusFilteredTransactions,
+    searchFilteredTransactions,
     ledgerOpeningForRunning,
     periodDr,
     periodCr,
@@ -1578,6 +1676,42 @@ export function PartyDetails({
     // All-vouchers report: sirf ek title upar â€” balance neeche summary row me rahe.
     const reportHeaderTitleOnly = isReportMobileChrome && (isAllVouchersView || party.id === "all");
 
+    const mobileEntityTxnToolbar = (
+      <MobileEntityTxnToolbarRow placement="belowPager">
+        {!hideReportPartyPicker && allParties && allParties.length > 0 && (
+          <MobileEntityTxnToolbarPicker>
+            <Combobox
+              options={partyDropdownOptions}
+              value={party.id}
+              onChange={(value) => {
+                if (!value || value === party.id) return;
+                if (onEmbeddedPartyChange) onEmbeddedPartyChange(value);
+                else router.push(`/party?selected=${value}`);
+              }}
+              placeholder="Select party"
+            />
+          </MobileEntityTxnToolbarPicker>
+        )}
+        <MobileEntityTxnToolbarUnapprovedBadge
+          count={mobileUnapprovedTxnCount}
+          pressed={unapprovedOnly}
+          onToggle={toggleUnapprovedOnly}
+        />
+        <MobileEntityTxnToolbarSearch>
+          <Search className={mdc.mobileTxnToolbarSearchIcon} />
+          <Input
+            placeholder="Search transactions"
+            className={mdc.mobileTxnToolbarSearchInput}
+            value={mobileSearchTerm}
+            onChange={(e) => {
+              setMobileSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
+          />
+        </MobileEntityTxnToolbarSearch>
+      </MobileEntityTxnToolbarRow>
+    );
+
     return (
       <>
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
@@ -1638,7 +1772,10 @@ export function PartyDetails({
           {/* Mobile: date/balance/search â€” footer chevron se collapse */}
           <MobileDetailSummaryCollapsible>
           {!hideMobilePeriodLabelRow ? (
-            <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
+            <div
+              className={cn(mdc.mobileTxnDateRow, "gap-1.5 px-2 py-1")}
+              {...mdcMobileTxnDateRowData}
+            >
               <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
               {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
                 <button
@@ -1652,8 +1789,14 @@ export function PartyDetails({
               )}
             </div>
           ) : null}
-          {/* Selected party balance (closing) */}
-          <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
+          {/* Selected party balance (closing) — click opens party ledger details */}
+          <button
+            type="button"
+            className={cn(mdc.mobileTxnBalanceRow, "w-full text-left cursor-pointer")}
+            {...mdcMobileTxnBalanceRowData}
+            onClick={openPartyLedgerDetails}
+            aria-pressed={tdsLedgerViewMode === "account"}
+          >
             <p
               className={cn(
                 mdc.mobileTxnBalanceText2xl,
@@ -1662,51 +1805,54 @@ export function PartyDetails({
             >
               {balanceLabel} {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
             </p>
-          </div>
-          {/* Dropdown + Edit icon + Search - same size (equal width & height) */}
-          <div className="p-2 border-b flex-shrink-0">
-            <div className="flex items-stretch gap-2">
-              {!hideReportPartyPicker && allParties && allParties.length > 0 && (
-                <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
-                  <Combobox
-                    options={partyDropdownOptions}
-                    value={party.id}
-                    onChange={(value) => {
-                      if (!value || value === party.id) return;
-                      // Report-embedded list: parent hi party state rakhta hai (Anusuchi 13 filtered subset)
-                      if (onEmbeddedPartyChange) onEmbeddedPartyChange(value);
-                      else router.push(`/party?selected=${value}`);
-                    }}
-                    placeholder="Select party"
-                  />
-                </div>
-              )}
-              {!hideReportPartyPicker && party.id !== "all" && !(party as any).isSystemAccount && (
-                <EditPartyDialog
-                  party={party}
-                  onPartyUpdated={handlePartyUpdated}
-                  onPartyDeleted={() => onPartyDeleted(party.id)}
-                  hasTransactions={processedTransactions.length > 0}
-                >
-                  <Button variant="outline" size="icon" className="h-9 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditPartyDialog>
-              )}
-              <div className="flex-1 min-w-0 h-9 relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-                <Input
-                  placeholder="Search transactions"
-                  className="pl-8 h-9 text-sm w-full min-w-0"
-                  value={mobileSearchTerm}
-                  onChange={(e) => {
-                    setMobileSearchTerm(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                />
+          </button>
+          {partyTdsBalanceSummary.hasAny ? (
+            <div className="flex w-full items-end gap-2 px-2 pb-1">
+              <div className="flex min-w-0 flex-1 flex-wrap items-end gap-3">
+                {partyTdsHasSale ? (
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-col gap-0.5 text-left cursor-pointer"
+                    onClick={openSaleTdsLedgerDetails}
+                    aria-pressed={tdsLedgerViewMode === "sale"}
+                  >
+                    <span className="text-[10px] font-semibold tracking-wide text-muted-foreground">
+                      Sale TDS Balance
+                    </span>
+                    <span className="text-sm font-bold text-green-600">
+                      {formatCurrency(partyTdsBalanceSummary.saleTds, { showDrCr: true })}
+                    </span>
+                  </button>
+                ) : null}
+                {partyTdsHasPur ? (
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-col gap-0.5 text-left cursor-pointer"
+                    onClick={openPurTdsLedgerDetails}
+                    aria-pressed={tdsLedgerViewMode === "purchase"}
+                  >
+                    <span className="text-[10px] font-semibold tracking-wide text-muted-foreground">
+                      Pur TDS Balance
+                    </span>
+                    <span className="text-sm font-bold text-red-600">
+                      {formatCurrency(-partyTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+                    </span>
+                  </button>
+                ) : null}
               </div>
+              {tdsLedgerOnly ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowTdsLinkedTrxn((v) => !v)}
+                  className="h-7 shrink-0 px-2 text-xs"
+                >
+                  {showTdsLinkedTrxn ? "Hide linked trxn" : "Show linked trxn"}
+                </Button>
+              ) : null}
             </div>
-          </div>
+          ) : null}
           </MobileDetailSummaryCollapsible>
           {/* Transaction list â€” report: table + pager ek scroll (100/All par gap fix); ledger: pager bahar */}
           <div
@@ -1728,13 +1874,13 @@ export function PartyDetails({
             <TransactionsTable
               transactions={paginatedTransactions}
               ledgerTransactionsForFyOpening={ledgerListForPaging}
-              fyLedgerScopeOpeningBalance={ledgerOpeningForRunning}
+              fyLedgerScopeOpeningBalance={ledgerOpeningForPaging}
               context={transactionContext}
               contextId={ledgerContextId}
               openingBalance={desktopPaginationMeta.openingForPage}
               periodOpeningUnavailable={periodOpeningUnavailable}
               periodOpeningLoading={periodOpeningLoading}
-              booksOpeningBalance={masterPartyOpening}
+              booksOpeningBalance={tdsLedgerOnly ? 0 : masterPartyOpening}
               openingBalanceOutstanding={partyOpeningBalanceOutstandingForTable}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceNarration={party.openingBalanceNarration}
@@ -1762,14 +1908,15 @@ export function PartyDetails({
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
               closingBalance={ledgerFooterClosingBalance}
+              closingBalanceLabel={tdsClosingBalanceLabel}
               isAllVouchersView={isAllVouchersView}
               hideDebitColumn={false}
               hideCreditColumn={false}
               hideBalanceColumn={false}
               isDateChange={isDateChange}
               scrollOnlyTransactions
-              closingBalanceRowActions={partyClosingBalanceRowActions}
-              closingBalanceActions={partyClosingBalanceActions}
+              closingBalanceRowActions={tdsLedgerOnly ? undefined : partyClosingBalanceRowActions}
+              closingBalanceActions={tdsLedgerOnly ? undefined : partyClosingBalanceActions}
               highlightPendingApproval
               statusFilter={statusFilter}
               statusFilterAllChecked={statusFilterAllChecked}
@@ -1783,6 +1930,16 @@ export function PartyDetails({
             )}
             </div>
           </div>
+          {mobileReportView === "chart" && isReportMobileChrome ? (
+            <div
+              className={cn("pl-mobile-txn-pager-host relative flex-shrink-0", mdc.reportTxnPagerOutside)}
+              data-pl-mobile-txn-pager-has-toolbar=""
+            >
+              <div className="border-t border-blue-300/60" aria-hidden />
+              {mobileEntityTxnToolbar}
+              <MobileLedgerFooterChevronFab />
+            </div>
+          ) : null}
           {mobileReportView === "list" && isReportMobileChrome ? (
             <MobileTransactionsPager
               className={mdc.reportTxnPagerOutside}
@@ -1795,6 +1952,7 @@ export function PartyDetails({
               }}
               onPageChange={setCurrentPage}
               edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+              txnToolbar={mobileEntityTxnToolbar}
             />
           ) : null}
           {mobileReportView === "list" && !isReportMobileChrome ? (
@@ -1809,6 +1967,7 @@ export function PartyDetails({
               }}
               onPageChange={setCurrentPage}
               edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+              txnToolbar={mobileEntityTxnToolbar}
             />
           ) : null}
         </div>
@@ -1827,7 +1986,10 @@ export function PartyDetails({
             onViewToggle={() => setMobileReportView((v) => (v === "list" ? "chart" : "list"))}
           />
         ) : (
-        <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+        <div
+          className="fixed bottom-0 left-0 right-0 border-t bg-background/95 backdrop-blur z-50 flex items-stretch justify-around"
+          data-pl-mobile-ledger-action-footer=""
+        >
           {/* Mobile footer: ek button â€” Statement â†” Bill wise toggle */}
           <LedgerViewModeToggleButton
             value={balanceMode}
@@ -1837,15 +1999,13 @@ export function PartyDetails({
               { value: "bill_wise", label: "Bill wise" },
             ]}
           />
-          <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" disabled={blockPartyNewTransactions} onClick={() => { if (blockPartyNewTransactions) return; openingModalRef.current = true; setMobileFooterDialogOpen("payment_in"); openModalInUrl(); }}>
+          <Button className="flex-1 min-h-0 rounded-md bg-green-600 hover:bg-green-700 text-white text-sm font-semibold" disabled={blockPartyNewTransactions} onClick={() => { if (blockPartyNewTransactions) return; openingModalRef.current = true; setMobileFooterDialogOpen("payment_in"); openModalInUrl(); }}>
             Receive
           </Button>
-          <Button className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium" disabled={blockPartyNewTransactions} onClick={() => { if (blockPartyNewTransactions) return; openingModalRef.current = true; setMobileFooterDialogOpen("payment_out"); openModalInUrl(); }}>
+          <Button className="flex-1 min-h-0 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-semibold" disabled={blockPartyNewTransactions} onClick={() => { if (blockPartyNewTransactions) return; openingModalRef.current = true; setMobileFooterDialogOpen("payment_out"); openModalInUrl(); }}>
             Pay
           </Button>
-          <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" disabled={blockPartyNewTransactions} onClick={() => { if (blockPartyNewTransactions) return; openingModalRef.current = true; setMobileFooterDialogOpen("sale"); openModalInUrl(); }}>
-            New Sale
-          </Button>
+          <MobileEntityLedgerFooterPrintButton onClick={handlePrint} />
           <AddVoucherDialog
             isOpen={!!mobileFooterDialogOpen}
             onOpenChange={(open: boolean) => {
@@ -1869,8 +2029,8 @@ export function PartyDetails({
             }}
           >
             <DrawerTrigger asChild>
-              <Button className="flex-1 h-6 min-w-0 rounded-md text-xs font-medium px-1 bg-pink-600 hover:bg-pink-700 text-white">
-                <CalendarIcon className="h-3.5 w-3.5 shrink-0" />
+              <Button className="flex-1 min-h-0 min-w-0 rounded-md px-1 text-sm font-semibold bg-pink-600 hover:bg-pink-700 text-white">
+                <CalendarIcon className="h-4 w-4 shrink-0" />
               </Button>
             </DrawerTrigger>
             <DrawerContent>
@@ -1991,7 +2151,10 @@ export function PartyDetails({
             }
           }}
           voucher={selectedVoucher}
-          onVoucherAction={() => setSelectedVoucher(null)}
+          onVoucherAction={(status) => {
+            if (status === "saved") onPartyUpdated();
+            setSelectedVoucher(null);
+          }}
           ledgerEntityId={party?.id}
           ledgerOpeningBalanceOutstanding={
             typeof openingBalanceOutstanding === "number"
@@ -2083,10 +2246,10 @@ export function PartyDetails({
               <div className={LEDGER_HEADER_AVATAR_CN}>
                 <EntityFileAttachmentHover
                   fileUrl={partyHeaderAttachmentUrl}
-                  triggerClassName="inline-flex rounded-full"
+                  triggerClassName={LEDGER_HEADER_AVATAR_TRIGGER_CN}
                 >
                   <ResolvedEntityAvatar
-                    className="h-12 w-12 text-lg flex-shrink-0"
+                    className={LEDGER_HEADER_AVATAR_IMAGE_CN}
                     companyId={headerIdentityParty.companyId}
                     src={partyHeaderAttachmentUrl ?? undefined}
                     alt={headerDisplayTitle}
@@ -2128,14 +2291,52 @@ export function PartyDetails({
                   </div>
                 )}
               </div>
-              <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
+              <button
+                type="button"
+                className={cn(LEDGER_HEADER_BALANCE_CARD_CN, "cursor-pointer")}
+                onClick={openPartyLedgerDetails}
+                aria-pressed={tdsLedgerViewMode === "account"}
+                title="Party balance details"
+              >
                 <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
-                  <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
+                  <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Account Balance</span>
                   <div className={cn(LEDGER_HEADER_BALANCE_CN, headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
                     {formatCurrency(headerClosingBalance, { showDrCr: true })}
                   </div>
                 </div>
-              </div>
+              </button>
+              {partyTdsHasSale ? (
+                <button
+                  type="button"
+                  className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "cursor-pointer")}
+                  onClick={openSaleTdsLedgerDetails}
+                  aria-pressed={tdsLedgerViewMode === "sale"}
+                  title="Sale TDS Balance details"
+                >
+                  <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                    <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Sale TDS Balance</span>
+                    <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-green-600")}>
+                      {formatCurrency(partyTdsBalanceSummary.saleTds, { showDrCr: true })}
+                    </div>
+                  </div>
+                </button>
+              ) : null}
+              {partyTdsHasPur ? (
+                <button
+                  type="button"
+                  className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "cursor-pointer")}
+                  onClick={openPurTdsLedgerDetails}
+                  aria-pressed={tdsLedgerViewMode === "purchase"}
+                  title="Pur TDS Balance details"
+                >
+                  <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                    <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Pur TDS Balance</span>
+                    <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-red-600")}>
+                      {formatCurrency(-partyTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+                    </div>
+                  </div>
+                </button>
+              ) : null}
             </div>
             {/* Cluster: action pills â€” same gap-1.5 as identity cluster */}
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
@@ -2246,9 +2447,6 @@ export function PartyDetails({
                 ]}
               />
               ) : null}
-              {!isOpeningBalanceLedger ? (
-                <LedgerTdsFilterPill active={tdsLedgerOnly} onToggle={toggleTdsLedgerOnly} />
-              ) : null}
               <Button
                 variant="outline"
                 size="sm"
@@ -2260,6 +2458,22 @@ export function PartyDetails({
                 <FilePlus className="mr-2 h-3.5 w-3.5" />
                 Add Note
               </Button>
+              {tdsLedgerOnly ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowTdsLinkedTrxn((v) => !v)}
+                  className={LEDGER_HEADER_PILL_CN}
+                  title={
+                    showTdsLinkedTrxn
+                      ? "Hide linked settlement payments / journals"
+                      : "Show linked settlement payments / journals"
+                  }
+                >
+                  {showTdsLinkedTrxn ? "Hide linked trxn" : "Show linked trxn"}
+                </Button>
+              ) : null}
               {onShowAll && (
                 <Button variant="outline" size="sm" onClick={onShowAll} className={LEDGER_HEADER_PILL_CN}>
                   All Vouchers
@@ -2291,13 +2505,13 @@ export function PartyDetails({
             <TransactionsTable
               transactions={paginatedTransactions}
               ledgerTransactionsForFyOpening={ledgerListForPaging}
-              fyLedgerScopeOpeningBalance={ledgerOpeningForRunning}
+              fyLedgerScopeOpeningBalance={ledgerOpeningForPaging}
               context={transactionContext}
               contextId={ledgerContextId}
               openingBalance={desktopPaginationMeta.openingForPage}
               periodOpeningUnavailable={periodOpeningUnavailable}
               periodOpeningLoading={periodOpeningLoading}
-              booksOpeningBalance={masterPartyOpening}
+              booksOpeningBalance={tdsLedgerOnly ? 0 : masterPartyOpening}
               openingBalanceOutstanding={partyOpeningBalanceOutstandingForTable}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceNarration={party.openingBalanceNarration}
@@ -2309,7 +2523,10 @@ export function PartyDetails({
               openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               dateRange={dateRange}
               openingBalanceActions={
-                party.id !== "all" && !(party as any).isSystemAccount && !isIcCompanyGroupView ? (
+                !tdsLedgerOnly &&
+                party.id !== "all" &&
+                !(party as any).isSystemAccount &&
+                !isIcCompanyGroupView ? (
                   <EditPartyDialog
                     party={party}
                     onPartyUpdated={handlePartyUpdated}
@@ -2338,14 +2555,15 @@ export function PartyDetails({
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
               closingBalance={ledgerFooterClosingBalance}
+              closingBalanceLabel={tdsClosingBalanceLabel}
               isAllVouchersView={isAllVouchersView}
               hideDebitColumn={false}
               hideCreditColumn={false}
               hideBalanceColumn={false}
               isDateChange={isDateChange}
               scrollOnlyTransactions
-              closingBalanceRowActions={partyClosingBalanceRowActions}
-              closingBalanceActions={partyClosingBalanceActions}
+              closingBalanceRowActions={tdsLedgerOnly ? undefined : partyClosingBalanceRowActions}
+              closingBalanceActions={tdsLedgerOnly ? undefined : partyClosingBalanceActions}
               highlightPendingApproval
               statusFilter={statusFilter}
               statusFilterAllChecked={statusFilterAllChecked}
@@ -2481,7 +2699,10 @@ export function PartyDetails({
           }
         }}
         voucher={selectedVoucher}
-        onVoucherAction={() => setSelectedVoucher(null)}
+        onVoucherAction={(status) => {
+          if (status === "saved") onPartyUpdated();
+          setSelectedVoucher(null);
+        }}
         ledgerEntityId={party?.id}
         ledgerOpeningBalanceOutstanding={
           typeof openingBalanceOutstanding === "number"

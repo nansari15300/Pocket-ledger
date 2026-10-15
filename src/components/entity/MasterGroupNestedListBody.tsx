@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Users } from "lucide-react";
+import { Users } from "lucide-react";
+import { MasterListChromeChevronToggle } from "@/components/layout/MasterListChromeChevronToggle";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
@@ -312,22 +313,18 @@ function MasterGroupTreeNodeRow<G extends MasterGroupListRow, M>({
   );
 
   const expandControl = canExpand ? (
-    <button
-      type="button"
-      aria-expanded={isExpanded}
-      aria-label={isExpanded ? "Collapse group" : "Expand group"}
-      className="mt-0.5 shrink-0 self-start rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+    <MasterListChromeChevronToggle
+      variant="row"
+      expanded={isExpanded}
+      ariaLabelWhenExpanded="Collapse group"
+      ariaLabelWhenCollapsed="Expand group"
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
         onUserGroupExpandToggle(group.id);
       }}
       onPointerDown={(e) => e.stopPropagation()}
-    >
-      <ChevronDown
-        className={cn("h-3.5 w-3.5 transition-transform", !isExpanded && "-rotate-90")}
-      />
-    </button>
+    />
   ) : null;
 
   const renderGroupCard = () => (
@@ -628,22 +625,18 @@ function MasterGroupSystemBranchRow<G extends MasterGroupListRow, M>({
   };
 
   const expandControl = (
-    <button
-      type="button"
-      aria-expanded={branchExpanded}
-      aria-label={branchExpanded ? `Collapse ${branchLabel}` : `Expand ${branchLabel}`}
-      className="mt-0.5 shrink-0 self-start rounded p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+    <MasterListChromeChevronToggle
+      variant="row"
+      expanded={branchExpanded}
+      ariaLabelWhenExpanded={`Collapse ${branchLabel}`}
+      ariaLabelWhenCollapsed={`Expand ${branchLabel}`}
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
         onBranchExpandToggle(branch);
       }}
       onPointerDown={(e) => e.stopPropagation()}
-    >
-      <ChevronDown
-        className={cn("h-3.5 w-3.5 transition-transform", !branchExpanded && "-rotate-90")}
-      />
-    </button>
+    />
   );
 
   const branchLeading = renderBranchLeading?.(branch) ?? defaultGroupLeading();

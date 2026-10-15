@@ -16,7 +16,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Search, Package, Users } from "lucide-react";
+import { Search, Package, Users, Pencil } from "lucide-react";
+import { EditItemDialog } from "@/components/items/EditItemDialog";
+import { EditItemGroupDialog } from "@/components/items/EditItemGroupDialog";
+import { LEDGER_HEADER_AVATAR_PEN_CN } from "@/lib/ledgerHeaderChrome";
 import { CreateItemDialog } from "@/components/items/CreateItemDialog";
 import { Input } from "@/components/ui/input";
 import { CreateItemGroupDialog } from "@/components/items/CreateItemGroupDialog";
@@ -25,6 +28,7 @@ import { ItemGroupDetails } from "@/components/items/ItemGroupDetails";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { MobileMasterDetailNestedName } from "@/components/entity/MobileMasterDetailNestedName";
 import { mlc } from "@/lib/mobileListChrome";
+import { chromeProPillCn } from "@/lib/chromePillButton";
 import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
 import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import { PermissionButton } from "@/components/permission";
@@ -40,7 +44,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
-import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import { applyMasterDetailBackToListUrl, masterDetailListHref } from "@/lib/masterDetailListPath";
 import { browserHistoryHref } from "@/lib/webAppBasePath";
 import {
   masterDetailTabHref,
@@ -137,12 +141,14 @@ function ItemsPageContent() {
   const [activeView, setActiveView] = useState("items");
   const { selected, setSelected } = useResponsiveListLayout<Item | ItemGroup>(`items_view_${activeView}`);
 
+  const pendingItemsSelectIdRef = useRef<string | null>(null);
   const onBackToList = useCallback(() => {
+    pendingItemsSelectIdRef.current = null;
+    const href = applyMasterDetailBackToListUrl("items");
     setSelected(null);
-    router.replace(masterDetailListHref("items"), { scroll: false });
+    router.replace(href, { scroll: false });
   }, [setSelected, router]);
   useRegisterMasterDetailHardwareBack("items", onBackToList);
-  const pendingItemsSelectIdRef = useRef<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [itemListQuickFilter, setItemListQuickFilter] = useState<EntityListQuickFilter>("default");
@@ -212,15 +218,6 @@ function ItemsPageContent() {
         : () => setItemDetailsDateRange(undefined);
     return <MobileMasterDetailHeaderDateSecondary dateRange={range} onClear={onClear} />;
   }, [isMobile, selected, activeView, itemDetailsDateRange, groupDetailsDateRange]);
-  const mobileItemsDetailHeaderAvatar = useMemo(() => {
-    if (!isMobile || !selected) return null;
-    const selectedEntity = selected as Item | ItemGroup;
-    const name = selectedEntity.name || "Item";
-    const attachmentUrl = trimEntityFileUrlForPreview(
-      (selectedEntity as Item).fileUrls?.[0] ?? (selectedEntity as any).fileUrl
-    );
-    return <MobileMasterDetailHeaderAvatar name={name} attachmentUrl={attachmentUrl} />;
-  }, [isMobile, selected]);
   useSyncMasterDetailHeaderId("items", selectedItem?.id ?? selectedItemGroupRaw?.id ?? null);
 
   const itemGroupListConfig = useMemo(
@@ -258,6 +255,79 @@ function ItemsPageContent() {
         : null,
     [selectedItemGroupRaw, processedItemGroups, companyId]
   );
+
+  const mobileItemsDetailHeaderAvatar = useMemo(() => {
+    if (!isMobile || !selected) return null;
+
+    if (activeView === "items" && selectedItem) {
+      const item = selectedItem;
+      const name = item.name || "Item";
+      const attachmentUrl = trimEntityFileUrlForPreview(item.fileUrls?.[0] ?? (item as any).fileUrl);
+      const hasTransactions = (item.debit ?? 0) !== 0 || (item.credit ?? 0) !== 0;
+      return (
+        <MobileMasterDetailHeaderAvatar
+          name={name}
+          attachmentUrl={attachmentUrl}
+          editTrigger={
+            item.id !== "all" ? (
+              <EditItemDialog
+                item={item}
+                onItemUpdated={() => {}}
+                onItemDeleted={() => setSelected(null)}
+                hasTransactions={hasTransactions}
+              >
+                <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit item">
+                  <Pencil className="h-2.5 w-2.5" aria-hidden />
+                </button>
+              </EditItemDialog>
+            ) : undefined
+          }
+        />
+      );
+    }
+
+    if (activeView === "groups" && selectedItemGroup) {
+      const group = selectedItemGroup;
+      const name = group.name || "Item";
+      const attachmentUrl = trimEntityFileUrlForPreview((group as any).fileUrl);
+      const isSystemBranchGroup = isMasterEntitySystemGroupId(ITEM_ENTITY_GROUP_PRESET, group.id);
+      const hasAccounts =
+        processedItems.some((i) => i.groupId === group.id) ||
+        processedItemGroups.some((g) => g.parentId === group.id);
+      return (
+        <MobileMasterDetailHeaderAvatar
+          name={name}
+          attachmentUrl={attachmentUrl}
+          editTrigger={
+            !isSystemBranchGroup ? (
+              <EditItemGroupDialog
+                group={group}
+                allGroups={processedItemGroups}
+                onGroupUpdated={() => {}}
+                onGroupDeleted={() => setSelected(null)}
+                hasAccounts={hasAccounts}
+              >
+                <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit group">
+                  <Pencil className="h-2.5 w-2.5" aria-hidden />
+                </button>
+              </EditItemGroupDialog>
+            ) : undefined
+          }
+        />
+      );
+    }
+
+    return null;
+  }, [
+    isMobile,
+    selected,
+    activeView,
+    selectedItem,
+    selectedItemGroup,
+    processedItems,
+    processedItemGroups,
+    setSelected,
+  ]);
 
   const allItems = useMemo(
     () => processedItems.filter((i) => i.type === "item" || i.type === "service" || i.type === "finished_good" || !i.type),
@@ -644,7 +714,13 @@ function ItemsPageContent() {
         <Package className={mlc.sectionIcon} />
         <span>Item ({filteredItemListCount})</span>
         <Select value={stockView} onValueChange={(v) => setStockView(v as StockView)}>
-          <SelectTrigger className="w-[100px] h-7 ml-auto">
+          <SelectTrigger
+            data-pl-item-stock-view-select=""
+            className={cn(
+              "ml-auto h-7 min-h-7 max-h-7 w-auto min-w-[5.5rem] max-w-[7.5rem] shrink-0 rounded-full px-2.5 text-xs font-medium shadow-none ring-0 focus:ring-0 focus-visible:ring-0",
+              chromeProPillCn,
+            )}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

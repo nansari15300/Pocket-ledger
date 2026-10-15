@@ -10,6 +10,18 @@ export function isLedgerTransactionUnapproved(
   return tx.isApproved !== true;
 }
 
+/** Mobile txn toolbar / header — kitni rows abhi approve nahi. */
+export function countLedgerUnapprovedTransactions(
+  list: ReadonlyArray<{ isApproved?: boolean; type?: string; id?: string }> | null | undefined
+): number {
+  if (!list?.length) return 0;
+  let n = 0;
+  for (const tx of list) {
+    if (isLedgerTransactionUnapproved(tx)) n += 1;
+  }
+  return n;
+}
+
 /** Approve All ke baad stale SQLite/Firestore list ~1s me pink wapas na laaye. */
 const LOCAL_APPROVE_HOLD_MS = 90_000;
 const locallyApprovedAtMs = new Map<string, number>();

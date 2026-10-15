@@ -206,10 +206,10 @@ export function ResponsiveMasterDetail({
                 </div>
                 {mobileDetailHeaderEnd ? (
                   <div
-                    className="flex shrink-0 self-stretch items-stretch pl-0.5"
+                    className="flex shrink-0 items-center pl-0.5"
                     data-pl-mobile-detail-header-avatar-slot=""
                   >
-                    <div className="aspect-square h-full min-h-[2.75rem] max-h-[4.75rem] w-auto min-w-[2.75rem]">
+                    <div className={cn(mdc.mobileHeaderAvatarBox, "overflow-visible")}>
                       {typeof mobileDetailHeaderEnd === "string" || typeof mobileDetailHeaderEnd === "number" ? (
                         <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
                           {mobileDetailHeaderEnd}
@@ -222,7 +222,12 @@ export function ResponsiveMasterDetail({
                 ) : null}
               </div>
             ) : (
-              <div className={mdc.masterBackRow} {...mdcNoEdgeSwipeCapture} data-pl-mobile-back-row="">
+              <div
+                className={mdc.masterBackRow}
+                {...mdcNoEdgeSwipeCapture}
+                data-pl-mobile-back-row=""
+                data-pl-mobile-entity-detail-header=""
+              >
                 <Button variant="ghost" size="icon" className={mdc.backBtn} onClick={onBackToList} aria-label="Back to list">
                   <ArrowLeft className={mdc.backIcon} />
                 </Button>

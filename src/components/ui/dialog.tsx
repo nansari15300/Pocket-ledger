@@ -116,8 +116,8 @@ const DialogContent = React.forwardRef<
           preventCloseWhilePreviewOpen(ev)
           onFocusOutside?.(ev)
         }}
-        aria-describedby={ariaDescribedBy}
         {...rest}
+        aria-describedby={ariaDescribedBy ?? undefined}
       >
         {children}
         {!hideCloseButton && (

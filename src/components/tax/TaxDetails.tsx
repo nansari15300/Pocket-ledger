@@ -39,6 +39,16 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { nestedLedgerChildDialogShell } from "@/lib/nestedLedgerMasterEditPresentation";
 import { mdc, mdcMobileTxnBalanceRowData, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
+import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { MobileEntityLedgerFooterPrintButton } from "@/components/entity/MobileEntityLedgerFooterPrintButton";
+import { LedgerViewModePills, LedgerViewModeToggleButton } from "@/components/ui/LedgerViewModePills";
+import { useAuth } from "@/hooks/useAuth";
 import * as XLSX from "xlsx";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 import {
@@ -65,6 +75,8 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_TRIGGER_CN,
+  LEDGER_HEADER_AVATAR_IMAGE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
@@ -179,7 +191,10 @@ import {
 import NepaliCalendar from "../ui/nepali-calendar";
 import { MasterLedgerDateRangePresetRow } from "@/components/ui/MasterLedgerDateRangePresetRow";
 import { useEnsureEntityMinTxnsInScope } from "@/hooks/useEnsureEntityMinTxnsInScope";
-import { ledgerMasterDateRangeLabel } from "@/lib/ledgerMasterDefaultView";
+import {
+  ledgerMasterDateRangeLabel,
+  MASTER_LEDGER_DEFAULT_TXN_COUNT,
+} from "@/lib/ledgerMasterDefaultView";
 import type { BSDate } from "@/lib/bs-date";
 
 interface TaxDetailsProps {
@@ -227,6 +242,7 @@ export function TaxDetails({
       : { overlayClassName: undefined, className: "h-[95vh] w-full max-w-3xl flex flex-col" };
   useFyLoadOnDateRangeChange(dateRange);
   const { company, companyId } = useCompany();
+  const { user, customUser } = useAuth();
   const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
   const {
     vouchers,
@@ -237,6 +253,17 @@ export function TaxDetails({
     processedStaff,
     processedParties,
   } = useVouchers();
+  const isCompanyAdmin = React.useMemo(() => {
+    const role = String(customUser?.role || "").trim();
+    if (role === "CompanyAdmin" || role === "SuperAdmin" || role === "owner") return true;
+    if (!company || !user) return false;
+    if (company.ownerId && user.uid && company.ownerId === user.uid) return true;
+    const ownerEmail = String((company as { ownerEmail?: string }).ownerEmail || "")
+      .trim()
+      .toLowerCase();
+    const email = String(user.email || "").trim().toLowerCase();
+    return !!ownerEmail && !!email && ownerEmail === email;
+  }, [customUser?.role, company, user]);
   const journalAccountNames = journalAccountNamesProp ?? journalAccountNamesFromHook ?? {};
   const mobileSearchNames = useMemo(
     () => ({ ...journalAccountNames, ...(userNames ?? {}) }),
@@ -326,6 +353,7 @@ export function TaxDetails({
   }, [ledgerViewMode]);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
+
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
@@ -457,7 +485,24 @@ export function TaxDetails({
     closingBalance,
     openingBalanceOutstanding,
     openingBalanceLinkedVoucherNos,
-  } = useTransactions(tax, 'tax', dateRange, undefined, allTaxes, transactions, context, filters, undefined, undefined, userNames);
+  } = useTransactions(
+    tax,
+    'tax',
+    dateRange,
+    undefined,
+    allTaxes,
+    transactions,
+    context,
+    filters,
+    undefined,
+    undefined,
+    userNames,
+    undefined,
+    undefined,
+    undefined,
+    true,
+    balanceMode === "bill_wise"
+  );
 
   const isFilterActive =
     dateRange !== undefined || Object.values(filters).some((v) => v);
@@ -515,8 +560,11 @@ export function TaxDetails({
     [processedTransactions, includeNotesInTable]
   );
   const statusFilteredTransactions = useMemo(
-    () => filterByStatus(displayTransactions, statusFilter),
-    [displayTransactions, statusFilter]
+    () => {
+      if (balanceMode !== "bill_wise") return displayTransactions;
+      return filterByStatus(displayTransactions, statusFilter);
+    },
+    [displayTransactions, statusFilter, balanceMode]
   );
 
   const resolveOppositeAccountName = useCallback(
@@ -553,6 +601,10 @@ export function TaxDetails({
       processedTaxes || []
     );
   }, [statusFilteredTransactions, tax?.id, oppositeAccountFilter, processedTaxes]);
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(oppositeAccountFilteredTransactions),
+    [oppositeAccountFilteredTransactions]
+  );
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
@@ -576,6 +628,8 @@ export function TaxDetails({
     entityId: tax?.id,
     entityKind: "tax",
     entityTxnCount: sortedTransactions.length,
+    // Default “Last N” — do not FY-widen to full SQLite tax history (TDS hang).
+    maxAutoWidenTarget: MASTER_LEDGER_DEFAULT_TXN_COUNT,
     enabled: Boolean(tax?.id),
   });
 
@@ -878,6 +932,40 @@ export function TaxDetails({
     const isReportMobileChrome = mobileFooterVariant === "report";
     const hideReportTaxPicker = isReportMobileChrome && context === "payment-out";
 
+    const mobileEntityTxnToolbar = (
+      <MobileEntityTxnToolbarRow placement="belowPager">
+        {!hideReportTaxPicker && allTaxes && allTaxes.length > 0 && (
+          <MobileEntityTxnToolbarPicker>
+            <Combobox
+              options={taxDropdownOptions}
+              value={tax.id}
+              onChange={(value) => {
+                if (value && value !== tax.id) router.push(`/tax/${value}`);
+              }}
+              placeholder="Select tax"
+            />
+          </MobileEntityTxnToolbarPicker>
+        )}
+        <MobileEntityTxnToolbarUnapprovedBadge
+          count={mobileUnapprovedTxnCount}
+          pressed={unapprovedOnly}
+          onToggle={toggleUnapprovedOnly}
+        />
+        <MobileEntityTxnToolbarSearch>
+          <Search className={mdc.mobileTxnToolbarSearchIcon} />
+          <Input
+            placeholder="Search transactions"
+            className={mdc.mobileTxnToolbarSearchInput}
+            value={mobileSearchTerm}
+            onChange={(e) => {
+              setMobileSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
+          />
+        </MobileEntityTxnToolbarSearch>
+      </MobileEntityTxnToolbarRow>
+    );
+
     return (
       <>
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
@@ -927,14 +1015,21 @@ export function TaxDetails({
               )}
             </div>
           ) : null}
-          <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
-            <p className={cn(mdc.mobileTxnBalanceText2xl, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-              {balanceLabel} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
-            </p>
-          </div>
-          <div className="p-2 border-b flex-shrink-0">
-            {oppositeAccountFilterOptions.length > 0 && (
-              <div className="mb-2 min-h-7 min-w-0">
+          <div
+            className={cn(
+              mdc.mobileTxnBalanceRow,
+              oppositeAccountFilterOptions.length > 0 && "gap-2 px-2"
+            )}
+            {...mdcMobileTxnBalanceRowData}
+            {...(oppositeAccountFilterOptions.length > 0
+              ? { "data-pl-tax-balance-with-account-filter": "" }
+              : {})}
+          >
+            {oppositeAccountFilterOptions.length > 0 ? (
+              <div
+                className="min-w-0 max-w-[2.5in] shrink"
+                data-pl-tax-balance-account-filter=""
+              >
                 <Combobox
                   options={oppositeAccountFilterOptions}
                   value={oppositeAccountFilter}
@@ -943,47 +1038,25 @@ export function TaxDetails({
                     setCurrentPage(1);
                   }}
                   placeholder="All accounts"
-                  triggerClassName={cn(LEDGER_HEADER_PILL_CN, chromePillBtn(false), "!h-7 min-h-7 text-xs")}
+                  showFullOptionText={false}
+                  triggerClassName={cn(
+                    LEDGER_HEADER_PILL_CN,
+                    chromePillBtn(false),
+                    "!h-7 min-h-7 w-full min-w-0 max-w-full text-xs"
+                  )}
                 />
               </div>
-            )}
-            <div className="flex items-stretch gap-2">
-              {!hideReportTaxPicker && allTaxes && allTaxes.length > 0 && (
-                <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
-                  <Combobox
-                    options={taxDropdownOptions}
-                    value={tax.id}
-                    onChange={(value) => {
-                      if (value && value !== tax.id) router.push(`/tax/${value}`);
-                    }}
-                    placeholder="Select tax"
-                  />
-                </div>
+            ) : null}
+            <p
+              className={cn(
+                oppositeAccountFilterOptions.length > 0
+                  ? cn(mdc.mobileTxnBalanceTextLg, "min-w-0 flex-1 whitespace-nowrap text-center")
+                  : mdc.mobileTxnBalanceText2xl,
+                closingBalance >= 0 ? "text-green-600" : "text-red-600"
               )}
-              <EditTaxDialog
-                tax={tax}
-                allTaxes={allTaxes}
-                onTaxUpdated={handleTaxUpdated}
-                onTaxDeleted={() => onTaxDeleted(tax.id)}
-                hasTransactions={processedTransactions.length > 0}
-              >
-                <Button variant="outline" size="icon" className="h-9 w-8 flex-shrink-0">
-                  <Edit className="h-4 w-4" />
-                </Button>
-              </EditTaxDialog>
-              <div className="flex-1 min-w-0 h-9 relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-                <Input
-                  placeholder="Search transactions"
-                  className="pl-8 h-9 text-sm w-full min-w-0"
-                  value={mobileSearchTerm}
-                  onChange={(e) => {
-                    setMobileSearchTerm(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                />
-              </div>
-            </div>
+            >
+              {balanceLabel} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
+            </p>
           </div>
           </MobileDetailSummaryCollapsible>
           {/* scroll-touch + inline style for APK/WebView touch scroll */}
@@ -1012,6 +1085,7 @@ export function TaxDetails({
               openingBalanceActions={undefined}
               showNarration={showNarration}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
+              forceBalanceMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
               journalAccountNames={journalAccountNames}
               userNames={userNames}
               onRowClick={handleEditVoucher}
@@ -1048,6 +1122,7 @@ export function TaxDetails({
               }}
               onPageChange={setCurrentPage}
               edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+              txnToolbar={mobileEntityTxnToolbar}
             />
           ) : null}
           {!isReportMobileChrome ? (
@@ -1062,6 +1137,7 @@ export function TaxDetails({
               }}
               onPageChange={setCurrentPage}
               edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+              txnToolbar={mobileEntityTxnToolbar}
             />
           ) : null}
         </div>
@@ -1079,16 +1155,27 @@ export function TaxDetails({
             showChart={false}
           />
         ) : (
-        <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+        <div
+          className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5"
+          data-pl-mobile-ledger-action-footer=""
+        >
+          {/* Mobile: Statement ↔ Bill wise (Party/Staff jaisa) — status column + bill-wise linking */}
+          <LedgerViewModeToggleButton
+            value={balanceMode}
+            onChange={setBalanceMode}
+            options={[
+              { value: "statement", label: "Statement" },
+              { value: "bill_wise", label: "Bill wise" },
+            ]}
+            className="h-6 text-xs font-medium"
+          />
           <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("payment_in"); openModalInUrl(); }}>
             Receive
           </Button>
           <Button className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("payment_out"); openModalInUrl(); }}>
             Pay
           </Button>
-          <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("sale"); openModalInUrl(); }}>
-            New Sale
-          </Button>
+          <MobileEntityLedgerFooterPrintButton onClick={() => void handlePrint()} />
           <AddVoucherDialog
             isOpen={!!mobileFooterDialogOpen}
             onOpenChange={(open: boolean) => {
@@ -1328,10 +1415,10 @@ export function TaxDetails({
               <div className={LEDGER_HEADER_AVATAR_CN}>
                 <EntityFileAttachmentHover
                   fileUrl={taxHeaderAttachmentUrl}
-                  triggerClassName="inline-flex rounded-full"
-                >
-                  <ResolvedEntityAvatar
-                    className="h-12 w-12 text-lg flex-shrink-0"
+                triggerClassName={LEDGER_HEADER_AVATAR_TRIGGER_CN}
+              >
+                <ResolvedEntityAvatar
+                  className={LEDGER_HEADER_AVATAR_IMAGE_CN}
                     src={taxHeaderAttachmentUrl ?? undefined}
                     alt={tax.name}
                     fallbackSlot={<Receipt className="h-6 w-6 text-muted-foreground" />}
@@ -1460,9 +1547,31 @@ export function TaxDetails({
                 </Button>
               )}
               <NotificationBell context="Tax" entityId={tax.id} />
+              <LedgerViewModePills
+                value={balanceMode}
+                onChange={setBalanceMode}
+                options={[
+                  { value: "statement", label: "Statement" },
+                  { value: "bill_wise", label: "Bill wise" },
+                ]}
+              />
               <Button variant="outline" size="sm" onClick={() => setIsNoteOpen(true)} className={LEDGER_HEADER_PILL_CN}>
                 <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>
+              {isCompanyAdmin ? (
+                <Button
+                  type="button"
+                  variant="chromePill"
+                  size="sm"
+                  className={LEDGER_HEADER_PILL_CN}
+                  onClick={() => {
+                    setBalanceMode("bill_wise");
+                    toast.info("Bill wise mode on — open a payment/purchase row to link bills.");
+                  }}
+                >
+                  Link for Bill Wise
+                </Button>
+              ) : null}
               {onShowAll && (
                 <Button variant="outline" size="sm" onClick={onShowAll} className={LEDGER_HEADER_PILL_CN}>
                   All Vouchers
@@ -1508,6 +1617,7 @@ export function TaxDetails({
                   }
                   showNarration={showNarration}
                   visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
+                  forceBalanceMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
                   periodDr={desktopPaginationMeta.periodDrForPage}
                   periodCr={desktopPaginationMeta.periodCrForPage}
                   closingBalance={desktopPaginationMeta.closingForPage}
@@ -1638,7 +1748,14 @@ export function TaxDetails({
           }
         }}
         voucher={selectedVoucher}
-        onVoucherCreated={() => setSelectedVoucher(null)}
+        onVoucherCreated={() => {
+          setSelectedVoucher(null);
+          onTaxUpdated();
+        }}
+        onVoucherAction={(status) => {
+          if (status === "saved") onTaxUpdated();
+          setSelectedVoucher(null);
+        }}
       />
     </>
   );

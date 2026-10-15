@@ -241,7 +241,9 @@ export function GroupListExpandNameRow({
           ) : null}
         </span>
       </MasterListNameTooltip>
-      {expandControl}
+      {expandControl ? (
+        <div className="ml-auto shrink-0 self-center pl-1">{expandControl}</div>
+      ) : null}
     </div>
   );
 }

@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { getVoucherEditConvertPresentation } from "@/lib/voucherEditConvert";
 import { VoucherEditConvertBanner } from "@/components/vouchers/VoucherEditConvertBanner";
 import { nestedVoucherAlertShell } from "@/lib/dialogShellChrome";
+import { plHang, plHangEnsureLongTaskObserver, plHangStart } from "@/lib/plHangDiag";
 import { startOfDay } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { collection, doc, getDoc, deleteDoc, getDocs, onSnapshot, query, serverTimestamp, where, Timestamp } from "firebase/firestore";
@@ -1590,6 +1591,35 @@ export function AddVoucherDialog(props: any) {
     },
     [isOpen, onOpenChange]
   );
+  const addVoucherHangRenderN = useRef(0);
+  if (dialogOpen && voucher?.id) {
+    addVoucherHangRenderN.current += 1;
+    if (addVoucherHangRenderN.current <= 40) {
+      plHang("AddVoucherDialog.render", {
+        n: addVoucherHangRenderN.current,
+        id: String(voucher.id),
+        type: String(voucher.type || ""),
+      });
+    }
+  } else if (!dialogOpen) {
+    addVoucherHangRenderN.current = 0;
+  }
+  useEffect(() => {
+    if (!dialogOpen || !voucher?.id) return;
+    plHangEnsureLongTaskObserver();
+    const end = plHangStart("AddVoucherDialog.open→rAF3", {
+      id: String(voucher.id),
+      type: String(voucher.type || ""),
+      subType: String(voucher.subType || ""),
+    });
+    requestAnimationFrame(() => {
+      plHang("AddVoucherDialog rAF1");
+      requestAnimationFrame(() => {
+        plHang("AddVoucherDialog rAF2");
+        requestAnimationFrame(() => end());
+      });
+    });
+  }, [dialogOpen, voucher?.id]);
   // Outer company context full reference: dialog-scope override provider build karne ke liye (forms ko target company dikhana hai
   // bina global app state badale).
   const outerCompanyContext = useCompany();

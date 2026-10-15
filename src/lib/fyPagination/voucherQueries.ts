@@ -3,11 +3,21 @@
 import { deserializeLocalDbValue } from "@/lib/localCompanyDocMirror";
 import { getBrowserDbForCompanyId } from "@/lib/localSqlite";
 import type { FyDateRangeMs } from "@/lib/fyPagination/types";
+import { yieldToMain } from "@/lib/yieldToMain";
 
 export type FyVoucherQueryOptions = {
   forBackupMerge?: boolean;
   includeSoftDeleted?: boolean;
 };
+
+// JSON revival can be much more expensive than the indexed SQL range query.
+// Yield in short slices so a ledger's background FY/history expansion never
+// monopolizes the renderer (especially when the same company is open in tabs).
+const VOUCHER_PARSE_SLICE_MS = 8;
+
+function nowMs(): number {
+  return typeof performance === "undefined" ? Date.now() : performance.now();
+}
 
 function parseVoucherRow(
   row: { id: string; data: string },
@@ -49,9 +59,15 @@ export async function listVouchersFromBrowserDbByDateRange(
     .all(companyId, range.fromMs, range.toMs) as Array<{ id: string; data: string }>;
 
   const out: any[] = [];
+  let sliceStartedAt = nowMs();
   for (const row of rows) {
     const doc = parseVoucherRow(row, options);
     if (doc) out.push(doc);
+
+    if (nowMs() - sliceStartedAt >= VOUCHER_PARSE_SLICE_MS) {
+      await yieldToMain();
+      sliceStartedAt = nowMs();
+    }
   }
   return out;
 }

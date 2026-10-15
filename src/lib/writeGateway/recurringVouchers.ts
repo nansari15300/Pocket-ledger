@@ -1929,27 +1929,104 @@ export async function setRecurringTemplateForVoucher(
 export async function clearRecurringTemplateForVoucher(companyId: string, sourceVoucherId: string): Promise<void> {
   if (!companyId?.trim() || !sourceVoucherId?.trim()) return;
   const docId = await getRecurringTemplateDocIdForVoucher(companyId, sourceVoucherId);
-  const existing = await getRecurringTemplateRecord(companyId, docId).catch(() => null);
-  const activeSource = String(existing?.cloneSourceVoucherId || existing?.sourceVoucherId || sourceVoucherId).trim();
+  await forceDeleteRecurringTemplateDoc(companyId, docId, { clearTriggerOnVoucherId: sourceVoucherId });
+}
+
+function collectRecurringTemplateLinkedVoucherIds(tpl: RecurringVoucherTemplate | null | undefined): string[] {
+  if (!tpl) return [];
+  const ids = [
+    String(tpl.cloneSourceVoucherId || "").trim(),
+    String(tpl.sourceVoucherId || "").trim(),
+    String(tpl.lastGeneratedVoucherId || "").trim(),
+  ].filter(Boolean);
+  return [...new Set(ids)];
+}
+
+async function forceDeleteRecurringTemplateDoc(
+  companyId: string,
+  templateDocId: string,
+  opts?: { clearTriggerOnVoucherId?: string | null },
+): Promise<void> {
+  if (!companyId?.trim() || !templateDocId?.trim()) return;
+  const existing = await getRecurringTemplateRecord(companyId, templateDocId).catch(() => null);
+  const activeSource = String(
+    existing?.cloneSourceVoucherId ||
+      existing?.sourceVoucherId ||
+      opts?.clearTriggerOnVoucherId ||
+      "",
+  ).trim();
   try {
-    await deleteDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, docId));
+    await deleteDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateDocId));
   } catch {
-    if (!preferLocalLedgerReads()) throw new Error("Failed to clear Auto Monthly template.");
+    if (!preferLocalLedgerReads()) throw new Error("Failed to remove recurring schedule.");
   }
   try {
-    await deleteCompanyDocFromBrowserDb(companyId, RECURRING_TEMPLATE_COLLECTION, docId, { force: true });
+    await deleteCompanyDocFromBrowserDb(companyId, RECURRING_TEMPLATE_COLLECTION, templateDocId, { force: true });
   } catch {
     /* mirror best-effort */
   }
   if (activeSource) {
-    await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, activeSource), {
-      "recurringMeta.isActiveTriggerSource": false,
-      "recurringMeta.activeTriggerSourceVoucherId": null,
-    }).catch(() => {});
-    await markRecurringTriggerVoucherLocally(companyId, activeSource, {
-      isActiveTriggerSource: false,
-      activeTriggerSourceVoucherId: null,
-    });
+    const live = await getVoucherRecordForRecurring(companyId, activeSource, { skipCloudIO: false }).catch(() => null);
+    if (live) {
+      await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, activeSource), {
+        "recurringMeta.isActiveTriggerSource": false,
+        "recurringMeta.activeTriggerSourceVoucherId": null,
+        "recurringMeta.templateId": null,
+      }).catch(() => {});
+      await markRecurringTriggerVoucherLocally(companyId, activeSource, {
+        isActiveTriggerSource: false,
+        activeTriggerSourceVoucherId: null,
+        templateId: null,
+      });
+    }
+  }
+}
+
+/**
+ * Dashboard orphan schedule: enabled template jiska source voucher company list me nahi —
+ * template hatao + jo linked voucher ids ledger me nahi (ghost SQLite / stale Firestore) unhe permanent purge.
+ */
+export async function forceRemoveOrphanRecurringSchedule(
+  companyId: string,
+  templateDocId: string,
+  opts?: { purgeVoucherIds?: string[] },
+): Promise<void> {
+  if (!companyId?.trim() || !templateDocId?.trim()) {
+    throw new Error("Missing company or schedule.");
+  }
+  const existing = await getRecurringTemplateRecord(companyId, templateDocId).catch(() => null);
+  const purgeIds = (opts?.purgeVoucherIds?.length
+    ? opts.purgeVoucherIds
+    : collectRecurringTemplateLinkedVoucherIds(existing)
+  )
+    .map((id) => String(id || "").trim())
+    .filter(Boolean);
+  const uniquePurge = [...new Set(purgeIds)];
+
+  await forceDeleteRecurringTemplateDoc(companyId, templateDocId);
+
+  if (uniquePurge.length === 0) return;
+
+  const { permanentDeleteCompanySubdocFromRecycleBin } = await import("@/lib/recycleBinEntityLifecycle");
+  for (const voucherId of uniquePurge) {
+    try {
+      const localGhost = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId, {
+        includeDeleted: true,
+      }).catch(() => null);
+      let remoteExists = false;
+      if (!localGhost) {
+        try {
+          const snap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, voucherId));
+          remoteExists = snap.exists();
+        } catch {
+          remoteExists = false;
+        }
+      }
+      if (!localGhost && !remoteExists) continue;
+      await permanentDeleteCompanySubdocFromRecycleBin(companyId, "vouchers", voucherId);
+    } catch (e) {
+      console.warn("[forceRemoveOrphanRecurringSchedule] voucher purge failed", voucherId, e);
+    }
   }
 }
 

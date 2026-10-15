@@ -67,7 +67,8 @@ export function getPartyLedgerTransactionAmounts(transaction: any, partyId: stri
 
   if (
     (transaction?.type === "journal" || transaction?.type === "adjustment") &&
-    Array.isArray(transaction.entries)
+    Array.isArray(transaction.entries) &&
+    !(transaction?.type === "journal" && transaction?.isTdsJournal === true)
   ) {
     const journalAmt = sumJournalAmountsForAccount(transaction.entries, partyId);
     debit += journalAmt.debit;

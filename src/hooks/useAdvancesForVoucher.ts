@@ -8,6 +8,10 @@ import {
   getPaymentOutRemaining,
   getPaymentOutPartyLinkAmount,
   getJournalPartyBillWiseAmountFromEntries,
+  getJournalTaxDrAmount,
+  getJournalRemainingForTax,
+  getTaxFromAllocation,
+  getNetFromAllocation,
   getVoucherRemaining,
   getOutstanding,
   getAllocationTotal,
@@ -407,6 +411,66 @@ export function useAdvancesLinkableCount(
   }, [mode, partyId, targetVoucherId, vouchers, partyOpeningBalance]);
 
   return obCount + (baseList?.length ?? 0);
+}
+
+/**
+ * Count of From rows for tax/TDS legs in LinkAdvancesToVoucherDialog
+ * (payment/journal with that taxAccountId and linkable remaining).
+ */
+export function countTaxAccountLinkableSources(
+  vouchers: any[] | null | undefined,
+  taxAccountId: string | null | undefined,
+  targetVoucherId?: string | null
+): number {
+  const id = String(taxAccountId ?? "").trim();
+  if (!id || !vouchers?.length) return 0;
+  const targetId = String(targetVoucherId ?? "");
+  let count = 0;
+  for (const v of vouchers as any[]) {
+    if (
+      v.type === "payment_out" ||
+      v.type === "direct_expense" ||
+      v.type === "payment_in" ||
+      v.type === "direct_income"
+    ) {
+      if (String(v.taxAccountId ?? "") !== id) continue;
+      const remaining =
+        v.type === "payment_out" || v.type === "direct_expense"
+          ? getPaymentOutRemaining(v)
+          : getPaymentInRemaining(v);
+      const allocations = (v.allocations as Allocation[] | undefined) || [];
+      const toTarget = allocations
+        .filter((a) => String(a.voucherId) === targetId)
+        .reduce((s, a) => s + getTaxFromAllocation(a) + getNetFromAllocation(a), 0);
+      if (remaining + toTarget <= 0 && toTarget <= 0) continue;
+      count += 1;
+      continue;
+    }
+    if (v.type === "journal" && v.subType !== "add_salary") {
+      const dr = getJournalTaxDrAmount(v, id);
+      if (dr == null) continue;
+      const remaining = getJournalRemainingForTax(v, id);
+      const allocations = (v.allocations as Allocation[] | undefined) || [];
+      const toTarget = allocations
+        .filter((a) => String(a.voucherId) === targetId)
+        .reduce((s, a) => s + getTaxFromAllocation(a) + getNetFromAllocation(a), 0);
+      if (remaining + toTarget <= 0 && toTarget <= 0) continue;
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/** Tax / TDS link-tab count — matches Link payment to tax/TDS popup From list. */
+export function useTaxAccountLinkableCount(
+  taxAccountId: string | null | undefined,
+  targetVoucherId: string | null | undefined,
+  vouchers: any[]
+): number {
+  return useMemo(
+    () => countTaxAccountLinkableSources(vouchers, taxAccountId, targetVoucherId),
+    [vouchers, taxAccountId, targetVoucherId]
+  );
 }
 
 /**

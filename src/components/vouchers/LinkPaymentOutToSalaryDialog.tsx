@@ -17,7 +17,7 @@ import {
   NESTED_VOUCHER_LINK_DIALOG_CONTENT_CN,
   NESTED_VOUCHER_LINK_DIALOG_OVERLAY_CN,
 } from "@/lib/dialogShellChrome";
-import { getTaxNetAllocatedByVoucherIdFromPaymentOuts, getAllocationTotal, getPaymentInRemaining, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { getTaxNetAllocatedByVoucherIdFromPaymentOuts, getAllocationTotal, getPaymentInRemaining, buildBillWiseEntityTxnId, allocationEntityTxnId, parseBillWiseEntityTxnId, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 import { Link2, RotateCcw } from "lucide-react";
@@ -193,9 +193,17 @@ export function LinkPaymentOutToSalaryDialog({
     if (!isOpen) return;
     const initial: Record<string, number> = {};
     for (const a of existingAllocations) {
-      if (a.voucherId && (Number(a.amount) || Number((a as any).netAmount) || 0) > 0) {
-        initial[a.voucherId] = Number((a as any).netAmount) || Number(a.amount) || 0;
+      if (!a.voucherId) continue;
+      const stored = allocationEntityTxnId(a);
+      if (stored) {
+        const parsed = parseBillWiseEntityTxnId(stored);
+        // Staff salary dialog: ignore tax-leg links
+        if (parsed?.entityKind === "tax") continue;
+      } else if ((Number((a as any).taxAmount) || 0) > 0 && !(Number((a as any).netAmount) || 0) && !(Number(a.amount) || 0)) {
+        continue;
       }
+      const net = Number((a as any).netAmount) || Number(a.amount) || 0;
+      if (net > 0) initial[a.voucherId] = (initial[a.voucherId] ?? 0) + net;
     }
     setLinkedAmounts(initial);
   }, [isOpen, existingAllocations]);
@@ -229,7 +237,23 @@ export function LinkPaymentOutToSalaryDialog({
   const handleDone = () => {
     const allocations: Allocation[] = Object.entries(linkedAmounts)
       .filter(([, amt]) => Number(amt) > 0)
-      .map(([voucherId, amount]) => ({ voucherId, amount: Number(amount), netAmount: Number(amount) }));
+      .map(([voucherId, amount]) => {
+        const amt = Number(amount);
+        if (voucherId === OPENING_BALANCE_VOUCHER_ID) {
+          return { voucherId, amount: amt, netAmount: amt } as Allocation;
+        }
+        const entityTxnId =
+          staffId
+            ? buildBillWiseEntityTxnId({ voucherId, entityKind: "staff", accountId: staffId })
+            : undefined;
+        return {
+          voucherId,
+          amount: amt,
+          netAmount: amt,
+          ...(staffId ? { linkedAccountId: staffId } : {}),
+          ...(entityTxnId ? { entityTxnId } : {}),
+        } as Allocation;
+      });
     const total = allocations.reduce((s, a) => s + a.amount, 0);
     if (total > amountPaid) {
       toast.error("Total linked cannot exceed amount paid.");

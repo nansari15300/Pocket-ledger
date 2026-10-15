@@ -34,7 +34,7 @@ export const LEDGER_HEADER_PILL_ROW_CN =
   "pl-ledger-header-card pl-ledger-header-pill-row justify-start gap-[3px]";
 /** Outer ribbon wrap — sides/bottom gap; pill-blue strip (top flush on txn pages via CSS) */
 export const LEDGER_HEADER_RIBBON_WRAP_CN =
-  "pl-ledger-header-ribbon-wrap shrink-0 border-b px-[3px] py-[3px] overflow-x-auto min-h-0 scrollbar-slim-dim";
+  "pl-ledger-header-ribbon-wrap shrink-0 border-b px-[2px] py-[2px] overflow-x-auto min-h-0 scrollbar-slim-dim";
 /** Right inset on entity txn pages — matches Dashboard Recent edge gap. */
 export const LEDGER_TXN_PAGE_EDGE_GAP_PX = 2;
 /** Ledger detail pane: fixed ribbon + scrollable table (desktop). */
@@ -65,7 +65,10 @@ export const LEDGER_TDS_AMOUNT_COL_PX = 170;
 export const LEDGER_TDS_VOUCHER_NO_COL_PX = 182;
 export const LEDGER_ENTITY_USER_COL_PX = 148;
 export const LEDGER_ENTITY_FILE_COL_PX = 44;
-/** TDS ledger: File thumbnail centered between User and Debit. */
+/**
+ * Party TDS details = same pad/align as party Account Details txn table.
+ * Extra cols (Taxable + TDS Amount + wider Dr/Cr for verify badge) raise table min width.
+ */
 export const LEDGER_TDS_FILE_COL_PX = 72;
 export const LEDGER_TDS_FILE_CELL_PAD_CN = "px-[5px]";
 /** Max horizontal gap between adjacent header/txn cell texts (5px + 5px); col min-width wins if tighter. */
@@ -75,17 +78,23 @@ export const LEDGER_TXN_COL_MAX_GAP_PAD_CN = "px-[5px]";
 export const LEDGER_TXN_COL_MIN_GAP_PAD_CN = LEDGER_TXN_COL_MAX_GAP_PAD_CN;
 /** Entity ledger header + txn body cell horizontal pad (matches max gap). */
 export const LEDGER_TXN_BODY_CELL_PAD_CN = LEDGER_TXN_COL_MAX_GAP_PAD_CN;
-/** TDS ledger row text columns — same 10px max inter-column text gap. */
+/** TDS details: same 5px side pad as Account Details (10px between columns). */
 export const LEDGER_TDS_ROW_TEXT_CELL_PAD_CN = LEDGER_TXN_COL_MAX_GAP_PAD_CN;
-export const LEDGER_TDS_TAXABLE_CELL_PAD_CN = LEDGER_TDS_ROW_TEXT_CELL_PAD_CN;
-export const LEDGER_TDS_AMOUNT_CELL_PAD_CN = LEDGER_TDS_ROW_TEXT_CELL_PAD_CN;
-export const LEDGER_TDS_USER_CELL_PAD_CN = LEDGER_TDS_ROW_TEXT_CELL_PAD_CN;
+export const LEDGER_TDS_TAXABLE_CELL_PAD_CN = LEDGER_TXN_COL_MAX_GAP_PAD_CN;
+export const LEDGER_TDS_AMOUNT_CELL_PAD_CN = LEDGER_TXN_COL_MAX_GAP_PAD_CN;
+export const LEDGER_TDS_USER_CELL_PAD_CN = LEDGER_TXN_COL_MAX_GAP_PAD_CN;
 /** Dr/Cr amount cols — body, footer, FY partition (right edge / `.00` align). */
 export const LEDGER_TXN_DR_CR_COL_PX = 100;
 export const LEDGER_TXN_DR_CR_AMOUNT_CELL_CN =
   "min-w-[100px] px-[5px] text-right tabular-nums";
-/** TDS Dr/Cr uses same horizontal pad as other TDS text cols. */
-export const LEDGER_TDS_DR_CR_CELL_PAD_CN = LEDGER_TDS_ROW_TEXT_CELL_PAD_CN;
+/**
+ * TDS details Dr/Cr: Account Details align (right) + wider min for "TDS Unverified" badge.
+ */
+export const LEDGER_TDS_DR_CR_COL_PX = 168;
+export const LEDGER_TDS_VERIFY_BADGE_TO_AMOUNT_GAP_PX = 10;
+export const LEDGER_TDS_DR_CR_CELL_PAD_CN = LEDGER_TXN_COL_MAX_GAP_PAD_CN;
+export const LEDGER_TDS_DR_CR_AMOUNT_CELL_CN =
+  "min-w-[168px] px-[5px] text-right tabular-nums";
 /** TDS ledger: +10px min width on last Date col, visual gap before Type. */
 export const LEDGER_TDS_DATE_TO_TYPE_GAP_PX = 10;
 /** Entity / daybook: min visual gap between entry time (e.g. PM) and Type pill. */
@@ -110,16 +119,50 @@ export const LEDGER_TXN_BALANCE_HEADER_PAD_CN = "pl-[5px] pr-0";
 /** Body Balance: max text gap from Cr; keep small strip before ⋮. */
 export const LEDGER_TXN_BALANCE_TO_MENU_PAD_CN = "pl-[5px] pr-[6px]";
 
+export const LEDGER_TXN_VERTICAL_SCROLLBAR_FALLBACK_PX = 14;
+
+export function readLedgerTxnVerticalScrollbarSizePx(doc: Document = document): number {
+  const raw = getComputedStyle(doc.documentElement).getPropertyValue("--pl-ledger-txn-scroll-size").trim();
+  const n = parseFloat(raw);
+  return Number.isFinite(n) && n > 0 ? n : LEDGER_TXN_VERTICAL_SCROLLBAR_FALLBACK_PX;
+}
+
+/** Recent / Daybook: header pad aligns cols; body pad only when overlay scrollbar (classic already reserves gutter). */
+export function measureLedgerTxnVerticalScrollPads(body: HTMLElement): {
+  headerPadPx: number;
+  bodyPadPx: number;
+} {
+  if (body.scrollHeight <= body.clientHeight + 1) {
+    return { headerPadPx: 0, bodyPadPx: 0 };
+  }
+  const classicGutter = Math.max(0, body.offsetWidth - body.clientWidth);
+  const scrollSize = readLedgerTxnVerticalScrollbarSizePx(body.ownerDocument);
+  const headerPadPx = classicGutter > 0 ? classicGutter : scrollSize;
+  const bodyPadPx = classicGutter > 0 ? 0 : scrollSize;
+  return { headerPadPx, bodyPadPx };
+}
+
 /** Outer ribbon — 50/50; overflow parent pe H-scroll jab left floor tight ho */
 export const LEDGER_HEADER_OUTER_ROW_CN =
-  "pl-ledger-header-outer-row flex w-full flex-nowrap items-stretch gap-1";
+  "pl-ledger-header-outer-row flex w-full flex-nowrap items-start gap-1";
 /**
  * Left 50%: profile + name (flex) + balance — responsive within half.
  */
 export const LEDGER_HEADER_IDENTITY_CN =
-  "pl-ledger-header-identity flex items-stretch gap-1";
+  "pl-ledger-header-identity flex items-start gap-1";
 /** Profile avatar wrap — pen badge overlay */
 export const LEDGER_HEADER_AVATAR_CN = "pl-ledger-header-avatar";
+/** Ledger + mobile merged header profile tile (global 3.5rem square) */
+export const LEDGER_HEADER_AVATAR_BOX_CN = "h-[3.5rem] w-[3.5rem] shrink-0";
+export const LEDGER_HEADER_AVATAR_TRIGGER_CN = cn("inline-flex", LEDGER_HEADER_AVATAR_BOX_CN);
+export const LEDGER_HEADER_AVATAR_IMAGE_CN = cn(
+  LEDGER_HEADER_AVATAR_BOX_CN,
+  "rounded-lg text-lg flex-shrink-0 [&_img]:object-cover"
+);
+export const LEDGER_HEADER_AVATAR_ICON_TILE_CN = cn(
+  LEDGER_HEADER_AVATAR_BOX_CN,
+  "inline-flex items-center justify-center rounded-lg border border-blue-300 bg-blue-100/80"
+);
 /** Pen on profile — same blue as Adjust Balance outline pill */
 export const LEDGER_HEADER_AVATAR_PEN_CN = cn(
   "pl-ledger-header-avatar-pen",
@@ -137,6 +180,10 @@ export const LEDGER_HEADER_NAME_CARD_CN =
 export const LEDGER_HEADER_BALANCE_CARD_CN = "pl-ledger-header-balance-card";
 export const LEDGER_HEADER_BALANCE_STACK_CN = "pl-ledger-header-balance-stack";
 export const LEDGER_HEADER_BALANCE_LABEL_CN = "pl-ledger-header-balance-label";
+/** Party TDS Balance card (Sale / Pur sections) — right of Balance */
+export const LEDGER_HEADER_TDS_BALANCE_CARD_CN = "pl-ledger-header-tds-balance-card";
+export const LEDGER_HEADER_TDS_BALANCE_ROW_CN = "pl-ledger-header-tds-balance-row";
+export const LEDGER_HEADER_TDS_BALANCE_SIDE_CN = "pl-ledger-header-tds-balance-side";
 /** Title in name card */
 export const LEDGER_HEADER_TITLE_CN =
   "pl-ledger-header-title text-xl font-semibold leading-6";

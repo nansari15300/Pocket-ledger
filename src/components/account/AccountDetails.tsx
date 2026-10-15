@@ -70,6 +70,8 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_TRIGGER_CN,
+  LEDGER_HEADER_AVATAR_IMAGE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
@@ -1015,10 +1017,10 @@ export function AccountDetails({
               <div className={LEDGER_HEADER_AVATAR_CN}>
                 <EntityFileAttachmentHover
                   fileUrl={trimEntityFileUrlForPreview(account.fileUrl)}
-                  triggerClassName="inline-flex rounded-full"
+                  triggerClassName={LEDGER_HEADER_AVATAR_TRIGGER_CN}
                 >
                   <ResolvedEntityAvatar
-                    className="h-12 w-12 text-lg flex-shrink-0"
+                    className={LEDGER_HEADER_AVATAR_IMAGE_CN}
                     src={trimEntityFileUrlForPreview(account.fileUrl) ?? undefined}
                     alt={account.accountName}
                     fallbackSlot={

@@ -32,6 +32,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Textarea } from "../ui/textarea";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Checkbox } from "../ui/checkbox";
+import { SalePurchaseTdsVerifyTick } from "@/components/vouchers/SalePurchaseTdsVerifyTick";
 import { VoucherDeleteConfirmAlertDialog } from "@/components/vouchers/VoucherDeleteConfirmAlertDialog";
 import {
   assertCanPermanentDeleteFromForm,
@@ -93,8 +94,19 @@ import {
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { LinkAdvancesToVoucherDialog, applyAdvancesAllocationsToServer } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
-import { useAdvancesLinkableCount } from "@/hooks/useAdvancesForVoucher";
-import { getLinkedAmountsToVoucher, getLinkedAmountRowsFromPending, getOutgoingLinkedAmountRows, mergeLinkedRows, hasPaymentLinks, getAllocationTotal, getPaymentOutPartyLinkAmount, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { useAdvancesLinkableCount, useTaxAccountLinkableCount } from "@/hooks/useAdvancesForVoucher";
+import { getLinkedAmountsToVoucher, getLinkedAmountRowsFromPending, getOutgoingLinkedAmountRows, mergeLinkedRows, hasPaymentLinks, getAllocationTotal, getPaymentOutPartyLinkAmount, allocationEntityTxnId, getTaxFromAllocation, getNetFromAllocation, buildBillWiseEntityTxnId, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { getSalePurchasePartyAmount } from "@/lib/tdsVoucher";
+import {
+  resolveSalePurchaseBillWiseLegs,
+  salePurchaseLinkSectionTitle,
+  salePurchaseLinkButtonLabel,
+  type SalePurchaseBillWiseLegKind,
+} from "@/lib/salePurchaseBillWiseLinkLegs";
+import {
+  collectSalePurchaseTaxAndTdsAccountIds,
+  getSalePurchaseLinkAllocation,
+} from "@/lib/linkAllocationSettings";
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 
 import { firestore, storage } from "@/lib/firebase";
@@ -244,6 +256,8 @@ const formSchema = z.object({
   discountExpenseAccountId: z.string().optional(),
   tax: z.coerce.number().min(0).optional(),
   tds: z.coerce.number().min(0).optional(),
+  /** TDS selected hone par party/tax ledger pe Verified / Unverified */
+  isTdsVerified: z.boolean().optional().default(false),
   total: z.coerce.number(),
   unassignedFile: z.any().optional(), // Keep unassignedFile data
   isApproved: z.boolean().optional(),
@@ -325,6 +339,7 @@ function getInitialFormValues(voucher?: any): PurchaseFormValues {
       discountExpenseAccountId: "",
       tax: 0,
       tds: 0,
+      isTdsVerified: false,
       total: 0,
       unassignedFile: null, // सुरुमा null राख्ने
       isApproved: false,
@@ -350,6 +365,7 @@ function getInitialFormValues(voucher?: any): PurchaseFormValues {
     discountExpenseAccountId: String(voucher.discountExpenseAccountId ?? ""),
     tax: voucher.tax || 0,
     tds: voucher.tds || 0,
+    isTdsVerified: voucher.isTdsVerified === true,
     fileUrls: attachmentEntries,
     files: attachmentEntries.map((entry) => ({
       file: typeof File !== "undefined" && entry instanceof File ? entry : null,
@@ -472,6 +488,11 @@ export function CreatePurchaseForm({
   // Link sections are collapsed by default in add/new; edit shows automatically only when already linked.
   const [showLinkSections, setShowLinkSections] = useState(false);
   const [pendingLinkAllocations, setPendingLinkAllocations] = useState<Record<string, number> | null>(null);
+  const [pendingLinkLeg, setPendingLinkLeg] = useState<{
+    kind: SalePurchaseBillWiseLegKind;
+    accountId: string;
+  } | null>(null);
+  const [billWiseLinkLegKey, setBillWiseLinkLegKey] = useState<string>("");
   const billWiseLinksPersistedOnDialogRef = useRef(false);
   /** Edit hydrate + line calc settle hone se pehle Save mat enable (Payment Out / Journal jaisa). */
   const [editBaselineHydrated, setEditBaselineHydrated] = useState(() => !voucher?.id);
@@ -479,6 +500,7 @@ export function CreatePurchaseForm({
   const resetLinksOnCopyTargetChange = useCallback(() => {
     billWiseLinksPersistedOnDialogRef.current = false;
     setPendingLinkAllocations(null);
+    setPendingLinkLeg(null);
     setShowLinkSections(false);
     setIsLinkAdvancesOpen(false);
     onEffectiveLinksChange?.(false);
@@ -644,20 +666,99 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   );
 
   const voucherIdForLinks = isCopiedDraftFirstInsert ? undefined : (voucher?.id ?? savedVoucherId ?? undefined);
-  // Incoming: who allocated to us. Outgoing: we allocated to Sale (purchase return). When pending is set, show only pending so unlink reflects immediately.
-  const effectiveLinkedRows = useMemo(() => {
-    const incoming = pendingLinkAllocations != null && vouchers?.length
-      ? getLinkedAmountRowsFromPending(pendingLinkAllocations, vouchers, "purchase")
-      : getLinkedAmountsToVoucher(vouchers, voucherIdForLinks, "purchase", "all");
-    let outgoing = getOutgoingLinkedAmountRows(vouchers, voucherIdForLinks, "purchase", "all");
-    if (pendingLinkAllocations != null) {
-      const pendingIds = new Set(Object.keys(pendingLinkAllocations));
-      outgoing = outgoing.filter((r) => r.paymentVoucherId && pendingIds.has(r.paymentVoucherId));
+  const purchaseFormTotal = Number(form.watch("total") ?? 0) || 0;
+  const billWiseLegs = useMemo(
+    () =>
+      resolveSalePurchaseBillWiseLegs({
+        lineItems: watchedLineItems,
+        partyId: String(partyId || ""),
+        partyName: processedParties.find((p) => p.id === partyId)?.name ?? "Party",
+        partyAmount: getSalePurchasePartyAmount({
+          total: purchaseFormTotal,
+          lineItems: watchedLineItems,
+        }),
+        taxes: processedTaxes,
+      }),
+    [watchedLineItems, partyId, processedParties, purchaseFormTotal, processedTaxes]
+  );
+  const activeBillWiseLeg = useMemo(() => {
+    if (!billWiseLegs.length) return null;
+    const found = billWiseLegs.find((l) => `${l.kind}:${l.accountId}` === billWiseLinkLegKey);
+    return found || billWiseLegs[0];
+  }, [billWiseLegs, billWiseLinkLegKey]);
+  useEffect(() => {
+    if (!billWiseLegs.length) {
+      setBillWiseLinkLegKey("");
+      return;
     }
-    return mergeLinkedRows(incoming, outgoing);
-  }, [vouchers, voucherIdForLinks, pendingLinkAllocations, isCopiedDraftFirstInsert]);
+    if (!billWiseLegs.some((l) => `${l.kind}:${l.accountId}` === billWiseLinkLegKey)) {
+      setBillWiseLinkLegKey(`${billWiseLegs[0].kind}:${billWiseLegs[0].accountId}`);
+    }
+  }, [billWiseLegs, billWiseLinkLegKey]);
+
+  const pendingMatchesActiveLeg =
+    pendingLinkAllocations != null &&
+    !!pendingLinkLeg &&
+    !!activeBillWiseLeg &&
+    pendingLinkLeg.kind === activeBillWiseLeg.kind &&
+    pendingLinkLeg.accountId === activeBillWiseLeg.accountId;
+
+  // Incoming: who allocated to us. Outgoing: we allocated to Sale (purchase return). When pending is set for active leg, show only pending so unlink reflects immediately.
+  const effectiveLinkedRows = useMemo(() => {
+    const leg = activeBillWiseLeg;
+    const fetchKind = leg && leg.kind !== "party" ? "tax" : "net";
+    if (pendingMatchesActiveLeg && vouchers?.length) {
+      const incoming = getLinkedAmountRowsFromPending(pendingLinkAllocations!, vouchers, "purchase");
+      let outgoing = getOutgoingLinkedAmountRows(vouchers, voucherIdForLinks, "purchase", fetchKind);
+      const pendingIds = new Set(Object.keys(pendingLinkAllocations!));
+      outgoing = outgoing.filter((r) => r.paymentVoucherId && pendingIds.has(r.paymentVoucherId));
+      return mergeLinkedRows(incoming, outgoing);
+    }
+    const incoming = getLinkedAmountsToVoucher(vouchers, voucherIdForLinks, "purchase", fetchKind);
+    let outgoing = getOutgoingLinkedAmountRows(vouchers, voucherIdForLinks, "purchase", fetchKind);
+    let rows = mergeLinkedRows(incoming, outgoing);
+    if (leg && voucherIdForLinks && vouchers?.length) {
+      const wantEt = buildBillWiseEntityTxnId({
+        voucherId: voucherIdForLinks,
+        entityKind: leg.kind,
+        accountId: leg.accountId,
+      });
+      rows = rows.filter((row) => {
+        const srcId = row.paymentVoucherId;
+        if (!srcId || srcId === OPENING_BALANCE_VOUCHER_ID) return leg.kind === "party";
+        const src = (vouchers as any[]).find((v) => String(v.id) === String(srcId));
+        const allocs = (src?.allocations as any[] | undefined) || [];
+        const hit = allocs.find((a) => String(a.voucherId) === String(voucherIdForLinks));
+        if (!hit) return false;
+        const et = allocationEntityTxnId(hit);
+        if (et) return et === wantEt;
+        if (leg.kind === "party") return getNetFromAllocation(hit) > 0 || getAllocationTotal(hit) > 0;
+        return getTaxFromAllocation(hit) > 0;
+      });
+    }
+    return rows;
+  }, [
+    vouchers,
+    voucherIdForLinks,
+    pendingLinkAllocations,
+    pendingMatchesActiveLeg,
+    isCopiedDraftFirstInsert,
+    activeBillWiseLeg,
+  ]);
   const linkedAmountRows = effectiveLinkedRows;
   const totalLinked = useMemo(() => linkedAmountRows.reduce((s, r) => s + r.amount, 0), [linkedAmountRows]);
+  const activeLegOutstanding = useMemo(() => {
+    const legTotal = Number(activeBillWiseLeg?.totalAmount) || 0;
+    return Math.max(0, legTotal - totalLinked);
+  }, [activeBillWiseLeg, totalLinked]);
+  const voucherHasAnyBillWiseLinks = useMemo(() => {
+    if (pendingLinkAllocations != null && Object.keys(pendingLinkAllocations).length > 0) return true;
+    if (!voucherIdForLinks || !vouchers?.length) return false;
+    return (
+      getLinkedAmountsToVoucher(vouchers, voucherIdForLinks, "purchase", "all").length > 0 ||
+      getOutgoingLinkedAmountRows(vouchers, voucherIdForLinks, "purchase", "all").length > 0
+    );
+  }, [vouchers, voucherIdForLinks, pendingLinkAllocations]);
   // Report effective link state to dialog so banner/fields follow local unlink (pending = {} → no links → enable edit)
   useEffect(() => {
     if (!onEffectiveLinksChange) return;
@@ -706,15 +807,45 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     vouchers ?? [],
     processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0
   );
-  const hasItemEditLock = linkedAmountRows.length > 0;
+  const hasItemEditLock = voucherHasAnyBillWiseLinks;
   const isEditMode = !!voucher?.id;
   const canRenderBillWiseSection = isEditing || !!partyId;
-  const shouldShowBillWiseSection = canRenderBillWiseSection && (showLinkSections || (isEditMode && linkedAmountRows.length > 0));
+  const shouldShowBillWiseSection = canRenderBillWiseSection && (showLinkSections || (isEditMode && voucherHasAnyBillWiseLinks));
   const shouldShowLinkButton = canRenderBillWiseSection && !shouldShowBillWiseSection;
+  const activeLinkBalanceKind =
+    activeBillWiseLeg?.kind === "tax" || activeBillWiseLeg?.kind === "tds" ? "tax" : "net";
+  const activeLinkButtonLabel = salePurchaseLinkButtonLabel(
+    activeBillWiseLeg?.kind ?? "party",
+    "purchase"
+  );
+  const activeLinkSectionTitle = salePurchaseLinkSectionTitle(activeBillWiseLeg?.kind ?? "party");
+  const taxTdsLinkableCount = useTaxAccountLinkableCount(
+    activeBillWiseLeg?.kind === "tax" || activeBillWiseLeg?.kind === "tds"
+      ? activeBillWiseLeg.accountId
+      : null,
+    voucher?.id ?? savedVoucherId ?? undefined,
+    vouchers ?? []
+  );
+  const activeLegLinkableCount =
+    activeBillWiseLeg?.kind === "tax" || activeBillWiseLeg?.kind === "tds"
+      ? taxTdsLinkableCount
+      : billWiseLinkableCount;
+  const purchaseLinkAllocationPrefs = getSalePurchaseLinkAllocation(company, "purchase");
+  const partyLegCrossEntityAccountIds = useMemo(() => {
+    const fromLines = collectSalePurchaseTaxAndTdsAccountIds(watchedLineItems);
+    return {
+      taxAccountIds: purchaseLinkAllocationPrefs.allowTaxOnPartyAmount ? fromLines.taxAccountIds : [],
+      tdsAccountIds: purchaseLinkAllocationPrefs.allowTdsOnPartyAmount ? fromLines.tdsAccountIds : [],
+    };
+  }, [
+    watchedLineItems,
+    purchaseLinkAllocationPrefs.allowTaxOnPartyAmount,
+    purchaseLinkAllocationPrefs.allowTdsOnPartyAmount,
+  ]);
 
   useEffect(() => {
-    if (isEditMode && linkedAmountRows.length > 0) setShowLinkSections(true);
-  }, [isEditMode, linkedAmountRows.length]);
+    if (isEditMode && voucherHasAnyBillWiseLinks) setShowLinkSections(true);
+  }, [isEditMode, voucherHasAnyBillWiseLinks]);
 
   const transactionDates = useMemo(() => {
     if (!vouchers?.length) return [];
@@ -1241,6 +1372,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           ...data,
           lineItems: lineItemsWithTax,
           tds: tdsTotal,
+          isTdsVerified: tdsTotal > 0 && data.isTdsVerified === true,
           type: "purchase",
         };
 
@@ -1366,19 +1498,29 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             if (partyIdForLink) {
               const partyForOb = processedParties.find((p) => p.id === partyIdForLink);
               const showOBRow = Number(partyForOb?.openingBalance ?? 0) > 0;
+              const linkLeg = pendingLinkLeg ?? activeBillWiseLeg;
+              const linkBalanceKind =
+                linkLeg?.kind === "tax" || linkLeg?.kind === "tds" ? "tax" : "net";
               const linkResult = await runWithVoucherLinkSaveProgress(async () => {
                 await applyAdvancesAllocationsToServer({
                   companyId,
                   mode: "purchase",
                   targetVoucherId: docId,
                   targetPartyId: partyIdForLink,
-                  balanceKind: "all",
+                  balanceKind: linkBalanceKind,
+                  linkEntityKind: linkLeg?.kind ?? "party",
+                  linkAccountId: linkLeg?.accountId ?? partyIdForLink,
+                  linkCrossEntityTaxAccountIds:
+                    linkLeg?.kind === "party" ? partyLegCrossEntityAccountIds.taxAccountIds : undefined,
+                  linkCrossEntityTdsAccountIds:
+                    linkLeg?.kind === "party" ? partyLegCrossEntityAccountIds.tdsAccountIds : undefined,
                   linkedAmounts: pendingLinkAllocations,
                   vouchers,
-                  showOBRow,
+                  showOBRow: linkLeg?.kind === "party" ? showOBRow : false,
                 });
                 if (isMounted.current) {
                   setPendingLinkAllocations(null);
+                  setPendingLinkLeg(null);
                   billWiseLinksPersistedOnDialogRef.current = false;
                 }
               });
@@ -1473,7 +1615,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
     },
     // pendingLinkAllocations, vouchers, processedParties: required so link data is persisted to server on Save (avoids stale closure)
-    [companyId, user, files, savePdfAsImage, onVoucherAction, form, savedVoucherId, company, voucher, isEditingAndConverting, fetchVoucherNumber, pendingLinkAllocations, vouchers, processedParties, resolveVoucherIdForSave, isPermissionEdit, markCopiedDraftPersisted, isCopiedDraftFirstInsert]
+    [companyId, user, files, savePdfAsImage, onVoucherAction, form, savedVoucherId, company, voucher, isEditingAndConverting, fetchVoucherNumber, pendingLinkAllocations, pendingLinkLeg, activeBillWiseLeg, partyLegCrossEntityAccountIds, vouchers, processedParties, resolveVoucherIdForSave, isPermissionEdit, markCopiedDraftPersisted, isCopiedDraftFirstInsert]
   );
 
 
@@ -2756,7 +2898,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <div className={cn(TH_BASE, "text-center")}>Rate</div>
                         <div className={cn(TH_BASE, "text-right text-xs")}>{lineColLabels.taxable}</div>
                         <div className={salePurchaseLinePairTh(TH_BASE, SALE_PURCHASE_TDS_PAIR_GRID)}>
-                          <div className={salePurchasePairHeaderCell("left")}>{lineColLabels.tds}</div>
+                          <div className={cn(salePurchasePairHeaderCell("left"), "flex items-center gap-1.5")}>
+                            <span>{lineColLabels.tds}</span>
+                            {(tds || 0) > 0 ? (
+                              <SalePurchaseTdsVerifyTick
+                                control={form.control}
+                                disabled={deleteDisabledWhenLinked}
+                                compact
+                              />
+                            ) : null}
+                          </div>
                           <div className={salePurchasePairHeaderCell("right")}>{lineColLabels.tdsAmount}</div>
                         </div>
                         <div className={cn(TH_BASE, "flex items-center gap-1 min-w-0 flex-nowrap justify-end")}>
@@ -3137,7 +3288,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </div>
                     {(tds || 0) > 0 && (
                       <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "pt-1")}>
-                        <span className="text-xs shrink-0">TDS:</span>
+                        <div className="flex min-w-0 flex-1 items-center gap-2">
+                          <span className="text-xs shrink-0">TDS:</span>
+                          <SalePurchaseTdsVerifyTick control={form.control} disabled={deleteDisabledWhenLinked} compact />
+                        </div>
                         <SalePurchaseTotalsSummaryAmount value={tds || 0} className="text-xs font-medium" tdsDeduction />
                       </div>
                     )}
@@ -3397,16 +3551,36 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     {shouldShowBillWiseSection && (
                       <div className="bg-rose-50 rounded-lg border-2 border-rose-300/80 px-[2px] py-2 pb-[45px] space-y-1.5 w-full">
                         <div className="border-b border-border/60 pb-2">
-                          <span className="text-xs font-semibold">Link for bill wise</span>
-                          {company?.enableLinkPaymentToTxns && (
+                          <span className="text-xs font-semibold">{activeLinkSectionTitle}</span>
+                          {billWiseLegs.length > 1 && (
+                            <div className="flex gap-2 flex-wrap mt-1.5">
+                              {billWiseLegs.map((leg) => {
+                                const key = `${leg.kind}:${leg.accountId}`;
+                                return (
+                                  <label key={key} className="flex items-center gap-1.5 cursor-pointer text-xs">
+                                    <input
+                                      type="radio"
+                                      name="purchaseBillWiseLinkLegMobile"
+                                      checked={billWiseLinkLegKey === key}
+                                      onChange={() => setBillWiseLinkLegKey(key)}
+                                      className="rounded-full"
+                                    />
+                                    <span>{leg.label}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {company?.enableLinkPaymentToTxns && activeBillWiseLeg?.kind === "party" && (
                             <p className="text-xs text-blue-600 mt-1">
-                              {billWiseLinkableCount > 0
-                                ? `${billWiseLinkableCount} voucher${billWiseLinkableCount === 1 ? "" : "s"} available to link, so link 1st to save.`
+                              {activeLegLinkableCount > 0
+                                ? `${activeLegLinkableCount} voucher${activeLegLinkableCount === 1 ? "" : "s"} available to link, so link 1st to save.`
                                 : "You can save this voucher without linking, bcz no voucher to link."}
                             </p>
                           )}
                           <p className="text-xs text-muted-foreground mt-1">
-                            {billWiseLinkableCount} voucher(s) available to link.{linkedAmountRows.length > 0 && ` ${linkedAmountRows.length} linked.`}
+                            {`${activeLegLinkableCount} voucher(s) available to link.`}
+                            {linkedAmountRows.length > 0 && ` ${linkedAmountRows.length} linked.`}
                           </p>
                         </div>
                         {linkedAmountRows.length > 0 && (
@@ -3458,8 +3632,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               <span className="truncate leading-tight">Balance</span>
                             </div>
                             <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
-                              <span className={cn("truncate text-right whitespace-nowrap leading-tight", (total || 0) - totalLinked <= 0 ? "text-green-600 font-semibold" : "")}>
-                                {(total || 0) - totalLinked <= 0 ? "Settled" : formatCurrencyForPrint(Math.max(0, (total || 0) - totalLinked), { noSuffix: true, noAnimation: true })}
+                              <span className={cn("truncate text-right whitespace-nowrap leading-tight", activeLegOutstanding <= 0 ? "text-green-600 font-semibold" : "")}>
+                                {activeLegOutstanding <= 0 ? "Settled" : formatCurrencyForPrint(activeLegOutstanding, { noSuffix: true, noAnimation: true })}
                               </span>
                             </div>
                           </div>
@@ -3467,7 +3641,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         {partyId && can("add_link") && (
                           <div className="mt-2 flex flex-wrap items-center gap-1.5">
                             <Button type="button" className="w-auto bg-green-600 hover:bg-green-700 text-white" onClick={() => setIsLinkAdvancesOpen(true)}>
-                              <Link2 className="mr-2 h-4 w-4" /> Link to Dr
+                              <Link2 className="mr-2 h-4 w-4" /> {activeLinkButtonLabel}
                             </Button>
                             <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
                               <Info className="h-4 w-4 shrink-0" />
@@ -3729,7 +3903,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </div>
                       {(tds || 0) > 0 && (
                         <div className={SALE_PURCHASE_TOTALS_SUMMARY_ROW}>
-                          <FormLabel className="shrink-0">TDS:</FormLabel>
+                          <div className="flex min-w-0 flex-1 items-center gap-2">
+                            <FormLabel className="shrink-0">TDS:</FormLabel>
+                            <SalePurchaseTdsVerifyTick control={form.control} disabled={deleteDisabledWhenLinked} />
+                          </div>
                           <SalePurchaseTotalsSummaryAmount value={tds || 0} tdsDeduction />
                         </div>
                       )}
@@ -3757,16 +3934,36 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     {shouldShowBillWiseSection && (
                       <div className="space-y-4 border-2 border-rose-300/80 rounded-lg px-[2px] py-4 pb-[45px] bg-rose-50 w-full">
                         <div className="border-b border-border/60 pb-2">
-                          <span className="text-sm font-semibold">Link for bill wise</span>
-                          {company?.enableLinkPaymentToTxns && (
+                          <span className="text-sm font-semibold">{activeLinkSectionTitle}</span>
+                          {billWiseLegs.length > 1 && (
+                            <div className="flex gap-2 flex-wrap mt-1.5">
+                              {billWiseLegs.map((leg) => {
+                                const key = `${leg.kind}:${leg.accountId}`;
+                                return (
+                                  <label key={key} className="flex items-center gap-1.5 cursor-pointer text-sm">
+                                    <input
+                                      type="radio"
+                                      name="purchaseBillWiseLinkLegDesktop"
+                                      checked={billWiseLinkLegKey === key}
+                                      onChange={() => setBillWiseLinkLegKey(key)}
+                                      className="rounded-full"
+                                    />
+                                    <span>{leg.label}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {company?.enableLinkPaymentToTxns && activeBillWiseLeg?.kind === "party" && (
                             <p className="text-sm text-blue-600 mt-1">
-                              {billWiseLinkableCount > 0
-                                ? `${billWiseLinkableCount} voucher${billWiseLinkableCount === 1 ? "" : "s"} available to link, so link 1st to save.`
+                              {activeLegLinkableCount > 0
+                                ? `${activeLegLinkableCount} voucher${activeLegLinkableCount === 1 ? "" : "s"} available to link, so link 1st to save.`
                                 : "You can save this voucher without linking, bcz no voucher to link."}
                             </p>
                           )}
                           <p className="text-sm text-muted-foreground mt-1">
-                            {billWiseLinkableCount} voucher(s) available to link.{linkedAmountRows.length > 0 && ` ${linkedAmountRows.length} linked.`}
+                            {`${activeLegLinkableCount} voucher(s) available to link.`}
+                            {linkedAmountRows.length > 0 && ` ${linkedAmountRows.length} linked.`}
                           </p>
                         </div>
                         {linkedAmountRows.length > 0 && (
@@ -3818,8 +4015,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               <span className="truncate leading-tight">Balance</span>
                             </div>
                             <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
-                              <span className={cn("truncate text-right whitespace-nowrap leading-tight", (total || 0) - totalLinked <= 0 ? "text-green-600 font-semibold" : "")}>
-                                {(total || 0) - totalLinked <= 0 ? "Settled" : formatCurrencyForPrint(Math.max(0, (total || 0) - totalLinked), { noSuffix: true, noAnimation: true })}
+                              <span className={cn("truncate text-right whitespace-nowrap leading-tight", activeLegOutstanding <= 0 ? "text-green-600 font-semibold" : "")}>
+                                {activeLegOutstanding <= 0 ? "Settled" : formatCurrencyForPrint(activeLegOutstanding, { noSuffix: true, noAnimation: true })}
                               </span>
                             </div>
                           </div>
@@ -3827,7 +4024,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         {partyId && can('add_link') && (
                           <div className="mt-2 flex flex-wrap items-center gap-1.5">
                             <Button type="button" className="w-auto bg-green-600 hover:bg-green-700 text-white" onClick={() => setIsLinkAdvancesOpen(true)}>
-                              <Link2 className="mr-2 h-4 w-4" /> Link to Dr
+                              <Link2 className="mr-2 h-4 w-4" /> {activeLinkButtonLabel}
                             </Button>
                             {/* Read me to the right of Link to Dr, inside the link section box */}
                             <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
@@ -3951,7 +4148,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         isOpen={isCreateExpenseAccountOpen}
         onOpenChange={setIsCreateExpenseAccountOpen}
       />
-      {partyId && (
+      {partyId && activeBillWiseLeg && (
         <LinkAdvancesToVoucherDialog
           isOpen={isLinkAdvancesOpen}
           onOpenChange={setIsLinkAdvancesOpen}
@@ -3961,42 +4158,36 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           targetPartyId={partyId}
           targetPartyName={processedParties.find((p) => p.id === partyId)?.name ?? "Party"}
           targetLabel={`Purchase #${form.watch("voucherNumber") || ""}`}
-          balanceKind="all"
-          targetOutstandingOverride={Math.max(0, (total || 0) - totalLinked)}
-          targetTotalAmount={total ?? 0}
-          partyOpeningBalance={processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0}
-          onConfirm={async (payload) => {
+          balanceKind={activeLinkBalanceKind}
+          linkLegKind={activeBillWiseLeg.kind}
+          linkAccountId={activeBillWiseLeg.accountId}
+          linkAccountLabel={activeBillWiseLeg.label}
+          targetOutstandingOverride={activeLegOutstanding}
+          targetTotalAmount={Number(activeBillWiseLeg.totalAmount) || 0}
+          partyOpeningBalance={
+            activeBillWiseLeg.kind === "party"
+              ? processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0
+              : 0
+          }
+          onConfirm={(payload) => {
+            // Keep links local until voucher Save — otherwise edit dirty/Save stay disabled.
             const linkedAmounts =
               payload.linkedAmounts && Object.keys(payload.linkedAmounts).length > 0
                 ? { ...payload.linkedAmounts }
                 : {};
+            billWiseLinksPersistedOnDialogRef.current = false;
             setPendingLinkAllocations(linkedAmounts);
-            setIsLinkAdvancesOpen(false);
-            const docId = voucher?.id ?? savedVoucherId;
-            if (!docId || !companyId || !partyId || !vouchers?.length) return;
-            const partyForOb = processedParties.find((p) => p.id === partyId);
-            const linkResult = await runWithVoucherLinkSaveProgress(async () => {
-              await applyAdvancesAllocationsToServer({
-                companyId,
-                mode: "purchase",
-                targetVoucherId: docId,
-                targetPartyId: partyId,
-                balanceKind: "all",
-                linkedAmounts,
-                vouchers,
-                showOBRow: Number(partyForOb?.openingBalance ?? 0) > 0,
-              });
-              billWiseLinksPersistedOnDialogRef.current = true;
-              setPendingLinkAllocations(null);
-              onEffectiveLinksChange?.(false);
+            setPendingLinkLeg({
+              kind: activeBillWiseLeg.kind,
+              accountId: activeBillWiseLeg.accountId,
             });
-            if (!linkResult.ok) {
-              sonnerToast.error("Could not update bill-wise links.", {
-                description: "Try again or check connection.",
-              });
-            }
+            setIsLinkAdvancesOpen(false);
           }}
-          initialLinkedAmounts={pendingLinkAllocations ?? effectiveLinkedAmountsForDialog}
+          initialLinkedAmounts={
+            pendingMatchesActiveLeg
+              ? pendingLinkAllocations ?? undefined
+              : effectiveLinkedAmountsForDialog
+          }
         />
       )}
       <LinkSectionInfoDialog open={linkSectionInfoOpen} onOpenChange={setLinkSectionInfoOpen} />

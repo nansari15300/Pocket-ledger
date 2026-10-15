@@ -34,7 +34,10 @@ export function ReportMobileLedgerFooter({
   onViewToggle,
 }: ReportMobileLedgerFooterProps) {
   return (
-    <footer className="fixed bottom-0 left-0 right-0 z-50 flex items-stretch justify-around gap-1 border-t bg-white p-1.5 dark:bg-card">
+    <footer
+      className="fixed bottom-0 left-0 right-0 z-50 flex items-stretch justify-around gap-1 border-t bg-white p-1.5 dark:bg-card"
+      data-pl-mobile-ledger-action-footer=""
+    >
       <PermissionButton
         permission="export_data"
         className="flex min-w-0 flex-1 flex-col items-center justify-center rounded-md bg-green-500 py-1 text-white hover:bg-green-600"

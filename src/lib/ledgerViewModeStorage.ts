@@ -2,14 +2,17 @@
 
 export type LedgerBalanceViewMode = "statement" | "bill_wise";
 
-const BALANCE_LEGACY_KEYS: Record<"party" | "staff", string> = {
+export type LedgerBalanceSection = "party" | "staff" | "tax";
+
+const BALANCE_LEGACY_KEYS: Record<LedgerBalanceSection, string> = {
   party: "balanceMode_party",
   staff: "balanceMode_staff",
+  tax: "balanceMode_tax",
 };
 
 const BANK_SPEND_WISE_LEGACY_KEYS = ["bank-cash-spendWiseView", "bank-group-spendWiseView"] as const;
 
-function balanceStorageKey(companyId: string, section: "party" | "staff"): string {
+function balanceStorageKey(companyId: string, section: LedgerBalanceSection): string {
   return `pl-ledger-balance-view:${companyId}:${section}`;
 }
 
@@ -17,19 +20,24 @@ function bankSpendWiseStorageKey(companyId: string): string {
   return `pl-ledger-bank-spend-wise:${companyId}`;
 }
 
-export function resolveLedgerBalanceSection(pathname: string | null | undefined): "party" | "staff" | null {
+export function resolveLedgerBalanceSection(
+  pathname: string | null | undefined
+): LedgerBalanceSection | null {
   const path = String(pathname || "").trim();
   if (!path) return null;
   if (path.startsWith("/party")) return "party";
   if (path.startsWith("/staff")) return "staff";
+  if (path.startsWith("/tax")) return "tax";
   return null;
 }
 
-export function defaultLedgerBalanceViewMode(section: "party" | "staff"): LedgerBalanceViewMode {
+export function defaultLedgerBalanceViewMode(section: LedgerBalanceSection): LedgerBalanceViewMode {
+  // Tax default statement — bill wise explicit toggle se on
+  if (section === "tax") return "statement";
   return "bill_wise";
 }
 
-function readLegacyBalanceMode(section: "party" | "staff"): LedgerBalanceViewMode | null {
+function readLegacyBalanceMode(section: LedgerBalanceSection): LedgerBalanceViewMode | null {
   if (typeof window === "undefined") return null;
   try {
     const v = localStorage.getItem(BALANCE_LEGACY_KEYS[section]);
@@ -54,10 +62,10 @@ function readLegacyBankSpendWise(): boolean | null {
   return null;
 }
 
-/** Party / staff Statement vs Bill wise — refresh + company switch par restore. */
+/** Party / staff / tax Statement vs Bill wise — refresh + company switch par restore. */
 export function readLedgerBalanceViewMode(
   companyId: string | null | undefined,
-  section: "party" | "staff"
+  section: LedgerBalanceSection
 ): LedgerBalanceViewMode {
   const cid = String(companyId || "").trim();
   if (typeof window !== "undefined" && cid) {
@@ -80,7 +88,7 @@ export function readLedgerBalanceViewMode(
 
 export function writeLedgerBalanceViewMode(
   companyId: string | null | undefined,
-  section: "party" | "staff",
+  section: LedgerBalanceSection,
   mode: LedgerBalanceViewMode
 ): void {
   if (typeof window === "undefined") return;

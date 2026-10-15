@@ -1,10 +1,13 @@
 "use client";
 
-import { Suspense, useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo, startTransition, type ReactNode } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Search, Receipt, Users } from "lucide-react";
+import { Search, Receipt, Users, Pencil } from "lucide-react";
+import { EditTaxDialog } from "@/components/tax/EditTaxDialog";
+import { EditTaxGroupDialog } from "@/components/tax/EditTaxGroupDialog";
+import { LEDGER_HEADER_AVATAR_PEN_CN } from "@/lib/ledgerHeaderChrome";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -36,7 +39,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
-import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import { applyMasterDetailBackToListUrl, masterDetailListHref } from "@/lib/masterDetailListPath";
 import { browserHistoryHref } from "@/lib/webAppBasePath";
 import {
   masterDetailTabHref,
@@ -149,12 +152,15 @@ function TaxPageContent() {
   const { selected, setSelected } = useResponsiveListLayout<Tax | TaxGroup>(`tax_view_${activeView}`);
   const isInitialMount = useRef(true);
 
+  const pendingTaxSelectIdRef = useRef<string | null>(null);
   const onBackToList = useCallback(() => {
+    pendingTaxSelectIdRef.current = null;
+    // Pehle URL clear — warna sync effect purani ?selected= se detail wapas kholta hai
+    const href = applyMasterDetailBackToListUrl("tax");
     setSelected(null);
-    router.replace(masterDetailListHref("tax"), { scroll: false });
+    router.replace(href, { scroll: false });
   }, [setSelected, router]);
   useRegisterMasterDetailHardwareBack("tax", onBackToList);
-  const pendingTaxSelectIdRef = useRef<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [taxListQuickFilter, setTaxListQuickFilter] = useState<EntityListQuickFilter>("default");
@@ -182,6 +188,10 @@ function TaxPageContent() {
     if (!patch?.id || !selectedTaxRaw || selectedTaxRaw.id !== patch.id) return;
     setSelected({ ...selectedTaxRaw, ...patch });
   }, [setSelected, selectedTaxRaw]);
+  const handleTaxGroupUpdated = useCallback((patch?: Partial<TaxGroup>) => {
+    if (!patch?.id || !selectedGroupRaw || selectedGroupRaw.id !== patch.id) return;
+    setSelected({ ...selectedGroupRaw, ...patch });
+  }, [setSelected, selectedGroupRaw]);
   const mobileTaxSelectionLabelClassName = useMemo(() => {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as Tax | TaxGroup).balance);
@@ -218,13 +228,6 @@ function TaxPageContent() {
       activeView === "groups" ? () => setGroupDetailsDateRange(undefined) : () => setTaxDetailsDateRange(undefined);
     return <MobileMasterDetailHeaderDateSecondary dateRange={range} onClear={onClear} />;
   }, [isMobile, selected, activeView, taxDetailsDateRange, groupDetailsDateRange]);
-  const mobileTaxDetailHeaderAvatar = useMemo(() => {
-    if (!isMobile || !selected) return null;
-    const selectedEntity = selected as Tax | TaxGroup;
-    const name = selectedEntity.name || "Tax";
-    const attachmentUrl = trimEntityFileUrlForPreview((selectedEntity as any).fileUrl);
-    return <MobileMasterDetailHeaderAvatar name={name} attachmentUrl={attachmentUrl} />;
-  }, [isMobile, selected]);
   useSyncMasterDetailHeaderId("tax", selectedTax?.id ?? selectedGroupRaw?.id ?? null);
   
   const processedTaxGroups = useMemo(() => {
@@ -254,6 +257,80 @@ function TaxPageContent() {
         : null,
     [selectedGroupRaw, processedTaxGroups, companyId]
   );
+
+  const mobileTaxDetailHeaderAvatar = useMemo(() => {
+    if (!isMobile || !selected) return null;
+
+    if (activeView !== "groups" && selectedTax) {
+      const tax = selectedTax;
+      const name = tax.name || "Tax";
+      const attachmentUrl = trimEntityFileUrlForPreview((tax as any).fileUrl);
+      const hasTransactions = (tax.debit ?? 0) !== 0 || (tax.credit ?? 0) !== 0;
+      return (
+        <MobileMasterDetailHeaderAvatar
+          name={name}
+          attachmentUrl={attachmentUrl}
+          editTrigger={
+            <EditTaxDialog
+              tax={tax}
+              allTaxes={processedTaxes}
+              onTaxUpdated={handleTaxUpdated}
+              onTaxDeleted={() => setSelected(null)}
+              hasTransactions={hasTransactions}
+            >
+              <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit tax">
+                <Pencil className="h-2.5 w-2.5" aria-hidden />
+              </button>
+            </EditTaxDialog>
+          }
+        />
+      );
+    }
+
+    if (activeView === "groups" && selectedGroup) {
+      const group = selectedGroup;
+      const name = group.name || "Tax";
+      const attachmentUrl = trimEntityFileUrlForPreview((group as any).fileUrl);
+      const isSystemBranchGroup = isMasterEntitySystemGroupId(TAX_ENTITY_GROUP_PRESET, group.id);
+      const hasAccounts =
+        processedTaxes.some((t) => t.groupId === group.id) ||
+        processedTaxGroups.some((g) => g.parentId === group.id);
+      return (
+        <MobileMasterDetailHeaderAvatar
+          name={name}
+          attachmentUrl={attachmentUrl}
+          editTrigger={
+            !isSystemBranchGroup ? (
+              <EditTaxGroupDialog
+                group={group}
+                allGroups={processedTaxGroups}
+                onGroupUpdated={handleTaxGroupUpdated}
+                onGroupDeleted={() => setSelected(null)}
+                hasAccounts={hasAccounts}
+              >
+                <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit group">
+                  <Pencil className="h-2.5 w-2.5" aria-hidden />
+                </button>
+              </EditTaxGroupDialog>
+            ) : undefined
+          }
+        />
+      );
+    }
+
+    return null;
+  }, [
+    isMobile,
+    selected,
+    activeView,
+    selectedTax,
+    selectedGroup,
+    processedTaxes,
+    processedTaxGroups,
+    handleTaxUpdated,
+    handleTaxGroupUpdated,
+    setSelected,
+  ]);
 
   const handleTaxTabChange = useCallback(
     (value: string) => {
@@ -395,9 +472,25 @@ function TaxPageContent() {
   }, [activeView, processedTaxes, processedTaxGroups]);
 
   const handleSelect = useCallback((item: Tax | TaxGroup, options?: GroupListSelectOptions) => {
-    pendingTaxSelectIdRef.current = item.id;
-    setSelected(item);
+    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
     const isTax = "rate" in item;
+    console.log("[TaxPage.handleSelect] start", {
+      id: item?.id,
+      name: (item as { name?: string })?.name,
+      isTax,
+      activeView,
+      useQueryNav,
+      memberId: options?.memberId ?? null,
+      t0,
+    });
+    pendingTaxSelectIdRef.current = item.id;
+    // Heavy TaxDetails mount off the click stack — keeps UI responsive.
+    startTransition(() => {
+      setSelected(item);
+      console.log("[TaxPage.handleSelect] after setSelected (transition)", {
+        ms: (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0,
+      });
+    });
     if (isTax) {
       setGroupMemberFilterId(null);
     } else {
@@ -411,13 +504,25 @@ function TaxPageContent() {
     if (typeof window !== "undefined") {
       try {
         window.history.replaceState(window.history.state, "", browserHistoryHref(path));
-      } catch {
-        /* ignore */
+        console.log("[TaxPage.handleSelect] replaceState", { path });
+      } catch (err) {
+        console.warn("[TaxPage.handleSelect] replaceState failed", err);
       }
     }
     if (useQueryNav && shouldReplaceWithMasterDetailCanonical(path)) {
+      console.log("[TaxPage.handleSelect] router.replace", { path });
       router.replace(path, { scroll: false });
     }
+    console.log("[TaxPage.handleSelect] end", {
+      ms: (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0,
+      path,
+    });
+    requestAnimationFrame(() => {
+      console.log("[TaxPage.handleSelect] rAF1", {
+        ms: (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0,
+        selectedId: item?.id,
+      });
+    });
   }, [useQueryNav, router, setSelected, activeView, setActiveView]);
 
   useEffect(() => {
@@ -438,15 +543,19 @@ function TaxPageContent() {
     }
     const groupItem = processedTaxGroups.find((i) => i.id === selectedId);
     const taxItem = processedTaxes.find((i) => i.id === selectedId);
-    if (view === "groups" && groupItem) setActiveView("groups");
-    else if (view === "taxes" && taxItem) setActiveView("taxes");
     const item =
       groupItem && taxItem
         ? view === "groups"
           ? groupItem
           : taxItem
         : groupItem || taxItem;
-    if (item) setSelected(item);
+    // Deep links can mount TaxDetails, whose ledger math is expensive. Keep URL
+    // restoration at the same non-urgent priority as a TaxList click.
+    startTransition(() => {
+      if (view === "groups" && groupItem) setActiveView("groups");
+      else if (view === "taxes" && taxItem) setActiveView("taxes");
+      if (item) setSelected(item);
+    });
     const canonical =
       view === "groups"
         ? `/tax?view=groups&selected=${encodeURIComponent(selectedId)}`
@@ -532,6 +641,12 @@ function TaxPageContent() {
         moveHelpers: taxGroupTreeMove,
       })(sourceGroupId, targetGroupId),
     [companyId, company, processedTaxGroups, initialProcessedTaxGroups]
+  );
+
+  // Stable ref for TaxDetails — inline `{...}` every render re-ran useTransactions (main-thread hang).
+  const taxDetailUserNames = useMemo(
+    () => ({ ...vouchersUserNames, ...userNames }),
+    [vouchersUserNames, userNames]
   );
 
   if (vouchersLoading) {
@@ -668,10 +783,10 @@ function TaxPageContent() {
   const detailView = (
     <>
       {activeView === 'taxes' && selectedTax && (
-        <TaxDetails tax={selectedTax} allTaxes={processedTaxes} onTaxUpdated={handleTaxUpdated} onTaxDeleted={() => setSelected(null)} dateRange={taxDetailsDateRange} onDateRangeChange={setTaxDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} hideMobilePeriodLabelRow={isMobile} />
+        <TaxDetails tax={selectedTax} allTaxes={processedTaxes} onTaxUpdated={handleTaxUpdated} onTaxDeleted={() => setSelected(null)} dateRange={taxDetailsDateRange} onDateRangeChange={setTaxDetailsDateRange} userNames={taxDetailUserNames} hideMobilePeriodLabelRow={isMobile} />
       )}
       {activeView === 'groups' && selectedGroup && (
-        <TaxGroupDetails key={`${selectedGroup.id}:${groupMemberFilterId ?? "all"}`} group={selectedGroup} allGroups={processedTaxGroups} taxes={taxesForGroupDetails} groupMemberFilterId={groupMemberFilterId} onGroupUpdated={() => {}} onGroupDeleted={() => setSelected(null)} onTaxUpdated={handleTaxUpdated} dateRange={groupDetailsDateRange} onDateRangeChange={setGroupDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} hideMobilePeriodLabelRow={isMobile} />
+        <TaxGroupDetails key={`${selectedGroup.id}:${groupMemberFilterId ?? "all"}`} group={selectedGroup} allGroups={processedTaxGroups} taxes={taxesForGroupDetails} groupMemberFilterId={groupMemberFilterId} onGroupUpdated={() => {}} onGroupDeleted={() => setSelected(null)} onTaxUpdated={handleTaxUpdated} dateRange={groupDetailsDateRange} onDateRangeChange={setGroupDetailsDateRange} userNames={taxDetailUserNames} hideMobilePeriodLabelRow={isMobile} />
       )}
       {!selected && <div className="p-6 text-center text-muted-foreground">Select an item to see details</div>}
     </>

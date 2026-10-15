@@ -51,6 +51,14 @@ import {
 } from "@/components/ui/drawer";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
+import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { MobileEntityLedgerFooterPrintButton } from "@/components/entity/MobileEntityLedgerFooterPrintButton";
 import * as XLSX from "xlsx";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 import {
@@ -79,6 +87,8 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_TRIGGER_CN,
+  LEDGER_HEADER_AVATAR_IMAGE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
@@ -457,6 +467,10 @@ export function ExpenseAccountDetails({
     () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, includeNotesInTable]
   );
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(displayTransactions),
+    [displayTransactions]
+  );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
@@ -792,10 +806,10 @@ export function ExpenseAccountDetails({
               <div className={LEDGER_HEADER_AVATAR_CN}>
                 <EntityFileAttachmentHover
                   fileUrl={accountHeaderAttachmentUrl}
-                  triggerClassName="inline-flex rounded-full"
-                >
-                  <ResolvedEntityAvatar
-                    className="h-12 w-12 text-lg flex-shrink-0"
+                triggerClassName={LEDGER_HEADER_AVATAR_TRIGGER_CN}
+              >
+                <ResolvedEntityAvatar
+                  className={LEDGER_HEADER_AVATAR_IMAGE_CN}
                     src={accountHeaderAttachmentUrl ?? undefined}
                     alt={account.name}
                     fallbackSlot={
@@ -1095,6 +1109,40 @@ export function ExpenseAccountDetails({
     // Report all-vouchers: account picker hide â€” sirf search + filters.
     const hideReportAccountPicker = isReportMobileChrome && (isAllVouchersView || account.id === "all");
 
+    const mobileEntityTxnToolbar = (
+      <MobileEntityTxnToolbarRow placement="belowPager">
+        {!hideReportAccountPicker && allAccounts && allAccounts.length > 0 && (
+          <MobileEntityTxnToolbarPicker>
+            <Combobox
+              options={accountDropdownOptions}
+              value={account.id}
+              onChange={(value) => {
+                if (value && value !== account.id) pushIncomeExpenseAccountSwitch(router, pathname || "", value);
+              }}
+              placeholder="Select account"
+            />
+          </MobileEntityTxnToolbarPicker>
+        )}
+        <MobileEntityTxnToolbarUnapprovedBadge
+          count={mobileUnapprovedTxnCount}
+          pressed={unapprovedOnly}
+          onToggle={toggleUnapprovedOnly}
+        />
+        <MobileEntityTxnToolbarSearch>
+          <Search className={mdc.mobileTxnToolbarSearchIcon} />
+          <Input
+            placeholder="Search transactions"
+            className={mdc.mobileTxnToolbarSearchInput}
+            value={mobileSearchTerm}
+            onChange={(e) => {
+              setMobileSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
+          />
+        </MobileEntityTxnToolbarSearch>
+      </MobileEntityTxnToolbarRow>
+    );
+
     return (
       <>
       <div className="flex h-full flex-col flex-1 min-h-0 overflow-hidden w-full">
@@ -1150,48 +1198,6 @@ export function ExpenseAccountDetails({
               {balanceText} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
             </p>
           </div>
-          {/* Dropdown + Edit + Search */}
-          <div className="p-2 border-b flex-shrink-0">
-            <div className="flex items-stretch gap-2">
-              {!hideReportAccountPicker && allAccounts && allAccounts.length > 0 && (
-                <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
-                  <Combobox
-                    options={accountDropdownOptions}
-                    value={account.id}
-                    onChange={(value) => {
-                      // `/incomes` par last-segment trick empty path banata tha â†’ /company redirect
-                      if (value && value !== account.id) pushIncomeExpenseAccountSwitch(router, pathname || "", value);
-                    }}
-                    placeholder="Select account"
-                  />
-                </div>
-              )}
-              {account.id !== "all" && (
-                <EditExpenseAccountDialog
-                  account={account}
-                  onAccountUpdated={handleAccountUpdated}
-                  onAccountDeleted={() => onAccountDeleted(account.id)}
-                  hasTransactions={processedTransactions.length > 0}
-                >
-                  <Button variant="outline" size="icon" className="h-9 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditExpenseAccountDialog>
-              )}
-              <div className="flex-1 min-w-0 h-9 relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-                <Input
-                  placeholder="Search transactions"
-                  className="pl-8 h-9 text-sm w-full min-w-0"
-                  value={mobileSearchTerm}
-                  onChange={(e) => {
-                    setMobileSearchTerm(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                />
-              </div>
-            </div>
-          </div>
           </MobileDetailSummaryCollapsible>
           {isReportMobileChrome ? (
             <>
@@ -1246,12 +1252,16 @@ export function ExpenseAccountDetails({
               }}
               onPageChange={setCurrentPage}
               edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+              txnToolbar={mobileEntityTxnToolbar}
             />
             </>
           ) : (
           <div className="flex min-h-0 flex-1 flex-col">
             <div
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y"
+              className={cn(
+                "min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y pl-ledger-txn-scroll-native",
+                mdc.mobileLedgerTxnScrollPad
+              )}
               style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
             >
               <div className="pb-2">
@@ -1292,7 +1302,7 @@ export function ExpenseAccountDetails({
               </div>
             </div>
             <MobileTransactionsPager
-              className="mt-auto shrink-0 mb-12"
+              className={cn("mt-auto shrink-0", mdc.ledgerTxnPagerOutside)}
               currentPage={currentPage}
               totalItems={searchFilteredTransactions.length}
               rowsPerPage={rowsPerPage}
@@ -1302,6 +1312,7 @@ export function ExpenseAccountDetails({
               }}
               onPageChange={setCurrentPage}
               edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+              txnToolbar={mobileEntityTxnToolbar}
             />
           </div>
           )}
@@ -1401,7 +1412,10 @@ export function ExpenseAccountDetails({
         </Drawer>
         </>
       ) : (
-        <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+        <div
+          className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5"
+          data-pl-mobile-ledger-action-footer=""
+        >
           <Button
             className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium"
             onClick={() => {
@@ -1412,16 +1426,7 @@ export function ExpenseAccountDetails({
           >
             Add Expense
           </Button>
-          <Button
-            className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium"
-            onClick={() => {
-              openingModalRef.current = true;
-              setMobileFooterDialogOpen("add_income");
-              openModalInUrl();
-            }}
-          >
-            Add Income
-          </Button>
+          <MobileEntityLedgerFooterPrintButton onClick={handlePrint} />
           <Drawer
             open={isCalendarOpen}
             onOpenChange={(open: boolean) => {

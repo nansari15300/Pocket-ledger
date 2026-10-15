@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  canDismissClientHealthEmergencyOverlay,
   hideClientHealthEmergencyOverlay,
   refreshClientHealthEmergencyOverlayLog,
   showClientHealthEmergencyOverlay,
@@ -56,8 +57,11 @@ export const PL_UI_HEALTH_BRAKE_EVENT = "pl_ui_health_brake";
 const RING_MAX = 100;
 /** Log long tasks in diary from this duration (ms). */
 const LONG_TASK_LOG_MS = 4000;
-/** Full-screen brake / overlay only from this duration — dashboard ~4s stays in log only. */
-const STALL_OVERLAY_MIN_MS = 5500;
+/** Emergency overlay + brake when main-thread block is at least this long (ms). */
+export const PL_UI_HEALTH_STALL_OVERLAY_MIN_MS = 5000;
+/** Imperative “UI paused” overlay stays at least this long before Resume (ms). */
+export const PL_UI_HEALTH_EMERGENCY_OVERLAY_MIN_VISIBLE_MS = 5000;
+const STALL_OVERLAY_MIN_MS = PL_UI_HEALTH_STALL_OVERLAY_MIN_MS;
 const SESSION_KEY = "pl_ui_health_ring_v1";
 const SNAPSHOT_SESSION_KEY = "pl_ui_health_snapshot_v1";
 const PENDING_STALL_KEY = "pl_ui_health_pending_stall_v1";
@@ -80,6 +84,7 @@ let lastStallAlertAt = 0;
 let heartbeatTimer: number | null = null;
 let heartbeatExpected = 0;
 let lastChunkInfoLoggedAt = 0;
+let healthDiaryAfterOverlayTimer: number | null = null;
 
 function parseStallDurationMs(summary: string): number | null {
   const m = String(summary || "").match(/~(\d+)\s*ms/i);
@@ -239,23 +244,67 @@ function notifyBrakeListeners(): void {
   }
 }
 
+export type ClientHealthEmergencyBrakeOptions = {
+  /** Measured main-thread block (ms) — opens React health diary after min overlay time when ≥ 5s. */
+  detectedStallMs?: number;
+};
+
+function scheduleHealthDiaryAfterMinOverlay(reason: string, detectedStallMs?: number): void {
+  if (healthDiaryAfterOverlayTimer != null) return;
+  healthDiaryAfterOverlayTimer = window.setTimeout(() => {
+    healthDiaryAfterOverlayTimer = null;
+    const stallLong =
+      detectedStallMs != null &&
+      detectedStallMs >= PL_UI_HEALTH_EMERGENCY_OVERLAY_MIN_VISIBLE_MS;
+    if (!brakeEngaged && !stallLong) return;
+    dispatchHealthAlert({
+      reason,
+      source: "stall",
+      forceOpen: true,
+    });
+  }, PL_UI_HEALTH_EMERGENCY_OVERLAY_MIN_VISIBLE_MS);
+}
+
+function clearHealthDiaryAfterMinOverlayTimer(): void {
+  if (healthDiaryAfterOverlayTimer == null) return;
+  window.clearTimeout(healthDiaryAfterOverlayTimer);
+  healthDiaryAfterOverlayTimer = null;
+}
+
 /** Unmount heavy React tree + show imperative overlay (stall / long-task recovery). */
-export function engageClientHealthEmergencyBrake(reason: string): void {
+export function engageClientHealthEmergencyBrake(
+  reason: string,
+  opts?: ClientHealthEmergencyBrakeOptions
+): void {
   if (!isClientHealthMonitorEnabled()) return;
+  if (isBenignResizeObserverMessage(reason)) return;
+  const stallMs = opts?.detectedStallMs;
+  if (stallMs == null || stallMs < PL_UI_HEALTH_STALL_OVERLAY_MIN_MS) {
+    return;
+  }
   if (brakeEngaged) {
     refreshClientHealthEmergencyOverlayLog();
     return;
   }
   brakeEngaged = true;
   persistRing();
-  showClientHealthEmergencyOverlay(reason, () => releaseClientHealthEmergencyBrake());
+  showClientHealthEmergencyOverlay(
+    reason,
+    () => {
+      if (!canDismissClientHealthEmergencyOverlay()) return;
+      releaseClientHealthEmergencyBrake();
+    },
+    { minVisibleMs: PL_UI_HEALTH_EMERGENCY_OVERLAY_MIN_VISIBLE_MS }
+  );
   refreshClientHealthEmergencyOverlayLog();
   notifyBrakeListeners();
+  scheduleHealthDiaryAfterMinOverlay(reason, opts?.detectedStallMs);
 }
 
 export function releaseClientHealthEmergencyBrake(): void {
   if (!brakeEngaged) return;
   brakeEngaged = false;
+  clearHealthDiaryAfterMinOverlayTimer();
   hideClientHealthEmergencyOverlay();
   notifyBrakeListeners();
 }
@@ -361,7 +410,9 @@ export function consumePendingStallRecoveryAlert(): boolean {
       detail:
         parsed.driftMs != null ? `Blocked for ~${parsed.driftMs} ms before recovery.` : undefined,
     });
-    engageClientHealthEmergencyBrake("App recovered after a freeze — review clicks/errors below.");
+    engageClientHealthEmergencyBrake("App recovered after a freeze — review clicks/errors below.", {
+      detectedStallMs: parsed.driftMs,
+    });
     dispatchHealthAlert({
       reason: "App recovered after a freeze — review clicks/errors below.",
       source: "recovery",
@@ -386,6 +437,13 @@ export function getLatestStallEntryMaxAgeMs(maxAgeMs: number): ClientHealthEntry
 export function pushClientHealthEntry(
   entry: Omit<ClientHealthEntry, "id" | "at"> & { at?: number }
 ): void {
+  if (isBenignResizeObserverMessage(entry.summary)) {
+    entry = {
+      ...entry,
+      kind: "info",
+      summary: "ResizeObserver layout loop (browser notice — safe to ignore)",
+    };
+  }
   const at = entry.at ?? Date.now();
   if (
     entry.kind === "info" &&
@@ -417,16 +475,14 @@ export function pushClientHealthEntry(
   persistRing();
   dispatchRing();
   if (entry.kind === "error" || entry.kind === "rejection") {
-    if (!isBenignChunkLoadMessage(entry.summary)) {
-      dispatchHealthAlert({ reason: entry.summary, source: "error" });
+    if (!isBenignChunkLoadMessage(entry.summary) && !isBenignResizeObserverMessage(entry.summary)) {
+      dispatchHealthAlert({ reason: entry.summary, source: "error", forceOpen: false });
     }
   }
   if (entry.kind === "stall") {
     const blockedMs = parseStallDurationMs(entry.summary);
-    const severe =
-      blockedMs == null || blockedMs >= STALL_OVERLAY_MIN_MS;
-    if (severe) {
-      engageClientHealthEmergencyBrake(entry.summary);
+    if (blockedMs != null && blockedMs >= STALL_OVERLAY_MIN_MS) {
+      engageClientHealthEmergencyBrake(entry.summary, { detectedStallMs: blockedMs });
       dispatchHealthAlert({
         reason: entry.summary,
         source: "stall",
@@ -453,10 +509,8 @@ function isBenignChunkLoadMessage(msg: string): boolean {
 }
 
 /** Browser noise when RO callback mutates layout — not an app bug; no emergency overlay. */
-function isBenignResizeObserverMessage(msg: string): boolean {
-  return /ResizeObserver loop (completed with undelivered notifications|limit exceeded)/i.test(
-    String(msg || "")
-  );
+export function isBenignResizeObserverMessage(msg: string): boolean {
+  return /resizeobserver/i.test(String(msg || ""));
 }
 
 function describeClickTarget(target: EventTarget | null): string {
@@ -588,7 +642,8 @@ function startLongTaskObserver(): void {
         });
       }
     });
-    obs.observe({ type: "longtask", buffered: true } as PerformanceObserverInit);
+    // buffered:false — otherwise Resume/remount replays old 8–14s tasks as if new.
+    obs.observe({ type: "longtask", buffered: false } as PerformanceObserverInit);
   } catch {
     /* Safari / older WebView */
   }
@@ -642,7 +697,12 @@ export function startClientHealthMonitor(): () => void {
     } catch {
       /* ignore */
     }
-    engageClientHealthEmergencyBrake("Recent freeze detected — diary opened with context.");
+    const blockedMs = parseStallDurationMs(recent.summary);
+    if (blockedMs != null && blockedMs >= PL_UI_HEALTH_STALL_OVERLAY_MIN_MS) {
+      engageClientHealthEmergencyBrake("Recent freeze detected — diary opened with context.", {
+        detectedStallMs: blockedMs,
+      });
+    }
     dispatchHealthAlert({
       reason: "Recent freeze detected — diary opened with context.",
       source: "recovery",
@@ -650,6 +710,18 @@ export function startClientHealthMonitor(): () => void {
     });
   };
   document.addEventListener("visibilitychange", onVisible);
+
+  const onBenignResizeObserverErrorCapture = (ev: Event) => {
+    const msg = String((ev as ErrorEvent).message || "");
+    if (!isBenignResizeObserverMessage(msg)) return;
+    ev.stopImmediatePropagation();
+    pushClientHealthEntry({
+      kind: "info",
+      summary: "ResizeObserver layout loop (browser notice — safe to ignore)",
+      detail: msg.slice(0, 400),
+    });
+  };
+  window.addEventListener("error", onBenignResizeObserverErrorCapture, true);
 
   if (!earlyBoot) {
     document.addEventListener("click", onDocumentClick, true);
@@ -663,6 +735,7 @@ export function startClientHealthMonitor(): () => void {
   startLongTaskObserver();
 
   return () => {
+    window.removeEventListener("error", onBenignResizeObserverErrorCapture, true);
     if (!earlyBoot) {
       document.removeEventListener("click", onDocumentClick, true);
       window.removeEventListener("error", onWindowError);

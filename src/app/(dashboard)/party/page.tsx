@@ -11,7 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Search, User, Users, AlertCircle, ArrowLeft, XCircle } from "lucide-react";
+import { Search, User, Users, AlertCircle, ArrowLeft, XCircle, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -22,8 +22,13 @@ import {
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { MobileMasterDetailNestedName } from "@/components/entity/MobileMasterDetailNestedName";
 import { mlc } from "@/lib/mobileListChrome";
-import { mobileEntityDetailShellTitle } from "@/lib/mobileDetailChrome";
+import { mdc, mobileEntityDetailShellTitle } from "@/lib/mobileDetailChrome";
+import { MobileEntityTxnToolbarRow, MobileEntityTxnToolbarSearch } from "@/components/entity/MobileEntityTxnToolbarRow";
+import { MobileLedgerFooterChevronFab } from "@/components/layout/MobileLedgerFooterChevronFab";
 import { MobileMasterDetailHeaderAvatar } from "@/components/entity/MobileMasterDetailHeaderAvatar";
+import { EditPartyDialog } from "@/components/party/EditPartyDialog";
+import { EditGroupDialog } from "@/components/party/EditGroupDialog";
+import { LEDGER_HEADER_AVATAR_PEN_CN } from "@/lib/ledgerHeaderChrome";
 import { MobileMasterDetailHeaderDateSecondary } from "@/components/entity/MobileMasterDetailHeaderDateSecondary";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -55,7 +60,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
-import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import { applyMasterDetailBackToListUrl, masterDetailListHref } from "@/lib/masterDetailListPath";
 import {
   masterDetailTabHref,
   replaceMasterDetailTabUrl,
@@ -289,24 +294,22 @@ function PartyPageContent() {
     pendingPartySelectIdRef.current = null;
     suppressPartyListRestoreRef.current = true;
     const base = masterDetailListHref("party");
-    // Groups tab se detail se wapas aane par URL me `view=groups` rakho — warna bare `/party` pe memory/effect Parties pe kheench leta hai
+    // Groups / ic_ac tab se detail se wapas — URL me view rakho
     const viewQ = partyTabViewQuery(activeView);
-    const href = viewQ ? `${base}?view=${viewQ}` : base;
+    const listHref = viewQ ? `${base}?view=${viewQ}` : base;
     // Pehle URL + memory clear — phir selected null (sync effect purani ?selected= se detail na khole)
-    if (typeof window !== "undefined") {
-      try {
-        window.history.replaceState(window.history.state, "", browserHistoryHref(href));
-        const raw = localStorage.getItem("partyPageState");
-        if (raw) {
-          const parsed = JSON.parse(raw) as { selections?: Record<string, string> };
-          if (parsed.selections?.[activeView]) {
-            delete parsed.selections[activeView];
-            localStorage.setItem("partyPageState", JSON.stringify(parsed));
-          }
+    const href = applyMasterDetailBackToListUrl("party", { href: listHref });
+    try {
+      const raw = localStorage.getItem("partyPageState");
+      if (raw) {
+        const parsed = JSON.parse(raw) as { selections?: Record<string, string> };
+        if (parsed.selections?.[activeView]) {
+          delete parsed.selections[activeView];
+          localStorage.setItem("partyPageState", JSON.stringify(parsed));
         }
-      } catch {
-        /* ignore */
       }
+    } catch {
+      /* ignore */
     }
     setSelected(null);
     router.replace(href, { scroll: false });
@@ -381,6 +384,10 @@ function PartyPageContent() {
     if (!patch?.id || !selectedPartyRaw || selectedPartyRaw.id !== patch.id) return;
     setSelected({ ...selectedPartyRaw, ...patch });
   }, [setSelected, selectedPartyRaw]);
+  const handleGroupUpdated = useCallback((patch?: Partial<Group>) => {
+    if (!patch?.id || !selectedGroupRaw || selectedGroupRaw.id !== patch.id) return;
+    setSelected({ ...selectedGroupRaw, ...patch });
+  }, [setSelected, selectedGroupRaw]);
   const mobilePartyGroupSelectionLabelClassName = useMemo(() => {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as Party | Group).balance);
@@ -576,14 +583,6 @@ function PartyPageContent() {
     );
   }, [isMobile, selectedParty, activeView, partyDetailsDateRange]);
 
-  const mobileDetailHeaderAvatar = useMemo(() => {
-    if (!isMobile || !selectedParty) return null;
-    const attachmentUrl = trimEntityFileUrlForPreview((selectedParty as any).fileUrl);
-    return (
-      <MobileMasterDetailHeaderAvatar name={selectedParty.name || "Party"} attachmentUrl={attachmentUrl} />
-    );
-  }, [isMobile, selectedParty]);
-
    const processedGroups = useMemo(() => {
     // Filter out report-only groups (isReportOnly: true) and system parent groups
     const userDefinedGroups = initialProcessedGroups.filter(g => {
@@ -633,6 +632,80 @@ function PartyPageContent() {
         : null,
     [processedGroups, selectedGroupRaw, companyId]
   );
+
+  const mobileDetailHeaderAvatar = useMemo(() => {
+    if (!isMobile || !selected) return null;
+
+    if (activeView === "groups" && selectedGroup) {
+      const group = selectedGroup;
+      const isAutoSyntheticPartyGroup =
+        group.id === IC_COMPANY_PARTY_GROUP_ID || isPartySystemGroupId(group.id);
+      const name = group.name || "Group";
+      const attachmentUrl = trimEntityFileUrlForPreview((group as any).fileUrl);
+      const hasAccounts =
+        processedParties.some((p) => p.groupId === group.id) ||
+        processedGroups.some((g) => g.parentId === group.id);
+      return (
+        <MobileMasterDetailHeaderAvatar
+          name={name}
+          attachmentUrl={attachmentUrl}
+          editTrigger={
+            !isAutoSyntheticPartyGroup ? (
+              <EditGroupDialog
+                group={group}
+                allGroups={processedGroups}
+                onGroupUpdated={handleGroupUpdated}
+                onGroupDeleted={() => setSelected(null)}
+                hasAccounts={hasAccounts}
+              >
+                <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit group">
+                  <Pencil className="h-2.5 w-2.5" aria-hidden />
+                </button>
+              </EditGroupDialog>
+            ) : undefined
+          }
+        />
+      );
+    }
+
+    if (!selectedParty || selectedParty.id === OVERDUE_ACCOUNT_ID) return null;
+    const attachmentUrl = trimEntityFileUrlForPreview((selectedParty as any).fileUrl);
+    const canEdit =
+      selectedParty.id !== "all" && !(selectedParty as any).isSystemAccount;
+    const hasTransactions =
+      (selectedParty.debit ?? 0) !== 0 || (selectedParty.credit ?? 0) !== 0;
+    return (
+      <MobileMasterDetailHeaderAvatar
+        name={selectedParty.name || "Party"}
+        attachmentUrl={attachmentUrl}
+        editTrigger={
+          canEdit ? (
+            <EditPartyDialog
+              party={selectedParty}
+              onPartyUpdated={handlePartyUpdated}
+              onPartyDeleted={() => setSelected(null)}
+              hasTransactions={hasTransactions}
+            >
+              <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit party">
+                <Pencil className="h-2.5 w-2.5" aria-hidden />
+              </button>
+            </EditPartyDialog>
+          ) : undefined
+        }
+      />
+    );
+  }, [
+    isMobile,
+    selected,
+    activeView,
+    selectedGroup,
+    selectedParty,
+    processedParties,
+    processedGroups,
+    handlePartyUpdated,
+    handleGroupUpdated,
+    setSelected,
+  ]);
 
   // Header Report: sessionStorage sync — URL ?selected= flicker / router.replace race se button stable rahe
   useSyncMasterDetailHeaderId("party", selectedParty?.id ?? selectedGroup?.id ?? null);
@@ -1750,23 +1823,9 @@ function PartyPageContent() {
               To Pay {formatCurrency(Math.abs(overdueClosingBalance), { noSuffix: true })}
             </p>
           </div>
-          {/* Search */}
-          <div className="p-2 border-b flex-shrink-0">
-            <div className="flex items-stretch gap-2">
-              <div className="flex-1 min-w-0 h-9 relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-                <Input
-                  placeholder="Search transactions"
-                  className="pl-8 h-9 text-sm w-full min-w-0"
-                  value={overdueMobileSearchTerm}
-                  onChange={(e) => setOverdueMobileSearchTerm(e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
           {/* Transaction list – mobile cards; scroll-touch + inline for APK/WebView touch scroll */}
           <div
-            className="flex-1 min-h-0 overflow-auto scroll-touch"
+            className="flex-1 min-h-0 overflow-auto scroll-touch pb-[calc(env(safe-area-inset-bottom,0px)+5rem)]"
           >
             <TransactionsTable
               transactions={mobileFilteredOverdue}
@@ -1791,8 +1850,23 @@ function PartyPageContent() {
             />
           </div>
         </div>
-        {/* Fixed bottom: Receive, Pay, New Sale (no Bill wise – overdue mobile is always bill-wise) */}
-        <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+        {/* Fixed bottom: search (pager slot) + Receive, Pay, New Sale */}
+        <div className="fixed bottom-0 left-0 right-0 z-50 flex flex-col border-t bg-background/95 backdrop-blur">
+          <MobileEntityTxnToolbarRow placement="belowPager" className="border-t border-blue-300/80 bg-background/95">
+            <MobileEntityTxnToolbarSearch>
+              <Search className={mdc.mobileTxnToolbarSearchIcon} />
+              <Input
+                placeholder="Search transactions"
+                className={mdc.mobileTxnToolbarSearchInput}
+                value={overdueMobileSearchTerm}
+                onChange={(e) => setOverdueMobileSearchTerm(e.target.value)}
+              />
+            </MobileEntityTxnToolbarSearch>
+          </MobileEntityTxnToolbarRow>
+        <div
+          className="flex items-center justify-around gap-1.5 p-1.5 border-t"
+          data-pl-mobile-ledger-action-footer=""
+        >
           <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" onClick={() => { editingFromOverdueRef.current = true; setOverdueFooterDialog("payment_in"); }}>
             Receive
           </Button>
@@ -1803,6 +1877,8 @@ function PartyPageContent() {
             New Sale
           </Button>
         </div>
+        </div>
+        <MobileLedgerFooterChevronFab />
         <AddVoucherDialog
           isOpen={!!overdueVoucherToEdit || !!overdueFooterDialog}
           onOpenChange={(open: boolean) => {

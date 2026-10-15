@@ -31,6 +31,19 @@ import type { RecurringDashboardLine } from "@/lib/dashboardRecurringAccrual";
 import { X } from "lucide-react";
 import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { forceRemoveOrphanRecurringSchedule } from "@/lib/writeGateway/recurringVouchers";
+import { canEditRecurringAutoMonthly } from "@/lib/recurringAutoPermissions";
 
 type RecurringDetailsFmt = (n: number) => React.ReactNode;
 
@@ -45,7 +58,7 @@ function recurringSyncWaitMessage(scheduleCount: number): string {
 
 function recurringOrphanSourceMessage(scheduleCount: number): string {
   const n = Math.max(1, scheduleCount);
-  return `${n} enabled schedule(s) reference a source voucher that is not in this company (deleted or never synced). Open the source journal again to re-enable auto recurring, or remove the schedule from Firebase/local recurring templates.`;
+  return `${n} enabled schedule(s) reference a source voucher that is not in this company (deleted or never synced). Open the source journal again to re-enable auto recurring, or use Remove permanently to delete the schedule and any ghost voucher rows from this device and the server.`;
 }
 
 type RecurringVoucherResolveMeta = {
@@ -157,13 +170,60 @@ type RecurringLiveDetailsProps = {
   onClose: () => void;
 };
 
+function orphanSchedulePurgeVoucherIds(
+  tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate,
+  voucherById: Map<string, Record<string, unknown>>,
+): string[] {
+  const ids = [
+    recurringTemplateSourceBodyId(tpl),
+    String(tpl.sourceVoucherId || "").trim(),
+    String(tpl.cloneSourceVoucherId || "").trim(),
+    String(tpl.lastGeneratedVoucherId || "").trim(),
+  ].filter(Boolean);
+  return [...new Set(ids)].filter((vid) => !voucherById.has(vid));
+}
+
 function RecurringAutoSummaryOrphanSourceDetails({
+  companyId,
   templates,
   scheduleCount,
+  voucherById,
+  canRemove,
+  onAfterRemove,
 }: {
+  companyId: string;
   templates: Array<{ id: string; tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate }>;
   scheduleCount: number;
+  voucherById: Map<string, Record<string, unknown>>;
+  canRemove: boolean;
+  onAfterRemove?: () => void;
 }) {
+  const [busyTemplateId, setBusyTemplateId] = React.useState<string | null>(null);
+
+  const runRemove = React.useCallback(
+    async (templateDocId: string, tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate) => {
+      const cid = String(companyId || "").trim();
+      if (!cid) {
+        toast.error("No company selected.");
+        return;
+      }
+      setBusyTemplateId(templateDocId);
+      try {
+        await forceRemoveOrphanRecurringSchedule(cid, templateDocId, {
+          purgeVoucherIds: orphanSchedulePurgeVoucherIds(tpl, voucherById),
+        });
+        toast.success("Recurring schedule removed permanently.");
+        onAfterRemove?.();
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Could not remove schedule.";
+        toast.error(msg);
+      } finally {
+        setBusyTemplateId(null);
+      }
+    },
+    [companyId, voucherById, onAfterRemove],
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
       <p className="text-sm leading-relaxed text-amber-900 dark:text-amber-100">{recurringOrphanSourceMessage(scheduleCount)}</p>
@@ -172,14 +232,54 @@ function RecurringAutoSummaryOrphanSourceDetails({
           {templates.map(({ id, tpl }) => {
             const sourceId = recurringTemplateSourceBodyId(tpl);
             const label = String(tpl.manualOnSourceVoucherNumber || sourceId || "Schedule").trim();
+            const removing = busyTemplateId === id;
             return (
               <li key={id} className="rounded-md border border-amber-500/40 bg-amber-50/80 px-3 py-2 dark:bg-amber-950/30">
-                <p className="font-medium text-foreground">{label || "Auto schedule"}</p>
-                {sourceId ? (
-                  <p className="mt-0.5 text-xs text-muted-foreground">Missing source voucher id: {sourceId}</p>
-                ) : (
-                  <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-200">No source voucher id on template.</p>
-                )}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-foreground">{label || "Auto schedule"}</p>
+                    {sourceId ? (
+                      <p className="mt-0.5 text-xs text-muted-foreground">Missing source voucher id: {sourceId}</p>
+                    ) : (
+                      <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-200">No source voucher id on template.</p>
+                    )}
+                  </div>
+                  {canRemove ? (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 shrink-0 border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800"
+                          disabled={removing || busyTemplateId !== null}
+                        >
+                          {removing ? "Removing…" : "Remove permanently"}
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Remove this recurring schedule?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This deletes the enabled schedule from local storage and the cloud, and permanently removes any
+                            linked voucher rows that are not in your ledger (ghost / missing source). This cannot be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            className="bg-red-600 hover:bg-red-700"
+                            onClick={() => {
+                              void runRemove(id, tpl);
+                            }}
+                          >
+                            Remove permanently
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  ) : null}
+                </div>
               </li>
             );
           })}
@@ -667,6 +767,7 @@ const RecurringLiveSnapEngine = React.memo(function RecurringLiveSnapEngine({
 });
 
 type RecurringAutoSummaryLiveViewProps = {
+  companyId: string;
   snap: RecurringLiveSnap;
   templates: Array<{ id: string; tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate }>;
   templatesLoading: boolean;
@@ -677,6 +778,8 @@ type RecurringAutoSummaryLiveViewProps = {
   hadResolvedRowsRef: React.MutableRefObject<boolean>;
   onSyncWaitHintChange?: (active: boolean, scheduleCount: number) => void;
   voucherResolveMeta: RecurringVoucherResolveMeta;
+  canRemoveOrphanSchedule: boolean;
+  onAfterOrphanRemove?: () => void;
 };
 
 /** Stable UI — `useVouchers` nahi; sirf snap badle tab re-render. */
@@ -691,6 +794,9 @@ const RecurringAutoSummaryLiveView = React.memo(function RecurringAutoSummaryLiv
   hadResolvedRowsRef,
   onSyncWaitHintChange,
   voucherResolveMeta,
+  companyId,
+  canRemoveOrphanSchedule,
+  onAfterOrphanRemove,
 }: RecurringAutoSummaryLiveViewProps) {
   const { formatCurrencyForPrint } = useDate();
   const isMobile = useIsMobile();
@@ -798,7 +904,14 @@ const RecurringAutoSummaryLiveView = React.memo(function RecurringAutoSummaryLiv
             </Button>
           </DialogHeader>
           {orphanedSchedules ? (
-            <RecurringAutoSummaryOrphanSourceDetails templates={missingSource} scheduleCount={missingSource.length} />
+            <RecurringAutoSummaryOrphanSourceDetails
+              companyId={companyId}
+              templates={missingSource}
+              scheduleCount={missingSource.length}
+              voucherById={voucherResolveMeta.voucherById}
+              canRemove={canRemoveOrphanSchedule}
+              onAfterRemove={onAfterOrphanRemove}
+            />
           ) : waitingForVouchers ? (
             <RecurringAutoSummarySyncWaitDetails templates={templates} scheduleCount={scheduleCount} />
           ) : (
@@ -817,6 +930,7 @@ const RecurringAutoSummaryLiveView = React.memo(function RecurringAutoSummaryLiv
 });
 
 type RecurringAutoSummaryLiveIslandProps = {
+  companyId: string;
   templates: Array<{ id: string; tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate }>;
   templatesLoading: boolean;
   recurringCompanyEnabled: boolean;
@@ -826,6 +940,8 @@ type RecurringAutoSummaryLiveIslandProps = {
   inGrid: boolean;
   hadResolvedRowsRef: React.MutableRefObject<boolean>;
   onSyncWaitHintChange?: (active: boolean, scheduleCount: number) => void;
+  canRemoveOrphanSchedule: boolean;
+  onAfterOrphanRemove?: () => void;
 };
 
 const RecurringAutoSummaryLiveIsland = React.memo(function RecurringAutoSummaryLiveIsland(
@@ -892,6 +1008,8 @@ type RecurringAutoSummaryCardBodyProps = {
   onOpenBodyVoucher?: (bodyVoucherId: string) => void;
   inGrid: boolean;
   onSyncWaitHintChange?: (active: boolean, scheduleCount: number) => void;
+  canRemoveOrphanSchedule: boolean;
+  onAfterOrphanRemove?: () => void;
 };
 
 /** Templates-only shell — `useVouchers` / sync flicker yahan nahi. */
@@ -905,6 +1023,8 @@ const RecurringAutoSummaryCardBody = React.memo(function RecurringAutoSummaryCar
   onOpenBodyVoucher,
   inGrid,
   onSyncWaitHintChange,
+  canRemoveOrphanSchedule,
+  onAfterOrphanRemove,
 }: RecurringAutoSummaryCardBodyProps) {
   const hadResolvedRowsRef = React.useRef(false);
   const templatesEverLoadedRef = React.useRef(false);
@@ -953,6 +1073,7 @@ const RecurringAutoSummaryCardBody = React.memo(function RecurringAutoSummaryCar
       ) : (
         <div className={cn(inGrid && "flex min-h-0 flex-1 flex-col")}>
           <RecurringAutoSummaryLiveIsland
+            companyId={companyId}
             templates={templates}
             templatesLoading={templatesLoading}
             recurringCompanyEnabled={recurringCompanyEnabled}
@@ -962,6 +1083,8 @@ const RecurringAutoSummaryCardBody = React.memo(function RecurringAutoSummaryCar
             inGrid={inGrid}
             hadResolvedRowsRef={hadResolvedRowsRef}
             onSyncWaitHintChange={onSyncWaitHintChange}
+            canRemoveOrphanSchedule={canRemoveOrphanSchedule}
+            onAfterOrphanRemove={onAfterOrphanRemove}
           />
         </div>
       )}
@@ -998,6 +1121,10 @@ export const RecurringAutoSummaryCard = React.memo(function RecurringAutoSummary
 
   const canViewRecurringCard = can("view_recurring_auto_summary");
   const canToggleRecurring = can("configure_recurring_auto_company");
+  const canRemoveOrphanSchedule = canEditRecurringAutoMonthly(can);
+  const onAfterOrphanRemove = React.useCallback(() => {
+    triggerSync();
+  }, [triggerSync]);
   const [savingToggle, setSavingToggle] = React.useState(false);
   const [detailsOpen, setDetailsOpen] = React.useState(false);
   const [syncWaitHint, setSyncWaitHint] = React.useState({ active: false, scheduleCount: 0 });
@@ -1109,6 +1236,8 @@ export const RecurringAutoSummaryCard = React.memo(function RecurringAutoSummary
         onOpenBodyVoucher={onOpenBodyVoucher}
         inGrid={inGrid}
         onSyncWaitHintChange={onSyncWaitHintChange}
+        canRemoveOrphanSchedule={canRemoveOrphanSchedule}
+        onAfterOrphanRemove={onAfterOrphanRemove}
       />
     </Card>
   );

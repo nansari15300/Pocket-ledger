@@ -44,6 +44,14 @@ import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
 import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { MobileEntityLedgerFooterPrintButton } from "@/components/entity/MobileEntityLedgerFooterPrintButton";
+import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
   patchMasterDetailUrlAfterModalClose,
@@ -63,6 +71,9 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_BOX_CN,
+  LEDGER_HEADER_AVATAR_TRIGGER_CN,
+  LEDGER_HEADER_AVATAR_IMAGE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
@@ -491,6 +502,10 @@ export function ExpenseGroupDetails({
     () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, showNotes]
   );
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(displayTransactions),
+    [displayTransactions]
+  );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
@@ -616,6 +631,40 @@ export function ExpenseGroupDetails({
     );
   };
 
+  const mobileEntityTxnToolbar = (
+    <MobileEntityTxnToolbarRow placement="belowPager">
+      {allGroups && allGroups.length > 0 && (
+        <MobileEntityTxnToolbarPicker>
+          <Combobox
+            options={groupDropdownOptions}
+            value={group.id}
+            onChange={(value) => {
+              if (value && value !== group.id) pushIncomeExpenseGroupSwitch(router, pathname || "", value);
+            }}
+            placeholder="Select group"
+          />
+        </MobileEntityTxnToolbarPicker>
+      )}
+      <MobileEntityTxnToolbarUnapprovedBadge
+        count={mobileUnapprovedTxnCount}
+        pressed={unapprovedOnly}
+        onToggle={toggleUnapprovedOnly}
+      />
+      <MobileEntityTxnToolbarSearch>
+        <Search className={mdc.mobileTxnToolbarSearchIcon} />
+        <Input
+          placeholder="Search transactions"
+          className={mdc.mobileTxnToolbarSearchInput}
+          value={mobileSearchTerm}
+          onChange={(e) => {
+            setMobileSearchTerm(e.target.value);
+            setCurrentPage(1);
+          }}
+        />
+      </MobileEntityTxnToolbarSearch>
+    </MobileEntityTxnToolbarRow>
+  );
+
   if (isMobile) {
     return (
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
@@ -649,52 +698,13 @@ export function ExpenseGroupDetails({
               {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
             </p>
           </div>
-          <div className="p-2 border-b flex-shrink-0">
-            <div className="flex items-stretch gap-2">
-              {allGroups && allGroups.length > 0 && (
-                <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
-                  <Combobox
-                    options={groupDropdownOptions}
-                    value={group.id}
-                    onChange={(value) => {
-                      // `/incomes` + query-nav: segment-replace se galat URL; account jaisa hi group ke liye helper
-                      if (value && value !== group.id) pushIncomeExpenseGroupSwitch(router, pathname || "", value);
-                    }}
-                    placeholder="Select group"
-                  />
-                </div>
-              )}
-              {!isSystemBranchGroup && (
-                <EditExpenseGroupDialog
-                  group={group}
-                  allGroups={allGroups}
-                  onGroupUpdated={onGroupUpdated}
-                  onGroupDeleted={onGroupDeleted}
-                  hasAccounts={accountsInGroup.length > 0 || childGroups.length > 0}
-                >
-                  <Button variant="outline" size="icon" className="h-9 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditExpenseGroupDialog>
-              )}
-              <div className="flex-1 min-w-0 h-9 relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-                <Input
-                  placeholder="Search transactions"
-                  className="pl-8 h-9 text-sm w-full min-w-0"
-                  value={mobileSearchTerm}
-                  onChange={(e) => {
-                    setMobileSearchTerm(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                />
-              </div>
-            </div>
-          </div>
           </MobileDetailSummaryCollapsible>
           <div className="flex min-h-0 flex-1 flex-col">
             <div
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y"
+              className={cn(
+                "min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y pl-ledger-txn-scroll-native",
+                mdc.mobileLedgerTxnScrollPad
+              )}
               style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
             >
             <div className="pb-2">
@@ -728,7 +738,7 @@ export function ExpenseGroupDetails({
             </div>
             </div>
             <MobileTransactionsPager
-              className="mt-auto shrink-0 mb-12"
+              className={cn("mt-auto shrink-0", mdc.ledgerTxnPagerOutside)}
               currentPage={currentPage}
               totalItems={searchFilteredTransactions.length}
               rowsPerPage={rowsPerPage}
@@ -738,10 +748,14 @@ export function ExpenseGroupDetails({
               }}
               onPageChange={setCurrentPage}
               edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+              txnToolbar={mobileEntityTxnToolbar}
             />
           </div>
         </div>
-        <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+        <div
+          className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5"
+          data-pl-mobile-ledger-action-footer=""
+        >
           <Button
             className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium"
             onClick={() => {
@@ -762,16 +776,7 @@ export function ExpenseGroupDetails({
           >
             Add Income
           </Button>
-          <Button
-            className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium"
-            onClick={() => {
-              openingModalRef.current = true;
-              setMobileFooterDialogOpen("add_salary");
-              openModalInUrl();
-            }}
-          >
-            Add Salary
-          </Button>
+          <MobileEntityLedgerFooterPrintButton onClick={handlePrint} />
           <Drawer
             open={isCalendarOpen}
             onOpenChange={(open: boolean) => {
@@ -920,10 +925,10 @@ export function ExpenseGroupDetails({
                   <>
                     <EntityFileAttachmentHover
                       fileUrl={selectedMemberAttachmentUrl}
-                      triggerClassName="inline-flex rounded-full"
+                      triggerClassName={LEDGER_HEADER_AVATAR_TRIGGER_CN}
                     >
                       <ResolvedEntityAvatar
-                        className="h-12 w-12 flex-shrink-0 text-lg"
+                        className={LEDGER_HEADER_AVATAR_IMAGE_CN}
                         companyId={companyId ?? undefined}
                         src={selectedMemberAttachmentUrl ?? undefined}
                         alt={selectedMemberAccount.name}
@@ -952,7 +957,7 @@ export function ExpenseGroupDetails({
                   </>
                 ) : (
                   <>
-                    <Avatar className="h-12 w-12 text-lg">
+                    <Avatar className={cn(LEDGER_HEADER_AVATAR_BOX_CN, "rounded-lg text-lg")}>
                       <AvatarFallback className="bg-muted text-muted-foreground">
                         {getInitials(group.name)}
                       </AvatarFallback>

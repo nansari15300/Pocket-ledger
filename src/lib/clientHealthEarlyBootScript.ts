@@ -29,8 +29,10 @@ function exportText(){
   }
   return lines.join("\\n");
 }
+var OVERLAY_MIN_MS=5000;
 function showOverlay(reason){
   if(document.getElementById("pl-ui-health-emergency-overlay"))return;
+  var shownAt=Date.now();
   var root=document.createElement("div");
   root.id="pl-ui-health-emergency-overlay";
   root.setAttribute("data-pl-ui-health-emergency","1");
@@ -48,9 +50,22 @@ function showOverlay(reason){
   var resume=btn("Resume app","#2563eb","#fff");resume.style.border="0";
   refresh.onclick=function(){ta.value=exportText();};
   copy.onclick=function(){ta.select();try{navigator.clipboard.writeText(ta.value);}catch(e){} copy.textContent="Copied";setTimeout(function(){copy.textContent="Copy all";},1200);};
-  resume.onclick=function(){root.remove();try{window.__PL_UI_HEALTH_BRAKE_RELEASE__&&window.__PL_UI_HEALTH_BRAKE_RELEASE__();}catch(e){} };
+  function syncResume(){
+    var left=OVERLAY_MIN_MS-(Date.now()-shownAt);
+    if(left<=0){resume.disabled=false;resume.style.opacity="1";resume.style.cursor="pointer";resume.textContent="Resume app";return;}
+    resume.disabled=true;resume.style.opacity="0.55";resume.style.cursor="not-allowed";
+    resume.textContent="Resume ("+Math.ceil(left/1000)+"s)";
+    setTimeout(syncResume,250);
+  }
+  resume.onclick=function(){
+    if(Date.now()-shownAt<OVERLAY_MIN_MS)return;
+    root.remove();try{window.__PL_UI_HEALTH_BRAKE_RELEASE__&&window.__PL_UI_HEALTH_BRAKE_RELEASE__();}catch(e){}
+  };
+  syncResume();
   row.append(refresh,copy,resume);card.append(h,p,r,ta,row);root.append(card);document.body.appendChild(root);
-  try{window.dispatchEvent(new CustomEvent("pl_client_health_alert",{detail:{reason:reason||"stall",source:"stall",forceOpen:true}}));}catch(e){}
+  setTimeout(function(){
+    try{window.dispatchEvent(new CustomEvent("pl_client_health_alert",{detail:{reason:reason||"stall",source:"stall",forceOpen:true}}));}catch(e){}
+  },OVERLAY_MIN_MS);
 }
 document.addEventListener("click",function(ev){
   var t=ev.target,el=t&&t.closest?t.closest("button,a,[role=button],input,select")||t:t;
@@ -61,8 +76,9 @@ document.addEventListener("click",function(ev){
   push("click",tag+id+(txt?' "'+txt+'"':"")+href);
 },true);
 function isChunkMsg(m){m=String(m||"");return/ChunkLoadError|Failed to load chunk|hmr-client/i.test(m);}
-window.addEventListener("error",function(ev){var m=String(ev.message||"Script error");if(isChunkMsg(m)){push("info","Chunk load — hard refresh (Ctrl+Shift+R) or restart dev server");return;}push("error",m);showOverlay(m);});
-window.addEventListener("unhandledrejection",function(ev){var x=ev.reason,m=x&&x.message?x.message:String(x||"rejection");if(isChunkMsg(m)){push("info","Chunk load — hard refresh (Ctrl+Shift+R) or restart dev server");return;}push("rejection",m);showOverlay(m);});
+function isBenignRO(m){m=String(m||"").toLowerCase();return m.indexOf("resizeobserver")>=0;}
+window.addEventListener("error",function(ev){var m=String(ev.message||"Script error");if(isChunkMsg(m)){push("info","Chunk load — hard refresh (Ctrl+Shift+R) or restart dev server");return;}if(isBenignRO(m)){try{ev.stopImmediatePropagation();}catch(e){}push("info","ResizeObserver layout loop (browser notice — safe to ignore)",m);return;}push("error",m);},true);
+window.addEventListener("unhandledrejection",function(ev){var x=ev.reason,m=x&&x.message?x.message:String(x||"rejection");if(isChunkMsg(m)){push("info","Chunk load — hard refresh (Ctrl+Shift+R) or restart dev server");return;}if(isBenignRO(m)){push("info","ResizeObserver layout loop (browser notice — safe to ignore)",m);return;}push("rejection",m);});
 try{var raw=sessionStorage.getItem(RING_KEY);if(raw){var p=JSON.parse(raw);if(Array.isArray(p))ring=p.slice(-100);}}catch(e){}
 try{var ebk="pl_ui_health_early_boot_last",ebp=Number(sessionStorage.getItem(ebk)||0);if(Date.now()-ebp>8000){sessionStorage.setItem(ebk,String(Date.now()));push("info","UI health early boot (pre-React — clicks/errors only; stall detect after React)");}}catch(e){push("info","UI health early boot (pre-React — clicks/errors only; stall detect after React)");}
 }catch(e){}})();`;

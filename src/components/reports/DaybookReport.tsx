@@ -46,6 +46,12 @@ import {
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { chromeProPillCn } from "@/lib/chromePillButton";
+
+const daybookToolbarSelectTriggerCn = cn(
+  chromeProPillCn,
+  "h-9 min-h-9 max-h-9 rounded-full px-3 py-0 shadow-none focus:ring-0 focus-visible:ring-0",
+);
 
 interface DaybookReportProps {
   onFullScreenToggle?: () => void;
@@ -442,7 +448,10 @@ export function DaybookReport({
                                         value={daybookUserFilter ?? "__all__"}
                                         onValueChange={(v) => setDaybookUserFilter(v === "__all__" ? null : v)}
                                     >
-                                        <SelectTrigger className="h-9 bg-background/80 border-blue-200">
+                                        <SelectTrigger
+                                            data-pl-toolbar-field=""
+                                            className={cn(daybookToolbarSelectTriggerCn, "w-full")}
+                                        >
                                             <SelectValue placeholder="All users" />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -461,11 +470,15 @@ export function DaybookReport({
                                     <Input
                                         id="daybook-account-search"
                                         type="search"
+                                        enterKeyHint="search"
+                                        listChrome
+                                        listChromeSearch
                                         value={daybookSummaryAccountSearch}
                                         onChange={(e) => setDaybookSummaryAccountSearch(e.target.value)}
                                         placeholder="Search account"
-                                        className="h-9 pl-8 text-sm bg-background/80 border-blue-200"
+                                        className="h-9 min-h-9 max-h-9 w-full bg-white py-1 pl-8 pr-2 text-sm dark:bg-white"
                                         autoComplete="off"
+                                        aria-label="Search account"
                                     />
                                 </div>
                                 )}
@@ -642,11 +655,20 @@ export function DaybookReport({
                     </Card>
                 )}
                  <div className="flex flex-col gap-2 mt-4 print:hidden">
-                    <div className="flex flex-wrap items-center justify-between gap-4">
-                        <div className="flex items-center gap-2">
+                    <div
+                      data-pl-daybook-toolbar=""
+                      className="flex flex-wrap items-center justify-between gap-4"
+                    >
+                        <div className="flex min-h-9 flex-wrap items-center gap-2">
                             {/* Daybook only: single date system – show either BS or AD calendar, not both. Date select par calendar auto-close. */}
                             {dateSystem === 'BS' && (
-                                <BsDatePicker valueAD={daybookDate} onChangeAD={(date) => setDaybookDate(date as Date)} isRange={false} transactionDates={transactionDates} />
+                                <BsDatePicker
+                                  valueAD={daybookDate}
+                                  onChangeAD={(date) => setDaybookDate(date as Date)}
+                                  isRange={false}
+                                  transactionDates={transactionDates}
+                                  className="h-9 min-h-9 max-h-9"
+                                />
                             )}
                             {(dateSystem === 'AD' || dateSystem === 'Both') && (
                                 <Popover open={isDaybookCalendarOpen} onOpenChange={setIsDaybookCalendarOpen}>
@@ -654,7 +676,7 @@ export function DaybookReport({
                                     <Button
                                         id="date"
                                         variant={"outline"}
-                                        className={cn("w-auto justify-start text-left font-normal", !daybookDate && "text-muted-foreground")}
+                                        className={cn("h-9 min-h-9 max-h-9 w-auto justify-start text-left font-normal", !daybookDate && "text-muted-foreground")}
                                     >
                                         {!isMobile && <CalendarIcon className="mr-2 h-4 w-4" />}
                                         {daybookDate ? formatDate(daybookDate) : <span>Pick a date</span>}
@@ -685,13 +707,20 @@ export function DaybookReport({
                                     </Button>
                                 </>
                             )}
-                            <Button variant="outline" onClick={() => setDaybookDate(new Date())}>Today</Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-9 min-h-9 max-h-9"
+                              onClick={() => setDaybookDate(new Date())}
+                            >
+                              Today
+                            </Button>
                              {isDaybookFilterActive && (
-                                <Button variant="ghost" size="icon" className="h-9 w-9" onClick={clearDaybookFilters} aria-label="Clear Filters"><X className="h-4 w-4" /></Button>
+                                <Button variant="ghost" size="icon" className="h-9 w-9 min-h-9 max-h-9 shrink-0" onClick={clearDaybookFilters} aria-label="Clear Filters"><X className="h-4 w-4" /></Button>
                             )}
                             {!isMobile && (
                             <>
-                            <div className="flex items-center space-x-2 flex-shrink-0">
+                            <div className="flex h-9 min-h-9 items-center space-x-2 flex-shrink-0">
                                 <Checkbox
                                     id="daybook-show-narration"
                                     checked={showDaybookNarration}
@@ -703,20 +732,24 @@ export function DaybookReport({
                               id="narration-search-report-daybook"
                               value={daybookNarrationNoteSearch}
                               onChange={setDaybookNarrationNoteSearch}
+                              toolbarChrome
                             />
                             </>
                             )}
                         </div>
-                        <div className="flex items-center space-x-2 flex-wrap justify-end">
+                        <div className="flex min-h-9 flex-wrap items-center space-x-2 justify-end">
                             {/* PC: User filter — Rows dropdown ke left; account search Daily Summary me */}
                             {!isMobile && (
                             <>
-                            <span className="text-sm font-medium">User:</span>
+                            <span className="text-sm font-medium leading-none">User:</span>
                             <Select
                                 value={daybookUserFilter ?? "__all__"}
                                 onValueChange={(v) => setDaybookUserFilter(v === "__all__" ? null : v)}
                             >
-                                <SelectTrigger className="h-9 w-[min(180px,18vw)] bg-background">
+                                <SelectTrigger
+                                  data-pl-toolbar-field=""
+                                  className={cn(daybookToolbarSelectTriggerCn, "w-[min(180px,18vw)]")}
+                                >
                                     <SelectValue placeholder="All users" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -730,9 +763,12 @@ export function DaybookReport({
                             </Select>
                             </>
                             )}
-                            {!isMobile && <span className="text-sm font-medium">Rows:</span>}
+                            {!isMobile && <span className="text-sm font-medium leading-none">Rows:</span>}
                             <Select value={daybookRowsPerPage} onValueChange={(v) => setDaybookRowsPerPage(v)}>
-                                <SelectTrigger className="h-9 w-[80px]">
+                                <SelectTrigger
+                                  data-pl-toolbar-field=""
+                                  className={cn(daybookToolbarSelectTriggerCn, "w-[80px]")}
+                                >
                                     <SelectValue placeholder={`${daybookRowsPerPage}`} />
                                 </SelectTrigger>
                                 <SelectContent>

@@ -320,6 +320,30 @@ export async function findVoucherInLocalMirrorByNumberAndType(
   }
 }
 
+/**
+ * Cheap row count for health/diagnostics — no JSON.parse of every doc
+ * (full `listCompanyDocsFromBrowserDb` for vouchers freezes UI ~5–15s).
+ */
+export async function countCompanyDocsInBrowserDb(
+  companyId: string,
+  collectionName: string
+): Promise<number> {
+  if (typeof window === "undefined" || !companyId || !collectionName) return 0;
+  if (!(await canReadCompanyDocsFromBrowserDb(companyId))) return 0;
+  try {
+    const db = await getBrowserDbForCompanyId(companyId);
+    if (!db) return 0;
+    const row = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM company_docs WHERE company_id = ? AND collection = ?"
+      )
+      .get(companyId, collectionName) as { n?: number } | undefined;
+    return Math.max(0, Number(row?.n) || 0);
+  } catch {
+    return 0;
+  }
+}
+
 export async function listCompanyDocsFromBrowserDb(
   companyId: string,
   collectionName: string,

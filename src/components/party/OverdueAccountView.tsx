@@ -38,6 +38,7 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_BOX_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
   LEDGER_HEADER_BALANCE_STACK_CN,
@@ -845,7 +846,7 @@ export function OverdueAccountView({
         <div className={LEDGER_HEADER_OUTER_ROW_CN}>
           <div className={LEDGER_HEADER_IDENTITY_CN}>
             <div className={LEDGER_HEADER_AVATAR_CN}>
-              <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+              <div className={cn(LEDGER_HEADER_AVATAR_BOX_CN, "flex items-center justify-center rounded-lg border border-blue-300 bg-amber-100 dark:bg-amber-900/30")}>
                 <AlertCircle className="h-6 w-6 text-amber-600 dark:text-amber-500" />
               </div>
             </div>

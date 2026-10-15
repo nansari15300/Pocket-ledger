@@ -91,6 +91,8 @@ import {
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
   LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_TRIGGER_CN,
+  LEDGER_HEADER_AVATAR_IMAGE_CN,
   LEDGER_HEADER_AVATAR_PEN_CN,
   LEDGER_HEADER_NAME_CARD_CN,
   LEDGER_HEADER_BALANCE_CARD_CN,
@@ -125,6 +127,14 @@ import { useInterCompanyLedgerChangeDetectDialog } from "@/hooks/useInterCompany
 import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillLabel";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
+import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { MobileEntityLedgerFooterPrintButton } from "@/components/entity/MobileEntityLedgerFooterPrintButton";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { MasterAccountFreezeTxnShell } from "@/components/masterAccountFreeze/MasterAccountFreezeTxnShell";
@@ -778,6 +788,10 @@ export function AccountDetails({
     setFilters,
     setActiveFilter,
   });
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(displayTransactions),
+    [displayTransactions]
+  );
 
   // Sort only in statement view; spend-wise keeps group order
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
@@ -1666,6 +1680,46 @@ export function AccountDetails({
     onBack?.();
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isEditAccountDialogOpen, isNoteOpen, closeModalInUrl, onBack]);
 
+  const mobileEntityTxnToolbar = (
+    <MobileEntityTxnToolbarRow placement="belowPager">
+      {allAccounts && allAccounts.length > 0 && (
+        <MobileEntityTxnToolbarPicker>
+          <Combobox
+            options={allAccounts.map((p) => ({ value: p.id, label: p.accountName }))}
+            value={account?.id || ""}
+            onChange={(value) => {
+              if (!value || value === account.id) return;
+              router.replace(`/bank-cash?selected=${encodeURIComponent(value)}`, { scroll: false });
+            }}
+            placeholder="Select an account"
+            noWrapOptions
+            showFullOptionText
+            contentWidthMode="auto"
+            popoverContentClassName="w-[80vw] max-w-[80vw] sm:min-w-[var(--radix-popover-trigger-width)] sm:w-auto sm:max-w-md"
+            triggerClassName="w-full min-w-0"
+          />
+        </MobileEntityTxnToolbarPicker>
+      )}
+      <MobileEntityTxnToolbarUnapprovedBadge
+        count={mobileUnapprovedTxnCount}
+        pressed={unapprovedOnly}
+        onToggle={toggleUnapprovedOnly}
+      />
+      <MobileEntityTxnToolbarSearch>
+        <Search className={mdc.mobileTxnToolbarSearchIcon} />
+        <Input
+          placeholder="Search transactions"
+          className={mdc.mobileTxnToolbarSearchInput}
+          value={mobileSearchTerm}
+          onChange={(e) => {
+            setMobileSearchTerm(e.target.value);
+            setCurrentPage(1);
+          }}
+        />
+      </MobileEntityTxnToolbarSearch>
+    </MobileEntityTxnToolbarRow>
+  );
+
   const renderMobileView = () => (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
       {/* No pb-24 here: scroll area extends to footer; inner content has pb-24 so last row clears footer */}
@@ -1719,66 +1773,6 @@ export function AccountDetails({
             </>
           )}
         </p>
-      </div>
-      {/* Account dropdown + Edit icon + Search - same size (equal width & height) */}
-      <div className="p-2 border-b flex-shrink-0">
-        <div className="flex items-stretch gap-2">
-          {allAccounts && allAccounts.length > 0 && (
-            <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
-              {/* Mobile master: 80vw dropdown, naam ek line, green trigger; scroll ? select (combobox). */}
-              <Combobox
-                options={allAccounts.map((p) => ({ value: p.id, label: p.accountName }))}
-                value={account?.id || ""}
-                onChange={(value) => {
-                  if (!value || value === account.id) return;
-                  // `/bank-cash/[id]` par chale jane se master-detail + "Bank & Cash · name" header tut jata tha — `?selected=` par hi rakho
-                  router.replace(`/bank-cash?selected=${encodeURIComponent(value)}`, { scroll: false });
-                }}
-                placeholder="Select an account"
-                noWrapOptions
-                showFullOptionText
-                contentWidthMode="auto"
-                popoverContentClassName="w-[80vw] max-w-[80vw] sm:min-w-[var(--radix-popover-trigger-width)] sm:w-auto sm:max-w-md"
-                triggerClassName="w-full min-w-0 border-2 border-green-600 focus-visible:ring-2 focus-visible:ring-green-600/35"
-              />
-            </div>
-          )}
-          {account.id !== "all" && (!account.isSpecial || can("manage_special_bank_accounts")) && (
-            <EditAccountDialog
-              account={account}
-              allAccounts={allAccounts}
-              onAccountUpdated={handleAccountUpdated}
-              onAccountDeleted={onAccountDeleted}
-              hasTransactions={processedTransactions.length > 0}
-              isOpen={isEditAccountDialogOpen}
-              onOpenChange={(open) => {
-                setIsEditAccountDialogOpen(open);
-                if (open) {
-                  openingModalRef.current = true;
-                  openModalInUrl();
-                } else {
-                  closeModalInUrl();
-                }
-              }}
-            >
-              <Button variant="outline" size="icon" className="h-9 w-8 flex-shrink-0">
-                <Edit className="h-4 w-4" />
-              </Button>
-            </EditAccountDialog>
-          )}
-          <div className="flex-1 min-w-0 h-9 relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-            <Input
-              placeholder="Search transactions"
-              className="pl-8 h-9 text-sm w-full min-w-0"
-              value={mobileSearchTerm}
-              onChange={(e) => {
-                setMobileSearchTerm(e.target.value);
-                setCurrentPage(1);
-              }}
-            />
-          </div>
-        </div>
       </div>
       {periodSummaryCards}
       </MobileDetailSummaryCollapsible>
@@ -1846,9 +1840,13 @@ export function AccountDetails({
         }}
         onPageChange={setCurrentPage}
         edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+        txnToolbar={mobileEntityTxnToolbar}
       />
       
-        <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+        <div
+          className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5"
+          data-pl-mobile-ledger-action-footer=""
+        >
           {/* Mobile footer: ek button — Statement ? Spend wise toggle */}
           <LedgerViewModeToggleButton
             value={spendWiseView ? "spend_wise" : "statement"}
@@ -1870,12 +1868,11 @@ export function AccountDetails({
              >
                Pay
              </Button>
-             <Button
-               className="flex-1 h-6 min-w-0 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium"
-               onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("contra"); openModalInUrl(); }}
-             >
-               Contra
-             </Button>
+             <MobileEntityLedgerFooterPrintButton
+               onClick={() => {
+                 void handlePrintStatement();
+               }}
+             />
             <Drawer
               open={isCalendarOpen}
               onOpenChange={(open) => {
@@ -1979,10 +1976,10 @@ export function AccountDetails({
               <div className={LEDGER_HEADER_AVATAR_CN}>
                 <EntityFileAttachmentHover
                   fileUrl={accountHeaderAttachmentUrl}
-                  triggerClassName="inline-flex rounded-full"
-                >
-                  <ResolvedEntityAvatar
-                    className="h-12 w-12 text-lg flex-shrink-0 border"
+                triggerClassName={LEDGER_HEADER_AVATAR_TRIGGER_CN}
+              >
+                <ResolvedEntityAvatar
+                  className={cn(LEDGER_HEADER_AVATAR_IMAGE_CN, "border")}
                     src={accountHeaderAttachmentUrl ?? undefined}
                     alt={account.accountName}
                     fallbackSlot={

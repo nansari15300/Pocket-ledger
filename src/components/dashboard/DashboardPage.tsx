@@ -153,7 +153,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { adToBs, bsToAd, getBSMonthDays } from "@/lib/bs-date";
 import { motion, AnimatePresence } from 'framer-motion';
 import { AddVoucherDialog } from '@/components/vouchers/AddVoucherDialog';
-import { useTransactions } from '@/hooks/use-transactions';
+import { useTransactions, DAYBOOK_TRANSACTIONS_ENTITY } from '@/hooks/use-transactions';
 import { useFeatureAccess } from '@/hooks/use-feature-access';
 import { useIsMobile, useCalendarMonths } from '@/hooks/use-mobile';
 import { DASHBOARD_VIEW_DETAILS_TABLE_CN } from "@/lib/dashboardViewDetailsTableClass";
@@ -1175,7 +1175,7 @@ export default function DashboardPage() {
   const effectiveRecentDateRange = recentUnapprovedOnly ? undefined : recentDateRange;
   const effectiveRecentFilters = recentUnapprovedOnly ? {} : recentFilters;
   const { daybookTransactions: allRecentTransactions } = useTransactions(
-    { id: 'daybook', items: [] },
+    DAYBOOK_TRANSACTIONS_ENTITY,
     'daybook',
     effectiveRecentDateRange,
     undefined,
