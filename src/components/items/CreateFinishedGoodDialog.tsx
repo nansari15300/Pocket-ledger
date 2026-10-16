@@ -71,7 +71,8 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
-export function CreateFinishedGoodDialog({
+/** Finished-good form only (no Dialog shell) so it can sit inside the Create Item dialog or its own dialog. */
+export function CreateFinishedGoodForm({
   isOpen,
   onOpenChange,
   onItemCreated,
@@ -328,14 +329,6 @@ export function CreateFinishedGoodDialog({
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[420px]">
-        <DialogHeader>
-          <DialogTitle>Add Finished Good</DialogTitle>
-          <DialogDescription>
-            Add a new finished good from production. Fill name, date, item code and optional image.
-          </DialogDescription>
-        </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-[1fr_140px] gap-4">
@@ -496,6 +489,25 @@ export function CreateFinishedGoodDialog({
             </DialogFooter>
           </form>
         </Form>
+  );
+}
+
+export function CreateFinishedGoodDialog(props: {
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+  onItemCreated?: (newId: string) => void;
+  prefillName?: string;
+}) {
+  return (
+    <Dialog open={props.isOpen} onOpenChange={props.onOpenChange}>
+      <DialogContent className="sm:max-w-[420px]">
+        <DialogHeader>
+          <DialogTitle>Add Finished Good</DialogTitle>
+          <DialogDescription>
+            Add a new finished good from production. Fill name, date, item code and optional image.
+          </DialogDescription>
+        </DialogHeader>
+        <CreateFinishedGoodForm {...props} />
       </DialogContent>
     </Dialog>
   );

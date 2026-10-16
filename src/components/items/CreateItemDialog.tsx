@@ -101,6 +101,7 @@ import {
   MAX_PDF_BYTES_BEFORE_UPLOAD,
   MAX_PDF_UPLOAD_MB,
 } from "@/lib/fileUploadLimits";
+import { CreateFinishedGoodForm } from "@/components/items/CreateFinishedGoodDialog";
 import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { MasterGroupTreeCombobox } from "@/components/entity/MasterGroupTreeCombobox";
@@ -1000,6 +1001,17 @@ const capitalizeFirstLetter = (str: string) => {
               <DialogDescription>Add a new product or service to your records.</DialogDescription>
             </DialogHeader>
           )}
+          {itemType === 'finished_good' ? (
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4 pt-4">
+              {tabsInRibbon ? null : itemTypeTabs}
+              <CreateFinishedGoodForm
+                isOpen={isOpen}
+                onOpenChange={setIsOpen}
+                onItemCreated={onItemCreated}
+                prefillName={String(form.getValues('name') || '')}
+              />
+            </div>
+          ) : (
           <div className={cn(masterEntityDialogFormWrapperClassName, dialogResizable && "px-6 pb-4")}>
           <Form {...form}>
             <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
@@ -1437,6 +1449,7 @@ const capitalizeFirstLetter = (str: string) => {
             </form>
           </Form>
           </div>
+          )}
           {dialogResizable ? <ResizableDialogEdgeHandles onResizeStart={handleResizeStart} allSides /> : null}
         </DialogContent>
       </Dialog>
