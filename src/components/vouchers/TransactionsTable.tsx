@@ -3551,7 +3551,7 @@ export function TransactionsTable({
         {renderOpeningBalanceTdsCells()}
         {showCol("dr") && !hideDebitColumn && (
           <TableCell className={cn("text-right text-green-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {showDatedOpeningAmounts
+            {!authoritativeOpeningPending
               ? renderOpeningBalanceDrCrCell(
                   "dr",
                   useSpendWiseOpeningBalanceCard ? spendWiseBookOpeningRowDr : billWiseDatedOpeningDrCr.debit,
@@ -3563,7 +3563,7 @@ export function TransactionsTable({
         )}
         {showCol("cr") && !hideCreditColumn && (
           <TableCell className={cn("text-right text-red-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {showDatedOpeningAmounts
+            {!authoritativeOpeningPending
               ? renderOpeningBalanceDrCrCell(
                   "cr",
                   useSpendWiseOpeningBalanceCard ? spendWiseBookOpeningRowDr : billWiseDatedOpeningDrCr.debit,
@@ -5222,14 +5222,14 @@ export function TransactionsTable({
                     {renderOpeningBalanceTdsCells()}
                     {showCol("dr") && !hideDebitColumn && (
                       <TableCell className={cn("text-right text-green-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-                        {showDatedOpeningAmounts
+                        {!authoritativeOpeningPending
                           ? renderOpeningBalanceDrCrCell("dr", billWiseDatedOpeningDrCr.debit, billWiseDatedOpeningDrCr.credit, LEDGER_OB_DATED_KEY)
                           : "-"}
                       </TableCell>
                     )}
                     {showCol("cr") && !hideCreditColumn && (
                       <TableCell className={cn("text-right text-red-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-                        {showDatedOpeningAmounts
+                        {!authoritativeOpeningPending
                           ? renderOpeningBalanceDrCrCell("cr", billWiseDatedOpeningDrCr.debit, billWiseDatedOpeningDrCr.credit, LEDGER_OB_DATED_KEY)
                           : "-"}
                       </TableCell>

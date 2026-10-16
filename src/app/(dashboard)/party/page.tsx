@@ -1820,7 +1820,7 @@ function PartyPageContent() {
           {/* To Pay total */}
           <div className="px-3 py-3 border-b flex-shrink-0">
             <p className="text-2xl font-bold text-center text-red-600">
-              To Pay {formatCurrency(Math.abs(overdueClosingBalance), { noSuffix: true })}
+              <span className="text-[0.6em]">To Pay</span> {formatCurrency(Math.abs(overdueClosingBalance), { noSuffix: true })}
             </p>
           </div>
           {/* Transaction list – mobile cards; scroll-touch + inline for APK/WebView touch scroll */}

@@ -38,7 +38,7 @@ function showOverlay(reason){
   root.setAttribute("data-pl-ui-health-emergency","1");
   root.style.cssText="position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:12px;background:rgba(15,23,42,.92);font-family:system-ui,sans-serif;";
   var card=document.createElement("div");
-  card.style.cssText="width:min(100%,520px);max-height:92vh;display:flex;flex-direction:column;gap:10px;border-radius:10px;border:1px solid #fbbf24;background:#fffbeb;padding:14px;";
+  card.style.cssText="width:min(100%,520px);height:80vh;max-height:80vh;display:flex;flex-direction:column;gap:10px;border-radius:10px;border:1px solid #fbbf24;background:#fffbeb;padding:14px;";
   var h=document.createElement("h2");h.textContent="UI paused — diagnostics";h.style.cssText="margin:0;font-size:16px;font-weight:700;color:#92400e;";
   var p=document.createElement("p");p.textContent="Heavy work paused so you can copy the log. After browser \\"Wait\\", use Copy all then Resume.";p.style.cssText="margin:0;font-size:12px;line-height:1.45;color:#78350f;";
   var r=document.createElement("p");r.textContent=reason||"";r.style.cssText="margin:0;font-size:12px;font-weight:600;color:#b45309;";

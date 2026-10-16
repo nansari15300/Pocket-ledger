@@ -46,7 +46,7 @@ export function showClientHealthEmergencyOverlay(
 
   const card = document.createElement("div");
   card.style.cssText =
-    "width:min(100%,520px);max-height:min(92vh,720px);display:flex;flex-direction:column;gap:10px;border-radius:10px;border:1px solid #fbbf24;background:#fffbeb;padding:14px;box-shadow:0 20px 50px rgba(0,0,0,.45);";
+    "width:min(100%,520px);height:80vh;max-height:80vh;display:flex;flex-direction:column;gap:10px;border-radius:10px;border:1px solid #fbbf24;background:#fffbeb;padding:14px;box-shadow:0 20px 50px rgba(0,0,0,.45);";
 
   const title = document.createElement("h2");
   title.textContent = "UI paused — diagnostics";

@@ -1499,7 +1499,7 @@ export function StaffDetails({
               "Settled Up"
             ) : (
               <>
-                {balanceLabel}{" "}
+                <span className="text-[0.6em]">{balanceLabel}</span>{" "}
                 {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
               </>
             )}

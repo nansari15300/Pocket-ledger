@@ -1127,7 +1127,7 @@ export function TaxDetails({
                 headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
               )}
             >
-              {balanceLabel} {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
+              <span className="text-[0.6em]">{balanceLabel}</span> {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
             </p>
           </div>
           </MobileDetailSummaryCollapsible>

@@ -718,7 +718,7 @@ export function TaxGroupDetails({
           ) : null}
           <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
             <p className={cn(mdc.mobileTxnBalanceText2xl, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-              {balanceText} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
+              <span className="text-[0.6em]">{balanceText}</span> {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
             </p>
           </div>
           </MobileDetailSummaryCollapsible>

@@ -6058,8 +6058,8 @@ body[class*="theme-"] main [data-pl-master-list-chrome] .bg-background {
     min-width: 100%;
   }
   [data-pl-master-list-chrome] .pl-mlc-quick-filter-pill {
-    flex: 1 1 0%;
-    min-width: 0;
+    flex: 1 0 auto;
+    min-width: max-content;
     max-width: none;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -6779,8 +6779,8 @@ body[class*="theme-"] main .pl-mobile-ledger-footer-fab[data-pl-master-list-chro
 }
 [data-pl-mobile-list-dock] .pl-mlc-quick-filter-pill,
 [data-pl-party-mobile-list-dock] .pl-mlc-quick-filter-pill {
-  flex: 1 1 0%;
-  min-width: 0;
+  flex: 1 0 auto;
+  min-width: max-content;
   max-width: none;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -12994,4 +12994,15 @@ span[data-tds-verify-badge="unverified"] {
   border: 1.5px solid #d97706 !important;
   background-color: #fef3c7 !important;
   color: #b45309 !important;
+}
+
+/* Quick-filter pills: chhoti screen par scroll (scrollbar hidden), badi screen par stretch */
+.pl-mlc-quick-filter-row .pl-ledger-footer-scroll {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none;
+}
+.pl-mlc-quick-filter-row .pl-ledger-footer-scroll::-webkit-scrollbar {
+  display: none !important;
+  height: 0 !important;
+  width: 0 !important;
 }

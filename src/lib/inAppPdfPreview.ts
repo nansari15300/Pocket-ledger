@@ -25,10 +25,10 @@ const ZOOM_MAX = 500;
 const ZOOM_STEP = 10;
 
 /** Bitmap vs label — itne % se zyada farq par debounced PDF.js repaint (smooth CSS beech me). */
-const REPAINT_THRESHOLD = 35;
+const REPAINT_THRESHOLD = 1;
 
 /** Chrome-like: pinch settle ke baad repaint — chhota debounce = zyada flash. */
-const PDF_REPAINT_DEBOUNCE_MS = 320;
+const PDF_REPAINT_DEBOUNCE_MS = 0;
 
 /** Off-screen page skip (scrollHost vs wrap rect) — pixels. */
 const PDF_VIEWPORT_CULL_MARGIN_PX = 1200;
@@ -176,7 +176,7 @@ async function renderPdfPagesToZoomInner(
     if (!ctx) return;
 
     canvas.style.transition = "none";
-    canvas.style.opacity = "0.85";
+    canvas.style.opacity = "1";
 
     const bw = Math.floor(viewport.width * dprCap);
     const bh = Math.floor(viewport.height * dprCap);
@@ -745,14 +745,14 @@ export function showInAppPdfPreview(
   iframe.setAttribute("title", "PDF preview");
   iframe.setAttribute("aria-label", "PDF preview");
   iframe.style.cssText =
-    "flex:1;width:100%;border:0;background:#525252;min-height:0;min-width:0;z-index:0;position:relative";
+    "flex:1;width:100%;border:0;background:#000;min-height:0;min-width:0;z-index:0;position:relative";
 
   // Native: PDF.js scroll; desktop: iframe
   const scrollHost = document.createElement("div");
   scrollHost.setAttribute("data-pdf-js-scroll-preview", "1");
   // `align-items:flex-start` — zoom ke baad horizontal scroll poora (center se left crop nahi); wrap `margin:0 auto` se fit mode me center.
   scrollHost.style.cssText =
-    "flex:1;min-height:0;min-width:0;display:none;flex-direction:column;align-items:flex-start;overflow:auto;background:#525252;padding:10px 8px;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;position:relative;z-index:0;overscroll-behavior:contain";
+    "flex:1;min-height:0;min-width:0;display:none;flex-direction:column;align-items:flex-start;overflow:auto;background:#000;padding:10px 8px;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;position:relative;z-index:0;overscroll-behavior:contain";
 
   /** `transform: scale` se layout scroll galat — wrap ko W×H×scale de kar scrollHost sahi scroll kare. */
   const zoomScalerWrap = document.createElement("div");
@@ -788,7 +788,7 @@ export function showInAppPdfPreview(
   const loadingOverlay = document.createElement("div");
   loadingOverlay.textContent = "Loading preview…";
   loadingOverlay.style.cssText =
-    "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#3f3f3f;color:#e5e5e5;font-size:15px;z-index:1";
+    "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#e5e5e5;font-size:15px;z-index:1";
 
   const previewWrap = document.createElement("div");
   // `contain:paint` scroll + transform ke saath edge par glitch/slash dikha sakta — sirf layout contain.
@@ -1222,7 +1222,7 @@ export function showInAppPdfPreview(
             const ric = (globalThis as unknown as {
               requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
             }).requestIdleCallback;
-            if (typeof ric === "function") ric(() => void execPaint(), { timeout: 500 });
+            if (typeof ric === "function" && false) ric(() => void execPaint(), { timeout: 500 });
             else setTimeout(() => void execPaint(), 16);
           });
           scrollHost.scrollLeft = sl;

@@ -1446,7 +1446,7 @@ export function GroupDetails({
         </div>
         <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
           <p className={cn(mdc.mobileTxnBalanceTextLg, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-            {balanceText} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
+            <span className="text-[0.6em]">{balanceText}</span> {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
           </p>
         </div>
         </MobileDetailSummaryCollapsible>
