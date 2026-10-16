@@ -37,14 +37,17 @@ export function plHangStart(label: string, detail?: Record<string, unknown>): ()
   };
 }
 
-/** Install once: logs main-thread blocks > 50ms (Chrome). */
+/** Install once: logs main-thread blocks after this call (Chrome). */
 export function plHangEnsureLongTaskObserver(): void {
   if (!plHangEnabled() || typeof window === "undefined") return;
   if (window.__plHangLongTaskObs) return;
   try {
     if (!("PerformanceObserver" in window)) return;
+    // Do NOT use buffered:true — first click dumps boot/HMR longtasks and looks like a hang loop.
+    const installedAt = performance.now();
     const obs = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
+        if (entry.startTime < installedAt - 16) continue;
         const ms = Math.round(entry.duration);
         // Ignore tiny jank; only surface real freezes (click hang / multi-second blocks).
         if (ms < 200) continue;
@@ -54,7 +57,7 @@ export function plHangEnsureLongTaskObserver(): void {
         });
       }
     });
-    obs.observe({ type: "longtask", buffered: true } as PerformanceObserverInit);
+    obs.observe({ type: "longtask", buffered: false } as PerformanceObserverInit);
     window.__plHangLongTaskObs = obs;
     plHang("longtask observer on");
   } catch {

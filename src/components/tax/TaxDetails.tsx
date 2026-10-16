@@ -135,6 +135,7 @@ import {
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
+import { taxLedgerBooksDrCrFromRow } from "@/lib/partyLedgerTdsView";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 
@@ -274,6 +275,24 @@ export function TaxDetails({
     if (!initialTax) return undefined;
     return allTaxes.find((t) => t.id === initialTax.id) || initialTax;
   }, [allTaxes, initialTax]);
+
+  // Paint TaxDetails chrome first; full voucher scan on next frames (VAT / fiscal-merge companies).
+  const [ledgerComputeReady, setLedgerComputeReady] = useState(false);
+  useEffect(() => {
+    setLedgerComputeReady(false);
+    let cancelled = false;
+    let innerRaf = 0;
+    const outerRaf = requestAnimationFrame(() => {
+      innerRaf = requestAnimationFrame(() => {
+        if (!cancelled) setLedgerComputeReady(true);
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(outerRaf);
+      if (innerRaf) cancelAnimationFrame(innerRaf);
+    };
+  }, [tax?.id]);
 
   const handleTaxUpdated = useMasterEntityLivePatch<Tax>({
     collection: "taxes",
@@ -454,29 +473,6 @@ export function TaxDetails({
     router,
   });
   
-  const transactionDates = useMemo(() => {
-    if (!tax) return [];
-    const dates = new Set<number>();
-    vouchers.forEach((v) => {
-      const isRelevant =
-        v.taxAccountId === tax.id ||
-        (Array.isArray(v.lineItems) &&
-          v.lineItems.some(
-            (line: any) => line.taxAccountId === tax.id || line.tdsAccountId === tax.id
-          )) ||
-        (v.type === 'note' && v.context === 'Tax' && v.entityId === tax.id) ||
-        (v.type === 'journal' && Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId === tax.id));
-
-      if (isRelevant) {
-        const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);
-        if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
-          dates.add(startOfDay(dateValue).getTime());
-        }
-      }
-    });
-    return Array.from(dates).map((d) => new Date(d));
-  }, [vouchers, tax]);
-
   const {
     processedTransactions,
     openingBalanceForPeriod,
@@ -500,9 +496,21 @@ export function TaxDetails({
     undefined,
     undefined,
     undefined,
-    true,
+    ledgerComputeReady,
     balanceMode === "bill_wise"
   );
+
+  // Calendar dots from entity rows only — full vouchers.forEach was a VAT-select LONGTASK.
+  const transactionDates = useMemo(() => {
+    const dates = new Set<number>();
+    processedTransactions.forEach((v: any) => {
+      const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);
+      if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
+        dates.add(startOfDay(dateValue).getTime());
+      }
+    });
+    return Array.from(dates).map((d) => new Date(d));
+  }, [processedTransactions]);
 
   const isFilterActive =
     dateRange !== undefined || Object.values(filters).some((v) => v);
@@ -608,6 +616,20 @@ export function TaxDetails({
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const taxBooksRebalanceOptions = useMemo(
+    () => {
+      const taxId = String(tax?.id || "").trim();
+      if (!taxId) return undefined;
+      return {
+        booksDrCrForRow: (tx: any) => taxLedgerBooksDrCrFromRow(tx, taxId),
+      };
+    },
+    [tax?.id]
+  );
+  const fiscalMergeCompanyKey = `${company?.fiscalSplitMode ?? ""}:${String(
+    (company as { fiscalMergePartitionAtIsos?: string[] | null } | null)?.fiscalMergePartitionAtIsos?.join(",") ??
+      ""
+  )}`;
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
@@ -618,9 +640,18 @@ export function TaxDetails({
           undefined,
           company
         ),
-        openingBalanceForPeriod
+        openingBalanceForPeriod,
+        taxBooksRebalanceOptions
       ),
-    [oppositeAccountFilteredTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
+    // fiscalMergeCompanyKey — avoid rebalance when useCompany() returns a new company object identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- company read inside; key tracks fiscal merge fields
+    [
+      oppositeAccountFilteredTransactions,
+      filterByUnapprovedOnly,
+      openingBalanceForPeriod,
+      fiscalMergeCompanyKey,
+      taxBooksRebalanceOptions,
+    ]
   );
 
   useEnsureEntityMinTxnsInScope({

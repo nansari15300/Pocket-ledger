@@ -151,6 +151,14 @@ function TaxPageContent() {
   const [activeView, setActiveView] = useState("taxes");
   const { selected, setSelected } = useResponsiveListLayout<Tax | TaxGroup>(`tax_view_${activeView}`);
   const isInitialMount = useRef(true);
+  /** URL sync must not depend on processedTaxes identity — refresh pe har aggregate bump setSelected loop + TaxDetails hang. */
+  const processedTaxesRef = useRef(processedTaxes);
+  const processedTaxGroupsRef = useRef(initialProcessedTaxGroups);
+  const selectedRef = useRef(selected);
+  const activeViewRef = useRef(activeView);
+  processedTaxesRef.current = processedTaxes;
+  selectedRef.current = selected;
+  activeViewRef.current = activeView;
 
   const pendingTaxSelectIdRef = useRef<string | null>(null);
   const onBackToList = useCallback(() => {
@@ -244,6 +252,7 @@ function TaxPageContent() {
       companyId || ""
     );
   }, [initialProcessedTaxGroups, companyId]);
+  processedTaxGroupsRef.current = processedTaxGroups;
 
   const selectedGroup = useMemo(
     () =>
@@ -393,70 +402,84 @@ function TaxPageContent() {
     return taxesForTaxList.filter((t) => t.name && t.name.toLowerCase().includes(searchLower)).length;
   }, [taxesForTaxList, searchTerm]);
   
-  const fetchUserName = useCallback(async (userId: string): Promise<string> => {
-    if (userNames[userId] && userNames[userId] !== "Unknown") return userNames[userId];
-    try {
-        // User doc ID may be name_uid format, so query by uid field first
-        const q = query(collection(firestore, "users"), where("uid", "==", userId));
-        const snap = await getDocs(q);
-        let data = snap.docs[0]?.data();
-        
-        if (!data) {
-            // Fallback: doc ID might be uid (legacy)
-            const userDoc = await getDoc(doc(firestore, 'users', userId));
-            if (userDoc.exists()) {
-                data = userDoc.data();
-            }
-        }
-        
-        if (data) {
-            // Get displayName from user document - this is the primary field
-            const displayName = data.displayName || data.name || data.email || null;
-            if (displayName && displayName !== userId && !displayName.match(/^[a-zA-Z0-9_-]{20,}$/)) {
-                return displayName;
-            }
-        }
-    } catch (e) {}
-    return "N/A"; // Return N/A instead of Unknown
-  }, [userNames]);
+  const userNamesRef = useRef(userNames);
+  userNamesRef.current = userNames;
 
-  // Use vouchersUserNames from useVouchers hook as primary source
+  // useVouchers names — merge only when values change (identity churn must not re-render TaxDetails).
   useEffect(() => {
-    if (vouchersUserNames && Object.keys(vouchersUserNames).length > 0) {
-      setUserNames(vouchersUserNames);
-    }
+    if (!vouchersUserNames || Object.keys(vouchersUserNames).length === 0) return;
+    setUserNames((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const [uid, name] of Object.entries(vouchersUserNames)) {
+        if (!name || name === "Unknown" || name === "N/A") continue;
+        if (next[uid] !== name) {
+          next[uid] = name;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
   }, [vouchersUserNames]);
 
-  // Only fetch locally if not in vouchersUserNames
+  // Firestore fallback for missing names — never depend on fetchUserName/userNames (setState loop → LONGTASK cascade).
   useEffect(() => {
     if (!vouchers || vouchers.length === 0) return;
     const uids = new Set(vouchers.map((t) => t.userId).filter(Boolean) as string[]);
-    // Only fetch if not in vouchersUserNames or if it's "Unknown"/"N/A"
-    const uidsToFetch = Array.from(uids).filter(uid => {
+    const local = userNamesRef.current;
+    const uidsToFetch = Array.from(uids).filter((uid) => {
+      const have = local[uid];
+      if (have && have !== "Unknown" && have !== "N/A") return false;
       const vouchersName = vouchersUserNames?.[uid];
       return !vouchersName || vouchersName === "Unknown" || vouchersName === "N/A";
     });
-    
     if (uidsToFetch.length === 0) return;
-    
-    // Fetch all user names in parallel
-    Promise.all(
+
+    let cancelled = false;
+    void Promise.all(
       uidsToFetch.map(async (uid) => {
-        const name = await fetchUserName(uid);
-        return { uid, name };
-      })
-    ).then(results => {
-      const newUserNames: Record<string, string> = {};
-      results.forEach(({ uid, name }) => {
-        if (name && name !== "Unknown" && name !== "N/A") {
-          newUserNames[uid] = name;
+        try {
+          const q = query(collection(firestore, "users"), where("uid", "==", uid));
+          const snap = await getDocs(q);
+          let data = snap.docs[0]?.data();
+          if (!data) {
+            const userDoc = await getDoc(doc(firestore, "users", uid));
+            if (userDoc.exists()) data = userDoc.data();
+          }
+          if (data) {
+            const displayName = data.displayName || data.name || data.email || null;
+            if (
+              displayName &&
+              displayName !== uid &&
+              !String(displayName).match(/^[a-zA-Z0-9_-]{20,}$/)
+            ) {
+              return { uid, name: String(displayName) };
+            }
+          }
+        } catch {
+          /* ignore */
         }
+        return { uid, name: "N/A" };
+      })
+    ).then((results) => {
+      if (cancelled) return;
+      setUserNames((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const { uid, name } of results) {
+          if (!name || name === "Unknown" || name === "N/A") continue;
+          if (next[uid] !== name) {
+            next[uid] = name;
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
       });
-      if (Object.keys(newUserNames).length > 0) {
-        setUserNames((prev) => ({ ...prev, ...newUserNames }));
-      }
     });
-  }, [vouchers, fetchUserName, vouchersUserNames]);
+    return () => {
+      cancelled = true;
+    };
+  }, [vouchers, vouchersUserNames]);
 
   // Initial Mount Safety
   useEffect(() => {
@@ -472,24 +495,11 @@ function TaxPageContent() {
   }, [activeView, processedTaxes, processedTaxGroups]);
 
   const handleSelect = useCallback((item: Tax | TaxGroup, options?: GroupListSelectOptions) => {
-    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
     const isTax = "rate" in item;
-    console.log("[TaxPage.handleSelect] start", {
-      id: item?.id,
-      name: (item as { name?: string })?.name,
-      isTax,
-      activeView,
-      useQueryNav,
-      memberId: options?.memberId ?? null,
-      t0,
-    });
     pendingTaxSelectIdRef.current = item.id;
     // Heavy TaxDetails mount off the click stack — keeps UI responsive.
     startTransition(() => {
       setSelected(item);
-      console.log("[TaxPage.handleSelect] after setSelected (transition)", {
-        ms: (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0,
-      });
     });
     if (isTax) {
       setGroupMemberFilterId(null);
@@ -504,58 +514,60 @@ function TaxPageContent() {
     if (typeof window !== "undefined") {
       try {
         window.history.replaceState(window.history.state, "", browserHistoryHref(path));
-        console.log("[TaxPage.handleSelect] replaceState", { path });
-      } catch (err) {
-        console.warn("[TaxPage.handleSelect] replaceState failed", err);
+      } catch {
+        /* ignore */
       }
     }
     if (useQueryNav && shouldReplaceWithMasterDetailCanonical(path)) {
-      console.log("[TaxPage.handleSelect] router.replace", { path });
       router.replace(path, { scroll: false });
     }
-    console.log("[TaxPage.handleSelect] end", {
-      ms: (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0,
-      path,
-    });
-    requestAnimationFrame(() => {
-      console.log("[TaxPage.handleSelect] rAF1", {
-        ms: (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0,
-        selectedId: item?.id,
-      });
-    });
   }, [useQueryNav, router, setSelected, activeView, setActiveView]);
 
+  // Length-only (not array identity): first hydrate restores URL selection once;
+  // later balance/aggregate bumps must not re-setSelected (refresh click hang).
+  const taxListLen = processedTaxes.length;
+  const taxGroupListLen = processedTaxGroups.length;
+
+  // Location-first URL sync (Party jaisa) — refs + id-guard so voucher aggregate
+  // updates do not re-setSelected and freeze TaxDetails after refresh.
   useEffect(() => {
     if (vouchersLoading) return;
     const { view, selectedId } = readMasterDetailLocationQuery();
+    const currentSelectedId = selectedRef.current?.id ?? null;
+    const currentActiveView = activeViewRef.current;
     const pendingId = pendingTaxSelectIdRef.current;
     if (pendingId) {
       if (selectedId === pendingId) pendingTaxSelectIdRef.current = null;
-      else if (selected?.id === pendingId) return;
+      else if (currentSelectedId === pendingId) return;
     }
     if (!selectedId) {
       if (view === "groups") {
-        if (activeView !== "groups") setActiveView("groups");
-      } else if (activeView !== "taxes") {
+        if (currentActiveView !== "groups") setActiveView("groups");
+      } else if (currentActiveView !== "taxes") {
         setActiveView("taxes");
       }
       return;
     }
-    const groupItem = processedTaxGroups.find((i) => i.id === selectedId);
-    const taxItem = processedTaxes.find((i) => i.id === selectedId);
+    const groupItem = processedTaxGroupsRef.current.find((i) => i.id === selectedId);
+    const taxItem = processedTaxesRef.current.find((i) => i.id === selectedId);
+    let targetView = currentActiveView;
+    if (groupItem && taxItem) {
+      targetView = view === "groups" ? "groups" : "taxes";
+    } else if (view === "groups" && groupItem) targetView = "groups";
+    else if (view === "taxes" && taxItem) targetView = "taxes";
+    if (targetView !== currentActiveView) setActiveView(targetView);
     const item =
       groupItem && taxItem
         ? view === "groups"
           ? groupItem
           : taxItem
         : groupItem || taxItem;
-    // Deep links can mount TaxDetails, whose ledger math is expensive. Keep URL
-    // restoration at the same non-urgent priority as a TaxList click.
-    startTransition(() => {
-      if (view === "groups" && groupItem) setActiveView("groups");
-      else if (view === "taxes" && taxItem) setActiveView("taxes");
-      if (item) setSelected(item);
-    });
+    // Deep links mount TaxDetails (expensive) — same non-urgent path as list click.
+    if (item && item.id !== currentSelectedId) {
+      startTransition(() => {
+        setSelected(item);
+      });
+    }
     const canonical =
       view === "groups"
         ? `/tax?view=groups&selected=${encodeURIComponent(selectedId)}`
@@ -563,7 +575,16 @@ function TaxPageContent() {
     if (shouldReplaceWithMasterDetailCanonical(canonical)) {
       router.replace(canonical, { scroll: false });
     }
-  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedTaxes, processedTaxGroups, selected?.id, activeView, setSelected, setActiveView, router]);
+  }, [
+    selectedIdFromUrl,
+    viewFromUrl,
+    vouchersLoading,
+    taxListLen,
+    taxGroupListLen,
+    setSelected,
+    setActiveView,
+    router,
+  ]);
 
   const taxesForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];

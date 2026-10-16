@@ -397,7 +397,9 @@ export function ledgerTdsTypeDisplayLabel(side: unknown): string {
   return "sale TDS";
 }
 
-export function isLedgerTdsTableRow(t: { type?: string; [LEDGER_TDS_ROW_FLAG]?: boolean } | null | undefined): boolean {
+export function isLedgerTdsTableRow(
+  t: { type?: unknown; [LEDGER_TDS_ROW_FLAG]?: boolean } | null | undefined
+): boolean {
   if (!t) return false;
   return Boolean(t[LEDGER_TDS_ROW_FLAG]) || String(t.type ?? "") === "tds";
 }

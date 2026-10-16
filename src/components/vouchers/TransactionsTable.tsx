@@ -15,7 +15,11 @@ import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { cn } from "@/lib/utils";
 import { isTransactionColumnVisible } from "@/lib/transactionVisibleColumnShow";
-import { LEDGER_TDS_ROW_FLAG } from "@/lib/partyLedgerTdsView";
+import {
+  LEDGER_TDS_ROW_FLAG,
+  partyTdsLedgerBooksDrCrFromRow,
+  taxLedgerBooksDrCrFromRow,
+} from "@/lib/partyLedgerTdsView";
 import type { StockView, Item } from "@/components/items/types";
 import { useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import { Button } from "@/components/ui/button";
@@ -769,9 +773,21 @@ export function TransactionsTable({
     effectiveFyPartitionOpenings,
     effectiveFyPartitionOpeningsStatus,
   ]);
+  /** Unverified TDS legs stay on the row (dim) but must not inflate FY End Total Dr/Cr. */
+  const fiscalPartitionBooksDrCr = useMemo(() => {
+    if (context === "tax") {
+      const taxId = String(contextId || "").trim();
+      if (!taxId) return undefined;
+      return (tx: unknown) => taxLedgerBooksDrCrFromRow(tx as any, taxId);
+    }
+    if (context === "party" || context === "staff") {
+      return (tx: unknown) => partyTdsLedgerBooksDrCrFromRow(tx as any);
+    }
+    return undefined;
+  }, [context, contextId]);
   const fiscalPartitionClosingSummaryById = useMemo(
-    () => buildPartitionClosingSummaryMap(tableTransactions as unknown[]),
-    [tableTransactions]
+    () => buildPartitionClosingSummaryMap(tableTransactions as unknown[], fiscalPartitionBooksDrCr),
+    [tableTransactions, fiscalPartitionBooksDrCr]
   );
   const fiscalPartitionSummaryForTxn = useCallback(
     (t: { type?: string; id?: string }) => {

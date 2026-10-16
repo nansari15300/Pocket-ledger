@@ -25,7 +25,7 @@ import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachm
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
-import { plHang, plHangEnsureLongTaskObserver, plHangStart } from "@/lib/plHangDiag";
+import { plHangEnsureLongTaskObserver, plHangStart } from "@/lib/plHangDiag";
 
 export function TaxList({ 
     taxes, 
@@ -178,11 +178,6 @@ export function TaxList({
                         href={href}
                         onClick={(e) => {
                           e.preventDefault();
-                          console.log("[TaxList.click] link", {
-                            id: tax.id,
-                            name: tax.name,
-                            t: typeof performance !== "undefined" ? performance.now() : Date.now(),
-                          });
                           plHangEnsureLongTaskObserver();
                           const end = plHangStart("TaxList.click", {
                             id: String(tax.id || ""),
@@ -191,10 +186,6 @@ export function TaxList({
                           });
                           onSelectTax(tax);
                           end();
-                          requestAnimationFrame(() => {
-                            console.log("[TaxList.click] rAF1 after link select", { id: tax.id });
-                            plHang("TaxList.rAF1 after click");
-                          });
                         }}
                         className="block min-w-0 max-w-full overflow-hidden"
                       >
@@ -205,11 +196,6 @@ export function TaxList({
                         selected={isSelected}
                         className={cardClassName}
                         onClick={() => {
-                          console.log("[TaxList.click] row", {
-                            id: tax.id,
-                            name: tax.name,
-                            t: typeof performance !== "undefined" ? performance.now() : Date.now(),
-                          });
                           plHangEnsureLongTaskObserver();
                           const end = plHangStart("TaxList.click", {
                             id: String(tax.id || ""),
@@ -218,10 +204,6 @@ export function TaxList({
                           });
                           onSelectTax(tax);
                           end();
-                          requestAnimationFrame(() => {
-                            console.log("[TaxList.click] rAF1 after row select", { id: tax.id });
-                            plHang("TaxList.rAF1 after click");
-                          });
                         }}
                       >
                         {cardContent}

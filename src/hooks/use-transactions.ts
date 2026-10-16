@@ -989,6 +989,18 @@ export function useTransactions(
     userNamesForFilterRef.current = userNames;
     const journalAccountNamesForFilterRef = useRef(journalAccountNames);
     journalAccountNamesForFilterRef.current = journalAccountNames;
+    // processedTaxes/allTaxes remaps on every aggregate bump — keep list via ref; dep on stable key only.
+    const entityListRef = useRef(entityList);
+    entityListRef.current = entityList;
+    let entityListDepKey = "0";
+    if (entityList?.length) {
+      let key = "";
+      for (const e of entityList) {
+        const anyE = e as { id?: string; rate?: unknown; openingBalance?: unknown };
+        key += `${anyE?.id ?? ""}:${anyE?.rate ?? ""}:${Number(anyE?.openingBalance) || 0}|`;
+      }
+      entityListDepKey = key;
+    }
 
     const entityDepKey = entityMemoDepKey(entity, context);
     const dateRangeFromMs = dateRange?.from?.getTime() ?? 0;
@@ -1000,6 +1012,7 @@ export function useTransactions(
     const result = useMemo(() => {
         const userNames = userNamesForFilterRef.current;
         const journalAccountNames = journalAccountNamesForFilterRef.current;
+        const entityList = entityListRef.current;
         if (!transactionsComputationEnabled) {
           return IDLE_USE_TRANSACTIONS_RESULT;
         }
@@ -2746,7 +2759,7 @@ export function useTransactions(
     dateRangeFromMs,
     dateRangeToMs,
     stockView,
-    entityList,
+    entityListDepKey,
     passedTransactions,
     transactionContext,
     filters,

@@ -30,10 +30,13 @@ function rowClosingBalance(t: Record<string, unknown>): number | null {
   return null;
 }
 
+export type FiscalPartitionBooksDrCr = (tx: unknown) => { debit: number; credit: number };
+
 /** FY merge divider se pehle wale segment ka Total Dr/Cr + closing balance. */
 export function computeClosingSummaryBeforePartition(
   rowsInDisplayOrder: unknown[],
-  partitionIndex: number
+  partitionIndex: number,
+  booksDrCrForRow?: FiscalPartitionBooksDrCr
 ): FiscalPartitionClosingSummary | null {
   if (!Array.isArray(rowsInDisplayOrder) || partitionIndex < 0 || partitionIndex >= rowsInDisplayOrder.length) {
     return null;
@@ -58,8 +61,14 @@ export function computeClosingSummaryBeforePartition(
   for (let i = start; i < partitionIndex; i++) {
     const t = rowsInDisplayOrder[i] as Record<string, unknown>;
     if (!isClosingSummaryRow(t)) continue;
-    totalDr += ledgerAmount(t.debit);
-    totalCr += ledgerAmount(t.credit);
+    if (booksDrCrForRow) {
+      const books = booksDrCrForRow(t);
+      totalDr += ledgerAmount(books.debit);
+      totalCr += ledgerAmount(books.credit);
+    } else {
+      totalDr += ledgerAmount(t.debit);
+      totalCr += ledgerAmount(t.credit);
+    }
     const bal = rowClosingBalance(t);
     if (bal != null) {
       closingBalance = bal;
@@ -72,13 +81,16 @@ export function computeClosingSummaryBeforePartition(
   return { totalDr, totalCr, closingBalance };
 }
 
-export function buildPartitionClosingSummaryMap(rowsInDisplayOrder: unknown[]): Map<string, FiscalPartitionClosingSummary> {
+export function buildPartitionClosingSummaryMap(
+  rowsInDisplayOrder: unknown[],
+  booksDrCrForRow?: FiscalPartitionBooksDrCr
+): Map<string, FiscalPartitionClosingSummary> {
   const map = new Map<string, FiscalPartitionClosingSummary>();
   if (!Array.isArray(rowsInDisplayOrder)) return map;
   for (let i = 0; i < rowsInDisplayOrder.length; i++) {
     const row = rowsInDisplayOrder[i] as { type?: string; id?: string };
     if (row?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE) continue;
-    const summary = computeClosingSummaryBeforePartition(rowsInDisplayOrder, i);
+    const summary = computeClosingSummaryBeforePartition(rowsInDisplayOrder, i, booksDrCrForRow);
     if (!summary) continue;
     const key = String(row.id || `__fiscal_partition_idx_${i}`);
     map.set(key, summary);

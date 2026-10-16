@@ -452,36 +452,52 @@ function StaffPageContent() {
     return staffForStaffList.filter((s) => s.name && s.name.toLowerCase().includes(searchLower)).length;
   }, [staffForStaffList, searchTerm]);
 
-  // Location-first URL sync (Party jaisa).
+  const processedStaffRef = useRef(processedStaff);
+  const processedStaffGroupsRef = useRef(processedStaffGroups);
+  const staffLiabilityGroupsRef = useRef(staffLiabilityGroupTree.allGroups);
+  const selectedStaffPageRef = useRef(selected);
+  const activeStaffViewRef = useRef(activeView);
+  processedStaffRef.current = processedStaff;
+  processedStaffGroupsRef.current = processedStaffGroups;
+  staffLiabilityGroupsRef.current = staffLiabilityGroupTree.allGroups;
+  selectedStaffPageRef.current = selected;
+  activeStaffViewRef.current = activeView;
+  const staffListLen = processedStaff.length;
+  const staffGroupListLen = processedStaffGroups.length;
+  const staffLiabilityGroupLen = staffLiabilityGroupTree.allGroups.length;
+
+  // Location-first URL sync (Party jaisa) — id-guard; skip aggregate identity deps (refresh hang).
   useEffect(() => {
     if (vouchersLoading) return;
     const { view, selectedId } = readMasterDetailLocationQuery();
+    const currentSelectedId = selectedStaffPageRef.current?.id ?? null;
+    const currentActiveView = activeStaffViewRef.current;
     const pendingId = pendingStaffSelectIdRef.current;
     if (pendingId) {
       if (selectedId === pendingId) pendingStaffSelectIdRef.current = null;
-      else if (selected?.id === pendingId) return;
+      else if (currentSelectedId === pendingId) return;
     }
     if (!selectedId) {
       if (view === "groups") {
-        if (activeView !== "groups") setActiveView("groups");
-      } else if (activeView !== "staff") {
+        if (currentActiveView !== "groups") setActiveView("groups");
+      } else if (currentActiveView !== "staff") {
         setActiveView("staff");
       }
       return;
     }
     const groupItem =
-      staffLiabilityGroupTree.allGroups.find((i) => i.id === selectedId) ||
-      processedStaffGroups.find((i) => i.id === selectedId);
-    const staffItem = processedStaff.find((i) => i.id === selectedId);
-    if (view === "groups" && groupItem) setActiveView("groups");
-    else if (view === "staff" && staffItem) setActiveView("staff");
+      staffLiabilityGroupsRef.current.find((i) => i.id === selectedId) ||
+      processedStaffGroupsRef.current.find((i) => i.id === selectedId);
+    const staffItem = processedStaffRef.current.find((i) => i.id === selectedId);
+    if (view === "groups" && groupItem && currentActiveView !== "groups") setActiveView("groups");
+    else if (view === "staff" && staffItem && currentActiveView !== "staff") setActiveView("staff");
     const item =
       groupItem && staffItem
         ? view === "groups"
           ? groupItem
           : staffItem
         : groupItem || staffItem;
-    if (item) setSelected(item);
+    if (item && item.id !== currentSelectedId) setSelected(item);
     const canonical =
       view === "groups"
         ? `/staff?view=groups&selected=${encodeURIComponent(selectedId)}`
@@ -489,7 +505,17 @@ function StaffPageContent() {
     if (shouldReplaceWithMasterDetailCanonical(canonical)) {
       router.replace(canonical, { scroll: false });
     }
-  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedStaff, processedStaffGroups, staffLiabilityGroupTree.allGroups, selected?.id, activeView, setSelected, setActiveView, router]);
+  }, [
+    selectedIdFromUrl,
+    viewFromUrl,
+    vouchersLoading,
+    staffListLen,
+    staffGroupListLen,
+    staffLiabilityGroupLen,
+    setSelected,
+    setActiveView,
+    router,
+  ]);
 
   const openPayEmi = () => {
     const staff = selectedStaff as Staff | undefined;

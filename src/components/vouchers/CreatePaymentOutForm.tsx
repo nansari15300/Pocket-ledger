@@ -4097,8 +4097,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           paymentOutVoucherNumber={form.watch("voucherNumber") || undefined}
           paymentOutDate={form.watch("date")}
           partyOpeningBalance={processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0}
-          linkEntityKind="party"
-          linkAccountId={partyId || undefined}
           dialogTitle="Link Payment Out to Linkable Cr Txns"
           onDone={(allocs, _amount) => {
             // Link save only on local; server save when user clicks Save on voucher
