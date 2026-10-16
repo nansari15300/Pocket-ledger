@@ -110,6 +110,13 @@ export function expandStaffLedgerTdsRows<T extends Record<string, unknown>>(
       const tdsAccountId =
         resolveStaffTaxAccountId(source, staffId, taxes) ||
         String((row as { _staffTaxAccountId?: unknown })._staffTaxAccountId ?? "").trim();
+      const staffRows = staffCreditEntries(source, taxes);
+      const staffRowIndex = staffRows.findIndex(
+        (e: { accountId?: unknown }) => String(e.accountId ?? "") === staffId
+      );
+      const taxEntry = findStaffTaxEntry(source, staffId, staffRowIndex, taxes);
+      // Expand overwrites type→tds; copy verify onto row so badge / books resolve without staff ctx.
+      const isTdsVerified = taxEntry?.isTdsVerified === true;
       const allocated = round2(allocatedTaxByAddSalary.get(id)?.tax ?? 0);
       const pay = getPaymentStatus(tdsAmt, allocated, source.dueDate ?? (row as { dueDate?: unknown }).dueDate);
       const linkedFromVoucherNos = linkedSettlementNosForAddSalary(id, voucherById);
@@ -121,6 +128,8 @@ export function expandStaffLedgerTdsRows<T extends Record<string, unknown>>(
         _ledgerTdsParentId: id,
         _rowKey: `${id}__staffTds`,
         type: "tds",
+        subType: "add_salary",
+        isTdsVerified,
         _ledgerTdsSide: "purchase",
         _tdsAccountId: tdsAccountId,
         _tdsAccountName: options.taxNameById.get(tdsAccountId) ?? tdsAccountId,

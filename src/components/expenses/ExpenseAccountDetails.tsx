@@ -1212,6 +1212,7 @@ export function ExpenseAccountDetails({
                   transactions={mobileTransactions}
                   context="expense"
                   contextId={account.id}
+                  transactionCardSearchHighlight={mobileSearchTerm}
                   openingBalance={mobilePageLedgerStats.openingForPage}
                   booksOpeningBalance={masterExpenseOpening}
                   ledgerDateFilterActive={hasLedgerDateFilter}
@@ -1272,6 +1273,7 @@ export function ExpenseAccountDetails({
                   transactions={mobileTransactions}
                   context="expense"
                   contextId={account.id}
+                  transactionCardSearchHighlight={mobileSearchTerm}
                   openingBalance={mobilePageLedgerStats.openingForPage}
                   booksOpeningBalance={masterExpenseOpening}
                   ledgerDateFilterActive={hasLedgerDateFilter}

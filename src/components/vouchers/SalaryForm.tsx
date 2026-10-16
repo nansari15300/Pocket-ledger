@@ -2720,7 +2720,8 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                         <SalePurchaseTdsVerifyTick
                                           control={form.control}
                                           name={`lineItems.${index}.isTdsVerified`}
-                                          disabled={deleteDisabledWhenLinked}
+                                          // Linked bill-wise: amounts locked, TDS Verify still editable (no unlink needed)
+                                          disabled={editingDisabled}
                                           compact
                                         />
                                       ) : null}
@@ -2982,7 +2983,8 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                                   <SalePurchaseTdsVerifyTick
                                                     control={form.control}
                                                     name={`lineItems.${index}.isTdsVerified`}
-                                                    disabled={deleteDisabledWhenLinked}
+                                                    // Linked bill-wise: amounts locked, TDS Verify still editable (no unlink needed)
+                                                    disabled={editingDisabled}
                                                   />
                                                 </div>
                                               ) : null}

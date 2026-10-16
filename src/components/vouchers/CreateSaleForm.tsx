@@ -3497,7 +3497,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           {(tds || 0) > 0 ? (
                             <SalePurchaseTdsVerifyTick
                               control={form.control}
-                              disabled={deleteDisabledWhenLinked}
+                              // Linked bill-wise: amounts locked, TDS Verify still editable (no unlink needed)
+                              disabled={editingDisabled}
                               compact
                             />
                           ) : null}
@@ -3924,7 +3925,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "pt-1")}>
                         <div className="flex min-w-0 flex-1 items-center gap-2">
                           <span className="text-xs shrink-0">TDS:</span>
-                          <SalePurchaseTdsVerifyTick control={form.control} disabled={deleteDisabledWhenLinked} compact />
+                          <SalePurchaseTdsVerifyTick control={form.control} disabled={editingDisabled} compact />
                         </div>
                         <SalePurchaseTotalsSummaryAmount value={tds || 0} className="text-xs font-medium" tdsDeduction />
                       </div>
@@ -4541,7 +4542,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <div className={SALE_PURCHASE_TOTALS_SUMMARY_ROW}>
                           <div className="flex min-w-0 flex-1 items-center gap-2">
                             <FormLabel className="shrink-0">TDS:</FormLabel>
-                            <SalePurchaseTdsVerifyTick control={form.control} disabled={deleteDisabledWhenLinked} />
+                            <SalePurchaseTdsVerifyTick control={form.control} disabled={editingDisabled} />
                           </div>
                           <SalePurchaseTotalsSummaryAmount value={tds || 0} tdsDeduction />
                         </div>

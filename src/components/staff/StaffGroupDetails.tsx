@@ -754,6 +754,7 @@ export function StaffGroupDetails({
               context="group"
               contextId={group.id}
               groupEntityType="staff"
+              transactionCardSearchHighlight={mobileSearchTerm}
               openingBalance={desktopPageLedgerStats.openingForPage}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}

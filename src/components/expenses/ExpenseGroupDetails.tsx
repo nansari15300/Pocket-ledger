@@ -713,6 +713,7 @@ export function ExpenseGroupDetails({
               transactions={mobileTransactionsToShow}
               context="group"
               contextId={group.id}
+              transactionCardSearchHighlight={mobileSearchTerm}
               openingBalance={desktopPaginationMeta.openingForPage}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}

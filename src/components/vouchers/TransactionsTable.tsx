@@ -17,7 +17,10 @@ import { cn } from "@/lib/utils";
 import { isTransactionColumnVisible } from "@/lib/transactionVisibleColumnShow";
 import {
   LEDGER_TDS_ROW_FLAG,
+  SALE_PURCHASE_TDS_VERIFIED_MESSAGE,
+  isSalePurchaseTdsVerifyLedgerContext,
   partyTdsLedgerBooksDrCrFromRow,
+  resolveSalePurchaseTdsVerifyLabel,
   taxLedgerBooksDrCrFromRow,
 } from "@/lib/partyLedgerTdsView";
 import type { StockView, Item } from "@/components/items/types";
@@ -3943,6 +3946,9 @@ export function TransactionsTable({
       const isStatementChecked = ledgerStatementChecked.isChecked(t);
       const showCheckedMessage =
         isStatementChecked && statementCheckedMessageColumn(debit, credit) !== null;
+      const mobileTdsVerifyLabel = isSalePurchaseTdsVerifyLedgerContext(context, groupEntityType)
+        ? resolveSalePurchaseTdsVerifyLabel(t, { context, contextId, groupEntityType })
+        : null;
       const canMarkStatement =
         ledgerStatementChecked.canMark &&
         statementCheckTxnId(t) &&
@@ -4215,9 +4221,21 @@ export function TransactionsTable({
             </div>
           ) : null}
           <div className="flex justify-between items-end gap-2 min-w-0">
-            <div className="min-w-0 flex-1 overflow-hidden">
+            <div className="min-w-0 flex-1 overflow-hidden flex flex-col items-start gap-0.5">
               {groupAccountName ? (
-                <p className="text-xs text-muted-foreground truncate font-medium">{hl(`Account: ${groupAccountName}`)}</p>
+                <p className="text-xs text-muted-foreground truncate font-medium w-full">{hl(`Account: ${groupAccountName}`)}</p>
+              ) : null}
+              {mobileTdsVerifyLabel ? (
+                <span
+                  className={cn(
+                    "inline-flex w-max max-w-full shrink-0 items-center justify-center whitespace-nowrap rounded-md border box-border pl-2 pr-2.5 py-0.5 text-[11px] font-bold italic leading-none",
+                    mobileTdsVerifyLabel === SALE_PURCHASE_TDS_VERIFIED_MESSAGE
+                      ? "border-green-600 bg-green-100 text-green-800 dark:border-green-500 dark:bg-green-950/40 dark:text-green-200"
+                      : "border-amber-500 bg-amber-100 text-amber-900 dark:border-amber-500 dark:bg-amber-950/40 dark:text-amber-200"
+                  )}
+                >
+                  {hl(mobileTdsVerifyLabel)}
+                </span>
               ) : null}
               <p className="text-xs text-muted-foreground">
                 {hl(

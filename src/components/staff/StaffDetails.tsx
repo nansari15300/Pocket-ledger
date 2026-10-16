@@ -1451,66 +1451,61 @@ export function StaffDetails({
             )}
         </div>
       ) : null}
-      {/* Account Balance + TDS Balance cards (party TDS parity) */}
-      <button
-        type="button"
-        className={cn(mdc.mobileTxnBalanceRow, "w-full text-left cursor-pointer")}
+      {/* Account Balance + TDS Balance on same gray row (no separate TDS band / linked-trxn toggle on mobile) */}
+      <div
+        className={cn(mdc.mobileTxnBalanceRow, "w-full")}
         {...mdcMobileTxnBalanceRowData}
-        onClick={openStaffLedgerDetails}
-        aria-pressed={!taxDetailsMode}
+        {...(canUseStaffTaxDetails && staffHasTdsHistory && !isReportMobileChrome
+          ? { "data-pl-staff-balance-with-tds": "" }
+          : {})}
       >
-        <p
-          className={cn(
-            mdc.mobileTxnBalanceText2xl,
-            headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
-          )}
-        >
-          {headerClosingBalance === 0 ? (
-            "Settled Up"
-          ) : (
-            <>
-              {balanceLabel}{" "}
-              {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
-            </>
-          )}
-        </p>
-      </button>
-      {canUseStaffTaxDetails && staffHasTdsHistory && !isReportMobileChrome ? (
-        <div className="flex w-full items-end gap-2 px-2 pb-1">
+        {canUseStaffTaxDetails && staffHasTdsHistory && !isReportMobileChrome ? (
           <button
             type="button"
-            className="flex min-w-0 flex-1 flex-col gap-0.5 text-left cursor-pointer"
+            data-pl-staff-tds-inline=""
+            className="flex shrink-0 flex-col items-start gap-0 text-left cursor-pointer"
             onClick={openStaffTdsLedgerDetails}
             aria-pressed={taxDetailsMode}
           >
-            <span className="text-[10px] font-semibold tracking-wide text-muted-foreground">
+            <span className="text-[10px] font-semibold tracking-wide text-muted-foreground leading-none">
               TDS Balance
             </span>
             {staffTdsBalanceSummary.purchaseTds > 0 ? (
-              <span className="text-sm font-bold text-red-600">
+              <span className="text-xs font-bold text-red-600 leading-tight">
                 {formatCurrency(-staffTdsBalanceSummary.purchaseTds, { showDrCr: true })}
               </span>
             ) : staffTdsBalanceSummary.saleTds > 0 ? (
-              <span className="text-sm font-bold text-green-600">
+              <span className="text-xs font-bold text-green-600 leading-tight">
                 {formatCurrency(staffTdsBalanceSummary.saleTds, { showDrCr: true })}
               </span>
             ) : (
-              <span className="text-sm font-bold text-muted-foreground">Settled</span>
+              <span className="text-xs font-bold text-muted-foreground leading-tight">Settled</span>
             )}
           </button>
-          {taxDetailsMode ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setShowTdsLinkedTrxn((v) => !v)}
-              className="h-7 shrink-0 px-2 text-xs"
-            >
-              {showTdsLinkedTrxn ? "Hide linked trxn" : "Show linked trxn"}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
+        ) : null}
+        <button
+          type="button"
+          className="min-w-0 flex-1 cursor-pointer text-center"
+          onClick={openStaffLedgerDetails}
+          aria-pressed={!taxDetailsMode}
+        >
+          <p
+            className={cn(
+              mdc.mobileTxnBalanceText2xl,
+              headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
+            )}
+          >
+            {headerClosingBalance === 0 ? (
+              "Settled Up"
+            ) : (
+              <>
+                {balanceLabel}{" "}
+                {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
+              </>
+            )}
+          </p>
+        </button>
+      </div>
       </MobileDetailSummaryCollapsible>
       {/* scroll-touch + inline style for APK/WebView touch scroll */}
       <div
@@ -1532,6 +1527,7 @@ export function StaffDetails({
           transactions={mobileTransactionsToShow}
           context="staff"
           contextId={staff.id}
+          transactionCardSearchHighlight={mobileSearchTerm}
           openingBalance={hideBooksOpeningForSplit ? 0 : mobilePaginationMeta.openingForPage}
           booksOpeningBalance={hideBooksOpeningForSplit ? 0 : masterStaffOpening}
           ledgerDateFilterActive={hasLedgerDateFilter}

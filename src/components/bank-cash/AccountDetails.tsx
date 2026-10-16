@@ -1790,6 +1790,7 @@ export function AccountDetails({
             transactions={displayMobileTransactionsToShow}
             context="account"
             contextId={account.id}
+            transactionCardSearchHighlight={mobileSearchTerm}
             forceBalanceMode="statement"
             openingBalance={showMaskedBalance ? 0 : displayMobilePageLedgerStats.openingForPage}
             booksOpeningBalance={showMaskedBalance ? undefined : masterAccountOpening}

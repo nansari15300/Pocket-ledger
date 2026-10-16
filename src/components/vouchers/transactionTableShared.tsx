@@ -1047,6 +1047,20 @@ export function getTransactionQuickSearchHaystack(
   if (context && contextId) {
     chunks.push(getOppositeAccountLabel(t, names, context, contextId, groupEntityType));
   }
+  // Status badge + TDS Verified/Unverified — substring search (e.g. "veri" → Unverified)
+  const paymentStatus = String((t as any)?.paymentStatus || "").toLowerCase();
+  if (paymentStatus === "paid") chunks.push("Paid");
+  else if (paymentStatus === "unpaid") chunks.push("Unpaid");
+  else if (paymentStatus === "partially_paid") chunks.push("Partial", "partially_paid");
+  else if (paymentStatus === "overdue" || (t as any)?.isOverdue) chunks.push("Overdue");
+  if (isSalePurchaseTdsVerifyLedgerContext(context, groupEntityType)) {
+    const tdsLabel = resolveSalePurchaseTdsVerifyLabel(t, {
+      context,
+      contextId,
+      groupEntityType,
+    });
+    if (tdsLabel) chunks.push(tdsLabel);
+  }
   return chunks.filter(Boolean).join(" ").toLowerCase();
 }
 

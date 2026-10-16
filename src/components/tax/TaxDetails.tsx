@@ -1102,6 +1102,7 @@ export function TaxDetails({
               transactions={mobileTransactions}
               context="tax"
               contextId={tax.id}
+              transactionCardSearchHighlight={mobileSearchTerm}
               openingBalance={desktopPaginationMeta.openingForPage}
               booksOpeningBalance={masterTaxOpening}
               ledgerDateFilterActive={hasLedgerDateFilter}

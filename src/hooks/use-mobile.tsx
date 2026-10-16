@@ -240,6 +240,17 @@ export function MobileViewProvider({
     }
   }, [lockDesktopLayout]);
 
+  // Wide PC + forced mobile: CSS `@media (max-width:767px)` gray bands miss — html flag drives the same slate chrome.
+  React.useEffect(() => {
+    if (!isClient || typeof document === "undefined") return;
+    const root = document.documentElement;
+    if (isMobile) root.dataset.plAppMobileUi = "1";
+    else delete root.dataset.plAppMobileUi;
+    return () => {
+      delete root.dataset.plAppMobileUi;
+    };
+  }, [isClient, isMobile]);
+
   const value = React.useMemo(() => ({
     isMobile,
     // Keep SSR and first client render consistent; compute UA-dependent flags only after mount.

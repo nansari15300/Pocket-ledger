@@ -1456,6 +1456,7 @@ export function AccountGroupDetails({
               context="group"
               contextId={group.id}
               groupEntityType="account"
+              transactionCardSearchHighlight={mobileSearchTerm}
               forceBalanceMode="statement"
               openingBalance={isBalanceMasked ? 0 : mobilePageLedgerStats.openingForPage}
               booksOpeningBalance={isBalanceMasked ? undefined : booksOpeningForAccountGroup}

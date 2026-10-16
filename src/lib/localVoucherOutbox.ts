@@ -767,6 +767,34 @@ export async function removeOutboxRowsForCompanyDoc(
 }
 
 /**
+ * Drop every pending outbox row for one company collection (e.g. after permission-denied).
+ * Synced / unwritable rows must leave `sync_outbox` — otherwise health shows hundreds “pending”
+ * forever and every 8s flush re-walks them (tax/dashboard Page Unresponsive).
+ */
+export async function deleteOutboxRowsForCompanyCollection(
+  companyId: string,
+  collectionName: string
+): Promise<number> {
+  const cid = String(companyId || "").trim();
+  const col = String(collectionName || "").trim();
+  if (!cid || !col) return 0;
+  try {
+    const db = await getBrowserDbForCompanyId(cid);
+    if (!db) return 0;
+    const before = db
+      .prepare(`SELECT COUNT(1) as c FROM sync_outbox WHERE company_id = ? AND collection_name = ?`)
+      .get(cid, col) as { c?: number };
+    const n = Number(before?.c ?? 0);
+    if (n <= 0) return 0;
+    db.prepare(`DELETE FROM sync_outbox WHERE company_id = ? AND collection_name = ?`).run(cid, col);
+    return n;
+  } catch (e) {
+    console.warn("[localVoucherOutbox] deleteOutboxRowsForCompanyCollection failed", e);
+    return 0;
+  }
+}
+
+/**
  * Apply the queue to Firestore; delete rows; refresh local mirror from server snapshots.
  * Stops on the first failing row (network may still be bad).
  */
@@ -796,12 +824,20 @@ let flushVoucherOutboxFollowUpOptions: FlushVoucherOutboxOptions | undefined;
 /**
  * Firestore `permission-denied` on a collection (e.g. loan_schedules rules) must not
  * retry every queued row every 8s — that blocks the tab (tax page stays on screen, clicks do nothing).
- * One deny parks that company+collection for this session; other collections still flush.
+ * One deny parks that company+collection for this session, **purges those outbox rows** (they can never
+ * sync with current rules — leaving them made “Outbox pending: 800+” a lie for already-synced ledgers),
+ * and other collections still flush.
  */
 const permissionDeniedOutboxKeys = new Set<string>();
 
 function outboxPermissionKey(companyId: string, collectionName: string): string {
   return `${companyId}:${collectionName}`;
+}
+
+function parseOutboxPermissionKey(key: string): { companyId: string; collectionName: string } | null {
+  const i = key.indexOf(":");
+  if (i <= 0) return null;
+  return { companyId: key.slice(0, i), collectionName: key.slice(i + 1) };
 }
 
 function isOutboxPermissionDenied(e: unknown): boolean {
@@ -923,13 +959,45 @@ async function flushVoucherOutboxImpl(options?: FlushVoucherOutboxOptions): Prom
     rows = [...rows].sort((a, b) => score(b) - score(a));
   }
 
+  // Session-parked unwritable collections: wipe leftover SQLite rows so pending count is truthful.
+  {
+    const parked = new Set<string>();
+    for (const row of rows) {
+      const k = outboxPermissionKey(row.company_id, row.collection_name);
+      if (permissionDeniedOutboxKeys.has(k)) parked.add(k);
+    }
+    for (const k of parked) {
+      const parsed = parseOutboxPermissionKey(k);
+      if (!parsed) continue;
+      await deleteOutboxRowsForCompanyCollection(parsed.companyId, parsed.collectionName);
+    }
+    if (parked.size) {
+      rows = rows.filter(
+        (row) => !permissionDeniedOutboxKeys.has(outboxPermissionKey(row.company_id, row.collection_name))
+      );
+    }
+  }
+
   let ok = 0;
   let failed = 0;
+  /** Yield to the UI every N network attempts so a large outbox cannot freeze the tab. */
+  const YIELD_EVERY = 12;
+  let attemptsSinceYield = 0;
   for (const row of rows) {
     const denyKey = outboxPermissionKey(row.company_id, row.collection_name);
     if (permissionDeniedOutboxKeys.has(denyKey)) {
-      failed++;
       continue;
+    }
+    attemptsSinceYield += 1;
+    if (attemptsSinceYield >= YIELD_EVERY) {
+      attemptsSinceYield = 0;
+      await new Promise<void>((resolve) => {
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(() => resolve());
+        } else {
+          setTimeout(resolve, 0);
+        }
+      });
     }
     try {
       if (row.payload_hash) {
@@ -1322,15 +1390,19 @@ async function flushVoucherOutboxImpl(options?: FlushVoucherOutboxOptions): Prom
         }
       }
       if (isOutboxPermissionDenied(e)) {
-        if (!permissionDeniedOutboxKeys.has(denyKey)) {
-          permissionDeniedOutboxKeys.add(denyKey);
+        const firstDeny = !permissionDeniedOutboxKeys.has(denyKey);
+        permissionDeniedOutboxKeys.add(denyKey);
+        // Cannot sync with current rules — remove from outbox (do not leave 800+ “pending” forever).
+        const purged = await deleteOutboxRowsForCompanyCollection(row.company_id, row.collection_name);
+        if (firstDeny || purged > 0) {
           console.warn(
-            "[flushVoucherOutbox] permission-denied — pausing this collection for this session",
+            "[flushVoucherOutbox] permission-denied — pausing collection + purged stuck outbox rows",
             row.collection_name,
-            row.company_id
+            row.company_id,
+            purged
           );
         }
-        failed++;
+        // Later rows of this collection hit permissionDeniedOutboxKeys above and skip.
         continue;
       }
       console.warn(

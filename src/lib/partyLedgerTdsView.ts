@@ -705,12 +705,16 @@ export function isSalePurchaseTdsVerifyLedgerContext(
   return false;
 }
 
-function isAddSalaryVoucher(t: { type?: unknown; subType?: unknown } | null | undefined): boolean {
+function isAddSalaryVoucher(
+  t: { type?: unknown; subType?: unknown; [LEDGER_TDS_ROW_FLAG]?: boolean } | null | undefined
+): boolean {
   if (!t) return false;
-  return (
-    (String(t.type ?? "") === "journal" && String(t.subType ?? "") === "add_salary") ||
-    String(t.type ?? "") === "add_salary"
-  );
+  const typ = String(t.type ?? "");
+  const sub = String(t.subType ?? "");
+  if ((typ === "journal" && sub === "add_salary") || typ === "add_salary") return true;
+  // Staff TDS expand overwrites type → "tds" but keeps subType + entries
+  if (sub === "add_salary" && (typ === "tds" || t[LEDGER_TDS_ROW_FLAG] === true)) return true;
+  return false;
 }
 
 /** Add-salary tax legs for one tax account (or all tax credits when taxId empty). */
@@ -784,6 +788,21 @@ export function resolveSalePurchaseTdsVerifyLabel(
       const amt = Number(taxLeg.credit) || Number(taxLeg.debit) || 0;
       if (amt <= 0) return null;
       return taxLeg.isTdsVerified === true
+        ? SALE_PURCHASE_TDS_VERIFIED_MESSAGE
+        : SALE_PURCHASE_TDS_UNVERIFIED_MESSAGE;
+    }
+    // Expanded staff TDS bill row (no staff ctx) — row flag or tax-leg entries
+    const rowAmt = Number((t as { _tdsAmount?: unknown })._tdsAmount ?? 0) || 0;
+    if (isLedgerTdsTableRow(t as { type?: string; [LEDGER_TDS_ROW_FLAG]?: boolean }) || rowAmt > 0) {
+      if ((t as { isTdsVerified?: unknown }).isTdsVerified === true) {
+        return SALE_PURCHASE_TDS_VERIFIED_MESSAGE;
+      }
+      const tdsAccountId = String((t as { _tdsAccountId?: unknown })._tdsAccountId ?? "").trim();
+      const legs = addSalaryTaxEntriesForAccount(t, tdsAccountId || undefined);
+      if (legs.length === 0) {
+        return SALE_PURCHASE_TDS_UNVERIFIED_MESSAGE;
+      }
+      return legs.every((e) => e.isTdsVerified === true)
         ? SALE_PURCHASE_TDS_VERIFIED_MESSAGE
         : SALE_PURCHASE_TDS_UNVERIFIED_MESSAGE;
     }

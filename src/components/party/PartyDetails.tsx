@@ -1789,37 +1789,28 @@ export function PartyDetails({
               )}
             </div>
           ) : null}
-          {/* Selected party balance (closing) — click opens party ledger details */}
-          <button
-            type="button"
-            className={cn(mdc.mobileTxnBalanceRow, "w-full text-left cursor-pointer")}
+          {/* Closing balance + Sale/Pur TDS on same gray row (no linked-trxn toggle on mobile) */}
+          <div
+            className={cn(mdc.mobileTxnBalanceRow, "w-full")}
             {...mdcMobileTxnBalanceRowData}
-            onClick={openPartyLedgerDetails}
-            aria-pressed={tdsLedgerViewMode === "account"}
+            {...(partyTdsBalanceSummary.hasAny ? { "data-pl-party-balance-with-tds": "" } : {})}
           >
-            <p
-              className={cn(
-                mdc.mobileTxnBalanceText2xl,
-                headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
-              )}
-            >
-              {balanceLabel} {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
-            </p>
-          </button>
-          {partyTdsBalanceSummary.hasAny ? (
-            <div className="flex w-full items-end gap-2 px-2 pb-1">
-              <div className="flex min-w-0 flex-1 flex-wrap items-end gap-3">
+            {partyTdsBalanceSummary.hasAny ? (
+              <div
+                data-pl-party-tds-inline=""
+                className="flex shrink-0 flex-col items-start gap-1 text-left"
+              >
                 {partyTdsHasSale ? (
                   <button
                     type="button"
-                    className="flex min-w-0 flex-col gap-0.5 text-left cursor-pointer"
+                    className="flex min-w-0 flex-col gap-0 text-left cursor-pointer"
                     onClick={openSaleTdsLedgerDetails}
                     aria-pressed={tdsLedgerViewMode === "sale"}
                   >
-                    <span className="text-[10px] font-semibold tracking-wide text-muted-foreground">
-                      Sale TDS Balance
+                    <span className="text-[10px] font-semibold tracking-wide text-muted-foreground leading-none">
+                      Sale TDS
                     </span>
-                    <span className="text-sm font-bold text-green-600">
+                    <span className="text-xs font-bold text-green-600 leading-tight">
                       {formatCurrency(partyTdsBalanceSummary.saleTds, { showDrCr: true })}
                     </span>
                   </button>
@@ -1827,32 +1818,37 @@ export function PartyDetails({
                 {partyTdsHasPur ? (
                   <button
                     type="button"
-                    className="flex min-w-0 flex-col gap-0.5 text-left cursor-pointer"
+                    className="flex min-w-0 flex-col gap-0 text-left cursor-pointer"
                     onClick={openPurTdsLedgerDetails}
                     aria-pressed={tdsLedgerViewMode === "purchase"}
                   >
-                    <span className="text-[10px] font-semibold tracking-wide text-muted-foreground">
-                      Pur TDS Balance
+                    <span className="text-[10px] font-semibold tracking-wide text-muted-foreground leading-none">
+                      Pur TDS
                     </span>
-                    <span className="text-sm font-bold text-red-600">
+                    <span className="text-xs font-bold text-red-600 leading-tight">
                       {formatCurrency(-partyTdsBalanceSummary.purchaseTds, { showDrCr: true })}
                     </span>
                   </button>
                 ) : null}
               </div>
-              {tdsLedgerOnly ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowTdsLinkedTrxn((v) => !v)}
-                  className="h-7 shrink-0 px-2 text-xs"
-                >
-                  {showTdsLinkedTrxn ? "Hide linked trxn" : "Show linked trxn"}
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
+            ) : null}
+            <button
+              type="button"
+              data-pl-party-account-balance=""
+              className="min-w-0 flex-1 cursor-pointer text-center"
+              onClick={openPartyLedgerDetails}
+              aria-pressed={tdsLedgerViewMode === "account"}
+            >
+              <p
+                className={cn(
+                  mdc.mobileTxnBalanceText2xl,
+                  headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
+                )}
+              >
+                {balanceLabel} {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
+              </p>
+            </button>
+          </div>
           </MobileDetailSummaryCollapsible>
           {/* Transaction list â€” report: table + pager ek scroll (100/All par gap fix); ledger: pager bahar */}
           <div
@@ -1877,6 +1873,7 @@ export function PartyDetails({
               fyLedgerScopeOpeningBalance={ledgerOpeningForPaging}
               context={transactionContext}
               contextId={ledgerContextId}
+              transactionCardSearchHighlight={mobileSearchTerm}
               openingBalance={desktopPaginationMeta.openingForPage}
               periodOpeningUnavailable={periodOpeningUnavailable}
               periodOpeningLoading={periodOpeningLoading}

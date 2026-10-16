@@ -14,7 +14,10 @@ type Props = {
   compact?: boolean;
 };
 
-/** Sale/Purchase / Add Salary: TDS/Tax ke right — 20×20 yellow Verify tick. */
+/**
+ * Sale/Purchase / Add Salary: TDS/Tax ke right — 20×20 yellow Verify tick.
+ * Callers: pass `editingDisabled` only — do NOT tie to bill-wise link lock (`deleteDisabledWhenLinked`).
+ */
 export function SalePurchaseTdsVerifyTick({
   control,
   name = "isTdsVerified",
@@ -38,7 +41,8 @@ export function SalePurchaseTdsVerifyTick({
           </FormControl>
           <FormLabel
             className={cn(
-              "cursor-pointer font-bold leading-none text-yellow-800",
+              "font-bold leading-none text-yellow-800",
+              disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
               compact ? "text-[10px]" : "text-xs"
             )}
           >
