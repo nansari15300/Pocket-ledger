@@ -7,8 +7,6 @@
 
 import { useEffect } from "react";
 import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
-import { isLocalOnlyMode } from "@/lib/localMode";
-import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
 import {
   FIREBASE_LEDGER_DATA_SYNC_CHANGED_EVENT,
@@ -20,7 +18,6 @@ export function VoucherOutboxFlushManager() {
     // PL Server staff: authoritative queue + SQLite mirror — Firestore outbox flush UI churn na kare.
     if (isPlServerThinStaffClient()) return;
     // Capacitor + Firebase data source: `isLocalOnlyMode` may be false but outbox flush is still required, or masters stay stuck in the queue.
-    if (!isLocalOnlyMode() && !apkEmbeddedSqliteFirstWritesPreferred()) return;
     // Local-first sync engine: default ON for online-category companies; disable with env flag.
     if (process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "0") return;
     /** Let the browser "online" event settle before flushing — reduces races with Firestore watch streams (ca9). */
@@ -30,18 +27,33 @@ export function VoucherOutboxFlushManager() {
     // Browser `setTimeout` ids are numbers here; Node typings use `Timeout` — this effect is window-only.
     let onlineTimer: number | null = null;
     const pendingFlushTimers: number[] = [];
-    const scheduleFlush = (delayMs: number) => {
+    /** Failed flush: retry quickly (2s, 4s, then the 8s interval) instead of waiting for the next tick. */
+    let failRetryMs = 2_000;
+    const runFlush = () => {
+      void flushVoucherOutbox()
+        .then((res) => {
+          if (res && res.failed > 0) {
+            const wait = failRetryMs;
+            failRetryMs = Math.min(failRetryMs * 2, 8_000);
+            scheduleFlush(wait);
+          } else {
+            failRetryMs = 2_000;
+          }
+        })
+        .catch(() => {});
+    };
+    function scheduleFlush(delayMs: number) {
       const t = window.setTimeout(() => {
         const i = pendingFlushTimers.indexOf(t);
         if (i !== -1) pendingFlushTimers.splice(i, 1);
         if (isFirebaseLedgerDataSyncDisabled()) return;
-        void flushVoucherOutbox();
+        runFlush();
       }, delayMs);
       pendingFlushTimers.push(t);
-    };
+    }
     const tick = () => {
       if (isFirebaseLedgerDataSyncDisabled()) return;
-      void flushVoucherOutbox();
+      runFlush();
     };
     const onOnline = () => {
       if (onlineTimer != null) clearTimeout(onlineTimer);

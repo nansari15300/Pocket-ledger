@@ -981,7 +981,7 @@ async function flushVoucherOutboxImpl(options?: FlushVoucherOutboxOptions): Prom
   let ok = 0;
   let failed = 0;
   /** Yield to the UI every N network attempts so a large outbox cannot freeze the tab. */
-  const YIELD_EVERY = 12;
+  const YIELD_EVERY = 4;
   let attemptsSinceYield = 0;
   for (const row of rows) {
     const denyKey = outboxPermissionKey(row.company_id, row.collection_name);

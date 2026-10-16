@@ -435,7 +435,7 @@ function samePendingOutboxIdSet(a: ReadonlySet<string>, b: ReadonlySet<string>):
 }
 
 /** Outbox drain background me hota hai — badge live rakhne ke liye pending rows tak halka poll. */
-const PENDING_OUTBOX_POLL_MS = 3000;
+const PENDING_OUTBOX_POLL_MS = 10_000;
 
 export function TransactionsTable({
   transactions,
@@ -612,9 +612,11 @@ export function TransactionsTable({
   // Pending rows rehne tak poll karo: background flush ke baad "Sync due" khud green tick ban jaye.
   useEffect(() => {
     if (!pendingOutboxVoucherIds.size) return;
-    const timer = window.setInterval(refreshPendingOutboxVoucherIds, PENDING_OUTBOX_POLL_MS);
+    const timer = window.setInterval(() => {
+      if (!document.hidden) refreshPendingOutboxVoucherIds();
+    }, PENDING_OUTBOX_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [pendingOutboxVoucherIds, refreshPendingOutboxVoucherIds]);
+  }, [pendingOutboxVoucherIds.size, refreshPendingOutboxVoucherIds]);
   // FY merge: neela divider row — company par local fiscal merge `useCompany` se aa chuka hai.
   const fiscalMergePartitions = useMemo(
     () => buildFiscalMergePartitionEntriesFromCompany(company),
@@ -1515,9 +1517,11 @@ export function TransactionsTable({
     // Status body pills are centered — keep header label over the pill (not left-aligned).
     const statusHeaderCenter = key === "status";
     // Same as Account Details: numeric headers right-aligned (Taxable / TDS Amount / Dr / Cr / Balance).
+    const tdsLeftAlignHeader =
+      hasTdsLedgerCols && (key === "tdsTaxable" || key === "tdsAmount" || key === "debit" || key === "credit");
     const thClass = cn(
       "p-0",
-      isNumeric && "text-right",
+      isNumeric && !tdsLeftAlignHeader && "text-right",
       statusHeaderCenter && "text-center"
     );
     const innerPadding =
@@ -1642,7 +1646,7 @@ export function TransactionsTable({
             "flex w-full items-center gap-1 font-bold py-3 text-black whitespace-nowrap",
             innerPadding,
             isFiltered ? "text-red-600" : "text-black",
-            isNumeric ? "justify-end" : statusHeaderCenter ? "justify-center" : "justify-start"
+            isNumeric && !tdsLeftAlignHeader ? "justify-end" : statusHeaderCenter ? "justify-center" : "justify-start"
           )}
         >
           {/* Label pehle, filter right — Debit/Credit/Balance; Status centered over row pill. */}
@@ -4944,7 +4948,7 @@ export function TransactionsTable({
           {showCol("tdsTaxable") && (
             <TableCell
               className={cn(
-                "text-right font-semibold tabular-nums align-middle",
+                "text-left font-semibold tabular-nums align-middle",
                 ensureMinGaps && LEDGER_TDS_TAXABLE_CELL_PAD_CN
               )}
               style={ensureMinGaps ? { minWidth: `${LEDGER_TDS_TAXABLE_COL_PX}px` } : undefined}
@@ -4955,7 +4959,7 @@ export function TransactionsTable({
           {showCol("tdsAmount") && (
             <TableCell
               className={cn(
-                "text-right font-semibold tabular-nums align-middle",
+                "text-left font-semibold tabular-nums align-middle",
                 ensureMinGaps && LEDGER_TDS_AMOUNT_CELL_PAD_CN
               )}
               style={ensureMinGaps ? { minWidth: `${LEDGER_TDS_AMOUNT_COL_PX}px` } : undefined}
@@ -4966,11 +4970,13 @@ export function TransactionsTable({
           {showCol("dr") && !hideDebitColumn && (
             <TableCell
               className={cn(
-                "font-semibold text-green-700 align-middle text-right",
+                "font-semibold text-green-700 align-middle",
+                tdsLedgerTableLayout ? "text-left" : "text-right",
                 ensureMinGaps &&
                   (tdsLedgerTableLayout
                     ? LEDGER_TDS_DR_CR_AMOUNT_CELL_CN
-                    : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN)
+                    : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN),
+                tdsLedgerTableLayout && "text-left"
               )}
               style={
                 ensureMinGaps
@@ -4988,11 +4994,13 @@ export function TransactionsTable({
           {showCol("cr") && !hideCreditColumn && (
             <TableCell
               className={cn(
-                "font-semibold text-red-700 align-middle text-right",
+                "font-semibold text-red-700 align-middle",
+                tdsLedgerTableLayout ? "text-left" : "text-right",
                 ensureMinGaps &&
                   (tdsLedgerTableLayout
                     ? LEDGER_TDS_DR_CR_AMOUNT_CELL_CN
-                    : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN)
+                    : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN),
+                tdsLedgerTableLayout && "text-left"
               )}
               style={
                 ensureMinGaps

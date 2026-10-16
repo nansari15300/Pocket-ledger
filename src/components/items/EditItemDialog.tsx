@@ -1059,11 +1059,12 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {/* Mobile: 85vh height, 98vw width. PC: 90% screen height & width (90vh / 90vw) so dialog uses most of viewport. */}
         <DialogContent
+            hideCloseButton={dialogResizable}
             className={cn(
               cnMasterEntityDialogContent(isMobile),
               "sm:max-w-5xl",
               dialogResizable &&
-                "relative !flex !max-h-none flex-col overflow-hidden sm:!left-0 sm:!top-0 sm:!h-auto sm:!max-w-none sm:!translate-x-0 sm:!translate-y-0"
+                "!fixed !flex !max-h-none flex-col overflow-hidden !p-0 !gap-0 sm:!max-w-none sm:!px-0"
             )}
             style={
               dialogResizable
@@ -1082,7 +1083,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
           {dialogResizable ? (
-            <MasterEntityDialogDragRibbon onDragStart={handleDragStart}>
+            <MasterEntityDialogDragRibbon onDragStart={handleDragStart} blue>
               <DialogHeader className={cn(masterEntityDialogHeaderClassName, "space-y-0.5 p-0 text-left")}>
                 <DialogTitle>Edit Item/Service</DialogTitle>
                 <DialogDescription>Update the details for {item.name}.</DialogDescription>
@@ -1094,7 +1095,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
               <DialogDescription>Update the details for {item.name}.</DialogDescription>
             </DialogHeader>
           )}
-          <div className={masterEntityDialogFormWrapperClassName}>
+          <div className={cn(masterEntityDialogFormWrapperClassName, dialogResizable && "px-6 pb-4")}>
           <div className="pl-master-form-scroll min-h-0 flex-1 overflow-y-auto pr-1">
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4">
@@ -1569,7 +1570,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
           </Form>
           </div>
           </div>
-          {dialogResizable ? <ResizableDialogEdgeHandles onResizeStart={handleResizeStart} /> : null}
+          {dialogResizable ? <ResizableDialogEdgeHandles onResizeStart={handleResizeStart} allSides /> : null}
         </DialogContent>
       </Dialog>
       

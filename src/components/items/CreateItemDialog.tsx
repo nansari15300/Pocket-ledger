@@ -267,6 +267,30 @@ export function CreateItemDialog({
   const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
 
   const itemType = form.watch('type');
+  const tabsInRibbon = dialogResizable;
+  const itemTypeTabs = (
+    <Tabs
+      value={itemType}
+      onValueChange={(value) => form.setValue('type', value as 'item' | 'service' | 'finished_good')}
+      className={tabsInRibbon ? 'shrink-0' : 'w-full mb-4'}
+    >
+      <TabsList className={tabsInRibbon ? 'h-8 gap-1 rounded-full bg-white/50 p-0.5' : undefined}>
+        {(['item', 'service', 'finished_good'] as const).map((t) => (
+          <TabsTrigger
+            key={t}
+            value={t}
+            className={
+              tabsInRibbon
+                ? 'rounded-full px-3 py-1 text-xs !shadow-none data-[state=active]:!border-transparent data-[state=active]:!bg-[#3f5fc4] data-[state=active]:!text-white'
+                : undefined
+            }
+          >
+            {t === 'item' ? 'Item' : t === 'service' ? 'Service' : 'Finished Good'}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </Tabs>
+  );
   
   useEffect(() => {
     const handlePrefill = (event: CustomEvent) => {
@@ -937,11 +961,12 @@ const capitalizeFirstLetter = (str: string) => {
         {/* Mobile: 85vh height, 98vw width. PC: 90% screen height & width (90vh / 90vw) so dialog uses most of viewport. */}
         <DialogContent
             overlayClassName={NESTED_VOUCHER_MASTER_CREATE_OVERLAY_CN}
+            hideCloseButton={dialogResizable}
             className={cn(
               cnMasterEntityDialogContent(isMobile),
               "sm:max-w-5xl",
               dialogResizable &&
-                "relative !flex !max-h-none flex-col overflow-hidden sm:!left-0 sm:!top-0 sm:!h-auto sm:!max-w-none sm:!translate-x-0 sm:!translate-y-0"
+                "!fixed !flex !max-h-none flex-col overflow-hidden !p-0 !gap-0 sm:!max-w-none sm:!px-0"
             )}
             style={
               dialogResizable
@@ -960,11 +985,14 @@ const capitalizeFirstLetter = (str: string) => {
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
           {dialogResizable ? (
-            <MasterEntityDialogDragRibbon onDragStart={handleDragStart}>
-              <DialogHeader className={cn(masterEntityDialogHeaderClassName, "space-y-0.5 p-0 text-left")}>
-                <DialogTitle>Create a New Item</DialogTitle>
-                <DialogDescription>Add a new product or service to your records.</DialogDescription>
-              </DialogHeader>
+            <MasterEntityDialogDragRibbon onDragStart={handleDragStart} blue>
+              <div className="relative flex min-w-0 items-center">
+                <DialogHeader className={cn(masterEntityDialogHeaderClassName, "space-y-0.5 p-0 text-left")}>
+                  <DialogTitle>Create a New Item</DialogTitle>
+                  <DialogDescription>Add a new product or service to your records.</DialogDescription>
+                </DialogHeader>
+                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">{itemTypeTabs}</div>
+              </div>
             </MasterEntityDialogDragRibbon>
           ) : (
             <DialogHeader className={masterEntityDialogHeaderClassName}>
@@ -972,18 +1000,12 @@ const capitalizeFirstLetter = (str: string) => {
               <DialogDescription>Add a new product or service to your records.</DialogDescription>
             </DialogHeader>
           )}
-          <div className={masterEntityDialogFormWrapperClassName}>
+          <div className={cn(masterEntityDialogFormWrapperClassName, dialogResizable && "px-6 pb-4")}>
           <Form {...form}>
             <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
             <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
 
-              <Tabs value={itemType} onValueChange={(value) => form.setValue('type', value as 'item' | 'service' | 'finished_good')} className="w-full mb-4">
-                  <TabsList>
-                      <TabsTrigger value="item">Item</TabsTrigger>
-                      <TabsTrigger value="service">Service</TabsTrigger>
-                      <TabsTrigger value="finished_good">Finished Good</TabsTrigger>
-                  </TabsList>
-              </Tabs>
+              {tabsInRibbon ? null : itemTypeTabs}
               <div className="space-y-4 py-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <FormField
@@ -1348,9 +1370,11 @@ const capitalizeFirstLetter = (str: string) => {
               </div>
 
               {/* Party/bank jaisa: narration se pehle profile + documents */}
+              <div className="flex flex-wrap items-stretch gap-4">
               <RestrictedFileUploader>
-                <div className="space-y-6 rounded-md border p-4">
+                <div className="shrink-0 rounded-md border p-4">
                   <EntityProfilePhotoBlock
+                    compactInfo
                     file={profileFile}
                     onPickClick={() => avatarInputRef.current?.click()}
                     fileInputRef={avatarInputRef}
@@ -1359,7 +1383,10 @@ const capitalizeFirstLetter = (str: string) => {
                     canAddAvatar={canAddAvatar}
                     inputId="create-item-avatar-input"
                   />
+                </div>
+                <div className="min-w-[18rem] flex-1 rounded-md border p-4">
                   <EntityDocumentsBlock
+                    compactInfo
                     docSlots={docSlots}
                     setDocSlots={setDocSlots}
                     onRemoveDoc={removeDocSlot}
@@ -1373,12 +1400,15 @@ const capitalizeFirstLetter = (str: string) => {
                   />
                 </div>
               </RestrictedFileUploader>
-
-              <EntityOpeningBalanceNarrationField
-                control={form.control}
-                name="openingBalanceNarration"
-                detailLabel="item"
-              />
+              <div className="min-w-[16rem] flex-1 rounded-md border p-4">
+                <EntityOpeningBalanceNarrationField
+                  compactInfo
+                  control={form.control}
+                  name="openingBalanceNarration"
+                  detailLabel="item"
+                />
+              </div>
+              </div>
 
             </div>
               <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
@@ -1407,7 +1437,7 @@ const capitalizeFirstLetter = (str: string) => {
             </form>
           </Form>
           </div>
-          {dialogResizable ? <ResizableDialogEdgeHandles onResizeStart={handleResizeStart} /> : null}
+          {dialogResizable ? <ResizableDialogEdgeHandles onResizeStart={handleResizeStart} allSides /> : null}
         </DialogContent>
       </Dialog>
       <CreateItemGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} />

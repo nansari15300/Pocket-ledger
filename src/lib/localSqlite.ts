@@ -537,7 +537,7 @@ function wrapDb(
     cur.pendingSaveTimer = setTimeout(() => {
       cur.pendingSaveTimer = null;
       onSave().catch(() => {});
-    }, 250);
+    }, 1500);
   };
   return {
     raw: db,
@@ -1142,7 +1142,7 @@ export function scheduleBrowserDbPersistAfterWrite(): void {
     cur.pendingSaveTimer = setTimeout(() => {
       cur.pendingSaveTimer = null;
       void cur.pendingSaveFn?.().catch(() => undefined);
-    }, 250);
+    }, 1500);
   }
 }
 

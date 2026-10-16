@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileImage, Info, Link2, Loader2, Search, X } from "lucide-react";
+import { FileImage, Info, Loader2, Search, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -544,7 +544,7 @@ export function CompanyAttachmentReuseButton({
         variant="outline"
         size="sm"
         data-attachment-reuse-action
-        className={cn("whitespace-normal text-center", className)}
+        className={cn("whitespace-nowrap text-center", className)}
         disabled={!canAdd}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => {
@@ -552,7 +552,6 @@ export function CompanyAttachmentReuseButton({
           setOpenTracked(true);
         }}
       >
-        <Link2 className="h-5 w-5 shrink-0" aria-hidden />
         <span>Reuse file</span>
       </Button>
       <CompanyAttachmentReuseDialog

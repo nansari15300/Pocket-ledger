@@ -899,9 +899,9 @@ function taxLedgerBooksBalanceAmounts(
   taxAccountId: string,
   amounts: { debit: number; credit: number }
 ): { debit: number; credit: number } {
-  if (isUnverifiedTaxTdsBalanceRow(transaction, taxAccountId)) {
-    return { debit: 0, credit: 0 };
-  }
+  // Unverified TDS legs now count in running balance / period totals (UI keeps them dim).
+  void transaction;
+  void taxAccountId;
   return amounts;
 }
 

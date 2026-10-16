@@ -135,7 +135,7 @@ import {
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
-import { taxLedgerBooksDrCrFromRow } from "@/lib/partyLedgerTdsView";
+import { taxLedgerBooksDrCrFromRow, summarizeUnverifiedTaxTdsByKind } from "@/lib/partyLedgerTdsView";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 
@@ -609,6 +609,9 @@ export function TaxDetails({
       processedTaxes || []
     );
   }, [statusFilteredTransactions, tax?.id, oppositeAccountFilter, processedTaxes]);
+  const oppositeAccountFilterActive = Boolean(String(oppositeAccountFilter || "").trim());
+  /** One opposite account: start books at 0 so To Receive / row Bal = that account only (not full tax). */
+  const ledgerOpeningForRunning = oppositeAccountFilterActive ? 0 : openingBalanceForPeriod;
   const mobileUnapprovedTxnCount = useMemo(
     () => countLedgerUnapprovedTransactions(oppositeAccountFilteredTransactions),
     [oppositeAccountFilteredTransactions]
@@ -640,7 +643,7 @@ export function TaxDetails({
           undefined,
           company
         ),
-        openingBalanceForPeriod,
+        ledgerOpeningForRunning,
         taxBooksRebalanceOptions
       ),
     // fiscalMergeCompanyKey — avoid rebalance when useCompany() returns a new company object identity.
@@ -648,7 +651,7 @@ export function TaxDetails({
     [
       oppositeAccountFilteredTransactions,
       filterByUnapprovedOnly,
-      openingBalanceForPeriod,
+      ledgerOpeningForRunning,
       fiscalMergeCompanyKey,
       taxBooksRebalanceOptions,
     ]
@@ -730,12 +733,45 @@ export function TaxDetails({
     searchFilteredTransactions: searchFilteredTransactions,
     rowsPerPage,
     currentPage,
-    ledgerOpeningForRunning: openingBalanceForPeriod,
+    ledgerOpeningForRunning,
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
     company,
   });
 
+  /**
+   * Top To Receive / To Pay:
+   * - All accounts → full tax closingBalance
+   * - One opposite account → last running balance of that filtered list
+   */
+  const headerClosingBalance = useMemo(() => {
+    if (!oppositeAccountFilterActive) {
+      return typeof closingBalance === "number" && Number.isFinite(closingBalance)
+        ? closingBalance
+        : 0;
+    }
+    const list = sortedTransactions as any[];
+    if (list.length === 0) return 0;
+    const last = list[list.length - 1];
+    const bal = last?.balance ?? last?.runningBalance;
+    if (typeof bal === "number" && Number.isFinite(bal)) return bal;
+    return 0;
+  }, [oppositeAccountFilterActive, closingBalance, sortedTransactions]);
+
+  const unverifiedTdsSummary = useMemo(
+    () => summarizeUnverifiedTaxTdsByKind(processedTransactions as any[], tax?.id),
+    [processedTransactions, tax?.id]
+  );
+  const unverifiedTdsTop = useMemo(() => {
+    const items = [
+      { label: "Sale TDS", s: unverifiedTdsSummary.sale },
+      { label: "Purchase TDS", s: unverifiedTdsSummary.purchase },
+      { label: "Add Salary TDS", s: unverifiedTdsSummary.salary },
+    ];
+    return items.reduce((best, it) => (it.s.count > best.s.count ? it : best), items[0]);
+  }, [unverifiedTdsSummary]);
+  const unverifiedTdsTotalNet =
+    unverifiedTdsSummary.sale.net + unverifiedTdsSummary.purchase.net + unverifiedTdsSummary.salary.net;
   useLedgerDetailSessionMemory({
     companyId: companyId ?? undefined,
     context: "tax",
@@ -899,9 +935,14 @@ export function TaxDetails({
     return null;
   }
 
-  const balanceLabel = closingBalance >= 0 ? "To Receive" : "To Pay";
+  const balanceLabel = headerClosingBalance >= 0 ? "To Receive" : "To Pay";
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
-  const masterTaxOpening = Number((tax as any).openingBalance) || 0;
+  const masterTaxOpening = oppositeAccountFilterActive
+    ? 0
+    : Number((tax as any).openingBalance) || 0;
+  const showTaxBookOpeningRow =
+    !oppositeAccountFilterActive &&
+    (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0);
 
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     const range = dateRange;
@@ -935,12 +976,12 @@ export function TaxDetails({
     const summaryRows = [
       {
         "Date (BS)": "Opening Balance",
-        Balance: `${Math.abs(openingBalanceForPeriod).toFixed(2)} ${openingBalanceForPeriod >= 0 ? "Dr" : "Cr"}`,
+        Balance: `${Math.abs(ledgerOpeningForRunning).toFixed(2)} ${ledgerOpeningForRunning >= 0 ? "Dr" : "Cr"}`,
       },
       { "Date (BS)": "Total", Debit: periodDr, Credit: periodCr },
       {
         "Date (BS)": "Closing Balance",
-        Balance: `${Math.abs(closingBalance).toFixed(2)} ${closingBalance >= 0 ? "Dr" : "Cr"}`,
+        Balance: `${Math.abs(headerClosingBalance).toFixed(2)} ${headerClosingBalance >= 0 ? "Dr" : "Cr"}`,
       },
     ];
     const worksheet = XLSX.utils.json_to_sheet([...rows, {}, ...summaryRows] as Record<string, unknown>[]);
@@ -952,10 +993,10 @@ export function TaxDetails({
     searchFilteredTransactions,
     formatDate,
     formatDateBS,
-    openingBalanceForPeriod,
+    ledgerOpeningForRunning,
     periodDr,
     periodCr,
-    closingBalance,
+    headerClosingBalance,
     tax?.name,
   ]);
 
@@ -1010,7 +1051,7 @@ export function TaxDetails({
                   <h1 className="shrink-0 text-base font-bold text-muted-foreground">{reportStickyTitle}</h1>
                   <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>Â·</span>
                   <span
-                    className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
+                    className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(headerClosingBalance))}
                     title={tax.name}
                   >
                     {tax.name}
@@ -1019,10 +1060,10 @@ export function TaxDetails({
                 <span
                   className={cn(
                     "shrink-0 text-sm font-bold whitespace-nowrap",
-                    closingBalance >= 0 ? "text-green-600" : "text-red-600"
+                    headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
                   )}
                 >
-                  {formatCurrency(closingBalance, { showDrCr: true })}
+                  {formatCurrency(headerClosingBalance, { showDrCr: true })}
                 </span>
               </div>
             </header>
@@ -1083,10 +1124,10 @@ export function TaxDetails({
                 oppositeAccountFilterOptions.length > 0
                   ? cn(mdc.mobileTxnBalanceTextLg, "min-w-0 flex-1 whitespace-nowrap text-center")
                   : mdc.mobileTxnBalanceText2xl,
-                closingBalance >= 0 ? "text-green-600" : "text-red-600"
+                headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
               )}
             >
-              {balanceLabel} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
+              {balanceLabel} {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
             </p>
           </div>
           </MobileDetailSummaryCollapsible>
@@ -1106,7 +1147,8 @@ export function TaxDetails({
               openingBalance={desktopPaginationMeta.openingForPage}
               booksOpeningBalance={masterTaxOpening}
               ledgerDateFilterActive={hasLedgerDateFilter}
-              ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0}
+              ledgerShowBookOpeningRow={showTaxBookOpeningRow}
+              hideLedgerOpeningRows={oppositeAccountFilterActive}
               openingBalancePeriodStartDate={dateRange?.from}
               dateRange={dateRange}
               openingBalanceOutstanding={openingBalanceOutstanding}
@@ -1474,11 +1516,47 @@ export function TaxDetails({
               <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
                 <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
                   <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
-                  <div className={cn(LEDGER_HEADER_BALANCE_CN, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                    {formatCurrency(closingBalance, {showDrCr: true})}
+                  <div className={cn(LEDGER_HEADER_BALANCE_CN, headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    {formatCurrency(headerClosingBalance, {showDrCr: true})}
                   </div>
                 </div>
               </div>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button type="button" className={cn(LEDGER_HEADER_BALANCE_CARD_CN, "cursor-pointer text-left")} title="Unverified TDS">
+                    <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                      <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>
+                        {unverifiedTdsTop.label} · {unverifiedTdsTop.s.count} Voucher{unverifiedTdsTop.s.count === 1 ? "" : "s"}
+                      </span>
+                      <div className={cn(LEDGER_HEADER_BALANCE_CN, unverifiedTdsTop.s.net >= 0 ? "text-green-600" : "text-red-600")}>
+                        {formatCurrency(unverifiedTdsTop.s.net, { showDrCr: true })}
+                      </div>
+                      <span className={cn(LEDGER_HEADER_BALANCE_LABEL_CN, "text-amber-700")}>Unverified</span>
+                    </div>
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-auto p-2">
+                  <div className="mb-1 text-[11px] font-semibold text-amber-700">
+                    Unverified TDS · Total {formatCurrency(unverifiedTdsTotalNet, { showDrCr: true })}
+                  </div>
+                  <div className="flex gap-2">
+                    {([
+                      ["Sale TDS Balance", unverifiedTdsSummary.sale],
+                      ["Purchase TDS Balance", unverifiedTdsSummary.purchase],
+                      ["Add Salary TDS Balance", unverifiedTdsSummary.salary],
+                    ] as const).map(([label, s]) => (
+                      <div key={label} className={LEDGER_HEADER_BALANCE_CARD_CN}>
+                        <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                          <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>{label} · {s.count}</span>
+                          <div className={cn(LEDGER_HEADER_BALANCE_CN, s.net >= 0 ? "text-green-600" : "text-red-600")}>
+                            {formatCurrency(s.net, { showDrCr: true })}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
             {oppositeAccountFilterOptions.length > 0 && (
@@ -1626,7 +1704,8 @@ export function TaxDetails({
                   openingBalance={desktopPaginationMeta.openingForPage}
                   booksOpeningBalance={masterTaxOpening}
                   ledgerDateFilterActive={hasLedgerDateFilter}
-                  ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0}
+                  ledgerShowBookOpeningRow={showTaxBookOpeningRow}
+                  hideLedgerOpeningRows={oppositeAccountFilterActive}
                   openingBalancePeriodStartDate={dateRange?.from}
                   dateRange={dateRange}
                   openingBalanceOutstanding={openingBalanceOutstanding}

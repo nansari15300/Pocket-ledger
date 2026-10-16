@@ -13,6 +13,8 @@ import java.io.File;
 public class MainActivity extends BridgeActivity {
     private static final String UPGRADE_PREFS = "pl_apk_upgrade_cache";
     private static final String BUILD_MARKER_KEY = "build_marker";
+    /** True only on the first launch after an APK update; avoids wiping the WebView code cache on every cold start. */
+    private boolean cachesClearedThisLaunch = false;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -23,7 +25,7 @@ public class MainActivity extends BridgeActivity {
         super.onCreate(savedInstanceState);
         // Samsung / Android 13+ WebView: algorithmic force-dark gradients aur border tones browser se alag dikha sakta — explict OFF (styles.xml se saath).
         disableWebViewAlgorithmicDarkening();
-        clearCurrentWebViewHttpCacheAfterApkUpdate();
+        if (cachesClearedThisLaunch) clearCurrentWebViewHttpCacheAfterApkUpdate();
     }
 
     /** Chromium WebView FORCE_DARK_OFF — `color-scheme` CSS ke alava native layer bhi light palette pakki karo (S25 APK vs Chrome). */
@@ -58,6 +60,7 @@ public class MainActivity extends BridgeActivity {
             deleteDirContents(new File(getDataDir(), "app_webview/Default/Service Worker/ScriptCache"));
 
             prefs.edit().putString(BUILD_MARKER_KEY, marker).apply();
+            cachesClearedThisLaunch = true;
         } catch (Throwable ignored) {
             /* Cache refresh best-effort; app boot must continue. */
         }

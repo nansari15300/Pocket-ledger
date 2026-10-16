@@ -2222,7 +2222,7 @@ function PlServerCompanyConnectionStatus() {
         const measuredMs = status === 200 ? Math.max(1, Math.round(performance.now() - started)) : null;
         if (!cancelled) {
           lastPingMsRef.current = measuredMs;
-          setPingMs(measuredMs);
+          setPingMs((prev) => (prev === measuredMs ? prev : measuredMs));
         }
       } catch {
         if (!cancelled) {
@@ -2232,7 +2232,9 @@ function PlServerCompanyConnectionStatus() {
       }
     };
     void check();
-    const timer = window.setInterval(() => void check(), 5_000);
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void check();
+    }, 30_000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);

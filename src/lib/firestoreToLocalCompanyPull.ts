@@ -530,14 +530,18 @@ export async function mergeRemoteSnapshotWithLocalOnlyDocs(
     // Local registry: restore ke baad Firestore purane rows same id rakhe → pehle wala "extras only" merge un rows ko chhod deta tha
     if (options?.preferLocalSqliteWhenIdsConflict && cached.length) {
       const byId = new Map<string, any>();
+      const remoteById = new Map<string, any>();
       for (const r of remoteStamped) {
         const id = String(r?.id ?? "");
-        if (id) byId.set(id, r);
+        if (id) {
+          byId.set(id, r);
+          remoteById.set(id, r);
+        }
       }
       for (const c of cached) {
         const id = String(c?.id ?? "");
         if (!id || c?.isDeleted === true) continue;
-        const remoteRow = remoteStamped.find((r: any) => String(r?.id ?? "") === id) as Record<string, unknown> | undefined;
+        const remoteRow = remoteById.get(id) as Record<string, unknown> | undefined;
         const mergedRow = remoteRow
           ? mergeDocAttachmentFieldsPreferRemote(remoteRow, c as Record<string, unknown>, localCompanyId)
           : (c as Record<string, unknown>);

@@ -114,7 +114,7 @@ export function useNavigatorOnline(): boolean {
       }
 
       await runProbe();
-      probeInterval = window.setInterval(() => void runProbe(), 12_000);
+      probeInterval = window.setInterval(() => { if (!document.hidden) void runProbe(); }, 12_000);
     })();
 
     return () => {

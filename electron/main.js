@@ -44,9 +44,12 @@ if (process.platform === "win32") {
 }
 
 /** Attachment JPEG compress: Canvas toBlob Chrome jaisa GPU path (software raster = 10–15× slow). `app.ready` se pehle. */
-app.commandLine.appendSwitch("ignore-gpu-blocklist");
+if (process.env.PL_GPU_FORCE === "1") {
+  // Opt-in only: forcing blocklisted GPUs stalls old Intel HD graphics.
+  app.commandLine.appendSwitch("ignore-gpu-blocklist");
+  app.commandLine.appendSwitch("enable-zero-copy");
+}
 app.commandLine.appendSwitch("enable-gpu-rasterization");
-app.commandLine.appendSwitch("enable-zero-copy");
 if (process.platform === "win32") {
   app.commandLine.appendSwitch("use-angle", "d3d11");
 }
@@ -2240,7 +2243,7 @@ async function openNewTab(win, loadUrl) {
       additionalArguments: [`--pl-tab-instance-id=${tabInstanceId}`],
       nodeIntegration: false,
       contextIsolation: true,
-      backgroundThrottling: false,
+      backgroundThrottling: true,
     },
   });
   view.plTabInstanceId = tabInstanceId;
@@ -2662,7 +2665,14 @@ if (gotSingleInstanceLock) {
   powerMonitor.on("resume", () => {
     plTraceLog.traceLog("PL-MAIN", "system_resume_live_sync");
     void ensureHostSharingRunningAfterLaunch().catch(() => undefined);
-    void ensureServerDataBridgeWindow().catch(() => undefined);
+    try {
+      // Only host/server mode needs the hidden bridge window; skip it for plain desktop users.
+      if (localAppServer.loadConfig(userDataPath()).userWantsRunning) {
+        void ensureServerDataBridgeWindow().catch(() => undefined);
+      }
+    } catch (_) {
+      /* ignore config read errors */
+    }
     notifyLiveSyncResume("system_resume");
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) tabSnapshotRecovery.onWindowForeground(w, "system_resume");

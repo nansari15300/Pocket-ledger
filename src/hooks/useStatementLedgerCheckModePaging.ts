@@ -85,7 +85,8 @@ export function useStatementLedgerCheckModePaging({
       if (memberIds.length === 0) return undefined;
       return {
         booksDrCrForRow: (tx) => {
-          const hasUnverifiedMember = memberIds.some((taxId) => isUnverifiedTaxTdsBalanceRow(tx, taxId));
+          // Unverified TDS legs now count in books; only the dim UI differs.
+          const hasUnverifiedMember = false as boolean;
           if (!hasUnverifiedMember) {
             return {
               debit: Number(tx?.debit) || 0,

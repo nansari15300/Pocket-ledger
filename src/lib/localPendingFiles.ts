@@ -1780,7 +1780,10 @@ export async function syncOnePendingFile(
 /**
  * Sync all pending files to Storage and update Firestore docs. Call when online.
  */
-export async function syncPendingFiles(): Promise<{
+export async function syncPendingFiles(options?: {
+  /** Only upload pending files whose `local:` ref is in this list (voucher save: do not drain unrelated pending files). */
+  onlyLocalRefs?: string[];
+}): Promise<{
   synced: number;
   uploaded: number;
   failed: number;
@@ -1790,14 +1793,16 @@ export async function syncPendingFiles(): Promise<{
   if (isFirebaseLedgerDataSyncDisabled()) {
     return { synced: 0, uploaded: 0, failed: 0 };
   }
-  const pending = await getPendingFiles();
+  const allPending = await getPendingFiles();
+  const onlyRefs = options?.onlyLocalRefs?.length ? new Set(options.onlyLocalRefs) : null;
+  const pending = onlyRefs ? allPending.filter((item) => onlyRefs.has(LOCAL_FILE_PREFIX + String(item.id))) : allPending;
   let synced = 0;
   let uploaded = 0;
   let failed = 0;
   let lastError: string | undefined;
-  for (const item of pending) {
+  const syncOne = async (item: (typeof pending)[number]) => {
     const itemCompanyId = resolvePendingPayloadCompanyId(item);
-    if (itemCompanyId && !isFirebaseLedgerCompanyAttachmentUploadEnabled(itemCompanyId)) continue;
+    if (itemCompanyId && !isFirebaseLedgerCompanyAttachmentUploadEnabled(itemCompanyId)) return;
     const result = await syncOnePendingFile(item);
     if (result.success) {
       synced++;
@@ -1807,6 +1812,12 @@ export async function syncPendingFiles(): Promise<{
       failed++;
       if (!lastError && result.error) lastError = result.error;
     }
+  };
+  if (onlyRefs) {
+    // A voucher has only a few files: upload them in parallel.
+    await Promise.all(pending.map(syncOne));
+  } else {
+    for (const item of pending) await syncOne(item);
   }
   return { synced, uploaded, failed, lastError };
 }

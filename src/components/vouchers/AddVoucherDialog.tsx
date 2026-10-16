@@ -1,4 +1,5 @@
 "use client";
+import dynamic from "next/dynamic";
 
 import React, { useState, useEffect, useMemo, Suspense, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -36,17 +37,18 @@ import { firestore, storage } from "@/lib/firebase"; // storage आयात ग
 import { ref, deleteObject } from "firebase/storage"; // storage डिलिट गर्न आवश्यक
 
 // Forms
-import { CreateSaleForm } from "./CreateSaleForm";
-import { CreatePurchaseForm } from "./CreatePurchaseForm";
-import { CreatePaymentInForm } from "./CreatePaymentInForm";
-import { CreatePaymentOutForm } from "./CreatePaymentOutForm";
-import { CreateContraForm } from "./CreateContraForm";
-import { CreateJournalForm } from "./CreateJournalForm";
-import { CreateAdjustmentForm } from "./CreateAdjustmentForm";
-import { CreateNoteForm } from "./CreateNoteForm";
-import { SalaryForm } from "./SalaryForm";
-import { CreateProductionForm } from "./CreateProductionForm";
-import { InterCompanyVoucherForm } from "@/components/inter-company/InterCompanyVoucherForm";
+// Each form is its own chunk: loaded the first time that voucher tab opens, then kept in memory.
+const CreateSaleForm = dynamic(() => import("./CreateSaleForm").then((m) => m.CreateSaleForm), { ssr: false, loading: () => null });
+const CreatePurchaseForm = dynamic(() => import("./CreatePurchaseForm").then((m) => m.CreatePurchaseForm), { ssr: false, loading: () => null });
+const CreatePaymentInForm = dynamic(() => import("./CreatePaymentInForm").then((m) => m.CreatePaymentInForm), { ssr: false, loading: () => null });
+const CreatePaymentOutForm = dynamic(() => import("./CreatePaymentOutForm").then((m) => m.CreatePaymentOutForm), { ssr: false, loading: () => null });
+const CreateContraForm = dynamic(() => import("./CreateContraForm").then((m) => m.CreateContraForm), { ssr: false, loading: () => null });
+const CreateJournalForm = dynamic(() => import("./CreateJournalForm").then((m) => m.CreateJournalForm), { ssr: false, loading: () => null });
+const CreateAdjustmentForm = dynamic(() => import("./CreateAdjustmentForm").then((m) => m.CreateAdjustmentForm), { ssr: false, loading: () => null });
+const CreateNoteForm = dynamic(() => import("./CreateNoteForm").then((m) => m.CreateNoteForm), { ssr: false, loading: () => null });
+const SalaryForm = dynamic(() => import("./SalaryForm").then((m) => m.SalaryForm), { ssr: false, loading: () => null });
+const CreateProductionForm = dynamic(() => import("./CreateProductionForm").then((m) => m.CreateProductionForm), { ssr: false, loading: () => null });
+const InterCompanyVoucherForm = dynamic(() => import("@/components/inter-company/InterCompanyVoucherForm").then((m) => m.InterCompanyVoucherForm), { ssr: false, loading: () => null });
 import { InterCompanyPayModeInfoButton } from "@/components/inter-company/InterCompanyPayModeInfoButton";
 import type { InterCompanyRibbonTab } from "@/components/inter-company/InterCompanyRibbonNav";
 import { isInterCompanyVoucherEditDeleteBlocked } from "@/lib/interCompany/interCompanyVoucherHydrate";
@@ -2197,7 +2199,7 @@ export function AddVoucherDialog(props: any) {
       return;
     }
     const detectEditDirtyFromSaveButton = () => {
-      if (typeof document === "undefined") return;
+      if (typeof document === "undefined" || document.hidden) return;
       const submitButtons = Array.from(document.querySelectorAll('button[type="submit"]')) as HTMLButtonElement[];
       const saveButtons = submitButtons.filter((btn) => (btn.textContent || "").trim().toLowerCase() === "save");
       const visibleSave = saveButtons.find((btn) => btn.offsetParent !== null) || saveButtons[0];
@@ -2205,7 +2207,7 @@ export function AddVoucherDialog(props: any) {
       setHasPendingEditChanges(Boolean(visibleSave && !visibleSave.disabled));
     };
     detectEditDirtyFromSaveButton();
-    const id = window.setInterval(detectEditDirtyFromSaveButton, 250);
+    const id = window.setInterval(detectEditDirtyFromSaveButton, 1000);
     return () => window.clearInterval(id);
   }, [isOpen, voucher?.id]);
 
@@ -2361,7 +2363,7 @@ export function AddVoucherDialog(props: any) {
       if (createdHost) setCopyButtonMountNode((prev) => (prev === host ? prev : host));
     };
     syncCopyButtonHostInActionRow();
-    const intervalId = window.setInterval(syncCopyButtonHostInActionRow, 220);
+    const intervalId = window.setInterval(() => { if (!document.hidden) syncCopyButtonHostInActionRow(); }, 700);
     const onResize = () => syncCopyButtonHostInActionRow();
     window.addEventListener("resize", onResize);
     return () => {

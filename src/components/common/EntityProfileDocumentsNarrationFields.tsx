@@ -6,7 +6,8 @@
  */
 import * as React from "react";
 import Link from "next/link";
-import { Upload } from "lucide-react";
+import { Info, Upload } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import {
   AttachmentHoldPasteSurface,
@@ -25,6 +26,22 @@ import {
 } from "@/lib/attachmentPdfOptions";
 
 const DOC_SIZE = 96;
+
+/** Small "i" icon that shows the given help text on hover/focus. */
+function InfoHint({ children }: { children: React.ReactNode }) {
+  return (
+    <TooltipProvider delayDuration={100}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" tabIndex={0} className="inline-flex shrink-0 text-muted-foreground hover:text-foreground" aria-label="Info">
+            <Info className="h-3.5 w-3.5" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs text-xs leading-snug">{children}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
 
 /** Statement File column note — entity name se sentence banao */
 function statementFileNote(entityLabel: string) {
@@ -84,7 +101,9 @@ export function EntityProfilePhotoBlock({
   inputId = "entity-avatar-input",
   attachmentCompanyId,
   attachmentReusePlaceKey,
+  compactInfo = false,
 }: {
+  compactInfo?: boolean;
   file: File | string | null;
   onPickClick: () => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
@@ -97,7 +116,10 @@ export function EntityProfilePhotoBlock({
 }) {
   return (
     <FormItem>
-      <FormLabel>Profile photo</FormLabel>
+      <FormLabel className={compactInfo ? "flex items-center gap-1.5" : undefined}>
+        Profile photo
+        {compactInfo ? <InfoHint>Images only — shown on profile / avatar.</InfoHint> : null}
+      </FormLabel>
       {!canAddAvatar ? (
         <p className="text-xs text-muted-foreground">
           Upgrade plan to change profile photo.{" "}
@@ -147,7 +169,7 @@ export function EntityProfilePhotoBlock({
           ) : null}
         </div>
       )}
-      <p className="mt-1 text-[10px] text-muted-foreground">Images only — shown on profile / avatar.</p>
+      {compactInfo ? null : <p className="mt-1 text-[10px] text-muted-foreground">Images only — shown on profile / avatar.</p>}
     </FormItem>
   );
 }
@@ -165,7 +187,9 @@ export function EntityDocumentsBlock({
   setDocSlots,
   attachmentReusePlaceKey,
   existingLockedPdfFileUrls,
+  compactInfo = false,
 }: {
+  compactInfo?: boolean;
   docSlots: Array<File | string>;
   onRemoveDoc: (idx: number) => void;
   onAddClick: () => void;
@@ -187,12 +211,23 @@ export function EntityDocumentsBlock({
 
   return (
     <FormItem>
-      <FormLabel>Documents</FormLabel>
+      <FormLabel className={compactInfo ? "flex items-center gap-1.5" : undefined}>
+        Documents
+        {compactInfo ? (
+          <InfoHint>
+            Optional supporting files (PDF or images, e.g. registration, agreement scans). Up to 5 files; stored with this
+            record and available from the statement. On the {entityStatementLabel} statement they show on the opening
+            balance row under the File column (green tick), like voucher attachments.
+          </InfoHint>
+        ) : null}
+      </FormLabel>
+      {compactInfo ? null : (<>
       <p className="mb-1 text-xs leading-snug text-muted-foreground">
         Optional supporting files (PDF or images — e.g. registration, agreement scans). Up to 5 files; stored with
         this record and available from the statement.
       </p>
       {statementFileNote(entityStatementLabel)}
+      </>)}
       {!canAttachDocuments ? (
         <p className="text-xs text-muted-foreground">
           Upgrade for PDF/image attachments.{" "}
@@ -270,7 +305,9 @@ export function EntityOpeningBalanceNarrationField<T extends FieldValues>({
   control,
   name,
   detailLabel,
+  compactInfo = false,
 }: {
+  compactInfo?: boolean;
   control: Control<T>;
   name: Path<T>;
   /** e.g. "party detail", "bank account", "item" */
@@ -282,18 +319,25 @@ export function EntityOpeningBalanceNarrationField<T extends FieldValues>({
       name={name}
       render={({ field }: { field: any }) => (
         <FormItem>
-          <FormLabel>Opening balance narration (Optional)</FormLabel>
+          <FormLabel className={compactInfo ? "flex items-center gap-1.5" : undefined}>
+            Opening balance narration (Optional)
+            {compactInfo ? (
+              <InfoHint>Shown on the {detailLabel} statement under the Opening Balance row (voucher-style narration).</InfoHint>
+            ) : null}
+          </FormLabel>
           <FormControl>
             <Textarea
               placeholder="e.g. OB brought forward…"
-              className="min-h-[72px] resize-y"
+              className={compactInfo ? "min-h-[96px] resize-y" : "min-h-[72px] resize-y"}
               {...field}
               value={field.value ?? ""}
             />
           </FormControl>
-          <p className="text-[10px] text-muted-foreground">
-            Shown on the {detailLabel} statement under the Opening Balance row (voucher-style narration).
-          </p>
+          {compactInfo ? null : (
+            <p className="text-[10px] text-muted-foreground">
+              Shown on the {detailLabel} statement under the Opening Balance row (voucher-style narration).
+            </p>
+          )}
           <FormMessage />
         </FormItem>
       )}

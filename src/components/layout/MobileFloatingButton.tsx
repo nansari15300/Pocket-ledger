@@ -116,10 +116,11 @@ export function MobileFloatingButton() {
     }
 
     const checkInterval = setInterval(() => {
+      if (document.hidden) return;
       const next = findScrollContainers();
       next.forEach((el) => attach(el));
       updateReportNoScrollVisibility();
-    }, 500);
+    }, 2000);
 
     return () => {
       clearInterval(checkInterval);

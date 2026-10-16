@@ -541,7 +541,7 @@ export function partyTdsLedgerBooksDrCrFromRow(t: {
 } | null | undefined): { debit: number; credit: number } {
   const debit = Number(t?.debit) || 0;
   const credit = Number(t?.credit) || 0;
-  if (isUnverifiedLedgerTdsBillRow(t)) return { debit: 0, credit: 0 };
+  // Unverified bill legs now count in running balance / totals (row stays dim + Waiting in the UI).
   return { debit, credit };
 }
 
@@ -567,7 +567,6 @@ export function summarizePartyTdsBalancesFromRows(
     if (r[LEDGER_TDS_SETTLEMENT_FLAG]) continue;
     if (!r[LEDGER_TDS_ROW_FLAG] && String(r.type ?? "") !== "tds") continue;
     // Unverified TDS stays on the table (dim / Waiting) but does not move Sale/Pur TDS balance.
-    if (isUnverifiedLedgerTdsBillRow(r)) continue;
     const full = round2(Number(r._tdsAmount ?? r.debit ?? r.credit) || 0);
     if (full <= 0) continue;
     const openRaw = Number(r.outstanding);
@@ -882,9 +881,8 @@ export function taxLedgerBooksDrCrFromRow(
 ): { debit: number; credit: number } {
   const debit = Number(t?.debit) || 0;
   const credit = Number(t?.credit) || 0;
-  if (taxAccountId && isUnverifiedTaxTdsBalanceRow(t, taxAccountId)) {
-    return { debit: 0, credit: 0 };
-  }
+  // Unverified TDS legs now count in running balance / totals (row stays dim + Waiting in the UI).
+  void taxAccountId;
   return { debit, credit };
 }
 
@@ -941,4 +939,37 @@ export function buildPartyTdsJournalDefaultVoucherData(
       },
     ],
   };
+}
+
+export type UnverifiedTaxTdsKind = "sale" | "purchase" | "salary";
+export type UnverifiedTaxTdsSummary = Record<UnverifiedTaxTdsKind, { count: number; net: number }>;
+
+/** Tax ledger header: Unverified TDS vouchers grouped by Sale / Purchase / Add Salary (net = Dr - Cr). */
+export function summarizeUnverifiedTaxTdsByKind(
+  rows: ReadonlyArray<any>,
+  taxAccountId: string | null | undefined
+): UnverifiedTaxTdsSummary {
+  const out: UnverifiedTaxTdsSummary = {
+    sale: { count: 0, net: 0 },
+    purchase: { count: 0, net: 0 },
+    salary: { count: 0, net: 0 },
+  };
+  const id = String(taxAccountId ?? "").trim();
+  if (!id) return out;
+  for (const t of rows) {
+    if (!t || !isUnverifiedTaxTdsBalanceRow(t, id)) continue;
+    const type = String(t.type ?? "");
+    const kind: UnverifiedTaxTdsKind | null = isAddSalaryVoucher(t)
+      ? "salary"
+      : type === "sale" || type === "sale_service"
+        ? "sale"
+        : type === "purchase" || type === "purchase_service"
+          ? "purchase"
+          : null;
+    if (!kind) continue;
+    const b = taxLedgerBooksDrCrFromRow(t, id);
+    out[kind].count += 1;
+    out[kind].net += (Number(b.debit) || 0) - (Number(b.credit) || 0);
+  }
+  return out;
 }

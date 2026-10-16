@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 const MIN_W = 480;
 const MIN_H = 400;
 
-export const ITEM_MASTER_DIALOG_SIZE_STORAGE_KEY = "pl-item-master-dialog-size-v1";
+export const ITEM_MASTER_DIALOG_SIZE_STORAGE_KEY = "pl-item-master-dialog-size-v2";
 
 export const ITEM_MASTER_DIALOG_DEFAULT_SIZE = {
   w: Math.round(14 * 96),
@@ -13,6 +13,7 @@ export const ITEM_MASTER_DIALOG_DEFAULT_SIZE = {
 };
 
 type DialogSize = { w: number; h: number };
+export type ResizeHandle = "e" | "s" | "se" | "w" | "n" | "nw" | "ne" | "sw";
 type DialogPosition = { x: number; y: number };
 
 function clampSize(w: number, h: number, vw: number, vh: number): DialogSize {
@@ -23,8 +24,8 @@ function clampSize(w: number, h: number, vw: number, vh: number): DialogSize {
 }
 
 function defaultSizeForViewport(vw: number, vh: number): DialogSize {
-  const w = Math.min(ITEM_MASTER_DIALOG_DEFAULT_SIZE.w, Math.floor(vw * 0.9));
-  const h = Math.min(ITEM_MASTER_DIALOG_DEFAULT_SIZE.h, Math.floor(vh * 0.85));
+  const w = Math.floor(vw * 0.9);
+  const h = Math.floor(vh * 0.8);
   return clampSize(w, h, vw, vh);
 }
 
@@ -82,11 +83,13 @@ export function usePersistedResizableDialogSize(
     startTop: number;
   } | null>(null);
   const resizeRef = useRef<{
-    handle: "e" | "s" | "se";
+    handle: ResizeHandle;
     startX: number;
     startY: number;
     startW: number;
     startH: number;
+    startLeft: number;
+    startTop: number;
   } | null>(null);
   const prevOpenRef = useRef(false);
 
@@ -152,7 +155,7 @@ export function usePersistedResizableDialogSize(
   );
 
   const handleResizeStart = useCallback(
-    (e: React.MouseEvent, handle: "e" | "s" | "se") => {
+    (e: React.MouseEvent, handle: ResizeHandle) => {
       if (!enabled) return;
       e.preventDefault();
       e.stopPropagation();
@@ -162,19 +165,29 @@ export function usePersistedResizableDialogSize(
         startY: e.clientY,
         startW: size.w,
         startH: size.h,
+        startLeft: position.x,
+        startTop: position.y,
       };
       const onMove = (ev: MouseEvent) => {
         if (!resizeRef.current) return;
-        const { handle: h, startX, startY, startW, startH } = resizeRef.current;
+        const { handle: h, startX, startY, startW, startH, startLeft, startTop } = resizeRef.current;
         const vw = window.innerWidth;
         const vh = window.innerHeight;
         const dx = ev.clientX - startX;
         const dy = ev.clientY - startY;
         let w = startW;
         let hh = startH;
-        if (h === "e" || h === "se") w = startW + dx;
-        if (h === "s" || h === "se") hh = startH + dy;
-        setSize(clampSize(w, hh, vw, vh));
+        if (h === "e" || h === "se" || h === "ne") w = startW + dx;
+        if (h === "w" || h === "sw" || h === "nw") w = startW - dx;
+        if (h === "s" || h === "se" || h === "sw") hh = startH + dy;
+        if (h === "n" || h === "nw" || h === "ne") hh = startH - dy;
+        const next = clampSize(w, hh, vw, vh);
+        let nx = startLeft;
+        let ny = startTop;
+        if (h === "w" || h === "sw" || h === "nw") nx = startLeft + (startW - next.w);
+        if (h === "n" || h === "nw" || h === "ne") ny = startTop + (startH - next.h);
+        setSize(next);
+        if (nx !== startLeft || ny !== startTop) setPosition(clampPosition(nx, ny, next.w, next.h, vw, vh));
       };
       const onUp = () => {
         resizeRef.current = null;
@@ -184,7 +197,7 @@ export function usePersistedResizableDialogSize(
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [enabled, size.w, size.h]
+    [enabled, size.w, size.h, position.x, position.y]
   );
 
   return { size, position, handleResizeStart, handleDragStart, resizable: enabled };

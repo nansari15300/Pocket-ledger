@@ -1789,7 +1789,10 @@ export const TransactionRow = React.memo(
     const ledgerTdsAmountToneCn = isLedgerTdsRow ? ledgerTdsRowAmountToneClass(transaction) : null;
     const tdsLedgerRowLayout = ensureMinGaps && (showCol("tdsTaxable") || showCol("tdsAmount"));
     const tdsRowTextPadCn = tdsLedgerRowLayout ? LEDGER_TDS_ROW_TEXT_CELL_PAD_CN : null;
-    const salePurchaseTdsVerifyLabel = isSalePurchaseTdsVerifyLedgerContext(context, groupEntityType)
+    // TDS Verified/Unverified badge: only on TDS Balance page rows (and tax page), not on Account Balance page.
+    const showTdsVerifyBadge =
+      isLedgerTdsRow || context === "tax" || (context === "group" && groupEntityType === "tax");
+    const salePurchaseTdsVerifyLabel = showTdsVerifyBadge && isSalePurchaseTdsVerifyLedgerContext(context, groupEntityType)
       ? resolveSalePurchaseTdsVerifyLabel(transaction, { context, contextId, groupEntityType })
       : null;
     const salePurchaseTdsVerifyCol =
@@ -1815,18 +1818,19 @@ export const TransactionRow = React.memo(
     const isTdsUnverifiedBooksRow = isTaxTdsUnverifiedRow || isPartyStaffTdsUnverifiedRow;
     const isTdsVerifiedBooksRow = isTaxTdsVerifiedRow || isPartyStaffTdsVerifiedRow;
     const taxTdsAmountWeightCn = isTdsUnverifiedBooksRow
-      ? "font-normal opacity-45"
+      ? "font-normal [&>*]:opacity-45"
       : isTdsVerifiedBooksRow
         ? "font-bold"
         : null;
     const salePurchaseTdsVerifyBadge = salePurchaseTdsVerifyLabel ? (
       <span
+        data-tds-verify-badge={salePurchaseTdsVerifyLabel === SALE_PURCHASE_TDS_VERIFIED_MESSAGE ? "verified" : "unverified"}
         className={cn(
           // italic glyphs stick out of the box — extra pr + w-max/shrink-0 so the fill covers the full label
-          "inline-flex w-max shrink-0 items-center justify-center whitespace-nowrap rounded-md border box-border pl-2.5 pr-3.5 py-1 text-sm font-bold italic leading-none",
+          "inline-flex w-max shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-solid box-border pl-2 pr-3 py-0 text-[9px] font-bold italic leading-4",
           salePurchaseTdsVerifyLabel === SALE_PURCHASE_TDS_VERIFIED_MESSAGE
-            ? "border-green-600 bg-green-100 text-green-800 dark:border-green-500 dark:bg-green-950/40 dark:text-green-200"
-            : "border-amber-500 bg-amber-100 text-amber-900 dark:border-amber-500 dark:bg-amber-950/40 dark:text-amber-200"
+            ? "!border-green-700 bg-green-100 text-green-800 dark:!border-green-400 dark:bg-green-950/40 dark:text-green-200"
+            : "!border-amber-600 bg-amber-100 text-amber-900 dark:!border-amber-400 dark:bg-amber-950/40 dark:text-amber-200"
         )}
       >
         {salePurchaseTdsVerifyLabel}
@@ -2197,8 +2201,15 @@ export const TransactionRow = React.memo(
         )}
         {/* Item + Item-group page: Party/Entity column should respect page-level show/hide toggle. */}
         {isItemPartyContext && showItemPartyColumn && (
-          <TableCell className="max-w-[180px] truncate text-muted-foreground">
-            {getOppositeAccountLabel(transaction, names, context, contextId, groupEntityType)}
+          <TableCell className="max-w-[180px] overflow-hidden text-muted-foreground" style={{ maxWidth: 90 }}>
+            {(() => {
+              const partyLabel = getOppositeAccountLabel(transaction, names, context, contextId, groupEntityType);
+              return (
+                <span className="block truncate" title={typeof partyLabel === "string" ? partyLabel : undefined}>
+                  {partyLabel}
+                </span>
+              );
+            })()}
           </TableCell>
         )}
         {showCol("user") && context !== "note" && (
@@ -2349,8 +2360,8 @@ export const TransactionRow = React.memo(
         {showCol("tdsTaxable") && (
           <TableCell
             className={cn(
-              // Same as Account Details amounts: right-aligned under numeric header.
-              "text-right tabular-nums align-middle",
+              // TDS ledger: left-aligned under header text.
+              "text-left tabular-nums align-middle",
               ledgerTdsAmountToneCn,
               tdsRowTextPadCn ?? (ensureMinGaps && LEDGER_TDS_TAXABLE_CELL_PAD_CN)
             )}
@@ -2362,7 +2373,7 @@ export const TransactionRow = React.memo(
         {showCol("tdsAmount") && (
           <TableCell
             className={cn(
-              "text-right tabular-nums align-middle",
+              "text-left tabular-nums align-middle",
               ledgerTdsAmountToneCn ?? "font-semibold",
               tdsRowTextPadCn ?? (ensureMinGaps && LEDGER_TDS_AMOUNT_CELL_PAD_CN)
             )}
@@ -2377,21 +2388,23 @@ export const TransactionRow = React.memo(
         {showCol("dr") && (
           <TableCell
             className={cn(
-              "text-right tabular-nums",
+              tdsLedgerRowLayout ? "text-left" : "text-right",
+              "tabular-nums",
               taxTdsAmountWeightCn
                 ? cn(taxTdsAmountWeightCn, "text-green-700")
                 : ledgerTdsAmountToneCn ?? "font-semibold text-green-700",
               ensureMinGaps &&
                 (tdsLedgerRowLayout || salePurchaseTdsVerifyLabel != null
                   ? LEDGER_TDS_DR_CR_AMOUNT_CELL_CN
-                  : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN)
+                  : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN),
+              tdsLedgerRowLayout && "text-left"
             )}
             style={ensureMinGaps ? { minWidth: `${tdsVerifyDrCrMinPx}px` } : undefined}
           >
             {isFyOpeningRow ? (
               renderFyOpeningDrCrCell("dr")
             ) : salePurchaseTdsVerifyCol === "debit" && salePurchaseTdsVerifyBadge ? (
-              <span className="inline-flex w-full justify-end">{salePurchaseTdsVerifyBadge}</span>
+              <span className={cn("inline-flex w-full", tdsLedgerRowLayout ? "justify-start" : "justify-end")}>{salePurchaseTdsVerifyBadge}</span>
             ) : isStatementChecked && statementCheckedMessageColumn(debit, credit) === "debit" ? (
               <StatementCheckedRowMessageLabel className="w-full" align="end" />
             ) : (
@@ -2402,21 +2415,23 @@ export const TransactionRow = React.memo(
         {showCol("cr") && (
           <TableCell
             className={cn(
-              "text-right tabular-nums",
+              tdsLedgerRowLayout ? "text-left" : "text-right",
+              "tabular-nums",
               taxTdsAmountWeightCn
                 ? cn(taxTdsAmountWeightCn, "text-red-700")
                 : ledgerTdsAmountToneCn ?? "font-semibold text-red-700",
               ensureMinGaps &&
                 (tdsLedgerRowLayout || salePurchaseTdsVerifyLabel != null
                   ? LEDGER_TDS_DR_CR_AMOUNT_CELL_CN
-                  : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN)
+                  : LEDGER_TXN_DR_CR_AMOUNT_CELL_CN),
+              tdsLedgerRowLayout && "text-left"
             )}
             style={ensureMinGaps ? { minWidth: `${tdsVerifyDrCrMinPx}px` } : undefined}
           >
             {isFyOpeningRow ? (
               renderFyOpeningDrCrCell("cr")
             ) : salePurchaseTdsVerifyCol === "credit" && salePurchaseTdsVerifyBadge ? (
-              <span className="inline-flex w-full justify-end">{salePurchaseTdsVerifyBadge}</span>
+              <span className={cn("inline-flex w-full", tdsLedgerRowLayout ? "justify-start" : "justify-end")}>{salePurchaseTdsVerifyBadge}</span>
             ) : isStatementChecked && statementCheckedMessageColumn(debit, credit) === "credit" ? (
               <StatementCheckedRowMessageLabel className="w-full" align="end" />
             ) : (
@@ -2549,13 +2564,13 @@ export const TransactionRow = React.memo(
               <TableCell
                 className={cn(
                   "text-right tabular-nums",
-                  isTdsUnverifiedBooksRow ? "font-semibold text-amber-700" : "font-semibold",
-                  !isTdsUnverifiedBooksRow && balanceToneCn,
+                  "font-semibold",
+                  balanceToneCn,
                   isTdsVerifiedBooksRow && "font-bold",
                   ensureMinGaps && LEDGER_TXN_BALANCE_TO_MENU_PAD_CN
                 )}
                 style={ensureMinGaps ? { minWidth: LEDGER_ENTITY_BALANCE_COL_PX } : undefined}
-                {...(isZeroBalance && !isLedgerTdsRow && !isTdsUnverifiedBooksRow
+                {...(isZeroBalance && !isLedgerTdsRow
                   ? { "data-cell-settled": "true" }
                   : {})}
               >
@@ -2563,8 +2578,6 @@ export const TransactionRow = React.memo(
                   "*****"
                 ) : isFyOpeningRow && !showOpeningBalanceAmount ? (
                   "-"
-                ) : isTdsUnverifiedBooksRow ? (
-                  <span className="font-semibold italic text-amber-700">Waiting</span>
                 ) : isZeroBalance && !isLedgerTdsRow ? (
                   <span
                     className={cn(

@@ -266,7 +266,11 @@ async function syncPendingAttachmentsAfterFirestoreWrite(wrotePayload: Record<st
     fileUrls: urls,
   });
   try {
-    const result = await syncPendingFiles();
+    // Only this voucher's own pending files (not every pending file in the app), uploaded in parallel.
+    const ownLocalRefs = urls.filter((x): x is string => typeof x === "string" && isLocalFileRef(x));
+    const unassigned = (wrotePayload.unassignedFile as Record<string, unknown> | undefined)?.url;
+    if (typeof unassigned === "string" && isLocalFileRef(unassigned)) ownLocalRefs.push(unassigned);
+    const result = await syncPendingFiles(ownLocalRefs.length ? { onlyLocalRefs: ownLocalRefs } : undefined);
     logAttachmentPipeline("sync", { step: "after_syncPendingFiles", result });
   } catch (e) {
     console.warn("[voucherActionsClient] syncPendingFiles after Firestore write failed", e);

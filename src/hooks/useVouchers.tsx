@@ -1928,7 +1928,10 @@ export const VoucherProvider = ({
       if (cancelled) return;
       const routeScopedPrefetchCollections = collectionsToPrefetch.filter((c) => c.path !== "vouchers");
       // Cloud firebase company ko bhi mirror chahiye: purane guard me sirf `storageOption===local`/static — offline par SQLite khali → sirf wo screens jahan pehle online snapshot mila usable tha (PWA/APK overlap).
+      // Web cloud boot: the live listeners below already download AND mirror every collection to SQLite, so this extra full getDocs is skipped there.
+      // SQLite-first builds (APK/EXE static/local-only) keep it so the offline mirror is ready before listeners attach.
       const shouldSqliteHydratePullFromFirestore =
+        embeddedLocalFirstBoot &&
         cloudLedgerSyncAllowed &&
         opts.firestoreRemotePullAttempt &&
         (shouldUseLocalCompanyData || isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape));
@@ -2001,24 +2004,49 @@ export const VoucherProvider = ({
 
       const bindCollectionListener = (
         { path, setter, isGroup, orderByField }: MasterCollectionConfig,
-        opts?: { stableKey?: string }
+        opts?: { stableKey?: string; onFirstResult?: () => void }
       ) => {
         const q = collectionListenerQuery(path, isGroup);
+        // Decrypted rows cached per listener: later snapshots only re-decrypt docs that actually changed (docChanges), not the whole collection.
+        const decryptedById = new Map<string, any>();
+        let decryptChain: Promise<void> = Promise.resolve();
+        let decryptSeeded = false;
         return onSnapshot(q, (snapshot) => {
+          opts?.onFirstResult?.();
           if (cancelled && !opts?.stableKey) return;
           if (opts?.stableKey && stableLiveVoucherListenerRef.current?.key !== opts.stableKey) return;
           const co = companyRef.current;
           const cryptoCtx = co ? { encryptServerBackupSalt: co.encryptServerBackupSalt } : null;
           void (async () => {
-            const data = (
-              await Promise.all(
-                snapshot.docs.map(async (d) => {
+            // Serialized so overlapping snapshots cannot apply their changes out of order.
+            const decryptStep = decryptChain.then(async () => {
+              const changedDocs = decryptSeeded
+                ? snapshot.docChanges().filter((ch) => ch.type !== "removed").map((ch) => ch.doc)
+                : snapshot.docs;
+              if (decryptSeeded) {
+                snapshot.docChanges().forEach((ch) => {
+                  if (ch.type === "removed") decryptedById.delete(ch.doc.id);
+                });
+              } else {
+                decryptedById.clear();
+              }
+              const decrypted = await Promise.all(
+                changedDocs.map(async (d) => {
                   const raw = { ...d.data(), id: d.id } as Record<string, unknown> & { id: string };
-                  return decryptFirestoreCompanyDocIfNeeded(raw, cryptoCtx, companyId);
+                  return { id: d.id, row: await decryptFirestoreCompanyDocIfNeeded(raw, cryptoCtx, companyId) };
                 })
-              )
-            ).filter((x): x is NonNullable<typeof x> => x != null)
-              .filter((item: any) => item.isDeleted !== true);
+              );
+              for (const { id, row } of decrypted) {
+                if (row == null) decryptedById.delete(id);
+                else decryptedById.set(id, row);
+              }
+              decryptSeeded = true;
+            });
+            decryptChain = decryptStep.catch(() => {
+              decryptSeeded = false;
+            });
+            await decryptStep;
+            const data = Array.from(decryptedById.values()).filter((item: any) => item.isDeleted !== true);
             if (cancelled && !opts?.stableKey) return;
             if (opts?.stableKey && stableLiveVoucherListenerRef.current?.key !== opts.stableKey) return;
             if (orderByField) {
@@ -2098,6 +2126,7 @@ export const VoucherProvider = ({
             }
           })();
         }, (error: any) => {
+          opts?.onFirstResult?.();
           try {
             if (error?.code === 'unavailable' || error?.code === 'deadline-exceeded' || error?.message?.includes('network')) {
               listCompanyCollectionForVoucherUi(companyId, path)
@@ -2168,7 +2197,14 @@ export const VoucherProvider = ({
         stableLiveVoucherListenerRef.current = null;
       }
 
-      const unsubscribers = collectionsToFetch.map((config) => bindCollectionListener(config));
+      // The same listener reports its first snapshot/error, so no second onSnapshot per collection is needed just to clear loading.
+      const unsubscribersPending: Array<() => void> = [];
+      const initialFetches = collectionsToFetch.map((config) => new Promise<boolean>((resolve) => {
+        let done = false;
+        const onFirstResult = () => { if (!done) { done = true; resolve(true); } };
+        unsubscribersPending.push(bindCollectionListener(config, { onFirstResult }));
+      }));
+      const unsubscribers = unsubscribersPending;
       unsubRef.current = unsubscribers;
 
       const coPrefetch = companyRef.current;
@@ -2189,17 +2225,6 @@ export const VoucherProvider = ({
         }
       }
 
-      const initialFetches = collectionsToFetch.map(({ path, isGroup, orderByField }) =>
-        new Promise((resolve) => {
-          const q = collectionListenerQuery(path, isGroup);
-          const unsub = onSnapshot(q, () => { unsub(); resolve(true); }, (err: any) => {
-            if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED' || String(err?.message || '').includes('permission')) {
-              console.warn('[PERMISSION_DENIED TRACK] source=useVouchers initialFetches path=companies/' + companyId + '/' + path, { companyId, path });
-            }
-            resolve(true);
-          });
-        })
-      );
       if (embeddedLocalFirstBoot) {
         // SQLite / stale-first pehle paint — saari collection snapshots ka wait mat karo.
         if (!cancelled) {
