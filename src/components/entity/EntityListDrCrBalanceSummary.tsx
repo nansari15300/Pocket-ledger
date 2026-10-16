@@ -61,7 +61,7 @@ export function EntityListDrCrBalanceSummary({
   return (
     <div
       className={cn(
-        "pl-mlc-footer-summary-row w-full min-w-0 px-2 pb-1 pt-1.5 max-md:py-px max-md:pb-px max-md:pt-px",
+        "pl-mlc-footer-summary-row w-full min-w-0 px-2 max-md:px-[2px] pb-1 pt-1.5 max-md:py-px max-md:pb-px max-md:pt-px",
         className,
       )}
     >

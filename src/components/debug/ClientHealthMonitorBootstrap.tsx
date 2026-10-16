@@ -22,12 +22,19 @@ import {
   getClientHealthMonitorSnapshot,
   getClientHealthRing,
   isClientHealthMonitorEnabled,
+  releaseClientHealthEmergencyBrake,
+  PL_UI_HEALTH_EMERGENCY_OVERLAY_MIN_VISIBLE_MS,
   startClientHealthMonitor,
   updateClientHealthMonitorSnapshot,
   type ClientHealthAlertDetail,
   type ClientHealthEntry,
   type ClientHealthMonitorSnapshot,
 } from "@/lib/clientHealthMonitor";
+import {
+  canDismissClientHealthEmergencyOverlay,
+  hideClientHealthEmergencyOverlay,
+  showClientHealthEmergencyOverlay,
+} from "@/lib/clientHealthEmergencyOverlay";
 import { useCompany } from "@/hooks/useCompany";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { toast } from "sonner";
@@ -107,6 +114,19 @@ export function ClientHealthMonitorBootstrap() {
     pushLightSnapshot();
   }, [enabled, pushLightSnapshot]);
 
+  // One health dialog only: reuse the lightweight overlay (snapshot on top, log below) instead of a second diary dialog.
+  const openSingleHealthDialog = useCallback((reason: string) => {
+    showClientHealthEmergencyOverlay(
+      reason,
+      () => {
+        if (!canDismissClientHealthEmergencyOverlay()) return;
+        hideClientHealthEmergencyOverlay();
+        releaseClientHealthEmergencyBrake();
+      },
+      { minVisibleMs: PL_UI_HEALTH_EMERGENCY_OVERLAY_MIN_VISIBLE_MS }
+    );
+  }, []);
+
   useEffect(() => {
     if (!enabled) return;
     const onRing = () => syncRing();
@@ -126,16 +146,13 @@ export function ClientHealthMonitorBootstrap() {
           forceOpen = Boolean(d.forceOpen && !isStallLike);
           if (isStallLike) {
             // Emergency overlay already has the log — opening diary behind it traps Resume.
-            if (d.forceOpen && !document.getElementById("pl-ui-health-emergency-overlay")) {
-              setAlertHint(reason);
-              setOpen(true);
-            }
+            if (d.forceOpen) openSingleHealthDialog(reason);
             return;
           }
         }
       }
       setAlertHint(reason);
-      if (forceOpen && !document.getElementById("pl-ui-health-emergency-overlay")) setOpen(true);
+      if (forceOpen) openSingleHealthDialog(reason);
     };
     window.addEventListener(PL_CLIENT_HEALTH_LOG_EVENT, onRing);
     window.addEventListener(PL_CLIENT_HEALTH_SNAPSHOT_EVENT, onSnapshot);
@@ -145,20 +162,9 @@ export function ClientHealthMonitorBootstrap() {
       window.removeEventListener(PL_CLIENT_HEALTH_SNAPSHOT_EVENT, onSnapshot);
       window.removeEventListener(PL_CLIENT_HEALTH_ALERT_EVENT, onAlert);
     };
-  }, [enabled, syncRing]);
+  }, [enabled, syncRing, openSingleHealthDialog]);
 
-  useEffect(() => {
-    if (!enabled) return;
-    const onKey = (ev: KeyboardEvent) => {
-      if (!ev.ctrlKey || !ev.shiftKey || ev.key.toLowerCase() !== "u") return;
-      ev.preventDefault();
-      pushLightSnapshot();
-      setOpen(true);
-      syncRing();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [enabled, syncRing, pushLightSnapshot]);
+  // Ctrl+Shift+U is handled once by ClientHealthGlobalBootstrap (same single dialog).
 
   const body = useMemo(() => getClientHealthExportText(), [entries, snapshot]);
 

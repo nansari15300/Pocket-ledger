@@ -4855,6 +4855,10 @@ body[class*="theme-"] main [data-pl-master-list-chrome] [data-pl-item-stock-view
   border-color: rgb(249 168 212) !important;
   color: rgb(131 24 67) !important;
 }
+/* Pink badge: search box ke left me (row gap 2px). Mobile dock niche apna order rakhta hai. */
+[data-pl-master-list-chrome] .pl-mlc-search-row > .pl-mlc-pending-badge {
+  order: -1 !important;
+}
 [data-pl-master-list-chrome] .pl-mlc-search-row .pl-mlc-pending-badge[aria-pressed="true"],
 [data-pl-mobile-list-dock] .pl-mlc-search-row .pl-mlc-pending-badge[aria-pressed="true"],
 [data-pl-party-mobile-list-dock] .pl-mlc-search-row .pl-mlc-pending-badge[aria-pressed="true"] {
@@ -6800,7 +6804,11 @@ body[class*="theme-"] main .pl-mobile-ledger-footer-fab[data-pl-master-list-chro
   padding-bottom: 1px !important;
 }
 [data-pl-mobile-list-dock] .pl-mlc-footer-summary-row > div,
-[data-pl-party-mobile-list-dock] .pl-mlc-footer-summary-row > div {
+[data-pl-party-mobile-list-dock] .pl-mlc-footer-summary-row > div,
+[data-pl-mobile-list-dock] .pl-mlc-action-row > div,
+[data-pl-party-mobile-list-dock] .pl-mlc-action-row > div {
+  width: 100% !important;
+  flex: 1 1 100%;
   height: 100% !important;
   min-height: 0 !important;
   align-items: stretch !important;
@@ -6920,6 +6928,15 @@ body[class*="theme-"] main .pl-mobile-ledger-footer-fab[data-pl-master-list-chro
   width: auto !important;
   min-width: calc(5ch + 10px) !important;
   max-width: none !important;
+}
+/* Badge ho to wo search ke bilkul bagal me (2px gap), dono right side; bina badge search pehle jaisa right */
+[data-pl-mobile-list-dock] .pl-mlc-search-row:has(> .pl-mlc-pending-badge) > .pl-mlc-search-wrap,
+[data-pl-party-mobile-list-dock] .pl-mlc-search-row:has(> .pl-mlc-pending-badge) > .pl-mlc-search-wrap {
+  margin-left: 0 !important;
+}
+[data-pl-mobile-list-dock] .pl-mlc-search-row > .pl-mlc-pending-badge,
+[data-pl-party-mobile-list-dock] .pl-mlc-search-row > .pl-mlc-pending-badge {
+  margin-left: auto !important;
 }
 [data-pl-mobile-list-dock] .pl-mlc-search-row > :not(.pl-mlc-search-wrap):not(.pl-mlc-pending-badge),
 [data-pl-party-mobile-list-dock] .pl-mlc-search-row > :not(.pl-mlc-search-wrap):not(.pl-mlc-pending-badge) {

@@ -67,14 +67,15 @@ export function MasterListViewShell({
     />
   ) : null;
 
-  const footerDock = showQuickFilter || footerSummary ? (
+  // Mobile: amount (Dr/Cr) row sits above the tabs, full width; only the quick filter stays in the footer.
+  const footerDock = showQuickFilter || (footerSummary && !isMobile) ? (
     <div
       className={cn(
         "pl-mlc-footer-stack w-full min-w-0 flex-shrink-0",
         !isMobile && "border-t border-blue-300/60 bg-blue-100/80",
       )}
     >
-      {footerSummary}
+      {isMobile ? null : footerSummary}
       {quickFilterBar}
     </div>
   ) : null;
@@ -93,6 +94,9 @@ export function MasterListViewShell({
   const mobileDock = isMobile ? (
     <div className={mlc.mobileListDock} data-pl-mobile-list-dock="">
       <div className="pl-mlc-dock-panel flex w-full min-w-0 flex-col gap-0 bg-blue-100/80 px-[2px] pb-[2px] pt-[2px] dark:bg-blue-950/35">
+        {footerSummary ? (
+          <div className="pl-mlc-footer-stack w-full min-w-0 flex-shrink-0">{footerSummary}</div>
+        ) : null}
         {tabs ? (
           <div className={cn(mlc.tabsRow, "flex items-center gap-[2px] border-b-0")}>
             <div className="min-w-0 flex-1">{tabs}</div>
