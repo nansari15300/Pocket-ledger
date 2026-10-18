@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -15,6 +16,7 @@ import { listVouchersFromBrowserDbByDateRange } from "@/lib/fyPagination/voucher
 import { hydrateLedgerOpeningBalances } from "@/lib/fyPagination/openingSnapshotHydrate";
 import type { LedgerOpeningHydrateResult } from "@/lib/fyPagination/openingSnapshotStatus";
 import type { FyActiveScope, FyDateRangeMs } from "@/lib/fyPagination/types";
+import { isDateInRange, voucherMs } from "@/lib/fyPagination/scopeFilter";
 
 export type OpeningBalancesLoadStatus = "idle" | "loading" | "ready" | "unavailable";
 
@@ -32,6 +34,10 @@ type FyVoucherScopeContextValue = {
   applyOpeningHydrateResult: (result: LedgerOpeningHydrateResult) => void;
   requestLoadRange: (range: FyDateRangeMs, fyKey?: string) => Promise<any[]>;
   requestLoadFyKey: (fyKey: string, country?: string) => Promise<any[]>;
+  /** Load one date range from local SQLite into memory WITHOUT persisting a loaded-range record (e.g. dashboard Daybook old day). */
+  requestLoadTransientRange: (range: FyDateRangeMs) => Promise<any[]>;
+  /** Drop a range loaded by requestLoadTransientRange (and its rows) unless another range / the active scope still covers them. */
+  evictTransientRange: (range: FyDateRangeMs) => void;
   mergeHydratedVouchers: (rows: any[]) => void;
   patchHydratedVouchers: (voucherIds: string[], patch: Record<string, unknown>) => void;
   registerInMemoryVoucherIds: (ids: Iterable<string>) => void;
@@ -128,6 +134,53 @@ export function FyVoucherScopeProvider({
     [companyId, enabled, mergeHydratedVouchers]
   );
 
+  const hydratedRef = useRef<any[]>([]);
+  hydratedRef.current = hydratedVouchers;
+  const loadedRangesRef = useRef<FyDateRangeMs[]>([]);
+  loadedRangesRef.current = loadedRanges;
+  const activeScopeRef = useRef<FyActiveScope | null>(null);
+  activeScopeRef.current = activeScope;
+
+  const requestLoadTransientRange = useCallback(
+    async (range: FyDateRangeMs) => {
+      if (!companyId || !enabled) return [];
+      const rows = await listVouchersFromBrowserDbByDateRange(companyId, range);
+      setLoadedRanges((prev) => [...prev, range]);
+      mergeHydratedVouchers(rows);
+      return rows;
+    },
+    [companyId, enabled, mergeHydratedVouchers]
+  );
+
+  const evictTransientRange = useCallback((range: FyDateRangeMs) => {
+    let removed = false;
+    const remaining = loadedRangesRef.current.filter((r) => {
+      if (!removed && r.fromMs === range.fromMs && r.toMs === range.toMs) {
+        removed = true;
+        return false;
+      }
+      return true;
+    });
+    if (!removed) return;
+    setLoadedRanges(remaining);
+    const scope = activeScopeRef.current;
+    const stillCovered = (ms: number) =>
+      (scope ? isDateInRange(ms, scope.range) : false) || remaining.some((r) => isDateInRange(ms, r));
+    const dropIds = new Set<string>();
+    for (const row of hydratedRef.current) {
+      const ms = voucherMs(row?.date);
+      const id = String(row?.id || "").trim();
+      if (id && ms != null && isDateInRange(ms, range) && !stillCovered(ms)) dropIds.add(id);
+    }
+    if (!dropIds.size) return;
+    setHydratedVouchers((prev) => prev.filter((row) => !dropIds.has(String(row?.id || "").trim())));
+    setScopedVoucherIds((prev) => {
+      const next = new Set(prev);
+      for (const id of dropIds) next.delete(id);
+      return next;
+    });
+  }, []);
+
   const requestLoadFyKey = useCallback(
     async (fyKey: string, country?: string) => {
       const range = fiscalYearRangeForKey(country, fyKey);
@@ -152,6 +205,8 @@ export function FyVoucherScopeProvider({
       applyOpeningHydrateResult,
       requestLoadRange,
       requestLoadFyKey,
+      requestLoadTransientRange,
+      evictTransientRange,
       mergeHydratedVouchers,
       patchHydratedVouchers,
       registerInMemoryVoucherIds,
@@ -167,6 +222,8 @@ export function FyVoucherScopeProvider({
       hydratedVouchers,
       requestLoadRange,
       requestLoadFyKey,
+      requestLoadTransientRange,
+      evictTransientRange,
       mergeHydratedVouchers,
       patchHydratedVouchers,
       registerInMemoryVoucherIds,
@@ -197,6 +254,8 @@ export function useFyVoucherScope(): FyVoucherScopeContextValue {
       applyOpeningHydrateResult: () => {},
       requestLoadRange: async () => [],
       requestLoadFyKey: async () => [],
+      requestLoadTransientRange: async () => [],
+      evictTransientRange: () => {},
       mergeHydratedVouchers: () => {},
       patchHydratedVouchers: () => {},
       registerInMemoryVoucherIds: () => {},

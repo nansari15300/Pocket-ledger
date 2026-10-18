@@ -40,6 +40,10 @@ type Props = {
   otherChargeAccountOptions?: AccountOption[];
   otherChargeBalance?: number | null;
   onOtherChargeDefault?: () => void;
+  /** A stored default exists: button shows Clear. */
+  otherChargeDefaultSaved?: boolean;
+  /** Hide Default/Clear when editing an existing voucher. */
+  showOtherChargeDefault?: boolean;
   otherChargeAccountId?: string;
   otherChargeAddNewLabels?: { value: string; label: string }[];
   onOtherChargeAccountChange?: (val: string, newName?: string) => void;
@@ -169,6 +173,8 @@ export function InterCompanyAmountDualFields({
   otherChargeAccountOptions = [],
   otherChargeBalance = null,
   onOtherChargeDefault,
+  otherChargeDefaultSaved = false,
+  showOtherChargeDefault = true,
   otherChargeAccountId = "",
   otherChargeAddNewLabels = OTHER_CHARGE_ADD_NEW_LABELS,
   onOtherChargeAccountChange,
@@ -350,7 +356,7 @@ export function InterCompanyAmountDualFields({
                         );
                       }}
                     />
-                    {otherChargeAccountId && onOtherChargeDefault && !sourceReadOnly ? (
+                    {showOtherChargeDefault && (otherChargeAccountId || otherChargeDefaultSaved) && onOtherChargeDefault && !sourceReadOnly ? (
                       <div className="flex shrink-0 flex-col gap-1">
                         <span
                           className="block text-xs leading-tight text-muted-foreground invisible select-none"
@@ -365,7 +371,7 @@ export function InterCompanyAmountDualFields({
                           className="h-9 rounded-full px-3 text-sm font-medium"
                           onClick={onOtherChargeDefault}
                         >
-                          Default
+                          {otherChargeDefaultSaved ? "Clear" : "Default"}
                         </Button>
                       </div>
                     ) : null}

@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { DateFormatSettingsDialog } from "@/components/settings/DateFormatSettingsDialog";
 import { cn } from "@/lib/utils";
-import { getVoucherEditConvertPresentation } from "@/lib/voucherEditConvert";
+import { getVoucherEditConvertPresentation, getVoucherConvertOriginalId, isVoucherEditConverting } from "@/lib/voucherEditConvert";
 import { VoucherEditConvertBanner } from "@/components/vouchers/VoucherEditConvertBanner";
 import { nestedVoucherAlertShell } from "@/lib/dialogShellChrome";
 import { plHang, plHangEnsureLongTaskObserver, plHangStart } from "@/lib/plHangDiag";
@@ -1450,7 +1450,7 @@ function VoucherDialogContent({
         )}
       >
         {editConvertPresentation ? (
-          <VoucherEditConvertBanner message={editConvertPresentation.bannerText} />
+          <VoucherEditConvertBanner message={editConvertPresentation.bannerText} sourceVoucherId={getVoucherConvertOriginalId(initialVoucherData as { id?: string; _sourceVoucherId?: string })} sourceVoucherNumber={editConvertPresentation.sourceVoucherNumber} />
         ) : null}
         <Suspense fallback={<div className="p-10 text-center"><Loader2 className="animate-spin mx-auto" /></div>}>
           {ActiveForm ? (
@@ -1508,6 +1508,22 @@ function VoucherDialogContent({
 
 const MIN_DIALOG_W = 420;
 const MIN_DIALOG_H = 320;
+/** Desktop (md+) content min width per voucher type: below this the whole form body+footer scrolls horizontally together. */
+const DESKTOP_VOUCHER_BODY_MIN_W_DEFAULT = 720;
+const DESKTOP_VOUCHER_BODY_MIN_W: Partial<Record<string, number>> = {
+  sale: SALE_PURCHASE_VOUCHER_DIALOG_MIN_W,
+  purchase: SALE_PURCHASE_VOUCHER_DIALOG_MIN_W,
+  add_salary: 780,
+  payment_in: 740,
+  payment_out: 740,
+  direct_income: 740,
+  direct_expense: 740,
+  journal: 780,
+  contra: 660,
+  adjustment: 660,
+  note: 660,
+  production: 740,
+};
 const DIALOG_VIEWPORT_W_RATIO = 0.8;
 const DIALOG_VIEWPORT_H_RATIO = 0.8;
 const VOUCHER_DIALOG_STORAGE_KEY = "pl-voucher-dialog-bounds";
@@ -2759,7 +2775,7 @@ export function AddVoucherDialog(props: any) {
       <p
         className={cn(
           "m-0 font-semibold leading-tight text-emerald-700",
-          isMobile ? "text-[10px]" : "text-[10px] md:text-xs"
+          isMobile ? "text-xs" : "text-xs md:text-sm"
         )}
       >
         Copied Draft (New)
@@ -2776,13 +2792,14 @@ export function AddVoucherDialog(props: any) {
             checked={deleteOriginalAfterCopySave}
             disabled={forceViewOnly}
             onCheckedChange={(v) => setDeleteOriginalAfterCopySave(v === true)}
-            className={cn(isMobile ? "h-3 w-3" : "h-3.5 w-3.5")}
+            data-pl-copy-del-cb=""
+            className={cn(isMobile ? "h-5 w-5" : "h-6 w-6")}
             aria-label="Delete original voucher after save"
           />
           <span
             className={cn(
               "whitespace-nowrap font-medium text-emerald-900",
-              isMobile ? "text-[10px]" : "text-[10px] md:text-xs"
+              isMobile ? "text-xs" : "text-xs md:text-sm"
             )}
           >
             Delete original voucher
@@ -2828,6 +2845,9 @@ export function AddVoucherDialog(props: any) {
     const activeContextCompanyId = String(ctxCompanyId || "").trim();
     // Copied-draft par approve sirf source saved doc ke liye — chrome me id nahi dikhate, yahan bhi guard.
     if (!cid || !effectiveVoucher?.id || postCopyNewFormSeed || isApproving || !user?.uid) return;
+    // Convert & Approve: the form already saved + approved the NEW voucher (saveVoucher approve option) and moved the
+    // original to bin. effectiveVoucher.id is the ORIGINAL, so approving it would hit a binned voucher (stuck "Approving...").
+    if (isVoucherEditConverting(effectiveVoucher as { id?: string; type?: string }, voucherFormActiveTab)) return;
     // APK cloud offline: approve Firestore call fail + galat UX — pehle roko.
     if (apkOfflineViewOnly) {
       toast.warning("Offline — view only. Connect to approve.");
@@ -2883,6 +2903,8 @@ export function AddVoucherDialog(props: any) {
     editCompanyId,
     ctxCompanyId,
     effectiveVoucher?.id,
+    effectiveVoucher?.type,
+    voucherFormActiveTab,
     postCopyNewFormSeed,
     isApproving,
     user?.uid,
@@ -4908,8 +4930,14 @@ export function AddVoucherDialog(props: any) {
             }}
           >
             {headerBlock}
-            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-              {bodyBlock}
+            {/* Desktop: ONE horizontal scroller around form body + footer; header stays fixed. Inner wrapper min-width per voucher type. */}
+            <div className="flex-1 flex flex-col min-h-0 overflow-x-auto overflow-y-hidden scrollbar-slim-dim">
+              <div
+                className="flex flex-1 flex-col min-h-0 w-full"
+                style={{ minWidth: DESKTOP_VOUCHER_BODY_MIN_W[voucherFormActiveTab] ?? DESKTOP_VOUCHER_BODY_MIN_W_DEFAULT }}
+              >
+                {bodyBlock}
+              </div>
             </div>
             {/* Top handles z-[35] — ribbon z-20 ke upar; bottom jaisa resize. */}
             <div

@@ -5526,6 +5526,76 @@ body.theme-pro main .rounded-lg.border.bg-card:not([data-pl-list-row]):not(.pl-d
   background-color: #ecfdf5 !important;
   background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
 }
+/* Daybook Daily Summary / Daybook card: pill blue (border-blue-300) over Pro global black card border */
+body.theme-pro main [data-pl-daybook-blue-border].rounded-lg.border.bg-card {
+  border-color: rgb(147 197 253) !important;
+}
+/* Daybook Daily Summary card: visible light blue (blue-100). Beats Pro nested-card rule (#f0f9ff + gradient) and non-pro .bg-card white via repeated attr specificity. */
+html body[class*="theme-"] main [data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card].rounded-lg.border.bg-card {
+  background-image: none !important;
+  background-color: rgb(219 234 254) !important;
+}
+html body[class*="theme-"].dark main [data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card].rounded-lg.border.bg-card,
+html.dark body[class*="theme-"] main [data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card].rounded-lg.border.bg-card {
+  background-image: none !important;
+  background-color: rgb(30 58 138 / 0.45) !important;
+}
+html body[class*="theme-"] main [data-pl-daybook-summary-card][data-pl-daybook-summary-card][data-pl-daybook-summary-card] :is(table, thead, tbody, th, td, tr):not([data-pl-daybook-summary-gray-row]):not([data-pl-daybook-summary-gray-row] > td) {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+/* Daybook outer + Daily Summary card border: force blue-300 over black theme rules (incl. 4K #000 rule ~21 specificity, main .border-2, nested-card). Width untouched. */
+html body[class*="theme-"] main [data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border].rounded-lg.border {
+  border-color: rgb(147 197 253) !important;
+  border-top-color: rgb(147 197 253) !important;
+  border-right-color: rgb(147 197 253) !important;
+  border-bottom-color: rgb(147 197 253) !important;
+  border-left-color: rgb(147 197 253) !important;
+  outline-color: rgb(147 197 253) !important;
+}
+html body[class*="theme-"].dark main [data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border].rounded-lg.border,
+html.dark body[class*="theme-"] main [data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border][data-pl-daybook-blue-border].rounded-lg.border {
+  border-color: rgb(59 130 246 / 0.55) !important;
+  border-top-color: rgb(59 130 246 / 0.55) !important;
+  border-right-color: rgb(59 130 246 / 0.55) !important;
+  border-bottom-color: rgb(59 130 246 / 0.55) !important;
+  border-left-color: rgb(59 130 246 / 0.55) !important;
+  outline-color: rgb(59 130 246 / 0.55) !important;
+}
+/* Daybook MAIN (outer) card: 1px blue border + 3px gap on all sides (padding). Outer Card is the element drawing the outline (dashboard wrapper has no border). */
+html body[class*="theme-"] main [data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card].rounded-lg.border {
+  border-width: 1px !important;
+  border-style: solid !important;
+  padding: 3px !important;
+}
+/* Daybook (Daily Summary table + Daybook transactions table): all horizontal row/header lines = soft dark gray (not #000). Width untouched. */
+html body[class*="theme-"] main [data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card] :is(table, thead, tbody, tfoot) tr,
+html body[class*="theme-"] main [data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card] :is(table, thead, tbody, tfoot) th,
+html body[class*="theme-"] main [data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card] :is(table, thead, tbody, tfoot) td {
+  border-top-color: #4b5563 !important;
+  border-bottom-color: #4b5563 !important;
+}
+html body[class*="theme-"].dark main [data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card] :is(table, thead, tbody, tfoot) tr,
+html body[class*="theme-"].dark main [data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card] :is(table, thead, tbody, tfoot) th,
+html body[class*="theme-"].dark main [data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card] :is(table, thead, tbody, tfoot) td,
+html.dark body[class*="theme-"] main [data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card] :is(table, thead, tbody, tfoot) tr,
+html.dark body[class*="theme-"] main [data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card] :is(table, thead, tbody, tfoot) th,
+html.dark body[class*="theme-"] main [data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card][data-pl-daybook-outer-card] :is(table, thead, tbody, tfoot) td {
+  border-top-color: #9ca3af !important;
+  border-bottom-color: #9ca3af !important;
+}
+/* Daybook Daily Summary Bank / Cash / Total rows: exact Recent/Daybook txn header gray (same as .pl-dashboard-recent-sticky-thead th: #e5e7eb, dark #374151) */
+[data-pl-daybook-summary-gray-row]:not([aria-selected="true"]),
+[data-pl-daybook-summary-gray-row]:not([aria-selected="true"]) > td {
+  background: #e5e7eb !important;
+}
+body.dark [data-pl-daybook-summary-gray-row]:not([aria-selected="true"]),
+body.dark [data-pl-daybook-summary-gray-row]:not([aria-selected="true"]) > td,
+.dark [data-pl-daybook-summary-gray-row]:not([aria-selected="true"]),
+.dark [data-pl-daybook-summary-gray-row]:not([aria-selected="true"]) > td {
+  background: #374151 !important;
+}
+
 /* Manage Sharing / Company Profile — Pro theme global black card border override se upar */
 body.theme-pro main [data-pl-company-profile-chrome].rounded-lg.border.bg-card,
 body.theme-pro main [data-pl-company-profile-chrome] .rounded-lg.border.bg-card:not([data-pl-mobile-transaction-card]),
@@ -13005,4 +13075,23 @@ span[data-tds-verify-badge="unverified"] {
   display: none !important;
   height: 0 !important;
   width: 0 !important;
+}
+
+/* Convert/copy banner: 'Delete original voucher' checkbox - clearly visible on the lavender bar (beats the dialog green !important border rule). */
+[data-pl-dialog-shell] button[data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][role="checkbox"],
+body [data-pl-dialog-shell] button[data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][role="checkbox"],
+body.dark [data-pl-dialog-shell] button[data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][role="checkbox"] {
+  border: 2px solid #065f46 !important;
+  background-color: #ffffff !important;
+}
+[data-pl-dialog-shell] button[data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][role="checkbox"][data-state="checked"],
+body [data-pl-dialog-shell] button[data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][role="checkbox"][data-state="checked"],
+body.dark [data-pl-dialog-shell] button[data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][role="checkbox"][data-state="checked"] {
+  background-color: #065f46 !important;
+  color: #ffffff !important;
+}
+/* Tick icon scales with the enlarged copy-draft checkbox (ui/checkbox fixes it at h-4 w-4). */
+[data-pl-dialog-shell] button[data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][role="checkbox"] svg {
+  width: 80% !important;
+  height: 80% !important;
 }

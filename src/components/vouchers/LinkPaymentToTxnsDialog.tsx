@@ -29,11 +29,20 @@ import {
   getAllocatedByVoucherId,
   getAllocatedByVoucherIdFromPaymentOuts,
   getAllocationTotal,
+  getTdsLegAllocatedByTargetId,
+  buildBillWiseEntityTxnId,
+  allocationEntityTxnId,
   getPaymentOutPartyLinkAmount,
   getJournalPartyBillWiseAmountFromEntries,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
-import { getSalePurchaseBillWiseTargetTotal } from "@/lib/tdsVoucher";
+import { getSalePurchasePartyLinkTarget } from "@/lib/tdsVoucher";
+
+/** Separate TDS rows are hidden: one net row (total - TDS) per Sale/Purchase. Existing TDS-leg allocations are kept untouched (see preservedTds). */
+const SHOW_TDS_LEG_ROWS = false;
+const isTdsLegEntityId = (id: string | null | undefined): boolean => String(id ?? "").includes("::tds::");
+const isTdsLegAllocation = (a: Allocation): boolean => isTdsLegEntityId(allocationEntityTxnId(a));
+const roundMoney2 = (n: number): number => Math.round((Number(n) || 0) * 100) / 100;
 import { getInterCompanyEntityBillWiseAmount } from "@/lib/interCompany/interCompanyLedgerAmounts";
 
 const safeToDate = (date: unknown): Date | null => {
@@ -86,7 +95,12 @@ export interface LinkPaymentToTxnsDialogProps {
   /** When true (Journal link dialog): Other Linked = sum from opposite-side vouchers only. Dr rows ← Cr sources; Cr rows ← Dr sources. */
   isJournalLinkDialog?: boolean;
   /** Called with allocations and the amount (received or paid). */
-  onDone: (allocations: Allocation[], amount: number) => void;
+  /** 3rd arg: TDS-leg links the user unticked (all) and the ones that existed only as an orphan reverse mirror. */
+  onDone: (
+    allocations: Allocation[],
+    amount: number,
+    info?: { removedTdsEntityIds: string[]; orphanTdsEntityIds: string[] }
+  ) => void;
 }
 
 export function LinkPaymentToTxnsDialog({
@@ -263,6 +277,68 @@ export function LinkPaymentToTxnsDialog({
   };
   const openingBalanceRowLabel = isJournalLinkDialog ? ("Book Opening" as const) : ("Opening Balance" as const);
 
+  // TDS-leg allocations by other sources (entityTxnId = voucherId::tds::accountId); current voucher excluded.
+  const tdsLegOthers = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const x of (vouchersForAllocations as any[]) || []) {
+      if (!x?.id || String(x.id) === currentVoucherIdStr) continue;
+      for (const a of (Array.isArray(x.allocations) ? x.allocations : []) as Allocation[]) {
+        const et = allocationEntityTxnId(a);
+        if (!isTdsLegEntityId(et)) continue;
+        // Reverse mirror on the Sale/Purchase itself (entity belongs to x.id, voucherId = source) is not an "other" link.
+        if (et.startsWith(`${String(x.id)}::`)) continue;
+        const amt = getAllocationTotal(a);
+        if (amt > 0) m.set(et, (m.get(et) ?? 0) + amt);
+      }
+    }
+    return m;
+  }, [vouchersForAllocations, currentVoucherIdStr]);
+
+  // Voucher numbers of the other sources holding each TDS leg (shown as "Linked by ..." on the TDS row).
+  const tdsLegOtherNos = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const x of (vouchersForAllocations as any[]) || []) {
+      if (!x?.id || String(x.id) === currentVoucherIdStr) continue;
+      for (const a of (Array.isArray(x.allocations) ? x.allocations : []) as Allocation[]) {
+        const et = allocationEntityTxnId(a);
+        if (!isTdsLegEntityId(et) || et.startsWith(`${String(x.id)}::`) || getAllocationTotal(a) <= 0) continue;
+        const no = String(x.voucherNumber ?? x.voucher_number ?? x.id);
+        const list = m.get(et) ?? [];
+        if (!list.includes(no)) list.push(no);
+        m.set(et, list);
+      }
+    }
+    return m;
+  }, [vouchersForAllocations, currentVoucherIdStr]);
+
+  /** One linkable row per TDS account of a Sale/Purchase (same voucher no.; id = TDS-leg entityTxnId). */
+  const buildTdsLegRows = (v: any, label: "Sale TDS" | "Purchase TDS") => {
+    if (!SHOW_TDS_LEG_ROWS) return [];
+    const byAcct = new Map<string, number>();
+    for (const li of (Array.isArray(v?.lineItems) ? v.lineItems : []) as any[]) {
+      const acct = String(li?.tdsAccountId ?? "").trim();
+      const amt = roundMoney2(Number(li?.tdsAmount) || 0);
+      if (acct && amt > 0) byAcct.set(acct, roundMoney2((byAcct.get(acct) ?? 0) + amt));
+    }
+    return Array.from(byAcct.entries()).map(([acct, amt]) => {
+      const id = buildBillWiseEntityTxnId({ voucherId: String(v.id), entityKind: "tds", accountId: acct });
+      const others = tdsLegOthers.get(id) ?? 0;
+      return {
+        id,
+        date: v.date,
+        type: label,
+        refNo: v.invoiceNumber ?? v.voucherNumber ?? "",
+        total: amt,
+        outstanding: Math.max(0, amt - others),
+        allocatedToOthers: others,
+        isTdsLeg: true as const,
+        linkedByNos: tdsLegOtherNos.get(id) ?? [],
+        refVoucherId: String(v.id),
+        tdsAccountId: acct,
+      };
+    });
+  };
+
   // Payment In links to Sales (same party) and Payment Outs (contra). Show Opening Balance when OB is Dr (> 0).
   const combinedInList = useMemo(() => {
     if (variant !== "payment_in" || !vouchers?.length || !partyId) return [];
@@ -298,7 +374,17 @@ export function LinkPaymentToTxnsDialog({
       }
       return m;
     })();
-    const totalAllocatedTo = (vid: string) => (allocatedByPaymentIns.get(String(vid)) ?? 0) + (allocatedByBillWiseVouchers.get(String(vid)) ?? 0);
+    // Party leg link target = total - TDS; TDS-leg links are settled separately and must not consume the party leg.
+    const tdsLegAllocatedTo = getTdsLegAllocatedByTargetId(
+      (vouchersForAllocations as any[]).filter((x: any) => String(x?.id ?? "") !== currentVoucherIdStr)
+    );
+    const totalAllocatedTo = (vid: string) =>
+      Math.max(
+        0,
+        (allocatedByPaymentIns.get(String(vid)) ?? 0) +
+          (allocatedByBillWiseVouchers.get(String(vid)) ?? 0) -
+          (tdsLegAllocatedTo.get(String(vid)) ?? 0)
+      );
     const getFreshTarget = (v: any) => (vouchersForAllocations as any[]).find((x: any) => String(x?.id ?? "") === String(v?.id ?? "")) ?? v;
     // Other Linked = target ke allocations ka sum (OB, JRNL, Sale, Pur, etc. sab) — multi-linked amount sahi aaye.
     const getAllocatedToOthersFromTarget = (targetVoucher: any, vid: string): number => {
@@ -306,6 +392,7 @@ export function LinkPaymentToTxnsDialog({
       const targetSum = fromTarget.reduce((sum, a) => {
         const srcId = String(a.voucherId ?? "");
         if (!srcId || srcId === currentVoucherIdStr) return sum;
+        if (isTdsLegAllocation(a)) return sum;
         if (partyId && (a as any).linkedAccountId && String((a as any).linkedAccountId) !== String(partyId)) return sum;
         return sum + getAllocationTotal(a);
       }, 0);
@@ -316,19 +403,25 @@ export function LinkPaymentToTxnsDialog({
       const targetObAlloc = Math.max(0, (Number(targetVoucher?.openingBalanceAllocated) || 0) - obInAllocations);
       return Math.max(targetSum, sourceSum) + targetObAlloc;
     };
-    const hasExistingAlloc = (id: string) => existingAllocations.some((a) => a.voucherId === id && getAllocationTotal(a) > 0);
+    const hasExistingAlloc = (id: string) =>
+      existingAllocations.some((a) =>
+        getAllocationTotal(a) > 0 &&
+        (isTdsLegEntityId(id) ? allocationEntityTxnId(a) === id : a.voucherId === id && !isTdsLegAllocation(a))
+      );
     const salesForParty = (vouchers as any[]).filter(
       (v) =>
         !isCurrentVoucher(v) &&
         (v.type === "sale" || v.type === "sale_service") &&
         String((v as any).partyId ?? "") === String(partyId)
     );
-    const sales = salesForParty.map((v) => {
-      const total = getSalePurchaseBillWiseTargetTotal(v);
+    const sales = salesForParty.flatMap((v) => {
+      // Main row = taxable + tax (total - TDS); TDS (if any) is a separate grouped row.
+      const total = getSalePurchasePartyLinkTarget(v);
       const allocatedToOthers = getAllocatedToOthersFromTarget(getFreshTarget(v), v.id);
       // Linkable = Amount - Other Linked; table shows (outstanding - linked) where linked includes Current Link
       const outstanding = Math.max(0, total - allocatedToOthers);
-      return {
+      const tdsRows = buildTdsLegRows(v, "Sale TDS");
+      const mainRow = {
         id: v.id,
         date: v.date,
         type: "Sale" as const,
@@ -336,10 +429,15 @@ export function LinkPaymentToTxnsDialog({
         total,
         outstanding,
         allocatedToOthers,
+        groupHasTds: tdsRows.length > 0,
       };
+      return [mainRow, ...tdsRows];
     });
     // Show only linkable (outstanding > 0) or already selected rows.
-    const salesFiltered = sales.filter((s) => s.outstanding > 0 || hasExistingAlloc(s.id));
+    // Vouchers with TDS always show both rows (main + TDS) so linked-elsewhere rows can be re-linked; others only if linkable/selected.
+    const salesFiltered = sales.filter(
+      (s) => s.outstanding > 0 || hasExistingAlloc(s.id) || (s as any).isTdsLeg === true || (s as any).groupHasTds === true
+    );
     const paymentOutsForParty = (vouchers as any[]).filter(
       (v) =>
         !isCurrentVoucher(v) &&
@@ -442,7 +540,11 @@ export function LinkPaymentToTxnsDialog({
         (v as any).entries.some((e: any) => String(e?.accountId ?? "") === String(partyId)));
     // Reusable guard so current voucher (edit context) never becomes a source row for itself.
     const isCurrentVoucher = (v: any) => currentVoucherIdStr && String((v as any)?.id ?? "") === currentVoucherIdStr;
-    const hasExistingAllocOut = (id: string) => existingAllocations.some((a) => a.voucherId === id && getAllocationTotal(a) > 0);
+    const hasExistingAllocOut = (id: string) =>
+      existingAllocations.some((a) =>
+        getAllocationTotal(a) > 0 &&
+        (isTdsLegEntityId(id) ? allocationEntityTxnId(a) === id : a.voucherId === id && !isTdsLegAllocation(a))
+      );
     const paymentOutVouchers = (vouchersForAllocations as any[]).filter(
       (v) => (v.type === "payment_out" || v.type === "direct_expense") && !isCurrentVoucher(v)
     );
@@ -472,10 +574,17 @@ export function LinkPaymentToTxnsDialog({
       }
       return m;
     })();
+    const tdsLegAllocatedToOut = getTdsLegAllocatedByTargetId(
+      (vouchersForAllocations as any[]).filter((x: any) => String(x?.id ?? "") !== currentVoucherIdStr)
+    );
     const totalAllocatedToOut = (vid: string) =>
-      (allocatedByPaymentOuts.get(String(vid)) ?? 0) +
-      (allocatedByPaymentInsOut.get(String(vid)) ?? 0) +
-      (allocatedByBillWiseVouchers.get(String(vid)) ?? 0);
+      Math.max(
+        0,
+        (allocatedByPaymentOuts.get(String(vid)) ?? 0) +
+          (allocatedByPaymentInsOut.get(String(vid)) ?? 0) +
+          (allocatedByBillWiseVouchers.get(String(vid)) ?? 0) -
+          (tdsLegAllocatedToOut.get(String(vid)) ?? 0)
+      );
     const getFreshTargetOut = (v: any) => (vouchersForAllocations as any[]).find((x: any) => String(x?.id ?? "") === String(v?.id ?? "")) ?? v;
     // Other Linked = target ke allocations ka sum (OB, JRNL, Sale, Pur, etc. sab) — multi-linked amount sahi aaye.
     const getAllocatedToOthersFromTargetOut = (targetVoucher: any, vid: string): number => {
@@ -483,6 +592,7 @@ export function LinkPaymentToTxnsDialog({
       const targetSum = fromTarget.reduce((sum, a) => {
         const srcId = String(a.voucherId ?? "");
         if (!srcId || srcId === currentVoucherIdStr) return sum;
+        if (isTdsLegAllocation(a)) return sum;
         if (partyId && (a as any).linkedAccountId && String((a as any).linkedAccountId) !== String(partyId)) return sum;
         return sum + getAllocationTotal(a);
       }, 0);
@@ -499,11 +609,13 @@ export function LinkPaymentToTxnsDialog({
         (v.type === "purchase" || v.type === "purchase_service") &&
         String((v as any).partyId ?? "") === String(partyId)
     );
-    const purchases = purchasesForParty.map((v) => {
-      const total = getSalePurchaseBillWiseTargetTotal(v);
+    const purchases = purchasesForParty.flatMap((v) => {
+      // Main row = taxable + tax (total - TDS); TDS (if any) is a separate grouped row.
+      const total = getSalePurchasePartyLinkTarget(v);
       const allocatedToOthers = getAllocatedToOthersFromTargetOut(getFreshTargetOut(v), v.id);
       const outstanding = Math.max(0, total - allocatedToOthers);
-      return {
+      const tdsRows = buildTdsLegRows(v, "Purchase TDS");
+      const mainRow = {
         id: v.id,
         date: v.date,
         type: "Purchase" as const,
@@ -511,10 +623,14 @@ export function LinkPaymentToTxnsDialog({
         total,
         outstanding,
         allocatedToOthers,
+        groupHasTds: tdsRows.length > 0,
       };
+      return [mainRow, ...tdsRows];
     });
     // Show only linkable (outstanding > 0) or already selected rows.
-    const purchasesFiltered = purchases.filter((p) => p.outstanding > 0 || hasExistingAllocOut(p.id));
+    const purchasesFiltered = purchases.filter(
+      (p) => p.outstanding > 0 || hasExistingAllocOut(p.id) || (p as any).isTdsLeg === true || (p as any).groupHasTds === true
+    );
     const paymentInsForParty = (vouchers as any[]).filter(
       (v) =>
         !isCurrentVoucher(v) &&
@@ -612,7 +728,8 @@ export function LinkPaymentToTxnsDialog({
   const autoLink = useMemo(() => {
     const currentList = isOut ? combinedOutList : combinedInList;
     return (amount: number) => {
-      const forAutoLink = currentList.map((r) => ({
+      // Auto Link fills main rows only; TDS rows are linked only when explicitly ticked/typed.
+      const forAutoLink = currentList.filter((r: any) => !r.isTdsLeg).map((r) => ({
         id: r.id,
         total: r.total,
         allocated: r.total - r.outstanding,
@@ -646,6 +763,12 @@ export function LinkPaymentToTxnsDialog({
 
   const [received, setReceived] = useState(receivedAmount);
   const [linkedAmounts, setLinkedAmounts] = useState<Record<string, number>>({});
+  /** Existing TDS-leg allocations (entityTxnId ::tds::) are not shown; they are passed through unchanged on Done. */
+  const [preservedTds, setPreservedTds] = useState<Allocation[]>([]);
+  const vouchersRef = React.useRef<any[]>([]);
+  const initialTdsKeysRef = React.useRef<Set<string>>(new Set());
+  const orphanTdsKeysRef = React.useRef<Set<string>>(new Set());
+  vouchersRef.current = (vouchersForAllocations as any[]) || [];
 
   useEffect(() => {
     setReceived(receivedAmount);
@@ -654,11 +777,56 @@ export function LinkPaymentToTxnsDialog({
   useEffect(() => {
     if (!isOpen) return;
     const initial: Record<string, number> = {};
+    const preserved: Allocation[] = [];
+    orphanTdsKeysRef.current = new Set();
     for (const a of existingAllocations) {
       if (!a.voucherId) continue;
       const total = getAllocationTotal(a);
-      if (total > 0) initial[a.voucherId] = total;
+      if (total <= 0) continue;
+      const et = allocationEntityTxnId(a);
+      // TDS-leg allocation -> its own grouped row; everything else -> main row (as before).
+      if (isTdsLegEntityId(et) && !SHOW_TDS_LEG_ROWS) {
+        preserved.push(a);
+        continue;
+      }
+      if (isTdsLegEntityId(et)) {
+        initial[et] = total;
+        continue;
+      }
+      // Fallback for older/stripped data: no entityTxnId, but the target's only reverse link from this voucher is a TDS leg -> TDS row.
+      let key = a.voucherId;
+      if (SHOW_TDS_LEG_ROWS && !allocationEntityTxnId(a) && currentVoucherIdStr) {
+        const tgt = (vouchersRef.current as any[]).find((x: any) => String(x?.id ?? "") === String(a.voucherId));
+        const rev = ((tgt?.allocations as Allocation[] | undefined) || []).filter(
+          (x) => String(x?.voucherId ?? "") === currentVoucherIdStr && getAllocationTotal(x) > 0
+        );
+        const tdsLegs = rev.filter(isTdsLegAllocation);
+        if (rev.length > 0 && tdsLegs.length === rev.length) {
+          const hit = tdsLegs.find((x) => Math.abs(getAllocationTotal(x) - total) < 0.005) ?? (tdsLegs.length === 1 ? tdsLegs[0] : undefined);
+          if (hit) key = allocationEntityTxnId(hit);
+        }
+      }
+      initial[key] = total;
     }
+    // Orphan reverse TDS-leg mirrors of THIS voucher on a target (journal/payment lost its own allocation):
+    // show them as this voucher's current link so the user can untick and Done removes them everywhere.
+    if (SHOW_TDS_LEG_ROWS && currentVoucherIdStr) {
+      for (const tgt of vouchersRef.current as any[]) {
+        if (!tgt?.id || String(tgt.id) === currentVoucherIdStr) continue;
+        for (const x of (Array.isArray(tgt.allocations) ? tgt.allocations : []) as Allocation[]) {
+          if (String(x?.voucherId ?? "") !== currentVoucherIdStr) continue;
+          const et = allocationEntityTxnId(x);
+          if (!isTdsLegEntityId(et) || !et.startsWith(`${String(tgt.id)}::`)) continue;
+          const amt = getAllocationTotal(x);
+          if (amt > 0 && initial[et] === undefined) {
+            initial[et] = amt;
+            orphanTdsKeysRef.current.add(et);
+          }
+        }
+      }
+    }
+    initialTdsKeysRef.current = new Set(Object.keys(initial).filter(isTdsLegEntityId));
+    setPreservedTds(preserved);
     setLinkedAmounts(initial);
   }, [isOpen, existingAllocations]);
 
@@ -686,8 +854,10 @@ export function LinkPaymentToTxnsDialog({
   };
 
   const totalLinked = useMemo(
-    () => Object.values(linkedAmounts).reduce((s, n) => s + Number(n) || 0, 0),
-    [linkedAmounts]
+    () =>
+      Object.values(linkedAmounts).reduce((s, n) => s + Number(n) || 0, 0) +
+      preservedTds.reduce((s, a) => s + getAllocationTotal(a), 0),
+    [linkedAmounts, preservedTds]
   );
   const remaining = Math.max(0, received - totalLinked);
 
@@ -705,20 +875,41 @@ export function LinkPaymentToTxnsDialog({
   };
 
   const handleDone = () => {
-    const allocations: Allocation[] = Object.entries(linkedAmounts)
+    const keyedAllocations: Allocation[] = Object.entries(linkedAmounts)
       .filter(([, amount]) => Number(amount) > 0)
       .map(([voucherId, amount]) => ({ voucherId, amount: Number(amount) }));
+    // TDS rows are saved against the TDS leg (entityTxnId) so _tdsSettled / TDS Paid counts them.
+    const tdsRowById = new Map<string, any>();
+    for (const r of targetList as any[]) if (r?.isTdsLeg) tdsRowById.set(String(r.id), r);
+    const allocations: Allocation[] = keyedAllocations.map((a) => {
+      const r = tdsRowById.get(String(a.voucherId));
+      if (!r) return a;
+      return {
+        voucherId: r.refVoucherId,
+        amount: a.amount,
+        taxAmount: a.amount,
+        // Keep the party as linkedAccountId (like main links) so journal side-split / payment filters keep it; entityTxnId marks the TDS leg.
+        linkedAccountId: partyId ? String(partyId) : r.tdsAccountId,
+        entityTxnId: r.id,
+      } as Allocation;
+    });
+    // Keep hidden TDS-leg allocations exactly as saved (not shown, not deleted).
+    allocations.push(...preservedTds);
     const cap = Number(receivedAmount) || 0;
     if (totalLinked > cap) {
       toast.error("Total linked amount cannot exceed " + (isOut ? "paid" : "received") + " amount.");
       return;
     }
-    const result = validate(allocations, cap);
+    const result = validate(keyedAllocations, cap);
     if (!result.valid) {
       toast.error(result.error ?? "Invalid allocations.");
       return;
     }
-    onDone(allocations, cap);
+    const removedTdsEntityIds = [...initialTdsKeysRef.current].filter((k) => !(Number(linkedAmounts[k]) > 0));
+    onDone(allocations, cap, {
+      removedTdsEntityIds,
+      orphanTdsEntityIds: removedTdsEntityIds.filter((k) => orphanTdsKeysRef.current.has(k)),
+    });
     onOpenChange(false);
   };
 
@@ -808,9 +999,9 @@ export function LinkPaymentToTxnsDialog({
               </p>
             ) : (
               <div className="min-w-0 overflow-x-auto">
-                <table className="table-row-stripe-7 w-full text-sm border-collapse min-w-[600px]">
+                <table className="table-row-stripe-7 w-full text-sm border-separate border-spacing-0 min-w-[600px]">
                   <thead>
-                    <tr className="border-b bg-muted/50">
+                    <tr className="border-b bg-muted/50 [&>th]:border-b [&>th]:border-border">
                       <th className="text-left p-2 w-10 whitespace-nowrap"></th>
                       <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
                       <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
@@ -828,14 +1019,43 @@ export function LinkPaymentToTxnsDialog({
                       const otherLinked = row.allocatedToOthers ?? 0;
                       const rowMax = row.outstanding ?? 0;
                       const maxAllowed = Math.min(rowMax, remaining + linked);
-                      const cannotAddMore = remaining <= 0 && linked === 0;
+                      const fullyLinkedElsewhere = rowMax <= 0 && linked === 0;
+                      const cannotAddMore = fullyLinkedElsewhere; // over-selection allowed; Done is disabled while total > received amount
                       const rowType =
                         row.type === "Book Opening" || row.type === "Opening Balance"
                           ? row.type
                           : (row.type ?? (isOut ? "Purchase" : "Sale")).toLowerCase();
                       const amountSuffix = isOut ? " Cr" : " Dr";
+                      const idx = targetList.indexOf(row);
+                      const nextRow: any = idx >= 0 ? (targetList as any[])[idx + 1] : undefined;
+                      const prevRow: any = idx > 0 ? (targetList as any[])[idx - 1] : undefined;
+                      const isTdsLegRow = row.isTdsLeg === true;
+                      // Group: main row + its TDS row share the voucher (refVoucherId / id).
+                      const groupedWithNext = !!nextRow?.isTdsLeg && String(nextRow.refVoucherId) === String(row.id);
+                      const groupedWithPrev = isTdsLegRow && !!prevRow && String(prevRow.id) === String(row.refVoucherId);
+                      // Box around main + TDS row (a TDS row without a visible main row is a one-row box).
+                      const boxTop = groupedWithNext || (isTdsLegRow && !groupedWithPrev);
+                      const boxBottom = groupedWithPrev || (isTdsLegRow && !groupedWithPrev);
+                      const inBox = boxTop || boxBottom;
+                      const spacerRow = (k: string) => (
+                        <tr key={k} aria-hidden="true" className="!bg-transparent hover:!bg-transparent">
+                          <td colSpan={8} className="h-1.5 p-0" />
+                        </tr>
+                      );
                       return (
-                        <tr key={row.id} className="border-b last:border-b-0 hover:bg-muted/30">
+                        <React.Fragment key={row.id}>
+                        {boxTop && spacerRow(`${row.id}-sp-t`)}
+                        <tr
+                          className={cn(
+                            "hover:bg-muted/30",
+                            fullyLinkedElsewhere && "opacity-60",
+                            !inBox && "[&>td]:border-b [&>td]:border-border",
+                            inBox &&
+                              "[&>td]:border-emerald-500 [&>td]:bg-emerald-50/70 dark:[&>td]:border-emerald-400/70 dark:[&>td]:bg-emerald-950/40 [&>td:first-child]:border-l-2 [&>td:last-child]:border-r-2",
+                            boxTop && "[&>td]:border-t-2 [&>td:first-child]:rounded-tl-md [&>td:last-child]:rounded-tr-md",
+                            boxBottom && "[&>td]:border-b-2 [&>td:first-child]:rounded-bl-md [&>td:last-child]:rounded-br-md"
+                          )}
+                        >
                           <td className="p-2 w-10 whitespace-nowrap align-middle">
                             <Checkbox
                               checked={linked > 0}
@@ -843,25 +1063,30 @@ export function LinkPaymentToTxnsDialog({
                               onCheckedChange={(checked) => {
                                 if (checked) {
                                   const cap = maxAllowed > 0 ? maxAllowed : rowMax;
-                                  const initial = cap > 0 ? (maxAllowed > 0 ? maxAllowed : Math.min(0.01, rowMax)) : 0;
+                                  const initial = cap > 0 ? (maxAllowed > 0 ? maxAllowed : rowMax) : 0;
                                   if (initial > 0) setLinkedForVoucher(row.id, String(initial), cap);
                                 } else {
                                   setLinkedForVoucher(row.id, "0");
                                 }
                               }}
-                              title={cannotAddMore ? "Required amount already linked" : linked > 0 ? "Clear this row" : "Include this row"}
+                              title={fullyLinkedElsewhere ? "Already fully linked by other vouchers" : cannotAddMore ? "Required amount already linked" : linked > 0 ? "Clear this row" : "Include this row"}
                             />
                           </td>
                           <td className="p-2 text-muted-foreground whitespace-nowrap align-middle">
                             {d ? (dateSystem === "AD" ? formatDate(d) : dateSystem === "BS" ? formatDateBS(d) : <span className="whitespace-nowrap">{formatDateBS(d)} ({formatDate(d)})</span>) : "—"}
                           </td>
                           <td className="p-2 font-medium whitespace-nowrap align-middle">{row.id === OPENING_BALANCE_VOUCHER_ID ? "—" : (row.refNo ?? "—")}</td>
-                          <td className="p-2 whitespace-nowrap align-middle">{rowType}</td>
+                          <td className={cn("p-2 whitespace-nowrap align-middle", isTdsLegRow && "pl-5 text-xs font-medium text-emerald-700 dark:text-emerald-300")}>{isTdsLegRow ? `↳ ${rowType}` : rowType}
+                            {isTdsLegRow && otherLinked > 0 && (row.linkedByNos?.length ?? 0) > 0 && (
+                              <span className="block text-[10px] font-normal text-muted-foreground">Linked by {(row.linkedByNos as string[]).join(", ")}</span>
+                            )}</td>
                           <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap align-middle tabular-nums">{formatCurrency(row.total ?? 0, { noSuffix: true })}{amountSuffix}</td>
                           <td className="p-2 text-right text-muted-foreground whitespace-nowrap align-middle tabular-nums">{formatCurrency(otherLinked, { noSuffix: true })}{amountSuffix}</td>
                           <td className="p-2 text-right text-muted-foreground whitespace-nowrap align-middle tabular-nums">{formatCurrency(linked, { noSuffix: true })}{amountSuffix}</td>
                           <td className="p-2 text-right font-medium whitespace-nowrap align-middle tabular-nums">{formatCurrency(Math.max(0, rowMax - linked), { noSuffix: true })}{amountSuffix}</td>
                         </tr>
+                        {boxBottom && spacerRow(`${row.id}-sp-b`)}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>

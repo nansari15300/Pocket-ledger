@@ -131,8 +131,11 @@ function billWiseAllocationSyncFingerprint(arr: readonly Allocation[] | null | u
         taxAmount: (a as { taxAmount?: number }).taxAmount ?? null,
         netAmount: (a as { netAmount?: number }).netAmount ?? null,
         linkedAccountId: (a as { linkedAccountId?: string }).linkedAccountId ?? null,
+        entityTxnId: (a as { entityTxnId?: string }).entityTxnId ?? null,
       }))
-      .sort((x, y) => x.voucherId.localeCompare(y.voucherId))
+      .sort((x, y) =>
+        x.voucherId.localeCompare(y.voucherId) || String(x.entityTxnId ?? "").localeCompare(String(y.entityTxnId ?? ""))
+      )
   );
 }
 
@@ -326,7 +329,33 @@ export function getAllocatedByVoucherIdFromJournal(vouchers: any[]): Map<string,
   return map;
 }
 
-/** Amount this Sale/Purchase has allocated OUT to opposite type (reduces own outstanding). E.g. Purchase linked to Sale from Sale form → Purchase allocated to Sale → Purchase status should update. */
+/** Sum of TDS-leg (entityTxnId `::tds::`) allocations per target voucher id (sale/purchase TDS leg links from payments/journals). */
+export function getTdsLegAllocatedByTargetId(vouchers: any[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const v of vouchers) {
+    const allocations = (v?.allocations as Allocation[] | undefined) || [];
+    for (const a of allocations) {
+      const key = String(a?.voucherId ?? "");
+      if (!key) continue;
+      const parsed = parseBillWiseEntityTxnId(allocationEntityTxnId(a));
+      if (parsed?.entityKind !== "tds" || parsed.voucherId !== key) continue;
+      map.set(key, (map.get(key) ?? 0) + getAllocationTotal(a));
+    }
+  }
+  return map;
+}
+
+/** Amount this Sale/Purchase has allocated OUT to opposite type'
+Rep2 'src/lib/salePurchaseBillWiseLinkLegs.ts' @'
+  for (const [id, amt] of taxById) {
+    legs.push({
+      kind: "tax",
+      accountId: id,
+      label: taxDisplayName(args.taxes || [], id),
+      totalAmount: amt,
+    });
+  }
+  for (const [id, amt] of tdsById) { (reduces own outstanding). E.g. Purchase linked to Sale from Sale form → Purchase allocated to Sale → Purchase status should update. */
 export function getOutgoingAllocatedToOpposite(voucher: any): number {
   const allocations = (voucher.allocations as Allocation[] | undefined) || [];
   return allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
@@ -606,7 +635,9 @@ export function getPaymentOutRemaining(v: any): number {
  */
 export function getVoucherRemaining(v: any): number {
   const amount = getSalePurchaseBillWiseTargetTotal(v);
-  const allocations = (v.allocations as Allocation[] | undefined) || [];
+  const allocations = ((v.allocations as Allocation[] | undefined) || []).filter(
+    (a) => !allocationEntityTxnId(a).includes("::tds::")
+  );
   const allocated = allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
   return Math.max(0, amount - allocated);
 }

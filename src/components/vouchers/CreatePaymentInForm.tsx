@@ -2,6 +2,7 @@
 import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
+import { useHealStaleTdsReverseLinks } from "@/hooks/useHealStaleTdsReverseLinks";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, type Resolver, type FieldErrors } from "react-hook-form";
 import { z } from "zod";
@@ -73,7 +74,7 @@ import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDial
 import type { ExpenseAccount } from "../expenses/types";
 import { Checkbox } from "../ui/checkbox";
 import type { DateRange } from "@/components/ui/ad-calendar";
-import { saveVoucher, isVoucherLimitError, updateVoucherSpendWiseLinks, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherActionsClient";
+import { removeTdsLegLinks, saveVoucher, isVoucherLimitError, updateVoucherSpendWiseLinks, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherActionsClient";
 import {
   getVoucherConvertOriginalId,
   getVoucherEditConvertPresentation,
@@ -332,6 +333,7 @@ export function CreatePaymentInForm({
   const isAttachmentProcessing = useVoucherAttachmentProcessing();
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  useHealStaleTdsReverseLinks(companyId, voucher?.id, allVouchers as any[]);
   /** Stable id for <label htmlFor> — modal me `hidden` input par sirf .click() se kuch browsers file picker nahi kholte. */
   const attachFileInputId = useId();
 
@@ -904,7 +906,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     for (const a of allocations || []) {
       if (!a.voucherId) continue;
       const total = getAllocationTotal(a);
-      if (total > 0) byId.set(a.voucherId, Math.max(byId.get(a.voucherId) ?? 0, total));
+      if (total > 0) {
+        // TDS-leg allocations (voucherId::tds::acct) stay separate so the link dialog can show the TDS row as linked.
+        const et = String((a as any).entityTxnId ?? "");
+        const key = et.includes("::tds::") ? et : a.voucherId;
+        byId.set(key, Math.max(byId.get(key) ?? 0, total));
+      }
     }
     const currentId = isCopiedDraftFirstInsert ? null : (voucher?.id ?? savedVoucherId);
     if (currentId && allVouchers?.length) {
@@ -922,7 +929,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
       }
     }
-    return Array.from(byId.entries(), ([voucherId, amount]) => ({ voucherId, amount }));
+    return Array.from(byId.entries(), ([key, amount]) =>
+      key.includes("::tds::") ? { voucherId: key.split("::")[0], amount, entityTxnId: key } : { voucherId: key, amount }
+    );
   }, [allocations, allVouchers, voucher?.id, savedVoucherId, partyId, isCopiedDraftFirstInsert]);
 
   const paymentInAlloc = usePaymentAllocations(
@@ -3225,8 +3234,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   {isLoading ? "..." : isEditingAndConverting ? "Convert" : "Save"}
                 </Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
-                    {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty || isEditingAndConverting) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty && !isEditingAndConverting)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                    {isApproving ? "..." : isEditingAndConverting ? "Convert & Approve" : isFormDirty ? "Save & Approve" : "Approve"}
                   </Button>
                 ) : showSaveAndApproveOnCreate ? (
                   <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -3238,7 +3247,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               </div>
             ) : (
               <>
-                <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                <div className={cn("flex flex-nowrap shrink-0 whitespace-nowrap justify-center md:justify-start gap-2 [&_button]:shrink-0 [&_button]:whitespace-nowrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !onOpenHistory} className={cn("shrink-0", BTN_HISTORY_CLASS)}>
                     <History className="mr-2 h-4 w-4" /> History
                   </Button>
@@ -3246,7 +3255,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
                 </div>
-                <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                <div className={cn("flex flex-nowrap shrink-0 whitespace-nowrap gap-2 justify-end [&_button]:shrink-0 [&_button]:whitespace-nowrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={() => { setAllocations(initialAllocationsRef.current.map((a) => ({ voucherId: a.voucherId, amount: a.amount }))); setPendingLinkedPaymentOut(null); onVoucherAction?.('cancelled'); }} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
                     Cancel
                   </Button>
@@ -3263,9 +3272,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     {isEditingAndConverting ? "Convert" : "Save"}
                   </Button>
                   {voucher?.id ? (
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty || isEditingAndConverting) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty && !isEditingAndConverting)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
-                      {isFormDirty ? "Save & Approve" : "Approve"}
+                      {isEditingAndConverting ? "Convert & Approve" : isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                   ) : (
                     <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || isAttachmentProcessing || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
@@ -3364,9 +3373,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           paymentInDate={form.watch("date")}
           partyOpeningBalance={processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0}
           dialogTitle="Link Payment In to Linkable Dr Txns"
-          onDone={(allocs, _amount) => {
+          onDone={(allocs, _amount, info) => {
             // Link save only on local; server save when user clicks Save on voucher
             setAllocations(allocs);
+            // Orphan reverse TDS mirror (no forward link left on this voucher): delete it right away on both vouchers.
+            const ownId = voucher?.id ?? savedVoucherId;
+            if (info?.orphanTdsEntityIds?.length && companyId && ownId) {
+              void removeTdsLegLinks(companyId, ownId, info.orphanTdsEntityIds, allVouchers as any[]).catch((e) =>
+                console.warn("[removeTdsLegLinks]", e)
+              );
+            }
           }}
         />
       )}

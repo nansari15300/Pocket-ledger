@@ -1,4 +1,6 @@
 "use client";
+import { isPlaceholderNoneTax } from "@/lib/salePurchaseLineColumnLabels";
+import { shouldMoveVoucherConvertSourceToBin } from "@/lib/voucherEditConvert";
 import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import * as React from "react";
@@ -34,7 +36,7 @@ import { Textarea } from "../ui/textarea";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Checkbox } from "../ui/checkbox";
-import { SalePurchaseTdsVerifyTick } from "@/components/vouchers/SalePurchaseTdsVerifyTick";
+import { SalePurchaseTdsVerifyTick, TdsVerifyTickBox } from "@/components/vouchers/SalePurchaseTdsVerifyTick";
 import { VoucherDeleteConfirmAlertDialog } from "@/components/vouchers/VoucherDeleteConfirmAlertDialog";
 import {
   assertCanPermanentDeleteFromForm,
@@ -2029,7 +2031,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
           if (!isPaymentMode) {
             await syncSalaryBillWiseLinks(savedDoc.id);
           }
-          if (originalVoucherIdToDelete) {
+          if (originalVoucherIdToDelete && shouldMoveVoucherConvertSourceToBin(originalVoucherIdToDelete)) {
             await patchVoucherFields(companyId, originalVoucherIdToDelete, {
               isDeleted: true,
               deletedAt: voucherRecycleBinDeletedAt(),
@@ -2693,7 +2695,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                           // Searchable tax picker so user can type and quickly find tax.
                                           options={[
                                             { value: "none", label: "None" },
-                                            ...processedTaxes.map((tax) => ({ value: tax.id, label: `${tax.name} @ ${tax.rate}%` })),
+                                            ...processedTaxes.filter((tax) => !isPlaceholderNoneTax(tax) || tax.id === field.value).map((tax) => ({ value: tax.id, label: `${tax.name} @ ${tax.rate}%` })),
                                           ]}
                                           value={field.value || "none"}
                                           onChange={(value, newName) => {
@@ -2869,8 +2871,31 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                             {/* PC Tax label ke right Copy chip — body row me extra chip/label avoid. */}
                             <TableHead className="min-w-[10.5rem] w-auto max-w-none">
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <span>Tax</span>
-                                {firstTaxCopyRowIndex !== null && (
+                                <span>TDS</span>
+                                {(() => {
+                                  const taxIdx = (watchedLineItems || [])
+                                    .map((li: any, i: number) => (String(li?.taxAccountId || "").trim() ? i : -1))
+                                    .filter((i: number) => i >= 0);
+                                  if (taxIdx.length === 0) return null;
+                                  const allVerified = taxIdx.every((i: number) => (watchedLineItems as any[])[i]?.isTdsVerified === true);
+                                  return (
+                                    <TdsVerifyTickBox
+                                      checked={allVerified}
+                                      gapLeft={10}
+                                      showLabel
+                                      verifiedText="Verified"
+                                      unverifiedText="Unverified"
+                                      labelGap={5}
+                                      disabled={editingDisabled}
+                                      onToggle={() => {
+                                        // Header tick toggles every row that has a tax selected (state stays per-row).
+                                        taxIdx.forEach((i: number) =>
+                                          form.setValue(`lineItems.${i}.isTdsVerified` as any, !allVerified, { shouldDirty: true })
+                                        );
+                                      }}
+                                    />
+                                  );
+                                })()}                                {firstTaxCopyRowIndex !== null && (
                                   <Button
                                     type="button"
                                     size="sm"
@@ -2955,7 +2980,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                               // Searchable tax picker on desktop salary rows.
                                               options={[
                                                 { value: "none", label: "None" },
-                                                ...processedTaxes.map((tax) => ({ value: tax.id, label: `${tax.name} @ ${tax.rate}%` })),
+                                                ...processedTaxes.filter((tax) => !isPlaceholderNoneTax(tax) || tax.id === field.value).map((tax) => ({ value: tax.id, label: `${tax.name} @ ${tax.rate}%` })),
                                               ]}
                                               value={field.value || "none"}
                                               onChange={(value, newName) => {
@@ -2978,16 +3003,6 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                               disabled={deleteDisabledWhenLinked}
                                             />
                                               </div>
-                                              {String(field.value || "").trim() ? (
-                                                <div className="pt-1">
-                                                  <SalePurchaseTdsVerifyTick
-                                                    control={form.control}
-                                                    name={`lineItems.${index}.isTdsVerified`}
-                                                    // Linked bill-wise: amounts locked, TDS Verify still editable (no unlink needed)
-                                                    disabled={editingDisabled}
-                                                  />
-                                                </div>
-                                              ) : null}
                                               {/* Desktop row: Tax copy chip header label me hai; row me combobox + Verify. */}
                                             </div>
                                             {taxBalance !== undefined && (
@@ -3269,7 +3284,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
               </div>
             ) : (
               <>
-                <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                <div className={cn("flex flex-nowrap shrink-0 whitespace-nowrap justify-center md:justify-start gap-2 [&_button]:shrink-0 [&_button]:whitespace-nowrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
                     <History className="mr-2 h-4 w-4" /> History
                   </Button>
@@ -3277,7 +3292,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
                 </div>
-                <div className={cn("flex gap-2 justify-end flex-wrap md:gap-4", VOUCHER_BUTTONS_CLASS)}>
+                <div className={cn("flex flex-nowrap shrink-0 whitespace-nowrap gap-2 justify-end [&_button]:shrink-0 [&_button]:whitespace-nowrap md:gap-4", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
                     Cancel
                   </Button>

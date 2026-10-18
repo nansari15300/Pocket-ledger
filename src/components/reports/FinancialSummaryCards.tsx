@@ -565,7 +565,7 @@ function TopSummaryRowWrap({
                 "grid w-full min-w-0 max-w-full items-stretch gap-[5px] [&>*]:h-full [&>*]:min-h-[12rem] [&>*]:min-w-0",
                 chartRowLayout
                     ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
-                    : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5",
+                    : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-[repeat(5,minmax(250px,1fr))]",
                 className,
             )}
         >
@@ -2575,7 +2575,7 @@ export function FinancialSummaryCards({
     const topSummaryCardFooterClass = "mt-auto shrink-0 text-right pt-2";
     const topSummaryMetricRowCn = cn(
         "flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5",
-        !compact && "sm:flex-nowrap sm:gap-x-4",
+        !compact && "sm:flex-nowrap sm:gap-x-2",
     );
     const topSummaryMetricLabelCn = cn(
         "min-w-0 max-w-[58%] text-xs text-muted-foreground break-words leading-snug",
@@ -2586,15 +2586,15 @@ export function FinancialSummaryCards({
         !compact && "whitespace-nowrap",
     );
     const topSummaryMetricLineValueCn = cn(
-        compact ? "text-sm font-bold" : "text-base font-bold",
+        compact ? "text-sm font-bold" : "text-sm font-bold",
         topSummaryMetricValueCn,
     );
     const topSummaryMetricNetLabelCn = cn(
-        compact ? "text-xs font-bold" : "text-sm font-bold",
+        compact ? "text-xs font-bold" : "text-xs font-bold",
         !compact && "shrink-0 whitespace-nowrap",
     );
     const topSummaryMetricNetValueCn = cn(
-        compact ? "text-base font-bold" : "text-lg font-bold",
+        compact ? "text-base font-bold" : "text-base font-bold",
         topSummaryMetricValueCn,
     );
     const topSummaryMetricDrCrCn = "text-xs font-normal";

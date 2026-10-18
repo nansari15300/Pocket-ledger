@@ -21,7 +21,7 @@ function voucherJsDate(date: unknown): Date | null {
   return null;
 }
 
-function voucherMs(date: unknown): number | null {
+export function voucherMs(date: unknown): number | null {
   const d = voucherJsDate(date);
   return d ? d.getTime() : null;
 }

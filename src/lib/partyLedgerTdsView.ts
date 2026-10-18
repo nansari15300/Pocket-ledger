@@ -108,6 +108,9 @@ function resolveTdsLegPaymentFields(args: {
       const no = voucherDisplayNo(src);
       if (no && !linkedFromVoucherNos.includes(no)) linkedFromVoucherNos.push(no);
     }
+    // Party-side links beyond (total - TDS) also settle the TDS leg (see getSalePurchaseTdsSettledAmount).
+    const settledViaParty = Math.min(tdsAmt, Number(processedTxn._tdsSettled) || 0);
+    if (settledViaParty > allocated) allocated = round2(settledViaParty);
     const result = getPaymentStatus(tdsAmt, allocated, voucher.dueDate ?? processedTxn.dueDate);
     return {
       paymentStatus: result.isOverdue ? "overdue" : result.status,
@@ -754,7 +757,7 @@ function addSalaryTaxEntryForStaff(
  * Sale/Purchase (+ party TDS detail rows) + Add Salary: empty Dr/Cr pe Verified / Unverified.
  * Journal TDS Journal rows alag handle hote hain.
  */
-export function resolveSalePurchaseTdsVerifyLabel(
+function resolveSalePurchaseTdsVerifyLabelLegacy(
   t: {
     type?: unknown;
     subType?: unknown;
@@ -822,6 +825,39 @@ export function resolveSalePurchaseTdsVerifyLabel(
     : SALE_PURCHASE_TDS_UNVERIFIED_MESSAGE;
 }
 
+/**
+ * TDS Paid / Unpaid from the TDS LEG only (never from the party payment status).
+ * - Sale/Purchase rows: `_tdsSettled` (TDS-leg links + party-side links beyond total - TDS) > 0 => Paid.
+ * - TDS ledger rows (entity-wise status already) and Add Salary: paid/partial status or attached link => Paid.
+ */
+export function resolveSalePurchaseTdsVerifyLabel(
+  t: Parameters<typeof resolveSalePurchaseTdsVerifyLabelLegacy>[0],
+  opts?: { context?: string; contextId?: string; groupEntityType?: string | null }
+): typeof SALE_PURCHASE_TDS_VERIFIED_MESSAGE | typeof SALE_PURCHASE_TDS_UNVERIFIED_MESSAGE | null {
+  // Tax account page: only TDS accounts show the badge; plain VAT / other tax accounts never do.
+  if (opts?.context === "tax" && t) {
+    const isSpecial =
+      isAddSalaryVoucher(t as { type?: unknown; subType?: unknown }) ||
+      isLedgerTdsTableRow(t as { type?: string; [LEDGER_TDS_ROW_FLAG]?: boolean });
+    const ctxId = String(opts?.contextId ?? "").trim();
+    if (!isSpecial && ctxId && !taxAccountIsTdsVerifyLegOnVoucher(t as any, ctxId)) return null;
+  }
+  const base = resolveSalePurchaseTdsVerifyLabelLegacy(t, opts);
+  if (base == null) return null;
+  if (!isAddSalaryVoucher(t as { type?: unknown; subType?: unknown }) && !isLedgerTdsTableRow(t as { type?: string; [LEDGER_TDS_ROW_FLAG]?: boolean })) {
+    const settled = Number((t as { _tdsSettled?: unknown } | null | undefined)?._tdsSettled);
+    return Number.isFinite(settled) && settled > 0 ? SALE_PURCHASE_TDS_VERIFIED_MESSAGE : SALE_PURCHASE_TDS_UNVERIFIED_MESSAGE;
+  }
+  const row = t as { paymentStatus?: unknown; linkedFromVoucherNos?: unknown } | null | undefined;
+  const status = String(row?.paymentStatus ?? "").trim().toLowerCase();
+  const linked = row?.linkedFromVoucherNos;
+  const hasLink = Array.isArray(linked)
+    ? linked.some((x) => String(x ?? "").trim() !== "")
+    : typeof linked === "string" && linked.trim() !== "";
+  return status === "paid" || status === "partially_paid" || hasLink
+    ? SALE_PURCHASE_TDS_VERIFIED_MESSAGE
+    : SALE_PURCHASE_TDS_UNVERIFIED_MESSAGE;
+}
 /**
  * Tax ledger: this account is a TDS / Add-Salary tax leg on the voucher
  * (not a plain VAT/Sales Tax line). Used for Unverified dim/Waiting + balance exclude.

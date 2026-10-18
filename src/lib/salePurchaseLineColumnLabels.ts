@@ -10,8 +10,8 @@ export type SalePurchaseLineColumnLabels = {
 };
 
 export const DEFAULT_SALE_PURCHASE_LINE_COLUMN_LABELS: Required<SalePurchaseLineColumnLabels> = {
-  tax: "Tax",
-  tds: "TDS",
+  tax: "Tax Account",
+  tds: "TDS Account",
   taxAmount: "Tax Amt.",
   taxable: "Taxable",
   tdsAmount: "TDS Amt.",
@@ -36,15 +36,17 @@ export function resolveSalePurchaseLineColumnLabels(
   };
 }
 
-/** Desktop number cells — at least 5 digits; grow with typed value. */
-export const SALE_PURCHASE_LINE_NUMBER_MIN_CH = 5;
+/** Qty / Rate / TDS Amt boxes - at least 7 characters; grow with typed value. */
+export const SALE_PURCHASE_LINE_NUMBER_MIN_CH = 7;
+/** Taxable / Tax Amt / Amount boxes - at least 11 characters (10 digits + padding); grow beyond. */
+export const SALE_PURCHASE_LINE_WIDE_MIN_CH = 11;
 
 export const SALE_PURCHASE_LINE_NUMBER_INPUT_CLASS =
-  "h-9 inline-block !w-auto !min-w-0 !max-w-none shrink-0 border-0 shadow-none focus-visible:ring-0 rounded-none text-right tabular-nums px-0.5 box-border [field-sizing:content]";
+  "h-[35px] inline-block !w-auto !max-w-none shrink-0 border shadow-none focus-visible:ring-0 rounded-md text-right tabular-nums px-0.5 box-border [field-sizing:content]";
 
 /** Amount column — right inset + 2px text gap; decimal type karte waqt clip na ho. */
 export const SALE_PURCHASE_LINE_AMOUNT_INPUT_CLASS =
-  "h-9 inline-block !w-auto !min-w-0 !max-w-none shrink-0 border-0 shadow-none focus-visible:ring-0 rounded-none text-right tabular-nums pl-0.5 pr-[2px] mr-[4px] box-border overflow-x-auto [field-sizing:content]";
+  "h-[35px] inline-block !w-auto !max-w-none shrink-0 border shadow-none focus-visible:ring-0 rounded-md text-right tabular-nums pl-0.5 pr-[2px] mr-[4px] box-border overflow-x-auto [field-sizing:content]";
 
 const SALE_PURCHASE_LINE_AMOUNT_INPUT_RIGHT_PAD_PX = 2;
 
@@ -67,13 +69,14 @@ export function formatSalePurchaseLineMoneyDisplay(value: unknown): string {
 
 function salePurchaseLineNumberInputStyleFromText(
   text: string,
-  extraRightPadPx = 0
+  extraRightPadPx = 0,
+  minCh = SALE_PURCHASE_LINE_NUMBER_MIN_CH
 ): {
   width: string;
   minWidth: string;
   maxWidth: string;
 } {
-  const len = Math.max(SALE_PURCHASE_LINE_NUMBER_MIN_CH, text.length);
+  const len = Math.max(minCh, text.length);
   const minW =
     extraRightPadPx > 0 ? `calc(${len}ch + ${extraRightPadPx}px)` : `${len}ch`;
   return { width: "auto", minWidth: minW, maxWidth: "none" };
@@ -113,7 +116,8 @@ export function salePurchaseLineAmountInputStyleFromText(text: string): {
   const normalized = String(text ?? "").trim() || "0";
   return salePurchaseLineNumberInputStyleFromText(
     normalized,
-    SALE_PURCHASE_LINE_AMOUNT_INPUT_RIGHT_PAD_PX
+    SALE_PURCHASE_LINE_AMOUNT_INPUT_RIGHT_PAD_PX,
+    SALE_PURCHASE_LINE_WIDE_MIN_CH
   );
 }
 
@@ -136,12 +140,12 @@ export function salePurchaseLineAmountInputSizeFromValue(value: unknown): number
 }
 
 /** Taxable, TDS Amt, Tax Amt — hamesha 2 decimal visible, clip na ho. */
-export function salePurchaseLineMoneyInputStyle(value: unknown): {
+export function salePurchaseLineMoneyInputStyle(value: unknown, minCh: number = SALE_PURCHASE_LINE_WIDE_MIN_CH): {
   width: string;
   minWidth: string;
   maxWidth: string;
 } {
-  return salePurchaseLineNumberInputStyleFromText(formatSalePurchaseLineMoneyDisplay(value));
+  return salePurchaseLineNumberInputStyleFromText(formatSalePurchaseLineMoneyDisplay(value), 0, minCh);
 }
 
 /** Desktop line grid — number input cell: grid border se 2px gap. */
@@ -161,17 +165,17 @@ function salePurchaseDesktopLineItemColTrack(): string {
 }
 
 /** Sirf is column ka content/header jitna — lamba Tax/TDS select par wahi track badhe. */
-function salePurchaseIntrinsicNumberColTrack(): string {
-  return `minmax(${SALE_PURCHASE_LINE_NUMBER_MIN_CH}ch,max-content)`;
+function salePurchaseIntrinsicNumberColTrack(minCh: number = SALE_PURCHASE_LINE_NUMBER_MIN_CH): string {
+  return `minmax(${minCh}ch,max-content)`;
 }
 
 function salePurchaseIntrinsicLabelColTrack(label: string, floorCh: number): string {
   return `minmax(${salePurchaseHeaderMinCh(label, floorCh)}ch,max-content)`;
 }
 
-/** Amount — min 5ch / header; lamba number par column bhi grow (1fr cap nahi). */
+/** Amount - min 11ch; lamba number par column bhi grow (1fr cap nahi). */
 function salePurchaseAmountColTrack(labels: Required<SalePurchaseLineColumnLabels>): string {
-  return salePurchaseIntrinsicNumberColTrack();
+  return salePurchaseIntrinsicNumberColTrack(SALE_PURCHASE_LINE_WIDE_MIN_CH);
 }
 
 /** Tailwind class only — column tracks runtime inline style se (JIT dynamic arbitrary class break karta tha). */
@@ -185,13 +189,13 @@ export function buildSalePurchaseDesktopLineGridTemplateColumns(
     salePurchaseDesktopLineItemColTrack(),
     salePurchaseIntrinsicNumberColTrack(),
     salePurchaseIntrinsicLabelColTrack("Unit", 4),
-    `minmax(${Math.max(SALE_PURCHASE_LINE_NUMBER_MIN_CH + 2, 7)}ch,max-content)`,
-    salePurchaseIntrinsicNumberColTrack(),
+    `minmax(calc(${Math.max(SALE_PURCHASE_LINE_NUMBER_MIN_CH + 2, 7)}ch + 10px),max-content)`,
+    salePurchaseIntrinsicNumberColTrack(SALE_PURCHASE_LINE_WIDE_MIN_CH),
     salePurchaseIntrinsicLabelColTrack(labels.tds, 3),
     salePurchaseIntrinsicNumberColTrack(),
     salePurchaseIntrinsicLabelColTrack(labels.tax, 3),
     "minmax(3.25rem,max-content)",
-    salePurchaseIntrinsicNumberColTrack(),
+    salePurchaseIntrinsicNumberColTrack(SALE_PURCHASE_LINE_WIDE_MIN_CH),
     salePurchaseAmountColTrack(labels),
   ];
   if (withDeleteColumn) tracks.push(SALE_PURCHASE_DESKTOP_LINE_DELETE_COL_TRACK);
@@ -232,7 +236,7 @@ export const SALE_PURCHASE_VOUCHER_DESKTOP_BODY = "w-max min-w-full max-w-none";
 export const SALE_PURCHASE_DESKTOP_LINE_GRID_MIN_PX = 720;
 
 /** Unified grid body cells — borders come from {@link SALE_PURCHASE_DESKTOP_LINE_UNIFIED_GRID_DIVIDERS}. */
-export const SALE_PURCHASE_DESKTOP_LINE_BODY_CELL = "whitespace-nowrap min-h-[2.25rem]";
+export const SALE_PURCHASE_DESKTOP_LINE_BODY_CELL = "whitespace-nowrap min-h-[39px] py-[2px] items-center";
 
 /** Outer frame — top + bottom 1px black (with header/row rules below). */
 export const SALE_PURCHASE_DESKTOP_LINE_UNIFIED_GRID_FRAME = "border border-black";
@@ -247,11 +251,36 @@ export const SALE_PURCHASE_VOUCHER_DIALOG_MIN_W = 940;
 export type SalePurchaseLineTaxRow = { id: string; name?: string; rate?: number };
 
 /** Line Tax + TDS combobox — same account list as Tax column. */
+/** Placeholder tax account literally named "Non" with 0% rate; duplicates the "None" reset option, so hidden from dropdown lists. */
+export function isPlaceholderNoneTax(t: { name?: string | null; rate?: number | string | null } | null | undefined): boolean {
+  if (!t) return false;
+  return String(t.name ?? "").trim().toLowerCase() === "non" && Number(t.rate ?? 0) === 0;
+}
+
+/** Tax/TDS dropdown options: "None" reset always first; placeholder "Non @ 0%" account removed. */
 export function mapSalePurchaseLineTaxComboboxOptions(taxes: SalePurchaseLineTaxRow[]) {
-  return taxes.map((t) => ({
-    value: t.id,
-    label: `${t.name ?? ""} @ ${t.rate}%`,
-  }));
+  return [
+    { value: "none", label: "None" },
+    ...taxes
+      .filter((t) => !isPlaceholderNoneTax(t))
+      .map((t) => ({
+        value: t.id,
+        label: `${t.name ?? ""} @ ${t.rate}%`,
+      })),
+  ];
+}
+
+/** If the current value is the hidden "Non @ 0%" account, add it back so the closed select still shows its label. */
+export function withSelectedHiddenTax(
+  options: { value: string; label: string }[],
+  taxes: SalePurchaseLineTaxRow[],
+  selectedId: unknown
+) {
+  const id = String(selectedId ?? "").trim();
+  if (!id || options.some((o) => o.value === id)) return options;
+  const t = taxes.find((x) => x.id === id);
+  if (!t) return options;
+  return [...options, { value: t.id, label: `${t.name ?? ""} @ ${t.rate}%` }];
 }
 
 /** Dropdown: single-line labels; panel wider than trigger (avoid w-max layout thrash in voucher dialog). */
@@ -265,6 +294,7 @@ export const SALE_PURCHASE_LINE_TAX_COMBOBOX_PROPS = {
 export const SALE_PURCHASE_LINE_DESKTOP_COMBOBOX_PROPS = {
   ...SALE_PURCHASE_LINE_TAX_COMBOBOX_PROPS,
   fitTrigger: true,
+  triggerClassName: "h-[35px]",
 } as const;
 
 /** Item column — kam se kam 2.5in fill; lamba label par pill + column dono grow. */
@@ -275,5 +305,5 @@ export const SALE_PURCHASE_DESKTOP_LINE_ITEM_CELL =
 export const SALE_PURCHASE_LINE_ITEM_COMBOBOX_PROPS = {
   ...SALE_PURCHASE_LINE_TAX_COMBOBOX_PROPS,
   fillColumn: true,
-  triggerClassName: "min-w-[2.5in]",
+  triggerClassName: "min-w-[2.5in] h-[35px]",
 } as const;

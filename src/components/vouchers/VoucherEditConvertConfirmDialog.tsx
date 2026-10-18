@@ -10,6 +10,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { NESTED_VOUCHER_ALERT_SHELL } from "@/lib/dialogShellChrome";
+import { getActiveVoucherConvertSourceId, shouldMoveVoucherConvertSourceToBin } from "@/lib/voucherEditConvert";
 
 type Props = {
   open: boolean;
@@ -24,15 +26,27 @@ export function VoucherEditConvertConfirmDialog({
   bannerText,
   onConfirm,
 }: Props) {
+  // Read the banner checkbox choice each time the dialog renders (it re-renders when `open` flips).
+  const activeSourceId = getActiveVoucherConvertSourceId();
+  const moveToBin = activeSourceId ? shouldMoveVoucherConvertSourceToBin(activeSourceId) : true;
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent {...NESTED_VOUCHER_ALERT_SHELL}>
         <AlertDialogHeader>
           <AlertDialogTitle>Convert voucher?</AlertDialogTitle>
           <AlertDialogDescription>{bannerText}</AlertDialogDescription>
           <AlertDialogDescription className="pt-1">
-            The original voucher will move to Recycle Bin (Converted). A new voucher will be saved with your
-            current details.
+            The original voucher will{" "}
+            {moveToBin ? (
+              <span className="rounded bg-yellow-100 px-1 text-base font-bold text-emerald-800 dark:bg-yellow-900/40 dark:text-emerald-300">
+                move to Recycle Bin
+              </span>
+            ) : (
+              <span className="rounded bg-yellow-100 px-1 text-base font-bold text-amber-700 dark:bg-yellow-900/40 dark:text-amber-300">
+                be kept
+              </span>
+            )}{" "}
+            {moveToBin ? "(Converted)" : "(stays active)"}. A new voucher will be saved with your current details.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

@@ -2126,16 +2126,34 @@ export function InterCompanyVoucherForm({
       `pocket-ledger:inter-company:other-charge-default:${sourceEntitiesCompanyId || companyId || "global"}`,
     [sourceEntitiesCompanyId, companyId]
   );
+  /** Default/Clear control + stored default auto-fill are for NEW vouchers only. */
+  const isEditingVoucherForDefaults = Boolean(currentLinkedVoucherId);
+  const [storedOtherChargeDefaultId, setStoredOtherChargeDefaultId] = useState(() => {
+    try {
+      return String(localStorage.getItem(otherChargeDefaultStorageKey) || "").trim();
+    } catch {
+      return "";
+    }
+  });
   const setOtherChargeDefault = useCallback(() => {
+    if (storedOtherChargeDefaultId) {
+      try {
+        localStorage.removeItem(otherChargeDefaultStorageKey);
+      } catch {}
+      setStoredOtherChargeDefaultId("");
+      toast.success("Default other charge account cleared.");
+      return;
+    }
     const id = String(form.getValues("otherChargeAccountId") || "").trim();
     if (!id) return;
     try {
       localStorage.setItem(otherChargeDefaultStorageKey, id);
+      setStoredOtherChargeDefaultId(id);
       toast.success("Default other charge account saved.");
     } catch {
       toast.error("Default save failed.");
     }
-  }, [form, otherChargeDefaultStorageKey]);
+  }, [form, otherChargeDefaultStorageKey, storedOtherChargeDefaultId]);
   const handleOtherChargeAccountChange = useCallback((val: string, newName?: string) => {
     const createType = resolveOtherChargeAddNewType(val);
     if (!createType) return;
@@ -2175,7 +2193,7 @@ export function InterCompanyVoucherForm({
       : null;
 
   useEffect(() => {
-    if (!showOtherChargeCard || otherChargeAccountId) return;
+    if (isEditingVoucherForDefaults || !showOtherChargeCard || otherChargeAccountId) return;
     try {
       const saved = String(localStorage.getItem(otherChargeDefaultStorageKey) || "").trim();
       if (saved && otherChargeAccountOptions.some((option) => option.value === saved)) {
@@ -2185,6 +2203,7 @@ export function InterCompanyVoucherForm({
       /* ignore */
     }
   }, [
+    isEditingVoucherForDefaults,
     showOtherChargeCard,
     otherChargeAccountId,
     otherChargeDefaultStorageKey,
@@ -3789,6 +3808,8 @@ export function InterCompanyVoucherForm({
         otherChargeAccountOptions={otherChargeAccountOptions}
         otherChargeBalance={otherChargeBalance}
         onOtherChargeDefault={setOtherChargeDefault}
+        otherChargeDefaultSaved={Boolean(storedOtherChargeDefaultId)}
+        showOtherChargeDefault={!isEditingVoucherForDefaults}
         otherChargeAccountId={String(otherChargeAccountId || "")}
         onOtherChargeAccountChange={handleOtherChargeAccountChange}
       />

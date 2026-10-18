@@ -1,5 +1,5 @@
 /**
- * Sale/Purchase bill-wise link legs: party + each tax + each TDS account (expense/sales account excluded).
+ * Sale/Purchase bill-wise link legs: party (taxable + tax = total - TDS) + each TDS account (tax/expense/sales accounts excluded).
  * Same pattern as Add Salary After-tax / Tax balance tabs.
  */
 import type { BillWiseEntityKind } from "@/lib/payment-allocation-utils";
@@ -42,26 +42,14 @@ export function resolveSalePurchaseBillWiseLegs(args: {
     });
   }
 
-  const taxById = new Map<string, number>();
   const tdsById = new Map<string, number>();
   for (const li of args.lineItems || []) {
-    const taxId = String(li?.taxAccountId || "").trim();
-    const taxAmt = round2(Number(li?.taxAmount) || 0);
-    if (taxId && taxAmt > 0) taxById.set(taxId, round2((taxById.get(taxId) || 0) + taxAmt));
-
     const tdsId = String(li?.tdsAccountId || "").trim();
     const tdsAmt = round2(Number(li?.tdsAmount) || 0);
     if (tdsId && tdsAmt > 0) tdsById.set(tdsId, round2((tdsById.get(tdsId) || 0) + tdsAmt));
   }
 
-  for (const [id, amt] of taxById) {
-    legs.push({
-      kind: "tax",
-      accountId: id,
-      label: taxDisplayName(args.taxes || [], id),
-      totalAmount: amt,
-    });
-  }
+  // Tax is counted with the taxable amount under the party leg (no separate VAT/tax link leg).
   for (const [id, amt] of tdsById) {
     legs.push({
       kind: "tds",

@@ -832,6 +832,8 @@ export function DashboardPageContentImpl() {
     const [cashFlowOpen, setCashFlowOpen] = useState(false);
 
     const [showRecentNarration, setShowRecentNarration] = useState(true);
+    /** Desktop Daybook tab: slot under the Welcome row for the Daybook pagination footer (portal target). */
+    const [daybookFooterSlot, setDaybookFooterSlot] = useState<HTMLElement | null>(null);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   
@@ -2532,7 +2534,7 @@ export function DashboardPageContentImpl() {
           style={{ display: summaryTabVisible ? "block" : "none" }}
           className="min-w-0"
         >
-          <div style={{ display: summaryChartsPane ? "none" : "block" }}>
+          <div className="lg:min-w-[1260px]" style={{ display: summaryChartsPane ? "none" : "block" }}>
             {renderFinancialSummaries(isReportsEnabled, false, !summaryChartsPane)}
           </div>
           {summaryChartsPane && !summaryChartPaneMounted ? (
@@ -2564,6 +2566,7 @@ export function DashboardPageContentImpl() {
             isPanelVisible={visibleCard === "daybook"}
             welcomeRibbonDateNav={!isMobile}
             dashboardEmbedded
+            footerPortalTarget={!isMobile ? daybookFooterSlot : null}
           />
         </div>
       )}
@@ -2769,6 +2772,10 @@ export function DashboardPageContentImpl() {
             displayName={welcomeDisplayName}
             newYearInfo={newYearInfo}
           />
+
+          {!isMobile && visibleCard === "daybook" ? (
+            <div ref={setDaybookFooterSlot} data-pl-daybook-footer-slot="" className="w-full min-w-0 shrink-0 overflow-hidden empty:hidden" />
+          ) : null}
 
           {showRecentCompactBottomControls ? (
           <div data-pl-recent-txn-toolbar="" className="w-full max-w-full box-border space-y-1 overflow-x-hidden border-0 border-t border-gray-300 bg-gray-200 px-1 py-1 dark:border-gray-600 dark:bg-gray-800">

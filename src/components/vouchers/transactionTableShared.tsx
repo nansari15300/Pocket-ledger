@@ -104,6 +104,7 @@ import { getVoucherAttachmentUrlsForUi, voucherAttachmentUiOptionsForCompany } f
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { getJournalVoucherLegs } from "@/lib/journalLedgerAmounts";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { drCrChipKey, drCrOppositeKey, tdsBadgeHighlightQuery } from "@/lib/transactionColumnHeaderFilter";
 
 /** File column / attachment thumb — row dblclick se voucher edit na khule (EXE/web). */
 function stopTxnRowOpenFromFilePreview(e: React.SyntheticEvent): void {
@@ -1789,9 +1790,13 @@ export const TransactionRow = React.memo(
     const ledgerTdsAmountToneCn = isLedgerTdsRow ? ledgerTdsRowAmountToneClass(transaction) : null;
     const tdsLedgerRowLayout = ensureMinGaps && (showCol("tdsTaxable") || showCol("tdsAmount"));
     const tdsRowTextPadCn = tdsLedgerRowLayout ? LEDGER_TDS_ROW_TEXT_CELL_PAD_CN : null;
-    // TDS Verified/Unverified badge: only on TDS Balance page rows (and tax page), not on Account Balance page.
+    // TDS Paid/Unpaid badge (statement AND bill-wise): TDS Balance rows, tax page, and
+    // TDS-bearing Sale/Purchase (party) / Add Salary (staff) rows on the regular Account Balance page.
     const showTdsVerifyBadge =
-      isLedgerTdsRow || context === "tax" || (context === "group" && groupEntityType === "tax");
+      isLedgerTdsRow ||
+      context === "tax" ||
+      (context === "group" && groupEntityType === "tax") ||
+      isSalePurchaseTdsVerifyLedgerContext(context, groupEntityType);
     const salePurchaseTdsVerifyLabel = showTdsVerifyBadge && isSalePurchaseTdsVerifyLedgerContext(context, groupEntityType)
       ? resolveSalePurchaseTdsVerifyLabel(transaction, { context, contextId, groupEntityType })
       : null;
@@ -1815,8 +1820,8 @@ export const TransactionRow = React.memo(
         !isPartyStaffTdsUnverifiedRow &&
         salePurchaseTdsVerifyLabel === SALE_PURCHASE_TDS_VERIFIED_MESSAGE
     );
-    const isTdsUnverifiedBooksRow = isTaxTdsUnverifiedRow || isPartyStaffTdsUnverifiedRow;
-    const isTdsVerifiedBooksRow = isTaxTdsVerifiedRow || isPartyStaffTdsVerifiedRow;
+    const isTdsUnverifiedBooksRow = false as boolean;
+    const isTdsVerifiedBooksRow = false as boolean;
     const taxTdsAmountWeightCn = isTdsUnverifiedBooksRow
       ? "font-normal [&>*]:opacity-45"
       : isTdsVerifiedBooksRow
@@ -1833,7 +1838,11 @@ export const TransactionRow = React.memo(
             : "!border-amber-600 bg-amber-100 text-amber-900 dark:!border-amber-400 dark:bg-amber-950/40 dark:text-amber-200"
         )}
       >
-        {salePurchaseTdsVerifyLabel}
+        {(() => { const hlQ = [String(textSearchHighlight ?? "").trim(), tdsBadgeHighlightQuery(
+            String((salePurchaseTdsVerifyCol && columnFilters && columnFilters[drCrOppositeKey(salePurchaseTdsVerifyCol)]) || ""),
+            salePurchaseTdsVerifyLabel,
+            String((salePurchaseTdsVerifyCol && columnFilters && columnFilters[drCrChipKey(drCrOppositeKey(salePurchaseTdsVerifyCol))]) || "")
+          )].filter(Boolean).join(" "); return hlQ ? (highlightQueryInText(salePurchaseTdsVerifyLabel, hlQ) as React.ReactNode) : salePurchaseTdsVerifyLabel; })()}
       </span>
     ) : null;
     const tdsVerifyDrCrMinPx =
@@ -1967,11 +1976,17 @@ export const TransactionRow = React.memo(
     const hlForColumn = (columnKey: string) => {
       const colQ = String((columnFilters && columnFilters[columnKey]) || "").trim();
       const q = [globalHlQ, colQ].filter(Boolean).join(" ");
-      return (s: string) => (q ? (highlightQueryInText(s, q) as React.ReactNode) : s);
+      const amountCol = columnKey === "debit" || columnKey === "credit";
+      return (s: string) => (q ? (highlightQueryInText(s, q, amountCol ? { amount: true } : undefined) as React.ReactNode) : s);
     };
     const hl = hlForColumn(""); // global only (narration / misc)
     const isItemPartyContext = context === "item" || (context === "group" && groupEntityType === "item");
-    const shouldDisableAmountTextAnimation = (context === "daybook" && globalHlQ.length > 0) || (context === "item" && stockView === "qty");
+    // AnimatedNumber is a React node (cannot be highlighted): use plain text while a Debit/Credit filter is typed.
+    const drCrFilterTyping = Boolean(
+      String((columnFilters && columnFilters.debit) || "").trim() || String((columnFilters && columnFilters.credit) || "").trim()
+    );
+    const shouldDisableAmountTextAnimation =
+      (context === "daybook" && globalHlQ.length > 0) || (context === "item" && stockView === "qty") || drCrFilterTyping;
 
     const formatAmountCell = (val: number) => {
       const n = toLedgerAmount(val);

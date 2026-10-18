@@ -44,7 +44,7 @@ import {
   salePurchaseLinkDialogEyebrow,
   salePurchaseLinkDialogTitle,
 } from "@/lib/salePurchaseBillWiseLinkLegs";
-import { patchVoucherFields } from "@/lib/voucherActionsClient";
+import { patchVoucherFields, reconcileTdsLegLinks } from "@/lib/voucherActionsClient";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isAdminPanelCompanyLocalId } from "@/lib/adminPanelCompany/ledgerMode";
@@ -305,6 +305,10 @@ export async function applyAdvancesAllocationsToServer(params: ApplyAdvancesAllo
     await patchVoucherFields(companyId, sourceVoucherId, { allocations }, { forceSqliteFirst: true });
   }
 
+  // Shared TDS-leg consistency pass (mirror recreate / orphan mirror delete) so unlink here is pruned too.
+  await reconcileTdsLegLinks(companyId, targetVoucherId).catch((e) =>
+    console.warn("[applyAdvancesAllocationsToServer] reconcileTdsLegLinks", e)
+  );
   const affectedIds = new Set<string>([targetVoucherId, ...toRemove, ...updates.map(([id]) => id)]);
   affectedIds.delete(OPENING_BALANCE_VOUCHER_ID);
   const nowTs = Timestamp.now();
@@ -396,7 +400,7 @@ export function LinkAdvancesToVoucherDialog({
     const fromLines = collectSalePurchaseTaxAndTdsAccountIds(targetV?.lineItems);
     return {
       taxAccountIds: salePurchaseLinkPrefs.allowTaxOnPartyAmount ? fromLines.taxAccountIds : [],
-      tdsAccountIds: salePurchaseLinkPrefs.allowTdsOnPartyAmount ? fromLines.tdsAccountIds : [],
+      tdsAccountIds: [] as string[], // party leg target excludes TDS; TDS is linked via its own TDS leg (no double settle)
     };
   }, [
     isTaxishLeg,
@@ -860,7 +864,10 @@ export function LinkAdvancesToVoucherDialog({
               <span className="text-muted-foreground">
                 Balance: {remainingToLink === 0 ? <strong className="text-green-600">Settled</strong> : <strong className="text-foreground">{formatCurrency(remainingToLink)}</strong>}
               </span>
-              {totalLinked < targetOutstanding && totalLinked > 0 && (
+              {totalLinked > targetOutstanding && (
+            <p className="text-sm text-red-600 font-medium px-1">Selected total ({formatCurrency(totalLinked)}) is more than required ({formatCurrency(targetOutstanding)}). Untick or reduce a row to continue.</p>
+          )}
+          {totalLinked < targetOutstanding && totalLinked > 0 && (
                 <span className="text-amber-600 font-medium">Choose more</span>
               )}
             </div>
@@ -932,7 +939,7 @@ export function LinkAdvancesToVoucherDialog({
                       const rowMax = row.remaining;
                       const maxAllowed = Math.min(rowMax, remainingToLink + linked);
                       // When required amount is already met, disable tick for rows not yet selected (only already-linked rows can be unticked)
-                      const cannotAddMore = remainingToLink <= 0 && linked === 0;
+                      const cannotAddMore = false; // never block ticking; over-selection is flagged by the warning and Done stays disabled until total <= required
                       return (
                         <tr key={row.id} className="border-b last:border-b-0 hover:bg-muted/30">
                           <td className="p-2 w-10 whitespace-nowrap align-middle">
@@ -942,7 +949,7 @@ export function LinkAdvancesToVoucherDialog({
                               onCheckedChange={(checked) => {
                                 if (checked) {
                                   const cap = maxAllowed > 0 ? maxAllowed : rowMax;
-                                  const initial = cap > 0 ? (maxAllowed > 0 ? maxAllowed : Math.min(0.01, rowMax)) : 0;
+                                  const initial = cap > 0 ? (maxAllowed > 0 ? maxAllowed : rowMax) : 0;
                                   if (initial > 0) setLinkedFor(row.id, String(initial), cap);
                                 } else {
                                   setLinkedFor(row.id, "0");
@@ -969,6 +976,9 @@ export function LinkAdvancesToVoucherDialog({
             )}
           </div>
 
+          {totalLinked > targetOutstanding && (
+            <p className="text-sm text-red-600 font-medium px-1">Selected total ({formatCurrency(totalLinked)}) is more than required ({formatCurrency(targetOutstanding)}). Untick or reduce a row to continue.</p>
+          )}
           {totalLinked < targetOutstanding && totalLinked > 0 && (
             <p className="text-sm text-amber-600 font-medium px-1">Selected total is less than required. Choose more vouchers to cover the amount.</p>
           )}
@@ -985,7 +995,7 @@ export function LinkAdvancesToVoucherDialog({
                 <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
                 Reset
               </Button>
-              <Button type="button" onClick={handleDone} disabled={saving || (!onConfirm && !valid)} className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0">
+              <Button type="button" onClick={handleDone} disabled={saving || !valid} className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0">
                 {saving ? "Saving..." : "DONE"}
               </Button>
             </div>

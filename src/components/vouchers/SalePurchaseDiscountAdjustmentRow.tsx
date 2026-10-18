@@ -17,6 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useCompany } from "@/hooks/useCompany";
 import {
+  clearCompanyDiscountExpenseDefault,
   persistCompanyDiscountExpenseDefault,
   readCompanyDiscountExpenseDefault,
   type SalePurchaseDiscountSide,
@@ -29,6 +30,8 @@ type Props = {
   expenseAccountOptions: { value: string; label: string }[];
   /** Mobile totals strip vs desktop cyan box */
   variant?: "mobile" | "desktop";
+  /** Default/Clear button only when creating a new voucher. */
+  showDefaultControl?: boolean;
 };
 
 /** Discount row — expense (Adjustment default) + ± + amount; posts to adjustment on save. */
@@ -38,9 +41,26 @@ export function SalePurchaseDiscountAdjustmentRow({
   disabled,
   expenseAccountOptions,
   variant = "desktop",
+  showDefaultControl = true,
 }: Props) {
   const { company, companyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
   const companyDefaultId = readCompanyDiscountExpenseDefault(side, company);
+
+  const clearCompanyDefault = useCallback(async () => {
+    if (!companyId) return;
+    try {
+      await clearCompanyDiscountExpenseDefault({
+        side,
+        companyId,
+        company,
+        reloadLocalCompanyRegistry,
+        triggerSync,
+      });
+      sonnerToast.success("Default discount account cleared.");
+    } catch {
+      sonnerToast.error("Could not clear default discount account.");
+    }
+  }, [company, companyId, reloadLocalCompanyRegistry, side, triggerSync]);
 
   const setCompanyDefault = useCallback(
     async (accountId: string) => {
@@ -65,12 +85,12 @@ export function SalePurchaseDiscountAdjustmentRow({
 
   const isMobile = variant === "mobile";
   const amountInputClass = isMobile
-    ? "w-20 border rounded p-1 text-right text-xs h-7 shrink-0"
-    : "w-28 text-right h-9";
-  const signTriggerClass = isMobile ? "h-7 w-12 text-xs px-1" : "h-9 w-14 px-2";
+    ? "w-20 border rounded p-1 text-right text-xs h-[27px] shrink-0"
+    : "w-28 text-right h-[27px]";
+  const signTriggerClass = isMobile ? "h-[27px] w-12 text-xs px-1" : "h-[27px] w-14 px-2";
 
   return (
-    <div className={cn("space-y-2", isMobile && "space-y-1")}>
+    <div className="[&>*]:py-[3px]">
       <FormField
         control={control}
         name="discountExpenseAccountId"
@@ -90,20 +110,20 @@ export function SalePurchaseDiscountAdjustmentRow({
                 isMobile ? "w-full justify-end" : "justify-end flex-1 max-w-[min(100%,20rem)]"
               )}
             >
-              {field.value ? (
+              {showDefaultControl && (field.value || companyDefaultId) ? (
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   className={cn(
                     "shrink-0 px-1.5 text-[10px] h-7",
-                    String(field.value) === companyDefaultId && "border-primary text-primary"
+                    companyDefaultId && "border-primary text-primary"
                   )}
                   disabled={disabled}
                   title="Set as default discount account for all users in this company"
-                  onClick={() => void setCompanyDefault(field.value)}
+                  onClick={() => void (companyDefaultId ? clearCompanyDefault() : setCompanyDefault(field.value))}
                 >
-                  Default
+                  {companyDefaultId ? "Clear" : "Default"}
                 </Button>
               ) : null}
               <FormControl className="min-w-0 flex-1 w-max max-w-full">
@@ -113,6 +133,7 @@ export function SalePurchaseDiscountAdjustmentRow({
                   disabled={disabled}
                   onChange={(val) => field.onChange(val === "none" ? "" : val)}
                   placeholder="Adjustment"
+                  triggerClassName={isMobile ? "h-[27px] min-w-[132px]" : "h-[27px] min-w-[172px]"}
                   contentWidthMode="auto"
                   fitTrigger
                 />
@@ -123,7 +144,7 @@ export function SalePurchaseDiscountAdjustmentRow({
       />
       <div
         className={cn(
-          "flex space-y-0",
+          "flex space-y-0 border-t",
           isMobile ? "flex-row justify-between items-center gap-2" : "justify-between items-center"
         )}
       >

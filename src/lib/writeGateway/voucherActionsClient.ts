@@ -2232,7 +2232,7 @@ export async function syncBillWiseAllocationsToTargetVouchers(
       const allocations: Allocation[] = Array.isArray((data as any)?.allocations) ? [...((data as any).allocations as Allocation[])] : [];
       const filtered = allocations.filter((a) => a.voucherId !== sourceVoucherId);
       if (filtered.length !== allocations.length) {
-        const payload = removeUndefined({ ...(data as any), id: targetId, allocations: filtered }) as Record<string, unknown>;
+        const payload = removeUndefined({ ...(data as any), id: targetId, allocations: filtered, updatedAt: Timestamp.now(), lastEditedAt: Timestamp.now() }) as Record<string, unknown>;
         coerceVoucherDocumentDate(payload);
         await upsertCompanyDocInBrowserDb(companyId, "vouchers", targetId, payload);
         await enqueueVoucherOutbox(companyId, "update", targetId, payload);
@@ -2289,7 +2289,7 @@ export async function syncBillWiseAllocationsToTargetVouchers(
         if (idx >= 0) allocations[idx] = entry;
         else allocations.push(entry);
       }
-      const payload = removeUndefined({ ...(data as any), id: targetId, allocations }) as Record<
+      const payload = removeUndefined({ ...(data as any), id: targetId, allocations, updatedAt: Timestamp.now(), lastEditedAt: Timestamp.now() }) as Record<
         string,
         unknown
       >;
@@ -2397,8 +2397,153 @@ export async function syncBillWiseAllocationsToTargetVouchers(
 }
 
 /**
- * Remove bill-wise allocations on source vouchers that point at `targetVoucherId`.
- * Used when a journal unlink clears incoming-only links (PYMT/JRNL Dr → Journal Cr) that
+ * Drop reverse TDS-leg links (on Sale/Purchase targets) from `sourceVoucherId` that are no longer
+ * in the source's allocations (entityTxnId `targetId::tds::acct`). Also heals already-stale data.
+ */
+export async function pruneStaleTdsReverseLinks(
+  companyId: string,
+  sourceVoucherId: string,
+  keepAllocations: Allocation[],
+  opts?: { rows?: Array<{ id?: string; allocations?: Allocation[] }>; forceSqliteFirst?: boolean }
+): Promise<void> {
+  const keep = new Set(
+    keepAllocations
+      .filter((a) => getAllocationTotal(a) > 0)
+      .map((a) => String((a as { entityTxnId?: string }).entityTxnId ?? "").trim())
+      .filter((e) => e.includes("::tds::"))
+  );
+  // Candidate rows: caller's in-memory list (works for online/Firestore companies too) else the local DB.
+  const rows = opts?.rows?.length ? opts.rows : await listCompanyDocsFromBrowserDb(companyId, "vouchers").catch(() => []);
+  for (const row of rows as Array<{ id?: string; allocations?: Allocation[]; isDeleted?: boolean }>) {
+    const rid = String(row?.id ?? "").trim();
+    if (!rid || rid === sourceVoucherId || row.isDeleted || !Array.isArray(row.allocations)) continue;
+    const filtered = row.allocations.filter((x) => {
+      if (String(x?.voucherId ?? "") !== sourceVoucherId) return true;
+      const et = String((x as { entityTxnId?: string }).entityTxnId ?? "").trim();
+      if (!et.includes("::tds::")) return true;
+      if (!et.startsWith(`${rid}::`)) return true;
+      return keep.has(et);
+    });
+    if (filtered.length === row.allocations.length) continue;
+    // patchVoucherFields = pipeline-aware write (SQLite+outbox or Firestore) with updatedAt/lastEditedAt bump.
+    await patchVoucherFields(
+      companyId,
+      rid,
+      { allocations: filtered },
+      opts?.forceSqliteFirst === undefined ? undefined : { forceSqliteFirst: opts.forceSqliteFirst }
+    );
+    dispatchVoucherLivePatch(companyId, rid, { allocations: filtered });
+  }
+}
+
+const tdsEtOf = (a: unknown): string => String((a as { entityTxnId?: string } | null)?.entityTxnId ?? "").trim();
+const isTdsEt = (e: string): boolean => e.includes("::tds::");
+
+async function readVoucherRowFresh(companyId: string, id: string, rows?: any[]): Promise<any | null> {
+  const db = await getCompanyDocFromBrowserDb(companyId, "vouchers", id).catch(() => null);
+  if (db) return db;
+  return (rows || []).find((r) => String(r?.id ?? "") === id) ?? null;
+}
+
+/**
+ * Explicitly delete TDS-leg links (entityTxnId `targetId::tds::acct`) between `sourceVoucherId` and each target:
+ * the forward allocation on the source (all sides) AND the reverse mirror on the target, even when the source
+ * has no allocations left. Uses patchVoucherFields (pipeline-aware, bumps updatedAt/lastEditedAt).
+ */
+export async function removeTdsLegLinks(
+  companyId: string,
+  sourceVoucherId: string,
+  entityTxnIds: string[],
+  rows?: any[]
+): Promise<void> {
+  const ids = new Set(entityTxnIds.map((e) => String(e || "").trim()).filter(isTdsEt));
+  if (!companyId || !sourceVoucherId || ids.size === 0) return;
+  const src = await readVoucherRowFresh(companyId, sourceVoucherId, rows);
+  const srcAllocs: Allocation[] = Array.isArray(src?.allocations) ? src.allocations : [];
+  const srcFiltered = srcAllocs.filter((a) => !ids.has(tdsEtOf(a)));
+  if (src && srcFiltered.length !== srcAllocs.length) {
+    await patchVoucherFields(companyId, sourceVoucherId, { allocations: srcFiltered });
+    dispatchVoucherLivePatch(companyId, sourceVoucherId, { allocations: srcFiltered });
+  }
+  const targetIds = new Set([...ids].map((e) => e.split("::")[0]).filter(Boolean));
+  for (const tid of targetIds) {
+    if (tid === sourceVoucherId) continue;
+    const tgt = await readVoucherRowFresh(companyId, tid, rows);
+    const tAllocs: Allocation[] = Array.isArray(tgt?.allocations) ? tgt.allocations : [];
+    const tFiltered = tAllocs.filter((a) => !(String(a?.voucherId ?? "") === sourceVoucherId && ids.has(tdsEtOf(a))));
+    if (tgt && tFiltered.length !== tAllocs.length) {
+      await patchVoucherFields(companyId, tid, { allocations: tFiltered });
+      dispatchVoucherLivePatch(companyId, tid, { allocations: tFiltered });
+    }
+  }
+}
+
+/**
+ * Consistency pass for TDS-leg links. Forward link = on source S: {voucherId: T, entityTxnId: T::tds::acct};
+ * mirror = on target T: {voucherId: S, same entityTxnId}. Missing mirror -> recreate; orphan mirror (no forward
+ * on S) -> delete. Decisions are re-verified against fresh DB rows (never from a stale UI snapshot only), so a link
+ * the user just removed is not resurrected. `scopeVoucherId` limits work to pairs touching that voucher.
+ */
+export async function reconcileTdsLegLinks(companyId: string, scopeVoucherId?: string, rows?: any[]): Promise<void> {
+  if (!companyId) return;
+  const list = ((rows?.length ? rows : await listCompanyDocsFromBrowserDb(companyId, "vouchers").catch(() => [])) as any[]).filter(
+    (v) => v && v.id && !v.isDeleted
+  );
+  const scope = String(scopeVoucherId ?? "").trim();
+  const addMirror: Array<{ sid: string; tid: string; et: string }> = [];
+  const dropMirror: Array<{ sid: string; tid: string; et: string }> = [];
+  for (const v of list) {
+    const vid = String(v.id);
+    for (const a of (Array.isArray(v.allocations) ? v.allocations : []) as Allocation[]) {
+      const et = tdsEtOf(a);
+      if (!isTdsEt(et)) continue;
+      const other = String(a.voucherId ?? "");
+      if (!other || other === vid) continue;
+      if (scope && vid !== scope && other !== scope) continue;
+      if (et.startsWith(`${other}::`)) addMirror.push({ sid: vid, tid: other, et }); // forward on v
+      else if (et.startsWith(`${vid}::`)) dropMirror.push({ sid: other, tid: vid, et }); // mirror on v
+    }
+  }
+  const edits = new Map<string, Allocation[]>();
+  const current = async (id: string): Promise<Allocation[] | null> => {
+    if (edits.has(id)) return edits.get(id)!;
+    const r = await readVoucherRowFresh(companyId, id, list);
+    if (!r || r.isDeleted) return null;
+    const l: Allocation[] = Array.isArray(r.allocations) ? [...r.allocations] : [];
+    return l;
+  };
+  for (const m of addMirror) {
+    const s = await current(m.sid);
+    const t = await current(m.tid);
+    if (!s || !t) continue;
+    const fwd = s.find((x) => String(x.voucherId ?? "") === m.tid && tdsEtOf(x) === m.et && getAllocationTotal(x) > 0);
+    if (!fwd) continue;
+    if (t.some((x) => String(x.voucherId ?? "") === m.sid && tdsEtOf(x) === m.et)) continue;
+    t.push({
+      voucherId: m.sid,
+      amount: fwd.amount,
+      ...(fwd.taxAmount !== undefined ? { taxAmount: fwd.taxAmount } : {}),
+      ...(fwd.linkedAccountId ? { linkedAccountId: fwd.linkedAccountId } : {}),
+      entityTxnId: m.et,
+    } as Allocation);
+    edits.set(m.tid, t);
+  }
+  for (const m of dropMirror) {
+    const s = await current(m.sid);
+    const t = await current(m.tid);
+    if (!s || !t) continue; // source not loaded (e.g. other FY): never delete on missing data
+    if (s.some((x) => String(x.voucherId ?? "") === m.tid && tdsEtOf(x) === m.et && getAllocationTotal(x) > 0)) continue;
+    const filtered = t.filter((x) => !(String(x.voucherId ?? "") === m.sid && tdsEtOf(x) === m.et));
+    if (filtered.length !== t.length) edits.set(m.tid, filtered);
+  }
+  for (const [id, allocations] of edits) {
+    await patchVoucherFields(companyId, id, { allocations });
+    dispatchVoucherLivePatch(companyId, id, { allocations });
+  }
+}
+
+/**
+ * Remove bill-wise allocations on source vouchers that point at `targetVoucherId`. * Used when a journal unlink clears incoming-only links (PYMT/JRNL Dr → Journal Cr) that
  * were never stored on the journal's own `allocations` array.
  */
 export async function clearBillWiseAllocationsFromSourcesToTarget(
@@ -2421,7 +2566,7 @@ export async function clearBillWiseAllocationsFromSourcesToTarget(
         : [];
       const filtered = allocations.filter((a) => String(a?.voucherId ?? "") !== targetVoucherId);
       if (filtered.length === allocations.length) continue;
-      const payload = removeUndefined({ ...(data as any), id: sourceId, allocations: filtered }) as Record<
+      const payload = removeUndefined({ ...(data as any), id: sourceId, allocations: filtered, updatedAt: Timestamp.now(), lastEditedAt: Timestamp.now() }) as Record<
         string,
         unknown
       >;
@@ -2520,6 +2665,9 @@ export async function applyJournalBillWiseLinkAllocations(
     dbPrevious,
     { forceSqliteFirst: true }
   );
+  await pruneStaleTdsReverseLinks(companyId, journalVoucherId, sanitizedNew, { forceSqliteFirst: true }).catch((e) =>
+    console.warn("[applyJournalBillWiseLinkAllocations] stale TDS reverse prune", e)
+  );
 
   const keepTargetIds = new Set(
     sanitizedNew
@@ -2603,6 +2751,9 @@ export async function applyPaymentBillWiseLinkAllocations(
   await syncBillWiseAllocationsToTargetVouchers(companyId, sourceId, newAllocations, previousAllocations, {
     forceSqliteFirst: true,
   });
+  await pruneStaleTdsReverseLinks(companyId, sourceId, newAllocations, { forceSqliteFirst: true }).catch((e) =>
+    console.warn("[applyPaymentBillWiseLinkAllocations] stale TDS reverse prune", e)
+  );
 
   const affectedTargetIds = new Set<string>();
   for (const a of [...previousAllocations, ...newAllocations]) {

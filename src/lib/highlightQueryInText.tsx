@@ -24,7 +24,11 @@ function mergeIntervals(intervals: [number, number][]): [number, number][] {
  * Space alag words — har word alag highlight (AND filter ke saath align).
  * Sirf caller jo text pass kare — global DOM search nahi.
  */
-export function highlightQueryInText(text: string, query: string): React.ReactNode {
+/**
+ * `opts.amount`: numeric tokens (digits / . / -) are matched tolerant of thousands commas in the formatted text,
+ * e.g. query "1500" highlights inside "Rs. 1,500.00".
+ */
+export function highlightQueryInText(text: string, query: string, opts?: { amount?: boolean }): React.ReactNode {
   const src = text ?? "";
   const tokens = query
     .trim()
@@ -35,7 +39,11 @@ export function highlightQueryInText(text: string, query: string): React.ReactNo
   try {
     const intervals: [number, number][] = [];
     for (const tok of tokens) {
-      const re = new RegExp(escapeRegExpForHighlight(tok), "gi");
+      const pattern =
+        opts?.amount && /^[\d.\-]+$/.test(tok)
+          ? tok.split("").map(escapeRegExpForHighlight).join(",?")
+          : escapeRegExpForHighlight(tok);
+      const re = new RegExp(pattern, "gi");
       let m: RegExpExecArray | null;
       while ((m = re.exec(src)) !== null) {
         intervals.push([m.index, m.index + m[0].length]);

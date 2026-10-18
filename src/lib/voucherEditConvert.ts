@@ -122,6 +122,27 @@ export function getVoucherEditConvertPresentation(
   };
 }
 
+/** Banner checkbox: original ids the user chose to KEEP (not move to bin) on convert save. Default (absent) = move to bin. */
+const keepConvertedSourceVoucherIds = new Set<string>();
+
+export function setVoucherConvertSourceMoveToBin(originalVoucherId: string, moveToBin: boolean): void {
+  if (!originalVoucherId) return;
+  if (moveToBin) keepConvertedSourceVoucherIds.delete(originalVoucherId);
+  else keepConvertedSourceVoucherIds.add(originalVoucherId);
+}
+
+export function shouldMoveVoucherConvertSourceToBin(originalVoucherId: string): boolean {
+  return !keepConvertedSourceVoucherIds.has(originalVoucherId);
+}
+
+/** Source id of the convert banner currently mounted (lets the confirm dialog read the same checkbox choice). */
+let activeConvertSourceVoucherId: string | null = null;
+export function setActiveVoucherConvertSourceId(id: string | null): void {
+  activeConvertSourceVoucherId = id;
+}
+export function getActiveVoucherConvertSourceId(): string | null {
+  return activeConvertSourceVoucherId;
+}
 /** After new voucher saved: mark original in recycle bin with converted metadata. */
 export async function markVoucherConvertedInRecycleBin(
   companyId: string,
@@ -133,6 +154,7 @@ export async function markVoucherConvertedInRecycleBin(
     deletedBy?: string;
   }
 ): Promise<void> {
+  if (!shouldMoveVoucherConvertSourceToBin(originalVoucherId)) return;
   await patchVoucherFields(companyId, originalVoucherId, {
     isDeleted: true,
     deletedAt: voucherRecycleBinDeletedAt(),

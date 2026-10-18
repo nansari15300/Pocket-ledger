@@ -2,6 +2,7 @@
 
 "use client";
 
+import { useShowAllTdsCards } from "@/lib/useShowAllTdsCards";
 import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect, getPdfBlob, companyFiscalFieldsForPrint } from "@/lib/printDirect";
@@ -351,7 +352,7 @@ export function PartyDetails({
       ? nestedLedgerChildDialogShell("h-[95vh] w-full max-w-3xl flex flex-col")
       : { overlayClassName: undefined, className: "h-[95vh] w-full max-w-3xl flex flex-col" };
   const { company, companyId } = useCompany();
-  const { balanceMode, setBalanceMode } = useBalanceMode();
+  const { balanceMode: balanceModeRaw, setBalanceMode } = useBalanceMode();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } =
     useDate();
   const {
@@ -407,7 +408,7 @@ export function PartyDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const ledgerPaginationReset = useLedgerPaginationReset(setRowsPerPage, setCurrentPage);
   const ledgerViewMode: LedgerDetailViewMode =
-    balanceMode === "bill_wise" ? "bill_wise" : "statement";
+    balanceModeRaw === "bill_wise" ? "bill_wise" : "statement";
   const ledgerSessionKey = useMemo(
     () =>
       companyId && party?.id
@@ -892,7 +893,7 @@ export function PartyDetails({
     vouchers: vouchersForAutoLink,
     ledgerOpeningBalance: masterPartyOpeningForAutoLink,
     openingBalanceOutstanding:
-      balanceMode === "bill_wise" ? openingBalanceOutstanding : undefined,
+      balanceModeRaw === "bill_wise" ? openingBalanceOutstanding : undefined,
   });
   const openBillWiseAutoLink = React.useCallback(() => {
     if (autoLinkPrompt.proposal) {
@@ -1007,6 +1008,8 @@ export function PartyDetails({
     companyId && party?.id ? readPartyTdsLedgerViewMode(companyId, party.id) : "account"
   );
   const tdsLedgerOnly = tdsLedgerViewMode !== "account";
+  /** Party TDS balance page never offers bill-wise: force statement. */
+  const balanceMode: typeof balanceModeRaw = tdsLedgerOnly ? "statement" : balanceModeRaw;
   /** Party TDS details: show entity-wise linked settlement payments/journals. */
   const [showTdsLinkedTrxn, setShowTdsLinkedTrxn] = useState(true);
   const taxNameById = useMemo(() => buildTaxNameById(processedTaxes), [processedTaxes]);
@@ -1060,6 +1063,9 @@ export function PartyDetails({
     },
     [companyId, party?.id, setCurrentPage]
   );
+  const [tdsCardsOpen, setTdsCardsOpen] = useState(false);
+  const [tdsCardsOpenM, setTdsCardsOpenM] = useState(false);
+  const [showAllTds, setShowAllTds] = useShowAllTdsCards();
   const openPartyLedgerDetails = useCallback(() => {
     setPartyTdsLedgerView("account");
   }, [setPartyTdsLedgerView]);
@@ -1208,7 +1214,7 @@ export function PartyDetails({
    * Top BALANCE card — always party account closing (never TDS row running balance).
    * TDS Balance card uses `partyTdsBalanceSummary` separately.
    */
-  const headerClosingBalance = useMemo(() => {
+  const headerClosingBalanceRaw = useMemo(() => {
     if (isOpeningBalanceLedger && openingBalanceLedgerBreakdown) {
       return -openingBalanceLedgerBreakdown.masterTotals.netSigned;
     }
@@ -1250,6 +1256,15 @@ export function PartyDetails({
     periodDr,
     periodCr,
   ]);
+  /** Column header filters (Debit/Credit/etc.) must not change the Account Balance card: keep last unfiltered value. */
+  const headerBalanceUnfilteredRef = useRef<{ key: string; value: number } | null>(null);
+  const headerBalanceHasColFilter = Object.values(filters).some((v) => v && v !== "all");
+  const headerBalanceKey = `${dateRange?.from?.getTime?.() ?? ""}|${dateRange?.to?.getTime?.() ?? ""}`;
+  if (!headerBalanceHasColFilter) headerBalanceUnfilteredRef.current = { key: headerBalanceKey, value: headerClosingBalanceRaw };
+  const headerClosingBalance =
+    headerBalanceHasColFilter && headerBalanceUnfilteredRef.current?.key === headerBalanceKey
+      ? headerBalanceUnfilteredRef.current.value
+      : headerClosingBalanceRaw;
 
   useLedgerDetailSessionMemory({
     companyId: companyId ?? undefined,
@@ -1800,36 +1815,78 @@ export function PartyDetails({
                 data-pl-party-tds-inline=""
                 className="flex shrink-0 flex-col items-start gap-1 text-left"
               >
-                {partyTdsHasSale ? (
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-col gap-0 text-left cursor-pointer"
-                    onClick={openSaleTdsLedgerDetails}
-                    aria-pressed={tdsLedgerViewMode === "sale"}
-                  >
-                    <span className="text-[10px] font-semibold tracking-wide text-muted-foreground leading-none">
-                      Sale TDS
-                    </span>
-                    <span className="text-xs font-bold text-green-600 leading-tight">
-                      {formatCurrency(partyTdsBalanceSummary.saleTds, { showDrCr: true })}
-                    </span>
-                  </button>
-                ) : null}
-                {partyTdsHasPur ? (
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-col gap-0 text-left cursor-pointer"
-                    onClick={openPurTdsLedgerDetails}
-                    aria-pressed={tdsLedgerViewMode === "purchase"}
-                  >
-                    <span className="text-[10px] font-semibold tracking-wide text-muted-foreground leading-none">
-                      Pur TDS
-                    </span>
-                    <span className="text-xs font-bold text-red-600 leading-tight">
-                      {formatCurrency(-partyTdsBalanceSummary.purchaseTds, { showDrCr: true })}
-                    </span>
-                  </button>
-                ) : null}
+                <Popover open={tdsCardsOpenM} onOpenChange={(o) => { if (o && !tdsLedgerOnly) { if (partyTdsHasPur) openPurTdsLedgerDetails(); else openSaleTdsLedgerDetails(); return; } setTdsCardsOpenM(o); }}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-col gap-0 text-left cursor-pointer"
+                      aria-pressed={tdsLedgerViewMode === "sale" || tdsLedgerViewMode === "purchase"}
+                    >
+                      <span className="text-[10px] font-semibold tracking-wide text-muted-foreground leading-none">
+                        {tdsLedgerViewMode === "sale" || (tdsLedgerViewMode !== "purchase" && !partyTdsHasPur) ? "Sale TDS" : "Pur TDS"}
+                      </span>
+                      {tdsLedgerViewMode === "sale" || (tdsLedgerViewMode !== "purchase" && !partyTdsHasPur) ? (
+                        <span className="text-xs font-bold text-green-600 leading-tight">
+                          {formatCurrency(partyTdsBalanceSummary.saleTds, { showDrCr: true })}
+                        </span>
+                      ) : (
+                        <span className="text-xs font-bold text-red-600 leading-tight">
+                          {formatCurrency(-partyTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+                        </span>
+                      )}
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-auto p-2">
+                    <div className="flex flex-col gap-2">
+                      {(partyTdsHasSale || showAllTds) ? (
+                        <button
+                          type="button"
+                          className={cn("flex flex-col items-start rounded-md border px-3 py-1.5 text-left", tdsLedgerViewMode === "sale" && "ring-2 ring-primary")}
+                          aria-pressed={tdsLedgerViewMode === "sale"}
+                          onClick={() => {
+                            openSaleTdsLedgerDetails();
+                            setTdsCardsOpenM(false);
+                          }}
+                        >
+                          <span className="text-[10px] font-semibold text-muted-foreground leading-none">Sale TDS Balance</span>
+                          <span className="text-sm font-bold text-green-600 leading-tight">
+                            {formatCurrency(partyTdsBalanceSummary.saleTds, { showDrCr: true })}
+                          </span>
+                        </button>
+                      ) : null}
+                      {(partyTdsHasPur || showAllTds) ? (
+                        <button
+                          type="button"
+                          className={cn("flex flex-col items-start rounded-md border px-3 py-1.5 text-left", (tdsLedgerViewMode === "purchase" || (tdsLedgerViewMode !== "sale" && partyTdsHasPur)) && "order-first", tdsLedgerViewMode === "purchase" && "ring-2 ring-primary")}
+                          aria-pressed={tdsLedgerViewMode === "purchase"}
+                          onClick={() => {
+                            openPurTdsLedgerDetails();
+                            setTdsCardsOpenM(false);
+                          }}
+                        >
+                          <span className="text-[10px] font-semibold text-muted-foreground leading-none">Pur TDS Balance</span>
+                          <span className="text-sm font-bold text-red-600 leading-tight">
+                            {formatCurrency(-partyTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+                          </span>
+                        </button>
+                      ) : null}
+                      {showAllTds ? (
+                        <div className="flex flex-col items-start rounded-md border px-3 py-1.5 text-left">
+                          <span className="text-[10px] font-semibold text-muted-foreground leading-none">Add Salary TDS Balance</span>
+                          <span className="text-sm font-bold text-muted-foreground leading-tight">{formatCurrency(0, { showDrCr: true })}</span>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {!showAllTds ? (<Button type="button" variant="chromePill" size="sm" aria-pressed={showAllTds} onClick={() => setShowAllTds(true)} className="h-8 w-auto min-w-[70px] whitespace-nowrap px-3 text-xs font-semibold">
+                        Show all TDS type cards (always)
+                      </Button>) : null}
+                      {showAllTds ? (<Button type="button" variant="chromePill" size="sm" aria-pressed={!showAllTds} onClick={() => setShowAllTds(false)} className="h-8 w-auto min-w-[70px] whitespace-nowrap px-3 text-xs font-semibold">
+                        Default
+                      </Button>) : null}
+                    </div>
+                  </PopoverContent>
+                </Popover>
               </div>
             ) : null}
             <button
@@ -1920,7 +1977,7 @@ export function PartyDetails({
               onStatusFilterAll={handleStatusFilterAll}
               onStatusFilterChange={handleStatusFilterChange}
               statusFilterIdPrefix="party"
-              forceBalanceMode={adminSubscriberPartyLedger ? "statement" : undefined}
+              forceBalanceMode={tdsLedgerOnly || adminSubscriberPartyLedger ? "statement" : undefined}
               {...statementCheck.tableProps}
             />
             </MasterAccountFreezeTxnShell>
@@ -1978,7 +2035,7 @@ export function PartyDetails({
               openModalInUrl();
             }}
             balanceMode={balanceMode}
-            onBalanceModeToggle={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+            onBalanceModeToggle={tdsLedgerOnly ? undefined : () => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
             mobileView={mobileReportView}
             onViewToggle={() => setMobileReportView((v) => (v === "list" ? "chart" : "list"))}
           />
@@ -1988,6 +2045,7 @@ export function PartyDetails({
           data-pl-mobile-ledger-action-footer=""
         >
           {/* Mobile footer: ek button â€” Statement â†” Bill wise toggle */}
+          {!tdsLedgerOnly ? (
           <LedgerViewModeToggleButton
             value={balanceMode}
             onChange={setBalanceMode}
@@ -1996,6 +2054,7 @@ export function PartyDetails({
               { value: "bill_wise", label: "Bill wise" },
             ]}
           />
+          ) : null}
           <Button className="flex-1 min-h-0 rounded-md bg-green-600 hover:bg-green-700 text-white text-sm font-semibold" disabled={blockPartyNewTransactions} onClick={() => { if (blockPartyNewTransactions) return; openingModalRef.current = true; setMobileFooterDialogOpen("payment_in"); openModalInUrl(); }}>
             Receive
           </Button>
@@ -2302,37 +2361,101 @@ export function PartyDetails({
                   </div>
                 </div>
               </button>
-              {partyTdsHasSale ? (
-                <button
-                  type="button"
-                  className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "cursor-pointer")}
-                  onClick={openSaleTdsLedgerDetails}
-                  aria-pressed={tdsLedgerViewMode === "sale"}
-                  title="Sale TDS Balance details"
-                >
-                  <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
-                    <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Sale TDS Balance</span>
-                    <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-green-600")}>
-                      {formatCurrency(partyTdsBalanceSummary.saleTds, { showDrCr: true })}
+              {partyTdsHasSale || partyTdsHasPur ? (
+                <Popover open={tdsCardsOpen} onOpenChange={(o) => { if (o && !tdsLedgerOnly) { if (partyTdsHasPur) openPurTdsLedgerDetails(); else openSaleTdsLedgerDetails(); return; } setTdsCardsOpen(o); }}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "cursor-pointer text-left")}
+                      aria-pressed={tdsLedgerViewMode === "sale" || tdsLedgerViewMode === "purchase"}
+                      title="TDS Balance details"
+                    >
+                      <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                        <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>
+                          {tdsLedgerViewMode === "sale" || (tdsLedgerViewMode !== "purchase" && !partyTdsHasPur)
+                            ? "Sale TDS Balance"
+                            : "Pur TDS Balance"}
+                        </span>
+                        {tdsLedgerViewMode === "sale" || (tdsLedgerViewMode !== "purchase" && !partyTdsHasPur) ? (
+                          <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-green-600")}>
+                            {formatCurrency(partyTdsBalanceSummary.saleTds, { showDrCr: true })}
+                          </div>
+                        ) : (
+                          <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-red-600")}>
+                            {formatCurrency(-partyTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-auto p-2">
+                    <div className="flex gap-2">
+                      {(partyTdsHasSale || showAllTds) ? (
+                        <button
+                          type="button"
+                          className={cn(
+                            LEDGER_HEADER_TDS_BALANCE_CARD_CN,
+                            "cursor-pointer text-left",
+                            tdsLedgerViewMode === "sale" && "ring-2 ring-primary"
+                          )}
+                          onClick={() => {
+                            openSaleTdsLedgerDetails();
+                            setTdsCardsOpen(false);
+                          }}
+                          aria-pressed={tdsLedgerViewMode === "sale"}
+                          title="Sale TDS Balance details"
+                        >
+                          <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                            <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Sale TDS Balance</span>
+                            <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-green-600")}>
+                              {formatCurrency(partyTdsBalanceSummary.saleTds, { showDrCr: true })}
+                            </div>
+                          </div>
+                        </button>
+                      ) : null}
+                      {(partyTdsHasPur || showAllTds) ? (
+                        <button
+                          type="button"
+                          className={cn(
+                            LEDGER_HEADER_TDS_BALANCE_CARD_CN,
+                            "cursor-pointer text-left",
+                            (tdsLedgerViewMode === "purchase" || (tdsLedgerViewMode !== "sale" && partyTdsHasPur)) && "order-first",
+                            tdsLedgerViewMode === "purchase" && "ring-2 ring-primary"
+                          )}
+                          onClick={() => {
+                            openPurTdsLedgerDetails();
+                            setTdsCardsOpen(false);
+                          }}
+                          aria-pressed={tdsLedgerViewMode === "purchase"}
+                          title="Pur TDS Balance details"
+                        >
+                          <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                            <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Pur TDS Balance</span>
+                            <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-red-600")}>
+                              {formatCurrency(-partyTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+                            </div>
+                          </div>
+                        </button>
+                      ) : null}
+                      {showAllTds ? (
+                        <div className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "text-left")}>
+                          <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                            <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Add Salary TDS Balance</span>
+                            <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-muted-foreground")}>{formatCurrency(0, { showDrCr: true })}</div>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
-                  </div>
-                </button>
-              ) : null}
-              {partyTdsHasPur ? (
-                <button
-                  type="button"
-                  className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "cursor-pointer")}
-                  onClick={openPurTdsLedgerDetails}
-                  aria-pressed={tdsLedgerViewMode === "purchase"}
-                  title="Pur TDS Balance details"
-                >
-                  <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
-                    <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Pur TDS Balance</span>
-                    <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-red-600")}>
-                      {formatCurrency(-partyTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {!showAllTds ? (<Button type="button" variant="chromePill" size="sm" aria-pressed={showAllTds} onClick={() => setShowAllTds(true)} className="h-8 w-auto min-w-[70px] whitespace-nowrap px-3 text-xs font-semibold">
+                        Show all TDS type cards (always)
+                      </Button>) : null}
+                      {showAllTds ? (<Button type="button" variant="chromePill" size="sm" aria-pressed={!showAllTds} onClick={() => setShowAllTds(false)} className="h-8 w-auto min-w-[70px] whitespace-nowrap px-3 text-xs font-semibold">
+                        Default
+                      </Button>) : null}
                     </div>
-                  </div>
-                </button>
+                  </PopoverContent>
+                </Popover>
               ) : null}
             </div>
             {/* Cluster: action pills â€” same gap-1.5 as identity cluster */}
@@ -2434,7 +2557,7 @@ export function PartyDetails({
                 </Button>
               )}
               <NotificationBell context="Party" entityId={party.id} />
-              {!isOpeningBalanceLedger ? (
+              {!isOpeningBalanceLedger && !tdsLedgerOnly ? (
               <LedgerViewModePills
                 value={balanceMode}
                 onChange={setBalanceMode}
@@ -2477,7 +2600,7 @@ export function PartyDetails({
                 </Button>
               )}
               
-              {isCompanyAdmin ? (
+              {isCompanyAdmin && !tdsLedgerOnly ? (
                 <Button
                   type="button"
                   variant="chromePill"
@@ -2567,7 +2690,7 @@ export function PartyDetails({
               onStatusFilterAll={handleStatusFilterAll}
               onStatusFilterChange={handleStatusFilterChange}
               statusFilterIdPrefix="party"
-              forceBalanceMode={adminSubscriberPartyLedger ? "statement" : undefined}
+              forceBalanceMode={tdsLedgerOnly || adminSubscriberPartyLedger ? "statement" : undefined}
               {...statementCheck.tableProps}
             />
             )}

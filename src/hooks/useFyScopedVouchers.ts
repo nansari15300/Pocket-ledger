@@ -49,5 +49,7 @@ export function useFyScopedVouchers() {
     fyScopeEnabled: fy.enabled,
     requestFyLoadRange: fy.requestLoadRange,
     requestFyLoadFyKey: fy.requestLoadFyKey,
+    requestFyLoadTransientRange: fy.requestLoadTransientRange,
+    evictFyTransientRange: fy.evictTransientRange,
   };
 }

@@ -5,6 +5,7 @@
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { useCompany } from "@/hooks/useCompany";
 import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Info, X, Calendar as CalendarIcon, Expand, Filter, RotateCw, ChevronLeft, ChevronRight, ChevronDown, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DaybookTxnScrollColumn } from "@/components/reports/DaybookTxnScrollColumn";
@@ -15,7 +16,7 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { startOfDay, isSameDay, addDays, subDays } from "date-fns";
+import { startOfDay, endOfDay, isSameDay, addDays, subDays } from "date-fns";
 import { DASHBOARD_EMBEDDED_DAYBOOK_VOUCHER_LOOKBACK_DAYS } from "@/lib/dashboardTabPanels";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdCalendar from "@/components/ui/ad-calendar";
@@ -47,6 +48,19 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { chromeProPillCn } from "@/lib/chromePillButton";
+import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
+import type { TransactionSortBy, TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import type { TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
+import { sortTransactions } from "@/lib/transactionSort";
+import { sortRecentTransactionsDesc } from "@/lib/recentTransactionsSort";
+import { useRowsPerPage } from "@/hooks/useRowsPerPage";
+import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
+import { COLUMN_LABELS, useShowNotes, useTransactionVisibleColumns } from "@/components/vouchers/transactionColumnVisibility";
+import { DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
 const daybookToolbarSelectTriggerCn = cn(
   chromeProPillCn,
@@ -61,6 +75,8 @@ interface DaybookReportProps {
   welcomeRibbonDateNav?: boolean;
   /** Dashboard Daybook tab (not full /reports route). */
   dashboardEmbedded?: boolean;
+  /** Desktop dashboard: element under the Welcome row where the pagination footer is portaled (Recent parity). */
+  footerPortalTarget?: HTMLElement | null;
 }
 
 function voucherToJsDate(raw: unknown): Date | null {
@@ -81,6 +97,7 @@ export function DaybookReport({
   isPanelVisible = true,
   welcomeRibbonDateNav = false,
   dashboardEmbedded = false,
+  footerPortalTarget = null,
 }: DaybookReportProps) {
     const {
       vouchers,
@@ -88,6 +105,10 @@ export function DaybookReport({
       processedParties,
       journalAccountNames: voucherJournalAccountNames,
       userNames: vouchersUserNames,
+      fyScopeEnabled,
+      fyActiveScope,
+      requestFyLoadTransientRange,
+      evictFyTransientRange,
     } = useFyScopedVouchers();
     const { company, companyId } = useCompany();
     const { dateSystem, formatDate, formatDateBS, formatCurrencyForPrint } = useDate();
@@ -97,6 +118,21 @@ export function DaybookReport({
     const [daybookRowsPerPage, setDaybookRowsPerPage] = useState('all');
     const [daybookVoucherTypes, setDaybookVoucherTypes] = useState<string[]>(['all']);
     const [showDaybookNarration, setShowDaybookNarration] = useState(true);
+    // Dashboard Daybook footer (same controls/components as Recent): columns, notes, rows per page, page, sort.
+    const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+    const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
+    const [footerRowsPerPage, setFooterRowsPerPage] = useRowsPerPage(50);
+    const [daybookCurrentPage, setDaybookCurrentPage] = useState(1);
+    const [daybookSortBy, setDaybookSortBy] = useState<TransactionSortBy>("date");
+    const [daybookSortOrder, setDaybookSortOrder] = useState<TransactionSortOrder>("desc");
+    const [daybookSortTouched, setDaybookSortTouched] = useState(false);
+    const { selectValue: footerRowsSelectValue } = useRowsPerPageSelectControl(
+        footerRowsPerPage,
+        setFooterRowsPerPage,
+        setDaybookCurrentPage,
+        ROWS_PER_PAGE_OPTIONS_DEFAULT,
+        "50"
+    );
     const [daybookNarrationNoteSearch, setDaybookNarrationNoteSearch] = useState("");
     const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
     const [selectedVoucher, setSelectedVoucher] = React.useState<any>(null);
@@ -253,11 +289,35 @@ export function DaybookReport({
           ? vouchers
           : vouchers.filter((v) => {
               const d = voucherToJsDate(v?.date);
-              return d ? startOfDay(d) >= daybookMonthCutoff : false;
+              if (!d) return false;
+              // Default window (last 32 days) UNION the selected day (older days are loaded on demand below).
+              return startOfDay(d) >= daybookMonthCutoff || (daybookDate ? isSameDay(d, daybookDate) : false);
             });
       vouchersForDaybookPipelineRef.current = next;
       return next;
-    }, [vouchers, dashboardEmbedded, daybookMonthCutoff, isPanelVisible]);
+    }, [vouchers, dashboardEmbedded, daybookMonthCutoff, isPanelVisible, daybookDate]);
+
+    // Selected day outside the in-memory FY/month scope: load just that day from local SQLite; evict it when the day changes.
+    useEffect(() => {
+      if (!dashboardEmbedded || !isPanelVisible || !daybookDate || !fyScopeEnabled || !fyActiveScope) return;
+      if (fyActiveScope.policy === "full") return;
+      const dayStart = startOfDay(daybookDate).getTime();
+      const dayEnd = endOfDay(daybookDate).getTime();
+      const sc = fyActiveScope.range;
+      if (dayStart >= sc.fromMs && dayEnd <= sc.toMs) return;
+      const range = { fromMs: dayStart, toMs: dayEnd };
+      let cancelled = false;
+      void requestFyLoadTransientRange(range)
+        .then(() => {
+          if (cancelled) evictFyTransientRange(range);
+        })
+        .catch(() => {});
+      return () => {
+        cancelled = true;
+        evictFyTransientRange(range);
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dashboardEmbedded, isPanelVisible, daybookDate, fyScopeEnabled, fyActiveScope?.policy, fyActiveScope?.range?.fromMs, fyActiveScope?.range?.toMs]);
 
     // plserver/APK: dates often plain `{seconds,nanoseconds}` after JSON wire — not `toDate()` / `new Date(obj)`.
     const transactionDates = useMemo(() => {
@@ -326,6 +386,27 @@ export function DaybookReport({
     const daybookTransactions = daybookPipelineActive
       ? hookDaybookTransactions
       : hookDaybookTransactionsRef.current;
+
+    // Pagination applies only to the dashboard Daybook tab; /reports Daybook keeps the full list.
+    const daybookListTotal = daybookTransactions ? daybookTransactions.length : 0;
+    const daybookPageSize = Math.max(10, footerRowsPerPage || 50);
+    const daybookTotalPages = Math.max(1, Math.ceil(daybookListTotal / daybookPageSize));
+    const daybookSafePage = Math.min(Math.max(1, daybookCurrentPage), daybookTotalPages);
+    const daybookPageStart = (daybookSafePage - 1) * daybookPageSize;
+    const daybookPageEnd = Math.min(daybookListTotal, daybookPageStart + daybookPageSize);
+    const daybookPagedTransactions = useMemo(() => {
+        if (!dashboardEmbedded || !daybookTransactions) return daybookTransactions;
+        const pageRows = daybookTransactions.slice(daybookPageStart, daybookPageEnd) as Record<string, unknown>[];
+        if (!daybookSortTouched || pageRows.length === 0) return pageRows;
+        if (daybookSortBy === "date") {
+            const sorted = sortRecentTransactionsDesc(pageRows);
+            return daybookSortOrder === "asc" ? [...sorted].reverse() : sorted;
+        }
+        return sortTransactions(pageRows, daybookSortBy, daybookSortOrder, { tieBreakCreatedAtDesc: true });
+    }, [dashboardEmbedded, daybookTransactions, daybookPageStart, daybookPageEnd, daybookSortTouched, daybookSortBy, daybookSortOrder]);
+    useEffect(() => {
+        setDaybookCurrentPage(1);
+    }, [daybookDate, daybookFilters, daybookVoucherTypes, daybookUserFilter]);
 
     const daybookSummaryRef = useRef<DaybookDailySummary | null>(null);
     useEffect(() => {
@@ -400,8 +481,9 @@ export function DaybookReport({
     return (
       <div id="daybook-area" className={cn("printable-area flex flex-col min-h-0 h-full", isMobile && "w-full min-w-0 max-w-full")}>
         <Card
+            data-pl-daybook-blue-border="" data-pl-daybook-outer-card=""
             className={cn(
-            "relative flex-1 flex flex-col min-h-0 overflow-hidden border-2 border-foreground transition-all duration-300",
+            "relative flex-1 flex flex-col min-h-0 overflow-hidden border-2 border-blue-300 transition-all duration-300",
             isFullScreen && "h-full",
             isMobile && "w-full min-w-0 max-w-full px-0",
             isMobile && daybookRotated && "max-w-[90vh] w-[90vh] h-[100vw] fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rotate-90 z-50"
@@ -432,7 +514,7 @@ export function DaybookReport({
                     </div>
                 </div>
                  {displayDaybookSummary && (
-                    <Card className={cn("mt-4 bg-blue-50 border-blue-200 text-blue-800", isMobile && "min-w-0 max-w-full rounded-lg mx-[2px]")}>
+                    <Card data-pl-daybook-blue-border="" data-pl-daybook-summary-card="" className={cn("mt-4 bg-blue-50 border-blue-300 text-blue-800", isMobile && "min-w-0 max-w-full rounded-lg mx-[2px]")}>
                         <CardHeader className={cn("pb-2 pt-4 space-y-3", isMobile ? "px-2" : "px-4")}>
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                 <div className="min-w-0">
@@ -490,8 +572,8 @@ export function DaybookReport({
                             onClick={() => setSelectedDaybookSummaryRowId(null)}
                             className={cn(
                               isMobile
-                                ? "min-w-0 max-w-full [&_thead_tr]:!border-b-[3px] [&_tbody_tr]:!border-b-[1.2px] [&_tbody_tr.daybook-summary-group-row]:!border-t-[3px] [&_tbody_tr.daybook-summary-group-row]:!border-b-[3px]"
-                                : "[&_thead_tr]:!border-b-[3px] [&_tbody_tr]:!border-b-[1.5px] [&_tbody_tr.daybook-summary-group-row]:!border-t-[3px] [&_tbody_tr.daybook-summary-group-row]:!border-b-[3px]",
+                                ? "min-w-0 max-w-full [&_thead_tr]:!border-b [&_tbody_tr]:!border-b-[1.2px] [&_tbody_tr.daybook-summary-group-row]:!border-t [&_tbody_tr.daybook-summary-group-row]:!border-b"
+                                : "[&_thead_tr]:!border-b [&_tbody_tr]:!border-b-[1.5px] [&_tbody_tr.daybook-summary-group-row]:!border-t [&_tbody_tr.daybook-summary-group-row]:!border-b",
                               "[&_thead_tr]:!border-foreground [&_tbody_tr]:!border-foreground/85 [&_tbody_tr.daybook-summary-group-row]:cursor-pointer [&_tbody_tr.daybook-summary-group-row]:transition-colors [&_tbody_tr.daybook-summary-group-row:hover]:bg-blue-100/40"
                             )}
                           >
@@ -507,7 +589,7 @@ export function DaybookReport({
                                         event.stopPropagation();
                                         setSelectedDaybookSummaryRowId("bank:group");
                                     }}
-                                    className={cn("daybook-summary-group-row", selectedDaybookSummaryRowId === "bank:group" && "!bg-blue-200/70 hover:!bg-blue-200/70")}
+                                    data-pl-daybook-summary-gray-row="" className={cn("daybook-summary-group-row font-bold text-base [&>td]:text-base [&>td]:font-bold", selectedDaybookSummaryRowId === "bank:group" && "!bg-blue-200/70 hover:!bg-blue-200/70")}
                                 >
                                     <TableCell className="font-medium">
                                         <button
@@ -573,7 +655,7 @@ export function DaybookReport({
                                         event.stopPropagation();
                                         setSelectedDaybookSummaryRowId("cash:group");
                                     }}
-                                    className={cn("daybook-summary-group-row", selectedDaybookSummaryRowId === "cash:group" && "!bg-blue-200/70 hover:!bg-blue-200/70")}
+                                    data-pl-daybook-summary-gray-row="" className={cn("daybook-summary-group-row font-bold text-base [&>td]:text-base [&>td]:font-bold", selectedDaybookSummaryRowId === "cash:group" && "!bg-blue-200/70 hover:!bg-blue-200/70")}
                                 >
                                     <TableCell className="font-medium">
                                         <button
@@ -632,13 +714,14 @@ export function DaybookReport({
                                 </>
                                 )}
                                 <TableRow
+                                  data-pl-daybook-summary-gray-row=""
                                   aria-selected={selectedDaybookSummaryRowId === "total"}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     setSelectedDaybookSummaryRowId("total");
                                   }}
                                   className={cn(
-                                    "font-bold border-foreground daybook-summary-group-row",
+                                    "font-bold text-base [&>td]:text-base [&>td]:font-bold border-foreground daybook-summary-group-row",
                                     selectedDaybookSummaryRowId === "total" && "!bg-blue-200/70 hover:!bg-blue-200/70"
                                   )}
                                 >
@@ -763,7 +846,10 @@ export function DaybookReport({
                             </Select>
                             </>
                             )}
-                            {!isMobile && <span className="text-sm font-medium leading-none">Rows:</span>}
+                            {/* Dashboard Daybook uses the footer Rows control (Recent parity); keep this one for /reports only. */}
+{!dashboardEmbedded && (
+<>
+{!isMobile && <span className="text-sm font-medium leading-none">Rows:</span>}
                             <Select value={daybookRowsPerPage} onValueChange={(v) => setDaybookRowsPerPage(v)}>
                                 <SelectTrigger
                                   data-pl-toolbar-field=""
@@ -775,6 +861,8 @@ export function DaybookReport({
                                     {['15', '30', '50', 'all'].map(size => <SelectItem key={size} value={size}>{size}</SelectItem>)}
                                 </SelectContent>
                             </Select>
+</>
+)}
                         </div>
                     </div>
                     <span className="text-sm font-medium text-muted-foreground w-full block">Total Vouchers: {daybookTransactions ? daybookTransactions.length : 0}</span>
@@ -791,10 +879,11 @@ export function DaybookReport({
                       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto min-w-full w-full">
                         <div className={cn("w-full min-w-full overflow-hidden px-[2px]")}>
                           <TransactionsTable
-                                transactions={daybookTransactions || []}
+                                transactions={daybookPagedTransactions || []}
                                 context="daybook"
                                 disableLayoutAnimation
                                 showNarration={showDaybookNarration}
+                                visibleColumns={dashboardEmbedded ? visibleColumns : undefined}
                                 narrationNoteSearch={daybookNarrationNoteSearch}
                                 journalAccountNames={voucherJournalAccountNames}
                                 userNames={vouchersUserNames}
@@ -818,10 +907,11 @@ export function DaybookReport({
                       <DaybookTxnScrollColumn className="flex-1 min-h-0">
                         <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col">
                           <TransactionsTable
-                                transactions={daybookTransactions || []}
+                                transactions={daybookPagedTransactions || []}
                                 context="daybook"
                                 disableLayoutAnimation
                                 showNarration={showDaybookNarration}
+                                visibleColumns={dashboardEmbedded ? visibleColumns : undefined}
                                 narrationNoteSearch={daybookNarrationNoteSearch}
                                 journalAccountNames={voucherJournalAccountNames}
                                 userNames={vouchersUserNames}
@@ -857,7 +947,94 @@ export function DaybookReport({
                     </div>
                 </div>
               )}
-            {/* Mobile: txn list ke niche ← → swipe strip; desktop dashboard uses Good Afternoon ribbon. */}
+              {dashboardEmbedded ? (
+                isMobile ? (
+                  <MobileTransactionsPager
+                    className="px-2 pt-2"
+                    currentPage={daybookSafePage}
+                    totalItems={daybookListTotal}
+                    rowsPerPage={daybookPageSize}
+                    onRowsPerPageChange={(nextRows) => {
+                      setFooterRowsPerPage(Math.max(10, nextRows || 50));
+                      setDaybookCurrentPage(1);
+                    }}
+                    onPageChange={setDaybookCurrentPage}
+                    edgeCounts={{ before: daybookPageStart, after: daybookListTotal - daybookPageEnd }}
+                    pagingMode="newest-first"
+                    trimSummary
+                    includeAllOption={false}
+                  />
+                ) : footerPortalTarget ? (
+                  createPortal(
+                  <div data-pl-daybook-ledger-footer="" className="w-full min-w-0 shrink-0 overflow-hidden print:hidden">
+                    <LedgerDesktopFooter
+                      shellClassName="mt-0 rounded-none border-0 border-t border-blue-300 bg-blue-100 py-1.5 px-2 shadow-none overflow-x-hidden overflow-y-hidden dark:border-blue-800 dark:bg-blue-950"
+                      left={
+                        <>
+                          <LedgerFooterCheckboxPill
+                            id="show-narration-daybook-footer"
+                            checked={showDaybookNarration}
+                            onCheckedChange={(checked) => setShowDaybookNarration(Boolean(checked))}
+                            label="Show Narration"
+                          />
+                          <LedgerFooterColumnsMenu>
+                            <DropdownMenuContent align="start" className="w-52 p-2">
+                              {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
+                                .filter((key) => key !== "runningBalance" && key !== "status")
+                                .map((key) => (
+                                  <DropdownMenuItem
+                                    key={key}
+                                    onSelect={(e) => e.preventDefault()}
+                                    className="flex items-center gap-2 cursor-pointer"
+                                  >
+                                    <Checkbox
+                                      id={`col-${key}-daybook`}
+                                      checked={visibleColumns[key] !== false}
+                                      onCheckedChange={(c) => handleColumnVisibilityChange(key, Boolean(c))}
+                                    />
+                                    <label htmlFor={`col-${key}-daybook`} className="text-sm font-medium flex-1 cursor-pointer">
+                                      {COLUMN_LABELS[key]}
+                                    </label>
+                                  </DropdownMenuItem>
+                                ))}
+                            </DropdownMenuContent>
+                          </LedgerFooterColumnsMenu>
+                          <LedgerFooterCheckboxPill
+                            id="show-notes-daybook-footer"
+                            checked={includeNotesInTable}
+                            disabled={notesPreferenceLockedOnMobile}
+                            onCheckedChange={(c) => setShowNotes(Boolean(c))}
+                            label="Note"
+                          />
+                        </>
+                      }
+                      sortBy={daybookSortBy}
+                      sortOrder={daybookSortOrder}
+                      onSortChange={(by, order) => {
+                        setDaybookSortBy(by);
+                        setDaybookSortOrder(order);
+                        setDaybookSortTouched(true);
+                      }}
+                      viewMode="statement"
+                      currentPage={daybookSafePage}
+                      totalPages={daybookTotalPages}
+                      setCurrentPage={setDaybookCurrentPage}
+                      rowsPerPageSelectValue={footerRowsSelectValue}
+                      onRowsPerPageChange={(value) => {
+                        setFooterRowsPerPage(Math.max(10, Number(value) || 50));
+                        setDaybookCurrentPage(1);
+                      }}
+                      rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS_DEFAULT}
+                      beforeCount={daybookPageStart}
+                      afterCount={daybookListTotal - daybookPageEnd}
+                      totalCount={daybookListTotal}
+                      includeAllOption={false}
+                    />
+                  </div>,
+                  footerPortalTarget
+                  )
+                ) : null
+              ) : null}            {/* Mobile: txn list ke niche ← → swipe strip; desktop dashboard uses Good Afternoon ribbon. */}
             {isMobile ? (
             <div className="relative shrink-0 flex h-10 items-center print:hidden">
                 <button

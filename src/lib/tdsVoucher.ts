@@ -59,6 +59,15 @@ export function writeStoredTdsDefault(side: "sale" | "purchase", companyId: stri
   localStorage.setItem(key, id);
 }
 
+export function clearStoredTdsDefault(side: "sale" | "purchase", companyId: string): void {
+  try {
+    const key = side === "sale" ? saleTdsDefaultStorageKey(companyId) : purchaseTdsDefaultStorageKey(companyId);
+    localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Line taxable base for TDS — same ex-VAT `amount` stored on sale/purchase lines. */
 export function lineTaxableBaseForTds(line: { amount?: unknown }): number {
   return round2(Number(line?.amount) || 0);
@@ -92,12 +101,31 @@ export function getSalePurchaseGrossTotal(v: { total?: unknown; amount?: unknown
   return round2(Number(v?.total ?? v?.amount ?? 0) || 0);
 }
 
-/** Party Dr/Cr and bill-wise link target. */
+/** Party Dr/Cr and bill-wise row balance base: NET = total - TDS (TDS is posted only on the TDS account: Dr party net + Dr/Cr TDS = sales/purchase + tax). Same value as getSalePurchasePartyLinkTarget. */
 export function getSalePurchasePartyAmount(v: { total?: unknown; amount?: unknown; lineItems?: unknown; tds?: unknown } | null | undefined): number {
-  const gross = getSalePurchaseGrossTotal(v);
+  return getSalePurchasePartyLinkTarget(v);
+}
+
+/** Party-leg bill-wise link target: taxable + tax = total - TDS (TDS leg is linked separately). Party ledger amount stays gross. */
+export function getSalePurchasePartyLinkTarget(v: { total?: unknown; amount?: unknown; lineItems?: unknown; tds?: unknown } | null | undefined): number {
+  return Math.max(0, round2(getSalePurchaseGrossTotal(v) - sumVoucherLineTds(v)));
+}
+
+/**
+ * TDS-leg settled amount: explicit TDS-leg links + anything linked on the party side beyond the party link target
+ * (e.g. a party<->TDS journal linked from the party page). Capped at the voucher TDS.
+ */
+export function getSalePurchaseTdsSettledAmount(
+  v: { total?: unknown; amount?: unknown; lineItems?: unknown; tds?: unknown } | null | undefined,
+  allocatedAll: number,
+  tdsLegAllocated: number
+): number {
   const tds = sumVoucherLineTds(v);
-  if (tds <= 0) return gross;
-  return Math.max(0, round2(gross - tds));
+  if (tds <= 0) return 0;
+  const all = Math.max(0, Number(allocatedAll) || 0);
+  const partyAllocated = Math.max(0, all - Math.max(0, Number(tdsLegAllocated) || 0));
+  const settled = round2(all - Math.min(partyAllocated, getSalePurchasePartyLinkTarget(v)));
+  return Math.min(tds, Math.max(0, settled));
 }
 
 export function getSalePurchaseBillWiseTargetTotal(v: { type?: string; total?: unknown; amount?: unknown; lineItems?: unknown; tds?: unknown } | null | undefined): number {

@@ -97,8 +97,10 @@ import {
   getBillWiseAllocatedToTargetWithMaps,
   getPaymentStatus as getPaymentStatusResult,
   getSalePurchaseBillWiseLinkNos,
+  getTdsLegAllocatedByTargetId,
   isSaleOrPurchaseBillVoucherType,
 } from "@/lib/payment-allocation-utils";
+import { getSalePurchasePartyLinkTarget } from "@/lib/tdsVoucher";
 import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
 import { isCurrentUserSharedOnCompanyRow } from "@/lib/companyOnlineIntegrity";
 import {
@@ -3461,8 +3463,8 @@ export const VoucherProvider = ({
                 }
                 if (line.tdsAccountId && line.tdsAmount) {
                       const tdsAmt = Number(line.tdsAmount);
-                      // Unverified TDS stays visible on tax ledger but does not move list/header balance.
-                      if (tdsAmt > 0 && v.isTdsVerified === true) {
+                      // Unverified TDS legs count in tax list balance (same as ledger header).
+                      if (tdsAmt > 0) {
                         if (v.type === "purchase" || v.type === "purchase_service")
                           addVal(taxMap, line.tdsAccountId, "credit", tdsAmt);
                         else if (v.type === "sale" || v.type === "sale_service")
@@ -3530,9 +3532,8 @@ export const VoucherProvider = ({
                        addVal(staffMap, entry.accountId, 'debit', d); addVal(staffMap, entry.accountId, 'credit', c);
                     }
                     addVal(accountMap, entry.accountId, 'debit', d); addVal(accountMap, entry.accountId, 'credit', c);
-                    // Add Salary tax legs: only Verified amounts count toward tax list balance.
-                    const skipUnverifiedAddSalaryTax =
-                      v.subType === "add_salary" && entry.isTdsVerified !== true;
+                    // Add Salary tax legs (Verified and Unverified) count toward tax list balance.
+                    const skipUnverifiedAddSalaryTax = false;
                     if (!skipUnverifiedAddSalaryTax) {
                       addVal(taxMap, entry.accountId, "debit", d);
                       addVal(taxMap, entry.accountId, "credit", c);
@@ -3610,17 +3611,21 @@ export const VoucherProvider = ({
     }
     const partyNameById = new Map(processedParties.map((p) => [p.id, p.name]));
     const billWiseIncoming = buildBillWiseIncomingAllocationMaps(vouchersForDisplay);
+    const tdsLegAllocByTarget = getTdsLegAllocatedByTargetId(vouchersForDisplay);
     const list: VoucherContextType["overdueTransactions"] = [];
     for (const v of vouchersForDisplay) {
       if (!isSaleOrPurchaseBillVoucherType(v.type) || !v.partyId) continue;
       const total = Number(v.total ?? v.amount ?? ((v.subTotal ?? 0) - (v.discount ?? 0) + (v.tax ?? 0))) || 0;
       const allocated = getBillWiseAllocatedToTargetWithMaps(v, String(v.id), billWiseIncoming);
-      const result = getPaymentStatusResult(total, allocated, v.dueDate);
+      // Overdue follows party-leg link target (total - TDS); shown outstanding still includes the TDS leg.
+      const partyAllocated = Math.max(0, allocated - (tdsLegAllocByTarget.get(String(v.id)) ?? 0));
+      const result = getPaymentStatusResult(getSalePurchasePartyLinkTarget({ ...v, total }), partyAllocated, v.dueDate);
       if (!result.isOverdue) continue;
       const partyName = partyNameById.get(v.partyId) ?? v.partyId;
-      const outstanding = result.outstanding;
-      const debit = v.type === "sale" ? total : 0;
-      const credit = v.type === "purchase" ? total : 0;
+      const netTotal = getSalePurchasePartyLinkTarget({ ...v, total });
+      const outstanding = Math.max(0, netTotal - partyAllocated);
+      const debit = v.type === "sale" ? netTotal : 0;
+      const credit = v.type === "purchase" ? netTotal : 0;
       const linkNos = getSalePurchaseBillWiseLinkNos(vouchersForDisplay, { id: v.id, type: v.type });
       const fallbackUserId =
         v.userId ||

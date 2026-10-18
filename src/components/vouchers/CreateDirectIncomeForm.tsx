@@ -1,4 +1,5 @@
 "use client";
+import { shouldMoveVoucherConvertSourceToBin } from "@/lib/voucherEditConvert";
 import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
@@ -508,7 +509,7 @@ export function CreatePaymentInForm({
       if (savedDoc && savedDoc.id) {
           docId = savedDoc.id;
           setSavedVoucherId(docId);
-          if (originalVoucherIdToDelete) {
+          if (originalVoucherIdToDelete && shouldMoveVoucherConvertSourceToBin(originalVoucherIdToDelete)) {
               // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
               await patchVoucherFields(companyId, originalVoucherIdToDelete, {
                 isDeleted: true,

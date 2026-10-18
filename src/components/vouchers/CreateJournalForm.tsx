@@ -2,6 +2,7 @@
 import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
+import { useHealStaleTdsReverseLinks } from "@/hooks/useHealStaleTdsReverseLinks";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { type Resolver, useFieldArray, useForm, useWatch, type FieldErrors } from "react-hook-form";
 import { z } from "zod";
@@ -56,6 +57,7 @@ import {
   patchVoucherFields,
   softDeleteVoucherMoveToRecycleBin,
   applyJournalBillWiseLinkAllocations,
+  removeTdsLegLinks,
 } from "@/lib/voucherActionsClient";
 import {
   getVoucherConvertOriginalId,
@@ -463,6 +465,7 @@ export function CreateJournalForm({
   /** CreateTaxDialog prefillTaxName — document event tax form mein nahi sunta */
   const [journalTaxPrefillName, setJournalTaxPrefillName] = React.useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  useHealStaleTdsReverseLinks(companyId, voucher?.id, vouchers as any[]);
   const [files, setFiles] = useState<(File|string)[]>([]);
   /** Journal tiles: memo string URLs — FilePreview main effect unnecessary re-run kam. */
   const attachmentClientFileUrlsForPreview = useMemo(
@@ -571,7 +574,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   })();
   const _isAllocationsDirty = (() => {
     const init = initialJournalAllocationsRef.current;
-    const norm = (a: Allocation[]) => JSON.stringify((a || []).map((x) => ({ v: x.voucherId, a: x.amount, l: x.linkedAccountId })).sort((p, q) => String(p.v).localeCompare(String(q.v))));
+    const norm = (a: Allocation[]) => JSON.stringify((a || []).map((x) => ({ v: x.voucherId, a: x.amount, l: x.linkedAccountId, e: (x as any).entityTxnId ?? "" })).sort((p, q) => String(p.v).localeCompare(String(q.v))));
     return norm(journalAllocationsBySide.debit || []) !== norm(init.debit || []) || norm(journalAllocationsBySide.credit || []) !== norm(init.credit || []);
   })();
   const isFormDirtyRaw =
@@ -664,7 +667,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const credit: Allocation[] = [];
         raw.forEach((a: any) => {
           const lid = String(a?.linkedAccountId ?? "");
-          if (lid && debitAccIds.has(lid)) debit.push(a);
+          // TDS-leg link: linkedAccountId may be the TDS account (older saves); it belongs to the party side = opposite of the TDS entry.
+          if (String(a?.entityTxnId ?? "").includes("::tds::") && lid && (debitAccIds.has(lid) || creditAccIds.has(lid))) {
+            if (debitAccIds.has(lid) && !creditAccIds.has(lid)) credit.push(a);
+            else debit.push(a);
+          } else if (lid && debitAccIds.has(lid)) debit.push(a);
           else if (lid && creditAccIds.has(lid)) credit.push(a);
           else if (!lid) debit.push(a);
         });
@@ -1612,7 +1619,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     for (const a of outbound) {
       const id = String(a?.voucherId ?? "").trim();
       if (!id || getAllocationTotal(a) <= 0) continue;
-      byId.set(id, {
+      const etKey = String((a as any)?.entityTxnId ?? "");
+      byId.set(etKey.includes("::tds::") ? etKey : id, {
         ...a,
         voucherId: id,
         amount: getAllocationTotal(a),
@@ -1664,7 +1672,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       } else if (!allowTypes.has(st)) {
         continue;
       }
-      const amt = Number(row.amount) || 0;
+      // Reverse TDS-leg links (voucherId::tds::acct) on a Sale/Purchase mirror this journal's own TDS allocation; they are not extra main-row links.
+      const amt = ((src.allocations as any[] | undefined) || [])
+        .filter(
+          (a: any) =>
+            String(a?.voucherId ?? "") === String(journalVoucherId) &&
+            !String(a?.entityTxnId ?? "").includes("::tds::")
+        )
+        .reduce((s: number, a: any) => s + getAllocationTotal(a), 0);
       if (amt <= 0) continue;
       const prev = byId.get(id);
       const mergedAmt = Math.max(prev ? getAllocationTotal(prev) : 0, amt);
@@ -3568,8 +3583,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   {isLoading ? "..." : isEditingAndConverting ? "Convert" : "Save"}
                 </Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
-                    {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty || isEditingAndConverting) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty && !isEditingAndConverting)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                    {isApproving ? "..." : isEditingAndConverting ? "Convert & Approve" : isFormDirty ? "Save & Approve" : "Approve"}
                   </Button>
                 ) : showSaveAndApproveOnCreate ? (
                   <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -3581,7 +3596,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               </div>
             ) : (
               <>
-                <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                <div className={cn("flex flex-nowrap shrink-0 whitespace-nowrap justify-center md:justify-start gap-2 [&_button]:shrink-0 [&_button]:whitespace-nowrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
                     <History className="mr-2 h-4 w-4" /> History
                   </Button>
@@ -3589,7 +3604,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
                 </div>
-                <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                <div className={cn("flex flex-nowrap shrink-0 whitespace-nowrap gap-2 justify-end [&_button]:shrink-0 [&_button]:whitespace-nowrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
                     Cancel
                   </Button>
@@ -3606,9 +3621,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     {isEditingAndConverting ? "Convert" : "Save"}
                   </Button>
                   {voucher?.id ? (
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty || isEditingAndConverting) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty && !isEditingAndConverting)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
-                      {isFormDirty ? "Save & Approve" : "Approve"}
+                      {isEditingAndConverting ? "Convert & Approve" : isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                   ) : (
                     <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || isAttachmentProcessing || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
@@ -3652,7 +3667,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         paymentOutVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}
         paymentInDate={form.getValues("date")}
         paymentOutDate={form.getValues("date")}
-        onDone={(allocations) => {
+        onDone={(allocations, _amount, info) => {
           const side = activeJournalLinkContext?.side;
           const accountId = activeJournalLinkContext?.accountId ?? "";
           if (!side) {
@@ -3660,17 +3675,30 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             return;
           }
           const linkSide = side === "debit" ? "debit" : "credit";
-          const { nextBySide, merged, removedIds } = computeJournalBillWiseDialogDone(
+          const computed = computeJournalBillWiseDialogDone(
             linkSide,
             accountId,
             allocations as Allocation[],
             journalDialogExistingAllocations,
             journalAllocationsBySide
           );
+          // Unticked TDS legs must disappear from BOTH sides of the journal state, not just the dialog side.
+          const removedTds = new Set(info?.removedTdsEntityIds ?? []);
+          const dropTds = (arr: Allocation[]) =>
+            removedTds.size ? arr.filter((x) => !removedTds.has(String((x as any)?.entityTxnId ?? ""))) : arr;
+          const nextBySide = { debit: dropTds(computed.nextBySide.debit), credit: dropTds(computed.nextBySide.credit) };
+          const merged = dropTds(computed.merged);
+          const removedIds = computed.removedIds;
           setJournalAllocationsBySide(nextBySide);
           setActiveJournalLinkSide(null);
           if (journalVoucherId && companyId) {
-            void persistJournalBillWiseLinks(merged, removedIds, nextBySide).catch((err) => {
+            void persistJournalBillWiseLinks(merged, removedIds, nextBySide)
+              .then(() =>
+                removedTds.size
+                  ? removeTdsLegLinks(companyId, journalVoucherId, [...removedTds], vouchers as any[])
+                  : undefined
+              )
+              .catch((err) => {
               console.error("[CreateJournalForm] bill-wise link persist", err);
               sonnerToast.error("Could not save bill-wise links.", {
                 description: err instanceof Error ? err.message : "Try saving the journal again.",

@@ -33,6 +33,9 @@ import {
   Pencil,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { buildTaxTdsAutoLinkProposal, applyTaxTdsAutoLinkProposal, type TaxTdsAutoLinkProposal } from "@/lib/taxTdsAutoLink";
+import { FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
+import { FY_OPENING_ROW_TYPE } from "@/lib/fyPagination/fyOpeningRows";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { format, startOfDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -135,7 +138,13 @@ import {
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
-import { taxLedgerBooksDrCrFromRow, summarizeUnverifiedTaxTdsByKind } from "@/lib/partyLedgerTdsView";
+import {
+  taxLedgerBooksDrCrFromRow,
+  taxAccountIsTdsVerifyLegOnVoucher,
+  resolveSalePurchaseTdsVerifyLabel,
+  SALE_PURCHASE_TDS_VERIFIED_MESSAGE,
+  SALE_PURCHASE_TDS_UNVERIFIED_MESSAGE,
+} from "@/lib/partyLedgerTdsView";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 
@@ -384,6 +393,8 @@ export function TaxDetails({
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [mobileSearchTerm, setMobileSearchTerm] = useState("");
   const [oppositeAccountFilter, setOppositeAccountFilter] = useState("");
+  /** TDS tax account header card: Balance (all) / Paid / Unpaid TDS rows. */
+  const [tdsStatusView, setTdsStatusView] = useState<"balance" | "paid" | "unpaid">("balance");
   const [mobileFooterDialogOpen, setMobileFooterDialogOpen] = useState<null | "payment_in" | "payment_out" | "sale">(null);
   const openingModalRef = React.useRef(false);
 
@@ -567,12 +578,32 @@ export function TaxDetails({
     () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, includeNotesInTable]
   );
+  /** Paid / Unpaid view: only TDS rows of that label; balances/opening recomputed over filtered rows from 0. */
+  const isTdsTaxAccount = useMemo(
+    () => (processedTransactions as any[]).some((t) => taxAccountIsTdsVerifyLegOnVoucher(t, tax?.id)),
+    [processedTransactions, tax?.id]
+  );
+  // Paid/Unpaid view only applies to TDS tax accounts (a stale view must not blank VAT etc.).
+  const tdsViewFiltered = tdsStatusView !== "balance" && isTdsTaxAccount;
+  useEffect(() => {
+    setTdsStatusView("balance");
+  }, [tax?.id]);
+  const isFiscalOrOpeningRow = (t: any) =>
+    t?.type === "opening_balance" || t?.type === FISCAL_YEAR_PARTITION_ROW_TYPE || t?.type === FY_OPENING_ROW_TYPE;
   const statusFilteredTransactions = useMemo(
     () => {
-      if (balanceMode !== "bill_wise") return displayTransactions;
-      return filterByStatus(displayTransactions, statusFilter);
+      const base =
+        balanceMode !== "bill_wise" ? displayTransactions : filterByStatus(displayTransactions, statusFilter);
+      if (!tdsViewFiltered || !tax?.id) return base;
+      const want = tdsStatusView === "paid" ? SALE_PURCHASE_TDS_VERIFIED_MESSAGE : SALE_PURCHASE_TDS_UNVERIFIED_MESSAGE;
+      return base.filter(
+        (t: any) =>
+          !isFiscalOrOpeningRow(t) &&
+          taxAccountIsTdsVerifyLegOnVoucher(t, tax.id) &&
+          resolveSalePurchaseTdsVerifyLabel(t, { context: "tax", contextId: tax.id }) === want
+      );
     },
-    [displayTransactions, statusFilter, balanceMode]
+    [displayTransactions, statusFilter, balanceMode, tdsViewFiltered, tdsStatusView, tax?.id]
   );
 
   const resolveOppositeAccountName = useCallback(
@@ -609,7 +640,63 @@ export function TaxDetails({
       processedTaxes || []
     );
   }, [statusFilteredTransactions, tax?.id, oppositeAccountFilter, processedTaxes]);
-  const oppositeAccountFilterActive = Boolean(String(oppositeAccountFilter || "").trim());
+  const oppositeAccountFilterActive =
+    Boolean(String(oppositeAccountFilter || "").trim()) || tdsViewFiltered;
+
+  const [tdsCardsOpen, setTdsCardsOpen] = useState(false);
+  const [tdsAutoLinkProposal, setTdsAutoLinkProposal] = useState<TaxTdsAutoLinkProposal | null>(null);
+  const [tdsAutoLinkSaving, setTdsAutoLinkSaving] = useState(false);
+  const openTdsAutoLink = useCallback(() => {
+    const proposal = buildTaxTdsAutoLinkProposal({
+      vouchers: (vouchers as any[]) || [],
+      taxRows: processedTransactions as any[],
+      taxId: String(tax?.id ?? ""),
+    });
+    if (!proposal) {
+      toast.info("No unlinked Dr entry on this tax account to link against unpaid TDS.");
+      return;
+    }
+    setTdsAutoLinkProposal(proposal);
+  }, [vouchers, processedTransactions, tax?.id]);
+  const confirmTdsAutoLink = useCallback(async () => {
+    const proposal = tdsAutoLinkProposal;
+    if (!proposal || !companyId) return;
+    setTdsAutoLinkSaving(true);
+    try {
+      const { runWithVoucherLinkSaveProgress } = await import("@/lib/voucherSaveUi");
+      const result = await runWithVoucherLinkSaveProgress(
+        async () => {
+          const n = await applyTaxTdsAutoLinkProposal(companyId, proposal, (vouchers as any[]) || []);
+          return `Linked ${n} allocation${n === 1 ? "" : "s"}.`;
+        },
+        { successTitle: "TDS links updated" }
+      );
+      if (!result.ok) {
+        toast.error(result.error instanceof Error ? result.error.message : "Failed to save TDS links.");
+      }
+      setTdsAutoLinkProposal(null);
+    } finally {
+      setTdsAutoLinkSaving(false);
+    }
+  }, [tdsAutoLinkProposal, companyId, vouchers]);
+  const { paid: tdsPaidNet, unpaid: tdsUnpaidNet } = useMemo(() => {
+    const out = { paid: 0, unpaid: 0 };
+    const id = String(tax?.id ?? "").trim();
+    if (!id) return out;
+    for (const t of displayTransactions as any[]) {
+      if (!taxAccountIsTdsVerifyLegOnVoucher(t, id)) continue;
+      const label = resolveSalePurchaseTdsVerifyLabel(t, { context: "tax", contextId: id });
+      if (!label) continue;
+      const b = taxLedgerBooksDrCrFromRow(t, id);
+      const net = (Number(b.debit) || 0) - (Number(b.credit) || 0);
+      if (label === SALE_PURCHASE_TDS_VERIFIED_MESSAGE) out.paid += net;
+      else out.unpaid += net;
+    }
+    return out;
+  }, [displayTransactions, tax?.id]);
+  // Balance = full ledger balance; Paid/Unpaid = net of only their TDS rows.
+  const headerAllNet =
+    typeof closingBalance === "number" && Number.isFinite(closingBalance) ? closingBalance : 0;
   /** One opposite account: start books at 0 so To Receive / row Bal = that account only (not full tax). */
   const ledgerOpeningForRunning = oppositeAccountFilterActive ? 0 : openingBalanceForPeriod;
   const mobileUnapprovedTxnCount = useMemo(
@@ -758,20 +845,6 @@ export function TaxDetails({
     return 0;
   }, [oppositeAccountFilterActive, closingBalance, sortedTransactions]);
 
-  const unverifiedTdsSummary = useMemo(
-    () => summarizeUnverifiedTaxTdsByKind(processedTransactions as any[], tax?.id),
-    [processedTransactions, tax?.id]
-  );
-  const unverifiedTdsTop = useMemo(() => {
-    const items = [
-      { label: "Sale TDS", s: unverifiedTdsSummary.sale },
-      { label: "Purchase TDS", s: unverifiedTdsSummary.purchase },
-      { label: "Add Salary TDS", s: unverifiedTdsSummary.salary },
-    ];
-    return items.reduce((best, it) => (it.s.count > best.s.count ? it : best), items[0]);
-  }, [unverifiedTdsSummary]);
-  const unverifiedTdsTotalNet =
-    unverifiedTdsSummary.sale.net + unverifiedTdsSummary.purchase.net + unverifiedTdsSummary.salary.net;
   useLedgerDetailSessionMemory({
     companyId: companyId ?? undefined,
     context: "tax",
@@ -937,11 +1010,12 @@ export function TaxDetails({
 
   const balanceLabel = headerClosingBalance >= 0 ? "To Receive" : "To Pay";
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
-  const masterTaxOpening = oppositeAccountFilterActive
+  const masterTaxOpening = oppositeAccountFilterActive || tdsViewFiltered
     ? 0
     : Number((tax as any).openingBalance) || 0;
   const showTaxBookOpeningRow =
     !oppositeAccountFilterActive &&
+    !tdsViewFiltered &&
     (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0);
 
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
@@ -1149,6 +1223,7 @@ export function TaxDetails({
               ledgerDateFilterActive={hasLedgerDateFilter}
               ledgerShowBookOpeningRow={showTaxBookOpeningRow}
               hideLedgerOpeningRows={oppositeAccountFilterActive}
+              hideFiscalPartitionRows={tdsViewFiltered}
               openingBalancePeriodStartDate={dateRange?.from}
               dateRange={dateRange}
               openingBalanceOutstanding={openingBalanceOutstanding}
@@ -1513,6 +1588,52 @@ export function TaxDetails({
               <div className={LEDGER_HEADER_NAME_CARD_CN}>
                 <h2 className={LEDGER_HEADER_TITLE_CN} title={tax.name}>{tax.name}</h2>
               </div>
+              {isTdsTaxAccount ? (
+              <Popover open={tdsCardsOpen} onOpenChange={setTdsCardsOpen}>
+                <PopoverTrigger asChild>
+                  <button type="button" className={cn(LEDGER_HEADER_BALANCE_CARD_CN, "cursor-pointer text-left")} title="Balance / Paid / Unpaid TDS">
+                    <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                      <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>
+                        {tdsStatusView === "paid" ? "Verified" : tdsStatusView === "unpaid" ? "Unverified/Unlinked" : "Balance"} <ChevronDown className="ml-0.5 inline-block h-4 w-4 align-[-3px]" />
+                      </span>
+                      <div className={cn(LEDGER_HEADER_BALANCE_CN, headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                        {formatCurrency(headerClosingBalance, { showDrCr: true })}
+                      </div>
+                    </div>
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-auto p-2">
+                  <div className="flex gap-2">
+                    {([
+                      ["balance", "Balance", headerAllNet],
+                      ["paid", "Verified", tdsPaidNet],
+                      ["unpaid", "Unverified/Unlinked", tdsUnpaidNet],
+                    ] as const).map(([opt, label, net]) => (
+                      <button
+                        key={opt}
+                        type="button"
+                        className={cn(
+                          LEDGER_HEADER_BALANCE_CARD_CN,
+                          "cursor-pointer text-left",
+                          tdsStatusView === opt && "ring-2 ring-primary"
+                        )}
+                        onClick={() => {
+                          setTdsStatusView(opt);
+                          setCurrentPage(1);
+                          setTdsCardsOpen(false);
+                        }}
+                      >
+                        <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                          <span className={cn(LEDGER_HEADER_BALANCE_LABEL_CN, "whitespace-nowrap")}>{label}</span>
+                          <div className={cn(LEDGER_HEADER_BALANCE_CN, net >= 0 ? "text-green-600" : "text-red-600")}>
+                            {formatCurrency(net, { showDrCr: true })}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>                </PopoverContent>
+              </Popover>
+              ) : (
               <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
                 <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
                   <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
@@ -1521,42 +1642,7 @@ export function TaxDetails({
                   </div>
                 </div>
               </div>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button type="button" className={cn(LEDGER_HEADER_BALANCE_CARD_CN, "cursor-pointer text-left")} title="Unverified TDS">
-                    <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
-                      <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>
-                        {unverifiedTdsTop.label} · {unverifiedTdsTop.s.count} Voucher{unverifiedTdsTop.s.count === 1 ? "" : "s"}
-                      </span>
-                      <div className={cn(LEDGER_HEADER_BALANCE_CN, unverifiedTdsTop.s.net >= 0 ? "text-green-600" : "text-red-600")}>
-                        {formatCurrency(unverifiedTdsTop.s.net, { showDrCr: true })}
-                      </div>
-                      <span className={cn(LEDGER_HEADER_BALANCE_LABEL_CN, "text-amber-700")}>Unverified</span>
-                    </div>
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent align="start" className="w-auto p-2">
-                  <div className="mb-1 text-[11px] font-semibold text-amber-700">
-                    Unverified TDS · Total {formatCurrency(unverifiedTdsTotalNet, { showDrCr: true })}
-                  </div>
-                  <div className="flex gap-2">
-                    {([
-                      ["Sale TDS Balance", unverifiedTdsSummary.sale],
-                      ["Purchase TDS Balance", unverifiedTdsSummary.purchase],
-                      ["Add Salary TDS Balance", unverifiedTdsSummary.salary],
-                    ] as const).map(([label, s]) => (
-                      <div key={label} className={LEDGER_HEADER_BALANCE_CARD_CN}>
-                        <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
-                          <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>{label} · {s.count}</span>
-                          <div className={cn(LEDGER_HEADER_BALANCE_CN, s.net >= 0 ? "text-green-600" : "text-red-600")}>
-                            {formatCurrency(s.net, { showDrCr: true })}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </PopoverContent>
-              </Popover>
+              )}
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
             {oppositeAccountFilterOptions.length > 0 && (
@@ -1669,18 +1755,43 @@ export function TaxDetails({
                 <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>
               {isCompanyAdmin ? (
+                <>
                 <Button
                   type="button"
                   variant="chromePill"
                   size="sm"
                   className={LEDGER_HEADER_PILL_CN}
-                  onClick={() => {
-                    setBalanceMode("bill_wise");
-                    toast.info("Bill wise mode on — open a payment/purchase row to link bills.");
-                  }}
+                  onClick={openTdsAutoLink}
                 >
                   Link for Bill Wise
                 </Button>
+                <Dialog open={!!tdsAutoLinkProposal} onOpenChange={(o) => { if (!o && !tdsAutoLinkSaving) setTdsAutoLinkProposal(null); }}>
+                  <DialogContent className="max-w-xl">
+                    <DialogHeader>
+                      <DialogTitle>Link Dr entries to unpaid TDS</DialogTitle>
+                      <DialogDescription>
+                        {tax.name} · oldest unpaid TDS first · total {formatCurrency(tdsAutoLinkProposal?.total ?? 0)}
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="max-h-[50vh] overflow-auto text-sm">
+                      {(tdsAutoLinkProposal?.rows ?? []).map((r) => (
+                        <div key={r.id} className="flex items-center justify-between gap-2 border-b py-1">
+                          <span className="truncate">{r.sourceNo || r.sourceType} → {r.targetNo || r.targetType}</span>
+                          <span className="font-semibold">{formatCurrency(r.amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <Button variant="outline" size="sm" disabled={tdsAutoLinkSaving} onClick={() => setTdsAutoLinkProposal(null)}>
+                        Cancel
+                      </Button>
+                      <Button size="sm" disabled={tdsAutoLinkSaving} onClick={() => void confirmTdsAutoLink()}>
+                        Link
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+                </>
               ) : null}
               {onShowAll && (
                 <Button variant="outline" size="sm" onClick={onShowAll} className={LEDGER_HEADER_PILL_CN}>
@@ -1706,6 +1817,7 @@ export function TaxDetails({
                   ledgerDateFilterActive={hasLedgerDateFilter}
                   ledgerShowBookOpeningRow={showTaxBookOpeningRow}
                   hideLedgerOpeningRows={oppositeAccountFilterActive}
+              hideFiscalPartitionRows={tdsViewFiltered}
                   openingBalancePeriodStartDate={dateRange?.from}
                   dateRange={dateRange}
                   openingBalanceOutstanding={openingBalanceOutstanding}

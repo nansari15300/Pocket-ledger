@@ -90,7 +90,7 @@ import { LinkAdvancesToVoucherDialog, applyAdvancesAllocationsToServer } from "@
 import { useAdvancesLinkableCount, useTaxAccountLinkableCount } from "@/hooks/useAdvancesForVoucher";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
 import { getLinkedAmountsToVoucher, getLinkedAmountRowsFromPending, getOutgoingLinkedAmountRows, mergeLinkedRows, hasPaymentLinks, getAllocationTotal, allocationEntityTxnId, getTaxFromAllocation, getNetFromAllocation, buildBillWiseEntityTxnId, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
-import { getSalePurchasePartyAmount } from "@/lib/tdsVoucher";
+import { getSalePurchasePartyLinkTarget } from "@/lib/tdsVoucher";
 import {
   resolveSalePurchaseBillWiseLegs,
   salePurchaseLinkSectionTitle,
@@ -190,6 +190,7 @@ import {
   SALE_PURCHASE_DESKTOP_LINE_TABLE_INNER,
   SALE_PURCHASE_VOUCHER_DESKTOP_BODY,
   mapSalePurchaseLineTaxComboboxOptions,
+  withSelectedHiddenTax,
   resolveSalePurchaseLineColumnLabels,
   SALE_PURCHASE_LINE_DESKTOP_COMBOBOX_PROPS,
   SALE_PURCHASE_LINE_ITEM_COMBOBOX_PROPS,
@@ -706,13 +707,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   useEffect(() => {
     const current = String(form.getValues("discountExpenseAccountId") ?? "").trim();
     if (current) return;
-    const companyDefault = readCompanyDiscountExpenseDefault("sale", company);
+    const companyDefault = isEditing ? "" : readCompanyDiscountExpenseDefault("sale", company);
     const adjId =
       companyDefault || resolveAdjustmentExpenseAccountId(expenseAccounts as any[]);
     if (adjId) {
       form.setValue("discountExpenseAccountId", adjId, { shouldDirty: false, shouldValidate: false });
     }
-  }, [company, expenseAccounts, form]);
+  }, [company, expenseAccounts, form, isEditing]);
   // All unique units from all items – base list for line rows when no item selected (merged with company.customUnits below)
   const allCompanyUnits = useMemo(() => {
     const units = new Set<string>();
@@ -760,7 +761,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         lineItems: watchedLineItems,
         partyId: String(partyId || ""),
         partyName: processedParties.find((p) => p.id === partyId)?.name ?? "Party",
-        partyAmount: getSalePurchasePartyAmount({
+        partyAmount: getSalePurchasePartyLinkTarget({
           total: saleFormTotal,
           lineItems: watchedLineItems,
         }),
@@ -918,7 +919,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const fromLines = collectSalePurchaseTaxAndTdsAccountIds(watchedLineItems);
     return {
       taxAccountIds: saleLinkAllocationPrefs.allowTaxOnPartyAmount ? fromLines.taxAccountIds : [],
-      tdsAccountIds: saleLinkAllocationPrefs.allowTdsOnPartyAmount ? fromLines.tdsAccountIds : [],
+      tdsAccountIds: [] as string[], // party leg target excludes TDS; TDS is linked via its own TDS leg (no double settle)
     };
   }, [
     watchedLineItems,
@@ -2031,6 +2032,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   });
 
   useEffect(() => {
+    if (isEditing) return;
     const def = readStoredTdsDefault("sale", companyId || "");
     if (!def) return;
     (form.getValues("lineItems") || []).forEach((li: { tdsAccountId?: string }, i: number) => {
@@ -2038,7 +2040,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         form.setValue(`lineItems.${i}.tdsAccountId`, def, { shouldDirty: false, shouldTouch: false });
       }
     });
-  }, [companyId, form, fields.length]);
+  }, [companyId, form, fields.length, isEditing]);
   
   const filteredItems = useMemo(() => items.filter((i) => i.type === itemType && !i.isDeleted), [items, itemType]);
   
@@ -2902,6 +2904,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                                 checked={manualRateField.value !== false}
                                                 onCheckedChange={(c) => manualRateField.onChange(c === true)}
                                                 aria-label="Allow editing item rate on this line"
+                                                title={manualRateField.value !== false ? "Rate edit enabled" : "Rate edit disabled"}
                                               />
                                             </FormControl>
                                           </FormItem>
@@ -2958,9 +2961,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   {/* Copy chip visible => Tax label red; resolved selection => normal label color. */}
                                   <FormLabel className={cn("text-xs", saleLineNeedsCopyTax(index) && "text-red-600 font-semibold")}>Tax</FormLabel>
                                   <FormControl>
-                                    <div className="[&_button]:h-9 [&_button]:text-xs">
+                                    <div className="[&_button]:h-[35px] [&_button]:text-xs">
                                       <Combobox
-                                        options={lineTaxComboboxOptions}
+                                        options={withSelectedHiddenTax(lineTaxComboboxOptions, processedTaxes, field.value)}
                                         value={field.value}
                                         disabled={itemFieldsDisabled}
                                         onChange={(val, newName) => {
@@ -2990,6 +2993,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           control={form.control}
                           index={index}
                           side="sale"
+                          showDefaultControl={!isEditing}
                           companyId={companyId || ""}
                           processedTaxes={processedTaxes}
                           taxableAmount={lineTaxableBaseForTds({ amount: Number(watchedLineItems?.[index]?.amount ?? 0) })}
@@ -3277,6 +3281,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                             checked={manualRateField.value !== false}
                                             onCheckedChange={(c) => manualRateField.onChange(c === true)}
                                             aria-label="Allow editing item rate on this line"
+                                            title={manualRateField.value !== false ? "Rate edit enabled" : "Rate edit disabled"}
                                           />
                                         </FormControl>
                                       </FormItem>
@@ -3305,6 +3310,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           control={form.control}
                           index={index}
                           side="sale"
+                          showDefaultControl={!isEditing}
                           companyId={companyId || ""}
                           processedTaxes={processedTaxes}
                           taxableAmount={lineTaxableBaseForTds({ amount: Number(watchedLineItems?.[index]?.amount ?? 0) })}
@@ -3321,6 +3327,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           control={form.control}
                           index={index}
                           side="sale"
+                          showDefaultControl={!isEditing}
                           companyId={companyId || ""}
                           processedTaxes={processedTaxes}
                           taxableAmount={lineTaxableBaseForTds({ amount: Number(watchedLineItems?.[index]?.amount ?? 0) })}
@@ -3337,6 +3344,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           control={form.control}
                           index={index}
                           side="sale"
+                          showDefaultControl={!isEditing}
                           companyId={companyId || ""}
                           processedTaxes={processedTaxes}
                           taxableAmount={lineTaxableBaseForTds({ amount: Number(watchedLineItems?.[index]?.amount ?? 0) })}
@@ -3356,7 +3364,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             render={({ field }: any) => (
                               <FormItem className="w-full min-w-0">
                                 <Combobox
-                                  options={lineTaxComboboxOptions}
+                                  options={withSelectedHiddenTax(lineTaxComboboxOptions, processedTaxes, field.value)}
                                   value={field.value}
                                   disabled={itemFieldsDisabled}
                                   onChange={(val, newName) => {
@@ -3491,8 +3499,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <div className={cn(TH_BASE, "text-center")}>Qty</div>
                         <div className={cn(TH_BASE, "text-center")}>Unit</div>
                         <div className={cn(TH_BASE, "text-center")}>Rate</div>
-                        <div className={cn(TH_BASE, "text-right text-xs")}>{lineColLabels.taxable}</div>
-                        <div className={cn(TH_BASE, "flex items-center gap-1.5 text-left text-xs")}>
+                        <div className={cn(TH_BASE, "text-right")}>{lineColLabels.taxable}</div>
+                        <div className={cn(TH_BASE, "flex items-center gap-1.5 text-left")}>
                           <span>{lineColLabels.tds}</span>
                           {(tds || 0) > 0 ? (
                             <SalePurchaseTdsVerifyTick
@@ -3503,10 +3511,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             />
                           ) : null}
                         </div>
-                        <div className={cn(TH_BASE, "text-right text-xs")}>{lineColLabels.tdsAmount}</div>
+                        <div className={cn(TH_BASE, "text-right")}>{lineColLabels.tdsAmount}</div>
                         <div className={cn(TH_BASE, "flex items-center gap-1 min-w-0 flex-nowrap justify-end")}>
                           {/* Desktop: Tax Copy visible ho to Tax header red highlight. */}
-                          <span className={cn("truncate font-semibold text-foreground min-w-0 flex-1 text-left text-xs", desktopHeaderCopyTax && "text-red-600")}>{lineColLabels.tax}</span>
+                          <span className={cn("truncate font-semibold text-foreground min-w-0 flex-1 text-left", desktopHeaderCopyTax && "text-red-600")}>{lineColLabels.tax}</span>
                           {desktopHeaderCopyTax && (
                             <Button
                               type="button"
@@ -3520,19 +3528,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             </Button>
                           )}
                         </div>
-                        <div className={cn(TH_BASE, "flex flex-col items-center justify-center gap-0.5 px-1 text-center")}>
+                        <div className={cn(TH_BASE, "flex items-center justify-center gap-1 px-1 text-center")}>
+                          {/* Header: Tax copy mismatch ho to Tax Inc label red; resolved case me normal. */}
+                          <label htmlFor="all-inclusive" className={cn("cursor-pointer select-none text-sm font-semibold text-foreground", desktopHeaderCopyTax && "text-red-600")}>
+                            Tax Inc.
+                          </label>
                           <Checkbox
                             checked={(form.watch("lineItems") || []).every((li) => li.isTaxInclusive)}
                             onCheckedChange={handleToggleAllInclusive}
                             id="all-inclusive"
                           />
-                          {/* Header: Tax copy mismatch ho to Tax Inc label red; resolved case me normal. */}
-                          <label htmlFor="all-inclusive" className={cn("cursor-pointer select-none text-[10px] leading-tight font-semibold text-foreground", desktopHeaderCopyTax && "text-red-600")}>
-                            Tax Inc.
-                          </label>
                         </div>
-                        <div className={cn(TH_BASE, "text-right text-xs")}>{lineColLabels.taxAmount}</div>
-                        <div className={cn(TH_BASE, "text-right text-xs")}>{lineColLabels.amount}</div>
+                        <div className={cn(TH_BASE, "text-right")}>{lineColLabels.taxAmount}</div>
+                        <div className={cn(TH_BASE, "text-right")}>{lineColLabels.amount}</div>
                         {fields.length > 1 ? <div className={SALE_PURCHASE_DESKTOP_LINE_DELETE_HEADER} /> : null}
                     </div>
                       {/* Desktop Rows */}
@@ -3547,7 +3555,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
                         return (
                           <div className="contents" key={line.id}>
-                            <div className={cn(TD_BASE, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL, SALE_PURCHASE_DESKTOP_LINE_ITEM_CELL)}>
+                            <div className={cn(TD_BASE, "flex", SALE_PURCHASE_DESKTOP_LINE_BODY_CELL, SALE_PURCHASE_DESKTOP_LINE_ITEM_CELL)}>
                               <FormField
                                 control={form.control}
                                 name={`lineItems.${index}.itemId`}
@@ -3605,14 +3613,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               />
                             </div>
 
-                            <div className={cn(TD_BASE, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
+                            <div className={cn(TD_BASE, "flex", SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
                               <FormField
                                 control={form.control}
                                 name={`lineItems.${index}.unit`}
                                 render={({ field }: any) => (
                                   <FormItem className="w-max min-w-max max-w-none space-y-0">
                                     <FormControl>
-                                      <div className="[&_button]:h-9 [&_button]:text-xs">
+                                      <div className="[&_button]:h-[35px] [&_button]:text-xs">
                                         <Combobox
                                           options={[
                                             ...unitOptions.map((u) => ({ value: u, label: u })),
@@ -3647,7 +3655,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 control={form.control}
                                 name={`lineItems.${index}.rate`}
                                 render={({ field }: any) => (
-                                  <div className="flex w-full min-w-0 items-stretch justify-end gap-[2px]">
+                                  <div className="flex w-full min-w-0 items-stretch justify-end gap-[5px] pr-[5px]">
                                     {/* Flat table rate row — same FormControl/Tooltip order as upar */}
                                     <TooltipProvider delayDuration={0}>
                                       <Tooltip>
@@ -3701,6 +3709,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                                 checked={manualRateField.value !== false}
                                                 onCheckedChange={(c) => manualRateField.onChange(c === true)}
                                                 aria-label="Allow editing item rate on this line"
+                                                title={manualRateField.value !== false ? "Rate edit enabled" : "Rate edit disabled"}
                                               />
                                             </FormControl>
                                           </FormItem>
@@ -3717,6 +3726,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 control={form.control}
                                 index={index}
                                 side="sale"
+                                showDefaultControl={!isEditing}
                                 companyId={companyId || ""}
                                 processedTaxes={processedTaxes}
                                 taxableAmount={lineTaxableBaseForTds({ amount: Number(watchedLineItems?.[index]?.amount ?? 0) })}
@@ -3730,11 +3740,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 tdsPlaceholder={lineColLabels.tds}
                               />
                             </div>
-                            <div className={cn(TD_BASE, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
+                            <div className={cn(TD_BASE, "flex", SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
                               <SalePurchaseTdsLineUi
                                 control={form.control}
                                 index={index}
                                 side="sale"
+                                showDefaultControl={!isEditing}
                                 companyId={companyId || ""}
                                 processedTaxes={processedTaxes}
                                 taxableAmount={lineTaxableBaseForTds({ amount: Number(watchedLineItems?.[index]?.amount ?? 0) })}
@@ -3753,6 +3764,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 control={form.control}
                                 index={index}
                                 side="sale"
+                                showDefaultControl={!isEditing}
                                 companyId={companyId || ""}
                                 processedTaxes={processedTaxes}
                                 taxableAmount={lineTaxableBaseForTds({ amount: Number(watchedLineItems?.[index]?.amount ?? 0) })}
@@ -3767,14 +3779,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               />
                             </div>
 
-                            <div className={cn(TD_BASE, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
+                            <div className={cn(TD_BASE, "flex", SALE_PURCHASE_DESKTOP_LINE_BODY_CELL)}>
                               <FormField
                                 control={form.control}
                                 name={`lineItems.${index}.taxAccountId`}
                                 render={({ field }: any) => (
                                   <FormItem className="w-max min-w-max max-w-none space-y-0">
                                     <Combobox
-                                      options={lineTaxComboboxOptions}
+                                      options={withSelectedHiddenTax(lineTaxComboboxOptions, processedTaxes, field.value)}
                                       value={field.value}
                                       disabled={itemFieldsDisabled}
                                       onChange={(val, newName) => {
@@ -3797,7 +3809,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               />
                             </div>
 
-                            <div className={cn(TD_BASE, SALE_PURCHASE_DESKTOP_LINE_BODY_CELL, "flex items-center justify-center")}>
+                            <div className={cn(TD_BASE, "flex", SALE_PURCHASE_DESKTOP_LINE_BODY_CELL, "flex items-center justify-center")}>
                               <FormField
                                 control={form.control}
                                 name={`lineItems.${index}.isTaxInclusive`}
@@ -3899,18 +3911,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <div className="grid grid-cols-2 gap-3 w-[calc(100%-4px)] mx-auto px-[2px]">
                   {/* Mobile UX: line items ke turant baad Sub Total / Discount / Tax / Total — pehle scroll me totals dikhe, phir narration / files */}
                   <div className={SALE_PURCHASE_TOTALS_SUMMARY_BOX_MOBILE}>
-                    <div className={SALE_PURCHASE_TOTALS_SUMMARY_ROW}>
+                    <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "py-[3px] border-b")}>
                       <span className="text-xs shrink-0">Sub Total:</span>
                       <SalePurchaseTotalsSummaryAmount value={subTotal || 0} className="text-xs font-medium" />
                     </div>
                     <SalePurchaseDiscountAdjustmentRow
                       control={form.control}
+                      showDefaultControl={!isEditing}
                       side="sale"
                       disabled={deleteDisabledWhenLinked}
                       expenseAccountOptions={discountExpenseAccountOptions}
                       variant="mobile"
                     />
-                    <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "pt-1 border-t")}>
+                    <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "py-[3px] border-t")}>
                       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
                         <FormLabel className="text-xs shrink-0">Tax:</FormLabel>
                         {selectedTax && (
@@ -3922,27 +3935,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       <SalePurchaseTotalsSummaryAmount value={tax || 0} className="text-xs font-medium" />
                     </div>
                     {(tds || 0) > 0 && (
-                      <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "pt-1")}>
+                      <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "py-[3px] border-t")}>
                         <div className="flex min-w-0 flex-1 items-center gap-2">
                           <span className="text-xs shrink-0">TDS:</span>
-                          <SalePurchaseTdsVerifyTick control={form.control} disabled={editingDisabled} compact />
+                          <SalePurchaseTdsVerifyTick control={form.control} disabled={editingDisabled} compact showLabel />
                         </div>
-                        <SalePurchaseTotalsSummaryAmount value={tds || 0} className="text-xs font-medium" tdsDeduction />
+                        <SalePurchaseTotalsSummaryAmount value={tds || 0} className="text-xs font-medium" />
                       </div>
                     )}
-                    <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "pt-1 border-t text-base font-bold")}>
+                    <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "py-[3px] border-t text-base font-bold")}>
                       <span className="text-sm shrink-0">{(tds || 0) > 0 ? "Invoice Total:" : "Total:"}</span>
                       <SalePurchaseTotalsSummaryAmount value={total || 0} className="text-green-600 text-sm font-bold" />
                     </div>
-                    {(tds || 0) > 0 && (
-                      <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "pt-1 border-t font-semibold")}>
-                        <span className="text-sm shrink-0">Net Receivable:</span>
-                        <SalePurchaseTotalsSummaryAmount
-                          value={Math.max(0, (total || 0) - (tds || 0))}
-                          className="text-sm font-semibold"
-                        />
-                      </div>
-                    )}
                   </div>
 
                   {/* Narration + Due Date share one section color for clear grouping; fields stay white. */}
@@ -4516,18 +4520,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <div className="flex flex-col gap-[15px] w-full">
                     {/* Container 1: Sub total se total tak */}
                     <div className={SALE_PURCHASE_TOTALS_SUMMARY_BOX_DESKTOP}>
-                      <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "font-medium")}>
+                      <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "font-medium py-[3px] border-b")}>
                         <span className="shrink-0">Sub Total:</span>
                         <SalePurchaseTotalsSummaryAmount value={subTotal || 0} />
                       </div>
                       <SalePurchaseDiscountAdjustmentRow
                         control={form.control}
+                        showDefaultControl={!isEditing}
                         side="sale"
                         disabled={deleteDisabledWhenLinked}
                         expenseAccountOptions={discountExpenseAccountOptions}
                         variant="desktop"
                       />
-                      <div className={SALE_PURCHASE_TOTALS_SUMMARY_ROW}>
+                      <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "border-t py-[3px]")}>
                         <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
                           <FormLabel className="shrink-0">Tax:</FormLabel>
                           {selectedTax && (
@@ -4539,27 +4544,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <SalePurchaseTotalsSummaryAmount value={tax || 0} />
                       </div>
                       {(tds || 0) > 0 && (
-                        <div className={SALE_PURCHASE_TOTALS_SUMMARY_ROW}>
+                        <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "border-t py-[3px]")}>
                           <div className="flex min-w-0 flex-1 items-center gap-2">
                             <FormLabel className="shrink-0">TDS:</FormLabel>
-                            <SalePurchaseTdsVerifyTick control={form.control} disabled={editingDisabled} />
+                            <SalePurchaseTdsVerifyTick control={form.control} disabled={editingDisabled} showLabel />
                           </div>
-                          <SalePurchaseTotalsSummaryAmount value={tds || 0} tdsDeduction />
+                          <SalePurchaseTotalsSummaryAmount value={tds || 0} />
                         </div>
                       )}
-                      <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "text-lg font-bold border-t pt-2 mt-2")}>
+                      <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "text-lg font-bold border-t py-[3px]")}>
                         <span className="shrink-0">{(tds || 0) > 0 ? "Invoice Total:" : "Total:"}</span>
                         <SalePurchaseTotalsSummaryAmount value={total || 0} className="text-green-600 font-bold" />
                       </div>
-                      {(tds || 0) > 0 && (
-                        <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "font-semibold border-t pt-2")}>
-                          <span className="shrink-0">Net Receivable:</span>
-                          <SalePurchaseTotalsSummaryAmount
-                            value={Math.max(0, (total || 0) - (tds || 0))}
-                            className="font-semibold"
-                          />
-                        </div>
-                      )}
                     </div>
                     {/* Container 2: Link for bill wise — same table/style as Payment Out (header bold black, table alignment, Amount green). Shown for both new and edit so user can link before/after save. */}
                     {shouldShowLinkButton && (
@@ -4702,13 +4698,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty && !isEditingAndConverting)} className={cn("w-full", BTN_SAVE_CLASS)}>
                   {isLoading ? "..." : isEditingAndConverting ? "Convert" : "Save"}
                 </Button>
-                <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isAttachmentProcessing || isApproving || editingDisabled) : (isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
-                  {isApproving ? "..." : (showSaveAndApproveOnCreate && !voucher?.id ? "Save & Approve" : (isFormDirty ? "Save & Approve" : "Approve"))}
+                <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : ((isFormDirty || isEditingAndConverting) ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isAttachmentProcessing || isApproving || editingDisabled) : (isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty && !isEditingAndConverting))} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                  {isApproving ? "..." : (showSaveAndApproveOnCreate && !voucher?.id ? "Save & Approve" : (isEditingAndConverting ? "Convert & Approve" : isFormDirty ? "Save & Approve" : "Approve"))}
                 </Button>
               </div>
             ) : (
               <>
-                <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                <div className={cn("flex flex-nowrap shrink-0 whitespace-nowrap justify-center md:justify-start gap-2 [&_button]:shrink-0 [&_button]:whitespace-nowrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || !showHistoryButton || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
                     <History className="mr-2 h-4 w-4" /> History
                   </Button>
@@ -4716,7 +4712,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
                 </div>
-                <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                <div className={cn("flex flex-nowrap shrink-0 whitespace-nowrap gap-2 justify-end [&_button]:shrink-0 [&_button]:whitespace-nowrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={() => { setPendingLinkAllocations(null); onVoucherAction?.('cancelled'); }} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
                     Cancel
                   </Button>
@@ -4732,9 +4728,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     {isEditingAndConverting ? "Convert" : "Save"}
                   </Button>
-                  <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isAttachmentProcessing || isApproving || editingDisabled) : (isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : ((isFormDirty || isEditingAndConverting) ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isAttachmentProcessing || isApproving || editingDisabled) : (isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty && !isEditingAndConverting))} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
-                    {showSaveAndApproveOnCreate && !voucher?.id ? "Save & Approve" : (isFormDirty ? "Save & Approve" : "Approve")}
+                    {showSaveAndApproveOnCreate && !voucher?.id ? "Save & Approve" : (isEditingAndConverting ? "Convert & Approve" : isFormDirty ? "Save & Approve" : "Approve")}
                   </Button>
                 </div>
               </>

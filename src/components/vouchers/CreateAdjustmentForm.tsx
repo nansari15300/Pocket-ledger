@@ -1451,7 +1451,7 @@ export function CreateAdjustmentForm({
             </div>
           ) : (
             <>
-              <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+              <div className={cn("flex flex-nowrap shrink-0 whitespace-nowrap justify-center md:justify-start gap-2 [&_button]:shrink-0 [&_button]:whitespace-nowrap", VOUCHER_BUTTONS_CLASS)}>
                 <Button
                   type="button"
                   onClick={onOpenHistory ?? (() => {})}
@@ -1472,7 +1472,7 @@ export function CreateAdjustmentForm({
                   Delete
                 </Button>
               </div>
-              <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+              <div className={cn("flex flex-nowrap shrink-0 whitespace-nowrap gap-2 justify-end [&_button]:shrink-0 [&_button]:whitespace-nowrap", VOUCHER_BUTTONS_CLASS)}>
                 <Button type="button" onClick={() => onVoucherAction?.("cancelled")} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>

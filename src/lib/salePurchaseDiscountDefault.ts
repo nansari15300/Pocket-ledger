@@ -41,12 +41,27 @@ export async function persistCompanyDiscountExpenseDefault(opts: {
   });
 }
 
+export async function clearCompanyDiscountExpenseDefault(opts: {
+  side: SalePurchaseDiscountSide;
+  companyId: string;
+  company: Parameters<typeof persistCompanyRootSettingsPatch>[0]["company"];
+  reloadLocalCompanyRegistry?: () => void;
+  triggerSync?: () => void;
+}): Promise<void> {
+  await persistCompanyRootSettingsPatch({
+    companyId: opts.companyId,
+    company: opts.company,
+    patch: { [fieldKey(opts.side)]: "" },
+    reloadLocalCompanyRegistry: opts.reloadLocalCompanyRegistry,
+    triggerSync: opts.triggerSync,
+  });
+}
 /** Totals summary cyan box — andar se 4px side inset; lambe amount clip na hon bahar. */
 export const SALE_PURCHASE_TOTALS_SUMMARY_BOX_MOBILE =
-  "col-span-2 bg-cyan-50 border border-cyan-300/80 rounded-lg px-1 py-2 space-y-1.5 w-full min-w-0 max-w-full overflow-hidden";
+  "col-span-2 bg-cyan-50 border border-cyan-300/80 rounded-lg px-1 py-2 space-y-0 w-full min-w-0 max-w-full overflow-hidden";
 
 export const SALE_PURCHASE_TOTALS_SUMMARY_BOX_DESKTOP =
-  "space-y-4 border border-cyan-300/80 rounded-lg px-1 py-4 bg-cyan-50 w-full min-w-0 max-w-full overflow-hidden";
+  "border border-cyan-300/80 rounded-lg px-1 py-4 space-y-0 bg-cyan-50 w-full min-w-0 max-w-full overflow-hidden";
 
 export const SALE_PURCHASE_TOTALS_SUMMARY_ROW =
   "flex justify-between items-center gap-2 min-w-0 w-full max-w-full";

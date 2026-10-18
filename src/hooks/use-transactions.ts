@@ -32,6 +32,8 @@ import {
   amountColumnHaystackMatchesFilter,
   columnFieldValuesHaystack,
   columnHaystackMatchesFilter,
+  drCrChipKey,
+  drCrColumnFilterResult,
 } from "@/lib/transactionColumnHeaderFilter";
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import {
@@ -56,9 +58,16 @@ import {
   getTaxableFromAllocation,
   getAllocationAmountForEntityScope,
   allocationMatchesEntityScope,
+  getTdsLegAllocatedByTargetId,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
-import { getSalePurchaseBillWiseTargetTotal, getSalePurchasePartyAmount } from "@/lib/tdsVoucher";
+import {
+  getSalePurchaseBillWiseTargetTotal,
+  getSalePurchasePartyAmount,
+  getSalePurchasePartyLinkTarget,
+  getSalePurchaseTdsSettledAmount,
+  sumVoucherLineTds,
+} from "@/lib/tdsVoucher";
 import {
   salePurchaseDiscountExpenseLedgerAmounts,
   salePurchaseTaxableAmount,
@@ -548,7 +557,8 @@ export const getTransactionAmounts = (
             
             // Generic Journal Processing for Groups (non-all view) - exclude salary journals and staff groups as they are handled above
             // Staff groups handle add_salary journals via getStaffTransactionAmounts, so skip generic processing for them
-            if (!isJournalAllView && !isStaffGroup && isRegularJournalLikeVoucher(transaction)) {
+            // Tax groups already sum journal legs per member via getTaxTransactionAmounts above (would double count here); same for expense groups (per-member "expense" case already sums journal legs).
+            if (!isJournalAllView && !isStaffGroup && !isTaxGroup && !isExpenseGroupContext && isRegularJournalLikeVoucher(transaction)) {
                 // For specific account groups, only process entries matching accounts in the group
                 transaction.entries.forEach((e: any) => {
                     if(memberIdsInGroup.has(e.accountId)) {
@@ -1377,6 +1387,7 @@ export function useTransactions(
                     }),
                     voucherNumber: [displayVoucherNo],
                     user: [userName],
+                    // Each header filter matches ONLY its own column cell (amount + TDS badge text when the badge sits in that column).
                     debit: [
                       debit,
                       debitStr,
@@ -1394,7 +1405,26 @@ export function useTransactions(
                     status: [t.paymentStatus, t.status, t.isApproved === true ? "approved" : "unapproved"],
                     balance: [balanceValue, Math.abs(balanceValue), balanceAbsStr, `${balanceAbsStr} ${balanceSide}`, balanceSide],
                 };
-                // Unknown column key → no match (empty haystack would hide all rows; skip instead)
+                // Debit/Credit header filters (text input + separate chip keys). Rows that carry a TDS badge are decided on the
+                // processed row in TransactionsTable (badge label depends on _tdsSettled/paymentStatus/links, not on this raw row).
+                // Rows without a badge: text/chip cannot match (they target the badge in the opposite column); numbers match own amount.
+                // Active filters (text and/or chip) are ORed across Debit/Credit.
+                if (key === "debit" || key === "credit" || key === "debitChip" || key === "creditChip") {
+                  if (salePurchaseTdsVerifyLabel != null) return true;
+                  const own = (k: "debit" | "credit") => {
+                    const amt = k === "debit" ? debit : credit;
+                    return columnFieldValuesHaystack([
+                      amt,
+                      k === "debit" ? debitStr : creditStr,
+                      String(formatCurrency(amt, { noAnimation: true }) ?? ""),
+                    ]);
+                  };
+                  const results = (["debit", "credit"] as const)
+                    .map((k) => drCrColumnFilterResult(String(filters[k] ?? ""), String(filters[drCrChipKey(k)] ?? ""), own(k), ""))
+                    .filter((r): r is boolean => r !== null);
+                  return results.length === 0 || results.some(Boolean);
+                }
+                // Unknown column key - no match (empty haystack would hide all rows; skip instead)
                 if (!Object.prototype.hasOwnProperty.call(columnFieldsByKey, key)) {
                   return true;
                 }
@@ -1542,11 +1572,12 @@ export function useTransactions(
         const atFyStartFilter = effectiveDateRange?.from
             ? isLedgerDateFilterFromAtFyStart(company?.country, effectiveDateRange)
             : false;
-        const periodOpeningBase = atFyStartFilter ? 0 : initialOpeningBalance;
         const fullLocalVoucherMirror = hasFullLocalLedgerVoucherMirror(
           company,
           fy.activeScope
         );
+        // FY-start filter + full local mirror (no server snapshot): opening = book OB + walk, same as the full-ledger chain.
+        const periodOpeningBase = atFyStartFilter && !fullLocalVoucherMirror ? 0 : initialOpeningBalance;
         const requiresAuthoritativeOpening =
             !fullLocalVoucherMirror &&
             company != null &&
@@ -1598,7 +1629,19 @@ export function useTransactions(
             const transactionDate = safeToDate(t.date);
             if (!transactionDate) return false;
             // FY-start filter: match All-view divider (book OB + all pre-FY vouchers).
-            if (!atFyStartFilter && openingBalanceDateForEntity && transactionDate < openingBalanceDateForEntity) {
+            if (
+              (!atFyStartFilter || fullLocalVoucherMirror) &&
+              openingBalanceDateForEntity &&
+              transactionDate < openingBalanceDateForEntity
+            ) {
+              return false;
+            }
+            // Full-ledger chain (fullBooksBalanceByVoucherId) does not move on unapproved inter-company rows.
+            if (
+              fullLocalVoucherMirror &&
+              (t as { type?: string }).type === "inter_company" &&
+              (t as { isApproved?: boolean }).isApproved !== true
+            ) {
               return false;
             }
             if (
@@ -1777,6 +1820,9 @@ export function useTransactions(
           isBillWiseContext || needsTaxBillWiseStatus || isExpenseContext
             ? buildBillWiseIncomingAllocationMaps(vouchers ?? [])
             : null;
+        // TDS-leg settlement (TDS Paid/Unpaid badge): TDS-leg links + party-side links beyond total - TDS.
+        const tdsSettleMaps = billWiseIncomingMaps ?? buildBillWiseIncomingAllocationMaps(vouchers ?? []);
+        const tdsLegAllocByTarget = getTdsLegAllocatedByTargetId(vouchers ?? []);
         const entityIdForLinks = entity && 'id' in entity ? (entity as any).id : undefined;
         // Keep Journal link visibility entity-aware (party/staff/account), same behavior users expect from payment in/out flow.
         const shouldScopeJournalLinksByEntity =
@@ -1980,18 +2026,61 @@ export function useTransactions(
                       paymentStatus = result.isOverdue ? "overdue" : result.status;
                       isOverdue = result.isOverdue;
                       outstanding = result.outstanding;
+                      // TDS-account rows (Sale TDS / Pur TDS) of Sale/Purchase: verified => Paid; else follow the PARTY status,
+                      // except a fully paid party shows Partial (TDS itself is not yet verified).
+                      const tdsForThisTax = Array.isArray((t as any).lineItems)
+                        ? (t as any).lineItems.reduce(
+                            (s: number, li: any) =>
+                              String(li?.tdsAccountId ?? "") === taxId ? s + (Number(li?.tdsAmount) || 0) : s,
+                            0
+                          )
+                        : 0;
+                      if (tdsForThisTax > 0) {
+                        if ((t as any).isTdsVerified === true) {
+                          paymentStatus = "paid";
+                          isOverdue = false;
+                          outstanding = 0;
+                        } else {
+                          const partyAllocatedForTds = Math.max(
+                            0,
+                            getBillWiseAllocatedToTargetWithMaps(t, String(t.id), billWiseIncomingMaps) -
+                              (tdsLegAllocByTarget.get(String(t.id)) ?? 0)
+                          );
+                          const partyRes = getPaymentStatusResult(
+                            getSalePurchasePartyLinkTarget(t),
+                            partyAllocatedForTds,
+                            t.dueDate
+                          );
+                          if (partyRes.status === "paid" && !partyRes.isOverdue) paymentStatus = "partially_paid";
+                          else paymentStatus = partyRes.isOverdue ? "overdue" : partyRes.status;
+                          isOverdue = partyRes.isOverdue;
+                          outstanding = tdsForThisTax;
+                        }
+                      }
                     } else {
+                      // Row balance = net (total - TDS) - party-leg links. TDS-leg links only settle the TDS badge, not the party balance.
                       const total = getSalePurchaseBillWiseTargetTotal(t);
                       const allocated = getBillWiseAllocatedToTargetWithMaps(
                         t,
                         String(t.id),
                         billWiseIncomingMaps
                       );
-                      const result = getPaymentStatusResult(total, allocated, t.dueDate);
+                      const partyAllocated = Math.max(0, allocated - (tdsLegAllocByTarget.get(String(t.id)) ?? 0));
+                      const result = getPaymentStatusResult(getSalePurchasePartyLinkTarget(t), partyAllocated, t.dueDate);
                       paymentStatus = result.isOverdue ? "overdue" : result.status;
                       isOverdue = result.isOverdue;
-                      outstanding = result.outstanding;
+                      outstanding = Math.max(0, total - partyAllocated);
                     }
+                }
+                let tdsSettled: number | undefined;
+                if (isSaleOrPurchaseBillVoucherType(t.type) && sumVoucherLineTds(t as any) > 0) {
+                  tdsSettled = getSalePurchaseTdsSettledAmount(
+                    t as any,
+                    getBillWiseAllocatedToTargetWithMaps(t, String(t.id), tdsSettleMaps),
+                    tdsLegAllocByTarget.get(String(t.id)) ?? 0
+                  );
+                  // Voucher 'Verify TDS' tick = TDS marked Paid without a journal (status only).
+                  if ((t as any).isTdsVerified === true) tdsSettled = sumVoucherLineTds(t as any);
                 }
                 // Bill-wise: payment_in / payment_out - Settled when remaining 0. getPaymentInRemaining already includes t.allocations (journal link bilateral sync ke baad bhi).
                 if (isBillWiseContext && (t.type === 'payment_in' || t.type === 'payment_out' || t.type === 'direct_income' || t.type === 'direct_expense')) {
@@ -2490,6 +2579,7 @@ export function useTransactions(
                             paymentStatus,
                             isOverdue,
                             outstanding,
+                            _tdsSettled: tdsSettled,
                             linkedFromVoucherNos: fromDeduped,
                             linkedToVoucherNos: toDeduped,
                             linkedFromVoucherNosBillWise: fromBillWiseDeduped,
@@ -2527,6 +2617,7 @@ export function useTransactions(
                     paymentStatus,
                     isOverdue,
                     outstanding,
+                    _tdsSettled: tdsSettled,
                     linkedFromVoucherNos: fromUnique,
                     linkedToVoucherNos: toUnique,
                     linkedFromVoucherNosBillWise,

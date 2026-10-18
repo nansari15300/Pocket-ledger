@@ -1,6 +1,7 @@
 
 "use client";
 
+import { useShowAllTdsCards } from "@/lib/useShowAllTdsCards";
 import * as React from "react";
 import { openPrintDirect, getPdfBlob, companyFiscalFieldsForPrint } from "@/lib/printDirect";
 import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
@@ -376,12 +377,12 @@ export function StaffDetails({
     [journalAccountNames, userNames]
   );
 
-  const { balanceMode, setBalanceMode } = useBalanceMode();
+  const { balanceMode: balanceModeRaw, setBalanceMode } = useBalanceMode();
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const ledgerPaginationReset = useLedgerPaginationReset(setRowsPerPage, setCurrentPage);
   const ledgerViewMode: LedgerDetailViewMode =
-    balanceMode === "bill_wise" ? "bill_wise" : "statement";
+    balanceModeRaw === "bill_wise" ? "bill_wise" : "statement";
   const ledgerSessionKey = useMemo(
     () =>
       companyId && staff?.id
@@ -422,6 +423,8 @@ export function StaffDetails({
   );
   const [showTdsLinkedTrxn, setShowTdsLinkedTrxn] = useState(true);
   const taxDetailsMode = ledgerSplitMode === "tax";
+  /** Staff TDS balance page never offers bill-wise: force statement. */
+  const balanceMode: typeof balanceModeRaw = taxDetailsMode ? "statement" : balanceModeRaw;
   /** TDS details hides books opening; salary = full account with taxable ADD-SAL. */
   const hideBooksOpeningForSplit = taxDetailsMode;
   
@@ -768,7 +771,7 @@ export function StaffDetails({
   );
 
   const taxDetailsOpeningForRunning = hideBooksOpeningForSplit ? 0 : ledgerOpeningForRunning;
-  const effectiveBalanceMode = taxDetailsMode ? "bill_wise" : balanceMode;
+  const effectiveBalanceMode = taxDetailsMode ? "statement" : balanceMode;
   const canUseStaffTaxDetails = !isAllVouchersView && staff.id !== "all";
 
   const effectiveVisibleColumns = useMemo(() => {
@@ -789,6 +792,9 @@ export function StaffDetails({
     setCurrentPage(1);
   }, [companyId, staff?.id, setCurrentPage]);
 
+  const [tdsCardsOpen, setTdsCardsOpen] = useState(false);
+  const [tdsCardsOpenM, setTdsCardsOpenM] = useState(false);
+  const [showAllTds, setShowAllTds] = useShowAllTdsCards();
   const openStaffTdsLedgerDetails = useCallback(() => {
     setLedgerSplitMode("tax");
     if (companyId && staff?.id) writeStaffTdsLedgerMode(companyId, staff.id, true);
@@ -851,7 +857,7 @@ export function StaffDetails({
    * Account Balance card — always staff salary account closing (never TDS row running balance).
    * TDS Balance card uses `staffTdsBalanceSummary` separately.
    */
-  const headerClosingBalance = useMemo(() => {
+  const headerClosingBalanceRaw = useMemo(() => {
     if (
       !dateRange?.from &&
       !dateRange?.to &&
@@ -879,6 +885,15 @@ export function StaffDetails({
     periodDr,
     periodCr,
   ]);
+  /** Column header filters (Debit/Credit/etc.) must not change the Account Balance card: keep last unfiltered value. */
+  const headerBalanceUnfilteredRef = useRef<{ key: string; value: number } | null>(null);
+  const headerBalanceHasColFilter = Object.values(filters).some((v) => v && v !== "all");
+  const headerBalanceKey = `${dateRange?.from?.getTime?.() ?? ""}|${dateRange?.to?.getTime?.() ?? ""}`;
+  if (!headerBalanceHasColFilter) headerBalanceUnfilteredRef.current = { key: headerBalanceKey, value: headerClosingBalanceRaw };
+  const headerClosingBalance =
+    headerBalanceHasColFilter && headerBalanceUnfilteredRef.current?.key === headerBalanceKey
+      ? headerBalanceUnfilteredRef.current.value
+      : headerClosingBalanceRaw;
 
   // Statement check mode + desktop tail paging (PartyDetails jaisa)
   const {
@@ -1460,28 +1475,77 @@ export function StaffDetails({
           : {})}
       >
         {canUseStaffTaxDetails && staffHasTdsHistory && !isReportMobileChrome ? (
-          <button
-            type="button"
-            data-pl-staff-tds-inline=""
-            className="flex shrink-0 flex-col items-start gap-0 text-left cursor-pointer"
-            onClick={openStaffTdsLedgerDetails}
-            aria-pressed={taxDetailsMode}
-          >
-            <span className="text-[10px] font-semibold tracking-wide text-muted-foreground leading-none">
-              TDS Balance
-            </span>
-            {staffTdsBalanceSummary.purchaseTds > 0 ? (
-              <span className="text-xs font-bold text-red-600 leading-tight">
-                {formatCurrency(-staffTdsBalanceSummary.purchaseTds, { showDrCr: true })}
-              </span>
-            ) : staffTdsBalanceSummary.saleTds > 0 ? (
-              <span className="text-xs font-bold text-green-600 leading-tight">
-                {formatCurrency(staffTdsBalanceSummary.saleTds, { showDrCr: true })}
-              </span>
-            ) : (
-              <span className="text-xs font-bold text-muted-foreground leading-tight">Settled</span>
-            )}
-          </button>
+          <Popover open={tdsCardsOpenM} onOpenChange={(o) => { if (o && !taxDetailsMode) { openStaffTdsLedgerDetails(); return; } setTdsCardsOpenM(o); }}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                data-pl-staff-tds-inline=""
+                className="flex shrink-0 flex-col items-start gap-0 text-left cursor-pointer"
+                aria-pressed={taxDetailsMode}
+              >
+                <span className="text-[10px] font-semibold tracking-wide text-muted-foreground leading-none">
+                  TDS Balance
+                </span>
+                {staffTdsBalanceSummary.purchaseTds > 0 ? (
+                  <span className="text-xs font-bold text-red-600 leading-tight">
+                    {formatCurrency(-staffTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+                  </span>
+                ) : staffTdsBalanceSummary.saleTds > 0 ? (
+                  <span className="text-xs font-bold text-green-600 leading-tight">
+                    {formatCurrency(staffTdsBalanceSummary.saleTds, { showDrCr: true })}
+                  </span>
+                ) : (
+                  <span className="text-xs font-bold text-muted-foreground leading-tight">Settled</span>
+                )}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-auto p-2">
+              <div className="flex flex-col gap-2">
+                {([
+                  ["Sale TDS Balance", staffTdsBalanceSummary.saleTds, "text-green-600"],
+                  ["Pur TDS Balance", 0, "text-muted-foreground"],
+                  ["Add Salary TDS Balance", -staffTdsBalanceSummary.purchaseTds, "text-red-600"],
+                ] as const)
+                  .filter(([, v]) => v !== 0 || showAllTds)
+                  .map(([label, v, tone]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      className={cn("flex flex-col items-start rounded-md border px-3 py-1.5 text-left", taxDetailsMode && "ring-2 ring-primary")}
+                      aria-pressed={taxDetailsMode}
+                      onClick={() => {
+                        openStaffTdsLedgerDetails();
+                        setTdsCardsOpenM(false);
+                      }}
+                    >
+                      <span className="text-[10px] font-semibold text-muted-foreground leading-none">{label}</span>
+                      <span className={cn("text-sm font-bold leading-tight", tone)}>{formatCurrency(v, { showDrCr: true })}</span>
+                    </button>
+                  ))}
+                {staffTdsBalanceSummary.saleTds <= 0 && staffTdsBalanceSummary.purchaseTds <= 0 && !showAllTds ? (
+                  <button
+                    type="button"
+                    className={cn("flex flex-col items-start rounded-md border px-3 py-1.5 text-left", taxDetailsMode && "ring-2 ring-primary")}
+                    onClick={() => {
+                      openStaffTdsLedgerDetails();
+                      setTdsCardsOpenM(false);
+                    }}
+                  >
+                    <span className="text-[10px] font-semibold text-muted-foreground leading-none">TDS Balance</span>
+                    <span className="text-sm font-bold text-muted-foreground leading-tight">Settled</span>
+                  </button>
+                ) : null}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {!showAllTds ? (<Button type="button" variant="chromePill" size="sm" aria-pressed={showAllTds} onClick={() => setShowAllTds(true)} className="h-8 w-auto min-w-[70px] whitespace-nowrap px-3 text-xs font-semibold">
+                  Show all TDS type cards (always)
+                </Button>) : null}
+                {showAllTds ? (<Button type="button" variant="chromePill" size="sm" aria-pressed={!showAllTds} onClick={() => setShowAllTds(false)} className="h-8 w-auto min-w-[70px] whitespace-nowrap px-3 text-xs font-semibold">
+                  Default
+                </Button>) : null}
+              </div>
+            </PopoverContent>
+          </Popover>
         ) : null}
         <button
           type="button"
@@ -1526,7 +1590,8 @@ export function StaffDetails({
           key={`staff-mobile-${staff.id}-${ledgerSplitMode}-${currentPage}-${rowsPerPage}`}
           transactions={mobileTransactionsToShow}
           context="staff"
-          contextId={staff.id}
+          contextId={staff.id}
+          forceBalanceMode={taxDetailsMode ? "statement" : undefined}
           transactionCardSearchHighlight={mobileSearchTerm}
           openingBalance={hideBooksOpeningForSplit ? 0 : mobilePaginationMeta.openingForPage}
           booksOpeningBalance={hideBooksOpeningForSplit ? 0 : masterStaffOpening}
@@ -1611,7 +1676,7 @@ export function StaffDetails({
             openModalInUrl();
           }}
           balanceMode={balanceMode}
-          onBalanceModeToggle={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+          onBalanceModeToggle={taxDetailsMode ? undefined : () => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
           mobileView={mobileReportView}
           onViewToggle={() => setMobileReportView((v) => (v === "list" ? "chart" : "list"))}
         />
@@ -1704,6 +1769,7 @@ export function StaffDetails({
         data-pl-mobile-ledger-action-footer=""
       >
         {/* Mobile: ek button — Statement ↔ Bill wise toggle (Party ledger jaisa). */}
+        {!taxDetailsMode ? (
         <Button
           type="button"
           className={cn(
@@ -1716,6 +1782,7 @@ export function StaffDetails({
         >
           {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
         </Button>
+        ) : null}
         <AddVoucherDialog
           defaultTab="payment_out"
           defaultVoucherData={{ payeeType: "staff", staffId: staff.id }}
@@ -1903,28 +1970,105 @@ export function StaffDetails({
               </div>
             </button>
             {canUseStaffTaxDetails && staffHasTdsHistory ? (
-              <button
-                type="button"
-                className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "cursor-pointer")}
-                onClick={openStaffTdsLedgerDetails}
-                aria-pressed={taxDetailsMode}
-                title="TDS Balance details"
-              >
-                <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
-                  <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>TDS Balance</span>
-                  {staffTdsBalanceSummary.purchaseTds > 0 ? (
-                    <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-red-600")}>
-                      {formatCurrency(-staffTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+              <Popover open={tdsCardsOpen} onOpenChange={(o) => { if (o && !taxDetailsMode) { openStaffTdsLedgerDetails(); return; } setTdsCardsOpen(o); }}>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "cursor-pointer text-left")}
+                    aria-pressed={taxDetailsMode}
+                    title="TDS Balance details"
+                  >
+                    <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                      <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>TDS Balance</span>
+                      {staffTdsBalanceSummary.purchaseTds > 0 ? (
+                        <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-red-600")}>
+                          {formatCurrency(-staffTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+                        </div>
+                      ) : staffTdsBalanceSummary.saleTds > 0 ? (
+                        <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-green-600")}>
+                          {formatCurrency(staffTdsBalanceSummary.saleTds, { showDrCr: true })}
+                        </div>
+                      ) : (
+                        <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-muted-foreground")}>Settled</div>
+                      )}
                     </div>
-                  ) : staffTdsBalanceSummary.saleTds > 0 ? (
-                    <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-green-600")}>
-                      {formatCurrency(staffTdsBalanceSummary.saleTds, { showDrCr: true })}
-                    </div>
-                  ) : (
-                    <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-muted-foreground")}>Settled</div>
-                  )}
-                </div>
-              </button>
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-auto p-2">
+                  <div className="flex gap-2">
+                    {(staffTdsBalanceSummary.saleTds > 0 || showAllTds) ? (
+                      <button
+                        type="button"
+                        className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "cursor-pointer text-left", taxDetailsMode && "ring-2 ring-primary")}
+                        onClick={() => {
+                          openStaffTdsLedgerDetails();
+                          setTdsCardsOpen(false);
+                        }}
+                        aria-pressed={taxDetailsMode}
+                        title="Sale TDS Balance details"
+                      >
+                        <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                          <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Sale TDS Balance</span>
+                          <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-green-600")}>
+                            {formatCurrency(staffTdsBalanceSummary.saleTds, { showDrCr: true })}
+                          </div>
+                        </div>
+                      </button>
+                    ) : null}
+                    {showAllTds ? (
+                      <div className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "text-left")}>
+                        <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                          <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Pur TDS Balance</span>
+                          <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-muted-foreground")}>{formatCurrency(0, { showDrCr: true })}</div>
+                        </div>
+                      </div>
+                    ) : null}
+                    {(staffTdsBalanceSummary.purchaseTds > 0 || showAllTds) ? (
+                      <button
+                        type="button"
+                        className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "cursor-pointer text-left", staffTdsBalanceSummary.purchaseTds > 0 && "order-first", taxDetailsMode && "ring-2 ring-primary")}
+                        onClick={() => {
+                          openStaffTdsLedgerDetails();
+                          setTdsCardsOpen(false);
+                        }}
+                        aria-pressed={taxDetailsMode}
+                        title="Add Salary TDS Balance details"
+                      >
+                        <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                          <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Add Salary TDS Balance</span>
+                          <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-red-600")}>
+                            {formatCurrency(-staffTdsBalanceSummary.purchaseTds, { showDrCr: true })}
+                          </div>
+                        </div>
+                      </button>
+                    ) : null}
+                    {staffTdsBalanceSummary.saleTds <= 0 && staffTdsBalanceSummary.purchaseTds <= 0 && !showAllTds ? (
+                      <button
+                        type="button"
+                        className={cn(LEDGER_HEADER_TDS_BALANCE_CARD_CN, "cursor-pointer text-left", taxDetailsMode && "ring-2 ring-primary")}
+                        onClick={() => {
+                          openStaffTdsLedgerDetails();
+                          setTdsCardsOpen(false);
+                        }}
+                        aria-pressed={taxDetailsMode}
+                      >
+                        <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                          <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>TDS Balance</span>
+                          <div className={cn(LEDGER_HEADER_BALANCE_CN, "text-muted-foreground")}>Settled</div>
+                        </div>
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {!showAllTds ? (<Button type="button" variant="chromePill" size="sm" aria-pressed={showAllTds} onClick={() => setShowAllTds(true)} className="h-8 w-auto min-w-[70px] whitespace-nowrap px-3 text-xs font-semibold">
+                      Show all TDS type cards (always)
+                    </Button>) : null}
+                    {showAllTds ? (<Button type="button" variant="chromePill" size="sm" aria-pressed={!showAllTds} onClick={() => setShowAllTds(false)} className="h-8 w-auto min-w-[70px] whitespace-nowrap px-3 text-xs font-semibold">
+                      Default
+                    </Button>) : null}
+                  </div>
+                </PopoverContent>
+              </Popover>
             ) : null}
           </div>
           <div className={LEDGER_HEADER_PILL_ROW_CN}>
@@ -2055,7 +2199,7 @@ export function StaffDetails({
               </Button>
             )}
             
-            {isCompanyAdmin ? (
+            {isCompanyAdmin && !taxDetailsMode ? (
               <Button
                 type="button"
                 variant="chromePill"
@@ -2079,7 +2223,8 @@ export function StaffDetails({
                   key={`staff-${staff.id}-${ledgerSplitMode}-${currentPage}-${rowsPerPage}`}
                   transactions={paginatedTransactions}
                   context="staff"
-                  contextId={staff.id}
+                  contextId={staff.id}
+                  forceBalanceMode={taxDetailsMode ? "statement" : undefined}
                   openingBalance={hideBooksOpeningForSplit ? 0 : desktopPaginationMeta.openingForPage}
                   booksOpeningBalance={hideBooksOpeningForSplit ? 0 : masterStaffOpening}
                   ledgerDateFilterActive={hasLedgerDateFilter}

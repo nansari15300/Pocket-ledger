@@ -29,7 +29,7 @@ export function salePurchasePairHeaderCell(
   className?: string
 ) {
   return cn(
-    "px-2 py-2 box-border text-xs font-semibold text-foreground",
+    "px-2 py-2 box-border text-sm font-semibold text-foreground",
     align === "left" && "text-left",
     align === "center" && "text-center",
     align === "right" && "text-right",
@@ -40,7 +40,7 @@ export function salePurchasePairHeaderCell(
 export function salePurchasePairBodyCell(side: "left" | "right", className?: string) {
   return cn(
     "box-border whitespace-nowrap",
-    side === "left" ? "pl-2 pr-1 py-1" : "pl-1 pr-2 py-1",
+    side === "left" ? "pl-2 pr-1 py-[2px]" : "pl-1 pr-2 py-[2px]",
     className
   );
 }

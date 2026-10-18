@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { columnFieldValuesHaystack, drCrChipKey, drCrColumnFilterResult, drCrOppositeKey, tdsBadgeHighlightQuery } from "@/lib/transactionColumnHeaderFilter";
 import {
   Table,
   TableBody,
@@ -20,8 +21,10 @@ import {
   SALE_PURCHASE_TDS_VERIFIED_MESSAGE,
   isSalePurchaseTdsVerifyLedgerContext,
   partyTdsLedgerBooksDrCrFromRow,
+  isLedgerTdsTableRow,
   resolveSalePurchaseTdsVerifyLabel,
   taxLedgerBooksDrCrFromRow,
+  taxAccountIsTdsVerifyLegOnVoucher,
 } from "@/lib/partyLedgerTdsView";
 import type { StockView, Item } from "@/components/items/types";
 import { useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
@@ -412,6 +415,8 @@ interface TransactionsTableProps {
   ledgerShowBookOpeningRow?: boolean;
   /** Staff tax-details view: hide Book/Dated opening rows entirely. */
   hideLedgerOpeningRows?: boolean;
+  /** Hide FY partition / FY opening divider rows (e.g. filtered TDS views). */
+  hideFiscalPartitionRows?: boolean;
   /** Range `from` — period-carry opening row ki Date column (BS/AD). */
   openingBalancePeriodStartDate?: unknown;
   /** Statement check mode (PC): focus / mark rows — Tally-style reconciliation */
@@ -512,6 +517,7 @@ export function TransactionsTable({
   ledgerDateFilterActive,
   ledgerShowBookOpeningRow = true,
   hideLedgerOpeningRows = false,
+  hideFiscalPartitionRows = false,
   openingBalancePeriodStartDate,
   transactionCardSearchHighlight,
   mobileCardLayoutLikeParty = false,
@@ -619,8 +625,8 @@ export function TransactionsTable({
   }, [pendingOutboxVoucherIds.size, refreshPendingOutboxVoucherIds]);
   // FY merge: neela divider row — company par local fiscal merge `useCompany` se aa chuka hai.
   const fiscalMergePartitions = useMemo(
-    () => buildFiscalMergePartitionEntriesFromCompany(company),
-    [company?.fiscalSplitMode, company?.fiscalMergePartitionAt, company?.fiscalMergePartitionAtIsos, company?.fiscalPartitionLabel, company?.country, company?.fiscalYearStart]
+    () => (hideFiscalPartitionRows ? [] : buildFiscalMergePartitionEntriesFromCompany(company)),
+    [hideFiscalPartitionRows, company?.fiscalSplitMode, company?.fiscalMergePartitionAt, company?.fiscalMergePartitionAtIsos, company?.fiscalPartitionLabel, company?.country, company?.fiscalYearStart]
   );
   const [fyPartitionOpenings, setFyPartitionOpenings] = useState<Map<number, number>>(() => new Map());
   const [fyPartitionOpeningsStatus, setFyPartitionOpeningsStatus] = useState<
@@ -751,6 +757,7 @@ export function TransactionsTable({
       : fyPartitionOpeningsStatus === "idle"
         ? "loading"
         : fyPartitionOpeningsStatus;
+  const { formatCurrency: drCrFormatCurrency } = useDate();
   const tableTransactions = useMemo(() => {
     let list =
       fiscalMergePartitions.length
@@ -764,13 +771,66 @@ export function TransactionsTable({
       });
     }
     list = stripSpendWiseSyntheticOpeningMaster(list) as typeof list;
-    return (list as any[]).map((row) => {
+    let mapped = (list as any[]).map((row) => {
       const id = String(row?.id || "").trim();
       if (!id || row?.type === FISCAL_YEAR_PARTITION_ROW_TYPE || row?.type === FY_OPENING_ROW_TYPE) return row;
       const nextStatus = pendingOutboxVoucherIds.has(id) ? "sync_due" : "synced";
       return row?.__plSyncStatus === nextStatus ? row : { ...row, __plSyncStatus: nextStatus };
-    }) as typeof list;
+    });
+    // TDS ledger rows bypass useTransactions column filters: apply Debit and Credit header filters here,
+    // each evaluated ONLY on its own column cell (amount + TDS badge text if the badge sits in that column).
+    // Chip tokens "verified"/"unverified" are exact (handled by amountColumnHaystackMatchesFilter); other text = substring.
+    const drCrFilterTexts = {
+      debit: String(filters?.debit ?? "").trim(),
+      credit: String(filters?.credit ?? "").trim(),
+    };
+    const drCrChips = { debit: String(filters?.debitChip ?? "").trim(), credit: String(filters?.creditChip ?? "").trim() };
+    if (drCrFilterTexts.debit || drCrFilterTexts.credit || drCrChips.debit || drCrChips.credit) {
+      mapped = mapped.filter((row) => {
+        const isTdsLedgerRow = isLedgerTdsTableRow(row as { type?: string; [LEDGER_TDS_ROW_FLAG]?: boolean });
+        // Processed row: badge label is final here (uses _tdsSettled / paymentStatus). Rows with a badge are filtered here.
+        const label =
+          isTdsLedgerRow || isSalePurchaseTdsVerifyLedgerContext(context, groupEntityType)
+            ? String(resolveSalePurchaseTdsVerifyLabel(row, { context, contextId, groupEntityType }) ?? "").toLowerCase()
+            : "";
+        if (!isTdsLedgerRow && !label) return true;
+        // Badge sits in ONE cell. Number tokens match own column amount; text tokens/chips match the badge in the OPPOSITE column.
+        const badgeCol = label
+          ? statementCheckedMessageColumn(Number((row as any)?.debit) || 0, Number((row as any)?.credit) || 0)
+          : null;
+        // Active filters (text and/or chip per column) are ORed. Number tokens: own column amount. Text/chip: badge in the OPPOSITE column.
+        const drCrMatches = (["debit", "credit"] as const)
+          .map((k) =>
+            drCrColumnFilterResult(
+              drCrFilterTexts[k],
+              drCrChips[k],
+              columnFieldValuesHaystack([
+                (row as any)?.[k],
+                (() => {
+                  const amt = Number((row as any)?.[k]) || 0;
+                  return amt ? String(drCrFormatCurrency(amt, { noAnimation: true }) ?? "") : "";
+                })(),
+                (() => {
+                  const amt = Number((row as any)?.[k]) || 0;
+                  return amt ? String(drCrFormatCurrency(amt, { noSuffix: true, noAnimation: true }) ?? "") : "";
+                })(),
+              ]),
+              label && badgeCol && badgeCol !== k ? label : ""
+            )
+          )
+          .filter((r): r is boolean => r !== null);        return drCrMatches.length === 0 || drCrMatches.some(Boolean);
+      });
+    }
+    return mapped as typeof list;
   }, [
+    filters?.debit,
+    filters?.credit,
+    filters?.debitChip,
+    filters?.creditChip,
+    drCrFormatCurrency,
+    context,
+    contextId,
+    groupEntityType,
     transactions,
     fiscalMergePartitions,
     pendingOutboxVoucherIds,
@@ -779,6 +839,13 @@ export function TransactionsTable({
     effectiveFyPartitionOpeningsStatus,
   ]);
   /** Unverified TDS legs stay on the row (dim) but must not inflate FY End Total Dr/Cr. */
+  /** Tax page only: TDS Paid/Unpaid filter applies to TDS tax accounts, not VAT etc. */
+  const isTdsTaxAccountPage = useMemo(
+    () =>
+      context !== "tax" ||
+      (transactions as any[]).some((t) => taxAccountIsTdsVerifyLegOnVoucher(t, String(contextId || ""))),
+    [context, contextId, transactions]
+  );
   const fiscalPartitionBooksDrCr = useMemo(() => {
     if (context === "tax") {
       const taxId = String(contextId || "").trim();
@@ -1499,10 +1566,13 @@ export function TransactionsTable({
     setBillWiseLinkPreview(null);
   }, [ledgerListAnimateKey]);
 
+  // formatCurrency returns an AnimatedNumber React node when number animation is on; that cannot be text-highlighted.
+  // While a Debit/Credit header filter has text, render the amount as a plain string ("Rs. 1.00") so highlight works.
+  const drCrFilterTypingForAmountText = Boolean(String(filters?.debit ?? "").trim() || String(filters?.credit ?? "").trim());
   const getDisplayValue = useCallback((value: number) => {
     if (getDisplayValueProp) return getDisplayValueProp(value);
-    return formatCurrency(value, {noSuffix: true, context: 'transaction'});
-  }, [getDisplayValueProp, formatCurrency]);
+    return formatCurrency(value, {noSuffix: true, context: 'transaction', ...(drCrFilterTypingForAmountText ? { noAnimation: true } : {})});
+  }, [getDisplayValueProp, formatCurrency, drCrFilterTypingForAmountText]);
 
   const rowTextSearchHighlight = useMemo(
     () => String(transactionCardSearchHighlight || "").trim(),
@@ -1512,7 +1582,8 @@ export function TransactionsTable({
 
   // Header filter popover — modal: filter input pe click se popover band na ho (Recent/daybook + party).
   const renderHeaderWithFilter = (key: string, label: string, isNumeric: boolean = false, minWidthPx?: number) => {
-    const isFiltered = !!(filters && filters[key]) || (key === 'type' && voucherTypes && !voucherTypes.includes('all'));
+    const drCrChipValue = key === "debit" || key === "credit" ? String((filters && filters[drCrChipKey(key)]) || "") : "";
+    const isFiltered = !!(filters && filters[key]) || !!drCrChipValue || (key === 'type' && voucherTypes && !voucherTypes.includes('all'));
     const hasTdsLedgerCols = showCol("tdsTaxable") || showCol("tdsAmount");
     // Status body pills are centered — keep header label over the pill (not left-aligned).
     const statusHeaderCenter = key === "status";
@@ -1549,6 +1620,43 @@ export function TransactionsTable({
                     : "px-2";
     const filterValue = filters ? filters[key] || "" : "";
     const filterOpen = effectiveActiveFilter === key;
+    const isTaxPageForFilter = context === "tax" || (context === "group" && groupEntityType === "tax");
+    // Verified/Unverified chips: always visible in the Debit and Credit filter popups.
+    const showTdsPaidFilterButtons = key === "debit" || key === "credit";
+    const activeTdsPaidToken = drCrChipValue.trim().toLowerCase();
+    const renderTdsPaidFilterButtons = () => {
+      if (!setFilters || !showTdsPaidFilterButtons) return null;
+      return (
+        <div className="flex gap-1 border-t p-1" data-pl-txn-filter-popover="">
+          {([
+            ["verified", "Verified"],
+            ["unverified", "Unverified"],
+          ] as const).map(([tok, text]) => (
+            <Button
+              key={tok}
+              type="button"
+              size="sm"
+              variant={activeTdsPaidToken === tok ? "default" : "outline"}
+              className="h-7 flex-1 px-1 text-[11px] font-semibold"
+              onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
+              onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                // Chip is its own state (debitChip / creditChip); the text input is not touched.
+                setFilters((prev: Record<string, string>) => ({
+                  ...prev,
+                  [drCrChipKey(key as "debit" | "credit")]:
+                    String(prev[drCrChipKey(key as "debit" | "credit")] ?? "").trim().toLowerCase() === tok ? "" : tok,
+                }));
+              }}
+            >
+              {text}
+            </Button>
+          ))}
+        </div>
+      );
+    };
     const renderTextFilterInput = () => {
       if (!setFilters) return null;
       return (
@@ -1574,7 +1682,7 @@ export function TransactionsTable({
               if (e.key === "Enter") patchActiveFilter(null);
             }}
           />
-          {filterValue ? (
+          {filterValue || drCrChipValue ? (
             <Button
               type="button"
               variant="ghost"
@@ -1583,7 +1691,12 @@ export function TransactionsTable({
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                setFilters((prev: Record<string, string>) => ({ ...prev, [key]: "" }));
+                // Clear action: text and chip of this column.
+                setFilters((prev: Record<string, string>) => ({
+                  ...prev,
+                  [key]: "",
+                  ...(key === "debit" || key === "credit" ? { [drCrChipKey(key)]: "" } : {}),
+                }));
                 focusFilterInputSoon(key);
               }}
               aria-label={`Clear ${label} filter`}
@@ -1606,7 +1719,7 @@ export function TransactionsTable({
           align="center"
           sideOffset={6}
           collisionPadding={context === "daybook" ? { top: 56, bottom: 8, left: 8, right: 8 } : 8}
-          className="z-[120] w-48 p-0 overflow-hidden"
+          className={cn("z-[120] p-0 overflow-hidden", showTdsPaidFilterButtons ? "w-56" : "w-48")}
           onOpenAutoFocus={(e: Event) => {
             e.preventDefault();
             focusFilterInputSoon(key);
@@ -1620,7 +1733,10 @@ export function TransactionsTable({
           {key === "type" && onVoucherTypeChange ? (
             <VoucherTypeFilter selectedTypes={voucherTypes || ["all"]} onSelectionChange={onVoucherTypeChange} />
           ) : (
-            renderTextFilterInput()
+            <>
+              {renderTextFilterInput()}
+              {renderTdsPaidFilterButtons()}
+            </>
           )}
         </PopoverContent>
       </Popover>
@@ -3621,7 +3737,8 @@ export function TransactionsTable({
     const hlForColumn = (columnKey: string) => {
       const colQ = String((filters && filters[columnKey]) || "").trim();
       const q = [globalHlQ, colQ].filter(Boolean).join(" ");
-      return (s: string) => highlightQueryInText(s, q);
+      const amountCol = columnKey === "debit" || columnKey === "credit";
+      return (s: string) => highlightQueryInText(s, q, amountCol ? { amount: true } : undefined);
     };
     const hl = hlForColumn("");
     const mobileCardPaletteStyle = (tone: "green" | "pink" | "blue"): React.CSSProperties => {
@@ -3874,7 +3991,7 @@ export function TransactionsTable({
         isItemQty && item ? `${formatQuantity(val)} ${displayUnit || ""}` : formatCurrency(val, { noSuffix: true, context: "transaction", noAnimation: true });
       const renderMobileAmountOrQty = (val: number) => {
         if (isItemQty && item) return `${formatQuantity(val)} ${displayUnit || ""}`;
-        if (context === "daybook" || !isNumberAnimationEnabled || numberAnimationDuration <= 0) {
+        if (context === "daybook" || !isNumberAnimationEnabled || numberAnimationDuration <= 0 || drCrFilterTypingForAmountText) {
           return formatCurrency(val, { noSuffix: true, context: "transaction", noAnimation: true });
         }
         return (
@@ -3885,9 +4002,10 @@ export function TransactionsTable({
           />
         );
       };
-      const renderHighlightedMobileAmountOrQty = (val: number): React.ReactNode => {
+      const renderHighlightedMobileAmountOrQty = (val: number, columnKey?: "debit" | "credit"): React.ReactNode => {
         const rendered = renderMobileAmountOrQty(val);
-        return typeof rendered === "string" || typeof rendered === "number" ? hl(String(rendered)) : rendered;
+        const hlAmt = columnKey ? hlForColumn(columnKey) : hl;
+        return typeof rendered === "string" || typeof rendered === "number" ? hlAmt(String(rendered)) : rendered;
       };
       const oppositeLabel = getOppositeAccountLabel(t, names, context, contextId, groupEntityType);
       const oppositeClean = (() => {
@@ -4045,7 +4163,12 @@ export function TransactionsTable({
                           : mainAmountClass
                     )}
                   >
-                    {amount > 0 ? renderHighlightedMobileAmountOrQty(amount) : "-"}
+                    {debit > 0 && credit > 0 && !isItemQty ? (
+                      <span className="inline-flex flex-col items-end leading-tight">
+                        <span className="!text-green-600">{renderHighlightedMobileAmountOrQty(debit, "debit")}</span>
+                        <span className="!text-red-600">{renderHighlightedMobileAmountOrQty(credit, "credit")}</span>
+                      </span>
+                    ) : amount > 0 ? renderHighlightedMobileAmountOrQty(amount) : "-"}
                   </span>
                   {useMobileCardView ? (
                 <DropdownMenu>
@@ -4238,7 +4361,15 @@ export function TransactionsTable({
                       : "border-amber-500 bg-amber-100 text-amber-900 dark:border-amber-500 dark:bg-amber-950/40 dark:text-amber-200"
                   )}
                 >
-                  {hl(mobileTdsVerifyLabel)}
+                  {(() => {
+                    const badgeColKey = drCrOppositeKey(statementCheckedMessageColumn(debit, credit));
+                    const badgeColQ = tdsBadgeHighlightQuery(
+                      String((filters && filters[badgeColKey]) || ""),
+                      mobileTdsVerifyLabel,
+                      String((filters && filters[drCrChipKey(badgeColKey)]) || "")
+                    );
+                    return highlightQueryInText(mobileTdsVerifyLabel, [globalHlQ, badgeColQ].filter(Boolean).join(" "));
+                  })()}
                 </span>
               ) : null}
               <p className="text-xs text-muted-foreground">

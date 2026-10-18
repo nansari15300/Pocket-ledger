@@ -187,7 +187,7 @@ export function nextStaffLedgerSplitMode(mode: StaffLedgerSplitMode): StaffLedge
   return mode === "salary" ? "tax" : "salary";
 }
 
-/** Full staff ledger + ADD-SAL rows show taxable (gross) amount only. */
+/** Full staff ledger; ADD-SAL rows show the NET credit (gross - TDS). `taxableAmount` keeps the gross for TDS columns. */
 export function mapTransactionsForStaffSalaryDetailsView(
   transactions: any[],
   staffId: string,
@@ -201,7 +201,8 @@ export function mapTransactionsForStaffSalaryDetailsView(
     return {
       ...t,
       debit: 0,
-      credit: taxable,
+      // Staff carries NET (gross - TDS); TDS stays on the TDS account. taxableAmount below stays gross for the TDS columns.
+      credit: Math.max(0, Math.round((taxable - (Number(row.taxAmount) || 0) + Number.EPSILON) * 100) / 100),
       taxAmount: row.taxAmount,
       taxableAmount: taxable,
       taxRate: row.taxRate,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Control } from "react-hook-form";
 import { FormControl, FormField, FormItem, FormLabel } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -9,15 +9,17 @@ import { Combobox } from "@/components/ui/combobox";
 import { cn } from "@/lib/utils";
 import {
   mapSalePurchaseLineTaxComboboxOptions,
+  withSelectedHiddenTax,
   SALE_PURCHASE_LINE_DESKTOP_COMBOBOX_PROPS,
   SALE_PURCHASE_LINE_NUMBER_INPUT_CLASS,
+  SALE_PURCHASE_LINE_NUMBER_MIN_CH,
   SALE_PURCHASE_LINE_MONEY_INPUT_FIELD_PROPS,
   SALE_PURCHASE_LINE_TAX_COMBOBOX_PROPS,
   formatSalePurchaseLineMoneyDisplay,
   salePurchaseLineMoneyInputStyle,
 } from "@/lib/salePurchaseLineColumnLabels";
 import { salePurchasePairBodyCell } from "@/components/vouchers/salePurchaseLineDesktopPairs";
-import { writeStoredTdsDefault } from "@/lib/tdsVoucher";
+import { clearStoredTdsDefault, readStoredTdsDefault, writeStoredTdsDefault } from "@/lib/tdsVoucher";
 import { toast as sonnerToast } from "sonner";
 
 type TaxRow = { id: string; name?: string; rate?: number };
@@ -40,6 +42,8 @@ type Props = {
   /** Tax master dialog — same as line Tax combobox. */
   onRequestCreateTdsAccount?: (prefillName?: string) => void;
   addNewLabel?: string;
+  /** Default/Clear button only when creating a new voucher (hidden while editing). */
+  showDefaultControl?: boolean;
 };
 
 export function SalePurchaseTdsLineUi({
@@ -58,6 +62,7 @@ export function SalePurchaseTdsLineUi({
   tdsPlaceholder = "TDS",
   onRequestCreateTdsAccount,
   addNewLabel = "+ Add New TDS",
+  showDefaultControl = true,
 }: Props) {
   const onTdsComboboxChange = useCallback(
     (fieldOnChange: (v: string) => void, val: string, newName?: string) => {
@@ -74,12 +79,19 @@ export function SalePurchaseTdsLineUi({
     [processedTaxes]
   );
 
+  const [storedDefaultId, setStoredDefaultId] = useState(() => readStoredTdsDefault(side, companyId));
+  const clearDefault = useCallback(() => {
+    clearStoredTdsDefault(side, companyId);
+    setStoredDefaultId("");
+    sonnerToast.success("Default TDS account cleared.");
+  }, [companyId, side]);
   const setDefault = useCallback(
     (accountId: string) => {
       const id = String(accountId || "").trim();
       if (!id) return;
       try {
         writeStoredTdsDefault(side, companyId, id);
+        setStoredDefaultId(id);
         sonnerToast.success("Default TDS account saved.");
       } catch {
         sonnerToast.error("Default save failed.");
@@ -117,7 +129,7 @@ export function SalePurchaseTdsLineUi({
                 onBlur={field.onBlur}
                 ref={field.ref}
                 value={moneyText}
-                style={salePurchaseLineMoneyInputStyle(field.value)}
+                style={salePurchaseLineMoneyInputStyle(field.value, SALE_PURCHASE_LINE_NUMBER_MIN_CH)}
                 className={cn(SALE_PURCHASE_LINE_NUMBER_INPUT_CLASS, "bg-muted")}
               />
             </FormControl>
@@ -136,7 +148,7 @@ export function SalePurchaseTdsLineUi({
           <div className="flex w-max items-center gap-1">
             <div className="w-max">
               <Combobox
-                options={taxAccountOptions}
+                options={withSelectedHiddenTax(taxAccountOptions, processedTaxes, field.value)}
                 value={field.value}
                 disabled={disabled}
                 onChange={(val, newName) => onTdsComboboxChange(field.onChange, val, newName)}
@@ -146,18 +158,14 @@ export function SalePurchaseTdsLineUi({
                 {...SALE_PURCHASE_LINE_DESKTOP_COMBOBOX_PROPS}
               />
             </div>
-            {field.value ? (
-              <Button
+            {showDefaultControl && (storedDefaultId || field.value) ? (<Button
                 type="button"
                 variant="outline"
                 size="sm"
                 className="h-7 shrink-0 px-1 text-[9px]"
                 disabled={disabled}
-                onClick={() => setDefault(field.value)}
-              >
-                Default
-              </Button>
-            ) : null}
+                onClick={() => (storedDefaultId ? clearDefault() : setDefault(field.value))}
+              >{storedDefaultId ? "Clear" : "Default"}</Button>) : null}
           </div>
         </FormItem>
       )}
@@ -178,7 +186,7 @@ export function SalePurchaseTdsLineUi({
               onBlur={field.onBlur}
               ref={field.ref}
               value={moneyText}
-              style={salePurchaseLineMoneyInputStyle(field.value)}
+              style={salePurchaseLineMoneyInputStyle(field.value, SALE_PURCHASE_LINE_NUMBER_MIN_CH)}
               className={cn(SALE_PURCHASE_LINE_NUMBER_INPUT_CLASS, "bg-muted")}
             />
           </FormControl>
@@ -197,7 +205,7 @@ export function SalePurchaseTdsLineUi({
   }
 
   if (variant === "desktop-tds") {
-    return <div className="px-2 py-1 box-border min-w-0">{tdsComboboxCell}</div>;
+    return <div className="px-2 py-[2px] box-border min-w-0">{tdsComboboxCell}</div>;
   }
 
   // mobile
@@ -220,23 +228,19 @@ export function SalePurchaseTdsLineUi({
             <FormItem>
               <div className="flex items-center justify-between gap-1">
                 <FormLabel className="text-xs">{tdsLabel}</FormLabel>
-                {field.value ? (
-                  <Button
+                {showDefaultControl && (storedDefaultId || field.value) ? (<Button
                     type="button"
                     variant="outline"
                     size="sm"
                     className="h-5 px-1.5 text-[9px]"
                     disabled={disabled}
-                    onClick={() => setDefault(field.value)}
-                  >
-                    Default
-                  </Button>
-                ) : null}
+                    onClick={() => (storedDefaultId ? clearDefault() : setDefault(field.value))}
+                  >{storedDefaultId ? "Clear" : "Default"}</Button>) : null}
               </div>
               <FormControl>
                 <div className="[&_button]:h-9 [&_button]:text-xs">
                   <Combobox
-                    options={taxAccountOptions}
+                    options={withSelectedHiddenTax(taxAccountOptions, processedTaxes, field.value)}
                     value={field.value}
                     disabled={disabled}
                     onChange={(val, newName) => onTdsComboboxChange(field.onChange, val, newName)}
