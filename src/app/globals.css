@@ -8723,7 +8723,8 @@ body.dark [data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn-header],
 [data-pl-ledger-txn-unified-scroll] [data-pl-ledger-txn-fixed-summary] table {
   box-sizing: border-box;
   width: 100%;
-  min-width: max(100%, calc(var(--pl-ledger-txn-table-min-px, 0) * 1px));
+  /* reserve V-scrollbar gutter: body clientWidth = host - pad, so tables must not exceed it (else 3-dot hides under scrollbar) */
+  min-width: max(100%, calc(var(--pl-ledger-txn-table-min-px, 0) * 1px - var(--pl-ledger-txn-body-vscroll-pad, 0px)));
   max-width: none;
   table-layout: fixed;
 }
@@ -13094,4 +13095,95 @@ body.dark [data-pl-dialog-shell] button[data-pl-copy-del-cb][data-pl-copy-del-cb
 [data-pl-dialog-shell] button[data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][data-pl-copy-del-cb][role="checkbox"] svg {
   width: 80% !important;
   height: 80% !important;
+}
+
+/* PC master list (Parties / groups / accounts): same blue pill chrome as the mobile dock - blue panel bg,
+   transparent rows, light-blue 1px row lines. Filter pill row position unchanged (PC keeps it where it is).
+   Dock (mobile) is excluded via :not(:has([data-pl-mobile-list-dock])). */
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) {
+  background-color: rgb(219 234 254 / 0.8) !important;
+  background-image: none !important;
+}
+html body[class*="theme-"].dark main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) {
+  background-color: rgb(23 37 84 / 0.35) !important;
+}
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-tabs-row,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-search-row,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-action-row,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-section-label-row,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-footer-stack,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-footer-summary-row,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-quick-filter-row {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-page-header,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-tabs-row,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-search-row,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-action-row,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-section-label-row {
+  border-bottom-width: var(--pl-mlc-separator-w, 1px) !important;
+  border-bottom-style: solid !important;
+  border-bottom-color: var(--pl-mlc-chrome-chevron-line, rgb(147 197 253)) !important;
+}
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-footer-stack {
+  border-top-color: var(--pl-mlc-chrome-chevron-line, rgb(147 197 253)) !important;
+}
+
+/* PC master list = mobile dock layout: search row order Add (left) | pending badge (middle) | search (right),
+   badge reserves 5 digits, row paddings copied from the mobile dock (panel 2px + row 8px, section rows 2px+2px). */
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-search-row > .pl-mlc-search-wrap {
+  flex: 1 1 0% !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: min(50vw, 2in) !important;
+  margin-left: auto !important;
+  order: 3 !important;
+}
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-search-row > .pl-mlc-pending-badge {
+  order: 2 !important;
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: calc(5ch + 10px) !important;
+  max-width: none !important;
+  margin-left: auto !important;
+}
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-search-row:has(> .pl-mlc-pending-badge) > .pl-mlc-search-wrap {
+  margin-left: 0 !important;
+}
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-search-row > :not(.pl-mlc-search-wrap):not(.pl-mlc-pending-badge) {
+  order: 1 !important;
+  flex: 0 0 auto !important;
+}
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-tabs-row,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-search-row,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-action-row,
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-quick-filter-row {
+  padding-left: 10px !important;
+  padding-right: 10px !important;
+}
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-section-label-row {
+  padding-left: 4px !important;
+  padding-right: 4px !important;
+  padding-top: var(--pl-mlc-row-pad-y, 2px) !important;
+  padding-bottom: var(--pl-mlc-row-pad-y, 2px) !important;
+  min-height: 0 !important;
+  height: auto !important;
+  line-height: 1 !important;
+}
+html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-section-label-row[data-pl-party-overdue-row] {
+  padding-top: 3px !important;
+  padding-bottom: 3px !important;
+}
+/* Filter pill row scrollbar: hidden on mobile (global rule above, swipe still works), visible on PC. */
+@media (min-width: 768px) {
+  html:not([data-pl-app-mobile-ui="1"]):not([data-pl-embedded-shell]) [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-quick-filter-row .pl-ledger-footer-scroll {
+    scrollbar-width: thin !important;
+    -ms-overflow-style: auto !important;
+  }
+  html:not([data-pl-app-mobile-ui="1"]):not([data-pl-embedded-shell]) [data-master-detail-layout] [data-pl-master-list-chrome]:not(:has([data-pl-mobile-list-dock])) .pl-mlc-quick-filter-row .pl-ledger-footer-scroll::-webkit-scrollbar {
+    display: block !important;
+    height: 8px !important;
+    width: 8px !important;
+  }
 }

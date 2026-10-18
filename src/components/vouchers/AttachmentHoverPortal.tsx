@@ -989,7 +989,8 @@ export function AttachmentHoverPortal({
 
   /** PC: mouse left = pan (scroll area); capture hata diya — img se bubble yahi aata hai */
   const handleScrollPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.pointerType === "mouse" && e.button !== 0) return;
+    // Touch/pen: native scrolling (touch-action pan-x pan-y). Custom pan only for mouse - it fought native scroll and stopped after a short drag.
+    if (e.pointerType !== "mouse" || e.button !== 0) return;
     const target = e.target as HTMLElement | null;
     if (target?.closest("button, a, input, textarea, select, [data-gallery-nav]")) return;
     const el = scrollRef.current;
@@ -1220,7 +1221,11 @@ export function AttachmentHoverPortal({
                 measuredContentFrame ? "overflow-hidden" : "overflow-auto",
                 scrollable ? "cursor-grab active:cursor-grabbing" : "cursor-default"
               )}
-              style={{ touchAction: scrollable ? "none" : "pan-x pan-y" }}
+              style={{
+                touchAction: "pan-x pan-y",
+                overscrollBehavior: "contain",
+                WebkitOverflowScrolling: "touch",
+              }}
               onPointerDown={handleScrollPointerDown}
               onPointerMove={handleScrollPointerMove}
               onPointerUp={endPan}
@@ -1232,10 +1237,10 @@ export function AttachmentHoverPortal({
               }}
             >
               <AttachmentPreviewGalleryContext.Provider value={galleryActive ? galleryState : null}>
-                <div className="flex min-w-0 w-full items-start justify-center py-1">
+                <div className="flex w-full min-w-max items-start py-1">
                   <div
                     key={galleryActive ? `${galleryState.index}:${activeGalleryUrl}` : "single"}
-                    className="inline-block w-max max-w-none shrink-0"
+                    className="mx-auto inline-block w-max max-w-none shrink-0"
                   >
                     {preview}
                   </div>

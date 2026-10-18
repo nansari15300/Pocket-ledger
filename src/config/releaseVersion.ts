@@ -3,5 +3,5 @@
  * Keep these aligned with electron/package.json and android/app/build.gradle
  * whenever publishing a desktop or Android release.
  */
-export const DESKTOP_APP_VERSION = "1.1.61";
-export const ANDROID_APP_VERSION = "1.1.61";
+export const DESKTOP_APP_VERSION = "1.1.62";
+export const ANDROID_APP_VERSION = "1.1.62";

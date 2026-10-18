@@ -775,7 +775,8 @@ function resolveSalePurchaseTdsVerifyLabelLegacy(
 
   if (isAddSalaryVoucher(t)) {
     const ctx = opts?.context;
-    const ctxId = String(opts?.contextId ?? "").trim();
+    // Group pages pass the GROUP id as contextId (not a tax/staff account id) -> match by narration, like "all tax legs".
+    const ctxId = ctx === "group" ? "" : String(opts?.contextId ?? "").trim();
     const isTaxCtx = ctx === "tax" || (ctx === "group" && opts?.groupEntityType === "tax");
     const isStaffCtx = ctx === "staff" || (ctx === "group" && opts?.groupEntityType === "staff");
     if (isTaxCtx) {
@@ -783,6 +784,13 @@ function resolveSalePurchaseTdsVerifyLabelLegacy(
       if (legs.length === 0) return null;
       const allVerified = legs.every((e) => e.isTdsVerified === true);
       return allVerified ? SALE_PURCHASE_TDS_VERIFIED_MESSAGE : SALE_PURCHASE_TDS_UNVERIFIED_MESSAGE;
+    }
+    if (isStaffCtx && !ctxId && ctx === "group") {
+      const legs = addSalaryTaxEntriesForAccount(t, undefined);
+      if (legs.length === 0) return null;
+      return legs.every((e) => e.isTdsVerified === true)
+        ? SALE_PURCHASE_TDS_VERIFIED_MESSAGE
+        : SALE_PURCHASE_TDS_UNVERIFIED_MESSAGE;
     }
     if (isStaffCtx && ctxId) {
       const taxLeg = addSalaryTaxEntryForStaff(t, ctxId);

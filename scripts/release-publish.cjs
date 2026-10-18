@@ -253,7 +253,9 @@ async function main() {
     run("npm", ["run", "build:exe:fast"]);
   }
   run("npm", ["run", "cap:copy:android"]);
-  run("gradlew.bat", ["assembleRelease", "bundleRelease"], { cwd: path.join(root, "android") });
+  // RELEASE_SKIP_AAB=1: fast mode - APK only (AAB is local Play Console artifact, never uploaded).
+  const gradleTasks = process.env.RELEASE_SKIP_AAB === "1" ? ["assembleRelease"] : ["assembleRelease", "bundleRelease"];
+  run("gradlew.bat", gradleTasks, { cwd: path.join(root, "android") });
   run("npm", ["run", "website:stage-releases"]);
 
   if (!skipUpload) {

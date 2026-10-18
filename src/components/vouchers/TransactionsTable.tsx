@@ -3190,8 +3190,10 @@ export function TransactionsTable({
 
         const bodyEl = tableContainerRef.current;
         const isDaybookUnifiedHost = host.hasAttribute("data-pl-daybook-unified-scroll");
+        let ledgerVScrollGutterPx = 0;
         if (bodyEl) {
           const { headerPadPx, bodyPadPx } = measureLedgerTxnVerticalScrollPads(bodyEl);
+          if (!isDaybookUnifiedHost) ledgerVScrollGutterPx = headerPadPx;
           const headerPadVar = `${headerPadPx}px`;
           const bodyPadVar = `${bodyPadPx}px`;
           if (isDaybookUnifiedHost) {
@@ -3240,7 +3242,12 @@ export function TransactionsTable({
         });
 
         let tableMinPx = stabilizeLedgerUnifiedPx(rawTableMinPx, lastUnifiedTableMinRef.current);
-        let scaleTargetPx = stabilizeLedgerUnifiedPx(rawScaleTargetPx, lastUnifiedScaleTargetRef.current);
+        // Body V-scrollbar eats ledgerVScrollGutterPx of the body width: column sum (fixed layout) must fit
+        // clientWidth, else the last (3-dot) column is clipped under the scrollbar.
+        let scaleTargetPx = stabilizeLedgerUnifiedPx(
+          Math.max(0, rawScaleTargetPx - ledgerVScrollGutterPx),
+          lastUnifiedScaleTargetRef.current
+        );
         if (isDaybookUnifiedHost && baseColSum > 0) {
           tableMinPx = Math.max(tableMinPx, baseColSum);
           if (baseColSum > hostW) {
