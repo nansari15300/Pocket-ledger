@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/com
 import { useCompany } from "@/hooks/useCompany";
 import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Info, X, Calendar as CalendarIcon, Expand, Filter, RotateCw, ChevronLeft, ChevronRight, ChevronDown, Search } from "lucide-react";
+import { Info, X, Calendar as CalendarIcon, Expand, Filter, RotateCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DaybookTxnScrollColumn } from "@/components/reports/DaybookTxnScrollColumn";
 import { DAYBOOK_SHIFT_DATE_EVENT } from "@/components/dashboard/DashboardWelcomeFooterBanner";
@@ -556,6 +556,28 @@ export function DaybookReport({
     }, [daybookAccountSearchTerm, daybookSummary]);
     
     const isFullScreen = !!onFullScreenToggle;
+    // Dashboard Daybook: hide title + Daily Summary so the table gets the height on small screens (remembered).
+    const DAYBOOK_TOP_COLLAPSED_KEY = "pl_daybook_top_collapsed_v1";
+    const [daybookTopCollapsed, setDaybookTopCollapsed] = useState(false);
+    useEffect(() => {
+      try {
+        setDaybookTopCollapsed(window.localStorage.getItem(DAYBOOK_TOP_COLLAPSED_KEY) === "1");
+      } catch {
+        /* ignore */
+      }
+    }, []);
+    const toggleDaybookTopCollapsed = useCallback(() => {
+      setDaybookTopCollapsed((prev) => {
+        const next = !prev;
+        try {
+          window.localStorage.setItem(DAYBOOK_TOP_COLLAPSED_KEY, next ? "1" : "0");
+        } catch {
+          /* ignore */
+        }
+        return next;
+      });
+    }, []);
+    const hideDaybookTop = dashboardEmbedded && daybookTopCollapsed;
 
     return (
       <div id="daybook-area" className={cn("printable-area flex flex-col min-h-0 h-full", isMobile && "w-full min-w-0 max-w-full")}>
@@ -570,7 +592,7 @@ export function DaybookReport({
         >
             <CardHeader className={cn("print:hidden flex-shrink-0", isMobile && "w-full min-w-0 max-w-full px-0.5")}>
                 <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div>
+                    <div className={cn(hideDaybookTop && "hidden")}>
                         <CardTitle>Daybook</CardTitle>
                         <CardDescription>All transactions for the selected date.</CardDescription>
                     </div>
@@ -592,7 +614,7 @@ export function DaybookReport({
                         )}
                     </div>
                 </div>
-                 {displayDaybookSummary && (
+                 {displayDaybookSummary && !hideDaybookTop && (
                     <Card data-pl-daybook-blue-border="" data-pl-daybook-summary-card="" className={cn("mt-4 bg-blue-50 border-blue-300 text-blue-800", isMobile && "min-w-0 max-w-full rounded-lg mx-[2px]")}>
                         <CardHeader className={cn("pb-2 pt-4 space-y-3", isMobile ? "px-2" : "px-4")}>
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -877,6 +899,22 @@ export function DaybookReport({
                             >
                               Today
                             </Button>
+                            {dashboardEmbedded && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                data-pl-daybook-top-toggle=""
+                                aria-label={daybookTopCollapsed ? "Show Daybook summary" : "Hide Daybook summary"}
+                                title={daybookTopCollapsed ? "Show summary" : "Hide summary"}
+                                aria-expanded={!daybookTopCollapsed}
+                                onClick={toggleDaybookTopCollapsed}
+                                // Same Button variant/size/height classes as the Today button next to it.
+                                className="h-9 min-h-9 max-h-9 shrink-0 px-2.5"
+                              >
+                                {daybookTopCollapsed ? <ChevronDown className="h-[18px] w-[18px]" /> : <ChevronUp className="h-[18px] w-[18px]" />}
+                              </Button>
+                            )}
                              {isDaybookFilterActive && (
                                 <Button variant="ghost" size="icon" className="h-9 w-9 min-h-9 max-h-9 shrink-0" onClick={clearDaybookFilters} aria-label="Clear Filters"><X className="h-4 w-4" /></Button>
                             )}
