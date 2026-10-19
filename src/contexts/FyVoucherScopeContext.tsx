@@ -20,7 +20,7 @@ import { isDateInRange, voucherMs } from "@/lib/fyPagination/scopeFilter";
 
 export type OpeningBalancesLoadStatus = "idle" | "loading" | "ready" | "unavailable";
 
-type FyVoucherScopeContextValue = {
+export type FyVoucherScopeContextValue = {
   enabled: boolean;
   activeScope: FyActiveScope | null;
   loadedRanges: FyDateRangeMs[];
@@ -234,6 +234,20 @@ export function FyVoucherScopeProvider({
     ]
   );
 
+  return <FyVoucherScopeContext.Provider value={value}>{children}</FyVoucherScopeContext.Provider>;
+}
+
+/**
+ * Popup-local scope (e.g. Daybook account day popup): children read this value instead of the shared
+ * scope, so their loads/filters never change what the dashboard sees.
+ */
+export function FyVoucherScopeOverrideProvider({
+  value,
+  children,
+}: {
+  value: FyVoucherScopeContextValue;
+  children: ReactNode;
+}) {
   return <FyVoucherScopeContext.Provider value={value}>{children}</FyVoucherScopeContext.Provider>;
 }
 

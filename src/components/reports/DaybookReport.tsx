@@ -18,6 +18,8 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { startOfDay, endOfDay, isSameDay, addDays, subDays } from "date-fns";
 import { DASHBOARD_EMBEDDED_DAYBOOK_VOUCHER_LOOKBACK_DAYS } from "@/lib/dashboardTabPanels";
+import { listVouchersFromBrowserDbByDateRange } from "@/lib/fyPagination/voucherQueries";
+import { buildDaybookDailySummary } from "@/lib/accountLedgerDaySummary";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdCalendar from "@/components/ui/ad-calendar";
 import { collectVoucherCalendarDates } from "@/lib/voucherDateNormalize";
@@ -268,20 +270,27 @@ export function DaybookReport({
         setDaybookFilters(prev => ({...prev, [key]: value}));
     }
 
-    const daybookMonthCutoff = useMemo(
-      () =>
-        dashboardEmbedded
-          ? startOfDay(subDays(new Date(), DASHBOARD_EMBEDDED_DAYBOOK_VOUCHER_LOOKBACK_DAYS))
-          : null,
-      [dashboardEmbedded]
-    );
+    const daybookMonthCutoff = useMemo(() => {
+      if (!dashboardEmbedded) return null;
+      const cutoff = startOfDay(subDays(new Date(), DASHBOARD_EMBEDDED_DAYBOOK_VOUCHER_LOOKBACK_DAYS));
+      // Window must be fully in memory: never start before the in-memory FY scope (first whole day of it).
+      if (fyScopeEnabled && fyActiveScope && fyActiveScope.policy !== "full") {
+        const scopeFrom = fyActiveScope.range.fromMs;
+        const scopeDay = startOfDay(new Date(scopeFrom));
+        const firstWholeDay = scopeDay.getTime() === scopeFrom ? scopeDay : addDays(scopeDay, 1);
+        if (firstWholeDay.getTime() > cutoff.getTime()) return firstWholeDay;
+      }
+      return cutoff;
+    }, [dashboardEmbedded, fyScopeEnabled, fyActiveScope?.policy, fyActiveScope?.range?.fromMs]);
 
     /** Dashboard keep-alive: hidden tab par voucher filter / calendar mat chalao. */
     const daybookPipelineActive = !dashboardEmbedded || isPanelVisible;
 
     const vouchersForDaybookPipelineRef = useRef<typeof vouchers>(vouchers);
+    /** Account day popup open: freeze the dashboard Daybook input so nothing behind the popup recomputes. */
+    const daybookFrozenForPeek = !!daybookAccountPeek;
     const vouchersForDaybookPipeline = useMemo(() => {
-      if (dashboardEmbedded && !isPanelVisible) {
+      if ((dashboardEmbedded && !isPanelVisible) || daybookFrozenForPeek) {
         return vouchersForDaybookPipelineRef.current;
       }
       const next =
@@ -295,7 +304,7 @@ export function DaybookReport({
             });
       vouchersForDaybookPipelineRef.current = next;
       return next;
-    }, [vouchers, dashboardEmbedded, daybookMonthCutoff, isPanelVisible, daybookDate]);
+    }, [vouchers, dashboardEmbedded, daybookMonthCutoff, isPanelVisible, daybookDate, daybookFrozenForPeek]);
 
     // Selected day outside the in-memory FY/month scope: load just that day from local SQLite; evict it when the day changes.
     useEffect(() => {
@@ -361,7 +370,7 @@ export function DaybookReport({
         [daybookDate]
     );
 
-    const { daybookTransactions: hookDaybookTransactions, daybookSummary: clientDaybookSummary } = useTransactions(
+    const { daybookTransactions: hookDaybookTransactions, daybookSummary: clientDaybookSummaryRaw } = useTransactions(
         daybookEntity,
         'daybook', 
         daybookDateRange, 
@@ -407,6 +416,76 @@ export function DaybookReport({
     useEffect(() => {
         setDaybookCurrentPage(1);
     }, [daybookDate, daybookFilters, daybookVoucherTypes, daybookUserFilter]);
+
+    // Daily Summary opening fix: the in-memory window only holds vouchers from `daybookMonthCutoff` on, so add each
+    // bank/cash account's balance BEFORE the window (computed once per boundary from local SQLite, bank/cash only).
+    const summaryBaseBeforeMs = useMemo(() => {
+      if (!dashboardEmbedded || !daybookMonthCutoff) return null;
+      const cutoffMs = daybookMonthCutoff.getTime();
+      const dayMs = daybookDate ? startOfDay(daybookDate).getTime() : null;
+      return dayMs != null && dayMs < cutoffMs ? dayMs : cutoffMs;
+    }, [dashboardEmbedded, daybookMonthCutoff, daybookDate]);
+    const summaryBaseKey = companyId && summaryBaseBeforeMs != null ? `${companyId}:${summaryBaseBeforeMs}` : "";
+    const summaryBaseCacheRef = useRef(new Map<string, Record<string, number>>());
+    const [summaryBaseVersion, setSummaryBaseVersion] = useState(0);
+    useEffect(() => {
+      summaryBaseCacheRef.current = new Map();
+    }, [companyId]);
+    useEffect(() => {
+      if (!summaryBaseKey || summaryBaseBeforeMs == null || !companyId) return;
+      if (!isPanelVisible || daybookFrozenForPeek) return;
+      if (summaryBaseCacheRef.current.has(summaryBaseKey)) return;
+      let cancelled = false;
+      const key = summaryBaseKey;
+      const beforeMs = summaryBaseBeforeMs;
+      void listVouchersFromBrowserDbByDateRange(companyId, { fromMs: 0, toMs: beforeMs - 1 })
+        .then((rows) => {
+          if (cancelled) return;
+          const pre = buildDaybookDailySummary({
+            accounts: (accounts || []) as any[],
+            vouchers: rows,
+            selectedDay: new Date(beforeMs),
+          });
+          const balances: Record<string, number> = {};
+          for (const r of [...pre.bankAccounts, ...pre.cashAccounts]) balances[r.id] = r.yesterday;
+          summaryBaseCacheRef.current.set(key, balances);
+          setSummaryBaseVersion((n) => n + 1);
+        })
+        .catch((err) => console.warn("[DaybookReport] summary base", err));
+      return () => {
+        cancelled = true;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [summaryBaseKey, isPanelVisible, daybookFrozenForPeek]);
+    const clientDaybookSummary = useMemo(() => {
+      const raw = clientDaybookSummaryRaw as DaybookDailySummary | null;
+      void summaryBaseVersion;
+      // Per-user summary is per-user money flow; base is all users -> leave it as is.
+      if (!raw || !summaryBaseKey || daybookUserFilter) return raw;
+      const base = summaryBaseCacheRef.current.get(summaryBaseKey);
+      if (!base) return raw;
+      const toNum = (v: unknown) => {
+        const n = Number(typeof v === "string" ? v.replace(/,/g, "").trim() : v);
+        return Number.isFinite(n) ? n : 0;
+      };
+      const obById = new Map((accounts || []).map((a: any) => [String(a.id), toNum(a.openingBalance)]));
+      const fix = (rows: DaybookDailySummary["bankAccounts"]) =>
+        rows.map((r) => {
+          const b = base[r.id];
+          if (typeof b !== "number" || !Number.isFinite(b)) return r;
+          // raw opening = book OB + window vouchers before the day; true = balance before window + same window vouchers.
+          const delta = b - (obById.get(r.id) ?? 0);
+          return Math.abs(delta) < 1e-9 ? r : { ...r, yesterday: r.yesterday + delta, today: r.today + delta };
+        });
+      const bankAccounts = fix(raw.bankAccounts || []);
+      const cashAccounts = fix(raw.cashAccounts || []);
+      const sum = (rows: DaybookDailySummary["bankAccounts"], k: "yesterday" | "today") =>
+        rows.reduce((acc, r) => acc + (Number(r[k]) || 0), 0);
+      const bank = { ...raw.bank, yesterday: sum(bankAccounts, "yesterday"), today: sum(bankAccounts, "today") };
+      const cash = { ...raw.cash, yesterday: sum(cashAccounts, "yesterday"), today: sum(cashAccounts, "today") };
+      const total = { ...raw.total, yesterday: bank.yesterday + cash.yesterday, today: bank.today + cash.today };
+      return { ...raw, bank, cash, total, bankAccounts, cashAccounts };
+    }, [clientDaybookSummaryRaw, summaryBaseKey, summaryBaseVersion, daybookUserFilter, accounts]);
 
     const daybookSummaryRef = useRef<DaybookDailySummary | null>(null);
     useEffect(() => {
@@ -947,6 +1026,33 @@ export function DaybookReport({
                     </div>
                 </div>
               )}
+              {/* Floating day stepper (same as the account day popup) - PC dashboard Daybook; mobile keeps its swipe strip arrows. */}
+              {dashboardEmbedded && !isMobile ? (
+                <div
+                  data-pl-day-stepper-float=""
+                  className="pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 print:hidden"
+                >
+                  <button
+                    type="button"
+                    aria-label="Previous day"
+                    title="Previous day"
+                    onClick={() => shiftDaybookDateBy(-1)}
+                    className={cn(chromeProPillCn, "pointer-events-auto h-8 w-10 rounded-full px-0 inline-flex items-center justify-center shadow-lg disabled:opacity-40 disabled:pointer-events-none")}
+                  >
+                    <ChevronLeft className="h-[18px] w-[18px]" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Next day"
+                    title="Next day"
+                    disabled={!daybookDate || startOfDay(daybookDate).getTime() >= startOfDay(new Date()).getTime()}
+                    onClick={() => shiftDaybookDateBy(1)}
+                    className={cn(chromeProPillCn, "pointer-events-auto h-8 w-10 rounded-full px-0 inline-flex items-center justify-center shadow-lg disabled:opacity-40 disabled:pointer-events-none")}
+                  >
+                    <ChevronRight className="h-[18px] w-[18px]" />
+                  </button>
+                </div>
+              ) : null}
               {dashboardEmbedded ? (
                 isMobile ? (
                   <MobileTransactionsPager

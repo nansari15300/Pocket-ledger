@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { LEDGER_HEADER_PILL_CN } from "@/lib/ledgerHeaderChrome";
 import { cn } from "@/lib/utils";
 
-type Option<T extends string> = { value: T; label: string };
+type Option<T extends string> = { value: T; label: string; disabled?: boolean };
 
 type Props<T extends string> = {
   value: T;
@@ -47,6 +47,7 @@ export function LedgerViewModePills<T extends string>({
             // Pro theme !important blue override se bachne ke liye
             isActive && "!border-green-600 hover:!border-green-600"
           )}
+          disabled={opt.disabled}
           onClick={() => onChange(opt.value)}
         >
           {opt.label}

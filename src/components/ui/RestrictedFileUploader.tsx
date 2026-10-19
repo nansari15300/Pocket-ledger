@@ -29,6 +29,22 @@ export const RestrictedFileUploader: React.FC<RestrictedFileUploaderProps> = ({
     Boolean(attachmentOffer) &&
     isFeatureLockScreenTicked(settings, "attachments");
 
+  const attachmentsBlocked = !allowAttachments || fileAttachmentLimits.maxFileCount === 0;
+  /**
+   * Role / plan / company-users resolve asynchronously (role falls back to "viewer" until then), so a
+   * blocked result in the first moments is often transient. Show the skeleton and only commit to the
+   * "Attachments Disabled" card once the blocked state has held steadily.
+   */
+  const [blockedSettled, setBlockedSettled] = React.useState(false);
+  React.useEffect(() => {
+    if (!attachmentsBlocked || loading || attachmentsUnlocked) {
+      setBlockedSettled(false);
+      return;
+    }
+    const t = setTimeout(() => setBlockedSettled(true), 1200);
+    return () => clearTimeout(t);
+  }, [attachmentsBlocked, loading, attachmentsUnlocked]);
+
   if (loading) return <div className="h-20 w-full bg-muted animate-pulse rounded-md" />;
 
   if (attachmentsUnlocked) {
@@ -36,7 +52,8 @@ export const RestrictedFileUploader: React.FC<RestrictedFileUploaderProps> = ({
   }
 
   // Check permission-based attachment settings (plan first, then role)
-  if (!allowAttachments || fileAttachmentLimits.maxFileCount === 0) {
+  if (attachmentsBlocked) {
+    if (!blockedSettled) return <div className="h-20 w-full bg-muted animate-pulse rounded-md" />;
     const blockedByPlan = !canAddFileImagePdf;
     return (
       <div className={cn(

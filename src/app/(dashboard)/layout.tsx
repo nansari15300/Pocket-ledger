@@ -20,6 +20,7 @@ import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
 import { useToast } from "@/hooks/use-toast";
 import { MobileFloatingButton, ReportsMobileReportListFab } from "@/components/layout/MobileFloatingButton";
 import { CompanyDemotedBanner } from "@/components/company/CompanyDemotedBanner";
+import { PermissionReverifyBanner } from "@/components/permission/PermissionReverifyBanner";
 import { PlanAuthoritativeSyncBanner } from "@/components/company/PlanAuthoritativeSyncBanner";
 import { PlServerAuthoritativePendingBanner } from "@/components/PlServerAuthoritativePendingBanner";
 import { PlServerReadSyncHealthBanner } from "@/components/PlServerReadSyncHealthBanner";
@@ -973,7 +974,8 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       <AppHeader />
                       <RestoreCloudPushGlobalBanner />
                       <BackupRunGlobalBanner />
-                      <CompanyDemotedBanner />
+                      <PermissionReverifyBanner />
+<CompanyDemotedBanner />
                       <PlanAuthoritativeSyncBanner />
                       <AdLockedScreenBanner />
                       <ApkCloudOfflineViewBanner />

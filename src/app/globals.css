@@ -1370,6 +1370,12 @@ body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
+/* Daybook account day popup only: header / fixed-summary blocks must not share the free height (they were flex:1 and stretched). */
+.daybook-account-peek-popup .pl-ledger-detail-table-shell > [data-pl-ledger-txn-header],
+.daybook-account-peek-popup .pl-ledger-detail-table-shell > [data-pl-ledger-txn-fixed-summary] {
+  flex: 0 0 auto !important;
+  overflow-y: visible;
+}
 .balance-sheet-ledger-popup .pl-ledger-detail-empty-fill {
   display: none !important;
 }

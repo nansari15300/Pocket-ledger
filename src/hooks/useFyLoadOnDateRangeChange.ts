@@ -31,6 +31,9 @@ export function useFyLoadOnDateRangeChange(dateRange?: LedgerDateRangeInput): vo
     loadingRef.current = false;
   }, [company?.id]);
 
+  /** Latest non-default range requested while another load was in flight (e.g. rapid day-step clicks). */
+  const pendingRangeRef = useRef<{ range: LedgerDateRangeInput } | null>(null);
+
   useEffect(() => {
     const key = ledgerDateRangeLoadKey(dateRange);
     const isDefaultKey = key === "default";
@@ -39,7 +42,12 @@ export function useFyLoadOnDateRangeChange(dateRange?: LedgerDateRangeInput): vo
     if (!isFirstMount && lastKeyRef.current === key) return;
 
     // "Last 10" / clear filter: default scope reload in-flight range load se block na ho.
-    if (loadingRef.current && !isDefaultKey) return;
+    if (loadingRef.current && !isDefaultKey) {
+      // Do not drop it: remember the newest range and run it as soon as the current load finishes.
+      pendingRangeRef.current = { range: dateRange };
+      return;
+    }
+    if (isDefaultKey) pendingRangeRef.current = null;
 
     // Default scope: FyVoucherScopeBootstrap handles opening on company boot.
     if (isFirstMount && isDefaultKey) {
@@ -47,19 +55,24 @@ export function useFyLoadOnDateRangeChange(dateRange?: LedgerDateRangeInput): vo
       return;
     }
 
-    lastKeyRef.current = key;
-    loadingRef.current = true;
-
-    void applyFyLoadForLedgerDateRange({
-      company: companyRef.current,
-      fy: fyRef.current,
-      dateRange,
-    })
-      .catch((err) => {
-        console.warn("[useFyLoadOnDateRangeChange]", err);
+    const startLoad = (range: LedgerDateRangeInput) => {
+      lastKeyRef.current = ledgerDateRangeLoadKey(range);
+      loadingRef.current = true;
+      void applyFyLoadForLedgerDateRange({
+        company: companyRef.current,
+        fy: fyRef.current,
+        dateRange: range,
       })
-      .finally(() => {
-        loadingRef.current = false;
-      });
+        .catch((err) => {
+          console.warn("[useFyLoadOnDateRangeChange]", err);
+        })
+        .finally(() => {
+          loadingRef.current = false;
+          const next = pendingRangeRef.current;
+          pendingRangeRef.current = null;
+          if (next && ledgerDateRangeLoadKey(next.range) !== lastKeyRef.current) startLoad(next.range);
+        });
+    };
+    startLoad(dateRange);
   }, [company?.id, fromMs, toMs]);
 }

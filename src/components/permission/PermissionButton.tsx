@@ -27,12 +27,14 @@ export function PermissionButton({
   children,
   ...rest
 }: PermissionButtonProps) {
-  const { can } = usePermissions();
+  const { can, permissionsResolved } = usePermissions();
   const allowed = can(permission);
-  const isDisabled = forceDisabled || disabled || !allowed;
+  /** Role still unresolved (no cache yet): neutral/pending look instead of a disabled-viewer flash. */
+  const pending = !permissionsResolved && !allowed && !forceDisabled && !disabled;
+  const isDisabled = forceDisabled || disabled || (!allowed && !pending);
 
   const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-    if (isDisabled) {
+    if (isDisabled || pending) {
       e.preventDefault();
       e.stopPropagation();
       return;
@@ -44,7 +46,9 @@ export function PermissionButton({
     <Button
       disabled={isDisabled}
       onClick={handleClick}
+      aria-busy={pending || undefined}
       {...rest}
+      className={pending ? `${rest.className ?? ""} opacity-80` : rest.className}
     >
       {children}
     </Button>

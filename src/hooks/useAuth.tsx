@@ -31,6 +31,7 @@ import { writeAccountPlanLocalCache } from "@/lib/accountPlanLocalCache";
 import { applyAccountCanonicalPlanToAllLocalCompanies } from "@/lib/applyAccountCanonicalPlanToLocalCompanies";
 import { writeCurrentAppAccountIdentity } from "@/lib/appAccountIdentity";
 import { clearSelectedCompanyId } from "@/lib/selectedCompanyStorage";
+import { clearPermissionRoleCache } from "@/lib/permissionRoleCache";
 
 /** PWA offline: `await getDoc`/`getDocs` indefinitely hang sakta hai — pehle `onSnapshot` laga ke UI unblock (Firestore persistence + yaz fire-and-forget). */
 async function firebaseReadWithDeadline<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
@@ -213,6 +214,7 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
       fastLocalAuthRef.current = false;
       // EXE/APK device-lock: agla open dubara PIN/biometric maange — Firebase session alag clear hoti hai.
       clearEmbeddedSessionUnlock();
+      clearPermissionRoleCache();
       if (unsubUserDocRef.current) {
         unsubUserDocRef.current();
         unsubUserDocRef.current = null;
@@ -226,6 +228,7 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
       fastLocalAuthRef.current = false;
       const identity = writeCurrentAppAccountIdentity(firebaseUser.email || firebaseUser.uid);
       if (identity.changed) {
+        clearPermissionRoleCache();
         clearAllLocalAuthSessions();
         clearSelectedCompanyId();
       }

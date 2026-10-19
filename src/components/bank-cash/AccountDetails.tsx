@@ -33,6 +33,9 @@ import {
   Pencil,
   X,
 } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { voucherMs } from "@/lib/fyPagination/scopeFilter";
+import { chromeProPillCn } from "@/lib/chromePillButton";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { format, startOfDay, endOfDay, isSameDay } from "date-fns";
@@ -231,7 +234,19 @@ interface AccountDetailsProps {
   /** Optional inline close control when this detail is hosted inside a report popup. */
   onPopupClose?: () => void;
   hideMobilePeriodLabelRow?: boolean;
+  /** Report popup only: calendar pickers show one month instead of two. */
+  singleMonthCalendar?: boolean;
+  /** Report popup only: footer day-step arrows (left of Closing Balance). */
+  dayStepper?: { onPrev: () => void; onNext: () => void; canPrev?: boolean; canNext?: boolean };
+  /** Report popup with its own FyVoucherScope override: never run the shared FY range loader. */
+  isolatedDayScope?: boolean;
+  /** Known true balance before day `atMs` (popup window anchor); opening/rows are re-based on it. */
+  ledgerOpeningAnchor?: { atMs: number; balance: number } | null;
+  /** Reports the (anchored) opening for the selected day so the host can re-anchor when its window moves. */
+  onLedgerOpeningResolved?: (dayStartMs: number, opening: number, closing: number) => void;
 }
+
+const HiddenPresetRow = (_props: any) => null;
 
 export function AccountDetails({
   account: initialAccount,
@@ -248,17 +263,45 @@ export function AccountDetails({
   showPeriodSummaryCards = false,
   onPopupClose,
   hideMobilePeriodLabelRow = false,
+  singleMonthCalendar = false,
+  dayStepper,
+  isolatedDayScope = false,
+  ledgerOpeningAnchor = null,
+  onLedgerOpeningResolved,
 }: AccountDetailsProps) {
   const nestedLedgerNoteDialogShell =
     ledgerPresentationMode === "nested-ledger"
       ? nestedLedgerChildDialogShell("h-[95vh] w-full max-w-3xl flex flex-col")
       : { overlayClassName: undefined, className: "h-[95vh] w-full max-w-3xl flex flex-col" };
-  useFyLoadOnDateRangeChange(dateRange);
+  // Isolated popup: data comes from its own scope override; the shared loader would swap the dashboard scope.
+  useFyLoadOnDateRangeChange(isolatedDayScope ? undefined : dateRange);
   const { company, companyId } = useCompany();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatRunning } =
     useDate();
   const isMobile = useIsMobile();
-  const calendarMonths = useCalendarMonths();
+  const calendarMonthsAuto = useCalendarMonths();
+  const calendarMonths = singleMonthCalendar ? 1 : calendarMonthsAuto;
+  // Floating day-stepper sits just above the fixed Total/Closing summary inside the table host.
+  const dayStepperHostRef = useRef<HTMLDivElement | null>(null);
+  const [dayStepperBottomPx, setDayStepperBottomPx] = useState(12);
+  const hasDayStepper = !!dayStepper;
+  useEffect(() => {
+    if (!hasDayStepper) return;
+    const host = dayStepperHostRef.current;
+    if (!host || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const sum = host.querySelector<HTMLElement>("[data-pl-ledger-txn-fixed-summary]");
+      setDayStepperBottomPx((sum?.offsetHeight ?? 0) + 12);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(host);
+    const sum = host.querySelector<HTMLElement>("[data-pl-ledger-txn-fixed-summary]");
+    if (sum) ro.observe(sum);
+    return () => ro.disconnect();
+  }, [hasDayStepper]);
+  /** Single-day popup: no range/FY preset chips in the calendar (Date Converter stays). */
+  const PeekPresetRow = singleMonthCalendar ? HiddenPresetRow : MasterLedgerDateRangePresetRow;
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -290,7 +333,9 @@ export function AccountDetails({
   const [mobileFooterDialogOpen, setMobileFooterDialogOpen] = useState<null | "payment_in" | "payment_out" | "contra">(null);
   const [mobileSearchTerm, setMobileSearchTerm] = useState("");
   const [isDateSearchMode, setIsDateSearchMode] = useState(false);
-  const { spendWiseView, setSpendWiseView } = useBankSpendWiseView();
+  const { spendWiseView: spendWiseViewPref, setSpendWiseView } = useBankSpendWiseView();
+  // Daybook day popup: Spend wise is disabled - never take the saved Bank-page preference.
+  const spendWiseView = isolatedDayScope ? false : spendWiseViewPref;
   const ledgerViewMode: LedgerDetailViewMode = spendWiseView ? "spend_wise" : "statement";
   const { perspective: bankDrCrPerspective, setPerspective: setBankDrCrPerspective } =
     useBankLedgerDrCrPerspective();
@@ -498,7 +543,8 @@ export function AccountDetails({
     useInterCompanyLedgerChangeDetectDialog(() => onAccountUpdated(account));
   
   let { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(account, 'account', dateRange, undefined, allAccounts, transactions, undefined, filters, undefined, undefined, userNames);
-  const { processedTransactions: allProcessedTransactions } = useTransactions(account, 'account', undefined, undefined, allAccounts, transactions, undefined, filters, undefined, undefined, userNames);
+  // Whole-ledger pass is only consumed by Spend-wise grouping; skip it (full voucher scan + running-balance chain) unless that view is on.
+  const { processedTransactions: allProcessedTransactions } = useTransactions(account, 'account', undefined, undefined, allAccounts, transactions, undefined, filters, undefined, undefined, userNames, undefined, undefined, undefined, spendWiseView);
 
   // If special account and user can't see balance, filter transactions to only show their own.
   if (account.isSpecial && !canViewSpecialBalance) {
@@ -509,13 +555,45 @@ export function AccountDetails({
       closingBalance = periodDr - periodCr;
   }
 
+  // Popup anchor: known true opening of the selected day, or of the NEXT day (opening(day) = opening(next) - this day's net).
+  // Uses only this day's pass (no whole-ledger pass); the day's net does not depend on the opening.
+  const anchorDayStartMs = dateRange?.from ? startOfDay(dateRange.from).getTime() : null;
+  const rawDayNet = closingBalance - openingBalanceForPeriod;
+  const anchoredTrueOpening = useMemo(() => {
+    if (!ledgerOpeningAnchor || anchorDayStartMs == null) return null;
+    if (account.isSpecial && !canViewSpecialBalance) return null;
+    const a = ledgerOpeningAnchor.atMs;
+    if (a === anchorDayStartMs) return ledgerOpeningAnchor.balance;
+    const nextDay = new Date(anchorDayStartMs);
+    const nextDayMs = new Date(nextDay.getFullYear(), nextDay.getMonth(), nextDay.getDate() + 1).getTime();
+    if (a === nextDayMs) return ledgerOpeningAnchor.balance - rawDayNet;
+    return null;
+  }, [ledgerOpeningAnchor, anchorDayStartMs, rawDayNet, account.isSpecial, canViewSpecialBalance]);  const anchorDelta = anchoredTrueOpening != null ? anchoredTrueOpening - openingBalanceForPeriod : 0;
+  const anchorShiftedTransactions = useMemo(() => {
+    if (Math.abs(anchorDelta) < 1e-9) return processedTransactions;
+    return processedTransactions.map((t: any) =>
+      typeof t?.balance === "number" ? { ...t, balance: t.balance + anchorDelta } : t
+    );
+  }, [processedTransactions, anchorDelta]);
+  if (Math.abs(anchorDelta) >= 1e-9) {
+    processedTransactions = anchorShiftedTransactions;
+    openingBalanceForPeriod = openingBalanceForPeriod + anchorDelta;
+    closingBalance = closingBalance + anchorDelta;
+  }
+  useEffect(() => {
+    if (anchoredTrueOpening == null || anchorDayStartMs == null || !onLedgerOpeningResolved) return;
+    onLedgerOpeningResolved(anchorDayStartMs, openingBalanceForPeriod, closingBalance);
+  }, [anchoredTrueOpening, anchorDayStartMs, openingBalanceForPeriod, closingBalance, onLedgerOpeningResolved]);
+
   /** Match party ledger: when period OB is 0 but books OB exists, running/header use books OB. */
   const ledgerOpeningForRunning = useMemo(() => {
     if (account.isSpecial && !canViewSpecialBalance) return openingBalanceForPeriod;
+    // Popup anchor already gives the true opening (0 can be real) - do not swap in books OB.
+    if (anchoredTrueOpening != null) return openingBalanceForPeriod;
     const master = Number(account?.openingBalance) || 0;
     if (Math.abs(openingBalanceForPeriod) < 1e-6 && Math.abs(master) > 1e-6) return master;
     return openingBalanceForPeriod;
-  }, [openingBalanceForPeriod, account?.openingBalance, account.isSpecial, canViewSpecialBalance]);
+  }, [openingBalanceForPeriod, account?.openingBalance, account.isSpecial, canViewSpecialBalance, anchoredTrueOpening]);
 
   /** Spend-wise layout hamesha poori ledger se — date range baad me sirf rows hide. */
   const spendWiseGroupingTransactions = useMemo(() => {
@@ -1312,7 +1390,7 @@ export function AccountDetails({
       <div className="min-w-max flex-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
         <div className="text-[11px] text-muted-foreground">Opening</div>
         <div className={cn("whitespace-nowrap font-semibold", displaySummaryOpening >= 0 ? "text-green-600" : "text-red-600")}>
-          {showMaskedBalance ? "*****" : formatCurrency(displaySummaryOpening, { noSuffix: true, hideCurrencySymbol: true })}
+          {showMaskedBalance ? "*****" : `${formatCurrency(Math.abs(displaySummaryOpening), { noSuffix: true, hideCurrencySymbol: true })} ${displaySummaryOpening >= 0 ? "Dr" : "Cr"}`}
         </div>
       </div>
       <div className="min-w-max flex-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
@@ -1330,7 +1408,7 @@ export function AccountDetails({
       <div className="min-w-max flex-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
         <div className="text-[11px] text-muted-foreground">Closing</div>
         <div className={cn("whitespace-nowrap font-semibold", displaySummaryClosing >= 0 ? "text-green-600" : "text-red-600")}>
-          {showMaskedBalance ? "*****" : formatCurrency(displaySummaryClosing, { noSuffix: true, hideCurrencySymbol: true })}
+          {showMaskedBalance ? "*****" : `${formatCurrency(Math.abs(displaySummaryClosing), { noSuffix: true, hideCurrencySymbol: true })} ${displaySummaryClosing >= 0 ? "Dr" : "Cr"}`}
         </div>
       </div>
     </div>
@@ -1851,7 +1929,11 @@ export function AccountDetails({
           {/* Mobile footer: ek button — Statement ? Spend wise toggle */}
           <LedgerViewModeToggleButton
             value={spendWiseView ? "spend_wise" : "statement"}
-            onChange={(v) => setSpendWiseView(v === "spend_wise")}
+            onChange={(v) => {
+              if (isolatedDayScope) return; // Daybook day popup: Spend wise disabled
+              setSpendWiseView(v === "spend_wise");
+            }}
+            className={isolatedDayScope ? "pointer-events-none opacity-50" : undefined}
             options={[
               { value: "statement", label: "Statement" },
               { value: "spend_wise", label: "Spend wise" },
@@ -1900,7 +1982,7 @@ export function AccountDetails({
                     {(dateSystem === 'BS' || dateSystem === 'Both') && (
                        <NepaliCalendar
                           rangePresetSlot={
-                            <MasterLedgerDateRangePresetRow
+                            <PeekPresetRow
                               ledgerPaginationReset={ledgerPaginationReset}
                               country={company?.country}
                               onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
@@ -1921,7 +2003,7 @@ export function AccountDetails({
                       <div className="flex-1 w-full min-w-0">
                         <AdCalendar
                           rangePresetSlot={
-                            <MasterLedgerDateRangePresetRow
+                            <PeekPresetRow
                               ledgerPaginationReset={ledgerPaginationReset}
                               country={company?.country}
                               onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
@@ -2035,6 +2117,8 @@ export function AccountDetails({
                 <BsDatePicker
                   isRange
                   masterLedgerDatePresets
+                  numberOfMonths={singleMonthCalendar ? 1 : undefined}
+                  hideRangePresets={singleMonthCalendar}
                   ledgerPaginationReset={ledgerPaginationReset}
                   valueAD={dateRange}
                   onChangeAD={onDateRangeChangeWithUnapprovedReset}
@@ -2069,7 +2153,7 @@ export function AccountDetails({
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
                       rangePresetSlot={
-                        <MasterLedgerDateRangePresetRow
+                        <PeekPresetRow
                           ledgerPaginationReset={ledgerPaginationReset}
                           country={company?.country}
                           onDateRangeChange={onDateRangeChangeWithUnapprovedReset}
@@ -2118,7 +2202,7 @@ export function AccountDetails({
                 onChange={(v) => setSpendWiseView(v === "spend_wise")}
                 options={[
                   { value: "statement", label: "Statement" },
-                  { value: "spend_wise", label: "Spend wise" },
+                  { value: "spend_wise", label: "Spend wise", disabled: isolatedDayScope },
                 ]}
               />
               <Button variant="outline" size="sm" onClick={() => setIsNoteOpen(true)} className={LEDGER_HEADER_PILL_CN} data-theme-detail="add-note">
@@ -2142,7 +2226,7 @@ export function AccountDetails({
         </div>
           }
           table={
-          <div className={cn(LEDGER_TXN_TABLE_HOST_CN, spendWiseView && "p-[2px]")}>
+          <div ref={dayStepperHostRef} className={cn(LEDGER_TXN_TABLE_HOST_CN, dayStepper && "relative", spendWiseView && "p-[2px]")}>
             {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}
             <MasterAccountFreezeTxnShell
               overlay={accountFreezeOverlay}
@@ -2203,6 +2287,34 @@ export function AccountDetails({
               {...bankDepositWithdrawColumnLabels}
             />
             </MasterAccountFreezeTxnShell>
+            {dayStepper ? (
+              <div
+                data-pl-day-stepper-float=""
+                className="pointer-events-none absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-2"
+                style={{ bottom: dayStepperBottomPx }}
+              >
+                <button
+                  type="button"
+                  aria-label="Previous day"
+                  title="Previous day"
+                  disabled={dayStepper.canPrev === false}
+                  onClick={dayStepper.onPrev}
+                  className={cn(chromeProPillCn, "pointer-events-auto h-8 w-10 rounded-full px-0 inline-flex items-center justify-center shadow-lg disabled:opacity-40 disabled:pointer-events-none")}
+                >
+                  <ChevronLeft className="h-[18px] w-[18px]" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Next day"
+                  title="Next day"
+                  disabled={dayStepper.canNext === false}
+                  onClick={dayStepper.onNext}
+                  className={cn(chromeProPillCn, "pointer-events-auto h-8 w-10 rounded-full px-0 inline-flex items-center justify-center shadow-lg disabled:opacity-40 disabled:pointer-events-none")}
+                >
+                  <ChevronRight className="h-[18px] w-[18px]" />
+                </button>
+              </div>
+            ) : null}
           </div>
           }
           footer={

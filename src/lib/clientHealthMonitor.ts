@@ -85,6 +85,29 @@ let heartbeatTimer: number | null = null;
 let heartbeatExpected = 0;
 let lastChunkInfoLoggedAt = 0;
 let healthDiaryAfterOverlayTimer: number | null = null;
+/**
+ * Sustained-stall gate: a long block is only measured AFTER it ended (the main thread cannot paint
+ * while blocked). A finished block = work completed, so we do NOT pop the overlay for it. We start a
+ * confirmation timer instead and only show "UI paused" if the app keeps freezing inside that window.
+ */
+let sustainedStallCheck: { summary: string; blockedMs: number; stallsSince: number; blockedSumMs: number; timer: number } | null = null;
+
+function scheduleSustainedStallCheck(summary: string, blockedMs: number): void {
+  if (sustainedStallCheck) return;
+  const timer = window.setTimeout(() => {
+    const check = sustainedStallCheck;
+    sustainedStallCheck = null;
+    if (!check) return;
+    if (check.stallsSince > 0) {
+      const total = Math.round(check.blockedMs + check.blockedSumMs);
+      const reason = `${check.summary} - still freezing (${check.stallsSince + 1} blocks, ~${total} ms total)`;
+      engageClientHealthEmergencyBrake(reason, { detectedStallMs: total });
+      dispatchHealthAlert({ reason, source: "stall", forceOpen: false });
+    }
+    clearPendingStall();
+  }, STALL_OVERLAY_MIN_MS);
+  sustainedStallCheck = { summary, blockedMs, stallsSince: 0, blockedSumMs: 0, timer };
+}
 
 function parseStallDurationMs(summary: string): number | null {
   const m = String(summary || "").match(/~(\d+)\s*ms/i);
@@ -482,13 +505,8 @@ export function pushClientHealthEntry(
   if (entry.kind === "stall") {
     const blockedMs = parseStallDurationMs(entry.summary);
     if (blockedMs != null && blockedMs >= STALL_OVERLAY_MIN_MS) {
-      engageClientHealthEmergencyBrake(entry.summary, { detectedStallMs: blockedMs });
-      dispatchHealthAlert({
-        reason: entry.summary,
-        source: "stall",
-        forceOpen: false,
-      });
-      clearPendingStall();
+      // Block already finished when measured: wait one threshold window and only show the overlay if it keeps freezing.
+      scheduleSustainedStallCheck(entry.summary, blockedMs);
     }
   }
 }
@@ -614,6 +632,11 @@ function heartbeatTick(): void {
     const drift = now - heartbeatExpected;
     if (drift >= STALL_MS) {
         if (drift <= HEARTBEAT_TIMER_DRIFT_MAX_MS) {
+          // Another block while a confirmation window is open = app still not done -> counts toward the overlay.
+          if (sustainedStallCheck) {
+            sustainedStallCheck.stallsSince += 1;
+            sustainedStallCheck.blockedSumMs += drift;
+          }
           if (drift >= STALL_OVERLAY_MIN_MS) markPendingStall(drift);
           pushClientHealthEntry({
             kind: "stall",
@@ -697,12 +720,7 @@ export function startClientHealthMonitor(): () => void {
     } catch {
       /* ignore */
     }
-    const blockedMs = parseStallDurationMs(recent.summary);
-    if (blockedMs != null && blockedMs >= PL_UI_HEALTH_STALL_OVERLAY_MIN_MS) {
-      engageClientHealthEmergencyBrake("Recent freeze detected — diary opened with context.", {
-        detectedStallMs: blockedMs,
-      });
-    }
+    // Finished freeze seen on tab return: diary only. "UI paused" overlay is reserved for sustained stalls (see scheduleSustainedStallCheck).
     dispatchHealthAlert({
       reason: "Recent freeze detected — diary opened with context.",
       source: "recovery",

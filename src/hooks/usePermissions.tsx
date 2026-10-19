@@ -23,6 +23,7 @@ import { findLocalCompanyUserRowForAppUser, parseLocalCompanyUserRows } from "@/
 import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
 import { useAdWallet } from "@/hooks/useAdWallet";
 import { normalizeSpecialAccountUseFor } from "@/lib/specialAccountUsage";
+import { resolvePermissionRoleWithCache } from "@/lib/permissionRoleCache";
 
 /** Offline company SQLite session — ye role Firebase owner se alag ho sakta hai (same email owner + staff login). */
 function isLocalStorageCompany(c: { storageOption?: string } | null | undefined): boolean {
@@ -213,6 +214,17 @@ const usePermissions = () => {
     /** Local unlock ke baad localStorage role turant useMemo me aaye (same-tab me storage event nahi aata). */
     const [localAuthEpoch, setLocalAuthEpoch] = useState(0);
     const [plServerMetaEpoch, setPlServerMetaEpoch] = useState(0);
+    /** online/offline flips re-evaluate the cached-role verification (10-day offline grace). */
+    const [onlineEpoch, setOnlineEpoch] = useState(0);
+    useEffect(() => {
+      const bump = () => setOnlineEpoch((n) => n + 1);
+      window.addEventListener("online", bump);
+      window.addEventListener("offline", bump);
+      return () => {
+        window.removeEventListener("online", bump);
+        window.removeEventListener("offline", bump);
+      };
+    }, []);
     /** PL / local staff: host meta → client SQLite `permissionConfig` (server se har save pe verify nahi). */
     const [sqlitePermissionConfig, setSqlitePermissionConfig] = useState<PermissionConfig | null>(null);
     /** Host Manage Sharing users — assigned role My Role me session se pehle yahi. */
@@ -482,6 +494,25 @@ const usePermissions = () => {
             }
         }
         
+        // Never transiently "viewer": reuse last server-confirmed role (per uid+company) until live data resolves.
+        const sharedWithList = Array.isArray((company as { sharedWith?: unknown } | null)?.sharedWith)
+          ? ((company as { sharedWith?: unknown[] }).sharedWith as unknown[])
+          : [];
+        const localUsersForEvidence = parseLocalCompanyUserRows(
+          sqliteLocalCompanyUsers ?? (company as { localCompanyUsers?: unknown } | null)?.localCompanyUsers
+        );
+        const roleEvidenceLoaded =
+          Boolean(localAuthUser) || sharedWithList.length > 0 || localUsersForEvidence.length > 0;
+        const roleResolution = resolvePermissionRoleWithCache({
+          uid: String(customUser?.uid || ""),
+          companyId: String(company?.id || ""),
+          derivedRole: role,
+          evidenceLoaded: roleEvidenceLoaded,
+        });
+        role = roleResolution.role as UserRole;
+        const permissionsResolved = roleResolution.resolved;
+        const permissionsReverifyRequired = roleResolution.reverifyRequired;
+
         const dateLimits = config.dateLimits?.[role] || { entryDays: 0, editDays: 0, deleteDays: 0 };
         
         const can = (permissionName: Permission): boolean => roleCanPermission(role, permissionName, config);
@@ -607,12 +638,14 @@ const usePermissions = () => {
             allowAttachments,
             canAddAvatar,
             canAddFileImagePdf,
+            permissionsResolved,
+            permissionsReverifyRequired,
             permissionConfig: config,
             permissionConfigSource: permSource,
             permissionConfigSourceKey: configSource,
         };
 
-    }, [customUser, company, allCompanies, livePlans, localAuthEpoch, localCompanyRegistryEpoch, plServerMetaEpoch, sqlitePermissionConfig, sqliteLocalCompanyUsers, attachmentsAdUnlock]);
+    }, [customUser, company, allCompanies, livePlans, localAuthEpoch, localCompanyRegistryEpoch, plServerMetaEpoch, sqlitePermissionConfig, sqliteLocalCompanyUsers, attachmentsAdUnlock, onlineEpoch]);
 
     return permissions;
 };

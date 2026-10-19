@@ -34,6 +34,8 @@ type BsDatePickerBaseProps = {
   showDateConverterButton?: boolean;
   /** Master ledger: "Last 10" clears filter + reloads default FY voucher scope. */
   masterLedgerDatePresets?: boolean;
+  /** Hide the range preset chips (7 days, Month, F Y, ...) inside the calendar. */
+  hideRangePresets?: boolean;
   /** With master presets: footer rows/page → 10 on "Last 10". */
   ledgerPaginationReset?: import("@/lib/ledgerLast10View").LedgerPaginationResetHandlers | null;
 };
@@ -82,6 +84,7 @@ export default function BsDatePicker({
   popoverAlign,
   showDateConverterButton = true,
   masterLedgerDatePresets = false,
+  hideRangePresets = false,
   ledgerPaginationReset,
 }: BsDatePickerProps) {
   const [open, setOpen] = React.useState(false);
@@ -196,7 +199,7 @@ export default function BsDatePicker({
             transactionDates={transactionDates}
             disabled={disabled}
             rangePresetSlot={
-              isRange
+              isRange && !hideRangePresets
                 ? masterLedgerDatePresets
                   ? (
                       <MasterLedgerDateRangePresetRow
