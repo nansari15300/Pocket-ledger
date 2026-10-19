@@ -1376,6 +1376,29 @@ body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
   flex: 0 0 auto !important;
   overflow-y: visible;
 }
+/* Daybook account popup (PC): Closing Balance footer = one row - tone pills ... Adjust / Freeze, label, amount. */
+@media (min-width: 768px) {
+  .daybook-account-peek-popup [data-pl-closing-balance-card] {
+    flex-wrap: nowrap !important;
+    max-width: none !important;
+  }
+  .daybook-account-peek-popup [data-pl-closing-balance-card] > div {
+    flex-wrap: nowrap !important;
+    flex-shrink: 0 !important;
+    min-width: max-content !important;
+    max-width: none !important;
+  }
+  .daybook-account-peek-popup [data-pl-closing-balance-card] [data-pl-closing-balance-actions],
+  .daybook-account-peek-popup [data-pl-closing-balance-card] [data-pl-closing-balance-actions] > div,
+  .daybook-account-peek-popup [data-pl-closing-balance-card] [data-pl-closing-balance-row-actions] {
+    flex: 0 0 auto !important;
+    flex-wrap: nowrap !important;
+    max-width: none !important;
+  }
+  .daybook-account-peek-popup [data-pl-closing-balance-card] span {
+    white-space: nowrap;
+  }
+}
 .balance-sheet-ledger-popup .pl-ledger-detail-empty-fill {
   display: none !important;
 }

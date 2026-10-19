@@ -1390,7 +1390,7 @@ export function AccountDetails({
       <div className="min-w-max flex-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
         <div className="text-[11px] text-muted-foreground">Opening</div>
         <div className={cn("whitespace-nowrap font-semibold", displaySummaryOpening >= 0 ? "text-green-600" : "text-red-600")}>
-          {showMaskedBalance ? "*****" : `${formatCurrency(Math.abs(displaySummaryOpening), { noSuffix: true, hideCurrencySymbol: true })} ${displaySummaryOpening >= 0 ? "Dr" : "Cr"}`}
+          {showMaskedBalance ? "*****" : <>{formatCurrency(Math.abs(displaySummaryOpening), { noSuffix: true, hideCurrencySymbol: true })} {displaySummaryOpening >= 0 ? "Dr" : "Cr"}</>}
         </div>
       </div>
       <div className="min-w-max flex-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
@@ -1408,7 +1408,7 @@ export function AccountDetails({
       <div className="min-w-max flex-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
         <div className="text-[11px] text-muted-foreground">Closing</div>
         <div className={cn("whitespace-nowrap font-semibold", displaySummaryClosing >= 0 ? "text-green-600" : "text-red-600")}>
-          {showMaskedBalance ? "*****" : `${formatCurrency(Math.abs(displaySummaryClosing), { noSuffix: true, hideCurrencySymbol: true })} ${displaySummaryClosing >= 0 ? "Dr" : "Cr"}`}
+          {showMaskedBalance ? "*****" : <>{formatCurrency(Math.abs(displaySummaryClosing), { noSuffix: true, hideCurrencySymbol: true })} {displaySummaryClosing >= 0 ? "Dr" : "Cr"}</>}
         </div>
       </div>
     </div>
