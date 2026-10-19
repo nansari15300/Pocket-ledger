@@ -38,6 +38,7 @@ import { Checkbox } from "../ui/checkbox";
 import { Permission, PermissionGroups } from "@/lib/permissions";
 import { type PermissionConfig, type UserRole, initialPermissionConfig } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
+import { PRESENCE_ONLINE_THRESHOLD_MS } from "@/lib/presenceConstants";
 
 type SharedUser = {
   email: string;
@@ -89,7 +90,7 @@ export function ManageShare() {
                  setStatuses(prev => ({
                     ...prev,
                     [u.id]: {
-                        state: (data?.online && (Date.now() - data.lastSeen.toDate().getTime() < 90 * 1000)) ? 'online' : 'offline',
+                        state: (data?.online && (Date.now() - data.lastSeen.toDate().getTime() < PRESENCE_ONLINE_THRESHOLD_MS)) ? 'online' : 'offline',
                         last_changed: data?.lastSeen?.toDate().getTime() || 0,
                     }
                 }));

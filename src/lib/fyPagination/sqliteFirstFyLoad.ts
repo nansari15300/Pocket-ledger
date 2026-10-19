@@ -7,6 +7,12 @@ import type { CompanyStorageRow } from "@/lib/companyStorageKind";
 import { hydrateOnlineVoucherRangeFromFirestore } from "@/lib/ledgerModes/online/fyMonthHydrate";
 import { pullCompanySubcollectionFromFirestoreToLocalDb } from "@/lib/firestoreToLocalCompanyPull";
 import { isFirebaseLedgerCompanyDataSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
+import {
+  ensureVoucherLoadSettingsHydrated,
+  isVoucherLoadModeAll,
+  markVoucherFullMirrorPulled,
+  shouldPullFullVoucherMirrorForAllMode,
+} from "@/lib/voucherLoadModeSettings";
 import { listVouchersFromBrowserDbByDateRange } from "@/lib/fyPagination/voucherQueries";
 import { recordFyLoadedRange } from "@/lib/fyPagination/snapshotStore";
 import type { FyActiveScope, FyDateRangeMs } from "@/lib/fyPagination/types";
@@ -54,17 +60,30 @@ async function mergeSqliteRangeIntoFyScope(params: {
 export function scheduleOnlineFullVoucherMirrorPull(params: {
   company: FyScopeCompany | null | undefined;
   companyId: string;
+  /** SuperAdmin All mode: allow pull without Company Selector Data tick when mirror missing/stale. */
+  reason?: "data_tick" | "admin_all_mode";
 }): void {
-  const { company, companyId } = params;
+  const { company, companyId, reason } = params;
   const cid = String(companyId || "").trim();
   if (!cid || !isCloudLinkedCompanyStorage(company)) return;
-  if (!isFirebaseLedgerCompanyDataSyncEnabled(cid, company)) return;
   const fsCompanyId = String(company?.authoritativeCompanyId || cid).trim();
   if (!fsCompanyId) return;
   if (typeof navigator !== "undefined" && !navigator.onLine) return;
 
   void (async () => {
     try {
+      const settings = await ensureVoucherLoadSettingsHydrated();
+      const dataTick = isFirebaseLedgerCompanyDataSyncEnabled(cid, company);
+      const adminAll = isVoucherLoadModeAll(settings);
+      const adminNeedsPull = adminAll && shouldPullFullVoucherMirrorForAllMode(cid, settings);
+      const allow =
+        dataTick ||
+        reason === "admin_all_mode" ||
+        adminNeedsPull;
+      if (!allow) return;
+      if (!dataTick && !adminNeedsPull && reason !== "admin_all_mode") return;
+      if (!dataTick && reason === "admin_all_mode" && !adminNeedsPull) return;
+
       await pullCompanySubcollectionFromFirestoreToLocalDb(
         fsCompanyId,
         cid,
@@ -74,6 +93,7 @@ export function scheduleOnlineFullVoucherMirrorPull(params: {
           : null,
         "date"
       );
+      markVoucherFullMirrorPulled(cid);
       notifyBrowserDbCollectionUpdated(cid, "vouchers", {
         immediate: true,
         source: "online_full_voucher_pull",

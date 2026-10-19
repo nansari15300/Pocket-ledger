@@ -101,6 +101,10 @@ import {
 } from '@/components/reports/DaybookAccountDayPeekDialog';
 import type { Account } from '@/components/bank-cash/types';
 import { useFyScopedVouchers } from '@/hooks/useFyScopedVouchers';
+import { useFyVoucherScope } from '@/contexts/FyVoucherScopeContext';
+import { widenFyScopeUntilRecentMinTxns } from '@/lib/fyPagination/entityMinTxnScope';
+import { companyUsesFiscalMergeDividers } from '@/lib/fyPagination/fiscalMergeFullVoucherScope';
+import { useFyLoadOnDateRangeChange } from '@/hooks/useFyLoadOnDateRangeChange';
 import { useVouchers } from '@/hooks/useVouchers';
 import { getTransactionAmounts as getLedgerTransactionAmounts } from '@/hooks/use-transactions';
 import { computeAccountLedgerDaySummary } from '@/lib/accountLedgerDaySummary';
@@ -204,7 +208,7 @@ const RECENT_DESKTOP_FOOTER_SCROLL_ROW_SLACK_PX = 58;
 /** Menu vertical line ↔ txn/footer containers; txn card ↔ footer container. */
 const RECENT_DESKTOP_EDGE_GAP_PX = 2;
 /** Desktop Recent: header + table + footer ek saath — is se chhoti width par H-scroll. */
-const RECENT_DESKTOP_MIN_WIDTH_IN = 10;
+const RECENT_DESKTOP_MIN_WIDTH_IN = 11.5;
 
 /** Recent footer sort: sirf current page rows — paging window poori list par fixed rehti hai. */
 function sortRecentDashboardPageRows<T extends Record<string, unknown>>(
@@ -779,8 +783,11 @@ export function DashboardPageContentImpl() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { vouchers, loading: vouchersLoading, processedItems, processedParties, processedStaff, processedTaxes, processedAccounts, expenseAccounts, journalAccountNames: voucherJournalAccountNames } = useFyScopedVouchers();
+  const fy = useFyVoucherScope();
   const pendingEditVoucherRef = useRef<{ companyId: string; voucherId: string } | null>(null);
-  const [showFab, setShowFab] = useState(true);
+  const showFabState = useState(true);
+  const showFab = showFabState[0];
+  const setShowFab = showFabState[1];
   const lastScrollY = useRef(0);
   const hideFabTimeout = useRef<NodeJS.Timeout | null>(null);
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } = useDate();
@@ -837,7 +844,7 @@ export function DashboardPageContentImpl() {
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   
-  const [recentRowsPerPage, setRecentRowsPerPage] = useRowsPerPage(50);
+  const [recentRowsPerPage, setRecentRowsPerPage] = useRowsPerPage(10, "app-recent-rows-per-page");
   const [recentCurrentPage, setRecentCurrentPage] = React.useState(1);
   const [recentSortBy, setRecentSortBy] = React.useState<TransactionSortBy>("date");
   const [recentSortOrder, setRecentSortOrder] = React.useState<TransactionSortOrder>('desc');
@@ -849,7 +856,7 @@ export function DashboardPageContentImpl() {
     setRecentRowsPerPage,
     setRecentCurrentPage,
     ROWS_PER_PAGE_OPTIONS_DEFAULT,
-    '50'
+    '10'
   );
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
   const [selectedVoucher, setSelectedVoucher] = React.useState<any>(null);
@@ -934,6 +941,7 @@ export function DashboardPageContentImpl() {
   const [greeting, setGreeting] = useState('');
   
   const [recentDateRange, setRecentDateRange] = React.useState<DateRange | undefined>();
+  useFyLoadOnDateRangeChange(recentDateRange);
   const [isRecentCalendarOpen, setIsRecentCalendarOpen] = React.useState(false);
   const [tempRecentDateRange, setTempRecentDateRange] = React.useState<DateRange | undefined>(undefined);
   const [recentFilters, setRecentFilters] = useState<Record<string, string>>({});
@@ -1516,13 +1524,35 @@ export function DashboardPageContentImpl() {
   }, [vouchers, dashboardSummaryStockActive]);
   
   // Unapproved quick filter: force all-time + all types + clear table column filters.
+  // When no date range is explicitly picked, do not restrict Recent Transactions to current month;
+  // let it show the most recent transactions across months to fulfill the selected page size (10, 20, 50).
   const effectiveRecentDateRange = recentUnapprovedOnly
     ? undefined
-    : resolveDashboardRecentDateRange(recentDateRange, dateSystem);
+    : (recentDateRange?.from ? recentDateRange : undefined);
   const effectiveRecentFilters = recentUnapprovedOnly ? {} : recentFilters;
-  const vouchersForRecentPipeline = dashboardRecentPipelineActive
-    ? vouchers
-    : EMPTY_TRANSACTIONS_LIST;
+  const vouchersForRecentPipeline = useMemo(() => {
+    if (!dashboardRecentPipelineActive || !vouchers) return EMPTY_TRANSACTIONS_LIST;
+    if (recentDateRange?.from || recentUnapprovedOnly || recentQuickSearchInput.trim()) {
+      return vouchers;
+    }
+    const pageSize = Math.max(10, recentRowsPerPage || 10);
+    const needed = Math.max(1, recentCurrentPage || 1) * pageSize + 15;
+    if (vouchers.length <= needed) return vouchers;
+    const sorted = [...vouchers].sort((a, b) => {
+      const msA = a?.date ? (typeof a.date === 'object' && 'toDate' in a.date ? (a.date as any).toDate().getTime() : new Date(a.date).getTime()) : 0;
+      const msB = b?.date ? (typeof b.date === 'object' && 'toDate' in b.date ? (b.date as any).toDate().getTime() : new Date(b.date).getTime()) : 0;
+      return msB - msA;
+    });
+    return sorted.slice(0, needed);
+  }, [
+    dashboardRecentPipelineActive,
+    vouchers,
+    recentDateRange?.from,
+    recentUnapprovedOnly,
+    recentQuickSearchInput,
+    recentRowsPerPage,
+    recentCurrentPage,
+  ]);
   const { daybookTransactions: allRecentTransactions } = useTransactions(
     DAYBOOK_TRANSACTIONS_ENTITY,
     'daybook',
@@ -1540,6 +1570,48 @@ export function DashboardPageContentImpl() {
     true,
     dashboardRecentPipelineActive
   );
+
+  const recentWideningRef = useRef(false);
+  const recentWidenFinishedKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    recentWidenFinishedKeyRef.current = null;
+  }, [companyId, recentRowsPerPage]);
+
+  useEffect(() => {
+    if (!dashboardRecentPipelineActive) return;
+    if (recentDateRange?.from) return;
+    if (companyUsesFiscalMergeDividers(company)) return;
+    if (!fy.enabled || !fy.activeScope) return;
+    const targetCount = Math.max(10, recentRowsPerPage || 10);
+    if ((allRecentTransactions?.length ?? 0) >= targetCount) return;
+    if (recentWideningRef.current) return;
+
+    const widenKey = `${companyId}:${targetCount}`;
+    if (recentWidenFinishedKeyRef.current === widenKey) return;
+
+    recentWideningRef.current = true;
+    void widenFyScopeUntilRecentMinTxns({
+      company,
+      fy,
+      targetTxnCount: targetCount,
+    })
+      .catch((err) => {
+        console.warn("[DashboardRecent] widen scope failed", err);
+      })
+      .finally(() => {
+        recentWideningRef.current = false;
+        recentWidenFinishedKeyRef.current = widenKey;
+      });
+  }, [
+    dashboardRecentPipelineActive,
+    recentDateRange?.from,
+    allRecentTransactions?.length,
+    recentRowsPerPage,
+    company,
+    companyId,
+    fy,
+  ]);
 
   const recentSortedBase = useMemo(() => {
     if (!dashboardRecentPipelineActive || !allRecentTransactions) return [];
@@ -1634,7 +1706,7 @@ export function DashboardPageContentImpl() {
   );
 
   React.useEffect(() => {
-    if (recentRowsPerPage <= 0) setRecentRowsPerPage(50);
+    if (recentRowsPerPage <= 0) setRecentRowsPerPage(10);
   }, [recentRowsPerPage, setRecentRowsPerPage]);
 
   React.useEffect(() => {
@@ -2467,6 +2539,7 @@ export function DashboardPageContentImpl() {
         <TransactionsTable
           transactions={recentTransactions}
           context="daybook"
+          daybookDesktopUnifiedScroll={!recentTransactionsCompact}
           mobileCardLayoutLikeParty
           onRowClick={(v) => {
             setSelectedVoucher(v);
@@ -2678,6 +2751,7 @@ export function DashboardPageContentImpl() {
   return (
     <div
       data-pl-dashboard-recent-full-bleed={recentDesktopScrollContained ? "" : undefined}
+      data-pl-daybook-unified-scroll={recentDesktopScrollContained ? "" : undefined}
       data-pl-dashboard-page-root={dashboardFooterLockedDesktop ? "" : undefined}
       className={cn(
         recentDesktopScrollContained
@@ -2715,9 +2789,17 @@ export function DashboardPageContentImpl() {
       ) : null}
       <div
         data-pl-dashboard-recent-min-column={recentDesktopScrollContained ? "" : undefined}
+        style={
+          recentDesktopScrollContained
+            ? {
+                minWidth:
+                  "max(var(--pl-dashboard-recent-min-width, 11.5in), calc(var(--pl-daybook-txn-table-min-px, 0) * 1px + 36px))",
+              }
+            : undefined
+        }
         className={cn(
           recentDesktopScrollContained &&
-            "flex min-h-0 w-full min-w-[var(--pl-dashboard-recent-min-width,10in)] max-w-none flex-1 basis-0 flex-col gap-[var(--pl-dashboard-recent-edge-gap,2px)]",
+            "flex min-h-0 w-full min-w-[max(var(--pl-dashboard-recent-min-width,11.5in),calc(var(--pl-daybook-txn-table-min-px,0)*1px+36px))] max-w-none flex-1 basis-0 flex-col gap-[var(--pl-dashboard-recent-edge-gap,2px)]",
           dashboardFooterLockedDesktop &&
             "flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden",
         )}

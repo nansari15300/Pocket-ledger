@@ -152,6 +152,7 @@ export type StartCompanyBackupRunInput = {
   folderDateSystem?: import("@/lib/autoBackupPath").BackupFolderDateSystem;
   backupFileRunKind?: import("@/lib/autoBackupPath").BackupFileRunKind;
   backupRestoreGmails?: string[] | null;
+  fyScope?: import("@/lib/backupFyScopeRewrite").BackupFyScope | null;
 };
 
 export async function startCompanyBackupRun(input: StartCompanyBackupRunInput): Promise<ExecuteCompanyBackupResult> {

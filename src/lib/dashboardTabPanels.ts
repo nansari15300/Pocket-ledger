@@ -108,9 +108,27 @@ export function dashboardMasterCollectionPathsForTab(tabId: string): Set<string>
     case "bank-cash-summary":
       return new Set(["vouchers", "bank_accounts", "account_groups", "taxes"]);
     case "daybook":
-      return new Set(["vouchers", "bank_accounts", "account_groups", "taxes", "parties", "groups"]);
+      return new Set([
+        "vouchers",
+        "bank_accounts",
+        "account_groups",
+        "taxes",
+        "parties",
+        "groups",
+        "staff",
+        "expense_accounts",
+      ]);
     case "recent-transactions":
-      return new Set(["vouchers"]);
+      return new Set([
+        "vouchers",
+        "parties",
+        "bank_accounts",
+        "staff",
+        "expense_accounts",
+        "taxes",
+        "groups",
+        "account_groups",
+      ]);
     case "dashboard-charts":
     case "financial-summaries":
       return new Set([

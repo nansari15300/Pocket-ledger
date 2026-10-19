@@ -27,6 +27,13 @@ import {
   isFirebaseLedgerCompanyDataSyncEnabled,
 } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
+import {
+  ensureVoucherLoadSettingsHydrated,
+  isVoucherLoadModeAll,
+  readCachedVoucherLoadSettings,
+  shouldPullFullVoucherMirrorForAllMode,
+} from "@/lib/voucherLoadModeSettings";
+import { ensureGlobalSyncModeSettingsHydrated } from "@/lib/globalSyncModeSettings";
 import { subscribeVoucherLivePatch } from "@/lib/voucherFormAttachmentSave";
 
 function FyHydratedVoucherLivePatchSync() {
@@ -83,20 +90,35 @@ function FyScopeLoaderInner() {
 
     void (async () => {
       try {
-        const onlineDataSyncFullScope =
+        void ensureGlobalSyncModeSettingsHydrated();
+        const voucherLoadSettings = await ensureVoucherLoadSettingsHydrated();
+        const adminAllMode = isVoucherLoadModeAll(voucherLoadSettings);
+        const dataTickEnabled =
           isCloudLinkedCompanyStorage(company) &&
           isFirebaseLedgerCompanyDataSyncEnabled(companyId, company);
+        const adminAllNeedsPull =
+          isCloudLinkedCompanyStorage(company) &&
+          adminAllMode &&
+          shouldPullFullVoucherMirrorForAllMode(companyId, voucherLoadSettings);
+        const onlineDataSyncFullScope =
+          companyUsesFiscalMergeDividers(company) ||
+          (adminAllMode && (dataTickEnabled || adminAllNeedsPull));
 
-        const scope = companyUsesFiscalMergeDividers(company) || onlineDataSyncFullScope
+        const scope = onlineDataSyncFullScope
           ? buildFiscalMergeFullVoucherScope(company?.country)
           : await buildScopeWithMinTxnsInFy({
               companyId,
               country: company?.country,
+              minTxn: 10,
             });
 
         await applyFyScopeFromSqlite({ companyId, fy, scope });
         if (onlineDataSyncFullScope) {
-          scheduleOnlineFullVoucherMirrorPull({ company, companyId });
+          if (dataTickEnabled) {
+            scheduleOnlineFullVoucherMirrorPull({ company, companyId, reason: "data_tick" });
+          } else if (adminAllNeedsPull) {
+            scheduleOnlineFullVoucherMirrorPull({ company, companyId, reason: "admin_all_mode" });
+          }
         }
         if (cancelled) return;
 
@@ -174,6 +196,8 @@ function FyOnlineDataSyncPrefsListener() {
     const onPrefs = () => {
       if (!isCloudLinkedCompanyStorage(company)) return;
       if (!isFirebaseLedgerCompanyDataSyncEnabled(companyId, company)) return;
+      const voucherLoadSettings = readCachedVoucherLoadSettings();
+      if (!isVoucherLoadModeAll(voucherLoadSettings)) return;
       const scope = buildFiscalMergeFullVoucherScope(company?.country);
       fy.setActiveScope(scope);
       void applyFyScopeFromSqlite({ companyId, fy, scope });

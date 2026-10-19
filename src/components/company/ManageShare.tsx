@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
+import { PRESENCE_ONLINE_THRESHOLD_MS } from "@/lib/presenceConstants";
 import {
   doc,
   onSnapshot,
@@ -1535,7 +1536,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
     
     const isUserOnline = (userInfo: any) => {
       if (!userInfo?.lastSeen?.toDate) return false;
-      return (Date.now() - userInfo.lastSeen.toDate().getTime()) < 90 * 1000;
+      return (Date.now() - userInfo.lastSeen.toDate().getTime()) < PRESENCE_ONLINE_THRESHOLD_MS;
     };
 
     const uniqueUsers = new Map<string, SharedUser & { isOnline?: boolean; id?: string, photoURL?: string }>();

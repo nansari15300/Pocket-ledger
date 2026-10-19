@@ -3,6 +3,7 @@
 import { collection, getDocs, getDocsFromServer, query, where } from "firebase/firestore";
 import { auth, firestore, ensureEmbeddedFirestoreOnlineForCloudCompanyLoad } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { ensureFreshIdToken } from "@/lib/ensureFreshIdToken";
 import {
   sharedCompanyQueryKey,
   sharedCompanyQuerySpecs,
@@ -29,7 +30,7 @@ async function pullSharedVariant(
         if (attempt > 0) {
           await new Promise((r) => setTimeout(r, attempt === 1 ? 800 : 2000));
           try {
-            await auth.currentUser?.getIdToken(true);
+            await ensureFreshIdToken({ force: true, permissionDenied: true, source: "sharedPull.variantRetry" });
           } catch {
             /* auth race after storage clean */
           }
@@ -80,7 +81,7 @@ export async function pullSharedOnlineCompaniesFromFirestore(
   if (isLocalOnlyMode()) {
     await ensureEmbeddedFirestoreOnlineForCloudCompanyLoad();
     try {
-      await auth.currentUser?.getIdToken(true);
+      await ensureFreshIdToken({ force: true, source: "sharedPull.start" });
     } catch {
       /* auth token race — pull still try karega */
     }

@@ -124,6 +124,8 @@ import {
 import { FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { canUserRestoreBackup, isValidRestoreAllowedGmail, normalizeBackupRestoreEmail, normalizeRestoreAllowedGmailList } from "@/lib/backupRestoreAccess";
 import { Checkbox } from "@/components/ui/checkbox";
+import { BackupFyScopePicker, BackupFyScopeRestoreNotice } from "@/components/settings/BackupFyScopePicker";
+import { isFyScopedBackupData, readBackupFyScopeMarker, type BackupFyScope } from "@/lib/backupFyScopeRewrite";
 import { Switch } from "@/components/ui/switch";
 import { BackupProgressStrip } from "@/components/settings/BackupProgressStrip";
 import {
@@ -778,6 +780,24 @@ export function BackupRestore() {
   const [restoreCompanyNameChoice, setRestoreCompanyNameChoice] = useState<"target" | "backup">("target");
   const [restoreTargetMode, setRestoreTargetMode] = useState<RestoreTargetMode>("replace_current");
   const restoreAsNewCompany = !company || restoreTargetMode === "new_company";
+  /** Manual backup FY range ("all" default). Auto backup uses per-company `fyScope` in prefs. */
+  const [backupFyScopeDraft, setBackupFyScopeDraft] = useState<BackupFyScope>("all");
+  useEffect(() => {
+    setBackupFyScopeDraft("all");
+  }, [companyId]);
+  /** Replace current company with an FY-scoped backup needs an explicit tick. */
+  const [fyScopeRestoreAck, setFyScopeRestoreAck] = useState(false);
+  useEffect(() => {
+    setFyScopeRestoreAck(false);
+  }, [backupDataToRestore, restoreTargetMode]);
+  const fyScopeRestoreBlocked =
+    Boolean(company) &&
+    restoreTargetMode === "replace_current" &&
+    isFyScopedBackupData(backupDataToRestore) &&
+    !fyScopeRestoreAck;
+  const currentCompanyFyScopeMarker = readBackupFyScopeMarker({
+    backupFyScope: (company as { backupFyScope?: unknown } | null | undefined)?.backupFyScope,
+  });
   const restoreOnlineSlotGate = useMemo(() => {
     if (!user?.uid) return { ok: false, max: 0, current: 0 };
     const candidateId =
@@ -1596,6 +1616,7 @@ export function BackupRestore() {
       backupFileRunKind: "Manual",
       backupRestoreGmails: getAutoBackupCompanySettings(autoBackupPrefs, companyId, staticBackupClient)
         .restoreAllowedGmails,
+      fyScope: backupFyScopeDraft,
     });
 
     if (result.ok === true) {
@@ -2296,6 +2317,11 @@ export function BackupRestore() {
       }
       report.tick("Finalizing", "Flushing local database…");
       await flushBrowserDbToIndexedDB();
+      if (isFyScopedBackupData(backupData)) {
+        // FY-scoped backup: openings changed vs any cached FY snapshot -> invalidate + notify ledgers.
+        const { finalizeFyScopedBackupRestore } = await import("@/lib/backupFyScopeRestoreFinalize");
+        await finalizeFyScopedBackupRestore({ companyId: targetCompanyId, cloudLinked: cloudRestore });
+      }
       reloadLocalCompanyRegistry();
       triggerSync();
 
@@ -3748,6 +3774,24 @@ export function BackupRestore() {
                 same Gmail as Firebase login on the restore device.
               </p>
             </div>
+            <BackupFyScopePicker
+              idPrefix="auto-backup"
+              companyId={autoBackupSettingsCompany?.id}
+              company={autoBackupSettingsCompany}
+              value={autoBackupSettingsDraft.fyScope ?? "all"}
+              openEndedTo
+              onChange={(next) =>
+                setAutoBackupSettingsDraft((prev) => ({
+                  ...prev,
+                  fyScope:
+                    next === "all"
+                      ? "all"
+                      : next.toFyKey
+                        ? { fromFyKey: next.fromFyKey, toFyKey: next.toFyKey }
+                        : { fromFyKey: next.fromFyKey },
+                }))
+              }
+            />
           </div>
           <DialogFooter className="gap-2 sm:gap-2">
             <Button type="button" variant="outline" onClick={closeAutoBackupCompanySettings}>
@@ -3925,6 +3969,19 @@ export function BackupRestore() {
                     </label>
                   </RadioGroup>
                 </div>
+                {currentCompanyFyScopeMarker ? (
+                  <p className="rounded-md border border-amber-400/60 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+                    This company was restored from an FY-scoped backup: history starts at FY{" "}
+                    {currentCompanyFyScopeMarker.fromFyKey}; openings were carried forward.
+                  </p>
+                ) : null}
+                <BackupFyScopePicker
+                  idPrefix="manual-backup"
+                  companyId={companyId}
+                  company={company}
+                  value={backupFyScopeDraft}
+                  onChange={setBackupFyScopeDraft}
+                />
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -4332,6 +4389,13 @@ export function BackupRestore() {
             onChange={(e) => setConfirmationText(e.target.value)}
             placeholder="Type company name to confirm"
           />
+          <BackupFyScopeRestoreNotice
+            backupData={backupDataToRestore}
+            replaceCurrent={Boolean(company) && restoreTargetMode === "replace_current"}
+            companyName={company?.name ?? null}
+            acknowledged={fyScopeRestoreAck}
+            onAcknowledgedChange={setFyScopeRestoreAck}
+          />
           </div>
           <AlertDialogFooter className="shrink-0 border-t bg-background p-6 pt-4">
             <div className="flex justify-between items-center w-full">
@@ -4350,6 +4414,7 @@ export function BackupRestore() {
                   e.preventDefault();
                   void (async () => {
                     if (confirmationText.trim().toLowerCase() !== restoreConfirmationName.toLowerCase()) return;
+                    if (fyScopeRestoreBlocked) return;
                     if (!user?.uid) {
                       toast({ variant: "destructive", title: "Not signed in", description: "Sign in again, then retry." });
                       return;
@@ -4398,7 +4463,7 @@ export function BackupRestore() {
                     );
                   })();
                 }}
-                disabled={isRestoring || confirmationText.trim().toLowerCase() !== restoreConfirmationName.toLowerCase()}
+                disabled={isRestoring || fyScopeRestoreBlocked || confirmationText.trim().toLowerCase() !== restoreConfirmationName.toLowerCase()}
                 className="bg-destructive hover:bg-destructive/90"
                 >
                 {isRestoring && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

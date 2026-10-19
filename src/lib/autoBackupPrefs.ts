@@ -1,6 +1,7 @@
 "use client";
 
 import type { CompanyBackupIntent, CompanyBackupSourceMode } from "@/lib/companyBackupCore";
+import type { AutoBackupFyScope } from "@/lib/backupFyScopeRewrite";
 import { isBackupSaveLocationConfigured } from "@/lib/backupSaveLocation";
 import { normalizeRestoreAllowedGmailList } from "@/lib/backupRestoreAccess";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
@@ -24,7 +25,19 @@ export type AutoBackupCompanySettings = {
   restoreAllowedGmails?: string[];
   /** @deprecated migrated to restoreAllowedGmails */
   restoreAllowedGmail?: string;
+  /** FY range: "all" (default) or From FY (open-ended To: new FYs included automatically). */
+  fyScope?: AutoBackupFyScope;
 };
+
+/** Light normalizer (no ledger imports) - `{ fromFyKey: "2081-2082" }` or "all". */
+export function normalizeAutoBackupCompanyFyScope(raw: unknown): AutoBackupFyScope {
+  if (!raw || raw === "all" || typeof raw !== "object") return "all";
+  const o = raw as { fromFyKey?: unknown; toFyKey?: unknown };
+  const from = typeof o.fromFyKey === "string" && /^\d{4}-\d{4}$/.test(o.fromFyKey.trim()) ? o.fromFyKey.trim() : "";
+  if (!from) return "all";
+  const to = typeof o.toFyKey === "string" && /^\d{4}-\d{4}$/.test(o.toFyKey.trim()) ? o.toFyKey.trim() : null;
+  return to ? { fromFyKey: from, toFyKey: to } : { fromFyKey: from };
+}
 
 export type AutoBackupPrefs = {
   enabled: boolean;
@@ -318,11 +331,13 @@ function normalizeCompanySettings(raw: unknown): AutoBackupCompanySettings | nul
     row.restoreAllowedGmails,
     row.restoreAllowedGmail
   );
+  const fyScope = normalizeAutoBackupCompanyFyScope(row.fyScope);
   return {
     backupSourceMode: normalizeBackupSourceMode(row.backupSourceMode),
     backupIntent: normalizeBackupIntent(row.backupIntent),
     includeAttachments: row.includeAttachments === true,
     ...(restoreAllowedGmails.length ? { restoreAllowedGmails } : {}),
+    ...(fyScope !== "all" ? { fyScope } : {}),
   };
 }
 

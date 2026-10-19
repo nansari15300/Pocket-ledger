@@ -631,7 +631,7 @@ export default function DashboardPage() {
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   
-  const [recentRowsPerPage, setRecentRowsPerPage] = useRowsPerPage(50);
+  const [recentRowsPerPage, setRecentRowsPerPage] = useRowsPerPage(10, "app-recent-rows-per-page");
   const [recentCurrentPage, setRecentCurrentPage] = React.useState(1);
   const [recentSortOrder, setRecentSortOrder] = React.useState<TransactionSortOrder>('desc');
   const {
@@ -642,7 +642,7 @@ export default function DashboardPage() {
     setRecentRowsPerPage,
     setRecentCurrentPage,
     ROWS_PER_PAGE_OPTIONS_DEFAULT,
-    '50'
+    '10'
   );
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
   const [selectedVoucher, setSelectedVoucher] = React.useState<any>(null);

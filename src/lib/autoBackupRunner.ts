@@ -145,6 +145,7 @@ export async function runAutoBackupQueue(input: RunAutoBackupQueueInput): Promis
       folderDateSystem: prefs.folderDateSystem,
       backupFileRunKind: input.backupFileRunKind === "Auto" ? "Auto" : "Manual",
       backupRestoreGmails: companySettings.restoreAllowedGmails,
+      fyScope: companySettings.fyScope ?? "all",
     });
 
     results.push({ companyId, companyName: name, result });

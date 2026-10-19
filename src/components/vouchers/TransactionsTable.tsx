@@ -1125,7 +1125,7 @@ export function TransactionsTable({
     const body = tableContainerRef.current;
     if (!body) return null;
     return body.closest<HTMLElement>(
-      "[data-pl-ledger-txn-unified-scroll], [data-pl-daybook-unified-scroll]"
+      "[data-pl-ledger-txn-unified-scroll], [data-pl-daybook-unified-scroll], [data-pl-dashboard-recent-full-bleed]"
     );
   }, []);
 
@@ -5830,7 +5830,7 @@ export function TransactionsTable({
           data-pl-txn-table-tone={txnTableTone}
           className={cn(
             "w-full shrink-0 overflow-y-hidden pl-dashboard-recent-txn-header-scroll pl-dashboard-recent-hide-hscroll",
-            ledgerUnifiedHScrollActive
+            ledgerUnifiedHScrollActive || dashboardRecentFyAttachmentGate
               ? cn(
                   "max-w-none overflow-x-hidden",
                   dashboardRecentFyAttachmentGate ? "min-w-0" : "min-w-full"
@@ -5872,7 +5872,7 @@ export function TransactionsTable({
             ? cn(
                 "min-h-0 max-w-full flex-1 overflow-y-auto pl-dashboard-recent-hide-hscroll",
                 dashboardRecentFyAttachmentGate ? "min-w-0" : "min-w-full",
-                ledgerUnifiedHScrollActive
+                ledgerUnifiedHScrollActive || dashboardRecentFyAttachmentGate
                   ? "overflow-x-hidden [scrollbar-gutter:auto]"
                   : "overflow-x-auto [scrollbar-gutter:auto]"
               )
@@ -5910,7 +5910,7 @@ export function TransactionsTable({
           </Table>
         </div>
       ) : null}
-      {desktopSplitTableScrollGate && !ledgerUnifiedHScrollActive ? (
+      {desktopSplitTableScrollGate && !ledgerUnifiedHScrollActive && !dashboardRecentFyAttachmentGate ? (
         <div
           ref={dashboardRecentFooterHScrollRef}
           {...(dashboardRecentFyAttachmentGate ? { "data-pl-dashboard-recent-txn-hscroll": "" } : {})}

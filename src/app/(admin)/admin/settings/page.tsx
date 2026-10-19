@@ -1,83 +1,359 @@
-
 "use client";
 
-import { useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { doc, getDocFromServer, setDoc } from "firebase/firestore";
+import { Fingerprint, Loader2, Search } from "lucide-react";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
 import PermissionsManager from "@/components/admin/PermissionsManager";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Fingerprint, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { PermissionGroups, type PermissionGroup } from "@/lib/permissions";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { AppFreshInfoButton } from "@/components/ui/AppFreshInfoButton";
+import { firestore } from "@/lib/firebase";
+import { useToast } from "@/hooks/use-toast";
+import {
+  DEFAULT_VOUCHER_LOAD_SETTINGS,
+  normalizeVoucherLoadSettings,
+  writeCachedVoucherLoadSettings,
+  type VoucherLoadMode,
+  type VoucherLoadSettings,
+} from "@/lib/voucherLoadModeSettings";
+import {
+  DEFAULT_GLOBAL_SYNC_MODE_SETTINGS,
+  normalizeGlobalSyncModeSettings,
+  writeCachedGlobalSyncModeSettings,
+  type GlobalSyncMode,
+  type GlobalSyncModeSettings,
+} from "@/lib/globalSyncModeSettings";
 
+/** Always green track/thumb — All (left) and Lazy load (right); only knob side changes. */
+const alwaysGreenSwitchClass = cn(
+  "!border-2 !border-green-400 !bg-green-100",
+  "data-[state=checked]:!border-green-400 data-[state=checked]:!bg-green-100",
+  "data-[state=unchecked]:!border-green-400 data-[state=unchecked]:!bg-green-100",
+  "dark:!border-green-500 dark:!bg-green-900/45",
+  "dark:data-[state=checked]:!border-green-500 dark:data-[state=checked]:!bg-green-900/45",
+  "dark:data-[state=unchecked]:!border-green-500 dark:data-[state=unchecked]:!bg-green-900/45",
+  "[&>span:last-child]:!bg-green-400",
+  "dark:[&>span:last-child]:!bg-green-400"
+);
+
+const VOUCHER_LOAD_HELP = {
+  title: "Company voucher data load",
+  body:
+    "Lazy load — current behaviour: vouchers hydrate by date range (and Company Selector Data tick for a full pull).\n\nAll — on company open, if this device has no full voucher mirror or it is older than 7 days, pull all voucher documents from Firebase into SQLite (data only, not attachment files). Applies to every user after save. Does not change Files sync. Default is Lazy load.",
+};
+
+const SYNC_MODE_HELP = {
+  title: "Company sync mode",
+  body:
+    "Delta — SQLite + change feed (_pl_change_log). Only fetches changed documents. Saves huge Firebase reads and runs smooth on low internet.\n\nLive — real-time Firebase collection listeners. Updates cross-device in ~300ms. Higher Firebase read usage.\n\nApplies globally to all users and companies after save.",
+};
 
 function GlobalSettingsPage() {
-  useAdminAccess(['SuperAdmin']);
+  useAdminAccess(["SuperAdmin"]);
+  const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [activeGroup, setActiveGroup] = useState<PermissionGroup>(PermissionGroups[0]);
 
+  const [voucherLoad, setVoucherLoad] = useState<VoucherLoadSettings>(DEFAULT_VOUCHER_LOAD_SETTINGS);
+  const [voucherLoadLoading, setVoucherLoadLoading] = useState(true);
+  const [voucherLoadSaving, setVoucherLoadSaving] = useState(false);
+
+  const [syncMode, setSyncMode] = useState<GlobalSyncModeSettings>(DEFAULT_GLOBAL_SYNC_MODE_SETTINGS);
+  const [syncModeLoading, setSyncModeLoading] = useState(true);
+  const [syncModeSaving, setSyncModeSaving] = useState(false);
+
   const filteredGroups = useMemo(() => {
     if (!searchTerm) return PermissionGroups;
-    return PermissionGroups.filter(group => 
-        group.title.toLowerCase().includes(searchTerm.toLowerCase())
+    return PermissionGroups.filter((group) =>
+      group.title.toLowerCase().includes(searchTerm.toLowerCase())
     );
   }, [searchTerm]);
 
+  const loadVoucherLoadSettings = useCallback(async () => {
+    setVoucherLoadLoading(true);
+    try {
+      const snap = await getDocFromServer(doc(firestore, "app_settings", "voucher_load"));
+      const next = normalizeVoucherLoadSettings(snap.exists() ? snap.data() : undefined);
+      setVoucherLoad(next);
+      writeCachedVoucherLoadSettings(next);
+    } catch {
+      setVoucherLoad(DEFAULT_VOUCHER_LOAD_SETTINGS);
+      toast({ title: "Could not load voucher load settings", variant: "destructive" });
+    } finally {
+      setVoucherLoadLoading(false);
+    }
+  }, [toast]);
+
+  const loadSyncModeSettings = useCallback(async () => {
+    setSyncModeLoading(true);
+    try {
+      const snap = await getDocFromServer(doc(firestore, "app_settings", "sync_mode"));
+      const next = normalizeGlobalSyncModeSettings(snap.exists() ? snap.data() : undefined);
+      setSyncMode(next);
+      writeCachedGlobalSyncModeSettings(next);
+    } catch {
+      setSyncMode(DEFAULT_GLOBAL_SYNC_MODE_SETTINGS);
+      toast({ title: "Could not load sync mode settings", variant: "destructive" });
+    } finally {
+      setSyncModeLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    void loadVoucherLoadSettings();
+    void loadSyncModeSettings();
+  }, [loadVoucherLoadSettings, loadSyncModeSettings]);
+
+  const saveVoucherLoadMode = async (mode: VoucherLoadMode) => {
+    setVoucherLoadSaving(true);
+    const prev = voucherLoad;
+    const next: VoucherLoadSettings = {
+      ...voucherLoad,
+      mode,
+      updatedAtMs: Date.now(),
+    };
+    setVoucherLoad(next);
+    try {
+      await setDoc(doc(firestore, "app_settings", "voucher_load"), next, { merge: true });
+      writeCachedVoucherLoadSettings(next);
+      toast({
+        title: "Saved",
+        description:
+          mode === "all"
+            ? "All companies: full voucher data load when missing or older than 7 days."
+            : "All companies: lazy load (hydrate by date range) — current behaviour.",
+      });
+    } catch {
+      setVoucherLoad(prev);
+      toast({ title: "Save failed", variant: "destructive" });
+    } finally {
+      setVoucherLoadSaving(false);
+    }
+  };
+
+  const saveSyncMode = async (mode: GlobalSyncMode) => {
+    setSyncModeSaving(true);
+    const prev = syncMode;
+    const next: GlobalSyncModeSettings = {
+      mode,
+      updatedAtMs: Date.now(),
+    };
+    setSyncMode(next);
+    try {
+      await setDoc(doc(firestore, "app_settings", "sync_mode"), next, { merge: true });
+      writeCachedGlobalSyncModeSettings(next);
+      toast({
+        title: "Saved",
+        description:
+          mode === "full_online"
+            ? "Global sync mode: Live (real-time collection listeners active)."
+            : "Global sync mode: Delta (SQLite + change-feed only — low read usage).",
+      });
+    } catch {
+      setSyncMode(prev);
+      toast({ title: "Save failed", variant: "destructive" });
+    } finally {
+      setSyncModeSaving(false);
+    }
+  };
+
+  /** Switch checked = Lazy load (right). Unchecked = All (left). */
+  const lazyChecked = voucherLoad.mode === "lazy";
+
+  /** Switch checked = Live (right). Unchecked = Delta (left). */
+  const liveChecked = syncMode.mode === "full_online";
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-8 h-full">
-      <div className="flex flex-col gap-4">
+    <div className="flex h-full flex-col gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Card 1: Company voucher data load */}
         <Card>
-            <CardHeader>
-                <CardTitle>Global Settings</CardTitle>
-                <CardDescription>Manage system-wide configurations.</CardDescription>
-            </CardHeader>
-             <CardContent>
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                        placeholder="Search permission groups..."
-                        className="pl-9"
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                    />
-                </div>
-            </CardContent>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <CardTitle>Company voucher data load</CardTitle>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <AppFreshInfoButton
+                    size="sm"
+                    aria-label="About voucher load modes"
+                    title="Voucher load help"
+                  />
+                </PopoverTrigger>
+                <PopoverContent align="start" className="z-[80] w-[min(92vw,22rem)] space-y-2 p-3 text-left">
+                  <p className="text-sm font-semibold">{VOUCHER_LOAD_HELP.title}</p>
+                  <div className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
+                    {VOUCHER_LOAD_HELP.body}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {voucherLoadLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading…
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-3">
+                <Label
+                  htmlFor="voucher-load-mode-switch"
+                  className={cn(
+                    "min-w-[2.5rem] cursor-pointer text-sm font-medium",
+                    !lazyChecked ? "text-green-700 dark:text-green-300" : "text-muted-foreground"
+                  )}
+                >
+                  All
+                </Label>
+                <Switch
+                  id="voucher-load-mode-switch"
+                  checked={lazyChecked}
+                  disabled={voucherLoadSaving}
+                  onCheckedChange={(checked) => {
+                    void saveVoucherLoadMode(checked ? "lazy" : "all");
+                  }}
+                  aria-label="Voucher load mode: All or Lazy load"
+                  className={alwaysGreenSwitchClass}
+                />
+                <Label
+                  htmlFor="voucher-load-mode-switch"
+                  className={cn(
+                    "cursor-pointer text-sm font-medium",
+                    lazyChecked ? "text-green-700 dark:text-green-300" : "text-muted-foreground"
+                  )}
+                >
+                  Lazy load
+                </Label>
+                {voucherLoadSaving ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
+              </div>
+            )}
+          </CardContent>
         </Card>
+
+        {/* Card 2: Company sync mode (Live / Delta) */}
         <Card>
-            <CardContent className="p-2">
-                 <ScrollArea className="h-[calc(100vh-24rem)]">
-                    {filteredGroups.map(group => (
-                        <Button
-                            key={group.title}
-                            variant={activeGroup.title === group.title ? "secondary" : "ghost"}
-                            className="w-full justify-start gap-3"
-                            onClick={() => setActiveGroup(group)}
-                        >
-                            <Fingerprint className="h-5 w-5" />
-                            <span>{group.title}</span>
-                        </Button>
-                    ))}
-                 </ScrollArea>
-            </CardContent>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <CardTitle>Company sync mode</CardTitle>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <AppFreshInfoButton
+                    size="sm"
+                    aria-label="About company sync modes"
+                    title="Company sync help"
+                  />
+                </PopoverTrigger>
+                <PopoverContent align="start" className="z-[80] w-[min(92vw,22rem)] space-y-2 p-3 text-left">
+                  <p className="text-sm font-semibold">{SYNC_MODE_HELP.title}</p>
+                  <div className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
+                    {SYNC_MODE_HELP.body}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {syncModeLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading…
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-3">
+                <Label
+                  htmlFor="company-sync-mode-switch"
+                  className={cn(
+                    "min-w-[2.5rem] cursor-pointer text-sm font-medium",
+                    !liveChecked ? "text-green-700 dark:text-green-300" : "text-muted-foreground"
+                  )}
+                >
+                  Delta
+                </Label>
+                <Switch
+                  id="company-sync-mode-switch"
+                  checked={liveChecked}
+                  disabled={syncModeSaving}
+                  onCheckedChange={(checked) => {
+                    void saveSyncMode(checked ? "full_online" : "local");
+                  }}
+                  aria-label="Company sync mode: Delta or Live"
+                  className={alwaysGreenSwitchClass}
+                />
+                <Label
+                  htmlFor="company-sync-mode-switch"
+                  className={cn(
+                    "cursor-pointer text-sm font-medium",
+                    liveChecked ? "text-green-700 dark:text-green-300" : "text-muted-foreground"
+                  )}
+                >
+                  Live
+                </Label>
+                {syncModeSaving ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
+              </div>
+            )}
+          </CardContent>
         </Card>
       </div>
-      <div>
-        <Card className="h-full">
-            <CardContent className="p-6">
-                 {activeGroup ? (
-                    <PermissionsManager selectedGroup={activeGroup} />
-                 ) : (
-                    <p>Select a group to manage permissions.</p>
-                 )}
+
+      <div className="grid h-full grid-cols-1 gap-8 md:grid-cols-[320px_1fr]">
+        <div className="flex flex-col gap-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Global Settings</CardTitle>
+              <CardDescription>Manage system-wide configurations.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Search permission groups..."
+                  className="pl-9"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
             </CardContent>
-        </Card>
+          </Card>
+          <Card>
+            <CardContent className="p-2">
+              <ScrollArea className="h-[calc(100vh-28rem)]">
+                {filteredGroups.map((group) => (
+                  <Button
+                    key={group.title}
+                    variant={activeGroup.title === group.title ? "secondary" : "ghost"}
+                    className="w-full justify-start gap-3"
+                    onClick={() => setActiveGroup(group)}
+                  >
+                    <Fingerprint className="h-5 w-5" />
+                    <span>{group.title}</span>
+                  </Button>
+                ))}
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        </div>
+        <div>
+          <Card className="h-full">
+            <CardContent className="p-6">
+              {activeGroup ? (
+                <PermissionsManager selectedGroup={activeGroup} />
+              ) : (
+                <p>Select a group to manage permissions.</p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   );
 }
 
 export default GlobalSettingsPage;
-
-

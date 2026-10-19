@@ -468,6 +468,8 @@ export type ExecuteCompanyBackupInput = {
   backupFileRunKind?: import("@/lib/autoBackupPath").BackupFileRunKind;
   /** Gmail list allowed to restore this backup file (stored in companyDetails). */
   backupRestoreGmails?: string[] | null;
+  /** FY range: "all" (default) or From FY ... To - earlier FY closings become master openings in the file. */
+  fyScope?: import("@/lib/backupFyScopeRewrite").BackupFyScope | null;
   onProgress: (p: CompanyBackupProgress) => void;
   signal?: AbortSignal;
 };
@@ -484,6 +486,12 @@ export type ExecuteCompanyBackupResult =
     }
   | { ok: false; error: string; cancelled?: boolean };
 
+/** FY-scoped backup: `Manual_backup_x_stamp.plbp` -> `Manual_backup_x_stamp_FY2081-2082_to_latest.plbp`. */
+function appendFyScopeToBackupFileName(fileName: string, suffix: string | null): string {
+  if (!suffix) return fileName;
+  return /\.plbp$/i.test(fileName) ? fileName.replace(/\.plbp$/i, `_${suffix}.plbp`) : `${fileName}_${suffix}`;
+}
+
 /** Core backup pipeline — module singleton se chale taaki page change par na ruke. */
 export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Promise<ExecuteCompanyBackupResult> {
   const {
@@ -499,6 +507,7 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
     folderDateSystem: folderDateSystemInput,
     backupFileRunKind: backupFileRunKindInput,
     backupRestoreGmails,
+    fyScope,
     onProgress,
     signal,
   } = input;
@@ -606,6 +615,20 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
       } else {
         backupData[colName] = fsRows;
       }
+    }
+
+    // FY-scoped backup: omit vouchers outside the FY range; earlier closings -> master openings (file only).
+    let fyScopeFileSuffix: string | null = null;
+    if (fyScope && fyScope !== "all") {
+      throwIfAborted();
+      onProgress({ phase: "Reading data", detail: "Applying FY range (carrying forward opening balances)..." });
+      const { applyBackupFyScopeToBackupData } = await import("@/lib/backupFyScopeRewrite");
+      const fyResult = applyBackupFyScopeToBackupData(backupData, {
+        scope: fyScope,
+        country: (company as { country?: string | null }).country ?? null,
+      });
+      if (fyResult.ok === false) return { ok: false, error: fyResult.error };
+      if (fyResult.applied) fyScopeFileSuffix = fyResult.fileNameSuffix;
     }
 
     let savedWithAttachments = false;
@@ -827,12 +850,12 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
           blob = new Blob([zipBlobBytes], { type: "application/zip" });
         }
 
-        const fileName = buildCompanyBackupFileName(
+        const fileName = appendFyScopeToBackupFileName(buildCompanyBackupFileName(
           String(company.name || companyId),
           new Date(),
           folderDateSystem,
           backupFileRunKind
-        );
+        ), fyScopeFileSuffix);
         onProgress({ phase: "Saving", detail: "Writing backup file…" });
         const saved = await saveBackupBlobWithBestEffort(blob, fileName, {
           relativeDir: resolvedRelativeDir,
@@ -898,12 +921,12 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
       blob = new Blob([jsonData], { type: "application/json" });
     }
 
-    const fileName = buildCompanyBackupFileName(
+    const fileName = appendFyScopeToBackupFileName(buildCompanyBackupFileName(
       String(company.name || companyId),
       new Date(),
       folderDateSystem,
       backupFileRunKind
-    );
+    ), fyScopeFileSuffix);
     onProgress({ phase: "Saving", detail: "Writing backup file…" });
     const saved = await saveBackupBlobWithBestEffort(blob, fileName, {
       relativeDir: resolvedRelativeDir,

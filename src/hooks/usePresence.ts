@@ -21,12 +21,17 @@ export function usePresence() {
     voidUpdateUserPresence(userDocId, { online: true });
     isOnlineRef.current = true;
 
-    // Heartbeat every 30 seconds (slightly longer to reduce frequency)
-    intervalRef.current = setInterval(() => {
-      if (isOnlineRef.current) {
-        voidUpdateUserPresence(userDocId, { online: true });
-      }
-    }, PRESENCE_HEARTBEAT_INTERVAL_MS);
+    // Heartbeat every PRESENCE_HEARTBEAT_INTERVAL_MS (60 s); hidden tab par interval write skip.
+    const startHeartbeat = () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      intervalRef.current = setInterval(() => {
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+        if (isOnlineRef.current) {
+          voidUpdateUserPresence(userDocId, { online: true });
+        }
+      }, PRESENCE_HEARTBEAT_INTERVAL_MS);
+    };
+    startHeartbeat();
 
     const handleOffline = () => {
       if (isOnlineRef.current) {
@@ -39,8 +44,10 @@ export function usePresence() {
       if (document.visibilityState === "hidden") {
         handleOffline();
       } else if (!isOnlineRef.current) {
+        // Visible: turant ek write, phir interval naye sire se (60 s baad agla heartbeat).
         isOnlineRef.current = true;
         voidUpdateUserPresence(userDocId, { online: true });
+        startHeartbeat();
       }
     };
 

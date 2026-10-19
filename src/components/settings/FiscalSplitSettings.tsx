@@ -37,7 +37,7 @@ import { writeLocalFiscalSplit, getLocalFiscalSplitOrDefaults, type FiscalSplitM
 import { persistFiscalSplitSettingsToCompany } from "@/lib/persistFiscalSplitSettings";
 import { SettingsInfoTip } from "@/components/settings/SettingsInfoTip";
 import { cn } from "@/lib/utils";
-import { Loader2 } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 
 /** `pl-dashboard-tone-card` — globals.css black `border #000` override se bachne ke liye (line ~5531). */
 const FISCAL_INNER_CARD_CN =
@@ -67,6 +67,8 @@ export function FiscalSplitSettings() {
     sqliteTotal,
     voucherDateFrom,
     voucherDateTo,
+    rebuilding: fyRowsRebuilding,
+    rebuildAndReload,
   } = useFiscalSplitFyRows();
   const { dateSystem } = useDate();
   const { toast } = useToast();
@@ -313,7 +315,7 @@ export function FiscalSplitSettings() {
                       >
                         <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-emerald-700" />
                         <div className="min-w-0 space-y-0.5">
-                          <p className="font-medium">Scanning is running — please wait…</p>
+                          <p className="font-medium">{fyRowsRebuilding ? "Refreshing FY list — please wait…" : "Scanning is running — please wait…"}</p>
                           <p className="text-xs text-muted-foreground">
                             {firestoreScanned > 0
                               ? `Cloud voucher scan — ${firestoreScanned.toLocaleString()} checked`
@@ -409,9 +411,42 @@ export function FiscalSplitSettings() {
           </div>
         </RadioGroup>
 
-        <div className="flex justify-end">
-          <Button type="button" onClick={handleRunSplit}>
-            run split
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="gap-1.5"
+            disabled={fyRowsLoading || fyRowsRebuilding || !companyId}
+            onClick={() => {
+              void (async () => {
+                const result = await rebuildAndReload();
+                if (result.ok) {
+                  toast({
+                    title: "FY list refreshed",
+                    description:
+                      result.rowCount > 0
+                        ? `${result.rowCount} fiscal year(s) from vouchers.`
+                        : "No voucher dates found yet.",
+                  });
+                } else {
+                  toast({
+                    variant: "destructive",
+                    title: "Refresh failed",
+                    description: "error" in result ? result.error : "Refresh failed.",
+                  });
+                }
+              })();
+            }}
+          >
+            {fyRowsRebuilding ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Refresh FY list
+          </Button>
+          <Button type="button" variant="outline" onClick={handleRunSplit}>
+            Run Split
           </Button>
         </div>
       </CardContent>

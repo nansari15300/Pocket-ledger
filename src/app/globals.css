@@ -9210,7 +9210,7 @@ main:has([data-pl-dashboard-recent-full-bleed]) > * {
 }
 [data-pl-dashboard-recent-min-column] {
   box-sizing: border-box;
-  min-width: var(--pl-dashboard-recent-min-width, 10in);
+  min-width: max(var(--pl-dashboard-recent-min-width, 11.5in), calc(var(--pl-daybook-txn-table-min-px, 0) * 1px + 36px));
   width: 100%;
   flex: 1 1 0;
   min-height: 0;
@@ -9227,10 +9227,9 @@ main:has([data-pl-dashboard-recent-full-bleed]) > * {
   flex-shrink: 0;
 }
 [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll] {
-  flex-shrink: 0;
-  margin-top: auto;
-  border-top: 1px solid #000;
-  box-sizing: border-box;
+  display: none !important;
+  height: 0 !important;
+  border: 0 !important;
 }
 [data-pl-dashboard-recent-min-column] [data-pl-dashboard-recent-shell],
 [data-pl-dashboard-recent-min-column] [data-pl-dashboard-footer-ribbon] {
@@ -9364,12 +9363,17 @@ main:has([data-pl-dashboard-page-root]) {
   overflow: visible;
 }
 [data-pl-daybook-unified-scroll] [data-pl-dashboard-recent-txn-hscroll],
-[data-pl-daybook-unified-scroll] [data-pl-ledger-txn-hscroll] {
+[data-pl-daybook-unified-scroll] [data-pl-ledger-txn-hscroll],
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll],
+[data-pl-dashboard-recent-shell] [data-pl-ledger-txn-hscroll] {
   display: none !important;
   height: 0 !important;
   overflow: hidden !important;
 }
-[data-pl-daybook-unified-scroll] .pl-dashboard-recent-hide-hscroll {
+[data-pl-daybook-unified-scroll] .pl-dashboard-recent-hide-hscroll,
+[data-pl-dashboard-recent-shell] .pl-dashboard-recent-hide-hscroll,
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn],
+[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header] {
   overflow-x: hidden !important;
 }
 [data-pl-daybook-unified-scroll] [data-theme-table="transactions"] tbody tr.transaction-main-row > td {
@@ -9380,26 +9384,26 @@ main:has([data-pl-dashboard-page-root]) {
 [data-pl-daybook-unified-scroll] [data-pl-txn-row-menu-trigger] {
   overflow: visible;
 }
-[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll] {
-  scrollbar-width: thin;
-  scrollbar-color: var(--pl-ledger-txn-scroll-thumb) var(--pl-ledger-txn-scroll-track);
+/* Recent Transactions: 3-dot column ko breathing room do taaki V-scrollbar 3-dot ke thoda right me rahe (party page parity) */
+[data-pl-dashboard-recent-shell] [data-pl-txn-row-menu] {
+  width: 24px !important;
+  min-width: 24px !important;
+  max-width: 24px !important;
+  padding-right: 8px !important;
+  box-sizing: border-box;
 }
-[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll]::-webkit-scrollbar {
-  width: var(--pl-ledger-txn-scroll-size) !important;
-  height: var(--pl-ledger-txn-scroll-size) !important;
+[data-pl-dashboard-recent-shell] thead th:last-child {
+  width: 24px !important;
+  min-width: 24px !important;
+  max-width: 24px !important;
+  padding-right: 8px !important;
+  box-sizing: border-box;
 }
-[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll]::-webkit-scrollbar-track {
-  background: var(--pl-ledger-txn-scroll-track) !important;
+[data-pl-dashboard-recent-shell] col:last-child {
+  width: 24px !important;
 }
-[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll]::-webkit-scrollbar-thumb {
-  background: var(--pl-ledger-txn-scroll-thumb) !important;
-  border: none !important;
-  border-radius: 9999px;
-}
-[data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-hscroll]::-webkit-scrollbar-button {
-  display: none;
-  width: 0;
-  height: 0;
+[data-pl-dashboard-recent-shell] [data-pl-txn-row-menu] [data-pl-txn-row-menu-trigger] {
+  margin-right: 4px;
 }
 [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn-header],
 [data-pl-dashboard-recent-shell] [data-pl-dashboard-recent-txn] {

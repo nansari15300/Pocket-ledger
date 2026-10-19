@@ -147,6 +147,7 @@ import { isHostedPlanSyncDisabled } from "@/lib/hostedPlanSyncDisabled";
 import { shouldSkipEmbeddedStartupAuthChurn } from "@/lib/embeddedWarmBootstrapFlags";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 import { withoutWebAppBasePath } from "@/lib/webAppBasePath";
+import { plCallerFrame, plCallerStack, plRegistryPullDebug } from "@/lib/registryPullDebug";
 
 export type DisplaySettings = {
     showDebit?: boolean;
@@ -1012,6 +1013,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     setRegistryVersion((v) => v + 1);
   }, []);
   const reloadLocalCompanyRegistry = useCallback(() => {
+    plRegistryPullDebug("reloadLocalCompanyRegistry", "bump", () => ({ caller: plCallerFrame(5) }));
     setLocalRegistryEpoch((v) => v + 1);
   }, []);
   const scheduleCompanyFirestoreListenerRetry = useCallback((source: string) => {
@@ -1168,10 +1170,97 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   ]);
 
   // Billing success → local SQLite plan patch ke baad list dubara load (offline company).
+  // Loop guard: bump bursts 500 ms me coalesce; registry content (volatile timestamps chhod kar, deep + order-stable)
+  // same ho to reload skip (max ek forced reload / 10 s). Pehle har bump = reload → writers dubara bump → ~1/s self-loop.
   useEffect(() => {
-    const onBump = () => reloadLocalCompanyRegistry();
+    const COALESCE_MS = 500;
+    const FORCE_RELOAD_MS = 10_000;
+    const VOLATILE_KEY =
+      /(^updated|At$|AtMs$|UntilMs$|^last(Seen|Verified|Synced|Sync|Login|Active|Opened|Pull|Push)|heartbeat|syncedAt|Epoch$)/i;
+    /** Deep, key-sorted, volatile-free JSON (arrays sorted by element JSON) - fingerprint order se independent. */
+    const stableJson = (value: unknown, depth = 0): string => {
+      if (value === null || typeof value !== "object") return JSON.stringify(value ?? null);
+      if (depth > 6) return '"<deep>"';
+      if (Array.isArray(value)) {
+        return `[${value.map((v) => stableJson(v, depth + 1)).sort().join(",")}]`;
+      }
+      const o = value as Record<string, unknown>;
+      const keys = Object.keys(o)
+        .filter((k) => !VOLATILE_KEY.test(k) && o[k] !== undefined)
+        .sort();
+      return `{${keys.map((k) => `${JSON.stringify(k)}:${stableJson(o[k], depth + 1)}`).join(",")}}`;
+    };
+    type RowSnap = Map<string, string>; // top-level key -> stable JSON
+    let timer: number | undefined;
+    let disposed = false;
+    let lastSnap: Map<string, RowSnap> | null = null;
+    let lastReloadAt = 0;
+    const snapshotRegistry = async (): Promise<Map<string, RowSnap>> => {
+      const rows = await listLocalCompanies({ includeDeleted: true });
+      const out = new Map<string, RowSnap>();
+      for (const r of rows) {
+        const o = r as Record<string, unknown>;
+        const m: RowSnap = new Map();
+        for (const k of Object.keys(o).sort()) {
+          if (VOLATILE_KEY.test(k) || o[k] === undefined) continue;
+          m.set(k, stableJson(o[k]));
+        }
+        out.set(String(o.id ?? ""), m);
+      }
+      return out;
+    };
+    const diffSnap = (a: Map<string, RowSnap>, b: Map<string, RowSnap>): string[] => {
+      const cut = (s: string | undefined) => (s === undefined ? "<none>" : s.length > 80 ? `${s.slice(0, 80)}…` : s);
+      const lines: string[] = [];
+      for (const id of new Set([...a.keys(), ...b.keys()])) {
+        const ra = a.get(id);
+        const rb = b.get(id);
+        if (!ra || !rb) {
+          lines.push(`company ${id}: ${ra ? "removed" : "added"}`);
+          continue;
+        }
+        const changed: string[] = [];
+        for (const k of new Set([...ra.keys(), ...rb.keys()])) {
+          if (ra.get(k) !== rb.get(k)) changed.push(`${k}: ${cut(ra.get(k))} -> ${cut(rb.get(k))}`);
+        }
+        if (changed.length) lines.push(`company ${id}: ${changed.slice(0, 6).join(" | ")}`);
+      }
+      return lines.slice(0, 5);
+    };
+    const flush = async () => {
+      timer = undefined;
+      let snap: Map<string, RowSnap> | null = null;
+      try {
+        snap = await snapshotRegistry();
+      } catch {
+        snap = null;
+      }
+      if (disposed) return;
+      const now = Date.now();
+      const diff = snap && lastSnap ? diffSnap(lastSnap, snap) : null;
+      if (diff && diff.length === 0 && now - lastReloadAt < FORCE_RELOAD_MS) {
+        plRegistryPullDebug("bumpEventSkip", "skip: registry unchanged", () => ({ sinceLastReloadMs: now - lastReloadAt }));
+        return;
+      }
+      if (diff && diff.length > 0) {
+        plRegistryPullDebug("bumpEventDiff", `registry changed: ${diff.join(" || ")}`);
+      }
+      lastSnap = snap;
+      lastReloadAt = now;
+      reloadLocalCompanyRegistry();
+    };
+    const onBump = () => {
+      // Sync dispatch → is stack me emitter frames bhi hote hain (loop source pakadne ke liye).
+      plRegistryPullDebug("bumpEvent", "received", () => ({ stack: plCallerStack(3, 14).join("  <-  ") }));
+      if (timer != null) return;
+      timer = window.setTimeout(() => void flush(), COALESCE_MS);
+    };
     window.addEventListener(BUMP_LOCAL_COMPANY_REGISTRY_EVENT, onBump);
-    return () => window.removeEventListener(BUMP_LOCAL_COMPANY_REGISTRY_EVENT, onBump);
+    return () => {
+      disposed = true;
+      if (timer != null) window.clearTimeout(timer);
+      window.removeEventListener(BUMP_LOCAL_COMPANY_REGISTRY_EVENT, onBump);
+    };
   }, [reloadLocalCompanyRegistry]);
 
   // Track mount time to avoid clearing companyId during initial Firestore load (static/Capacitor race)
@@ -1603,7 +1692,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
   /** Local-only heavy path: Firestore owned/shared → SQLite mirror + stale purge; deferred / bump / cold-start ke liye. */
   type LocalRegistryMirrorMode = "deferred" | "immediate-empty" | "registry-bump";
-  const performLocalRegistryFirestoreMirror = useCallback(
+  const performLocalRegistryFirestoreMirrorImpl = useCallback(
     async (opts: { mode: LocalRegistryMirrorMode }) => {
       // Thin staff: live Firestore listeners skip — lekin one-shot Online registry mirror
       // chalne do (warna Online tab kabhi SQLite cache / kabhi khali).
@@ -1872,6 +1961,76 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     },
     [user?.uid, user?.email, customUser?.userDocId, customUser?.email, normalizeLocalCompany, isSuperAdminUser, clearCompanyId, router, isBrowserOnline]
   );
+
+  /**
+   * Registry mirror throttle (securetoken / Firestore flood guard): ek waqt me ek hi pull;
+   * pichla pull ~15 s ke andar khatam hua ho to background trigger skip. User actions (`bypassThrottle`),
+   * cold-start `immediate-empty` aur email change hamesha chalte hain (in-flight ho to ek trailing run).
+   * Data / sync semantics same - sirf repeat frequency limit.
+   */
+  const REGISTRY_MIRROR_MIN_GAP_MS = 15_000;
+  const registryMirrorInFlightRef = useRef<Promise<void> | null>(null);
+  const registryMirrorLastDoneAtRef = useRef(0);
+  const registryMirrorLastEmailRef = useRef<string | null>(null);
+  const registryMirrorTrailingRef = useRef(false);
+  const registryMirrorUserInputsRef = useRef({ user, customUser });
+  registryMirrorUserInputsRef.current = { user, customUser };
+  const performLocalRegistryFirestoreMirror = useMemo(() => {
+    const run = (opts: {
+      mode: LocalRegistryMirrorMode;
+      bypassThrottle?: boolean;
+      source?: string;
+    }): Promise<void> => {
+      const inputs = registryMirrorUserInputsRef.current;
+      const emailNow = resolveMirrorUserEmail(inputs.user, inputs.customUser) || "";
+      const emailChanged = registryMirrorLastEmailRef.current !== emailNow;
+      const bypass = !!opts.bypassThrottle || opts.mode === "immediate-empty" || emailChanged;
+      const inFlight = registryMirrorInFlightRef.current;
+      if (inFlight) {
+        if (bypass) registryMirrorTrailingRef.current = true;
+        plRegistryPullDebug("registryMirror", "skip: pull in flight", () => ({
+          mode: opts.mode,
+          source: opts.source,
+          trailingQueued: bypass,
+          caller: plCallerFrame(5),
+        }));
+        return inFlight;
+      }
+      const sinceLastMs = Date.now() - registryMirrorLastDoneAtRef.current;
+      if (!bypass && sinceLastMs < REGISTRY_MIRROR_MIN_GAP_MS) {
+        plRegistryPullDebug("registryMirror", "skip: recent pull", () => ({
+          mode: opts.mode,
+          source: opts.source,
+          sinceLastMs,
+          caller: plCallerFrame(5),
+        }));
+        return Promise.resolve();
+      }
+      plRegistryPullDebug("registryMirrorRun", "run", () => ({
+        mode: opts.mode,
+        source: opts.source,
+        bypass,
+        sinceLastMs,
+        caller: plCallerFrame(5),
+      }));
+      registryMirrorLastEmailRef.current = emailNow;
+      const p = (async () => {
+        try {
+          await performLocalRegistryFirestoreMirrorImpl({ mode: opts.mode });
+        } finally {
+          registryMirrorLastDoneAtRef.current = Date.now();
+          registryMirrorInFlightRef.current = null;
+        }
+      })();
+      registryMirrorInFlightRef.current = p;
+      return p.then(() => {
+        if (!registryMirrorTrailingRef.current) return;
+        registryMirrorTrailingRef.current = false;
+        return run({ mode: "registry-bump", bypassThrottle: true, source: "trailing" });
+      });
+    };
+    return run;
+  }, [performLocalRegistryFirestoreMirrorImpl]);
 
   useEffect(() => {
     const onMirror = () => {
@@ -2996,11 +3155,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     if (typeof window === "undefined") return;
     const onSyncToggle = () => {
       triggerRegistryUpdateRef.current?.();
-      void performLocalRegistryFirestoreMirror({ mode: "registry-bump" }).catch(() => {});
+      void performLocalRegistryFirestoreMirror({ mode: "registry-bump", bypassThrottle: true, source: "event:dataSyncToggle" }).catch(() => {});
     };
     const onRegistryPull = () => {
       triggerRegistryUpdateRef.current?.();
-      void performLocalRegistryFirestoreMirror({ mode: "registry-bump" }).catch(() => {});
+      void performLocalRegistryFirestoreMirror({ mode: "registry-bump", bypassThrottle: true, source: "event:registryPull" }).catch(() => {});
     };
     window.addEventListener(FIREBASE_LEDGER_DATA_SYNC_CHANGED_EVENT, onSyncToggle);
     window.addEventListener(FIREBASE_LEDGER_COMPANY_REGISTRY_PULL_EVENT, onRegistryPull);

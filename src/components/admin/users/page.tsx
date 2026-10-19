@@ -13,6 +13,7 @@ import { collection, getDocs, onSnapshot, query, doc, DocumentData } from 'fireb
 import { firestore as db } from '@/lib/firebase'
 import type { Company } from '@/app/(admin)/admin/companies/page';
 import type { Role } from "@/utils/rbac";
+import { PRESENCE_ONLINE_THRESHOLD_MS } from "@/lib/presenceConstants";
 
 
 export type AppUser = {
@@ -115,7 +116,7 @@ export default function UsersPage() {
     const active = userList.filter(u => u.isActive !== false).length;
     const inactive = total - active;
     const now = Date.now();
-    const online = userList.filter(u => u.lastSeen?.toDate && (now - u.lastSeen.toDate().getTime() < 90 * 1000)).length;
+    const online = userList.filter(u => u.lastSeen?.toDate && (now - u.lastSeen.toDate().getTime() < PRESENCE_ONLINE_THRESHOLD_MS)).length;
     const offline = total - online;
 
     return { total, active, inactive, online, offline };
@@ -194,7 +195,7 @@ export default function UsersPage() {
                     currentUser={user as AppUser}
                     ownedCompanies={ownedCompanies}
                     sharedCompanies={sharedCompanies}
-                    isOnline={selectedUser.lastSeen?.toDate && (Date.now() - selectedUser.lastSeen.toDate().getTime()) < 90 * 1000}
+                    isOnline={selectedUser.lastSeen?.toDate && (Date.now() - selectedUser.lastSeen.toDate().getTime()) < PRESENCE_ONLINE_THRESHOLD_MS}
                 />
             ): (
                 <Card className="h-full flex items-center justify-center">

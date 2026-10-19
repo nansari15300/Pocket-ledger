@@ -35,6 +35,7 @@ import { isProtectedDriveLocalRegistryRow } from "@/lib/driveRestoredLocalCompan
 import { pullSharedOnlineCompaniesFromFirestore } from "@/lib/sharedCompaniesFirestorePull";
 import { ownerEmailQueryVariants, sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
 import { isListedPlServerSharedCompany } from "@/lib/plServerAccessContext";
+import { ensureFreshIdToken } from "@/lib/ensureFreshIdToken";
 
 export type MirrorOnlineUser = {
   uid: string;
@@ -77,7 +78,7 @@ async function ensureAuthReadyForCompanyPull(): Promise<void> {
   if (!isLocalOnlyMode()) return;
   await ensureEmbeddedFirestoreOnlineForCloudCompanyLoad();
   try {
-    await auth.currentUser?.getIdToken(true);
+    await ensureFreshIdToken({ force: true, source: "mirror.ensureAuthReady" });
   } catch {
     /* token race — pull phir bhi try */
   }
@@ -93,7 +94,7 @@ async function pullQuerySnap(q: Query, attempt: number): Promise<{ docs: { id: s
   const online = typeof navigator === "undefined" || navigator.onLine !== false;
   if (online && isLocalOnlyMode() && attempt === 0) {
     try {
-      await auth.currentUser?.getIdToken(true);
+      await ensureFreshIdToken({ force: true, source: "mirror.pullQuerySnap" });
     } catch {
       /* fresh storage clean: auth token race */
     }
@@ -107,7 +108,7 @@ async function pullQuerySnap(q: Query, attempt: number): Promise<{ docs: { id: s
     } catch (e) {
       if (isPermissionDenied(e) && attempt < 2) {
         try {
-          await auth.currentUser?.getIdToken(true);
+          await ensureFreshIdToken({ force: true, permissionDenied: true, source: "mirror.pullQuerySnap.denied" });
         } catch {
           /* retry */
         }

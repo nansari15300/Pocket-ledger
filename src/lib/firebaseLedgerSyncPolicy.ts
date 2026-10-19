@@ -15,6 +15,7 @@ import {
   type FirebaseLedgerSyncMode,
 } from "@/lib/firebaseLedgerSyncMode";
 import { isFirebaseLedgerDataSyncEnabled } from "@/lib/firebaseLedgerDataSyncDisabled";
+import { readCachedGlobalSyncModeSettings } from "@/lib/globalSyncModeSettings";
 
 /** Where the effective mode came from — UI move to admin plans only needs this resolver. */
 export type FirebaseLedgerSyncPolicySource = "device_preference" | "plan_override" | "build_default";
@@ -29,12 +30,12 @@ export type FirebaseLedgerSyncPlanOverride = {
 };
 
 /**
- * Global product policy. The mode switch is intentionally hidden, so old device
- * preferences cannot keep a client on delta mode.
+ * Global product policy from SuperAdmin settings (`app_settings/sync_mode`).
  */
 export function getFirebaseLedgerSyncPlanOverride(): FirebaseLedgerSyncPlanOverride | null {
+  const globalMode = readCachedGlobalSyncModeSettings().mode;
   return {
-    syncMode: "full_online",
+    syncMode: globalMode,
     cloudDataSyncAllowed: true,
     allowUserModeSwitch: false,
   };
