@@ -10997,9 +10997,9 @@ body[class*="theme-"] [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field]
     overflow: hidden !important;
   }
   [data-pl-tax-balance-with-account-filter] > [data-pl-tax-balance-account-filter] {
-    width: auto !important;
+    width: 50% !important;
     max-width: 50% !important;
-    flex: 0 1 auto !important;
+    flex: 0 1 50% !important;
     min-width: 0 !important;
     overflow: hidden !important;
   }
@@ -11118,9 +11118,9 @@ html[data-pl-app-mobile-ui="1"] [data-pl-tax-balance-with-account-filter] {
   overflow: hidden !important;
 }
 html[data-pl-app-mobile-ui="1"] [data-pl-tax-balance-with-account-filter] > [data-pl-tax-balance-account-filter] {
-  width: auto !important;
+  width: 50% !important;
   max-width: 50% !important;
-  flex: 0 1 auto !important;
+  flex: 0 1 50% !important;
   min-width: 0 !important;
   overflow: hidden !important;
 }

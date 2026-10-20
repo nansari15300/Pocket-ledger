@@ -1175,7 +1175,7 @@ export function TaxDetails({
           >
             {oppositeAccountFilterOptions.length > 0 ? (
               <div
-                className="min-w-0 max-w-[50%] flex-initial"
+                className="min-w-0 max-w-[50%] flex-[0_1_50%] w-[50%]"
                 data-pl-tax-balance-account-filter=""
               >
                 <Combobox
@@ -1190,7 +1190,7 @@ export function TaxDetails({
                   triggerClassName={cn(
                     LEDGER_HEADER_PILL_CN,
                     chromePillBtn(false),
-                    "!h-7 min-h-7 w-auto max-w-full min-w-0 text-xs truncate"
+                    "!h-7 min-h-7 w-full min-w-0 max-w-full text-xs truncate"
                   )}
                 />
               </div>
