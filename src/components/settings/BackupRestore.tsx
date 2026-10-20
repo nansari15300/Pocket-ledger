@@ -115,6 +115,7 @@ import { AutoBackupDriveUploadDialog } from "@/components/settings/AutoBackupDri
 import { buildAutoBackupRelativeDir } from "@/lib/autoBackupPath";
 import { isDeviceLocalCompany, partitionCompaniesForSelector, filterCompaniesForSelectorPartition, filterOnlineTabCompaniesForSelector, type CompanyListTab } from "@/lib/companyStorageKind";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
+import { isAdminPanelCompanyRow } from "@/lib/adminPanelCompany/companyListFilter";
 import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import {
@@ -700,10 +701,12 @@ export function BackupRestore() {
   }, []);
   const autoBackupSelectorCompanies = useMemo(() => {
     const shareUser = { uid: user?.uid || "", email: user?.email ?? null };
-    const merged = autoBackupCompanyRows.map((c) => ({
-      ...c,
-      isOwned: user?.uid ? resolveCompanyIsOwnedForUser(c, shareUser) : Boolean(c.isOwned),
-    }));
+    const merged = autoBackupCompanyRows
+      .filter((c) => !isAdminPanelCompanyRow(c))
+      .map((c) => ({
+        ...c,
+        isOwned: user?.uid ? resolveCompanyIsOwnedForUser(c, shareUser) : Boolean(c.isOwned),
+      }));
     return filterCompaniesForSelectorPartition(
       filterSharedOnlyCompaniesForSuperAdminInMainApp(
         merged,
