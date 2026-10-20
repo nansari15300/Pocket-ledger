@@ -2835,7 +2835,10 @@ export function BackupRestore() {
                   className="w-auto"
                 >
                   {predownloadRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-                  Pre-download data{staticBackupClient ? " & attachments" : ""}
+                  Pre-download data{" "}
+                  <span className={staticBackupClient ? "" : "text-muted-foreground/50"}>
+                    &amp; attachments
+                  </span>
                 </Button>
               </div>
             {isBackingUp ? null : backupRun.status === "interrupted" ? (
