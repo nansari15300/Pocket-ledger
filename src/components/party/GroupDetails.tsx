@@ -81,7 +81,8 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
-import { mdc, mdcMobileTxnBalanceRowData, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
+import { mdc, mdcMobileTxnBalanceRowData, mdcMobileTxnDateRowData, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
+import { ledgerMasterDateRangeLabel } from "@/lib/ledgerMasterDefaultView";
 import {
   MobileEntityTxnToolbarPicker,
   MobileEntityTxnToolbarRow,
@@ -255,6 +256,7 @@ export function GroupDetails({
   icGroupPeerCompanyFilterId = null,
   icGroupMemberFilterId = null,
   groupMemberFilterId = null,
+  hideMobilePeriodLabelRow = false,
 }: {
   group: Group;
   allGroups: Group[];
@@ -269,6 +271,7 @@ export function GroupDetails({
   icGroupPeerCompanyFilterId?: string | null;
   icGroupMemberFilterId?: string | null;
   groupMemberFilterId?: string | null;
+  hideMobilePeriodLabelRow?: boolean;
 }) {
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { balanceMode, setBalanceMode } = useBalanceMode();
@@ -1300,7 +1303,7 @@ export function GroupDetails({
     return raw instanceof Date && !isNaN(raw.getTime()) ? raw : undefined;
   }, [filteredMobileTransactions, rowsPerPage, mobilePaginationMeta.sliceStart, hasLedgerDateFilter, dateRange?.from]);
 
-  const dateRangeLabel = buildDateRangeText() || "All Time";
+  const dateRangeLabel = ledgerMasterDateRangeLabel(dateRange, buildDateRangeText());
 
   // Group dropdown: hide Assets, Equity, Expenses, Income, Liabilities (show Sundry Creditors, Sundry Debtors, etc.)
   const groupDropdownOptions = useMemo(() => {
@@ -1431,19 +1434,24 @@ export function GroupDetails({
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
         {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
         <MobileDetailSummaryCollapsible>
-        <div className="flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5">
-          <span className="text-[11px] font-medium leading-tight text-muted-foreground">{!dateRange || (dateRange.from == null && dateRange.to == null) ? "All Time" : dateRangeLabel}</span>
-          {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
-            <button
-              type="button"
-              onClick={() => onDateRangeChange(undefined)}
-              className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
-              aria-label="Clear date filter"
-            >
-              <XCircle className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
+        {!hideMobilePeriodLabelRow ? (
+          <div
+            className={cn(mdc.mobileTxnDateRow, "gap-1.5 px-2 py-1")}
+            {...mdcMobileTxnDateRowData}
+          >
+            <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
+            {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
+              <button
+                type="button"
+                onClick={() => onDateRangeChange(undefined)}
+                className="p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground"
+                aria-label="Clear date filter"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        ) : null}
         <div className={mdc.mobileTxnBalanceRow} {...mdcMobileTxnBalanceRowData}>
           <p className={cn(mdc.mobileTxnBalanceTextLg, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
             <span className="text-[0.6em]">{balanceText}</span> {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}

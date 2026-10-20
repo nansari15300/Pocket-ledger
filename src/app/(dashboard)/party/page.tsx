@@ -572,8 +572,17 @@ function PartyPageContent() {
     [isMobile, selectedParty, partyMasterDetailTitle]
   );
   const partyMobileHeaderSecondary = useMemo((): ReactNode | undefined => {
+    if (!isMobile) return undefined;
+    if (activeView === "groups" && selectedGroupRaw) {
+      return (
+        <MobileMasterDetailHeaderDateSecondary
+          dateRange={groupDetailsDateRange}
+          onClear={() => setGroupDetailsDateRange(undefined)}
+        />
+      );
+    }
     const partyDetailViews = ["parties", "ic_ac", "subscribers", "agents"] as const;
-    if (!isMobile || !selectedParty || selectedParty.id === OVERDUE_ACCOUNT_ID) return undefined;
+    if (!selectedParty || selectedParty.id === OVERDUE_ACCOUNT_ID) return undefined;
     if (!partyDetailViews.includes(activeView as (typeof partyDetailViews)[number])) return undefined;
     return (
       <MobileMasterDetailHeaderDateSecondary
@@ -581,7 +590,7 @@ function PartyPageContent() {
         onClear={() => setPartyDetailsDateRange(undefined)}
       />
     );
-  }, [isMobile, selectedParty, activeView, partyDetailsDateRange]);
+  }, [isMobile, selectedParty, selectedGroupRaw, activeView, partyDetailsDateRange, groupDetailsDateRange]);
 
    const processedGroups = useMemo(() => {
     // Filter out report-only groups (isReportOnly: true) and system parent groups
@@ -1748,6 +1757,7 @@ function PartyPageContent() {
           dateRange={groupDetailsDateRange}
           onDateRangeChange={setGroupDetailsDateRange}
           userNames={mergedUserNames}
+          hideMobilePeriodLabelRow={isMobile}
         />
       )}
       {!selected && <div className="p-6 text-center text-muted-foreground">Select an item to see details</div>}
