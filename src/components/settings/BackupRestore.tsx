@@ -188,7 +188,7 @@ const backupCardToneSkyCn = "pl-dashboard-tone-card pl-dashboard-ribbon-sky shad
 
 /** Card header: title upar, actions neeche wrap (mobile); desktop par ek row. */
 const backupCardHeaderLayoutCn = "flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between";
-const backupCardHeaderActionsCn = "flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto sm:justify-end";
+const backupCardHeaderActionsCn = "grid grid-cols-2 w-full gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end";
 const backupCardActionBtnCn = "w-full sm:w-auto";
 
 type BackupLocationFieldProps = {
@@ -3252,8 +3252,7 @@ export function BackupRestore() {
                 Last auto backup: {new Date(autoBackupPrefs.lastRunAt).toLocaleString()}
               </p>
             ) : null}
-            <div className="flex min-w-0 flex-col gap-2 pt-1 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <div className="grid grid-cols-2 gap-2 pt-1 sm:flex sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
                 <Button
                   type="button"
                   variant="outline"
@@ -3273,8 +3272,6 @@ export function BackupRestore() {
                   <Cloud className="mr-2 h-4 w-4" />
                   Drive upload
                 </Button>
-              </div>
-              <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
                 <Button
                   type="button"
                   variant="outline"
@@ -3297,7 +3294,6 @@ export function BackupRestore() {
                   {isBackingUp ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Backup now
                 </Button>
-              </div>
             </div>
           </CardContent>
         </Card>
@@ -3330,7 +3326,7 @@ export function BackupRestore() {
             </p>
             <p className="text-xs">Debounced sync also runs a few seconds after local saves when a location is active.</p>
           </CardContent>
-          <CardFooter className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <CardFooter className="grid grid-cols-2 gap-2 sm:flex sm:flex-row sm:flex-wrap">
             <Button
               type="button"
               variant="outline"
