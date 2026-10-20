@@ -10985,25 +10985,37 @@ body[class*="theme-"] [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field]
     color: rgb(30 58 138) !important;
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
   }
-  /* Tax mobile: pill left; amount centered in remaining space (pill → right edge) */
+  /* Tax mobile: pill left (max 50%); balance right; amount never cut */
   [data-pl-tax-balance-with-account-filter] {
-    justify-content: flex-start !important;
-    text-align: left !important;
-    gap: 0.5rem !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    gap: 0.375rem !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
   }
   [data-pl-tax-balance-with-account-filter] > [data-pl-tax-balance-account-filter] {
     width: auto !important;
-    max-width: 2.5in !important;
-    flex: 0 1 2.5in !important;
+    max-width: 50% !important;
+    flex: 0 1 auto !important;
     min-width: 0 !important;
+    overflow: hidden !important;
   }
   [data-pl-tax-balance-with-account-filter] > p {
     width: auto !important;
     max-width: none !important;
-    flex: 1 1 0% !important;
+    flex: 1 1 auto !important;
     min-width: 0 !important;
-    text-align: center !important;
-    white-space: nowrap !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    gap: 0.25rem !important;
+    text-align: right !important;
+    margin: 0 !important;
+    margin-left: auto !important;
+    overflow: hidden !important;
   }
   [data-pl-mobile-detail-merged-header] .border-t,
   [data-pl-mobile-detail-merged-header] .border-border {
@@ -11096,23 +11108,35 @@ html[data-pl-app-mobile-ui="1"] [data-pl-staff-balance-with-split-pill] > span[a
   flex-shrink: 0 !important;
 }
 html[data-pl-app-mobile-ui="1"] [data-pl-tax-balance-with-account-filter] {
-  justify-content: flex-start !important;
-  text-align: left !important;
-  gap: 0.5rem !important;
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  gap: 0.375rem !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
 }
 html[data-pl-app-mobile-ui="1"] [data-pl-tax-balance-with-account-filter] > [data-pl-tax-balance-account-filter] {
   width: auto !important;
-  max-width: 2.5in !important;
-  flex: 0 1 2.5in !important;
+  max-width: 50% !important;
+  flex: 0 1 auto !important;
   min-width: 0 !important;
+  overflow: hidden !important;
 }
 html[data-pl-app-mobile-ui="1"] [data-pl-tax-balance-with-account-filter] > p {
   width: auto !important;
   max-width: none !important;
-  flex: 1 1 0% !important;
+  flex: 1 1 auto !important;
   min-width: 0 !important;
-  text-align: center !important;
-  white-space: nowrap !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 0.25rem !important;
+  text-align: right !important;
+  margin: 0 !important;
+  margin-left: auto !important;
+  overflow: hidden !important;
 }
 html[data-pl-app-mobile-ui="1"] body.theme-pro.dark main > div > div.border-b[data-pl-mobile-detail-merged-header],
 html[data-pl-app-mobile-ui="1"] body[class*="theme-"].dark main > div > div.border-b[data-pl-mobile-detail-merged-header],
@@ -11360,10 +11384,9 @@ body[class*="theme-"] main [data-pl-mobile-txn-toolbar-row] input[data-pl-ledger
   text-align: center !important;
 }
 [data-pl-mobile-txn-balance-row][data-pl-tax-balance-with-account-filter] > p {
-  margin-left: 0 !important;
+  margin-left: auto !important;
   margin-right: 0 !important;
-  text-align: center !important;
-  white-space: nowrap !important;
+  text-align: right !important;
 }
 body[class*="theme-"] main [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"]:focus,
 body[class*="theme-"] main [data-pl-recent-txn-toolbar] button[data-pl-toolbar-field][role="combobox"]:focus-visible,

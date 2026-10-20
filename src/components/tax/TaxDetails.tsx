@@ -1175,7 +1175,7 @@ export function TaxDetails({
           >
             {oppositeAccountFilterOptions.length > 0 ? (
               <div
-                className="min-w-0 shrink-[2] basis-0 max-w-[50%] flex-1"
+                className="min-w-0 max-w-[50%] flex-initial"
                 data-pl-tax-balance-account-filter=""
               >
                 <Combobox
@@ -1186,11 +1186,11 @@ export function TaxDetails({
                     setCurrentPage(1);
                   }}
                   placeholder="All accounts"
-                  showFullOptionText={false}
+                  showFullOptionText={true}
                   triggerClassName={cn(
                     LEDGER_HEADER_PILL_CN,
                     chromePillBtn(false),
-                    "!h-7 min-h-7 w-full min-w-0 max-w-full text-xs truncate"
+                    "!h-7 min-h-7 w-auto max-w-full min-w-0 text-xs truncate"
                   )}
                 />
               </div>
@@ -1198,13 +1198,13 @@ export function TaxDetails({
             <p
               className={cn(
                 oppositeAccountFilterOptions.length > 0
-                  ? cn(mdc.mobileTxnBalanceTextLg, "flex-none whitespace-nowrap text-right")
+                  ? cn(mdc.mobileTxnBalanceTextLg, "flex items-center justify-end gap-1 min-w-0 flex-1 overflow-hidden text-right")
                   : mdc.mobileTxnBalanceText2xl,
                 headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
               )}
             >
-              <span className="inline-block max-w-[5.5rem] overflow-hidden align-bottom text-ellipsis whitespace-nowrap text-[0.6em] leading-none">{balanceLabel}</span>{" "}
-              <span className="whitespace-nowrap">{formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}</span>
+              <span className="min-w-0 shrink truncate text-[0.6em] leading-none">{balanceLabel}</span>{" "}
+              <span className="flex-none whitespace-nowrap">{formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}</span>
             </p>
           </div>
           </MobileDetailSummaryCollapsible>
