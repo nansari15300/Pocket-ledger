@@ -2968,25 +2968,25 @@ export function BackupRestore() {
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
-                <div className={cn(backupCardPillCn, "ml-1 h-8 min-h-8 w-auto shrink-0 gap-1.5 px-2.5 py-0")}>
-                  <Label htmlFor="auto-backup-folder-date-system" className="shrink-0 text-xs font-medium leading-none">
-                    Date system
-                  </Label>
-                  <select
-                    id="auto-backup-folder-date-system"
-                    className="h-6 min-w-[3.25rem] cursor-pointer appearance-none border-0 bg-transparent p-0 text-sm outline-none focus:ring-0"
-                    value={autoBackupDraft.folderDateSystem}
-                    onChange={(e) =>
-                      updateAutoBackupDraft({
-                        ...autoBackupDraft,
-                        folderDateSystem: e.target.value === "BS" ? "BS" : "AD",
-                      })
-                    }
-                    aria-label="Backup folder date system"
-                  >
-                    <option value="AD">AD</option>
-                    <option value="BS">BS</option>
-                  </select>
+                <div className={cn(backupCardPillCn, "ml-1 h-auto min-h-8 w-auto shrink-0 gap-1.5 px-2.5 py-1")}>
+                  <span className="shrink-0 text-xs font-medium leading-none">Date system</span>
+                  <div className="flex gap-1" role="group" aria-label="Backup folder date system">
+                    {(["AD", "BS"] as const).map((ds) => (
+                      <button
+                        key={ds}
+                        type="button"
+                        onClick={() => updateAutoBackupDraft({ ...autoBackupDraft, folderDateSystem: ds })}
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-xs font-semibold leading-none transition-colors",
+                          autoBackupDraft.folderDateSystem === ds
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "bg-background/60 text-muted-foreground hover:bg-background hover:text-foreground"
+                        )}
+                      >
+                        {ds}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
