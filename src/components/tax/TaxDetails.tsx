@@ -1164,7 +1164,9 @@ export function TaxDetails({
           <div
             className={cn(
               mdc.mobileTxnBalanceRow,
-              oppositeAccountFilterOptions.length > 0 && "gap-2 px-2"
+              oppositeAccountFilterOptions.length > 0
+                ? "justify-between gap-1.5 px-2"
+                : ""
             )}
             {...mdcMobileTxnBalanceRowData}
             {...(oppositeAccountFilterOptions.length > 0
@@ -1173,7 +1175,7 @@ export function TaxDetails({
           >
             {oppositeAccountFilterOptions.length > 0 ? (
               <div
-                className="min-w-0 max-w-[2.5in] shrink"
+                className="min-w-0 shrink-[2] basis-0 max-w-[50%] flex-1"
                 data-pl-tax-balance-account-filter=""
               >
                 <Combobox
@@ -1188,7 +1190,7 @@ export function TaxDetails({
                   triggerClassName={cn(
                     LEDGER_HEADER_PILL_CN,
                     chromePillBtn(false),
-                    "!h-7 min-h-7 w-full min-w-0 max-w-full text-xs"
+                    "!h-7 min-h-7 w-full min-w-0 max-w-full text-xs truncate"
                   )}
                 />
               </div>
@@ -1196,12 +1198,13 @@ export function TaxDetails({
             <p
               className={cn(
                 oppositeAccountFilterOptions.length > 0
-                  ? cn(mdc.mobileTxnBalanceTextLg, "min-w-0 flex-1 whitespace-nowrap text-center")
+                  ? cn(mdc.mobileTxnBalanceTextLg, "flex-none whitespace-nowrap text-right")
                   : mdc.mobileTxnBalanceText2xl,
                 headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
               )}
             >
-              <span className="text-[0.6em]">{balanceLabel}</span> {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
+              <span className="inline-block max-w-[5.5rem] overflow-hidden align-bottom text-ellipsis whitespace-nowrap text-[0.6em] leading-none">{balanceLabel}</span>{" "}
+              <span className="whitespace-nowrap">{formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}</span>
             </p>
           </div>
           </MobileDetailSummaryCollapsible>
