@@ -3752,13 +3752,38 @@ export function BackupRestore() {
                       <span className="font-medium text-foreground">Data only</span> — records and attachment links (URLs).
                     </span>
                   </label>
-                  <label className="flex cursor-pointer items-start gap-2 text-left">
-                    <RadioGroupItem value="attachments" className="mt-0.5" />
-                    <span>
-                      <span className="font-medium text-foreground">With attachments</span>
-                      <span className="block text-xs mt-1 leading-relaxed">
-                        Embed files already on this device. Missing files stay as URLs (online company).
+                  <label
+                    className={cn(
+                      "flex items-start gap-2 text-left",
+                      staticBackupClient ? "cursor-pointer" : "cursor-not-allowed opacity-60"
+                    )}
+                  >
+                    <RadioGroupItem value="attachments" className="mt-0.5" disabled={!staticBackupClient} />
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <span className="flex items-center gap-1">
+                        <span className="font-medium text-foreground">With attachments</span>
+                        {!staticBackupClient ? (
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <button
+                                type="button"
+                                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+                                aria-label="Attachment backup info"
+                              >
+                                <Info className="h-3.5 w-3.5" aria-hidden />
+                              </button>
+                            </PopoverTrigger>
+                            <PopoverContent side="top" align="start" className="max-w-[18rem] text-xs leading-snug p-3">
+                              Attachment backup is only available in the <strong>EXE or APK (static app)</strong>. Web app can only backup data and attachment links.
+                            </PopoverContent>
+                          </Popover>
+                        ) : null}
                       </span>
+                      {staticBackupClient ? (
+                        <span className="text-xs leading-relaxed">
+                          Embed files already on this device. Missing files stay as URLs (online company).
+                        </span>
+                      ) : null}
                     </span>
                   </label>
                 </RadioGroup>
@@ -3797,18 +3822,36 @@ export function BackupRestore() {
                   <label
                     className={cn(
                       "flex items-start gap-2 text-left",
-                      attachmentFeatureOn ? "cursor-pointer" : "cursor-not-allowed opacity-60"
+                      attachmentFeatureOn && staticBackupClient ? "cursor-pointer" : "cursor-not-allowed opacity-60"
                     )}
                   >
                     <RadioGroupItem
                       value="attachments"
                       className="mt-0.5"
-                      disabled={!attachmentFeatureOn}
+                      disabled={!attachmentFeatureOn || !staticBackupClient}
                     />
-                    <span>
-                      <span className="font-medium text-foreground">With attachments</span>
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <span className="flex items-center gap-1">
+                        <span className="font-medium text-foreground">With attachments</span>
+                        {!staticBackupClient ? (
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <button
+                                type="button"
+                                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+                                aria-label="Attachment backup info"
+                              >
+                                <Info className="h-3.5 w-3.5" aria-hidden />
+                              </button>
+                            </PopoverTrigger>
+                            <PopoverContent side="top" align="start" className="max-w-[18rem] text-xs leading-snug p-3">
+                              Attachment backup is only available in the <strong>EXE or APK (static app)</strong>. Web app can only backup data and attachment links.
+                            </PopoverContent>
+                          </Popover>
+                        ) : null}
+                      </span>
                       {!attachmentFeatureOn ? (
-                        <span className="block text-xs mt-1">Not included on your plan.</span>
+                        <span className="text-xs">Not included on your plan.</span>
                       ) : null}
                     </span>
                   </label>
