@@ -3182,7 +3182,7 @@ export function BackupRestore() {
                     <TableRow className="border-0 hover:bg-transparent">
                       <TableHead className="text-xs">Company</TableHead>
                       <TableHead className="hidden min-[400px]:table-cell w-[7.5rem] text-right text-xs">Action</TableHead>
-                      <TableHead className="w-[4.5rem] text-center text-xs">Setting</TableHead>
+                      <TableHead className="hidden min-[400px]:table-cell w-[4.5rem] text-center text-xs">Setting</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -3221,6 +3221,19 @@ export function BackupRestore() {
                                   Add password
                                 </Button>
                               )}
+                              {/* Mobile: setting icon below */}
+                              <div className="min-[400px]:hidden pl-6">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 pl-backup-control-sky"
+                                  aria-label={`Backup settings for ${c.name}`}
+                                  onClick={() => openAutoBackupCompanySettings(c)}
+                                >
+                                  <Settings className="h-4 w-4" />
+                                </Button>
+                              </div>
                               {companyUsesOnlineSelectorSyncTicks(c) &&
                               !getOnlineCompanyBackupTickGate(c, {
                                 attachmentEmbedMode: "may_download",
@@ -3246,7 +3259,7 @@ export function BackupRestore() {
                               </Button>
                             )}
                           </TableCell>
-                          <TableCell className="py-2 text-center">
+                          <TableCell className="hidden min-[400px]:table-cell py-2 text-center">
                             <Button
                               type="button"
                               variant="ghost"
