@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw, Info } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -348,11 +349,22 @@ export function BackupFyScopePicker({
             className="mt-0.5"
             disabled={!companyId}
           />
-          <span>
-            <span className="font-medium text-foreground">From FY ... To</span> - tick fiscal years
-            from this company&apos;s vouchers. Middles between the first and last tick auto-select
-            (one contiguous block). Closing balances of earlier FYs become openings in this backup
-            only.
+          <span className="flex items-center gap-1">
+            <span className="font-medium text-foreground">From FY ... To</span>
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+                  aria-label="FY range info"
+                >
+                  <Info className="h-3.5 w-3.5" aria-hidden />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent side="top" align="start" className="max-w-[20rem] text-xs leading-snug p-3">
+                Tick fiscal years from this company&apos;s vouchers. Middles between the first and last tick auto-select (one contiguous block). Closing balances of earlier FYs become openings in this backup only.
+              </PopoverContent>
+            </Popover>
           </span>
         </label>
       </RadioGroup>
