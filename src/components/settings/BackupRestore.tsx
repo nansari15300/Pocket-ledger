@@ -2816,17 +2816,19 @@ export function BackupRestore() {
                 showButton={false}
               />
             </div>
-            {staticBackupClient ? (
-              <div className={cn(backupCardSoftGreenBorderCn, "space-y-2 p-3")}>
+            <div className={cn(backupCardSoftGreenBorderCn, "space-y-2 p-3", !staticBackupClient && "opacity-50")}>
                 <p className="text-sm text-foreground font-medium">Pre-download (static app)</p>
                 <p className="text-xs leading-relaxed">
                   Download full company data into local SQLite and cache attachment files on this device before backup with attachments.
+                  {!staticBackupClient ? (
+                    <span className="block mt-1 text-muted-foreground italic">Only available on EXE / APK app.</span>
+                  ) : null}
                 </p>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={predownloadRunning || isBackingUp || !companyId}
+                  disabled={!staticBackupClient || predownloadRunning || isBackingUp || !companyId}
                   onClick={() => void handlePredownloadForBackup()}
                   className={backupCardActionBtnCn}
                 >
@@ -2834,7 +2836,6 @@ export function BackupRestore() {
                   Pre-download data &amp; attachments
                 </Button>
               </div>
-            ) : null}
             {isBackingUp ? null : backupRun.status === "interrupted" ? (
               <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                 Previous backup was interrupted by refresh or close. Start again and keep this page open until complete.
