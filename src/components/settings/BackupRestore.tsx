@@ -733,6 +733,16 @@ export function BackupRestore() {
   );
   const [autoBackupPrefs, setAutoBackupPrefs] = useState<AutoBackupPrefs>(() => readAutoBackupPrefs());
   const [autoBackupDraft, setAutoBackupDraft] = useState<AutoBackupPrefs>(() => readAutoBackupPrefs());
+
+  /** Nepal company → default BS, baaki AD — sirf tab jab user ne pehle se save nahi kiya ho. */
+  useEffect(() => {
+    const isNepal = (company?.country || "").toLowerCase().includes("nepal");
+    const storedSystem = readAutoBackupPrefs().folderDateSystem;
+    // Agar stored prefs me "AD" hai (factory default) aur company Nepal ki hai → BS set karo
+    if (storedSystem === "AD" && isNepal) {
+      setAutoBackupDraft((prev) => ({ ...prev, folderDateSystem: "BS" }));
+    }
+  }, [company?.country]);
   const driveUploadCompanies = useMemo(() => {
     const pool =
       autoBackupCompanyRows.length > 0
