@@ -3181,7 +3181,7 @@ export function BackupRestore() {
                   <TableHeader className="[&_tr]:border-b [&_tr]:border-sky-200/70">
                     <TableRow className="border-0 hover:bg-transparent">
                       <TableHead className="text-xs">Company</TableHead>
-                      <TableHead className="w-[7.5rem] text-right text-xs">Action</TableHead>
+                      <TableHead className="hidden min-[400px]:table-cell w-[7.5rem] text-right text-xs">Action</TableHead>
                       <TableHead className="w-[4.5rem] text-center text-xs">Setting</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -3207,6 +3207,20 @@ export function BackupRestore() {
                                   {c.name}
                                 </Label>
                               </div>
+                              {/* Mobile: password status below name */}
+                              {hasPassword ? (
+                                <span className="min-[400px]:hidden pl-6 text-xs font-medium text-sky-800">Password Protected</span>
+                              ) : (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="min-[400px]:hidden ml-6 h-7 w-fit px-2 text-xs pl-backup-control-sky"
+                                  onClick={() => openAutoBackupEditCompanyDialog(c)}
+                                >
+                                  Add password
+                                </Button>
+                              )}
                               {companyUsesOnlineSelectorSyncTicks(c) &&
                               !getOnlineCompanyBackupTickGate(c, {
                                 attachmentEmbedMode: "may_download",
@@ -3217,7 +3231,7 @@ export function BackupRestore() {
                               ) : null}
                             </div>
                           </TableCell>
-                          <TableCell className="py-2 text-right">
+                          <TableCell className="hidden min-[400px]:table-cell py-2 text-right">
                             {hasPassword ? (
                               <span className="text-xs font-medium text-sky-800">Password Protected</span>
                             ) : (
