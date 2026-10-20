@@ -5213,16 +5213,6 @@ export function TransactionsTable({
                 ))}
               </div>
               <div className={LEDGER_CLOSING_BALANCE_TOTAL_CN}>
-                {closingBalanceRowActions ? (
-                  <div
-                    data-pl-closing-balance-row-actions=""
-                    className={cn(LEDGER_CLOSING_BALANCE_ACTIONS_CN, "mr-0 flex-none")}
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => e.stopPropagation()}
-                  >
-                    {closingBalanceRowActions}
-                  </div>
-                ) : null}
                 {closingBalanceActions ? (
                   <div
                     data-pl-closing-balance-actions=""
@@ -5231,6 +5221,16 @@ export function TransactionsTable({
                     onKeyDown={(e) => e.stopPropagation()}
                   >
                     {closingBalanceActions}
+                  </div>
+                ) : null}
+                {closingBalanceRowActions ? (
+                  <div
+                    data-pl-closing-balance-row-actions=""
+                    className={cn(LEDGER_CLOSING_BALANCE_ACTIONS_CN, "mr-0 flex-none")}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    {closingBalanceRowActions}
                   </div>
                 ) : null}
                 <span className="shrink-0 text-right">{closingBalanceLabel}</span>
