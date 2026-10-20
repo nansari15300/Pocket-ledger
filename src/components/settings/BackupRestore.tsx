@@ -3859,7 +3859,23 @@ export function BackupRestore() {
               )}
             </div>
             <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
-              <Label className="text-sm font-medium text-foreground">Restore access (Gmail)</Label>
+              <div className="flex items-center gap-1">
+                <Label className="text-sm font-medium text-foreground">Restore access (Gmail)</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+                      aria-label="Restore access info"
+                    >
+                      <Info className="h-3.5 w-3.5" aria-hidden />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent side="top" align="start" className="max-w-[20rem] text-xs leading-snug p-3">
+                    Optional. These Gmail accounts can restore backups for this company (in addition to owner). Use the same Gmail as Firebase login on the restore device.
+                  </PopoverContent>
+                </Popover>
+              </div>
               {normalizeRestoreAllowedGmailList(
                 autoBackupSettingsDraft.restoreAllowedGmails,
                 autoBackupSettingsDraft.restoreAllowedGmail
@@ -3916,10 +3932,6 @@ export function BackupRestore() {
                   Add
                 </Button>
               </div>
-              <p className="text-xs leading-relaxed">
-                Optional. These Gmail accounts can restore backups for this company (in addition to owner). Use the
-                same Gmail as Firebase login on the restore device.
-              </p>
             </div>
             <BackupFyScopePicker
               idPrefix="auto-backup"
