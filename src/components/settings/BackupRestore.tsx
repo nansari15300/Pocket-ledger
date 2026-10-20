@@ -1777,14 +1777,14 @@ export function BackupRestore() {
     );
   };
 
-  const handlePredownloadForBackup = async () => {
+  const handlePredownloadForBackup = async (includeAttachments = true) => {
     if (!companyId || !company) return;
     if (predownloadRunning) return;
     try {
       assertCan(can, "export_data");
     } catch (error) {
       if (error instanceof PermissionDeniedError) {
-        toast({ variant: "destructive", title: "Permission Denied", description: error.message });
+        toast({ variant: "destructive", title: "Permission Denied", description: (error as PermissionDeniedError).message });
       }
       return;
     }
@@ -1798,12 +1798,15 @@ export function BackupRestore() {
         company,
         companyId,
         signal: ac.signal,
+        includeAttachments,
         onProgress: setPredownloadProgress,
       });
       if (result.ok) {
         toast({
           title: "Pre-download complete",
-          description: "Local SQLite and attachments are ready. You can create a backup with attachments.",
+          description: includeAttachments
+            ? "Local SQLite and attachments are ready. You can create a backup with attachments."
+            : "Company data is downloaded to local SQLite on this device.",
         });
         window.setTimeout(() => setPredownloadProgress(null), 4000);
       } else if (result.ok === false && !result.cancelled) {
@@ -2816,24 +2819,23 @@ export function BackupRestore() {
                 showButton={false}
               />
             </div>
-            <div className={cn(backupCardSoftGreenBorderCn, "space-y-2 p-3", !staticBackupClient && "opacity-50")}>
-                <p className="text-sm text-foreground font-medium">Pre-download (static app)</p>
+            <div className={cn(backupCardSoftGreenBorderCn, "space-y-2 p-3")}>
+                <p className="text-sm text-foreground font-medium">Pre-download</p>
                 <p className="text-xs leading-relaxed">
-                  Download full company data into local SQLite and cache attachment files on this device before backup with attachments.
-                  {!staticBackupClient ? (
-                    <span className="block mt-1 text-muted-foreground italic">Only available on EXE / APK app.</span>
-                  ) : null}
+                  {staticBackupClient
+                    ? "Download full company data into local SQLite and cache attachment files on this device before backup with attachments."
+                    : "Download company data into local SQLite on this device. Attachments pre-download is only available on EXE / APK app."}
                 </p>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={!staticBackupClient || predownloadRunning || isBackingUp || !companyId}
-                  onClick={() => void handlePredownloadForBackup()}
-                  className={backupCardActionBtnCn}
+                  disabled={predownloadRunning || isBackingUp || !companyId}
+                  onClick={() => void handlePredownloadForBackup(staticBackupClient)}
+                  className="w-auto"
                 >
                   {predownloadRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-                  Pre-download data &amp; attachments
+                  Pre-download data{staticBackupClient ? " & attachments" : ""}
                 </Button>
               </div>
             {isBackingUp ? null : backupRun.status === "interrupted" ? (
