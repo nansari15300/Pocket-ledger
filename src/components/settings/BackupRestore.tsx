@@ -3182,7 +3182,7 @@ export function BackupRestore() {
                     <TableRow className="border-0 hover:bg-transparent">
                       <TableHead className="text-xs">Company</TableHead>
                       <TableHead className="hidden min-[400px]:table-cell w-[7.5rem] text-right text-xs">Action</TableHead>
-                      <TableHead className="hidden min-[400px]:table-cell w-[4.5rem] text-center text-xs">Setting</TableHead>
+                      <TableHead className="hidden min-[400px]:table-cell w-[5rem] text-center text-xs">Setting</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -3221,8 +3221,8 @@ export function BackupRestore() {
                                   Add password
                                 </Button>
                               )}
-                              {/* Mobile: setting icon below */}
-                              <div className="min-[400px]:hidden pl-6">
+                              {/* Mobile: setting icon + info below */}
+                              <div className="min-[400px]:hidden pl-6 flex items-center gap-1">
                                 <Button
                                   type="button"
                                   variant="ghost"
@@ -3233,15 +3233,26 @@ export function BackupRestore() {
                                 >
                                   <Settings className="h-4 w-4" />
                                 </Button>
+                                {companyUsesOnlineSelectorSyncTicks(c) &&
+                                !getOnlineCompanyBackupTickGate(c, {
+                                  attachmentEmbedMode: "may_download",
+                                }).filesAllowed ? (
+                                  <Popover>
+                                    <PopoverTrigger asChild>
+                                      <button
+                                        type="button"
+                                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                                        aria-label="Files info"
+                                      >
+                                        <Info className="h-3.5 w-3.5" aria-hidden />
+                                      </button>
+                                    </PopoverTrigger>
+                                    <PopoverContent side="top" align="start" className="max-w-[18rem] text-xs leading-snug p-3">
+                                      Local-only can embed device files without Files tick. Tick Files only if Online merge must download missing attachments.
+                                    </PopoverContent>
+                                  </Popover>
+                                ) : null}
                               </div>
-                              {companyUsesOnlineSelectorSyncTicks(c) &&
-                              !getOnlineCompanyBackupTickGate(c, {
-                                attachmentEmbedMode: "may_download",
-                              }).filesAllowed ? (
-                                <p className="pl-6 text-[10px] leading-snug text-muted-foreground">
-                                  Local-only can embed device files without Files tick. Tick Files only if Online merge must download missing attachments.
-                                </p>
-                              ) : null}
                             </div>
                           </TableCell>
                           <TableCell className="hidden min-[400px]:table-cell py-2 text-right">
@@ -3260,16 +3271,37 @@ export function BackupRestore() {
                             )}
                           </TableCell>
                           <TableCell className="hidden min-[400px]:table-cell py-2 text-center">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 pl-backup-control-sky"
-                              aria-label={`Backup settings for ${c.name}`}
-                              onClick={() => openAutoBackupCompanySettings(c)}
-                            >
-                              <Settings className="h-4 w-4" />
-                            </Button>
+                            <div className="flex items-center justify-center gap-0.5">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 pl-backup-control-sky"
+                                aria-label={`Backup settings for ${c.name}`}
+                                onClick={() => openAutoBackupCompanySettings(c)}
+                              >
+                                <Settings className="h-4 w-4" />
+                              </Button>
+                              {companyUsesOnlineSelectorSyncTicks(c) &&
+                              !getOnlineCompanyBackupTickGate(c, {
+                                attachmentEmbedMode: "may_download",
+                              }).filesAllowed ? (
+                                <Popover>
+                                  <PopoverTrigger asChild>
+                                    <button
+                                      type="button"
+                                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                                      aria-label="Files info"
+                                    >
+                                      <Info className="h-3.5 w-3.5" aria-hidden />
+                                    </button>
+                                  </PopoverTrigger>
+                                  <PopoverContent side="top" align="end" className="max-w-[18rem] text-xs leading-snug p-3">
+                                    Local-only can embed device files without Files tick. Tick Files only if Online merge must download missing attachments.
+                                  </PopoverContent>
+                                </Popover>
+                              ) : null}
+                            </div>
                           </TableCell>
                         </TableRow>
                       );
