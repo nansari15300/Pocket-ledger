@@ -2924,17 +2924,18 @@ export function BackupRestore() {
                 type="file"
                 accept=".json,.plbp,.webtally"
                 onChange={handleFileSelect}
-                className="pl-backup-control-emerald max-w-full"
+                className="pl-backup-control-emerald max-w-full !border-emerald-500 !border-2"
+                style={{ borderColor: "rgb(16 185 129 / 0.85)", borderWidth: "2px", borderStyle: "solid" }}
               />
             )}
           </CardContent>
-          <CardFooter className="flex min-w-0 flex-col items-stretch gap-3 pt-0">
+          <CardFooter className="flex min-w-0 flex-col items-end gap-3 pt-0">
             <Button
               variant="outline"
               size="sm"
               onClick={startRestore}
               disabled={!fileToRestore || isRestoring}
-              className={backupCardActionBtnCn}
+              className="w-auto"
             >
               {isRestoring ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
               Restore as new company

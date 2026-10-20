@@ -13220,3 +13220,11 @@ html body[class*="theme-"] main [data-master-detail-layout] [data-pl-master-list
     width: 8px !important;
   }
 }
+/* Backup & Restore - Restore Data choose file green border */
+body[class*="theme-"] main [data-pl-backup-restore] input.pl-backup-control-emerald[type="file"],
+body.theme-pro main [data-pl-backup-restore] input.pl-backup-control-emerald[type="file"],
+body main [data-pl-backup-restore] input.pl-backup-control-emerald[type="file"] {
+  border-color: rgb(16 185 129 / 0.85) !important;
+  border-width: 1.5px !important;
+  border-style: solid !important;
+}
