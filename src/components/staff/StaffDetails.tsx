@@ -2278,13 +2278,6 @@ export function StaffDetails({
                   {...statementCheck.tableProps}
                 />
                 </MasterAccountFreezeTxnShell>
-          {paginatedTransactions.length === 0 && (
-            <div className="text-center py-8 text-muted-foreground">
-              {taxDetailsMode
-                ? "No TDS ledger transactions found for this staff member in the selected period."
-                : "No transactions found for this staff member in the selected period."}
-            </div>
-          )}
                 </>
         }
         footer={

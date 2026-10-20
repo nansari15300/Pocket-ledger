@@ -371,11 +371,6 @@ export function AccountGroupDetails({
               <ScrollArea txnChrome className="h-full">
                   <div className="p-4 sm:p-6 md:p-8 pt-0">
                       <TransactionsTable transactions={paginatedTransactions} context="group" contextId={group.id} {...statementCheck.tableProps} showNarration={showNarration} visibleColumns={visibleColumns} openingBalance={group.openingBalance}/>
-                      {paginatedTransactions.length === 0 && (
-                          <div className="text-center py-8 text-muted-foreground">
-                              No transactions found for the selected period.
-                          </div>
-                      )}
                   </div>
               </ScrollArea>
            </CardContent>

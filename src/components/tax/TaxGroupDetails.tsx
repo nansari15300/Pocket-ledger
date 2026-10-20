@@ -1129,11 +1129,6 @@ export function TaxGroupDetails({
               {...statementCheck.tableProps}
             />
             </MasterAccountFreezeTxnShell>
-            {paginatedTransactions.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">
-                No transactions found for the selected period.
-              </div>
-            )}
           </>
           }
           footer={

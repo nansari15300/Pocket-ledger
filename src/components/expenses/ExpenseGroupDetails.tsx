@@ -1107,11 +1107,6 @@ export function ExpenseGroupDetails({
               closingBalanceActions={memberClosingBalanceActions}
             />
             </MasterAccountFreezeTxnShell>
-            {paginatedTransactions.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">
-                No transactions found for the selected period.
-              </div>
-            )}
           </>
           }
           footer={
