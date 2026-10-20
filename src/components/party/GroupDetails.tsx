@@ -81,7 +81,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
-import { mdc, mdcMobileTxnBalanceRowData } from "@/lib/mobileDetailChrome";
+import { mdc, mdcMobileTxnBalanceRowData, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
 import {
   MobileEntityTxnToolbarPicker,
   MobileEntityTxnToolbarRow,
@@ -1452,7 +1452,7 @@ export function GroupDetails({
         </MobileDetailSummaryCollapsible>
         {/* scroll-touch + inline style for APK/WebView touch scroll */}
         <div
-          className="flex-1 min-h-0 overflow-auto scroll-touch"
+          className={mobileTxnScrollBodyClass(false)}
         >
           <div className="pb-2">
           <MasterAccountFreezeTxnShell className="min-h-[8rem]" overlay={memberFreezeOverlay}>
