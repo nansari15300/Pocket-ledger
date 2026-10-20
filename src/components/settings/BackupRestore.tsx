@@ -3596,6 +3596,11 @@ export function BackupRestore() {
                 </PopoverContent>
               </Popover>
             </div>
+            {autoBackupSettingsCompany?.name ? (
+              <p className="text-sm font-semibold text-foreground/80 truncate mt-0.5" title={autoBackupSettingsCompany.name}>
+                {autoBackupSettingsCompany.name}
+              </p>
+            ) : null}
             <DialogDescription className="sr-only">
               {autoBackupSettingsCompany?.name
                 ? `Backup options for ${autoBackupSettingsCompany.name}`
