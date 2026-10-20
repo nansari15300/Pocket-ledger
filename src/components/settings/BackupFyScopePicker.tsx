@@ -1,17 +1,20 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
 import { useDate } from "@/hooks/useDate";
+import { useToast } from "@/hooks/use-toast";
 import type { CompanyStorageRow } from "@/lib/companyStorageKind";
 import {
   formatFiscalYearMergeRangeLabel,
   type FiscalYearMergeRow,
 } from "@/lib/fiscalMergeFySelection";
 import { loadFiscalSplitFyRows } from "@/lib/fiscalSplit/loadFiscalSplitFyRows";
+import { rebuildFyVoucherIndex } from "@/lib/fiscalSplit/fyVoucherIndex";
 import {
   fyKeyStartYear,
   readBackupFyScopeMarker,
@@ -102,7 +105,8 @@ function scopeFromSelectedKeys(
   }
   if (fromIdx > toIdx) return "all";
   const fromFyKey = sortedKeys[fromIdx];
-  if (openEndedTo && latestRolling) return { fromFyKey };
+  const isLatestSelected = toIdx === sortedKeys.length - 1;
+  if (openEndedTo && latestRolling && isLatestSelected) return { fromFyKey };
   const toFyKey = sortedKeys[toIdx];
   if (toFyKey === fromFyKey) return { fromFyKey, toFyKey };
   return { fromFyKey, toFyKey };
@@ -110,6 +114,7 @@ function scopeFromSelectedKeys(
 
 function selectedKeysFromScope(sortedKeys: string[], value: BackupFyScope): Set<string> {
   if (value === "all" || !sortedKeys.length) return new Set();
+  if (!value.fromFyKey) return new Set();
   const fromY = fyKeyStartYear(value.fromFyKey);
   const toY = value.toFyKey ? fyKeyStartYear(value.toFyKey) : null;
   const next = new Set<string>();
@@ -141,10 +146,12 @@ export function BackupFyScopePicker({
   idPrefix: string;
 }) {
   const { dateSystem } = useDate();
-  const country = company?.country;
+  const country = company?.country || (dateSystem === "BS" ? "Nepal" : undefined);
   const [fyRows, setFyRows] = useState<FiscalYearMergeRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
   /** Auto: Latest = To open-ended forward of earliest ticked FY. */
   const [latestRolling, setLatestRolling] = useState(true);
   const loadGenRef = useRef(0);
@@ -160,12 +167,16 @@ export function BackupFyScopePicker({
       setLoading(false);
       return;
     }
+    const effectiveCompany: FyScopeCompany = {
+      ...row,
+      country: row.country || (dateSystem === "BS" ? "Nepal" : undefined),
+    };
     const gen = ++loadGenRef.current;
     setLoading(true);
     setError(null);
     void loadFiscalSplitFyRows({
       companyId: cid,
-      company: row,
+      company: effectiveCompany,
       onLateUpdate: (late) => {
         if (gen !== loadGenRef.current) return;
         setFyRows(late.rows.filter((r) => r.hasTransactions));
@@ -186,7 +197,55 @@ export function BackupFyScopePicker({
     return () => {
       loadGenRef.current += 1;
     };
-  }, [companyId]);
+  }, [companyId, dateSystem]);
+
+  const handleRefreshFyList = async () => {
+    const cid = String(companyId || "").trim();
+    const row = companyRef.current;
+    if (!cid || !row) return;
+    const effectiveCompany: FyScopeCompany = {
+      ...row,
+      country: row.country || (dateSystem === "BS" ? "Nepal" : undefined),
+    };
+    const gen = ++loadGenRef.current;
+    setRebuilding(true);
+    setError(null);
+    try {
+      await rebuildFyVoucherIndex({
+        companyId: cid,
+        company: effectiveCompany,
+      });
+      if (gen !== loadGenRef.current) return;
+      const result = await loadFiscalSplitFyRows({
+        companyId: cid,
+        company: effectiveCompany,
+        onLateUpdate: (late) => {
+          if (gen !== loadGenRef.current) return;
+          setFyRows(late.rows.filter((r) => r.hasTransactions));
+        },
+      });
+      if (gen !== loadGenRef.current) return;
+      const activeRows = result.rows.filter((r) => r.hasTransactions);
+      setFyRows(activeRows);
+      toast({
+        title: "FY list refreshed",
+        description:
+          activeRows.length > 0
+            ? `${activeRows.length} fiscal year(s) from vouchers.`
+            : "No voucher dates found yet.",
+      });
+    } catch (err) {
+      if (gen !== loadGenRef.current) return;
+      console.warn("[BackupFyScopePicker] refresh failed", err);
+      toast({
+        variant: "destructive",
+        title: "Refresh failed",
+        description: err instanceof Error ? err.message : "Could not refresh fiscal years.",
+      });
+    } finally {
+      if (gen === loadGenRef.current) setRebuilding(false);
+    }
+  };
 
   // Oldest → newest (same order as Fiscal year & split).
   const sortedKeys = useMemo(
@@ -202,7 +261,15 @@ export function BackupFyScopePicker({
     return map;
   }, [fyRows]);
 
-  const ranged = value !== "all";
+  const [rangeMode, setRangeMode] = useState<boolean>(value !== "all");
+
+  useEffect(() => {
+    if (value !== "all") {
+      setRangeMode(true);
+    }
+  }, [value]);
+
+  const ranged = rangeMode;
   const selected = useMemo(
     () => (ranged ? selectedKeysFromScope(sortedKeys, value) : new Set<string>()),
     [ranged, sortedKeys, value]
@@ -219,11 +286,22 @@ export function BackupFyScopePicker({
   }, [openEndedTo, value]);
 
   const emitSelected = (nextSelected: Set<string>, rolling = latestRolling) => {
+    let fromIdx = sortedKeys.length;
+    let toIdx = -1;
+    for (let i = 0; i < sortedKeys.length; i++) {
+      if (nextSelected.has(sortedKeys[i])) {
+        if (i < fromIdx) fromIdx = i;
+        if (i > toIdx) toIdx = i;
+      }
+    }
+    const isLatestSelected = toIdx >= 0 && toIdx === sortedKeys.length - 1;
+    const nextRolling = Boolean(openEndedTo && rolling && isLatestSelected);
+    setLatestRolling(nextRolling);
     if (!nextSelected.size) {
-      onChange("all");
+      onChange({ fromFyKey: "" } as unknown as BackupFyScope);
       return;
     }
-    onChange(scopeFromSelectedKeys(sortedKeys, nextSelected, openEndedTo, rolling));
+    onChange(scopeFromSelectedKeys(sortedKeys, nextSelected, openEndedTo, nextRolling));
   };
 
   const toggleKey = (fyKey: string) => {
@@ -232,6 +310,7 @@ export function BackupFyScopePicker({
   };
 
   const enterRangeMode = () => {
+    setRangeMode(true);
     if (!sortedKeys.length) return;
     // Default: all company FYs ticked (contiguous full span).
     emitSelected(new Set(sortedKeys), openEndedTo ? true : false);
@@ -243,8 +322,12 @@ export function BackupFyScopePicker({
       <RadioGroup
         value={ranged ? "range" : "all"}
         onValueChange={(v) => {
-          if (v === "all") onChange("all");
-          else enterRangeMode();
+          if (v === "all") {
+            setRangeMode(false);
+            onChange("all");
+          } else {
+            enterRangeMode();
+          }
         }}
         className="grid gap-2"
       >
@@ -256,14 +339,14 @@ export function BackupFyScopePicker({
         </label>
         <label
           className={`flex items-start gap-2 text-left text-sm ${
-            !sortedKeys.length && !loading ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
+            !companyId ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
           }`}
         >
           <RadioGroupItem
             value="range"
             id={`${idPrefix}-fy-range`}
             className="mt-0.5"
-            disabled={!sortedKeys.length && !loading}
+            disabled={!companyId}
           />
           <span>
             <span className="font-medium text-foreground">From FY ... To</span> - tick fiscal years
@@ -276,20 +359,73 @@ export function BackupFyScopePicker({
 
       {ranged ? (
         <div className="space-y-2 pt-1">
-          {loading ? (
+          {loading || rebuilding ? (
             <p className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Loading fiscal years from vouchers...
+              {rebuilding
+                ? "Refreshing FY list from vouchers..."
+                : "Loading fiscal years from vouchers..."}
             </p>
           ) : error ? (
-            <p className="text-xs text-destructive">{error}</p>
+            <div className="space-y-2">
+              <p className="text-xs text-destructive">{error}</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                disabled={loading || rebuilding || !companyId}
+                onClick={handleRefreshFyList}
+              >
+                {rebuilding ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                Refresh FY list
+              </Button>
+            </div>
           ) : !sortedKeys.length ? (
-            <p className="text-xs text-muted-foreground">
-              No voucher dates found for this company yet — From / To cannot be set.
-            </p>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                No voucher dates found for this company yet — From / To cannot be set.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                disabled={loading || rebuilding || !companyId}
+                onClick={handleRefreshFyList}
+              >
+                {rebuilding ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                Refresh FY list
+              </Button>
+            </div>
           ) : (
             <>
-              <Label className="text-xs text-muted-foreground">Fiscal years from your vouchers</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-xs text-muted-foreground">Fiscal years from your vouchers</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1 px-2 text-xs"
+                  disabled={loading || rebuilding || !companyId}
+                  onClick={handleRefreshFyList}
+                >
+                  {rebuilding ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                  Refresh FY list
+                </Button>
+              </div>
               <div className={TABLE_CN}>
                 <div className="border-b border-emerald-400/60 px-2 py-1.5 text-xs font-semibold text-muted-foreground">
                   Fiscal Year
@@ -336,7 +472,23 @@ export function BackupFyScopePicker({
                     onCheckedChange={(v) => {
                       const on = v === true;
                       setLatestRolling(on);
-                      if (selected.size) emitSelected(selected, on);
+                      if (selected.size) {
+                        if (on) {
+                          const next = new Set(selected);
+                          let fromIdx = sortedKeys.length;
+                          for (let i = 0; i < sortedKeys.length; i++) {
+                            if (selected.has(sortedKeys[i])) {
+                              if (i < fromIdx) fromIdx = i;
+                            }
+                          }
+                          for (let i = fromIdx; i < sortedKeys.length; i++) {
+                            next.add(sortedKeys[i]);
+                          }
+                          emitSelected(next, true);
+                        } else {
+                          emitSelected(selected, false);
+                        }
+                      }
                     }}
                   />
                   <span>

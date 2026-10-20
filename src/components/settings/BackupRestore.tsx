@@ -961,7 +961,11 @@ export function BackupRestore() {
       isDeviceLocalCompany(target) ? { ...saved, backupSourceMode: "local_only" } : saved
     );
     setRestoreGmailInput("");
-    setAutoBackupSettingsCompany(target);
+    const enrichedTarget: Company = {
+      ...target,
+      country: target.country || (target.id === company?.id ? company?.country : undefined),
+    };
+    setAutoBackupSettingsCompany(enrichedTarget);
   };
 
   const closeAutoBackupCompanySettings = () => {
@@ -1041,6 +1045,19 @@ export function BackupRestore() {
       ...(restoreAllowedGmails.length ? { restoreAllowedGmails } : {}),
     };
     delete normalizedDraft.restoreAllowedGmail;
+
+    if (
+      normalizedDraft.fyScope &&
+      normalizedDraft.fyScope !== "all" &&
+      !normalizedDraft.fyScope.fromFyKey
+    ) {
+      toast({
+        variant: "destructive",
+        title: "No FY selected",
+        description: "Tick at least one financial year or choose All FY.",
+      });
+      return;
+    }
 
     const next = patchAutoBackupCompanySettings(autoBackupDraft, target.id, normalizedDraft);
     persistAutoBackupPrefs(next);
@@ -1550,6 +1567,15 @@ export function BackupRestore() {
       return;
     }
 
+    if (backupFyScopeDraft !== "all" && !backupFyScopeDraft.fromFyKey) {
+      toast({
+        variant: "destructive",
+        title: "No FY selected",
+        description: "Tick at least one financial year or choose All FY.",
+      });
+      return;
+    }
+
     let backupCompany = company;
     if (staticBackupClient || backupIntent === "for_offline" || backupSourceMode === "local_only") {
       const localRow = await getLocalCompanyById(companyId, { includeDeleted: true });
@@ -1681,6 +1707,15 @@ export function BackupRestore() {
         variant: "destructive",
         title: "Backup already running",
         description: "Wait for the current backup to finish. Do not refresh the page.",
+      });
+      return;
+    }
+
+    if (backupFyScopeDraft !== "all" && !backupFyScopeDraft.fromFyKey) {
+      toast({
+        variant: "destructive",
+        title: "No FY selected",
+        description: "Tick at least one financial year or choose All FY.",
       });
       return;
     }
@@ -3539,8 +3574,8 @@ export function BackupRestore() {
           if (!open) closeAutoBackupCompanySettings();
         }}
       >
-        <DialogContent className="max-w-md" data-pl-backup-dialog="sky">
-          <DialogHeader>
+        <DialogContent className="max-w-md w-[95vw] max-h-[90vh] flex flex-col overflow-hidden rounded-2xl p-0" data-pl-backup-dialog="sky">
+          <DialogHeader className="px-4 pt-4 pb-2 shrink-0">
             <div className="flex items-center gap-1.5">
               <DialogTitle>Auto backup settings</DialogTitle>
               <TooltipProvider delayDuration={200}>
@@ -3568,6 +3603,7 @@ export function BackupRestore() {
                 : "Per-company auto backup options"}
             </DialogDescription>
           </DialogHeader>
+          <div className="flex-1 overflow-y-auto px-4 pb-2">
           <div className="space-y-3 text-sm text-muted-foreground">
             {!isAutoBackupSettingsLocalCompany ? (
             <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
@@ -3793,11 +3829,12 @@ export function BackupRestore() {
               }
             />
           </div>
-          <DialogFooter className="gap-2 sm:gap-2">
-            <Button type="button" variant="outline" onClick={closeAutoBackupCompanySettings}>
+          </div>
+          <DialogFooter className="px-4 pb-4 pt-2 shrink-0 grid grid-cols-2 gap-2 sm:flex sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={closeAutoBackupCompanySettings}>
               Cancel
             </Button>
-            <Button type="button" onClick={saveAutoBackupCompanySettings}>
+            <Button type="button" className="w-full sm:w-auto" onClick={saveAutoBackupCompanySettings}>
               Save settings
             </Button>
           </DialogFooter>
