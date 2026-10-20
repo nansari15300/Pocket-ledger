@@ -350,7 +350,7 @@ export function BackupFyScopePicker({
             disabled={!companyId}
           />
           <span className="flex items-center gap-1">
-            <span className="font-medium text-foreground">From FY ... To</span>
+            <span className="font-medium text-foreground">Selected</span>
             <Popover>
               <PopoverTrigger asChild>
                 <button
