@@ -1859,7 +1859,7 @@ export function AccountDetails({
       <div
         className={cn("flex-1 min-h-0 overflow-auto scroll-touch", spendWiseView && "p-[2px]")}
       >
-        <div className="pb-24">
+        <div className="pb-2">
           {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}
           <MasterAccountFreezeTxnShell
             overlay={accountFreezeOverlay}

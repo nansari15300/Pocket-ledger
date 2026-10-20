@@ -965,7 +965,7 @@ export function AccountDetails({
         )}
 
         <ScrollArea txnChrome className="min-h-0 flex-1">
-          <div className="pb-24">
+          <div className="pb-2">
             {filteredMobileTransactions.map((t: any) => (
               <TransactionRow key={t.id} transaction={t} />
             ))}

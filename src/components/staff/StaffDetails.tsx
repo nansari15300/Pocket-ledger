@@ -1575,7 +1575,7 @@ export function StaffDetails({
       <div
         className={mobileTxnScrollBodyClass(isReportMobileChrome)}
       >
-        <div className={isReportMobileChrome ? "pb-2" : "pb-24"}>
+        <div className="pb-2">
         {isReportMobileChrome && mobileReportView === "chart" ? (
           <RunningBalanceFullChart
             transactions={filteredMobileTransactions}

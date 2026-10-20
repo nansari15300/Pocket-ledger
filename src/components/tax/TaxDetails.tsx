@@ -1209,7 +1209,7 @@ export function TaxDetails({
           <div
             className={mobileTxnScrollBodyClass(isReportMobileChrome)}
           >
-            <div className={isReportMobileChrome ? "pb-2" : "pb-24"}>
+            <div className="pb-2">
             <MasterAccountFreezeTxnShell
               overlay={taxFreezeOverlay}
             >
