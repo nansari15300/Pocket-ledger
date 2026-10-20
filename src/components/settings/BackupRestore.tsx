@@ -133,6 +133,7 @@ import {
   createRestoreProgressReporter,
 } from "@/lib/companyRestoreProgress";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Capacitor } from "@capacitor/core";
 import {
   readBackupSaveLocationPrefs,
@@ -3578,24 +3579,22 @@ export function BackupRestore() {
           <DialogHeader className="px-4 pt-4 pb-2 shrink-0">
             <div className="flex items-center gap-1.5">
               <DialogTitle>Auto backup settings</DialogTitle>
-              <TooltipProvider delayDuration={200}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                      aria-label="Auto backup settings information"
-                    >
-                      <Info className="h-4 w-4" aria-hidden />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="max-w-[20rem] text-xs leading-snug">
-                    {autoBackupSettingsCompany?.name
-                      ? `Choose backup source and contents for ${autoBackupSettingsCompany.name}. Saved settings apply to scheduled and Backup now runs.`
-                      : "Per-company auto backup options."}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    aria-label="Auto backup settings information"
+                  >
+                    <Info className="h-4 w-4" aria-hidden />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent side="bottom" align="start" className="max-w-[20rem] text-xs leading-snug p-3">
+                  {autoBackupSettingsCompany?.name
+                    ? `Choose backup source and contents for ${autoBackupSettingsCompany.name}. Saved settings apply to scheduled and Backup now runs.`
+                    : "Per-company auto backup options."}
+                </PopoverContent>
+              </Popover>
             </div>
             <DialogDescription className="sr-only">
               {autoBackupSettingsCompany?.name
