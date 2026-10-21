@@ -60,22 +60,9 @@ const ScrollBar = React.forwardRef<
     orientation={orientation}
     className={cn(
       "flex touch-none select-none transition-colors",
-      orientation === "vertical" &&
-        (txnChrome
-          ? "h-full w-3.5 p-0.5"
-          : icVoucherChrome
-          ? "h-full w-2 p-0.5"
-          : listChrome
-            ? "h-full w-2.5 border-l border-l-transparent p-0.5"
-            : "h-full w-2.5 border-l border-l-transparent p-[1px]"),
-      orientation === "horizontal" &&
-        (txnChrome
-          ? "h-3.5 flex-col p-0.5"
-          : icVoucherChrome
-          ? "h-2 flex-col p-0.5"
-          : listChrome
-            ? "h-2.5 flex-col border-t border-t-transparent p-0.5"
-            : "h-2.5 flex-col border-t border-t-transparent p-[1px]"),
+      // Uniform app-wide scrollbar: ~6px thumb (8px gutter - 1px padding each side), see "UNIFORM SCROLLBARS" in globals.css
+      orientation === "vertical" && "h-full w-2 p-[1px]",
+      orientation === "horizontal" && "h-2 flex-col p-[1px]",
       // Gutter sits above the viewport; without this, right-edge controls (e.g. voucher attach) never receive clicks.
       "pointer-events-none",
       listChrome && "pl-master-list-scroll-bar",
@@ -87,14 +74,7 @@ const ScrollBar = React.forwardRef<
   >
     <ScrollAreaPrimitive.ScrollAreaThumb
       className={cn(
-        "relative flex-1 rounded-full pointer-events-auto",
-        icVoucherChrome
-          ? "bg-[#d1d5db] hover:bg-[#b8bcc4]"
-          : txnChrome
-            ? "border-0 bg-[var(--pl-ledger-txn-scroll-thumb)] hover:bg-[var(--pl-ledger-txn-scroll-thumb-hover)]"
-          : listChrome
-            ? "bg-muted-foreground/25 hover:bg-muted-foreground/40"
-            : "bg-border"
+        "relative flex-1 rounded-full pointer-events-auto pl-uniform-scroll-thumb"
       )}
     />
   </ScrollAreaPrimitive.ScrollAreaScrollbar>

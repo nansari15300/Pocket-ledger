@@ -94,6 +94,7 @@ import {
   LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
+import { ReportHeaderSummaryCards, type ReportStatementSummaryCardData } from "@/components/reports/ReportStatementSummaryCards";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
@@ -225,6 +226,7 @@ interface TaxDetailsProps {
   mobileReportStickyTitle?: string;
   ledgerPresentationMode?: import("@/lib/nestedLedgerMasterEditPresentation").MasterEditPresentationMode;
   hideMobilePeriodLabelRow?: boolean;
+  reportSummaryCards?: ReportStatementSummaryCardData[];
 }
 
 export function TaxDetails({
@@ -245,6 +247,7 @@ export function TaxDetails({
   mobileReportStickyTitle,
   ledgerPresentationMode = "default",
   hideMobilePeriodLabelRow = false,
+  reportSummaryCards,
 }: TaxDetailsProps) {
   const nestedLedgerNoteDialogShell =
     ledgerPresentationMode === "nested-ledger"
@@ -1591,7 +1594,9 @@ export function TaxDetails({
               <div className={LEDGER_HEADER_NAME_CARD_CN}>
                 <h2 className={LEDGER_HEADER_TITLE_CN} title={tax.name}>{tax.name}</h2>
               </div>
-              {isTdsTaxAccount ? (
+              {reportSummaryCards?.length ? (
+                <ReportHeaderSummaryCards cards={reportSummaryCards} />
+              ) : isTdsTaxAccount ? (
               <Popover open={tdsCardsOpen} onOpenChange={setTdsCardsOpen}>
                 <PopoverTrigger asChild>
                   <button type="button" className={cn(LEDGER_HEADER_BALANCE_CARD_CN, "cursor-pointer text-left")} title="Balance / Paid / Unpaid TDS">

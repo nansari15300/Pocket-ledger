@@ -5,7 +5,9 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { useFyScopedVouchers } from "@/hooks/useFyScopedVouchers";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { ReportStatementSummaryCardsGrid, ReportStatementSummaryCardsRow } from "@/components/reports/ReportStatementSummaryCards";
+import { computeFilteredCardOpeningAndRows } from "@/lib/reportFilteredCardBalance";
+import { ReportStatementSummaryCardsRow, buildPartyTdsReportSummaryCards, buildReportVoucherTypeCards, getReportVoucherTypeKey, insertReportCardsAfterNetBalance, makeMobileReportSummaryCards, reportTdsFilterSide, reportVoucherMatchesSummaryCard } from "@/components/reports/ReportStatementSummaryCards";
+import { buildTaxNameById, expandPartyLedgerTdsRows, mergeLedgerTdsVisibleColumnsWithPrefs, summarizePartyTdsBalances } from "@/lib/partyLedgerTdsView";
 import { Button } from "@/components/ui/button";
 import { PermissionButton } from "@/components/permission";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -14,7 +16,7 @@ import AdCalendar from "@/components/ui/ad-calendar";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, Calendar as CalendarIcon, ChevronDown, File, Printer, BarChart2, Search, User, Users, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Calendar as CalendarIcon, ChevronDown, File, Printer, BarChart2, Search, User, Users, X } from "lucide-react";
 import { PartyList } from "@/components/party/PartyList";
 import { PartyGroupList } from "@/components/party/PartyGroupList";
 import { ReportShowListButton } from "@/components/reports/ReportShowListButton";
@@ -24,6 +26,7 @@ import { mlc } from "@/lib/mobileListChrome";
 import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import type { Party, Group } from "@/components/party/types";
 import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
+import { ReportEntityMobileHeader } from "@/components/reports/ReportEntityMobileHeader";
 import { ReportLedgerTxnDetailPane } from "@/components/reports/ReportLedgerTxnDetailPane";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { startOfMonth, endOfMonth, format, isSameDay } from "date-fns";
@@ -43,6 +46,7 @@ import { openPrintDirect } from "@/lib/printDirect";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { useReportMobileListMode } from "@/hooks/useReportMobileListMode";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
@@ -65,11 +69,41 @@ import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { PartyDetails } from "@/components/party/PartyDetails";
+import { OverdueAccountView, type OverdueTransactionRow } from "@/components/party/OverdueAccountView";
+import { HistoryDialog } from "@/components/vouchers/HistoryDialog";
+import { LinkAdvancesToVoucherDialog } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
+import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
+import { applyPaymentBillWiseLinkAllocations } from "@/lib/voucherActionsClient";
+import { toast } from "sonner";
 import { GroupDetails } from "@/components/party/GroupDetails";
 import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
+import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { mdc } from "@/lib/mobileDetailChrome";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { buildPartyGroupReportEntity } from "@/lib/reportStatementGroupEntity";
+import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
+import { CreateGroupDialog } from "@/components/party/CreateGroupDialog";
+import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
+import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
+import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesPartyLedger";
+import usePermissions from "@/hooks/usePermissions";
+import {
+  dedupeInterCompanyClearingParties,
+  isInterCompanyPartyListAccount,
+} from "@/lib/interCompany/interCompanyCounterpartyPartyName";
+import { buildIcPeerCompanyGroupRows, IC_COMPANY_PARTY_GROUP_ID } from "@/lib/interCompany/icPeerCompanyGroups";
+import { resolvePartyListGroupBucketId } from "@/lib/partySystemGroups";
+import type { PartyListSelectOptions } from "@/components/party/PartyList";
+
+/** Main Parties page (`/party`) ka Overdue virtual account id. */
+const PARTY_PAGE_OVERDUE_ACCOUNT_ID = "__overdue__";
 
 export default function DesktopPartyStatementPage() {
     const {
@@ -85,25 +119,39 @@ export default function DesktopPartyStatementPage() {
         processedTaxes,
         processedStaff,
         vouchers,
+        vouchersAll,
         loading,
         journalAccountNames,
+        overdueTransactions,
+        hasOverdueTransactions,
     } = useFyScopedVouchers();
-    const { company } = useCompany();
+    const { company, effectiveNotificationSettings } = useCompany();
+    const { can } = usePermissions();
     const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
     const router = useRouter();
     const searchParams = useSearchParams();
     const pathname = usePathname();
     const isMobile = useIsMobile();
+    const reportMobileList = useReportMobileListMode(isMobile, ["partyId","groupId"]);
+    /** Main Parties page jaisa "Overdue Vouchers" view - report ke andar hi (list ke right / mobile detail). */
+    const [showReportOverdue, setShowReportOverdue] = useState(false);
+    /** Overdue view actions (Parties page parity): history + link (Receive/Pay/New Sale = existing report FAB). */
+    const [overdueHistoryVoucher, setOverdueHistoryVoucher] = useState<any>(null);
+    const [overdueLinkAdvancesVoucher, setOverdueLinkAdvancesVoucher] = useState<any>(null);
+    const [overdueLinkPaymentVoucher, setOverdueLinkPaymentVoucher] = useState<any>(null);
     const calendarMonths = useCalendarMonths();
     const openingModalRef = useRef(false);
     const [isCalendarOpen, setIsCalendarOpen] = useState(false);
     const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
     const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
     const [transactionSearch, setTransactionSearch] = useState("");
+    const [unapprovedOnly, setUnapprovedOnly] = useState(false);
+    const [balanceCardFilter, setBalanceCardFilter] = useState<string | null>(null);
+    const balanceCardsRowRef = useRef<HTMLDivElement | null>(null);
     const [mobileSearchTerm, setMobileSearchTerm] = useState("");
     const [isDateSearchMode, setIsDateSearchMode] = useState(false);
     const [view, setView] = useState<'list' | 'chart'>('list');
-    const [listTab, setListTab] = useState<"parties" | "groups">(() =>
+    const [listTab, setListTab] = useState<"parties" | "groups" | "ic_ac">(() =>
         typeof window !== "undefined" && new URLSearchParams(window.location.search).get("groupId")
             ? "groups"
             : "parties"
@@ -120,7 +168,7 @@ export default function DesktopPartyStatementPage() {
     const [userNames, setUserNames] = useState<Record<string, string>>({});
     const fetchedUidsRef = useRef<Set<string>>(new Set());
 
-    const pageTitle = selectedGroup ? 'Party Group Report' : 'Party Report';
+    const pageTitle = selectedGroup ? 'Party Group Statement' : 'Party Statement';
 
     const fetchUserName = useCallback(async (userId: string): Promise<string> => {
         try {
@@ -187,8 +235,9 @@ export default function DesktopPartyStatementPage() {
             closeModalInUrl();
             return;
         }
+        if (reportMobileList.backToList()) return;
         router.back();
-    }, [isVoucherDialogOpen, isCalendarOpen, closeModalInUrl, router]);
+    }, [isVoucherDialogOpen, isCalendarOpen, closeModalInUrl, router, reportMobileList]);
 
     const handleEditVoucher = useCallback((voucher: any) => {
         openingModalRef.current = true;
@@ -277,6 +326,9 @@ export default function DesktopPartyStatementPage() {
     ]);
 
     const activeEntity = selectedParty || groupReportEntity;
+    useEffect(() => {
+      if (balanceCardsRowRef.current) balanceCardsRowRef.current.scrollLeft = 0;
+    }, [activeEntity?.id]);
     const activeContext = selectedParty ? 'party' : 'group';
 
     const {
@@ -288,6 +340,21 @@ export default function DesktopPartyStatementPage() {
         openingBalanceOutstanding,
         openingBalanceLinkedVoucherNos,
     } = useTransactions(activeEntity as any, activeContext, dateRange);
+    const { closingBalance: allTimeNetBalance, processedTransactions: allTimeTransactions } = useTransactions(activeEntity as any, activeContext, undefined);
+    const taxNameById = useMemo(() => buildTaxNameById(processedTaxes), [processedTaxes]);
+    const voucherByIdForTds = useMemo(() => {
+      const src = (vouchersAll?.length ? vouchersAll : vouchers) || [];
+      return new Map(src.map((v: { id?: string }) => [String(v.id ?? ""), v as Record<string, unknown>]));
+    }, [vouchers, vouchersAll]);
+    const partyTdsBalanceSummary = useMemo(
+      () =>
+        summarizePartyTdsBalances((allTimeTransactions || []) as Record<string, unknown>[], taxNameById, {
+          partyId: selectedParty?.id,
+          voucherById: voucherByIdForTds,
+        }),
+      [allTimeTransactions, taxNameById, selectedParty?.id, voucherByIdForTds]
+    );
+    const tdsFilterSide = reportTdsFilterSide(balanceCardFilter);
 
     // Desktop: no date filter par last 10. Mobile + pager: pura processed list taaki Showing / Trxn Of sahi ho.
     const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
@@ -296,20 +363,98 @@ export default function DesktopPartyStatementPage() {
         if (processedTransactions.length <= 10) return processedTransactions;
         return processedTransactions.slice(-10);
     }, [processedTransactions, hasDateFilter, isMobile]);
+    const mobileUnapprovedTxnCount = useMemo(
+      () => countLedgerUnapprovedTransactions(reportDisplayTransactions),
+      [reportDisplayTransactions]
+    );
+
+
+    const cardFilteredResult = useMemo(() => {
+      if (!balanceCardFilter) return null;
+      const expandTds = (rows: any[]) => {
+        const expanded = expandPartyLedgerTdsRows(rows as Record<string, unknown>[], taxNameById, {
+          partyId: selectedParty?.id,
+          voucherById: voucherByIdForTds,
+        });
+        if (!tdsFilterSide) return expanded;
+        return expanded.filter(
+          (row) => String((row as { _ledgerTdsSide?: unknown })._ledgerTdsSide ?? "").toLowerCase() === tdsFilterSide
+        );
+      };
+      return computeFilteredCardOpeningAndRows({
+        allTimeTransactions: tdsFilterSide ? expandTds(allTimeTransactions || []) : allTimeTransactions,
+        periodTransactions: tdsFilterSide ? expandTds(reportDisplayTransactions) : reportDisplayTransactions,
+        fromDate: hasDateFilter ? dateRange?.from : undefined,
+        filterKey: balanceCardFilter,
+        matchesFilter: (t: any) =>
+          tdsFilterSide
+            ? true
+            : balanceCardFilter.startsWith("summary:")
+              ? reportVoucherMatchesSummaryCard(
+                  t,
+                  balanceCardFilter.slice(8),
+                  activeContext,
+                  activeEntity?.id,
+                  activeContext === "group" ? "party" : undefined
+                )
+              : getReportVoucherTypeKey(
+                  t,
+                  activeContext,
+                  activeEntity?.id,
+                  activeContext === "group" ? "party" : undefined
+                ) === balanceCardFilter,
+      });
+    }, [
+      balanceCardFilter,
+      tdsFilterSide,
+      taxNameById,
+      selectedParty?.id,
+      voucherByIdForTds,
+      allTimeTransactions,
+      reportDisplayTransactions,
+      hasDateFilter,
+      dateRange?.from,
+      activeContext,
+      activeEntity?.id,
+    ]);
+
+    const effectiveOpeningBalanceForPeriod = cardFilteredResult
+      ? cardFilteredResult.filteredOpening
+      : openingBalanceForPeriod;
+    const effectivePeriodDr = cardFilteredResult
+      ? cardFilteredResult.filteredPeriodDr
+      : periodDr;
+    const effectivePeriodCr = cardFilteredResult
+      ? cardFilteredResult.filteredPeriodCr
+      : periodCr;
+    const effectiveClosingBalance = cardFilteredResult
+      ? cardFilteredResult.filteredClosing
+      : closingBalance;
 
     const filteredReportTransactions = useMemo(() => {
-        if (!transactionSearch.trim()) return reportDisplayTransactions;
+        let list = cardFilteredResult
+          ? cardFilteredResult.recomputedRows
+          : reportDisplayTransactions;
+        if (!cardFilteredResult && balanceCardFilter) {
+          list = list.filter((t: any) => balanceCardFilter.startsWith("summary:")
+            ? reportVoucherMatchesSummaryCard(t, balanceCardFilter.slice(8), activeContext, activeEntity?.id, activeContext === "group" ? "party" : undefined)
+            : getReportVoucherTypeKey(t, activeContext, activeEntity?.id, activeContext === "group" ? "party" : undefined) === balanceCardFilter);
+        }
+        if (unapprovedOnly) {
+          list = list.filter((t: any) => !t.isApproved && t.isApproved !== true);
+        }
+        if (!transactionSearch.trim()) return list;
         const q = transactionSearch.trim().toLowerCase();
-        return reportDisplayTransactions.filter((t: any) => {
+        return list.filter((t: any) => {
             const vno = (t.voucherNumber || "").toLowerCase();
             const narr = (t.narration || "").toLowerCase();
             const type = (typeof t.type === "string" ? t.type.replace(/_/g, " ") : "").toLowerCase();
             const amount = String(t.debit ?? t.credit ?? t.total ?? "").toLowerCase();
             return vno.includes(q) || narr.includes(q) || type.includes(q) || amount.includes(q);
         });
-    }, [reportDisplayTransactions, transactionSearch]);
+    }, [cardFilteredResult, reportDisplayTransactions, transactionSearch, unapprovedOnly, balanceCardFilter, activeContext, activeEntity?.id]);
 
-    const partyStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${balanceMode}`;
+    const partyStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${unapprovedOnly}|${balanceMode}|${balanceCardFilter ?? "all"}`;
     const {
         pagingMeta: partyStatementMobilePaging,
         pagerPage: partyReportPagerPage,
@@ -319,10 +464,10 @@ export default function DesktopPartyStatementPage() {
     } = useStatementReportMobilePaging({
         filteredRows: filteredReportTransactions,
         isMobile,
-        openingBalanceForPeriod,
-        periodDr,
-        periodCr,
-        closingBalance,
+        openingBalanceForPeriod: effectiveOpeningBalanceForPeriod,
+        periodDr: effectivePeriodDr,
+        periodCr: effectivePeriodCr,
+        closingBalance: effectiveClosingBalance,
         resetKey: partyStatementMobilePagingKey,
     });
 
@@ -378,6 +523,14 @@ export default function DesktopPartyStatementPage() {
         { title: "Money In", amount: summaryData.moneyIn, color: "text-green-600" },
         { title: "Money Out", amount: summaryData.moneyOut, color: "text-red-600" },
     ], [closingBalance, summaryData.sales, summaryData.purchases, summaryData.moneyIn, summaryData.moneyOut]);
+    const mobileSummaryCards = useMemo(() => insertReportCardsAfterNetBalance([
+      ...summaryCards.map((card) => card.title === "Balance" ? { ...card, amount: allTimeNetBalance, color: allTimeNetBalance >= 0 ? "text-green-600" : "text-red-600" } : card),
+      ...buildReportVoucherTypeCards(processedTransactions, activeContext, activeEntity?.id, activeContext === "group" ? "party" : undefined, summaryCards.map((card) => card.title)),
+    ], buildPartyTdsReportSummaryCards(partyTdsBalanceSummary)), [summaryCards, processedTransactions, activeContext, activeEntity?.id, allTimeNetBalance, partyTdsBalanceSummary]);
+    const clickableSummaryCards = useMemo(
+      () => makeMobileReportSummaryCards(mobileSummaryCards, balanceCardFilter, setBalanceCardFilter, processedTransactions, activeContext, activeEntity?.id, activeContext === "group" ? "party" : undefined),
+      [mobileSummaryCards, balanceCardFilter, processedTransactions, activeContext, activeEntity?.id]
+    );
 
     const handlePrint = () => {
         if (!activeEntity || !company) return;
@@ -466,8 +619,8 @@ export default function DesktopPartyStatementPage() {
     
 
     const dateRangeLabel = useMemo(() => {
-        // Party Details mobile row-2: bina date filter = "All Time" (na ki "Last 10 Txns") — user request / unified master UX.
-        if (!hasDateFilter) return "All Time";
+        // Party Details mobile row-2 uses the default last-10 transaction window label.
+        if (!hasDateFilter) return "Last 10 Txns";
         const from = dateRange!.from!;
         const to = dateRange!.to || from;
         const fromAD = format(from, "LLL dd, y");
@@ -513,7 +666,88 @@ export default function DesktopPartyStatementPage() {
         );
     }, [processedGroups, selectedGroup?.id]);
 
+    /* ---- Main Parties page parity: pending-approval badge, IC / Ac tab, total balance ---- */
+    const showApproveOnList =
+        can("approve_transactions") &&
+        effectiveNotificationSettings?.approve?.on !== false &&
+        effectiveNotificationSettings?.approve?.onList !== false;
+    const pendingApprovalByPartyId = useMemo(() => {
+        if (!showApproveOnList || !vouchers?.length || !processedParties?.length) return {} as Record<string, number>;
+        const partyIdSet = new Set(processedParties.map((p: Party) => p.id));
+        const map: Record<string, number> = {};
+        vouchers.forEach((v: any) => {
+            collectPartyIdsTouchedByUnapprovedVoucher(v, partyIdSet).forEach((id) => {
+                map[id] = (map[id] || 0) + 1;
+            });
+        });
+        return map;
+    }, [vouchers, showApproveOnList, processedParties]);
+    const pendingApprovalByGroupId = useMemo(() => {
+        if (!showApproveOnList || !processedParties?.length) return {} as Record<string, number>;
+        const byGroup: Record<string, number> = {};
+        processedParties.forEach((p: Party) => {
+            const n = pendingApprovalByPartyId[p.id] || 0;
+            if (!n) return;
+            const gid = isInterCompanyPartyListAccount(p) ? IC_COMPANY_PARTY_GROUP_ID : resolvePartyListGroupBucketId(p);
+            byGroup[gid] = (byGroup[gid] || 0) + n;
+        });
+        return byGroup;
+    }, [processedParties, showApproveOnList, pendingApprovalByPartyId]);
+    const totalPendingApprovalVoucherCount = useMemo(() => {
+        if (!showApproveOnList || !vouchers?.length || !processedParties?.length) return 0;
+        const partyIdSet = new Set(processedParties.map((p: Party) => p.id));
+        let n = 0;
+        for (const v of vouchers as any[]) {
+            if (v?.isApproved === true) continue;
+            if (collectPartyIdsTouchedByUnapprovedVoucher(v, partyIdSet).size > 0) n += 1;
+        }
+        return n;
+    }, [vouchers, showApproveOnList, processedParties]);
+    const {
+        showOnlyEntities: showOnlyPartiesWithPendingApproval,
+        setShowOnlyEntities: setShowOnlyPartiesWithPendingApproval,
+        showOnlyGroups: showOnlyPartyGroupsWithPendingApproval,
+        setShowOnlyGroups: setShowOnlyPartyGroupsWithPendingApproval,
+    } = usePendingApprovalListFilter(totalPendingApprovalVoucherCount);
+    const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
+    const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+
+    const partiesForReportListView = useMemo(() => {
+        const base =
+            showOnlyPartiesWithPendingApproval && showApproveOnList
+                ? partiesForReportList.filter((p) => (pendingApprovalByPartyId[p.id] ?? 0) > 0 || p.id === selectedParty?.id)
+                : partiesForReportList;
+        const regular = base.filter((p) => !isInterCompanyPartyListAccount(p));
+        const icFlat = dedupeInterCompanyClearingParties(base.filter((p) => isInterCompanyPartyListAccount(p)));
+        return [...regular, ...icFlat];
+    }, [partiesForReportList, showOnlyPartiesWithPendingApproval, showApproveOnList, pendingApprovalByPartyId, selectedParty?.id]);
+    const groupsForReportListView = useMemo(() => {
+        if (!showOnlyPartyGroupsWithPendingApproval || !showApproveOnList) return groupsForReportList;
+        return groupsForReportList.filter((g) => (pendingApprovalByGroupId[g.id] ?? 0) > 0 || g.id === selectedGroup?.id);
+    }, [groupsForReportList, showOnlyPartyGroupsWithPendingApproval, showApproveOnList, pendingApprovalByGroupId, selectedGroup?.id]);
+    const icListRowsForReport = useMemo(() => {
+        let ic = dedupeInterCompanyClearingParties(
+            processedPartiesForSelection.filter((p) => isInterCompanyPartyListAccount(p))
+        );
+        if (showOnlyPartiesWithPendingApproval && showApproveOnList) {
+            ic = ic.filter((p) => (pendingApprovalByPartyId[p.id] ?? 0) > 0);
+        }
+        return buildIcPeerCompanyGroupRows(ic);
+    }, [processedPartiesForSelection, showOnlyPartiesWithPendingApproval, showApproveOnList, pendingApprovalByPartyId]);
+    const reportListTotalBalance = useMemo(() => {
+        if (listTab === "parties") {
+            return partiesForReportListView
+                .filter((p) => !(p as any).isSystemAccount)
+                .reduce((acc, p) => acc + (Number(p.balance) || 0), 0);
+        }
+        if (listTab === "ic_ac") {
+            return (icListRowsForReport || []).reduce((acc, p: any) => acc + (Number(p.balance) || 0), 0);
+        }
+        return processedGroups.reduce((acc, g) => acc + (Number(g.balance) || 0), 0);
+    }, [listTab, partiesForReportListView, icListRowsForReport, processedGroups]);
+
     const handleEmbeddedPartyChange = useCallback((partyId: string) => {
+        setShowReportOverdue(false);
         const party =
             processedPartiesForSelection.find((p) => p.id === partyId) ||
             processedParties.find((p) => p.id === partyId);
@@ -535,6 +769,7 @@ export default function DesktopPartyStatementPage() {
     );
 
     const handleSelectGroupFromList = useCallback((group: Group) => {
+        setShowReportOverdue(false);
         const newUrl = new URL(window.location.href);
         newUrl.searchParams.set("groupId", group.id);
         newUrl.searchParams.delete("partyId");
@@ -543,6 +778,24 @@ export default function DesktopPartyStatementPage() {
         setSelectedParty(null);
         setListTab("groups");
     }, []);
+
+    const handleSelectIcFromList = useCallback(
+        (party: Party, options?: PartyListSelectOptions) => {
+            setShowReportOverdue(false);
+            const memberId = options?.icMemberAccountId || party.id;
+            const real =
+                processedPartiesForSelection.find((p) => p.id === memberId) ||
+                processedParties.find((p) => p.id === memberId);
+            const target = real ?? party;
+            const newUrl = new URL(window.location.href);
+            newUrl.searchParams.set("partyId", target.id);
+            newUrl.searchParams.delete("groupId");
+            window.history.pushState({}, "", newUrl);
+            setSelectedParty(target);
+            setSelectedGroup(null);
+        },
+        [processedParties, processedPartiesForSelection]
+    );
 
     const groupMemberParties = processedParties;
 
@@ -561,16 +814,133 @@ export default function DesktopPartyStatementPage() {
         />
     );
 
+    const findOverdueVoucher = (row: OverdueTransactionRow) => {
+        const src = ((vouchersAll?.length ? vouchersAll : vouchers) || []) as any[];
+        return src.find((v) => v.id === row.id);
+    };
+    const overduePartyById = (id?: string | null) =>
+        id ? (processedParties || []).find((p) => p.id === id) : undefined;
+
+    /** Parties page Overdue view jaisa: History + Link dialogs. */
+    const overdueActionDialogs = (
+        <>
+            <HistoryDialog
+                voucher={overdueHistoryVoucher}
+                isOpen={!!overdueHistoryVoucher}
+                onOpenChange={(open) => !open && setOverdueHistoryVoucher(null)}
+                onHistoryReset={() => setOverdueHistoryVoucher((prev: any) => (prev ? { ...prev, history: [] } : null))}
+            />
+            {overdueLinkAdvancesVoucher && (
+                <LinkAdvancesToVoucherDialog
+                    isOpen={!!overdueLinkAdvancesVoucher}
+                    onOpenChange={(open) => !open && setOverdueLinkAdvancesVoucher(null)}
+                    mode={overdueLinkAdvancesVoucher.type === "purchase" || overdueLinkAdvancesVoucher.type === "purchase_service" ? "purchase" : "sale"}
+                    targetVoucherId={overdueLinkAdvancesVoucher.id}
+                    targetPartyId={overdueLinkAdvancesVoucher.partyId ?? ""}
+                    targetPartyName={overduePartyById(overdueLinkAdvancesVoucher.partyId)?.name ?? "Party"}
+                    partyOpeningBalance={overduePartyById(overdueLinkAdvancesVoucher.partyId)?.openingBalance ?? 0}
+                    balanceKind="all"
+                    onDone={() => setOverdueLinkAdvancesVoucher(null)}
+                />
+            )}
+            {overdueLinkPaymentVoucher && (
+                <LinkPaymentToTxnsDialog
+                    isOpen={!!overdueLinkPaymentVoucher}
+                    onOpenChange={(open) => !open && setOverdueLinkPaymentVoucher(null)}
+                    variant={overdueLinkPaymentVoucher.type === "payment_out" || overdueLinkPaymentVoucher.type === "direct_expense" ? "payment_out" : "payment_in"}
+                    partyId={overdueLinkPaymentVoucher.partyId ?? null}
+                    partyName={overduePartyById(overdueLinkPaymentVoucher.partyId)?.name ?? "Party"}
+                    receivedAmount={Number(overdueLinkPaymentVoucher.amount ?? overdueLinkPaymentVoucher.total ?? 0)}
+                    existingAllocations={Array.isArray(overdueLinkPaymentVoucher.allocations) ? overdueLinkPaymentVoucher.allocations : []}
+                    paymentInId={["payment_in", "direct_income"].includes(overdueLinkPaymentVoucher.type) ? overdueLinkPaymentVoucher.id : undefined}
+                    paymentOutId={["payment_out", "direct_expense"].includes(overdueLinkPaymentVoucher.type) ? overdueLinkPaymentVoucher.id : undefined}
+                    paymentInVoucherNumber={["payment_in", "direct_income"].includes(overdueLinkPaymentVoucher.type) ? overdueLinkPaymentVoucher.voucherNumber : undefined}
+                    paymentInDate={["payment_in", "direct_income"].includes(overdueLinkPaymentVoucher.type) ? overdueLinkPaymentVoucher.date : undefined}
+                    paymentOutVoucherNumber={["payment_out", "direct_expense"].includes(overdueLinkPaymentVoucher.type) ? overdueLinkPaymentVoucher.voucherNumber : undefined}
+                    paymentOutDate={["payment_out", "direct_expense"].includes(overdueLinkPaymentVoucher.type) ? overdueLinkPaymentVoucher.date : undefined}
+                    partyOpeningBalance={overduePartyById(overdueLinkPaymentVoucher.partyId)?.openingBalance ?? 0}
+                    onDone={async (allocations, _amount) => {
+                        const cid = (company as any)?.id;
+                        if (!cid || !overdueLinkPaymentVoucher?.id) return;
+                        const { runWithVoucherLinkSaveProgress } = await import("@/lib/voucherSaveUi");
+                        const result = await runWithVoucherLinkSaveProgress(async () => {
+                            await applyPaymentBillWiseLinkAllocations(cid, overdueLinkPaymentVoucher, allocations);
+                            setOverdueLinkPaymentVoucher(null);
+                        }, { successTitle: "Allocations updated" });
+                        if (!result.ok) {
+                            toast.error(result.error instanceof Error ? result.error.message : "Failed to update allocations.");
+                        }
+                    }}
+                />
+            )}
+        </>
+    );
+
     if (loading && !activeEntity) {
         return <LoadingSpinner />;
     }
 
     /** PC: party page jaisa — Parties/Groups tabs + account list + ledger detail. */
-    if (!isMobile) {
+    const mobileEntityTxnToolbar = (
+      <MobileEntityTxnToolbarRow placement="belowPager">
+        <MobileEntityTxnToolbarPicker>
+          <Combobox
+            options={selectedGroup ? groupReportOptions : partyReportOptions}
+            value={selectedGroup ? selectedGroup.id : (selectedParty?.id || "")}
+            onChange={(value) => {
+              if (selectedGroup) {
+                const group = processedGroups.find(g => g.id === value);
+                if (group) {
+                  const newUrl = new URL(window.location.href);
+                  newUrl.searchParams.set('groupId', group.id);
+                  newUrl.searchParams.delete('partyId');
+                  window.history.pushState({}, '', newUrl);
+                  setSelectedGroup(group);
+                  setSelectedParty(null);
+                }
+              } else {
+                const party = processedParties.find(p => p.id === value);
+                if (party) {
+                  const newUrl = new URL(window.location.href);
+                  newUrl.searchParams.set('partyId', party.id);
+                  newUrl.searchParams.delete('groupId');
+                  window.history.pushState({}, '', newUrl);
+                  setSelectedParty(party);
+                  setSelectedGroup(null);
+                }
+              }
+            }}
+            placeholder={selectedGroup ? "Select a group" : "Select a party"}
+          />
+        </MobileEntityTxnToolbarPicker>
+        <MobileEntityTxnToolbarUnapprovedBadge
+          count={mobileUnapprovedTxnCount}
+          pressed={unapprovedOnly}
+          onToggle={() => {
+            setUnapprovedOnly((prev) => !prev);
+            setPartyReportPagerPage(1);
+          }}
+        />
+        <MobileEntityTxnToolbarSearch>
+          <Search className={mdc.mobileTxnToolbarSearchIcon} />
+          <Input
+            placeholder="Search transactions"
+            className={mdc.mobileTxnToolbarSearchInput}
+            value={transactionSearch}
+            onChange={(e) => {
+              setTransactionSearch(e.target.value);
+              setPartyReportPagerPage(1);
+            }}
+          />
+        </MobileEntityTxnToolbarSearch>
+      </MobileEntityTxnToolbarRow>
+    );
+
+    if (!isMobile || reportMobileList.showList || showReportOverdue) {
         const reportListTabs = (
             <Tabs
                 value={listTab}
-                onValueChange={(value) => setListTab(value === "groups" ? "groups" : "parties")}
+                onValueChange={(value) => setListTab(value === "groups" ? "groups" : value === "ic_ac" ? "ic_ac" : "parties")}
                 className="w-full"
             >
                 <TabsList listChrome>
@@ -579,6 +949,9 @@ export default function DesktopPartyStatementPage() {
                     </TabsTrigger>
                     <TabsTrigger listChrome value="groups" className="flex-1">
                         Groups
+                    </TabsTrigger>
+                    <TabsTrigger listChrome value="ic_ac" className="flex-1">
+                        IC / Ac
                     </TabsTrigger>
                 </TabsList>
             </Tabs>
@@ -589,7 +962,7 @@ export default function DesktopPartyStatementPage() {
                 <div className={mlc.searchWrap}>
                     <Search className={mlc.searchIcon} />
                     <Input
-                        placeholder={listTab === "parties" ? "Search parties..." : "Search groups/party"}
+                        placeholder={listTab === "parties" ? "Search parties..." : listTab === "ic_ac" ? "Search companies..." : "Search groups/party"}
                         listChrome
                         listChromeSearch
                         value={listSearchTerm}
@@ -597,37 +970,86 @@ export default function DesktopPartyStatementPage() {
                         autoComplete="off"
                     />
                 </div>
+                {(listTab === "parties" || listTab === "ic_ac") && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+                    <PendingApprovalListFilterBadge
+                        compact
+                        count={totalPendingApprovalVoucherCount}
+                        pressed={showOnlyPartiesWithPendingApproval}
+                        onToggle={() => setShowOnlyPartiesWithPendingApproval((v) => !v)}
+                        tooltipFilterHint={`Only parties with pending approval - ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+                        tooltipShowAllHint="Show all parties (click)"
+                        ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+                        ariaLabelShowAll="Show all parties"
+                    />
+                ) : null}
+                {listTab === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+                    <PendingApprovalListFilterBadge
+                        compact
+                        count={totalPendingApprovalVoucherCount}
+                        pressed={showOnlyPartyGroupsWithPendingApproval}
+                        onToggle={() => setShowOnlyPartyGroupsWithPendingApproval((v) => !v)}
+                        tooltipFilterHint={`Only groups with pending approval - ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+                        tooltipShowAllHint="Show all groups (click)"
+                        ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+                        ariaLabelShowAll="Show all groups"
+                    />
+                ) : null}
+                {listTab === "parties" ? (
+                    <CreatePartyDialog onPartyCreated={() => {}} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen}>
+                        <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreatePartyOpen(true)}>
+                            + Add Party
+                        </PermissionButton>
+                    </CreatePartyDialog>
+                ) : listTab === "groups" ? (
+                    <CreateGroupDialog onGroupCreated={() => {}} groups={processedGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
+                        <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
+                            + Add Group
+                        </PermissionButton>
+                    </CreateGroupDialog>
+                ) : null}
             </div>
         );
 
         const reportSectionLabel =
             listTab === "parties" ? (
+                <div className={cn(mlc.sectionLabelRow, "justify-between")}>
+                    <div className="flex items-center gap-2">
+                        <User className={mlc.sectionIcon} />
+                        <span>Party ({partiesForReportListView.filter((p) => !(p as any).isSystemAccount).length})</span>
+                    </div>
+                    {hasOverdueTransactions && (overdueTransactions?.length ?? 0) > 0 ? (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-[35px] max-h-[35px] self-center px-2 text-xs font-medium border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-900/40 dark:hover:text-amber-100"
+                            onClick={() => setShowReportOverdue(true)}
+                        >
+                            <AlertCircle className="h-3.5 w-3 mr-1 shrink-0" />
+                            Overdue Vouchers ({overdueTransactions.length})
+                        </Button>
+                    ) : null}
+                </div>
+            ) : listTab === "ic_ac" ? (
                 <div className={mlc.sectionLabelRow}>
                     <User className={mlc.sectionIcon} />
-                    <span>Party ({partiesForReportList.length})</span>
+                    <span>IC / Ac ({icListRowsForReport.length})</span>
                 </div>
             ) : (
                 <div className={mlc.sectionLabelRow}>
                     <Users className={mlc.sectionIcon} />
-                    <span>Party group ({groupsForReportList.length})</span>
+                    <span>Party group ({groupsForReportListView.length})</span>
                 </div>
             );
 
         /** Search row jaisa vertical inset — cards/tabs dono par same band chrome. */
         const reportListBandChrome = cn(mlc.searchRow, "box-border !gap-0");
-        const reportSummaryBandChrome = cn(mlc.searchRow, "box-border !gap-0 !px-3");
-
-        const reportListTopSummary = activeEntity ? (
-            <div className={reportSummaryBandChrome}>
-                <ReportStatementSummaryCardsGrid cards={summaryCards} />
-            </div>
-        ) : null;
 
         const reportListTabsRow = <div className={reportListBandChrome}>{reportListTabs}</div>;
 
         const reportListView = (
             <MasterListViewShell
-                isMobile={false}
+                isMobile={isMobile}
+                tabs={isMobile ? reportListTabs : undefined}
                 searchRow={reportSearchRow}
                 sectionLabel={reportSectionLabel}
                 quickFilter={listTab === "groups" ? groupListQuickFilter : partyListQuickFilter}
@@ -642,10 +1064,11 @@ export default function DesktopPartyStatementPage() {
                         aria-hidden={listTab !== "parties"}
                     >
                         <PartyList
-                            parties={partiesForReportList}
+                            parties={partiesForReportListView}
                             onSelectParty={handleSelectPartyFromList}
                             selectedParty={selectedParty}
                             searchTerm={listSearchTerm}
+                            pendingApprovalByPartyId={pendingApprovalByPartyId}
                             quickFilter={partyListQuickFilter}
                             onQuickFilterChange={setPartyListQuickFilter}
                             hideQuickFilterBar
@@ -659,10 +1082,12 @@ export default function DesktopPartyStatementPage() {
                         aria-hidden={listTab !== "groups"}
                     >
                         <PartyGroupList
-                            groups={groupsForReportList}
+                            groups={groupsForReportListView}
                             onSelectGroup={handleSelectGroupFromList}
                             selectedGroup={selectedGroup}
                             searchTerm={listSearchTerm}
+                            pendingApprovalByGroupId={pendingApprovalByGroupId}
+                            pendingApprovalByPartyId={pendingApprovalByPartyId}
                             collapsible={false}
                             quickFilter={groupListQuickFilter}
                             onQuickFilterChange={setGroupListQuickFilter}
@@ -670,11 +1095,55 @@ export default function DesktopPartyStatementPage() {
                             hideCategoryHeaders
                         />
                     </div>
+                    <div
+                        className={cn(
+                            "absolute inset-0 flex h-full min-h-0 flex-col overflow-hidden",
+                            listTab !== "ic_ac" && "pointer-events-none hidden"
+                        )}
+                        aria-hidden={listTab !== "ic_ac"}
+                    >
+                        <PartyList
+                            parties={icListRowsForReport}
+                            onSelectParty={handleSelectIcFromList}
+                            selectedParty={selectedParty}
+                            searchTerm={listSearchTerm}
+                            pendingApprovalByPartyId={pendingApprovalByPartyId}
+                            quickFilter={partyListQuickFilter}
+                            onQuickFilterChange={setPartyListQuickFilter}
+                            hideQuickFilterBar
+                        />
+                    </div>
                 </div>
             </MasterListViewShell>
         );
 
-        const reportDetailView = selectedParty ? (
+        const reportOverdueView = (
+            <div className="flex h-full min-h-0 flex-col overflow-hidden">
+                <div className="min-h-0 flex-1 overflow-hidden">
+                    <OverdueAccountView
+                        overdueTransactions={(overdueTransactions || []) as OverdueTransactionRow[]}
+                        userNames={userNames}
+                        onEditVoucher={(row: OverdueTransactionRow) => {
+                            const voucher = findOverdueVoucher(row);
+                            if (voucher) handleEditVoucher(voucher);
+                        }}
+                        onHistoryVoucher={(row: OverdueTransactionRow) => {
+                            const voucher = findOverdueVoucher(row);
+                            if (voucher) setOverdueHistoryVoucher(voucher);
+                        }}
+                        onAddLink={(row: OverdueTransactionRow) => {
+                            const voucher = findOverdueVoucher(row);
+                            if (!voucher) return;
+                            const isPaymentType = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(voucher?.type);
+                            if (isPaymentType) setOverdueLinkPaymentVoucher(voucher);
+                            else setOverdueLinkAdvancesVoucher(voucher);
+                        }}
+                    />
+                </div>
+            </div>
+        );
+
+        const reportDetailView = showReportOverdue ? reportOverdueView : selectedParty ? (
             <PartyDetails
                 party={selectedParty}
                 allParties={processedParties}
@@ -686,6 +1155,8 @@ export default function DesktopPartyStatementPage() {
                 userNames={userNames}
                 journalAccountNames={journalAccountNames}
                 context="report"
+                reportCardFilter={balanceCardFilter}
+                reportSummaryCards={clickableSummaryCards}
                 onEmbeddedPartyChange={handleEmbeddedPartyChange}
             />
         ) : selectedGroup ? (
@@ -696,6 +1167,7 @@ export default function DesktopPartyStatementPage() {
                 onGroupUpdated={() => {}}
                 onGroupDeleted={() => setSelectedGroup(null)}
                 onPartyUpdated={() => {}}
+                reportSummaryCards={clickableSummaryCards}
                 dateRange={dateRange}
                 onDateRangeChange={setDateRange}
                 userNames={userNames}
@@ -706,117 +1178,59 @@ export default function DesktopPartyStatementPage() {
             </div>
         );
 
-        return (
+
+
+
+    return (
             <>
                 <ResponsiveMasterDetail
                     listChromeRouteKey="party"
                     title={pageTitle}
-                    balance={null}
+                    balance={
+                        <span className={cn("font-semibold", reportListTotalBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                            {formatCurrency(reportListTotalBalance, { showDrCr: true })}
+                        </span>
+                    }
                     listHeaderLeading={<ReportShowListButton />}
                     tabsRowClassName="!min-h-0 !border-b-0 !p-0"
-                    tabs={
-                        <div className="flex min-w-0 flex-col">
-                            {reportListTopSummary}
-                            {reportListTabsRow}
-                        </div>
-                    }
+                    tabs={isMobile ? undefined : reportListTabsRow}
                     listView={reportListView}
                     detailView={
                       <ReportLedgerTxnDetailPane>{reportDetailView}</ReportLedgerTxnDetailPane>
                     }
-                    isMobile={false}
+                    isMobile={isMobile}
+                    mobileListOnly={isMobile}
+                    mobileTabsDocked={isMobile}
+                    hasSelectedItem={isMobile && showReportOverdue}
+                    onBackToList={() => setShowReportOverdue(false)}
                 />
                 {addVoucherDialog}
+                {overdueActionDialogs}
             </>
         );
     }
 
     return (
         <div className="h-full min-h-0 flex flex-col bg-gray-50 overflow-hidden">
-             <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 p-3 border-b bg-white">
-                 {/* Row 1: Party Details jaisa — title · naam (balance tone) · daen par entity avatar; "Showing x of y" hata. */}
-                 <div className="flex items-center gap-2 min-w-0">
-                    <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={handleReportBack}><ArrowLeft className="h-4 w-4" /></Button>
-                    <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                      <h1 className="shrink-0 text-base font-bold text-muted-foreground">{pageTitle}</h1>
-                      {activeEntity?.name ? (
-                        <>
-                          <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
-                            ·
-                          </span>
-                          <span
-                            className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
-                            title={activeEntity.name}
-                          >
-                            {activeEntity.name}
-                          </span>
-                        </>
-                      ) : null}
-                    </div>
-                    {activeEntity?.name ? (
-                      <div className="flex-shrink-0" aria-hidden>
-                        <ReportStatementHeaderAvatar
-                          kind={selectedParty ? "party" : "group"}
-                          displayName={activeEntity.name}
-                          fileUrl={selectedParty?.fileUrl}
-                          isSystemEntity={Boolean(
-                            selectedParty && (selectedParty as Party & { isSystemAccount?: boolean }).isSystemAccount
-                          )}
-                        />
-                      </div>
-                    ) : null}
-                 </div>
-                 {/* Mobile: date + party/group filters — collapse FAB se hide/show */}
-                 <MobileDetailSummaryCollapsible className="gap-2">
-                 <div className="flex justify-center items-center gap-2">
-                    <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
-                    {hasDateFilter && (
-                        <Button variant="ghost" size="icon" className="h-6 w-6 flex-shrink-0" onClick={() => setDateRange(undefined)} title="Clear date filter">
-                            <X className="h-3.5 w-3.5" />
-                        </Button>
-                    )}
-                 </div>
-                 {/* Row 3: Party dropdown | Group dropdown */}
-                 <div className="flex items-center gap-2">
-                    <div className="flex-1 min-w-0">
-                        <Combobox
-                            options={partyReportOptions}
-                            value={selectedParty?.id || ""}
-                            onChange={(value) => {
-                                const party = processedParties.find(p => p.id === value);
-                                if (party) {
-                                    const newUrl = new URL(window.location.href);
-                                    newUrl.searchParams.set('partyId', party.id);
-                                    newUrl.searchParams.delete('groupId');
-                                    window.history.pushState({}, '', newUrl);
-                                    setSelectedParty(party);
-                                    setSelectedGroup(null);
-                                }
-                            }}
-                            placeholder="Select a party"
-                         />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                        <Combobox
-                            options={groupReportOptions}
-                            value={selectedGroup?.id || ""}
-                            onChange={(value) => {
-                                const group = processedGroups.find(g => g.id === value);
-                                if (group) {
-                                    const newUrl = new URL(window.location.href);
-                                    newUrl.searchParams.set('groupId', group.id);
-                                    newUrl.searchParams.delete('partyId');
-                                    window.history.pushState({}, '', newUrl);
-                                    setSelectedGroup(group);
-                                    setSelectedParty(null);
-                                }
-                            }}
-                            placeholder="Select a group"
-                        />
-                    </div>
-                 </div>
-                 </MobileDetailSummaryCollapsible>
-            </header>
+                   <ReportEntityMobileHeader
+        title={pageTitle}
+        entityName={activeEntity?.name}
+        closingBalance={closingBalance}
+        dateRangeLabel={dateRangeLabel}
+        hasDateFilter={hasDateFilter}
+        onBack={handleReportBack}
+        onClearDate={() => setDateRange(undefined)}
+        avatar={activeEntity?.name ? (
+          <ReportStatementHeaderAvatar
+            kind={selectedParty ? "party" : "group"}
+            displayName={activeEntity.name}
+            fileUrl={selectedParty?.fileUrl}
+            isSystemEntity={Boolean(
+              selectedParty && (selectedParty as Party & { isSystemAccount?: boolean }).isSystemAccount
+            )}
+          />
+        ) : undefined}
+      />
 
             {/* Date range drawer (opened from footer Date button) */}
             <Drawer
@@ -900,12 +1314,14 @@ export default function DesktopPartyStatementPage() {
                      </div>
                  ) : (
                     <>
-                        <MobileDetailSummaryCollapsible>
-                        <ReportStatementSummaryCardsRow cards={summaryCards} className="pt-0.5 pb-3 flex-shrink-0" />
+                        <MobileDetailSummaryCollapsible className="w-[calc(100%+2rem)] min-w-0 -mx-4">
+                        <div key={activeEntity?.id ?? "no-entity"} ref={balanceCardsRowRef} data-pl-mobile-txn-balance-row="" data-pl-bank-report-balance-row="" className="box-border flex w-full min-w-0 flex-nowrap justify-start gap-2 px-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+                        <ReportStatementSummaryCardsRow cards={clickableSummaryCards} className="w-max min-w-0 flex-shrink-0 pt-0.5 pb-0 overflow-visible" />
+                        </div>
                         </MobileDetailSummaryCollapsible>
 
                         <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
-                        <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:px-0" data-floating-button-scroll>
+                        <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:px-0 pl-mobile-ledger-txn-scroll-pad" data-floating-button-scroll>
                             {isMobile ? (
                                 <div className="pb-4">
                                     <TransactionsTable
@@ -913,26 +1329,28 @@ export default function DesktopPartyStatementPage() {
                                         context={activeContext}
                                         contextId={activeEntity?.id}
                                         openingBalance={partyStatementMobilePaging.openingForPage}
+                                        booksOpeningBalance={balanceCardFilter ? undefined : (activeEntity as any)?.openingBalance != null ? Number((activeEntity as any).openingBalance) : undefined}
+                                        openingBalanceDate={(activeEntity as any)?.openingBalanceDate}
+                                        ledgerDateFilterActive={hasDateFilter || !!balanceCardFilter}
+                                        ledgerShowBookOpeningRow={!balanceCardFilter && !tdsFilterSide && (partyReportRowsPerPage <= 0 || partyStatementMobilePaging.edges.before === 0)}
+                                        hideLedgerOpeningRows={!!tdsFilterSide}
+                                        ledgerTransactionsForFyOpening={balanceCardFilter ? filteredReportTransactions : undefined}
+                                        fyLedgerScopeOpeningBalance={balanceCardFilter ? effectiveOpeningBalanceForPeriod : undefined}
+                                        openingBalancePeriodStartDate={partyStatementMobilePaging.openingPeriodStartDate ?? dateRange?.from}
+                                        dateRange={dateRange}
                                         openingBalanceOutstanding={openingBalanceOutstanding}
                                         openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
                                         userNames={userNames}
                                         journalAccountNames={journalAccountNames}
                                         onRowClick={handleEditVoucher}
                                         openingBalanceLabel="Opening"
-                                        forceBalanceMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+                                        forceBalanceMode={tdsFilterSide ? "statement" : balanceMode === "bill_wise" ? "bill_wise" : "statement"}
                                         groupEntityType={activeContext === "group" ? "party" : undefined}
-                                        visibleColumns={balanceMode === "bill_wise" ? { status: true } : undefined}
+                                        visibleColumns={tdsFilterSide ? mergeLedgerTdsVisibleColumnsWithPrefs({}, false) : balanceMode === "bill_wise" ? { status: true } : undefined}
                                         periodDr={partyStatementMobilePaging.periodDrForPage}
                                         periodCr={partyStatementMobilePaging.periodCrForPage}
                                         closingBalance={partyStatementMobilePaging.closingForPage}
-                                        openingBalanceSearch={
-                                            <Input
-                                                placeholder="Search..."
-                                                value={transactionSearch}
-                                                onChange={(e) => setTransactionSearch(e.target.value)}
-                                                className="h-8 w-32 max-w-[140px] text-sm"
-                                            />
-                                        }
+
                                     />
                                 </div>
                             ) : (
@@ -940,16 +1358,28 @@ export default function DesktopPartyStatementPage() {
                                     transactions={filteredReportTransactions}
                                     context={activeContext}
                                     contextId={activeEntity?.id}
-                                    openingBalance={openingBalanceForPeriod}
+                                    openingBalance={effectiveOpeningBalanceForPeriod}
+                                    booksOpeningBalance={balanceCardFilter ? undefined : (activeEntity as any)?.openingBalance != null ? Number((activeEntity as any).openingBalance) : undefined}
+                                    openingBalanceDate={(activeEntity as any)?.openingBalanceDate}
+                                    ledgerDateFilterActive={hasDateFilter || !!balanceCardFilter}
+                                    ledgerShowBookOpeningRow={!balanceCardFilter && !tdsFilterSide}
+                                    hideLedgerOpeningRows={!!tdsFilterSide}
+                                    ledgerTransactionsForFyOpening={balanceCardFilter ? filteredReportTransactions : undefined}
+                                    fyLedgerScopeOpeningBalance={balanceCardFilter ? effectiveOpeningBalanceForPeriod : undefined}
+                                    periodDr={effectivePeriodDr}
+                                    periodCr={effectivePeriodCr}
+                                    closingBalance={effectiveClosingBalance}
+                                    openingBalancePeriodStartDate={dateRange?.from}
+                                    dateRange={dateRange}
                                     openingBalanceOutstanding={openingBalanceOutstanding}
                                     openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
                                     userNames={userNames}
                                     journalAccountNames={journalAccountNames}
                                     onRowClick={handleEditVoucher}
                                     openingBalanceLabel="Opening"
-                                    forceBalanceMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+                                    forceBalanceMode={tdsFilterSide ? "statement" : balanceMode === "bill_wise" ? "bill_wise" : "statement"}
                                     groupEntityType={activeContext === "group" ? "party" : undefined}
-                                    visibleColumns={balanceMode === "bill_wise" ? { status: true } : undefined}
+                                    visibleColumns={tdsFilterSide ? mergeLedgerTdsVisibleColumnsWithPrefs({}, false) : balanceMode === "bill_wise" ? { status: true } : undefined}
                                     openingBalanceSearch={
                                         <Input
                                             placeholder="Search..."
@@ -963,8 +1393,8 @@ export default function DesktopPartyStatementPage() {
                         </div>
                             {isMobile && view === "list" && (
                                 <MobileTransactionsPager
-                                    // PartyDetails jaisa `mb-12`: fixed footer + Add New FAB pager ke neeche overlap na kare — "pager kahan hai" UX.
-                                    className="flex-shrink-0 border-t bg-muted/25 mb-12"
+                                    className={mdc.ledgerTxnPagerOutside}
+                                    txnToolbar={mobileEntityTxnToolbar}
                                     currentPage={partyReportPagerPage}
                                     totalItems={filteredReportTransactions.length}
                                     rowsPerPage={partyReportRowsPerPage}
@@ -986,7 +1416,7 @@ export default function DesktopPartyStatementPage() {
                  )}
             </main>
 
-            <footer className="flex items-stretch justify-around p-1.5 border-t bg-white gap-1 fixed bottom-0 left-0 right-0">
+            <footer className="flex items-stretch justify-around p-1.5 border-t bg-white gap-1 fixed bottom-0 left-0 right-0" data-pl-mobile-ledger-action-footer="">
                 <PermissionButton permission="export_data" className="flex-1 flex flex-col items-center justify-center py-1 min-w-0 bg-green-500 hover:bg-green-600 text-white rounded-md" onClick={handlePrint}>
                     <Printer className="w-4 h-4 mb-0" /> <span className="text-[10px] leading-tight">Print</span>
                 </PermissionButton>

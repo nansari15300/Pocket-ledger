@@ -19,8 +19,12 @@ export async function createOnePartyGroup(params: {
   userId: string;
   name: string;
   parentId: string;
+  /** Optional other name (OCR / search). Omitted when empty. */
+  aliasName?: string;
 }): Promise<string> {
   const { company, companyId, userId, name, parentId } = params;
+  const alias = String(params.aliasName ?? "").trim();
+  const aliasField = alias ? { aliasName: alias } : {};
   if (apkEntityWriteUsesLocalSqliteMirror(company)) {
     const createdId = createLocalEntityId("group");
     const payload = {
@@ -29,6 +33,7 @@ export async function createOnePartyGroup(params: {
       ownerId: userId,
       companyId,
       parentId,
+      ...aliasField,
       createdAt: Timestamp.now(),
       isDeleted: false,
     };
@@ -41,6 +46,7 @@ export async function createOnePartyGroup(params: {
     ownerId: userId,
     companyId,
     parentId,
+    ...aliasField,
     createdAt: serverTimestamp(),
     isDeleted: false,
   });

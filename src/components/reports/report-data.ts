@@ -103,7 +103,7 @@ export const reports: Report[] = [
   },
   {
     id: "expense-statement",
-    name: "Income & Expense Report",
+    name: "Income & Expense Statement",
     description: "View Income & Expense account or group transaction history.",
     category: "Accounting",
   },

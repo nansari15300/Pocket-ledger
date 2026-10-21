@@ -1,6 +1,7 @@
 
 "use client";
 
+import { NESTED_LEDGER_MASTER_EDIT_CONTENT_CN, NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN } from "@/lib/nestedLedgerMasterEditPresentation";
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useFieldArray, useForm, useWatch, type Resolver } from "react-hook-form";
@@ -168,6 +169,7 @@ const unitConversionSchema = z.object({
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Item name must be at least 2 characters." }),
+  aliasName: z.string().optional(),
   type: z.enum(['item', 'service', 'finished_good']),
   hsCode: z.string().optional(),
   salePrice: z.coerce.number().min(0, "Price must be a positive number."),
@@ -230,7 +232,7 @@ function normalizeItemEditGroupId(
 function getInitialFormValues(item?: Item): z.infer<typeof formSchema> {
     if (!item) {
         return {
-            name: "",
+            name: "", aliasName: "",
             type: "item",
             hsCode: "",
             salePrice: 0,
@@ -255,6 +257,7 @@ function getInitialFormValues(item?: Item): z.infer<typeof formSchema> {
 
     return {
         name: item.name,
+        aliasName: (((item as unknown) as { aliasName?: string }).aliasName) || "",
         type: item.type,
         hsCode: (item as any).hsCode || "",
         salePrice: item.salePrice,
@@ -278,17 +281,26 @@ function getInitialFormValues(item?: Item): z.infer<typeof formSchema> {
 }
 
 
-export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, hasTransactions }: {
+export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, hasTransactions, isOpen: controlledIsOpen, onOpenChange: controlledOnOpenChange }: {
   item: Item;
   onItemUpdated: (updatedItem: Partial<Item>) => void;
   onItemDeleted: () => void;
-  children: React.ReactNode;
+  children?: React.ReactNode;
   hasTransactions?: boolean;
+  /** External open (e.g. combobox pencil): controlled + nested above the voucher dialog. */
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [isLoading, setIsLoading] = useState(false);
   const isCompressing = useImageCompressionProcessing();
   const { toast } = useToast();
-  const [isOpen, setIsOpen] = useState(false);
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const externallyControlled = controlledIsOpen !== undefined;
+  const isOpen = externallyControlled ? !!controlledIsOpen : internalIsOpen;
+  const setIsOpen = useCallback((o: boolean) => {
+    if (!externallyControlled) setInternalIsOpen(o);
+    controlledOnOpenChange?.(o);
+  }, [externallyControlled, controlledOnOpenChange]);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [groups, setGroups] = useState<ItemGroup[]>([]);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
@@ -489,6 +501,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
 
       const baseValues: ItemFormValues = {
         name: item.name,
+        aliasName: (((item as unknown) as { aliasName?: string }).aliasName) || "",
         type: item.type,
         hsCode: (item as any).hsCode || "",
         salePrice: item.salePrice,
@@ -664,6 +677,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         /** Explicit fields — `undefined` Firestore / SQLite JSON me avoid */
         const updatePayload: Record<string, unknown> = {
           name: submitValues.name,
+          aliasName: (submitValues.aliasName ?? "").trim(),
           type: submitValues.type,
           hsCode: submitValues.hsCode?.trim() || null,
           salePrice: submitValues.salePrice,
@@ -738,8 +752,13 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
           return;
         }
 
-        const itemRef = doc(firestore, `companies/${companyId}/items`, itemRefSnap.id);
-        await updateDoc(itemRef, updatePayload);
+        const { persistMasterEntityUpdate } = await import("@/lib/masterEntityUpdatePersist");
+        await persistMasterEntityUpdate({
+          companyId,
+          collection: "items",
+          docId: itemRefSnap.id,
+          patch: updatePayload,
+        });
 
         finalizeFormAttachmentEditAfterSave({
           companyId,
@@ -1060,7 +1079,9 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         {/* Mobile: 85vh height, 98vw width. PC: 90% screen height & width (90vh / 90vw) so dialog uses most of viewport. */}
         <DialogContent
             hideCloseButton={dialogResizable}
+            overlayClassName={externallyControlled ? NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN : undefined}
             className={cn(
+              externallyControlled && NESTED_LEDGER_MASTER_EDIT_CONTENT_CN,
               cnMasterEntityDialogContent(isMobile),
               "sm:max-w-5xl",
               dialogResizable &&
@@ -1118,7 +1139,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
               </Tabs>
                  <div className="space-y-4 py-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <FormField
+              <div className="space-y-2"><FormField
                 control={form.control}
                 name="name"
                 render={({ field }: any) => (
@@ -1135,7 +1156,24 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                     <FormMessage />
                   </FormItem>
                 )}
-              />
+              /><FormField
+                control={form.control}
+                name="aliasName"
+                render={({ field }: any) => (
+                  <FormItem>
+                    <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="Other name on bills / short name"
+                        className={cn("h-9", catalogLocked && "bg-muted cursor-not-allowed")}
+                        readOnly={catalogLocked}
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              /></div>
                <FormField
                 control={form.control}
                 name="hsCode"

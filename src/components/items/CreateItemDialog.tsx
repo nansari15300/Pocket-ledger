@@ -149,6 +149,7 @@ const unitConversionSchema = z.object({
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Item name must be at least 2 characters." }),
+  aliasName: z.string().optional(),
   type: z.enum(['item', 'service', 'finished_good']),
   hsCode: z.string().optional(),
   salePrice: z.coerce.number().min(0, "Price must be a positive number."),
@@ -172,7 +173,7 @@ const formSchema = z.object({
 
 function getInitialFormValues(itemType: 'item' | 'service' | 'finished_good' = 'item'): z.infer<typeof formSchema> {
     return {
-        name: "",
+        name: "", aliasName: "",
         type: itemType,
         hsCode: "",
         salePrice: 0,
@@ -631,6 +632,7 @@ export function CreateItemDialog({
         const payload = {
           id: localId,
           name: values.name,
+          aliasName: (values.aliasName ?? "").trim(),
           type: values.type,
           hsCode: values.hsCode || null,
           ownerId: user.uid,
@@ -769,6 +771,7 @@ export function CreateItemDialog({
 
       const submissionData = {
           name: values.name,
+          aliasName: (values.aliasName ?? "").trim(),
           type: values.type,
           hsCode: values.hsCode || null,
           ownerId: user.uid,
@@ -1020,7 +1023,7 @@ const capitalizeFirstLetter = (str: string) => {
               {tabsInRibbon ? null : itemTypeTabs}
               <div className="space-y-4 py-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <FormField
+                <div className="space-y-2"><FormField
                   control={form.control}
                   name="name"
                   render={({ field }: any) => (
@@ -1032,7 +1035,19 @@ const capitalizeFirstLetter = (str: string) => {
                       <FormMessage />
                     </FormItem>
                   )}
-                />
+                /><FormField
+                  control={form.control}
+                  name="aliasName"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                      <FormControl>
+                        <Input placeholder="Other name on bills / short name" className="h-9" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                /></div>
                 <FormField
                   control={form.control}
                   name="hsCode"

@@ -58,13 +58,14 @@ const formSchema = z.object({
 const MAX_FILE_SIZE_MB = 0.5;
 
 
-export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups = [], isOpen: parentIsOpen, onOpenChange: parentOnOpenChange, prefillTaxName }: { 
+export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups = [], isOpen: parentIsOpen, onOpenChange: parentOnOpenChange, prefillTaxName, prefillTaxRate }: { 
     onTaxCreated: (newId: string, newTax?: { id: string; name: string; rate: number; balance?: number; companyId: string; groupId?: string }) => void, 
     children?: React.ReactNode, 
     groups?: TaxGroup[],
     isOpen?: boolean,
     onOpenChange?: (open: boolean) => void,
-    prefillTaxName?: string
+    prefillTaxName?: string,
+  prefillTaxRate?: number
 }) {
   const [internalIsOpen, setIsOpen] = useState(false);
   const [isNestedOpen, setIsNestedOpen] = useState(false);
@@ -158,6 +159,7 @@ export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups =
                 groups={groups}
                 onNestedDialogOpenChange={setIsNestedOpen}
                 prefillName={prefillTaxName}
+          prefillRate={prefillTaxRate}
               />
             </div>
           </DialogContent>

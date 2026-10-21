@@ -46,6 +46,7 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
   const [isLoading, setIsLoading] = useState(false);
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const [systemBranch, setSystemBranch] = useState(PARTY_ENTITY_GROUP_PRESET.defaultBranch);
+  const [aliasName, setAliasName] = useState("");
   const [chainSlots, setChainSlots] = useState<MasterEntityGroupCreateChainSlot[]>([{}]);
   const { toast } = useToast();
   const { user } = useAuth();
@@ -63,6 +64,7 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
   const nestedGroupDialogShell = masterEntityNestedGroupDialogShell(isMobile);
 
   const resetForm = () => {
+    setAliasName("");
     setChainSlots([{}]);
     setSystemBranch(PARTY_ENTITY_GROUP_PRESET.defaultBranch);
   };
@@ -102,6 +104,7 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
     }
 
     const trimmedChain = trimTrailingEmptyCreateChainSlots(chainSlots);
+    const trimmedLastNewSlot = [...trimmedChain].reverse().find((sl) => !sl.groupId && String(sl.pendingName || "").trim());
     const pendingNames = masterEntityGroupCreateChainPendingNames(chainSlots);
 
     if (pendingNames.length === 0) {
@@ -177,6 +180,7 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
           userId: user.uid,
           name: nameTrimmed,
           parentId: createParentId,
+          aliasName: slot === trimmedLastNewSlot ? aliasName : undefined,
         });
         parentId = lastCreatedId;
       }
@@ -251,6 +255,10 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
             disabled={isLoading || apkOfflineViewOnly}
             formResetKey={isOpen ? "create-open" : "create-closed"}
           />
+          <div className="space-y-1 pt-2">
+            <label htmlFor="group-alias-name-new" className="text-sm font-medium">Alias Name <span className="text-xs font-normal text-muted-foreground">(optional)</span></label>
+            <input id="group-alias-name-new" value={aliasName} onChange={(e) => setAliasName(e.target.value)} placeholder="Other name (e.g. as printed on bills)" className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+          </div>
           <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
                 <DialogClose asChild>
                   <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>Cancel</Button>

@@ -22,9 +22,22 @@ import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
+import { ReportEntityMobileHeader } from "@/components/reports/ReportEntityMobileHeader";
 import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
+import { computeFilteredCardOpeningAndRows } from "@/lib/reportFilteredCardBalance";
+import { buildReportVoucherTypeCards, filterReportCardsToExistingVouchers, getReportVoucherTypeKey, reportMobileSummaryCardTitle, reportVoucherMatchesSummaryCard, ReportNetBalanceInfoButton } from "@/components/reports/ReportStatementSummaryCards";
+
+import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { mdc } from "@/lib/mobileDetailChrome";
+import { Search } from "lucide-react";
 import { buildItemGroupReportEntity } from "@/lib/reportStatementGroupEntity";
 import {
   clearPlModalParentQueryBackup,
@@ -61,24 +74,43 @@ import * as XLSX from "xlsx";
 import { RunningBalanceFullChart } from "@/components/reports/RunningBalanceFullChart";
 import { getConversionFactor, formatQuantity } from "@/components/vouchers/transactionTableShared";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { collectItemIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesItemLedger";
+import { resolveItemListGroupBucketId } from "@/lib/masterEntitySystemGroups";
+import { CreateItemDialog } from "@/components/items/CreateItemDialog";
+import { CreateItemGroupDialog } from "@/components/items/CreateItemGroupDialog";
+import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
+import { ReportListSearchExtras, ReportListTotalBalance, useReportListPendingApproval, useReportShowApproveOnList } from "@/components/reports/ReportListParityChrome";
+import { useReportMobileListMode } from "@/hooks/useReportMobileListMode";
 
 const ReportSummaryCard = React.memo(function ReportSummaryCard({
   title,
   amount,
   color,
   customFormatted,
+  selected,
 }: {
   title: string;
   amount: number;
   color: string;
   customFormatted?: string;
+  selected?: boolean;
 }) {
   const { formatCurrency, formatCurrencyForPrint } = useDate();
-  const formatted = customFormatted ?? formatCurrency(amount, { showDrCr: title === "Balance" });
-  const titleStr = customFormatted ?? formatCurrencyForPrint(amount, { showDrCr: title === "Balance" });
+  const showDrCr = title.toLowerCase().includes("balance");
+  const formatted = customFormatted ?? formatCurrency(amount, { showDrCr });
+  const titleStr = customFormatted ?? formatCurrencyForPrint(amount, { showDrCr });
   return (
-    <div className="px-2 py-1.5 h-10 min-h-10 flex items-center justify-center w-fit flex-shrink-0 border rounded-lg overflow-hidden bg-card">
-      <div className="flex flex-col">
+    <div
+      data-pl-bank-report-balance-card-surface=""
+      data-pl-report-balance-card-surface=""
+      data-pl-report-balance-card-selected={selected ? "true" : undefined}
+      className={cn(
+        "px-2 py-1.5 h-12 min-h-12 flex items-center justify-center w-fit flex-shrink-0 border rounded-lg overflow-hidden",
+        "pl-dashboard-tone-card",
+        selected ? "pl-dashboard-ribbon-sky border-blue-500" : "pl-dashboard-ribbon-emerald border-emerald-500"
+      )}
+    >
+      <div className={cn("flex flex-col", title === "Net Balance" && "pr-4")}>
         <p className="text-xs text-muted-foreground whitespace-nowrap">{title}</p>
         <p className={cn("text-sm sm:text-base font-bold whitespace-nowrap tabular-nums", color)} title={titleStr}>
           {formatted}
@@ -86,7 +118,7 @@ const ReportSummaryCard = React.memo(function ReportSummaryCard({
       </div>
     </div>
   );
-}, (prev, next) => prev.title === next.title && prev.amount === next.amount && prev.color === next.color && prev.customFormatted === next.customFormatted);
+}, (prev, next) => prev.title === next.title && prev.amount === next.amount && prev.color === next.color && prev.customFormatted === next.customFormatted && prev.selected === next.selected);
 
 export default function DesktopItemStatementPage() {
   const { processedItems, processedItemGroups, vouchers, loading, journalAccountNames } = useFyScopedVouchers();
@@ -96,12 +128,16 @@ export default function DesktopItemStatementPage() {
   const searchParams = useLocationSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
+  const reportMobileList = useReportMobileListMode(isMobile, ["itemId","groupId"]);
   const calendarMonths = useCalendarMonths();
   const openingModalRef = useRef(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [transactionSearch, setTransactionSearch] = useState("");
+  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
+  const [balanceCardFilter, setBalanceCardFilter] = useState<string | null>(null);
+  const balanceCardsRowRef = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState<"list" | "chart">("list");
   const [listTab, setListTab] = useState<"items" | "groups">(() =>
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("groupId")
@@ -120,7 +156,7 @@ export default function DesktopItemStatementPage() {
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const fetchedUidsRef = useRef<Set<string>>(new Set());
 
-  const pageTitle = selectedGroup ? "Item Group Report" : "Item Report";
+  const pageTitle = selectedGroup ? "Item Group Statement" : "Item Statement";
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     try {
@@ -216,8 +252,9 @@ export default function DesktopItemStatementPage() {
       closeModalInUrl();
       return;
     }
+    if (reportMobileList.backToList()) return;
     router.back();
-  }, [isVoucherDialogOpen, isCalendarOpen, closeModalInUrl, router]);
+  }, [isVoucherDialogOpen, isCalendarOpen, closeModalInUrl, router, reportMobileList]);
 
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     const range = dateRange;
@@ -276,6 +313,9 @@ export default function DesktopItemStatementPage() {
   }, [selectedGroup, processedItems, processedItemGroups]);
 
   const activeEntity = selectedItem || groupReportEntity;
+  useEffect(() => {
+    if (balanceCardsRowRef.current) balanceCardsRowRef.current.scrollLeft = 0;
+  }, [activeEntity?.id]);
   const activeContext = selectedItem ? "item" : "group";
 
   const reportStockViewForTx = selectedItem ? reportStockView : "amount";
@@ -295,6 +335,20 @@ export default function DesktopItemStatementPage() {
     userNames,
     reportDisplayUnitForTx
   );
+  const { closingBalance: allTimeNetBalance, processedTransactions: allTimeTransactions } = useTransactions(
+    activeEntity as any,
+    activeContext,
+    undefined,
+    reportStockViewForTx,
+    processedItems,
+    vouchers,
+    undefined,
+    {},
+    undefined,
+    undefined,
+    userNames,
+    reportDisplayUnitForTx
+  );
 
   const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
   // Mobile: full tx list for tail pager; desktop all-time = last 10 rows.
@@ -303,21 +357,82 @@ export default function DesktopItemStatementPage() {
     if (processedTransactions.length <= 10) return processedTransactions;
     return processedTransactions.slice(-10);
   }, [processedTransactions, hasDateFilter, isMobile]);
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(reportDisplayTransactions),
+    [reportDisplayTransactions]
+  );
+
+  const cardFilteredResult = useMemo(() => {
+    if (!balanceCardFilter) return null;
+    return computeFilteredCardOpeningAndRows({
+      allTimeTransactions,
+      periodTransactions: reportDisplayTransactions,
+      fromDate: hasDateFilter ? dateRange?.from : undefined,
+      filterKey: balanceCardFilter,
+      matchesFilter: (t: any) =>
+        balanceCardFilter.startsWith("summary:")
+          ? reportVoucherMatchesSummaryCard(
+              t,
+              balanceCardFilter.slice(8),
+              activeContext,
+              activeEntity?.id,
+              activeContext === "group" ? "item" : undefined
+            )
+          : getReportVoucherTypeKey(
+              t,
+              activeContext,
+              activeEntity?.id,
+              activeContext === "group" ? "item" : undefined
+            ) === balanceCardFilter,
+    });
+  }, [
+    balanceCardFilter,
+    allTimeTransactions,
+    reportDisplayTransactions,
+    hasDateFilter,
+    dateRange?.from,
+    activeContext,
+    activeEntity?.id,
+  ]);
+
+  const effectiveOpeningBalanceForPeriod = cardFilteredResult
+    ? cardFilteredResult.filteredOpening
+    : openingBalanceForPeriod;
+  const effectivePeriodDr = cardFilteredResult
+    ? cardFilteredResult.filteredPeriodDr
+    : periodDr;
+  const effectivePeriodCr = cardFilteredResult
+    ? cardFilteredResult.filteredPeriodCr
+    : periodCr;
+  const effectiveClosingBalance = cardFilteredResult
+    ? cardFilteredResult.filteredClosing
+    : closingBalance;
 
   const filteredReportTransactions = useMemo(() => {
-    if (!transactionSearch.trim()) return reportDisplayTransactions;
+    let list = cardFilteredResult
+      ? cardFilteredResult.recomputedRows
+      : reportDisplayTransactions;
+    if (!cardFilteredResult && balanceCardFilter) {
+      list = list.filter((t: any) => balanceCardFilter.startsWith("summary:")
+        ? reportVoucherMatchesSummaryCard(t, balanceCardFilter.slice(8), activeContext, activeEntity?.id, activeContext === "group" ? "item" : undefined)
+        : getReportVoucherTypeKey(t, activeContext, activeEntity?.id, activeContext === "group" ? "item" : undefined) === balanceCardFilter);
+    }
+    if (unapprovedOnly) {
+      list = list.filter((t: any) => !t.isApproved && t.isApproved !== true);
+    }
+    if (!transactionSearch.trim()) return list;
     const q = transactionSearch.trim().toLowerCase();
-    return reportDisplayTransactions.filter((t: any) => {
+    return list.filter((t: any) => {
       const vno = (t.voucherNumber || "").toLowerCase();
       const narr = (t.narration || "").toLowerCase();
       const type = (typeof t.type === "string" ? t.type.replace(/_/g, " ") : "").toLowerCase();
       const amount = String(t.debit ?? t.credit ?? t.total ?? "").toLowerCase();
       return vno.includes(q) || narr.includes(q) || type.includes(q) || amount.includes(q);
     });
-  }, [reportDisplayTransactions, transactionSearch]);
+  }, [cardFilteredResult, reportDisplayTransactions, transactionSearch, unapprovedOnly, balanceCardFilter, activeContext, activeEntity?.id]);
 
   // Qty/amount toggle ya unit badle to row shape change — pager page 1 (Party hook resetKey).
-  const itemStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${reportStockViewForTx}|${effectiveDisplayUnit ?? ""}`;
+  const itemStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${unapprovedOnly}|${balanceCardFilter ?? "all"}|${reportStockViewForTx}|${effectiveDisplayUnit ?? ""}`;
   const {
     pagingMeta: itemStatementMobilePaging,
     pagerPage: itemReportPagerPage,
@@ -327,10 +442,10 @@ export default function DesktopItemStatementPage() {
   } = useStatementReportMobilePaging({
     filteredRows: filteredReportTransactions,
     isMobile,
-    openingBalanceForPeriod,
-    periodDr,
-    periodCr,
-    closingBalance,
+    openingBalanceForPeriod: effectiveOpeningBalanceForPeriod,
+    periodDr: effectivePeriodDr,
+    periodCr: effectivePeriodCr,
+    closingBalance: effectiveClosingBalance,
     resetKey: itemStatementMobilePagingKey,
   });
 
@@ -345,6 +460,25 @@ export default function DesktopItemStatementPage() {
       { title: "Purchases", amount: purchasesAmount, qty: purchasesQty, color: "text-red-600" },
     ];
   }, [closingBalance, processedTransactions]);
+  const mobileSummaryCards = useMemo(() => filterReportCardsToExistingVouchers([
+    ...summaryCards.map((card) => card.title === "Balance" ? { ...card, amount: allTimeNetBalance, qty: allTimeNetBalance, color: allTimeNetBalance >= 0 ? "text-green-600" : "text-red-600" } : card),
+    ...buildReportVoucherTypeCards(processedTransactions, activeContext, activeEntity?.id, activeContext === "group" ? "item" : undefined, summaryCards.map((card) => card.title)),
+  ], processedTransactions, activeContext, activeEntity?.id, activeContext === "group" ? "item" : undefined), [summaryCards, processedTransactions, activeContext, activeEntity?.id, allTimeNetBalance]);
+  const clickableSummaryCards = useMemo(
+    () => mobileSummaryCards.map((card) => {
+      const isNet = ["Balance", "Account Balance", "Net Balance"].includes(card.title);
+      const filterKey = isNet ? null : (card as { filterKey?: string }).filterKey ?? `summary:${card.title}`;
+      return {
+        title: reportMobileSummaryCardTitle(card.title),
+        amount: card.amount,
+        color: card.color,
+        filterKey,
+        selected: isNet ? !balanceCardFilter : balanceCardFilter === filterKey,
+        onClick: () => setBalanceCardFilter(isNet || balanceCardFilter === filterKey ? null : filterKey),
+      };
+    }),
+    [mobileSummaryCards, balanceCardFilter]
+  );
 
   const desktopSummaryCards = useMemo(
     () => summaryCards.map(({ title, amount, color }) => ({ title, amount, color })),
@@ -383,7 +517,7 @@ export default function DesktopItemStatementPage() {
 
   const dateRangeLabel = useMemo(() => {
     // Entity report header row-2 — Party statement jaisa "All Time"; last-10 desktop slice alag logic.
-    if (!hasDateFilter) return "All Time";
+    if (!hasDateFilter) return "Last 10 Txns";
     const from = dateRange!.from!;
     const to = dateRange!.to || from;
     const fromAD = format(from, "LLL dd, y");
@@ -514,6 +648,47 @@ export default function DesktopItemStatementPage() {
     [openModalInUrl]
   );
 
+  /* ---- Main Item list page parity: header total, pink unapproved badge, + Add ---- */
+  const reportShowApproveOnList = useReportShowApproveOnList();
+  const reportPending = useReportListPendingApproval({
+    enabled: reportShowApproveOnList,
+    vouchers,
+    entities: processedItems as any[],
+    collect: (v, ids) => collectItemIdsTouchedByUnapprovedVoucher(v, ids),
+    bucket: (e: any) => resolveItemListGroupBucketId(e),
+  });
+  const {
+    showOnlyEntities: reportOnlyPendingEntities,
+    setShowOnlyEntities: setReportOnlyPendingEntities,
+    showOnlyGroups: reportOnlyPendingGroups,
+    setShowOnlyGroups: setReportOnlyPendingGroups,
+  } = usePendingApprovalListFilter(reportPending.total);
+  const [isReportCreateEntityOpen, setIsReportCreateEntityOpen] = useState(false);
+  const [isReportCreateGroupOpen, setIsReportCreateGroupOpen] = useState(false);
+  const reportEntitiesView = useMemo(
+    () =>
+      !reportOnlyPendingEntities || !reportShowApproveOnList
+        ? processedItems
+        : processedItems.filter((e: any) => (reportPending.byId[e.id] ?? 0) > 0),
+    [processedItems, reportOnlyPendingEntities, reportShowApproveOnList, reportPending]
+  );
+  const reportGroupsView = useMemo(
+    () =>
+      !reportOnlyPendingGroups || !reportShowApproveOnList
+        ? processedItemGroups
+        : processedItemGroups.filter((g: any) => (reportPending.byGroupId[g.id] ?? 0) > 0),
+    [processedItemGroups, reportOnlyPendingGroups, reportShowApproveOnList, reportPending]
+  );
+  const reportListTotalBalance = useMemo(
+    () =>
+      listTab === "groups"
+      ? processedItemGroups.reduce((acc: number, g: any) => acc + (Number(g.balance) || 0), 0)
+      : processedItems
+          .filter((i: any) => i.type === "item" || i.type === "service" || i.type === "finished_good" || !i.type)
+          .reduce((acc: number, i: any) => acc + (Number(i.balance) || 0), 0),
+    [listTab, processedItems, processedItemGroups]
+  );
+
   if (loading && !activeEntity) {
     return <LoadingSpinner />;
   }
@@ -533,9 +708,93 @@ export default function DesktopItemStatementPage() {
     />
   );
 
-  if (!isMobile) {
+  const mobileEntityTxnToolbar = (
+    <MobileEntityTxnToolbarRow placement="belowPager">
+      <MobileEntityTxnToolbarPicker>
+        <Combobox
+          options={selectedGroup ? groupReportOptions : itemReportOptions}
+          value={selectedGroup ? (selectedGroup?.id || "") : (selectedItem?.id || "")}
+          onChange={(value) => {
+            if (selectedGroup) {
+              const group = processedItemGroups.find((g) => g.id === value);
+              if (group) {
+                const newUrl = new URL(window.location.href);
+                newUrl.searchParams.set('groupId', group.id);
+                newUrl.searchParams.delete('itemId');
+                window.history.pushState({}, '', newUrl);
+                setSelectedGroup(group);
+                setSelectedItem(null);
+              }
+            } else {
+              const entity = processedItems.find((p) => p.id === value);
+              if (entity) {
+                const newUrl = new URL(window.location.href);
+                newUrl.searchParams.set('itemId', entity.id);
+                newUrl.searchParams.delete('groupId');
+                window.history.pushState({}, '', newUrl);
+                setSelectedItem(entity);
+                setSelectedGroup(null);
+              }
+            }
+          }}
+          placeholder={selectedGroup ? "Select a group" : "Select an item"}
+        />
+      </MobileEntityTxnToolbarPicker>
+      <MobileEntityTxnToolbarUnapprovedBadge
+        count={mobileUnapprovedTxnCount}
+        pressed={unapprovedOnly}
+        onToggle={() => {
+          setUnapprovedOnly((prev) => !prev);
+          setItemReportPagerPage(1);
+        }}
+      />
+      <MobileEntityTxnToolbarSearch>
+        <Search className={mdc.mobileTxnToolbarSearchIcon} />
+        <Input
+          placeholder="Search transactions"
+          className={mdc.mobileTxnToolbarSearchInput}
+          value={transactionSearch}
+          onChange={(e) => {
+            setTransactionSearch(e.target.value);
+            setItemReportPagerPage(1);
+          }}
+        />
+      </MobileEntityTxnToolbarSearch>
+    </MobileEntityTxnToolbarRow>
+  );
+
+  if (!isMobile || reportMobileList.showList) {
     return (
       <ReportStatementDesktopShell
+        isMobile={isMobile}
+        balance={<ReportListTotalBalance value={reportListTotalBalance} format={formatCurrency} />}
+        searchRowExtras={
+          <ReportListSearchExtras
+            show={reportShowApproveOnList}
+            count={reportPending.total}
+            isGroupsTab={listTab === "groups"}
+            entityPressed={reportOnlyPendingEntities}
+            onEntityToggle={() => setReportOnlyPendingEntities((v) => !v)}
+            groupPressed={reportOnlyPendingGroups}
+            onGroupToggle={() => setReportOnlyPendingGroups((v) => !v)}
+            entityNoun="items"
+            addButton={
+              listTab === "groups" ? (
+              <CreateItemGroupDialog onGroupCreated={() => {}} isOpen={isReportCreateGroupOpen} onOpenChange={setIsReportCreateGroupOpen} groups={processedItemGroups}>
+                <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsReportCreateGroupOpen(true)}>
+                  + Add Group
+                </PermissionButton>
+              </CreateItemGroupDialog>
+              ) : (
+              <CreateItemDialog onItemCreated={() => {}} isOpen={isReportCreateEntityOpen} onOpenChange={setIsReportCreateEntityOpen}>
+                <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsReportCreateEntityOpen(true)}>
+                  + Add Item
+                </PermissionButton>
+              </CreateItemDialog>
+              )
+            }
+          />
+        }
         listChromeRouteKey="items"
         pageTitle={pageTitle}
         listTab={listTab}
@@ -550,13 +809,13 @@ export default function DesktopItemStatementPage() {
         entitySectionLabel={
           <div className={mlc.sectionLabelRow}>
             <Package className={mlc.sectionIcon} />
-            <span>Item ({processedItems.length})</span>
+            <span>Item ({reportEntitiesView.length})</span>
           </div>
         }
         groupSectionLabel={
           <div className={mlc.sectionLabelRow}>
             <Layers className={mlc.sectionIcon} />
-            <span>Item group ({processedItemGroups.length})</span>
+            <span>Item group ({reportGroupsView.length})</span>
           </div>
         }
         entityQuickFilter={itemListQuickFilter}
@@ -567,7 +826,8 @@ export default function DesktopItemStatementPage() {
         showSummary={!!activeEntity}
         entityList={
           <ItemList
-            items={processedItems}
+            items={reportEntitiesView}
+            pendingApprovalByItemId={reportPending.byId}
             onSelectItem={handleSelectItemFromList}
             selectedItem={selectedItem}
             searchTerm={listSearchTerm}
@@ -580,7 +840,9 @@ export default function DesktopItemStatementPage() {
         }
         groupList={
           <ItemGroupList
-            groups={processedItemGroups}
+            groups={reportGroupsView}
+            pendingApprovalByGroupId={reportPending.byGroupId}
+            pendingApprovalByMemberId={reportPending.byId}
             onSelectGroup={handleSelectGroupFromList}
             selectedGroup={selectedGroup}
             searchTerm={listSearchTerm}
@@ -601,6 +863,7 @@ export default function DesktopItemStatementPage() {
               itemDisplayUnits={itemDisplayUnits}
               setItemDisplayUnit={setItemDisplayUnit}
               userNames={userNames}
+              reportSummaryCards={clickableSummaryCards}
             />
           ) : selectedGroup ? (
             <ItemGroupDetails
@@ -630,90 +893,26 @@ export default function DesktopItemStatementPage() {
 
   return (
     <div className="h-full min-h-0 flex flex-col bg-gray-50 overflow-hidden">
-      <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 p-3 border-b bg-white">
-        <div className="flex items-center gap-2 min-w-0">
-          <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={handleReportBack}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <h1 className="shrink-0 text-base font-bold text-muted-foreground">{pageTitle}</h1>
-            {activeEntity?.name ? (
-              <>
-                <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
-                  ·
-                </span>
-                <span
-                  className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
-                  title={activeEntity.name}
-                >
-                  {activeEntity.name}
-                </span>
-              </>
-            ) : null}
-          </div>
-          {activeEntity?.name ? (
-            <div className="flex-shrink-0" aria-hidden>
-              {selectedItem ? (
-                <ReportStatementHeaderAvatar
-                  kind="item"
-                  displayName={activeEntity.name}
-                  fileUrl={selectedItem.fileUrls?.[0]}
-                />
-              ) : (
-                <ReportStatementHeaderAvatar kind="group" displayName={activeEntity.name} />
-              )}
-            </div>
-          ) : null}
-        </div>
-        <MobileDetailSummaryCollapsible className="gap-2">
-        <div className="flex justify-center items-center gap-2">
-          <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
-          {hasDateFilter && (
-            <Button variant="ghost" size="icon" className="h-6 w-6 flex-shrink-0" onClick={() => setDateRange(undefined)} title="Clear date filter">
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex-1 min-w-0">
-            <Combobox
-              options={itemReportOptions}
-              value={selectedItem?.id || ""}
-              onChange={(value) => {
-                const item = processedItems.find((p) => p.id === value);
-                if (item) {
-                  const newUrl = new URL(window.location.href);
-                  newUrl.searchParams.set("itemId", item.id);
-                  newUrl.searchParams.delete("groupId");
-                  window.history.pushState({}, "", newUrl);
-                  setSelectedItem(item);
-                  setSelectedGroup(null);
-                }
-              }}
-              placeholder="Select an item"
+            <ReportEntityMobileHeader
+        title={pageTitle}
+        entityName={activeEntity?.name}
+        closingBalance={closingBalance}
+        dateRangeLabel={dateRangeLabel}
+        hasDateFilter={hasDateFilter}
+        onBack={handleReportBack}
+        onClearDate={() => setDateRange(undefined)}
+        avatar={activeEntity?.name ? (
+          selectedItem ? (
+            <ReportStatementHeaderAvatar
+              kind="item"
+              displayName={activeEntity.name}
+              fileUrl={selectedItem.fileUrls?.[0]}
             />
-          </div>
-          <div className="flex-1 min-w-0">
-            <Combobox
-              options={groupReportOptions}
-              value={selectedGroup?.id || ""}
-              onChange={(value) => {
-                const group = processedItemGroups.find((g) => g.id === value);
-                if (group) {
-                  const newUrl = new URL(window.location.href);
-                  newUrl.searchParams.set("groupId", group.id);
-                  newUrl.searchParams.delete("itemId");
-                  window.history.pushState({}, "", newUrl);
-                  setSelectedGroup(group);
-                  setSelectedItem(null);
-                }
-              }}
-              placeholder="Select a group"
-            />
-          </div>
-        </div>
-        </MobileDetailSummaryCollapsible>
-      </header>
+          ) : (
+            <ReportStatementHeaderAvatar kind="group" displayName={activeEntity.name} />
+          )
+        ) : undefined}
+      />
 
       <Drawer
         open={isCalendarOpen}
@@ -807,9 +1006,9 @@ export default function DesktopItemStatementPage() {
           </div>
         ) : (
           <>
-            <MobileDetailSummaryCollapsible>
-            <div className="flex flex-nowrap gap-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0 items-center">
-              {summaryCards.map((card) => {
+            <MobileDetailSummaryCollapsible className="w-[calc(100%+2rem)] min-w-0 -mx-4">
+            <div key={activeEntity?.id ?? "no-entity"} ref={balanceCardsRowRef} data-pl-mobile-txn-balance-row="" data-pl-bank-report-balance-row="" className="box-border flex w-full min-w-0 flex-nowrap justify-start gap-2 px-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0 items-center">
+              {mobileSummaryCards.map((card: any) => {
                 const convFactor = selectedItem && reportStockView === "qty" ? getConversionFactor(selectedItem, effectiveDisplayUnit) : 1;
                 let customFormatted: string | undefined;
                 if (selectedItem && reportStockView === "qty" && effectiveDisplayUnit) {
@@ -819,6 +1018,52 @@ export default function DesktopItemStatementPage() {
                     const qtyInUnit = (card as { qty?: number }).qty != null ? (card as { qty: number }).qty / convFactor : card.amount / convFactor;
                     customFormatted = `${formatQuantity(Math.abs(qtyInUnit))} ${effectiveDisplayUnit}`;
                   }
+                }
+                if (card.filterKey) {
+                  const selected = balanceCardFilter === card.filterKey;
+                  return (
+                    <button key={card.title} type="button" aria-pressed={selected} data-pl-bank-report-balance-card="" onClick={() => setBalanceCardFilter((current) => current === card.filterKey ? null : card.filterKey)} className="w-max min-w-[100px] shrink-0 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                      <ReportSummaryCard title={card.title} amount={card.amount} color={card.color} customFormatted={customFormatted} selected={selected} />
+                    </button>
+                  );
+                }
+                if (card.title === "Balance") {
+                  return (
+                    <div key={card.title} className="flex shrink-0 items-center gap-1">
+                      <div className="relative w-max min-w-[100px]">
+                        <button type="button" aria-pressed={balanceCardFilter === null} data-pl-bank-report-balance-card="" onClick={() => setBalanceCardFilter(null)} className="w-max min-w-[100px] rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                          <ReportSummaryCard title={reportMobileSummaryCardTitle(card.title)} amount={card.amount} color={card.color} customFormatted={customFormatted} selected={balanceCardFilter === null} />
+                        </button>
+                        <ReportNetBalanceInfoButton />
+                      </div>
+                      {selectedItem && unitOptions.length > 0 && (
+                        <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                          <Select
+                            value={reportStockView === "amount" ? "amount" : effectiveDisplayUnit}
+                            onValueChange={(v) => {
+                              if (v === "amount") setReportStockView("amount");
+                              else { setReportStockView("qty"); setReportDisplayUnit(v); }
+                            }}
+                          >
+                            <SelectTrigger className="h-10 min-w-[80px] text-xs"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="amount">Amounts</SelectItem>
+                              {unitOptions.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+                if (card.title !== "Balance") {
+                  const filterKey = `summary:${card.title}`;
+                  const selected = balanceCardFilter === filterKey;
+                  return (
+                    <button key={card.title} type="button" aria-pressed={selected} data-pl-bank-report-balance-card="" onClick={() => setBalanceCardFilter((current) => current === filterKey ? null : filterKey)} className="w-max min-w-[100px] shrink-0 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                      <ReportSummaryCard title={reportMobileSummaryCardTitle(card.title)} amount={card.amount} color={card.color} customFormatted={customFormatted} selected={selected} />
+                    </button>
+                  );
                 }
                 return (
                   <React.Fragment key={card.title}>
@@ -856,7 +1101,7 @@ export default function DesktopItemStatementPage() {
             </div>
             </MobileDetailSummaryCollapsible>
             <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
-            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0" data-floating-button-scroll>
+            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0 pl-mobile-ledger-txn-scroll-pad" data-floating-button-scroll>
               {isMobile ? (
                 <div className="pb-4">
                   <TransactionsTable
@@ -864,6 +1109,14 @@ export default function DesktopItemStatementPage() {
                     context={activeContext}
                     contextId={activeEntity?.id}
                     openingBalance={itemStatementMobilePaging.openingForPage}
+                    booksOpeningBalance={balanceCardFilter ? undefined : (activeEntity as any)?.openingBalance != null ? Number((activeEntity as any).openingBalance) : undefined}
+                    openingBalanceDate={(activeEntity as any)?.openingBalanceDate}
+                    ledgerDateFilterActive={hasDateFilter || !!balanceCardFilter}
+                    ledgerShowBookOpeningRow={!balanceCardFilter && (itemReportRowsPerPage <= 0 || itemStatementMobilePaging.edges.before === 0)}
+                    ledgerTransactionsForFyOpening={balanceCardFilter ? filteredReportTransactions : undefined}
+                    fyLedgerScopeOpeningBalance={balanceCardFilter ? effectiveOpeningBalanceForPeriod : undefined}
+                    openingBalancePeriodStartDate={itemStatementMobilePaging.openingPeriodStartDate ?? dateRange?.from}
+                    dateRange={dateRange}
                     userNames={userNames}
                     journalAccountNames={journalAccountNames}
                     accountNames={{}}
@@ -875,14 +1128,6 @@ export default function DesktopItemStatementPage() {
                     periodDr={itemStatementMobilePaging.periodDrForPage}
                     periodCr={itemStatementMobilePaging.periodCrForPage}
                     closingBalance={itemStatementMobilePaging.closingForPage}
-                    openingBalanceSearch={
-                      <Input
-                        placeholder="Search..."
-                        value={transactionSearch}
-                        onChange={(e) => setTransactionSearch(e.target.value)}
-                        className="h-9 w-32 max-w-[140px] text-sm"
-                      />
-                    }
                   />
                 </div>
               ) : (
@@ -890,7 +1135,18 @@ export default function DesktopItemStatementPage() {
                   transactions={filteredReportTransactions}
                   context={activeContext}
                   contextId={activeEntity?.id}
-                  openingBalance={openingBalanceForPeriod}
+                  openingBalance={effectiveOpeningBalanceForPeriod}
+                  booksOpeningBalance={balanceCardFilter ? undefined : (activeEntity as any)?.openingBalance != null ? Number((activeEntity as any).openingBalance) : undefined}
+                  openingBalanceDate={(activeEntity as any)?.openingBalanceDate}
+                  ledgerDateFilterActive={hasDateFilter || !!balanceCardFilter}
+                  ledgerShowBookOpeningRow={!balanceCardFilter}
+                  ledgerTransactionsForFyOpening={balanceCardFilter ? filteredReportTransactions : undefined}
+                  fyLedgerScopeOpeningBalance={balanceCardFilter ? effectiveOpeningBalanceForPeriod : undefined}
+                  periodDr={effectivePeriodDr}
+                  periodCr={effectivePeriodCr}
+                  closingBalance={effectiveClosingBalance}
+                  openingBalancePeriodStartDate={dateRange?.from}
+                  dateRange={dateRange}
                   userNames={userNames}
                   journalAccountNames={journalAccountNames}
                   accountNames={{}}
@@ -913,7 +1169,8 @@ export default function DesktopItemStatementPage() {
             {/* mb-12: overlap avoid with fixed footer / FAB */}
             {isMobile && view === "list" && (
               <MobileTransactionsPager
-                className="flex-shrink-0 border-t bg-muted/25 mb-12"
+                className={mdc.ledgerTxnPagerOutside}
+                txnToolbar={mobileEntityTxnToolbar}
                 currentPage={itemReportPagerPage}
                 totalItems={filteredReportTransactions.length}
                 rowsPerPage={itemReportRowsPerPage}
@@ -934,7 +1191,7 @@ export default function DesktopItemStatementPage() {
         )}
       </main>
 
-      <footer className="flex items-stretch justify-around p-1.5 border-t bg-white gap-1 fixed bottom-0 left-0 right-0">
+      <footer data-pl-mobile-ledger-action-footer="" className="flex items-stretch justify-around p-1.5 border-t bg-white gap-1 fixed bottom-0 left-0 right-0">
         <PermissionButton permission="export_data" className="flex-1 flex flex-col items-center justify-center py-1 min-w-0 bg-green-500 hover:bg-green-600 text-white rounded-md" onClick={handlePrint}>
           <Printer className="w-4 h-4 mb-0" /> <span className="text-[10px] leading-tight">Print</span>
         </PermissionButton>

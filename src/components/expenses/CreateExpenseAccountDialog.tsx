@@ -112,6 +112,7 @@ function createLocalEntityId(prefix: string): string {
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Account name must be at least 2 characters." }),
+  aliasName: z.string().optional(),
   phone: z.string().optional(),
   whatsapp: z.boolean().optional(),
   groupId: z.string().min(1, "A group is required."),
@@ -177,7 +178,7 @@ export function CreateExpenseAccountDialog({
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
-    defaultValues: { name: "", openingBalance: 0, groupId: "", openingBalanceNarration: "" },
+    defaultValues: { name: "", aliasName: "", openingBalance: 0, groupId: "", openingBalanceNarration: "" },
   });
 
   const openingBalanceDateMissing = useMasterOpeningBalanceDateRequired(form.control);
@@ -474,6 +475,7 @@ export function CreateExpenseAccountDialog({
         const payload = {
           id: createdId,
           name: values.name.trim(),
+          aliasName: (values.aliasName ?? "").trim(),
           phone: values.phone?.trim() || null,
           whatsapp: values.whatsapp === true,
           groupId: resolvedGroupId,
@@ -497,7 +499,7 @@ export function CreateExpenseAccountDialog({
         onExpenseAccountCreated(createdId);
         if (saveAndNew) {
           form.reset({
-            name: "",
+            name: "", aliasName: "",
             openingBalance: 0,
             groupId: defaultExpenseGroupId(defaultGroupType),
             openingBalanceDate: undefined,
@@ -570,6 +572,7 @@ export function CreateExpenseAccountDialog({
       const interCompanyAccountNo = await interCompanyAcNoForNewEntity("expense");
       await setDoc(accRef, {
         name: values.name.trim(),
+        aliasName: (values.aliasName ?? "").trim(),
         phone: values.phone?.trim() || null,
         whatsapp: values.whatsapp === true,
         groupId: resolvedGroupId,
@@ -610,7 +613,7 @@ export function CreateExpenseAccountDialog({
       onExpenseAccountCreated(createdId);
       if (saveAndNew) {
         form.reset({
-          name: "",
+          name: "", aliasName: "",
           openingBalance: 0,
           groupId: defaultExpenseGroupId(defaultGroupType),
           openingBalanceDate: undefined,
@@ -749,7 +752,7 @@ export function CreateExpenseAccountDialog({
               entityKind="expense"
               mode="create"
               nameField={
-                <FormField
+                <div className="space-y-2"><FormField
                   control={form.control}
                   name="name"
                   render={({ field }: any) => (
@@ -761,7 +764,19 @@ export function CreateExpenseAccountDialog({
                       <FormMessage />
                     </FormItem>
                   )}
-                />
+                /><FormField
+                  control={form.control}
+                  name="aliasName"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                      <FormControl>
+                        <Input placeholder="Other name on bills / short name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                /></div>
               }
             />
             <MasterFormTwoColGrid>

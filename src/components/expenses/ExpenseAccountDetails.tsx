@@ -102,6 +102,7 @@ import {
   LEDGER_HEADER_PILL_ROW_CN,
   LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
+import { ReportHeaderSummaryCards, type ReportStatementSummaryCardData } from "@/components/reports/ReportStatementSummaryCards";
 import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
@@ -198,6 +199,7 @@ interface ExpenseAccountDetailsProps {
   mobileFooterVariant?: "ledger" | "report";
   mobileReportStickyTitle?: string;
   hideMobilePeriodLabelRow?: boolean;
+  reportSummaryCards?: ReportStatementSummaryCardData[];
 }
 
 export function ExpenseAccountDetails({
@@ -217,6 +219,7 @@ export function ExpenseAccountDetails({
   mobileFooterVariant = "ledger",
   mobileReportStickyTitle,
   hideMobilePeriodLabelRow = false,
+  reportSummaryCards,
 }: ExpenseAccountDetailsProps) {
   useFyLoadOnDateRangeChange(dateRange);
   const { company, companyId } = useCompany();
@@ -838,6 +841,9 @@ export function ExpenseAccountDetails({
               <div className={LEDGER_HEADER_NAME_CARD_CN}>
                 <h2 className={LEDGER_HEADER_TITLE_CN} title={account.name}>{account.name}</h2>
               </div>
+              {reportSummaryCards?.length ? (
+                <ReportHeaderSummaryCards cards={reportSummaryCards} />
+              ) : (
               <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
                 <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
                   <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
@@ -846,6 +852,7 @@ export function ExpenseAccountDetails({
                   </div>
                 </div>
               </div>
+              )}
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
               <LedgerHeaderPrintButton variant="outline" onClick={handlePrint} />

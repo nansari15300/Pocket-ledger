@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
-import { doc, updateDoc, serverTimestamp, onSnapshot, collection, query, getDoc } from "firebase/firestore";
+import { doc, updateDoc, serverTimestamp, Timestamp, onSnapshot, collection, query, getDoc } from "firebase/firestore";
 import {
   uploadEntityAvatarAndDocumentsRemote,
   syncEntityAttachmentsAfterSave,
@@ -129,6 +129,7 @@ const MAX_FILE_SIZE_MB = 0.5;
 
 const formSchema = z.object({
   accountName: z.string().min(2, { message: "Account name must be at least 2 characters." }),
+  aliasName: z.string().optional(),
   phone: z.string().optional(),
   whatsapp: z.boolean().optional(),
   accountType: z.enum(["Bank", "Cash"]),
@@ -247,6 +248,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
     defaultValues: {
         accountName: account.accountName,
+        aliasName: ((account as unknown as { aliasName?: string }).aliasName) || "",
         phone: account.phone ?? "",
         whatsapp: account.whatsapp === true,
         accountType: account.accountType,
@@ -360,6 +362,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     const liveCompany = companyLiveRef.current;
     form.reset({
       accountName: account.accountName,
+      aliasName: ((account as unknown as { aliasName?: string }).aliasName) || "",
       phone: account.phone ?? "",
       whatsapp: account.whatsapp === true,
       accountType: account.accountType,
@@ -464,6 +467,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         /** Firestore `undefined` field skip / local mirror — explicit payload (EditExpenseAccountDialog jaisa) */
         const updatePayload: Record<string, unknown> = {
           accountName: values.accountName,
+          aliasName: (values.aliasName ?? "").trim(),
           phone: values.phone?.trim() || null,
           whatsapp: values.whatsapp === true,
           accountType: values.accountType,
@@ -501,7 +505,13 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
             isDeleted: false,
             ownerId: accountRefSnap.ownerId,
           };
-          const payload: Record<string, unknown> = { ...base, ...updatePayload, id: accountRefSnap.id, companyId };
+          const payload: Record<string, unknown> = {
+            ...base,
+            ...updatePayload,
+            id: accountRefSnap.id,
+            companyId,
+            updatedAt: Timestamp.now(),
+          };
           await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", accountRefSnap.id, payload);
           const persisted =
             (await getCompanyDocFromBrowserDb(companyId, "bank_accounts", accountRefSnap.id)) ?? payload;
@@ -574,8 +584,13 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           });
         }
 
-        const accountRef = doc(firestore, `companies/${companyId}/bank_accounts`, accountRefSnap.id);
-        await updateDoc(accountRef, updatePayload);
+        const { persistMasterEntityUpdate } = await import("@/lib/masterEntityUpdatePersist");
+        await persistMasterEntityUpdate({
+          companyId,
+          collection: "bank_accounts",
+          docId: accountRefSnap.id,
+          patch: updatePayload,
+        });
 
         onAccountUpdated({
           id: accountRefSnap.id,
@@ -668,6 +683,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
             isDeleted: false,
             ownerId: (account as { ownerId?: string }).ownerId,
             accountName: account.accountName,
+            aliasName: ((account as unknown as { aliasName?: string }).aliasName) || "",
           };
           const payload: Record<string, unknown> = {
             ...base,
@@ -867,7 +883,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                 )}
                 <BankAccountToggleFlagsRow control={form.control} />
                 <BankCashFormTwoColGrid>
-                  <FormField
+                  <div className="space-y-2"><FormField
                     control={form.control}
                     name="accountName"
                     render={({ field }: any) => (
@@ -879,7 +895,19 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                         <FormMessage />
                       </FormItem>
                     )}
-                  />
+                  /><FormField
+                    control={form.control}
+                    name="aliasName"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                        <FormControl>
+                          <Input placeholder="Other name on bills / short name" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  /></div>
                   <FormField
                     control={form.control}
                     name="accountNumber"

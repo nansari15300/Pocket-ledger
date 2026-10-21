@@ -24,6 +24,7 @@ import { EntityListQuickFilterBar,
 import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import { useCompany } from "@/hooks/useCompany";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { MasterAliasSearchHint } from "@/components/entity/MasterAliasSearchHint";
 import { getInterCompanyPartyListTitleLines, isInterCompanyPartyListAccount } from "@/lib/interCompany/interCompanyCounterpartyPartyName";
 import {
   icPartyListFlatSecondaryLabel,
@@ -367,6 +368,7 @@ export const PartyList = React.memo(({
                                     ? highlightQueryInText(rowTitleLines.primary, highlightSearch)
                                     : rowTitleLines.primary}
                                 </span>
+                                <MasterAliasSearchHint alias={(party as { aliasName?: string }).aliasName} name={rowTitleLines.primary} search={highlightSearch} />
                               </MasterListNameTooltip>
                               <p className={amountClassName}>{amountText}</p>
                             </div>
@@ -424,6 +426,7 @@ export const PartyList = React.memo(({
                                 ? highlightQueryInText(rowTitleLines.primary, highlightSearch)
                                 : rowTitleLines.primary}
                             </span>
+                            <MasterAliasSearchHint alias={(party as { aliasName?: string }).aliasName} name={rowTitleLines.primary} search={highlightSearch} />
                             {rowTitleLines.secondary ? (
                               <span
                                 {...masterListNameMeasureProps(

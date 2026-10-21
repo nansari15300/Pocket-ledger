@@ -135,6 +135,7 @@ const MAX_FILE_SIZE_MB = 0.5;
 
 const formSchema = z.object({
   accountName: z.string().min(2, { message: "Account name must be at least 2 characters." }),
+  aliasName: z.string().optional(),
   accountType: z.enum(["Bank", "Cash"]),
   openingBalance: z.number().min(0),
   openingBalanceDate: z.date().optional(),
@@ -206,6 +207,7 @@ export function CreateBankAccountDialog({
     resolver: zodResolver(formSchema),
     defaultValues: {
       accountName: "",
+      aliasName: "",
       accountType: "Bank",
       openingBalance: 0,
       bankName: "",
@@ -398,6 +400,7 @@ export function CreateBankAccountDialog({
       const { defaults, remoteAvatarUrl, remoteDocumentUrls } = bankPrefillPartsFromRow(row);
       form.reset({
         accountName: defaults.accountName,
+        aliasName: defaults.aliasName,
         accountType: defaults.accountType,
         openingBalance: defaults.openingBalance,
         openingBalanceDate: defaults.openingBalanceDate,
@@ -506,6 +509,7 @@ export function CreateBankAccountDialog({
         const payload = {
           id: localId,
           ...values,
+          aliasName: (values.aliasName ?? "").trim(),
           groupId: normalizeBankGroupIdForStorage(values.groupId, values.accountType),
           openingBalanceDate: values.openingBalanceDate || null,
           openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
@@ -527,7 +531,7 @@ export function CreateBankAccountDialog({
         });
         onAccountCreated(localId);
         if (saveAndNew) {
-          form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getDefaultSystemGroupId("bank", { accountType: values.accountType }), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
+          form.reset({ ...form.getValues(), accountName: "", aliasName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getDefaultSystemGroupId("bank", { accountType: values.accountType }), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
           clearUploads();
         }
         return;
@@ -589,6 +593,7 @@ export function CreateBankAccountDialog({
 
       await setDoc(accountRef, {
         ...values,
+        aliasName: (values.aliasName ?? "").trim(),
         groupId: normalizedGroupId,
         openingBalanceDate: values.openingBalanceDate || null,
         openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
@@ -618,7 +623,7 @@ export function CreateBankAccountDialog({
       onAccountCreated(newAccountId);
 
       if (saveAndNew) {
-        form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getDefaultSystemGroupId("bank", { accountType: values.accountType }), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
+        form.reset({ ...form.getValues(), accountName: "", aliasName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getDefaultSystemGroupId("bank", { accountType: values.accountType }), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
         clearUploads();
       }
     } catch (error) {
@@ -649,6 +654,7 @@ export function CreateBankAccountDialog({
           const payload = {
             id: localId,
             ...values,
+            aliasName: (values.aliasName ?? "").trim(),
             groupId: normalizedGroupId,
             openingBalanceDate: values.openingBalanceDate || null,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
@@ -670,7 +676,7 @@ export function CreateBankAccountDialog({
           });
           onAccountCreated(localId);
           if (saveAndNew) {
-            form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getDefaultSystemGroupId("bank", { accountType: values.accountType }), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
+            form.reset({ ...form.getValues(), accountName: "", aliasName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getDefaultSystemGroupId("bank", { accountType: values.accountType }), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
             clearUploads();
           }
         } catch (offlineErr) {
@@ -706,6 +712,7 @@ export function CreateBankAccountDialog({
           const payload: Record<string, unknown> = {
             id: localId,
             ...values,
+            aliasName: (values.aliasName ?? "").trim(),
             groupId: normalizedGroupId,
             openingBalanceDate: values.openingBalanceDate || null,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
@@ -724,7 +731,7 @@ export function CreateBankAccountDialog({
           });
           onAccountCreated(localId);
           if (saveAndNew) {
-            form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getDefaultSystemGroupId("bank", { accountType: values.accountType }), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
+            form.reset({ ...form.getValues(), accountName: "", aliasName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getDefaultSystemGroupId("bank", { accountType: values.accountType }), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
             clearUploads();
           }
         } catch {
@@ -805,7 +812,7 @@ export function CreateBankAccountDialog({
               )}
               <BankAccountToggleFlagsRow control={form.control} />
               <BankCashFormTwoColGrid>
-                <FormField
+                <div className="space-y-2"><FormField
                   control={form.control}
                   name="accountName"
                   render={({ field }: any) => (
@@ -817,7 +824,19 @@ export function CreateBankAccountDialog({
                       <FormMessage />
                     </FormItem>
                   )}
-                />
+                /><FormField
+                  control={form.control}
+                  name="aliasName"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                      <FormControl>
+                        <Input placeholder="Other name on bills / short name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                /></div>
                 <FormField
                   control={form.control}
                   name="accountNumber"

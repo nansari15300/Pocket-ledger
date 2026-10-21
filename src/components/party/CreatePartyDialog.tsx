@@ -24,7 +24,10 @@ export function CreatePartyDialog({
   children,
   isOpen: parentIsOpen,
   onOpenChange: parentOnOpenChange,
+  initialValues,
 }: {
+  /** Optional Create Party prefill (OCR). */
+  initialValues?: { name?: string; pan?: string; phone?: string; email?: string; address?: string; /** OCR: e.g. Sundry Creditors for a purchase bill */ accountTypeId?: string; /** OCR: raw bill name when it differs from the cleaned name */ aliasName?: string };
   onPartyCreated: (id: string) => void;
   children?: React.ReactNode;
   isOpen?: boolean;
@@ -92,6 +95,7 @@ export function CreatePartyDialog({
             onPartyCreated={handlePartyCreated}
             onNestedDialogOpenChange={setIsNestedOpen}
             onCloseDialogRequest={() => setOpen(false)}
+            initialValues={initialValues}
           />
         </div>
       </DialogContent>

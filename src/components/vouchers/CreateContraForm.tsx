@@ -1,6 +1,7 @@
 
 "use client";
 
+import { ocrAdapters, useVoucherOcr, VoucherOcrRefreshBar } from "@/modules/ocr";
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { type Resolver, useForm } from "react-hook-form";
@@ -71,7 +72,11 @@ import {
   resolveOtherChargeAddNewType,
 } from "@/lib/otherChargeComboboxAddNew";
 import { FilePreview } from "../vouchers/FilePreview";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState as __frozenAppendAttachments, handleVoucherAttachmentInputChange as __frozenAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { ocrWrapAppend, ocrWrapInputChange } from "@/modules/ocr";
+/** OCR reads the ORIGINAL upload: frozen helpers wrapped at the call site only (helper code unchanged). */
+const appendCompressedVoucherAttachmentsToState = ocrWrapAppend(__frozenAppendAttachments);
+const handleVoucherAttachmentInputChange = ocrWrapInputChange(__frozenAttachmentInputChange);
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
@@ -357,6 +362,23 @@ export function CreateContraForm({
     defaultValues: voucher
       ? getInitialContraFormValues(voucher)
       : getInitialContraFormValues(),
+  });
+
+  /* OCR (local, generic adapter): first attachment -> validated autofill; Auto Post saves UNAPPROVED. */
+  const ocr = useVoucherOcr({
+    adapter: ocrAdapters.contra(),
+    form: form as never,
+    files,
+    setFiles: setFiles as never,
+    ownName: ((company as { name?: string } | null)?.name) || null,
+    companyId: companyId,
+    ownPan: ((company as { pan?: string; panNumber?: string } | null)?.pan ?? (company as { panNumber?: string } | null)?.panNumber) || null,
+    parties: (processedParties || []) as never,
+    items: [],
+    taxes: (processedTaxes || []) as never,
+    autoPost: () => void handleFormSubmit({ preventDefault() {}, stopPropagation() {} } as unknown as React.FormEvent, { ocrAutoPost: true }),
+    isEditing: !!(voucher as { id?: string } | null | undefined)?.id,
+    disabled: !!editingDisabled,
   });
   
 const { isDirty: _isFormFieldsDirty } = form.formState;
@@ -1073,7 +1095,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   // Amount guard पहले; फिर validated `data` — `getValues()` से date miss न हो
   const handleFormSubmit = useCallback(
-    (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
+    (e: React.FormEvent, options: { ocrAutoPost?: boolean; saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
       e?.preventDefault?.();
       const enteredAmount =
         (Number(form.getValues("payeeAmount")) || 0) + (Number(form.getValues("otherChargeAmount")) || 0);
@@ -1772,13 +1794,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       <>
                         <div className="grid gap-2 w-full min-w-0 grid-cols-1 sm:grid-cols-2">
                           {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                            <FormItem className="min-w-0 w-full overflow-hidden">
+                            <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                               <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
                               <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" disabled={deleteDisabledWhenLinked} />
                             </FormItem>
                           )}
                           {(dateSystem === 'AD' || dateSystem === 'Both') && (
-                            <FormItem className="min-w-0 w-full overflow-hidden">
+                            <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                               <FormLabel className="text-xs truncate">Date</FormLabel>
                               <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
                                 <PopoverTrigger asChild>
@@ -1945,7 +1967,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </Button>
                             )}
                             </div>
-                            <FormField control={form.control} name="payeeAmount" render={({ field: payeeField }: any) => (<FormItem className="min-w-0"><FormLabel className="text-[10px] text-muted-foreground">Amount</FormLabel><FormControl><Input type="number" placeholder="0" className="h-9 text-xs min-w-[10ch]" style={{ width: `${Math.max(8, String(payeeField.value ?? "").length)}ch` }} {...payeeField} value={payeeField.value ?? ""} onChange={(e) => {
+                            <FormField control={form.control} name="payeeAmount" render={({ field: payeeField }: any) => (<FormItem data-ocr-field="amount" className="min-w-0"><FormLabel className="text-[10px] text-muted-foreground">Amount</FormLabel><FormControl><Input type="number" placeholder="0" className="h-9 text-xs min-w-[10ch]" style={{ width: `${Math.max(8, String(payeeField.value ?? "").length)}ch` }} {...payeeField} value={payeeField.value ?? ""} onChange={(e) => {
                       const nextAmount = e.target.value === "" ? 0 : Number(e.target.value);
                       if (isAmountExceedingSelectedFromAccount(nextAmount + otherChargeAmountValue)) {
                         payeeField.onChange(Math.max(0, lastValidAmountRef.current - otherChargeAmountValue));
@@ -2067,7 +2089,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       control={form.control}
                       name="date"
                       render={({ field }: any) => (
-                        <FormItem className="flex flex-col">
+                        <FormItem data-ocr-field="date" className="flex flex-col">
                           <FormLabel>Date</FormLabel>
                           <div className={VOUCHER_PC_DATE_ROW}>
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
@@ -2265,7 +2287,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           )}
                         </div>
                         <FormMessage /></FormItem>)}/>
-                          <FormField control={form.control} name="payeeAmount" render={({ field: payeeField }: any) => (<FormItem>
+                          <FormField control={form.control} name="payeeAmount" render={({ field: payeeField }: any) => (<FormItem data-ocr-field="amount">
                             <FormLabel className="text-xs text-muted-foreground">Amount (To account)</FormLabel>
                             <FormControl>
                               <Input type="number" placeholder="Enter amount" value={payeeField.value ?? ""} onChange={(e) => {
@@ -2399,6 +2421,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         className="mb-2"
                       />
                     )}
+                    <VoucherOcrRefreshBar ocr={ocr} />
                     <RestrictedFileUploader>
                       {/* File actions stay unchanged; only grouped in shared container with narration. */}
                       <div className="flex flex-wrap gap-4">
@@ -2472,7 +2495,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     control={form.control}
                     name="narration"
                     render={({ field }: any) => (
-                      <FormItem>
+                      <FormItem data-ocr-field="bill-no">
                         <FormLabel>Narration</FormLabel>
                         <FormControl>
                           {/* Shared narration sizing: fixed chhoti height ki jagah resize + scroll */}

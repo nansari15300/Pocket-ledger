@@ -19,6 +19,8 @@ export async function saveMasterEntityGroupCreateChain(params: {
   preset: MasterEntityGroupFormPreset;
   systemBranch: string;
   chainSlots: MasterEntityGroupCreateChainSlot[];
+  /** Alias for the leaf (last new) group only. */
+  leafAliasName?: string;
 }): Promise<MasterEntityGroupChainSaveResult> {
   const { company, companyId, userId, preset, systemBranch, chainSlots } = params;
   const trimmedChain = trimTrailingEmptyCreateChainSlots(chainSlots);
@@ -45,7 +47,8 @@ export async function saveMasterEntityGroupCreateChain(params: {
   let parentId: string = systemBranch;
   let lastCreatedId = "";
 
-  for (const slot of trimmedChain) {
+  const lastNewIdx = trimmedChain.reduce((acc, sl, i) => (!sl.groupId && String(sl.pendingName || "").trim() ? i : acc), -1);
+  for (const [slotIdx, slot] of trimmedChain.entries()) {
     if (slot.groupId) {
       parentId = slot.groupId;
       lastCreatedId = slot.groupId;
@@ -85,6 +88,7 @@ export async function saveMasterEntityGroupCreateChain(params: {
       parentId: createParentId,
       collection: preset.collection,
       localIdPrefix: preset.localIdPrefix,
+      aliasName: slotIdx === lastNewIdx ? params.leafAliasName : undefined,
     });
     parentId = lastCreatedId;
   }

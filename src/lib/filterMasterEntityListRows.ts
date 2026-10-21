@@ -22,6 +22,8 @@ function isMasterListAmountSettled(n: unknown): boolean {
 /** Tax / Income–Expense accounts: same footer toggles + sort as PartyList (`EntityListQuickFilterBar`). */
 export type MasterEntityListRowLike = {
   name?: string;
+  /** Optional Alias Name (master field) - searched like the name */
+  aliasName?: unknown;
   /** Signed amount for Dr/Cr / settled / default |balance| sort */
   balance?: unknown;
   openingBalanceDate?: unknown;
@@ -39,6 +41,11 @@ export function masterEntityTextMatchesSearch(text: unknown, searchTerm: string)
   return tokens.every((token) => src.includes(token));
 }
 
+/** Name OR optional Alias Name matches the list search. */
+export function masterEntityRowMatchesSearch(row: { name?: unknown; aliasName?: unknown }, searchTerm: string): boolean {
+  return masterEntityTextMatchesSearch(row.name, searchTerm) || (typeof row.aliasName === "string" && row.aliasName.trim() !== "" && masterEntityTextMatchesSearch(row.aliasName, searchTerm));
+}
+
 export function filterAndSortMasterEntityListRows<T extends MasterEntityListRowLike>(
   items: T[] | undefined,
   searchTerm: string,
@@ -53,7 +60,7 @@ export function filterAndSortMasterEntityListRows<T extends MasterEntityListRowL
   const list = (items || []).filter((row) => {
     if (exclude?.(row)) return false;
     if (!row.name) return false;
-    if (!masterEntityTextMatchesSearch(row.name, searchTerm)) return false;
+    if (!masterEntityRowMatchesSearch(row, searchTerm)) return false;
 
     const balRaw = row.balance;
     const bal = typeof balRaw === "number" && !Number.isNaN(balRaw) ? balRaw : null;

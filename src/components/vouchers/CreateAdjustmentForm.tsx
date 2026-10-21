@@ -1,5 +1,6 @@
 "use client";
 
+import { ocrAdapters, useVoucherOcr, VoucherOcrRefreshBar } from "@/modules/ocr";
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
@@ -60,10 +61,13 @@ import { FilePreview } from "@/components/vouchers/FilePreview";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import {
-  appendCompressedVoucherAttachmentsToState,
-  handleVoucherAttachmentInputChange,
+  appendCompressedVoucherAttachmentsToState as __frozenAppendAttachments,
+  handleVoucherAttachmentInputChange as __frozenAttachmentInputChange,
   useVoucherAttachmentProcessing,
 } from "@/lib/appendCompressedVoucherAttachments";
+import { ocrWrapAppend, ocrWrapInputChange } from "@/modules/ocr";
+const appendCompressedVoucherAttachmentsToState = ocrWrapAppend(__frozenAppendAttachments);
+const handleVoucherAttachmentInputChange = ocrWrapInputChange(__frozenAttachmentInputChange);
 import { shouldSuggestPdfAsImage } from "@/lib/voucherAttachmentPdfAsImage";
 import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSave";
 import { readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
@@ -245,6 +249,23 @@ export function CreateAdjustmentForm({
       amount: Number(voucher?.total || voucher?.amount || 0) || 0,
       narration: voucher?.narration || "",
     },
+  });
+
+  /* OCR (local, generic adapter): first attachment -> validated autofill; Auto Post saves UNAPPROVED. */
+  const ocr = useVoucherOcr({
+    adapter: ocrAdapters.adjustment(),
+    form: form as never,
+    files,
+    setFiles: setFiles as never,
+    ownName: ((company as { name?: string } | null)?.name) || null,
+    companyId: companyId,
+    ownPan: ((company as { pan?: string; panNumber?: string } | null)?.pan ?? (company as { panNumber?: string } | null)?.panNumber) || null,
+    parties: ([]) as never,
+    items: [],
+    taxes: (processedTaxes || []) as never,
+    autoPost: () => void handleFormSubmit({ preventDefault() {}, stopPropagation() {} } as unknown as React.FormEvent, { ocrAutoPost: true }),
+    isEditing: !!(voucher as { id?: string } | null | undefined)?.id,
+    disabled: !!editingDisabled,
   });
 
   const isAutoVoucherEnabled = company?.autoVoucherNumbering?.adjustment ?? true;
@@ -963,7 +984,7 @@ export function CreateAdjustmentForm({
 
   const handleFormSubmit = (
     e?: React.FormEvent,
-    options: { saveAndNew?: boolean; approveAfterSave?: boolean; print?: boolean } = {}
+    options: { ocrAutoPost?: boolean; saveAndNew?: boolean; approveAfterSave?: boolean; print?: boolean } = {}
   ) => {
     e?.preventDefault();
     void form.handleSubmit((data) =>
@@ -1131,7 +1152,7 @@ export function CreateAdjustmentForm({
             </FormItem>
           )} />
           <FormField control={form.control} name="date" render={({ field }) => (
-            <FormItem>
+            <FormItem data-ocr-field="date">
               <FormLabel>Date</FormLabel>
               <div className="grid gap-2 md:grid-cols-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
@@ -1155,7 +1176,7 @@ export function CreateAdjustmentForm({
             </FormItem>
           )} />
           <FormField control={form.control} name="amount" render={({ field }) => (
-            <FormItem>
+            <FormItem data-ocr-field="amount">
               <FormLabel>Amount</FormLabel>
               <FormControl><Input type="number" step="0.01" {...field} /></FormControl>
               <FormMessage />
@@ -1192,6 +1213,7 @@ export function CreateAdjustmentForm({
                   className="mb-2"
                 />
               ) : null}
+              <VoucherOcrRefreshBar ocr={ocr} />
               <RestrictedFileUploader>
                 <div className="flex flex-wrap gap-4">
                   {files.map((file, index) => (
@@ -1251,7 +1273,7 @@ export function CreateAdjustmentForm({
               </RestrictedFileUploader>
             </FormItem>
             <FormField control={form.control} name="narration" render={({ field }) => (
-              <FormItem className="flex-1">
+              <FormItem data-ocr-field="bill-no" className="flex-1">
                 <FormLabel>Narration</FormLabel>
                 <FormControl><Textarea className="min-h-[120px]" {...field} /></FormControl>
                 <FormMessage />

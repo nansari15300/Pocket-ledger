@@ -1,4 +1,5 @@
 "use client";
+import { ocrAdapters, useVoucherOcr, VoucherOcrRefreshBar } from "@/modules/ocr";
 import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
@@ -76,7 +77,11 @@ import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState as __frozenAppendAttachments, handleVoucherAttachmentInputChange as __frozenAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { ocrWrapAppend, ocrWrapInputChange } from "@/modules/ocr";
+/** OCR reads the ORIGINAL upload: frozen helpers wrapped at the call site only (helper code unchanged). */
+const appendCompressedVoucherAttachmentsToState = ocrWrapAppend(__frozenAppendAttachments);
+const handleVoucherAttachmentInputChange = ocrWrapInputChange(__frozenAttachmentInputChange);
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { VoucherAttachmentPcDropRow } from "@/components/vouchers/VoucherAttachmentPcDropRow";
@@ -459,6 +464,24 @@ export function CreatePaymentOutForm({
     resolver: zodResolver(formSchema) as Resolver<PaymentOutFormValues>,
     // Seed form from gallery/default payload so unassigned attachments and defaults hydrate for new voucher.
     defaultValues: getInitialFormValues(voucher || defaultVoucherData),
+  });
+
+  /* OCR (local, generic adapter): first attachment -> validated autofill; Auto Post saves UNAPPROVED. */
+  const ocr = useVoucherOcr({
+    adapter: ocrAdapters.paymentOut(),
+    form: form as never,
+    files,
+    setFiles: setFiles as never,
+    ownName: ((company as { name?: string } | null)?.name) || null,
+    accounts: (processedAccounts || []) as never,
+    companyId: companyId,
+    ownPan: ((company as { pan?: string; panNumber?: string } | null)?.pan ?? (company as { panNumber?: string } | null)?.panNumber) || null,
+    parties: (processedParties || []) as never,
+    items: [],
+    taxes: (processedTaxes || []) as never,
+    autoPost: () => void handleFormSubmit({ preventDefault() {}, stopPropagation() {} } as unknown as React.FormEvent, { ocrAutoPost: true }),
+    isEditing: !!(voucher as { id?: string } | null | undefined)?.id,
+    disabled: !!editingDisabled,
   });
   const [otherChargeEnabled, setOtherChargeEnabled] = useState(
     Boolean((voucher || defaultVoucherData)?.otherChargeAccountId || Number((voucher || defaultVoucherData)?.otherChargeAmount || 0) > 0)
@@ -1408,7 +1431,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   }, [payeeType, voucherType, form]);
   
   // Amount guard पहले; फिर validated `data` — nested mobile date + `getValues()` से miss न हो
-  function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) {
+  function handleFormSubmit(e: React.FormEvent, options: { ocrAutoPost?: boolean; saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
     const enteredAmount = outflowSupportsOtherCharge ? outflowTotalAmount : Number(form.getValues("amount")) || 0;
     if (outflowSupportsOtherCharge) {
@@ -2312,7 +2335,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             render={({ field: dateField }: any) => (
                               <>
                                 {hasDateBS && (
-                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                                     <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
                                     <div className="min-w-0 w-full overflow-hidden">
                                       <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" disabled={deleteDisabledWhenLinked} />
@@ -2320,7 +2343,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   </FormItem>
                                 )}
                                 {hasDateAD && (
-                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                                     <FormLabel className="text-xs truncate">Date</FormLabel>
                                     <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                                       <PopoverTrigger asChild>
@@ -2390,7 +2413,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       control={form.control}
                       name="date"
                       render={({ field }: any) => (
-                        <FormItem className="flex flex-col">
+                        <FormItem data-ocr-field="date" className="flex flex-col">
                           <FormLabel>Date</FormLabel>
                           <div className={VOUCHER_PC_DATE_ROW}>
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
@@ -2454,7 +2477,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       control={form.control}
                       name="accountId"
                       render={({ field }: any) => (
-                        <FormItem className="min-w-0 flex-1 flex flex-col min-h-0">
+                        <FormItem data-ocr-field="account" className="min-w-0 flex-1 flex flex-col min-h-0">
                           <div className="flex justify-between items-center mb-1 min-w-0 gap-1">
                             <FormLabel
                               className={cn(
@@ -2598,7 +2621,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         control={form.control}
                         name="partyId"
                         render={({ field }: any) => (
-                          <FormItem className="min-w-0">
+                          <FormItem data-ocr-field="party" className="min-w-0">
                             <div className="flex justify-between items-baseline mb-1 min-w-0">
                               <FormLabel className="text-xs truncate">To (Party)</FormLabel>
                               {payeeBalance !== null && payeeBalance !== undefined && (
@@ -2766,7 +2789,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           const hasLinks = allocations.length > 0;
                           const amountDisabled = hasLinks || deleteDisabledWhenLinked;
                           return (
-                            <FormItem className="min-w-0">
+                            <FormItem data-ocr-field="amount" className="min-w-0">
                               <FormLabel className="text-xs">Amount</FormLabel>
                               <FormControl>
                                 <Input
@@ -2895,7 +2918,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       control={form.control}
                       name="accountId"
                       render={({ field }: any) => (
-                        <FormItem className="flex flex-col flex-1 min-h-0">
+                        <FormItem data-ocr-field="account" className="flex flex-col flex-1 min-h-0">
                            <div className="flex justify-between items-center gap-1">
                             <FormLabel
                               className={cn(
@@ -3041,7 +3064,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       control={form.control}
                       name="partyId"
                       render={({ field }: any) => (
-                        <FormItem>
+                        <FormItem data-ocr-field="party">
                           <div className="flex justify-between items-baseline">
                             <FormLabel>To (Party)</FormLabel>
                             {payeeBalance !== null && payeeBalance !== undefined && (
@@ -3210,7 +3233,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             const hasLinks = allocations.length > 0;
                             const amountDisabled = hasLinks || deleteDisabledWhenLinked;
                             return (
-                              <FormItem>
+                              <FormItem data-ocr-field="amount">
                                 <FormLabel>Amount</FormLabel>
                                 <FormControl>
                                   <Input
@@ -3357,6 +3380,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     className="mb-2"
                   />
                 )}
+                <VoucherOcrRefreshBar ocr={ocr} />
                 <RestrictedFileUploader>
                   {/* When linked: no add/remove; existing files view-only (click to open still works). */}
                   <VoucherAttachmentPcDropRow
@@ -3463,7 +3487,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   control={form.control}
                   name="narration"
                   render={({ field }: any) => (
-                    <FormItem className="min-w-0 max-w-full">
+                    <FormItem data-ocr-field="bill-no" className="min-w-0 max-w-full">
                       {/* overflow-hidden hata: textarea resize / scroll clip na ho */}
                       <FormLabel>Narration</FormLabel>
                       <FormControl>

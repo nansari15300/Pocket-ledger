@@ -2,8 +2,10 @@
 "use client";
 
 import * as React from "react";
-import { Check, ChevronsUpDown, Plus, Crown, X } from "lucide-react";
+import { Check, ChevronsUpDown, Plus, Crown, X, Pencil } from "lucide-react";
+import { useComboboxEditOption } from "@/components/ui/comboboxEditOption";
 import { cn } from "@/lib/utils";
+import { getMasterAlias, normalizeComboboxSearch, skeletonQueryMatches } from "@/lib/masterAliasIndex";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -34,6 +36,8 @@ type ComboboxProps = {
     depth?: number;
     /** Extra haystack for filter search (breadcrumb path). */
     searchText?: string;
+  /** Alias Name: matched by search and shown as small secondary text (never as the label). */
+  aliasText?: string;
   }[];
   value?: string | string[];
   onChange?: (value: string, newName?: string) => void;
@@ -82,6 +86,8 @@ type ComboboxProps = {
   mobileWideOptionList?: boolean;
   /** Native tooltip on trigger (e.g. disabled picker hint). */
   title?: string;
+  /** Pencil icon on each option row → opens that master's Edit dialog (does NOT select). Falls back to ComboboxEditOptionContext. */
+  onEditOption?: (value: string) => void;
 };
 
 export function Combobox({
@@ -111,7 +117,17 @@ export function Combobox({
   commandListClassName,
   mobileWideOptionList = true,
   title,
+  onEditOption,
 }: ComboboxProps) {
+  const editResolver = useComboboxEditOption();
+  const editHandlerFor = React.useCallback(
+    (v: string): (() => void) | null => {
+      if (!v || v === "all") return null;
+      if (onEditOption) return () => onEditOption(v);
+      return editResolver ? editResolver(v) : null;
+    },
+    [onEditOption, editResolver]
+  );
   const isMobile = useIsMobile();
   /** Voucher / sab combo: mobile par list ~80vw jab tak caller ne `popoverContentClassName` na di ho. */
   const useMobileWideList =
@@ -235,11 +251,17 @@ export function Combobox({
 
   const addNewItems = addNewLabels || (addNewLabel ? [{value: "add-new", label: addNewLabel}] : []);
   const q = search.trim().toLowerCase();
+  const qn = normalizeComboboxSearch(search);
+  // Alias Name: from option.aliasText or the master alias index (by option value = entity id); searched, not shown as label.
+  const aliasOf = (opt: { value: string; aliasText?: string }) => opt.aliasText || getMasterAlias(opt.value);
   const filteredOptions = q.length === 0
     ? options
     : options.filter((opt) => {
-        const hay = (opt.searchText || opt.label).toLowerCase();
-        return hay.includes(q) || opt.label.toLowerCase().includes(q);
+        const hay = normalizeComboboxSearch(opt.searchText || opt.label);
+        const alias = aliasOf(opt);
+        if (hay.includes(qn) || normalizeComboboxSearch(opt.label).includes(qn) || (!!alias && normalizeComboboxSearch(alias).includes(qn))) return true;
+        // Roman <-> Devanagari (sound skeleton), alias first
+        return (!!alias && skeletonQueryMatches(search, alias)) || skeletonQueryMatches(search, opt.label);
       });
   // Keep dropdown manageable on dense lists by capping rendered rows when requested.
   const visibleOptions = React.useMemo(() => {
@@ -477,7 +499,7 @@ export function Combobox({
                     });
                   }}
                   className={cn(
-                    "flex w-full min-w-0 items-center",
+                    "group/cbopt flex w-full min-w-0 items-center",
                     // Patla trigger: dropdown row wrap na ho — ek line + andar scroll
                     effectiveNoWrap && "whitespace-nowrap",
                     // Sirf Check = form selection; aria-selected sirf halka hover (scroll pe galat “selected” na lage).
@@ -508,7 +530,41 @@ export function Combobox({
                     />
                     {option.isSpecial && <Crown className="mr-2 h-4 w-4 shrink-0 text-amber-500" />}
                     {renderOptionLabel(option.label)}
+                    {(() => {
+                      const al = aliasOf(option);
+                      return al && normalizeComboboxSearch(al) !== normalizeComboboxSearch(option.label) ? (
+                        <span className="ml-1.5 shrink-0 max-w-[45%] truncate text-[11px] text-muted-foreground" data-combobox-alias="">{al}</span>
+                      ) : null;
+                    })()}
                   </span>
+                  {(() => {
+                    const edit = option.isSpecial ? null : editHandlerFor(option.value);
+                    if (!edit) return null;
+                    const stop = (e: React.SyntheticEvent) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    };
+                    return (
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        aria-label="Edit"
+                        title="Edit"
+                        data-combobox-edit-option=""
+                        className="ml-1 shrink-0 rounded p-1 text-muted-foreground opacity-100 hover:bg-muted hover:text-foreground md:opacity-0 md:group-hover/cbopt:opacity-100"
+                        onPointerDown={stop}
+                        onMouseDown={stop}
+                        onTouchStart={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          stop(e);
+                          setOpen(false);
+                          window.setTimeout(edit, 0);
+                        }}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                    );
+                  })()}
                 </CommandItem>
               ))}
             </CommandGroup>

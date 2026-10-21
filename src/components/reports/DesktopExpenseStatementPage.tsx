@@ -24,9 +24,22 @@ import { format } from "date-fns";
 import AdCalendar from "@/components/ui/ad-calendar";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
+import { ReportEntityMobileHeader } from "@/components/reports/ReportEntityMobileHeader";
 import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
+import { computeFilteredCardOpeningAndRows } from "@/lib/reportFilteredCardBalance";
+import { buildReportVoucherTypeCards, getReportVoucherTypeKey, makeMobileReportSummaryCards, reportVoucherMatchesSummaryCard, ReportStatementSummaryCardsRow } from "@/components/reports/ReportStatementSummaryCards";
+
+import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { mdc } from "@/lib/mobileDetailChrome";
+import { Search } from "lucide-react";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -40,6 +53,13 @@ import { useCompany } from "@/hooks/useCompany";
 import { openPrintDirect, getPdfBlob, type Context } from "@/lib/printDirect";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { collectInterCompanyIdsForPendingApproval } from "@/lib/interCompany/interCompanyVoucherHydrate";
+import { resolveExpenseListGroupBucketId } from "@/lib/masterEntitySystemGroups";
+import { CreateExpenseAccountDialog } from "@/components/expenses/CreateExpenseAccountDialog";
+import { CreateExpenseGroupDialog } from "@/components/expenses/CreateExpenseGroupDialog";
+import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
+import { ReportListSearchExtras, ReportListTotalBalance, useReportListPendingApproval, useReportShowApproveOnList } from "@/components/reports/ReportListParityChrome";
+import { useReportMobileListMode } from "@/hooks/useReportMobileListMode";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
@@ -97,12 +117,16 @@ export default function DesktopExpenseStatementPage() {
   const searchParams = useLocationSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
+  const reportMobileList = useReportMobileListMode(isMobile, ["accountId","groupId"]);
   const calendarMonths = useCalendarMonths();
   const openingModalRef = useRef(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [transactionSearch, setTransactionSearch] = useState("");
+  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
+  const [balanceCardFilter, setBalanceCardFilter] = useState<string | null>(null);
+  const balanceCardsRowRef = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState<"list" | "chart">("list");
   const [listTab, setListTab] = useState<"accounts" | "groups">(() =>
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("groupId")
@@ -119,7 +143,7 @@ export default function DesktopExpenseStatementPage() {
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const fetchedUidsRef = useRef<Set<string>>(new Set());
 
-  const pageTitle = selectedGroup ? "In/Exp Group Report" : "In/Exp Report";
+  const pageTitle = selectedGroup ? "In/Exp Group Statement" : "In/Exp Statement";
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     try {
@@ -186,8 +210,9 @@ export default function DesktopExpenseStatementPage() {
       closeModalInUrl();
       return;
     }
+    if (reportMobileList.backToList()) return;
     router.back();
-  }, [isVoucherDialogOpen, isCalendarOpen, closeModalInUrl, router]);
+  }, [isVoucherDialogOpen, isCalendarOpen, closeModalInUrl, router, reportMobileList]);
 
   const handleEditVoucher = useCallback(
     (voucher: any) => {
@@ -212,6 +237,9 @@ export default function DesktopExpenseStatementPage() {
   }, [selectedGroup, processedExpenseAccounts, processedExpenseGroups]);
 
   const activeEntity = selectedAccount || groupEntity;
+  useEffect(() => {
+    if (balanceCardsRowRef.current) balanceCardsRowRef.current.scrollLeft = 0;
+  }, [activeEntity?.id]);
   const activeContext = selectedAccount ? "expense" : "group";
 
   useEffect(() => {
@@ -251,6 +279,14 @@ export default function DesktopExpenseStatementPage() {
     processedExpenseAccounts,
     vouchers
   );
+  const { closingBalance: allTimeNetBalance, processedTransactions: allTimeTransactions } = useTransactions(
+    activeEntity as any,
+    activeContext,
+    undefined,
+    undefined,
+    processedExpenseAccounts,
+    vouchers
+  );
 
   const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
   // Mobile: full list for MobileTransactionsPager; desktop no date = last 10.
@@ -259,21 +295,82 @@ export default function DesktopExpenseStatementPage() {
     if (processedTransactions.length <= 10) return processedTransactions;
     return processedTransactions.slice(-10);
   }, [processedTransactions, hasDateFilter, isMobile]);
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(reportDisplayTransactions),
+    [reportDisplayTransactions]
+  );
+
+  const cardFilteredResult = useMemo(() => {
+    if (!balanceCardFilter) return null;
+    return computeFilteredCardOpeningAndRows({
+      allTimeTransactions,
+      periodTransactions: reportDisplayTransactions,
+      fromDate: hasDateFilter ? dateRange?.from : undefined,
+      filterKey: balanceCardFilter,
+      matchesFilter: (t: any) =>
+        balanceCardFilter.startsWith("summary:")
+          ? reportVoucherMatchesSummaryCard(
+              t,
+              balanceCardFilter.slice(8),
+              activeContext,
+              activeEntity?.id,
+              activeContext === "group" ? "expense" : undefined
+            )
+          : getReportVoucherTypeKey(
+              t,
+              activeContext,
+              activeEntity?.id,
+              activeContext === "group" ? "expense" : undefined
+            ) === balanceCardFilter,
+    });
+  }, [
+    balanceCardFilter,
+    allTimeTransactions,
+    reportDisplayTransactions,
+    hasDateFilter,
+    dateRange?.from,
+    activeContext,
+    activeEntity?.id,
+  ]);
+
+  const effectiveOpeningBalanceForPeriod = cardFilteredResult
+    ? cardFilteredResult.filteredOpening
+    : openingBalanceForPeriod;
+  const effectivePeriodDr = cardFilteredResult
+    ? cardFilteredResult.filteredPeriodDr
+    : periodDr;
+  const effectivePeriodCr = cardFilteredResult
+    ? cardFilteredResult.filteredPeriodCr
+    : periodCr;
+  const effectiveClosingBalance = cardFilteredResult
+    ? cardFilteredResult.filteredClosing
+    : closingBalance;
 
   const filteredReportTransactions = useMemo(() => {
-    if (!transactionSearch.trim()) return reportDisplayTransactions;
+    let list = cardFilteredResult
+      ? cardFilteredResult.recomputedRows
+      : reportDisplayTransactions;
+    if (!cardFilteredResult && balanceCardFilter) {
+      list = list.filter((t: any) => balanceCardFilter.startsWith("summary:")
+        ? reportVoucherMatchesSummaryCard(t, balanceCardFilter.slice(8), activeContext, activeEntity?.id, activeContext === "group" ? "expense" : undefined)
+        : getReportVoucherTypeKey(t, activeContext, activeEntity?.id, activeContext === "group" ? "expense" : undefined) === balanceCardFilter);
+    }
+    if (unapprovedOnly) {
+      list = list.filter((t: any) => !t.isApproved && t.isApproved !== true);
+    }
+    if (!transactionSearch.trim()) return list;
     const q = transactionSearch.trim().toLowerCase();
-    return reportDisplayTransactions.filter((t: any) => {
+    return list.filter((t: any) => {
       const vno = (t.voucherNumber || "").toLowerCase();
       const narr = (t.narration || "").toLowerCase();
       const type = (typeof t.type === "string" ? t.type.replace(/_/g, " ") : "").toLowerCase();
       const amount = String(t.debit ?? t.credit ?? t.total ?? "").toLowerCase();
       return vno.includes(q) || narr.includes(q) || type.includes(q) || amount.includes(q);
     });
-  }, [reportDisplayTransactions, transactionSearch]);
+  }, [cardFilteredResult, reportDisplayTransactions, transactionSearch, unapprovedOnly, balanceCardFilter, activeContext, activeEntity?.id]);
 
   // In/Exp account ya group switch / filter / search par pager reset.
-  const expenseStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}`;
+  const expenseStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${unapprovedOnly}|${balanceCardFilter ?? "all"}`;
   const {
     pagingMeta: expenseStatementMobilePaging,
     pagerPage: expenseReportPagerPage,
@@ -283,10 +380,10 @@ export default function DesktopExpenseStatementPage() {
   } = useStatementReportMobilePaging({
     filteredRows: filteredReportTransactions,
     isMobile,
-    openingBalanceForPeriod,
-    periodDr,
-    periodCr,
-    closingBalance,
+    openingBalanceForPeriod: effectiveOpeningBalanceForPeriod,
+    periodDr: effectivePeriodDr,
+    periodCr: effectivePeriodCr,
+    closingBalance: effectiveClosingBalance,
     resetKey: expenseStatementMobilePagingKey,
   });
 
@@ -317,6 +414,14 @@ export default function DesktopExpenseStatementPage() {
       { title: "Expense", amount: summaryData.expense, color: "text-red-600" },
     ],
     [closingBalance, summaryData.income, summaryData.expense]
+  );
+  const mobileSummaryCards = useMemo(() => [
+    ...summaryCards.map((card) => card.title === "Balance" ? { ...card, amount: allTimeNetBalance, color: allTimeNetBalance >= 0 ? "text-green-600" : "text-red-600" } : card),
+    ...buildReportVoucherTypeCards(processedTransactions, activeContext, activeEntity?.id, activeContext === "group" ? "expense" : undefined, summaryCards.map((card) => card.title)),
+  ], [summaryCards, processedTransactions, activeContext, activeEntity?.id, allTimeNetBalance]);
+  const clickableSummaryCards = useMemo(
+    () => makeMobileReportSummaryCards(mobileSummaryCards, balanceCardFilter, setBalanceCardFilter, processedTransactions, activeContext, activeEntity?.id, activeContext === "group" ? "expense" : undefined),
+    [mobileSummaryCards, balanceCardFilter, processedTransactions, activeContext, activeEntity?.id]
   );
 
   const handlePrint = () => {
@@ -447,7 +552,7 @@ export default function DesktopExpenseStatementPage() {
 
   const dateRangeLabel = useMemo(() => {
     // Entity report header row-2 — Party statement jaisa "All Time"; last-10 desktop slice alag logic.
-    if (!hasDateFilter) return "All Time";
+    if (!hasDateFilter) return "Last 10 Txns";
     const from = dateRange!.from!;
     const to = dateRange!.to || from;
     const fromAD = format(from, "LLL dd, y");
@@ -517,6 +622,59 @@ export default function DesktopExpenseStatementPage() {
     setListTab("groups");
   }, []);
 
+  /* ---- Main Expense list page parity: header total, pink unapproved badge, + Add ---- */
+  const reportShowApproveOnList = useReportShowApproveOnList();
+  const reportPending = useReportListPendingApproval({
+    enabled: reportShowApproveOnList,
+    vouchers,
+    entities: processedExpenseAccounts as any[],
+    collect: (v: any, ids: Set<string>) => {
+      // Incomes/Expenses page jaisa.
+      const out = new Set<string>();
+      if (String(v?.type || "") === "inter_company") {
+        collectInterCompanyIdsForPendingApproval(v, ids, "expense").forEach((id: string) => out.add(id));
+        return out;
+      }
+      for (const k of ["incomeAccountId", "expenseAccountId", "accountId"]) {
+        if (v?.[k] && ids.has(v[k])) out.add(v[k]);
+      }
+      (v?.entries || []).forEach((e: any) => { if (e?.accountId && ids.has(e.accountId)) out.add(e.accountId); });
+      return out;
+    },
+    bucket: (e: any) => resolveExpenseListGroupBucketId(e),
+  });
+  const {
+    showOnlyEntities: reportOnlyPendingEntities,
+    setShowOnlyEntities: setReportOnlyPendingEntities,
+    showOnlyGroups: reportOnlyPendingGroups,
+    setShowOnlyGroups: setReportOnlyPendingGroups,
+  } = usePendingApprovalListFilter(reportPending.total);
+  const [isReportCreateEntityOpen, setIsReportCreateEntityOpen] = useState(false);
+  const [isReportCreateGroupOpen, setIsReportCreateGroupOpen] = useState(false);
+  const reportEntitiesView = useMemo(
+    () =>
+      !reportOnlyPendingEntities || !reportShowApproveOnList
+        ? processedExpenseAccounts
+        : processedExpenseAccounts.filter((e: any) => (reportPending.byId[e.id] ?? 0) > 0),
+    [processedExpenseAccounts, reportOnlyPendingEntities, reportShowApproveOnList, reportPending]
+  );
+  const reportGroupsView = useMemo(
+    () =>
+      !reportOnlyPendingGroups || !reportShowApproveOnList
+        ? groupsForReportList
+        : groupsForReportList.filter((g: any) => (reportPending.byGroupId[g.id] ?? 0) > 0),
+    [groupsForReportList, reportOnlyPendingGroups, reportShowApproveOnList, reportPending]
+  );
+  const reportListTotalBalance = useMemo(
+    () =>
+      listTab === "groups"
+      ? processedExpenseGroups
+          .filter((g: any) => !["income", "expenses"].includes((g.id || "").toLowerCase()))
+          .reduce((acc: number, g: any) => acc + (Number(g.balance) || 0), 0)
+      : processedExpenseAccounts.reduce((acc: number, a: any) => acc + (Number(a.balance) || 0), 0),
+    [listTab, processedExpenseAccounts, processedExpenseGroups]
+  );
+
   if (loading && !activeEntity) {
     return <LoadingSpinner />;
   }
@@ -536,9 +694,93 @@ export default function DesktopExpenseStatementPage() {
     />
   );
 
-  if (!isMobile) {
+  const mobileEntityTxnToolbar = (
+    <MobileEntityTxnToolbarRow placement="belowPager">
+      <MobileEntityTxnToolbarPicker>
+        <Combobox
+          options={selectedGroup ? groupReportOptions : accountReportOptions}
+          value={selectedGroup ? (selectedGroup?.id || "") : (selectedAccount?.id || "")}
+          onChange={(value) => {
+            if (selectedGroup) {
+              const group = processedExpenseGroups.find((g) => g.id === value);
+              if (group) {
+                const newUrl = new URL(window.location.href);
+                newUrl.searchParams.set('groupId', group.id);
+                newUrl.searchParams.delete('accountId');
+                window.history.pushState({}, '', newUrl);
+                setSelectedGroup(group);
+                setSelectedAccount(null);
+              }
+            } else {
+              const entity = processedExpenseAccounts.find((a) => a.id === value);
+              if (entity) {
+                const newUrl = new URL(window.location.href);
+                newUrl.searchParams.set('accountId', entity.id);
+                newUrl.searchParams.delete('groupId');
+                window.history.pushState({}, '', newUrl);
+                setSelectedAccount(entity);
+                setSelectedGroup(null);
+              }
+            }
+          }}
+          placeholder={selectedGroup ? "Select a group" : "Select account"}
+        />
+      </MobileEntityTxnToolbarPicker>
+      <MobileEntityTxnToolbarUnapprovedBadge
+        count={mobileUnapprovedTxnCount}
+        pressed={unapprovedOnly}
+        onToggle={() => {
+          setUnapprovedOnly((prev) => !prev);
+          setExpenseReportPagerPage(1);
+        }}
+      />
+      <MobileEntityTxnToolbarSearch>
+        <Search className={mdc.mobileTxnToolbarSearchIcon} />
+        <Input
+          placeholder="Search transactions"
+          className={mdc.mobileTxnToolbarSearchInput}
+          value={transactionSearch}
+          onChange={(e) => {
+            setTransactionSearch(e.target.value);
+            setExpenseReportPagerPage(1);
+          }}
+        />
+      </MobileEntityTxnToolbarSearch>
+    </MobileEntityTxnToolbarRow>
+  );
+
+  if (!isMobile || reportMobileList.showList) {
     return (
       <ReportStatementDesktopShell
+        isMobile={isMobile}
+        balance={<ReportListTotalBalance value={reportListTotalBalance} format={formatCurrency} />}
+        searchRowExtras={
+          <ReportListSearchExtras
+            show={reportShowApproveOnList}
+            count={reportPending.total}
+            isGroupsTab={listTab === "groups"}
+            entityPressed={reportOnlyPendingEntities}
+            onEntityToggle={() => setReportOnlyPendingEntities((v) => !v)}
+            groupPressed={reportOnlyPendingGroups}
+            onGroupToggle={() => setReportOnlyPendingGroups((v) => !v)}
+            entityNoun="accounts"
+            addButton={
+              listTab === "groups" ? (
+              <CreateExpenseGroupDialog onGroupCreated={() => {}} groups={processedExpenseGroups} isOpen={isReportCreateGroupOpen} onOpenChange={setIsReportCreateGroupOpen}>
+                <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsReportCreateGroupOpen(true)}>
+                  + Add Group
+                </PermissionButton>
+              </CreateExpenseGroupDialog>
+              ) : (
+              <CreateExpenseAccountDialog onExpenseAccountCreated={() => {}} isOpen={isReportCreateEntityOpen} onOpenChange={setIsReportCreateEntityOpen}>
+                <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsReportCreateEntityOpen(true)}>
+                  + Add Account
+                </PermissionButton>
+              </CreateExpenseAccountDialog>
+              )
+            }
+          />
+        }
         listChromeRouteKey="incomes"
         pageTitle={pageTitle}
         listTab={listTab}
@@ -553,13 +795,13 @@ export default function DesktopExpenseStatementPage() {
         entitySectionLabel={
           <div className={mlc.sectionLabelRow}>
             <DollarSign className={mlc.sectionIcon} />
-            <span>Account ({processedExpenseAccounts.length})</span>
+            <span>Account ({reportEntitiesView.length})</span>
           </div>
         }
         groupSectionLabel={
           <div className={mlc.sectionLabelRow}>
             <Users className={mlc.sectionIcon} />
-            <span>Group ({groupsForReportList.length})</span>
+            <span>Group ({reportGroupsView.length})</span>
           </div>
         }
         entityQuickFilter={accountListQuickFilter}
@@ -570,7 +812,8 @@ export default function DesktopExpenseStatementPage() {
         showSummary={!!activeEntity}
         entityList={
           <ExpenseAccountList
-            accounts={processedExpenseAccounts}
+            accounts={reportEntitiesView}
+            pendingApprovalByAccountId={reportPending.byId}
             onSelectAccount={handleSelectAccountFromList}
             selectedAccount={selectedAccount}
             searchTerm={listSearchTerm}
@@ -581,7 +824,9 @@ export default function DesktopExpenseStatementPage() {
         }
         groupList={
           <ExpenseGroupList
-            groups={groupsForReportList}
+            groups={reportGroupsView}
+            pendingApprovalByGroupId={reportPending.byGroupId}
+            pendingApprovalByMemberId={reportPending.byId}
             onSelectGroup={handleSelectGroupFromList}
             selectedGroup={selectedGroup}
             searchTerm={listSearchTerm}
@@ -601,6 +846,7 @@ export default function DesktopExpenseStatementPage() {
               userNames={userNames}
               journalAccountNames={journalAccountNames}
               context="report"
+              reportSummaryCards={clickableSummaryCards}
               mobileFooterVariant="report"
               dateRange={dateRange}
               onDateRangeChange={setDateRange}
@@ -630,101 +876,26 @@ export default function DesktopExpenseStatementPage() {
 
   return (
     <div className="h-full min-h-0 flex flex-col bg-gray-50 overflow-hidden">
-      <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 p-3 border-b bg-white">
-        <div className="flex items-center gap-2 min-w-0">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="flex-shrink-0 h-8 w-8"
-            onClick={handleReportBack}
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <h1 className="shrink-0 text-base font-bold text-muted-foreground">{pageTitle}</h1>
-            {activeEntity?.name ? (
-              <>
-                <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
-                  ·
-                </span>
-                <span
-                  className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
-                  title={activeEntity.name}
-                >
-                  {activeEntity.name}
-                </span>
-              </>
-            ) : null}
-          </div>
-          {activeEntity?.name ? (
-            <div className="flex-shrink-0" aria-hidden>
-              {selectedAccount ? (
-                <ReportStatementHeaderAvatar
-                  kind="expense"
-                  displayName={activeEntity.name}
-                  fileUrl={selectedAccount.fileUrl}
-                />
-              ) : (
-                <ReportStatementHeaderAvatar kind="group" displayName={activeEntity.name} />
-              )}
-            </div>
-          ) : null}
-        </div>
-        <MobileDetailSummaryCollapsible className="gap-2">
-        <div className="flex justify-center items-center gap-2">
-          <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
-          {hasDateFilter && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 flex-shrink-0"
-              onClick={() => setDateRange(undefined)}
-              title="Clear date filter"
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex-1 min-w-0">
-            <Combobox
-              options={accountReportOptions}
-              value={selectedAccount?.id || ""}
-              onChange={(value) => {
-                const acc = processedExpenseAccounts.find((a) => a.id === value);
-                if (acc) {
-                  const newUrl = new URL(window.location.href);
-                  newUrl.searchParams.set("accountId", acc.id);
-                  newUrl.searchParams.delete("groupId");
-                  window.history.pushState({}, "", newUrl);
-                  setSelectedAccount(acc);
-                  setSelectedGroup(null);
-                }
-              }}
-              placeholder="Select account"
+            <ReportEntityMobileHeader
+        title={pageTitle}
+        entityName={activeEntity?.name}
+        closingBalance={closingBalance}
+        dateRangeLabel={dateRangeLabel}
+        hasDateFilter={hasDateFilter}
+        onBack={handleReportBack}
+        onClearDate={() => setDateRange(undefined)}
+        avatar={activeEntity?.name ? (
+          selectedAccount ? (
+            <ReportStatementHeaderAvatar
+              kind="expense"
+              displayName={activeEntity.name}
+              fileUrl={selectedAccount.fileUrl}
             />
-          </div>
-          <div className="flex-1 min-w-0">
-            <Combobox
-              options={groupReportOptions}
-              value={selectedGroup?.id || ""}
-              onChange={(value) => {
-                const grp = processedExpenseGroups.find((g) => g.id === value);
-                if (grp) {
-                  const newUrl = new URL(window.location.href);
-                  newUrl.searchParams.set("groupId", grp.id);
-                  newUrl.searchParams.delete("accountId");
-                  window.history.pushState({}, "", newUrl);
-                  setSelectedGroup(grp);
-                  setSelectedAccount(null);
-                }
-              }}
-              placeholder="Select group"
-            />
-          </div>
-        </div>
-        </MobileDetailSummaryCollapsible>
-      </header>
+          ) : (
+            <ReportStatementHeaderAvatar kind="group" displayName={activeEntity.name} />
+          )
+        ) : undefined}
+      />
 
       <Drawer
         open={isCalendarOpen}
@@ -814,21 +985,14 @@ export default function DesktopExpenseStatementPage() {
           </div>
         ) : (
           <>
-            <MobileDetailSummaryCollapsible>
-            <div className="flex flex-nowrap gap-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-              {summaryCards.map((card) => (
-                <ReportSummaryCard
-                  key={card.title}
-                  title={card.title}
-                  amount={card.amount}
-                  color={card.color}
-                />
-              ))}
+            <MobileDetailSummaryCollapsible className="w-[calc(100%+2rem)] min-w-0 -mx-4">
+            <div key={activeEntity?.id ?? "no-entity"} ref={balanceCardsRowRef} data-pl-mobile-txn-balance-row="" data-pl-bank-report-balance-row="" className="box-border flex w-full min-w-0 flex-nowrap justify-start gap-2 px-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <ReportStatementSummaryCardsRow cards={clickableSummaryCards} className="w-max min-w-0 flex-shrink-0 pt-0.5 pb-0 overflow-visible" />
             </div>
             </MobileDetailSummaryCollapsible>
 
             <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
-              <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0" data-floating-button-scroll>
+              <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0 pl-mobile-ledger-txn-scroll-pad" data-floating-button-scroll>
                 {isMobile ? (
                   <div className="pb-4">
                     <TransactionsTable
@@ -836,6 +1000,14 @@ export default function DesktopExpenseStatementPage() {
                       context={activeContext}
                       contextId={activeEntity?.id}
                       openingBalance={expenseStatementMobilePaging.openingForPage}
+                      booksOpeningBalance={balanceCardFilter ? undefined : (activeEntity as any)?.openingBalance != null ? Number((activeEntity as any).openingBalance) : undefined}
+                      openingBalanceDate={(activeEntity as any)?.openingBalanceDate}
+                      ledgerDateFilterActive={hasDateFilter || !!balanceCardFilter}
+                      ledgerShowBookOpeningRow={!balanceCardFilter && (expenseReportRowsPerPage <= 0 || expenseStatementMobilePaging.edges.before === 0)}
+                      ledgerTransactionsForFyOpening={balanceCardFilter ? filteredReportTransactions : undefined}
+                      fyLedgerScopeOpeningBalance={balanceCardFilter ? effectiveOpeningBalanceForPeriod : undefined}
+                      openingBalancePeriodStartDate={expenseStatementMobilePaging.openingPeriodStartDate ?? dateRange?.from}
+                      dateRange={dateRange}
                       userNames={userNames}
                       journalAccountNames={journalAccountNames}
                       onRowClick={handleEditVoucher}
@@ -843,14 +1015,6 @@ export default function DesktopExpenseStatementPage() {
                       periodDr={expenseStatementMobilePaging.periodDrForPage}
                       periodCr={expenseStatementMobilePaging.periodCrForPage}
                       closingBalance={expenseStatementMobilePaging.closingForPage}
-                      openingBalanceSearch={
-                        <Input
-                          placeholder="Search..."
-                          value={transactionSearch}
-                          onChange={(e) => setTransactionSearch(e.target.value)}
-                          className="h-8 w-32 max-w-[140px] text-sm"
-                        />
-                      }
                     />
                   </div>
                 ) : (
@@ -858,7 +1022,18 @@ export default function DesktopExpenseStatementPage() {
                     transactions={filteredReportTransactions}
                     context={activeContext}
                     contextId={activeEntity?.id}
-                    openingBalance={openingBalanceForPeriod}
+                    openingBalance={effectiveOpeningBalanceForPeriod}
+                    booksOpeningBalance={balanceCardFilter ? undefined : (activeEntity as any)?.openingBalance != null ? Number((activeEntity as any).openingBalance) : undefined}
+                    openingBalanceDate={(activeEntity as any)?.openingBalanceDate}
+                    ledgerDateFilterActive={hasDateFilter || !!balanceCardFilter}
+                    ledgerShowBookOpeningRow={!balanceCardFilter}
+                    ledgerTransactionsForFyOpening={balanceCardFilter ? filteredReportTransactions : undefined}
+                    fyLedgerScopeOpeningBalance={balanceCardFilter ? effectiveOpeningBalanceForPeriod : undefined}
+                    periodDr={effectivePeriodDr}
+                    periodCr={effectivePeriodCr}
+                    closingBalance={effectiveClosingBalance}
+                    openingBalancePeriodStartDate={dateRange?.from}
+                    dateRange={dateRange}
                     userNames={userNames}
                     journalAccountNames={journalAccountNames}
                     onRowClick={handleEditVoucher}
@@ -877,7 +1052,8 @@ export default function DesktopExpenseStatementPage() {
               {/* Fixed footer + FAB ke upar jagah — Party report pager (~mb-12). */}
               {isMobile && view === "list" && (
                 <MobileTransactionsPager
-                  className="flex-shrink-0 border-t bg-muted/25 mb-12"
+                  className={mdc.ledgerTxnPagerOutside}
+                txnToolbar={mobileEntityTxnToolbar}
                   currentPage={expenseReportPagerPage}
                   totalItems={filteredReportTransactions.length}
                   rowsPerPage={expenseReportRowsPerPage}
@@ -898,7 +1074,7 @@ export default function DesktopExpenseStatementPage() {
         )}
       </main>
 
-      <footer className="flex items-stretch justify-around p-1.5 border-t bg-white gap-1 fixed bottom-0 left-0 right-0">
+      <footer data-pl-mobile-ledger-action-footer="" className="flex items-stretch justify-around p-1.5 border-t bg-white gap-1 fixed bottom-0 left-0 right-0">
         <PermissionButton
           permission="export_data"
           className="flex-1 flex flex-col items-center justify-center py-1 min-w-0 bg-green-500 hover:bg-green-600 text-white rounded-md"

@@ -111,6 +111,7 @@ import {
   LEDGER_TXN_TABLE_HOST_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
+import { ReportHeaderSummaryCards } from "@/components/reports/ReportStatementSummaryCards";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
@@ -244,6 +245,7 @@ interface AccountDetailsProps {
   ledgerOpeningAnchor?: { atMs: number; balance: number } | null;
   /** Reports the (anchored) opening for the selected day so the host can re-anchor when its window moves. */
   onLedgerOpeningResolved?: (dayStartMs: number, opening: number, closing: number) => void;
+  reportSummaryCards?: import("@/components/reports/ReportStatementSummaryCards").ReportStatementSummaryCardData[];
 }
 
 const HiddenPresetRow = (_props: any) => null;
@@ -268,6 +270,7 @@ export function AccountDetails({
   isolatedDayScope = false,
   ledgerOpeningAnchor = null,
   onLedgerOpeningResolved,
+  reportSummaryCards,
 }: AccountDetailsProps) {
   const nestedLedgerNoteDialogShell =
     ledgerPresentationMode === "nested-ledger"
@@ -2091,6 +2094,9 @@ export function AccountDetails({
               <div className={LEDGER_HEADER_NAME_CARD_CN}>
                 <h2 className={LEDGER_HEADER_TITLE_CN} title={account.accountName}>{account.accountName}</h2>
               </div>
+              {reportSummaryCards?.length ? (
+                <ReportHeaderSummaryCards cards={reportSummaryCards} />
+              ) : (
               <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
                 <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
                   <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
@@ -2108,6 +2114,7 @@ export function AccountDetails({
                   </div>
                 </div>
               </div>
+              )}
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
               <ReconciliationAccountButton accountId={account.id} />

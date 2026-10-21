@@ -634,7 +634,7 @@ export function TransactionsTable({
   >("idle");
   const fyOpeningFromLedger = useMemo(() => {
     if (!fiscalMergePartitions.length) return null;
-    if (!hasFullLocalLedgerVoucherMirror(company, fy.activeScope)) return null;
+    if (!ledgerTransactionsForFyOpening?.length && !hasFullLocalLedgerVoucherMirror(company, fy.activeScope)) return null;
     const source =
       ledgerTransactionsForFyOpening && ledgerTransactionsForFyOpening.length
         ? ledgerTransactionsForFyOpening

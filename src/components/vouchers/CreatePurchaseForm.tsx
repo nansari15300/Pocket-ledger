@@ -1,6 +1,7 @@
 
 "use client";
 
+import { ocrAdapters, useVoucherOcr, VoucherOcrRefreshBar } from "@/modules/ocr";
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useFieldArray, useForm, useWatch, type Resolver, type FieldErrors } from "react-hook-form";
@@ -133,7 +134,11 @@ import type { Tax, TaxGroup } from "@/components/tax/types";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState as __frozenAppendAttachments, handleVoucherAttachmentInputChange as __frozenAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { ocrWrapAppend, ocrWrapInputChange } from "@/modules/ocr";
+/** OCR reads the ORIGINAL upload: frozen helpers wrapped at the call site only (helper code unchanged). */
+const appendCompressedVoucherAttachmentsToState = ocrWrapAppend(__frozenAppendAttachments);
+const handleVoucherAttachmentInputChange = ocrWrapInputChange(__frozenAttachmentInputChange);
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { VoucherAttachmentPcDropRow } from "@/components/vouchers/VoucherAttachmentPcDropRow";
@@ -1263,7 +1268,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   // Validated payload `data` से save — `getValues()` से date कभी-कभी miss होकर coerce में "आज" भर जाता था
   const runValidatedSubmit = useCallback(
-    (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
+    (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean; ocrAutoPost?: boolean } = {}) => {
       if (submitInFlightRef.current || isLoading) return;
       submitInFlightRef.current = true;
       void (async () => {
@@ -1285,17 +1290,35 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   );
 
   const handleFormSubmit = useCallback(
-    (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
+    (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean; ocrAutoPost?: boolean } = {}) => {
       e.preventDefault();
       gateConvertSubmit(() => runValidatedSubmit(e, options));
     },
     [gateConvertSubmit, runValidatedSubmit]
   );
 
+  /* OCR (local): first attachment -> autofill; Auto Post saves UNAPPROVED via the same validated submit. */
+  const ocr = useVoucherOcr({
+    adapter: ocrAdapters.purchase(() => createEmptyPurchaseLineItem("item") as unknown as Record<string, unknown>),
+    form: form as never,
+    files,
+    setFiles: setFiles as never,
+    ownName: ((company as { name?: string } | null)?.name) || null,
+    companyId,
+    ownPan: ((company as { pan?: string; panNumber?: string } | null)?.pan ?? (company as { panNumber?: string } | null)?.panNumber) || null,
+    parties: (processedParties || []) as never,
+    items: (processedItems || []) as never,
+    taxes: (processedTaxes || []) as never,
+    ledgerAccounts: purchaseAccountOptions,
+    autoPost: () => runValidatedSubmit({ preventDefault() {} } as unknown as React.FormEvent, { ocrAutoPost: true }),
+    isEditing,
+    disabled: !!editingDisabled,
+  });
+
    const processAndSave = useCallback(
     async (
       data: PurchaseFormValues,
-      { saveAndNew, print, approveAfterSave }: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}
+      { saveAndNew, print, approveAfterSave, ocrAutoPost }: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean; ocrAutoPost?: boolean } = {}
     ): Promise<string | null> => {
       if (!user || !companyId || !company) {
         sonnerToast.error("Error", { description: "Login and company selection required." });
@@ -1412,7 +1435,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         let finalData = {
           ...submissionData,
           ...voucherAttachmentFieldsForSave(existingFileUrls, voucherAttachmentLockSaveOpts(voucher, can("unlock_locked_pdf"))),
-          isApproved: isCompanyAdmin ? true : (data.isApproved ?? voucher?.isApproved ?? false),
+          // OCR Auto Post: hamesha UNAPPROVED (admin auto-approve bhi nahi).
+        isApproved: ocrAutoPost ? false : isCompanyAdmin ? true : (data.isApproved ?? voucher?.isApproved ?? false),
         };
         // Keep opening balance link from current voucher (set by Link to Txns); copy-draft pehli save par purani row na uthao
         const currentPurchase = isCopiedDraftFirstInsert
@@ -2103,10 +2127,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             className={cn(
               "flex-1 min-h-0 min-w-0 w-full",
               isMobile
-                ? "overflow-y-auto overflow-x-hidden [scrollbar-width:thin] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-400/80 [&::-webkit-scrollbar-track]:bg-gray-200/60"
+                ? "overflow-y-auto overflow-x-hidden [scrollbar-width:thin]"
                 : /* w-2 = vertical track patla (pehle sirf h-2 tha — horizontal patla, vertical mota) */
                   // Tablet + PC-view touch drag fix: sirf scrollbar thumb nahi, content area se bhi x/y pan allow karo.
-                  "overflow-auto pr-6 -mr-6 touch-pan-x touch-pan-y [scrollbar-width:thin] [WebkitOverflowScrolling:touch] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-400 [&::-webkit-scrollbar-track]:bg-gray-200"
+                  "overflow-auto pr-6 -mr-6 touch-pan-x touch-pan-y [scrollbar-width:thin] [WebkitOverflowScrolling:touch]"
             )}
           >
             <div
@@ -2167,7 +2191,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             render={({ field: dateField }: any) => (
                               <>
                                 {hasDateBS && (
-                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                                     <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
                                     <div className="min-w-0 w-full overflow-hidden">
                                       <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" disabled={deleteDisabledWhenLinked} />
@@ -2175,7 +2199,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   </FormItem>
                                 )}
                                 {hasDateAD && (
-                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                                     <FormLabel className="text-xs truncate">Date</FormLabel>
                                     <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                                       <PopoverTrigger asChild>
@@ -2211,7 +2235,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       control={form.control}
                       name="partyId"
                       render={({ field }: any) => (
-                        <FormItem className="min-w-0 w-full overflow-hidden">
+                        <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                           <div className="flex justify-between items-center mb-1 gap-1">
                             <FormLabel className={cn("text-xs", highlightPartyLabelCopyMismatch && "font-semibold text-red-600")}>
                               Party
@@ -2267,7 +2291,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       control={form.control}
                       name="purchaseAccountId"
                       render={({ field }: any) => (
-                        <FormItem className="min-w-0 w-full overflow-hidden">
+                        <FormItem data-ocr-field="ledger" className="min-w-0 w-full overflow-hidden">
                           <div className="flex justify-between items-center mb-1 gap-1">
                             <FormLabel className={cn("text-xs", highlightPurchaseAccountLabelCopyMismatch && "font-semibold text-red-600")}>
                               Purchase A/c
@@ -2328,7 +2352,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           control={form.control}
                           name="partyId"
                           render={({ field }: any) => (
-                            <FormItem className="min-w-0 w-full overflow-hidden flex flex-col">
+                            <FormItem data-ocr-field="party" className="min-w-0 w-full overflow-hidden flex flex-col">
                               <div className="flex items-center gap-1 flex-wrap w-full">
                                 <FormLabel className={cn("truncate shrink-0", highlightPartyLabelCopyMismatch && "font-semibold text-red-600")}>
                                   Supplier (Cr.)
@@ -2373,7 +2397,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           control={form.control}
                           name="purchaseAccountId"
                           render={({ field }: any) => (
-                            <FormItem className="min-w-0 w-full overflow-hidden flex flex-col">
+                            <FormItem data-ocr-field="ledger" className="min-w-0 w-full overflow-hidden flex flex-col">
                               <div className="flex items-center justify-between gap-2">
                                 <FormLabel className={cn("truncate", highlightPurchaseAccountLabelCopyMismatch && "font-semibold text-red-600")}>
                                   Purchase Account (Dr.)
@@ -2453,14 +2477,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           render={({ field }: any) => (
                             <>
                               {hasDateBS && (
-                                <FormItem className="min-w-0 w-full overflow-hidden flex flex-col">
+                                <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden flex flex-col">
                                   <FormLabel className="truncate">Date (BS)</FormLabel>
                                   <BsDatePicker valueAD={field.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); field.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-10 w-full shrink-0" disabled={deleteDisabledWhenLinked} />
                                   <FormMessage />
                                 </FormItem>
                               )}
                               {hasDateAD && (
-                                <FormItem className="min-w-0 w-full overflow-hidden flex flex-col">
+                                <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden flex flex-col">
                                   <FormLabel className="truncate">Date</FormLabel>
                                   <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                                     <PopoverTrigger asChild>
@@ -2541,7 +2565,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               control={form.control}
                               name={`lineItems.${index}.itemId`}
                               render={({ field }: any) => (
-                                <FormItem className="min-w-0 flex-1 w-full">
+                                <FormItem data-ocr-field="lines" className="min-w-0 flex-1 w-full">
                                 <Combobox
                                   options={itemOptions}
                                   value={comboboxValueFromLineItemId(field.value)}
@@ -2604,7 +2628,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <FormItem>
                                   <FormLabel className="text-xs">Qty</FormLabel>
                                   <FormControl>
-                                    <Input type="number" {...field} className="h-9 text-xs text-right" disabled={itemFieldsDisabled} />
+                                    <Input type="number" step="any" {...field} className="h-9 text-xs text-right" disabled={itemFieldsDisabled} />
                                   </FormControl>
                                 </FormItem>
                               )}
@@ -2716,7 +2740,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               control={form.control}
                               name={`lineItems.${index}.taxAccountId`}
                               render={({ field }: any) => (
-                                <FormItem>
+                                <FormItem data-ocr-field="tax">
                                   {/* Copy chip visible => Tax label red; resolved selection => normal label color. */}
                                   <FormLabel className={cn("text-xs", purchaseLineNeedsCopyTax(index) && "text-red-600 font-semibold")}>Tax</FormLabel>
                                   <FormControl>
@@ -2962,7 +2986,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               control={form.control}
                               name={`lineItems.${index}.itemId`}
                               render={({ field }: any) => (
-                                <FormItem className="w-full min-w-[2.5in] max-w-none space-y-0">
+                                <FormItem data-ocr-field="lines" className="w-full min-w-[2.5in] max-w-none space-y-0">
                                 <Combobox
                                   options={itemOptions}
                                   value={comboboxValueFromLineItemId(field.value)}
@@ -3008,7 +3032,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             name={`lineItems.${index}.quantity`}
                             render={({ field }: any) => (
                               <FormControl className="shrink-0">
-                                <Input type="number" {...field} style={salePurchaseLineNumberInputStyle(field.value)} className={SALE_PURCHASE_LINE_NUMBER_INPUT_CLASS} disabled={itemFieldsDisabled} />
+                                <Input type="number" step="any" {...field} style={salePurchaseLineNumberInputStyle(field.value)} className={SALE_PURCHASE_LINE_NUMBER_INPUT_CLASS} disabled={itemFieldsDisabled} />
                               </FormControl>
                             )}
                           />
@@ -3159,7 +3183,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 control={form.control}
                                 name={`lineItems.${index}.taxAccountId`}
                                 render={({ field }: any) => (
-                                  <FormItem className="w-max min-w-max max-w-none space-y-0">
+                                  <FormItem data-ocr-field="tax" className="w-max min-w-max max-w-none space-y-0">
                                     <Combobox
                                       options={withSelectedHiddenTax(lineTaxComboboxOptions, processedTaxes, field.value)}
                                       value={field.value}
@@ -3304,7 +3328,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <SalePurchaseTotalsSummaryAmount value={tds || 0} className="text-xs font-medium" />
                       </div>
                     )}
-                    <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "py-[3px] border-t text-base font-bold")}>
+                    <div className={cn(SALE_PURCHASE_TOTALS_SUMMARY_ROW, "py-[3px] border-t text-base font-bold")} data-ocr-field="total">
                       <span className="text-sm shrink-0">{(tds || 0) > 0 ? "Invoice Total:" : "Total:"}</span>
                       <SalePurchaseTotalsSummaryAmount value={total || 0} className="text-red-600 text-sm font-bold" />
                     </div>
@@ -3317,7 +3341,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       control={form.control}
                       name="narration"
                       render={({ field }: any) => (
-                        <FormItem>
+                        <FormItem data-ocr-field="bill-no">
                           <FormLabel>Narration</FormLabel>
                           <FormControl>
                             {/* Mobile: shared narration resize/scroll — static app me clip na ho */}
@@ -3359,7 +3383,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       control={form.control}
                       name="dueDate"
                       render={({ field }: any) => (
-                        <FormItem className={cn(dateSystem === 'Both' && "flex-1 min-w-0")}>
+                        <FormItem data-ocr-field="due-date" className={cn(dateSystem === 'Both' && "flex-1 min-w-0")}>
                           <FormLabel className="text-sm">Due Date</FormLabel>
                           <div className={cn("flex w-full", dateSystem === 'Both' ? "flex-col gap-2" : "gap-1")}>
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
@@ -3446,6 +3470,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           className="mb-2"
                         />
                       )}
+                      <VoucherOcrRefreshBar ocr={ocr} />
                       <RestrictedFileUploader>
                         {/* When linked: add/remove disabled; existing files stay clickable to open. Filter by file identity (not index) so remove works reliably. */}
                         <VoucherAttachmentPcDropRow
@@ -3663,7 +3688,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         control={form.control}
                         name="narration"
                         render={({ field }: any) => (
-                          <FormItem>
+                          <FormItem data-ocr-field="bill-no">
                             <FormLabel>Narration</FormLabel>
                             <FormControl>
                               {/* Desktop narration: poora text dikhe */}
@@ -3697,7 +3722,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         control={form.control}
                         name="dueDate"
                         render={({ field }: any) => (
-                          <FormItem className={cn("w-full", dateSystem === 'Both' && "min-w-[160px]")}>
+                          <FormItem data-ocr-field="due-date" className={cn("w-full", dateSystem === 'Both' && "min-w-[160px]")}>
                             <FormLabel>Due Date</FormLabel>
                             <div className={cn("flex w-full", dateSystem === 'Both' ? "flex-col gap-2" : "gap-1")}>
                               {(dateSystem === 'BS' || dateSystem === 'Both') && (
@@ -3781,6 +3806,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           className="mb-2"
                         />
                       )}
+                      <VoucherOcrRefreshBar ocr={ocr} />
                       <RestrictedFileUploader>
                         {/* When linked: add/remove disabled; existing files stay clickable to open. Filter by file identity (not index) so remove works reliably. */}
                         <VoucherAttachmentPcDropRow

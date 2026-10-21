@@ -21,8 +21,12 @@ export async function createOneMasterEntityGroup(params: {
   parentId: string;
   collection: string;
   localIdPrefix: string;
+  /** Optional other name (OCR / search). Omitted when empty. */
+  aliasName?: string;
 }): Promise<string> {
   const { company, companyId, userId, name, parentId, collection: coll, localIdPrefix } = params;
+  const alias = String(params.aliasName ?? "").trim();
+  const aliasField = alias ? { aliasName: alias } : {};
   if (apkEntityWriteUsesLocalSqliteMirror(company)) {
     const createdId = createLocalEntityId(localIdPrefix);
     const payload = {
@@ -33,6 +37,7 @@ export async function createOneMasterEntityGroup(params: {
       parentId,
       createdAt: new Date().toISOString(),
       isDeleted: false,
+      ...aliasField,
     };
     await upsertCompanyDocInBrowserDb(companyId, coll, createdId, payload);
     await enqueueCompanyDocOutbox(companyId, coll, "create", createdId, payload);
@@ -45,6 +50,7 @@ export async function createOneMasterEntityGroup(params: {
     parentId,
     createdAt: serverTimestamp(),
     isDeleted: false,
+    ...aliasField,
   });
   return docRef.id;
 }

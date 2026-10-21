@@ -26,6 +26,7 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import { useCompany } from "@/hooks/useCompany";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { MasterAliasSearchHint } from "@/components/entity/MasterAliasSearchHint";
 
 interface ItemListProps {
   items: Item[];
@@ -222,6 +223,7 @@ export function ItemList({
                         }
                       >
                         {highlightSearch ? highlightQueryInText(item.name, highlightSearch) : item.name}
+<MasterAliasSearchHint alias={(item as { aliasName?: string }).aliasName} name={item.name} search={highlightSearch} />
                       </MasterListNameTooltip>
                     </div>
                     <div

@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect } from "react";
 import { enterAdminFirestoreOnline, leaveAdminFirestoreOnline } from "@/lib/adminFirestoreNetwork";
+import { leaveAdminPanelCompanyLedgerMode } from "@/lib/adminPanelCompany/ledgerMode";
+import { useCompany } from "@/hooks/useCompany";
 import { LayoutDashboard, Users, FileClock, Settings, ArrowLeft, FileDigit, ListTree, Landmark, CreditCard, UserCog, Trash2, Database, Megaphone } from 'lucide-react'
 import dynamic from "next/dynamic";
 import { Button } from '../ui/button'
@@ -27,6 +29,7 @@ const AdminHeader = dynamic(() => import("./AdminHeader").then((m) => m.AdminHea
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const { isOpen, isMobile, setIsOpen } = useSidebar()
+  const { setCompanyId } = useCompany()
 
   // Local/static app me global Firestore network band hota hai — admin sirf online server data use kare.
   useEffect(() => {
@@ -94,7 +97,11 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           </SidebarMenu>
         </SidebarContent>
         <SidebarFooter className="gap-2">
-          <Link href="/dashboard" onClick={() => { if (isMobile) setIsOpen(false); }}>
+          <Link href="/dashboard" onClick={() => {
+            const restored = leaveAdminPanelCompanyLedgerMode();
+            if (restored) setCompanyId(restored);
+            if (isMobile) setIsOpen(false);
+          }}>
             <Button variant="outline" className="w-full">
               <ArrowLeft className={cn(isOpen && "mr-2", "h-4 w-4")} />
               {isOpen && <span>Back to App</span>}

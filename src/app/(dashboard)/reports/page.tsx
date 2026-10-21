@@ -8,6 +8,9 @@ import { reports, type Report } from "@/components/reports/report-data";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { PanelRight } from "lucide-react";
 import { ReportRegisterListSearchRow } from "@/components/reports/ReportRegisterListSearchRow";
+import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
+import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
+import { useReportsMenuPendingApproval } from "@/components/reports/ReportListParityChrome";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { useReportList } from "@/contexts/ReportListContext";
@@ -183,23 +186,52 @@ function ReportsPageContent() {
     openReportListSheet
   );
 
+  /** Parties / Bank & Cash list jaisa pink badge: statement reports jinke entities par unapproved vouchers hain. */
+  const reportsMenuPending = useReportsMenuPendingApproval();
+  const { showOnlyEntities: showOnlyPendingReports, setShowOnlyEntities: setShowOnlyPendingReports } =
+    usePendingApprovalListFilter(reportsMenuPending.total);
+
   const filteredReports = useMemo(() => {
-    if (!searchTerm) return reportsForCompany;
-    return reportsForCompany.filter(
+    const base = showOnlyPendingReports
+      ? reportsForCompany.filter((r) => (reportsMenuPending.byReportId[r.id] ?? 0) > 0)
+      : reportsForCompany;
+    if (!searchTerm) return base;
+    return base.filter(
       (report) =>
         report.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         report.description.toLowerCase().includes(searchTerm.toLowerCase())
     );
-  }, [searchTerm, reportsForCompany]);
+  }, [searchTerm, reportsForCompany, showOnlyPendingReports, reportsMenuPending]);
 
   const listView = (
-    <div className="flex flex-col h-full min-h-0" data-pl-master-list-chrome="">
+    <div
+      className="flex flex-col h-full min-h-0"
+      data-pl-master-list-chrome=""
+      /* Search box: Parties / Bank & Cash list jaisi height (PC 1.8rem master-detail, mobile dock 35px) */
+      style={{ ["--pl-mlc-pill-h" as string]: isMobile ? "35px" : "1.8rem" } as React.CSSProperties}
+    >
       <ReportRegisterListSearchRow
         placeholder="Search reports..."
         value={searchTerm}
         onChange={setSearchTerm}
+        trailing={
+          <PendingApprovalListFilterBadge
+            compact
+            count={reportsMenuPending.total}
+            pressed={showOnlyPendingReports}
+            onToggle={() => setShowOnlyPendingReports((v) => !v)}
+            tooltipFilterHint={`Only reports with pending approval - ${reportsMenuPending.total} voucher(s) (click)`}
+            tooltipShowAllHint="Show all reports (click)"
+            ariaLabelFilter={`Filter ${reportsMenuPending.total} pending approval vouchers`}
+            ariaLabelShowAll="Show all reports"
+            /* Bank & Cash / Parties list badge jaisa roomy box: number squeeze na ho */
+            className="min-w-[2.25rem] px-2 text-xs"
+          />
+        }
       />
       <ReportList 
+        pendingByReportId={reportsMenuPending.byReportId}
+        searchTerm={searchTerm}
         reports={filteredReports}
         onSelectReport={(r) => {
           setSelectedReportWithUrl(r);

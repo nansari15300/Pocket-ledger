@@ -1,5 +1,6 @@
 "use client";
 
+import { ocrAdapters, useVoucherOcr, VoucherOcrRefreshBar } from "@/modules/ocr";
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
@@ -66,7 +67,11 @@ import { prepareVoucherAttachmentsForSave } from "@/lib/attachmentRecompressOnSa
 import { readLockedPdfFileUrlsFromRow } from "@/lib/attachmentPdfOptions";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { Upload } from "lucide-react";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState as __frozenAppendAttachments, handleVoucherAttachmentInputChange as __frozenAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { ocrWrapAppend, ocrWrapInputChange } from "@/modules/ocr";
+/** OCR reads the ORIGINAL upload: frozen helpers wrapped at the call site only (helper code unchanged). */
+const appendCompressedVoucherAttachmentsToState = ocrWrapAppend(__frozenAppendAttachments);
+const handleVoucherAttachmentInputChange = ocrWrapInputChange(__frozenAttachmentInputChange);
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
@@ -227,6 +232,23 @@ export function CreateProductionForm({
   const form = useForm<ProductionFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: getInitialFormValues(voucher),
+  });
+
+  /* OCR (local, generic adapter): first attachment -> validated autofill; Auto Post saves UNAPPROVED. */
+  const ocr = useVoucherOcr({
+    adapter: ocrAdapters.production(),
+    form: form as never,
+    files,
+    setFiles: setFiles as never,
+    ownName: ((company as { name?: string } | null)?.name) || null,
+    companyId: companyId,
+    ownPan: ((company as { pan?: string; panNumber?: string } | null)?.pan ?? (company as { panNumber?: string } | null)?.panNumber) || null,
+    parties: ([]) as never,
+    items: [],
+    taxes: ([]) as never,
+    autoPost: () => void form.handleSubmit(onSubmit)(),
+    isEditing: !!(voucher as { id?: string } | null | undefined)?.id,
+    disabled: !!editingDisabled,
   });
 
 const { isDirty: _isFormFieldsDirty } = form.formState;
@@ -759,7 +781,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 control={form.control}
                 name="date"
                 render={({ field }: any) => (
-                  <FormItem>
+                  <FormItem data-ocr-field="date">
                     <FormLabel>Date</FormLabel>
                     <div className={VOUCHER_PC_DATE_ROW}>
                       {(dateSystem === "BS" || dateSystem === "Both") && (
@@ -1226,6 +1248,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       className="mb-2"
                     />
                   )}
+                  <VoucherOcrRefreshBar ocr={ocr} />
                   <RestrictedFileUploader>
                     <div className="flex flex-wrap gap-4">
                       {files.map((file, index) => (
@@ -1298,7 +1321,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   control={form.control}
                   name="narration"
                   render={({ field }: any) => (
-                    <FormItem className="min-w-0">
+                    <FormItem data-ocr-field="bill-no" className="min-w-0">
                       <FormLabel>Narration</FormLabel>
                       <FormControl>
                         {/* Production voucher narration — same resize/scroll as baaki forms */}

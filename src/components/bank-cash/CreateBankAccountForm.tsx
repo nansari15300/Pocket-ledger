@@ -49,6 +49,7 @@ function createLocalEntityId(prefix: string): string {
 
 const formSchema = z.object({
   accountName: z.string().min(2, "Account name must be at least 2 characters."),
+  aliasName: z.string().optional(),
   phone: z.string().optional(),
   whatsapp: z.boolean().optional(),
   accountType: z.enum(["Bank", "Cash"], { message: "Account type is required." }),
@@ -74,7 +75,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
     defaultValues: {
-      accountName: "",
+      accountName: "", aliasName: "",
       phone: "",
       accountType: "Bank",
       openingBalance: 0,
@@ -129,7 +130,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
             ? `"${values.accountName}" was saved locally and will sync when online.`
             : `"${values.accountName}" was saved locally.`,
         });
-        form.reset({ accountName: "", accountType: "Bank", openingBalance: 0, bankName: "", accountNumber: "", ifscCode: "", groupId: getDefaultSystemGroupId("bank", { accountType: "Bank" }) });
+        form.reset({ accountName: "", aliasName: "", accountType: "Bank", openingBalance: 0, bankName: "", accountNumber: "", ifscCode: "", groupId: getDefaultSystemGroupId("bank", { accountType: "Bank" }) });
         onAccountCreated?.();
         return;
       }
@@ -155,7 +156,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
       });
       
       // Keep default on system branch for next quick entry.
-      form.reset({ accountName: "", accountType: "Bank", openingBalance: 0, bankName: "", accountNumber: "", ifscCode: "", groupId: getDefaultSystemGroupId("bank", { accountType: "Bank" }) });
+      form.reset({ accountName: "", aliasName: "", accountType: "Bank", openingBalance: 0, bankName: "", accountNumber: "", ifscCode: "", groupId: getDefaultSystemGroupId("bank", { accountType: "Bank" }) });
       if (onAccountCreated) {
         onAccountCreated();
       }
@@ -225,7 +226,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
               entityKind="bank"
               mode="create"
               nameField={
-                <FormField
+                <div className="space-y-2"><FormField
                   control={form.control}
                   name="accountName"
                   render={({ field }: any) => (
@@ -237,7 +238,19 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
                       <FormMessage />
                     </FormItem>
                   )}
-                />
+                /><FormField
+                  control={form.control}
+                  name="aliasName"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                      <FormControl>
+                        <Input placeholder="Other name on bills / short name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                /></div>
               }
             />
             <MasterMobileNoField control={form.control} />

@@ -25,6 +25,7 @@ import {
 import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import { useCompany } from "@/hooks/useCompany";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { MasterAliasSearchHint } from "@/components/entity/MasterAliasSearchHint";
 import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
 
 const getInitials = (name: string) => {
@@ -80,7 +81,7 @@ export function StaffList({
     const isSettled = (bal: number) => Math.abs(Number(bal || 0)) < 1e-6;
     return staff
       .filter((s) => {
-        if (!s.name || !masterEntityTextMatchesSearch(s.name, searchTerm)) return false;
+        if (!s.name || !(masterEntityTextMatchesSearch(s.name, searchTerm) || masterEntityTextMatchesSearch((s as { aliasName?: string }).aliasName || "\u0000", searchTerm))) return false;
         const bal = Number(s.balance || 0);
         // Footer quick filters: list short/filter from same control on mobile + desktop.
         if (quickFilter === "dr") return bal > 0;
@@ -174,6 +175,7 @@ export function StaffList({
                       }
                     >
                       {highlightSearch ? highlightQueryInText(staffMember.name, highlightSearch) : staffMember.name}
+<MasterAliasSearchHint alias={(staffMember as { aliasName?: string }).aliasName} name={staffMember.name} search={highlightSearch} />
                     </MasterListNameTooltip>
                     {readMasterAccountFrozen(staffMember) ? (
                       <MasterAccountFreezeListBadge className="mt-0.5" />

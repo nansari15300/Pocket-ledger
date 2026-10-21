@@ -28,6 +28,7 @@ export function partyListRowMatchesSearch(party: Party, searchTerm: string): boo
 
   return (
     masterEntityTextMatchesSearch(party.name, searchTerm) ||
+    masterEntityTextMatchesSearch((party as Party & { aliasName?: string }).aliasName || "\u0000", searchTerm) ||
     (title.secondary ? masterEntityTextMatchesSearch(title.secondary, searchTerm) : false) ||
     memberSearchMatch ||
     (isIcPeerCompanyGroup &&

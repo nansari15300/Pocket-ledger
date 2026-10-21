@@ -339,7 +339,7 @@ function ItemsPageContent() {
   }, [allItems, showOnlyItemsWithPendingApproval, showApproveOnList, pendingApprovalByItemId]);
   const filteredItemListCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
-    return itemsForItemList.filter((i) => i.name && i.name.toLowerCase().includes(searchLower)).length;
+    return itemsForItemList.filter((i) => (i.name && i.name.toLowerCase().includes(searchLower)) || String((i as { aliasName?: string }).aliasName || "").toLowerCase().includes(searchLower || "\u0000")).length;
   }, [itemsForItemList, searchTerm]);
 
   const handleItemsTabChange = useCallback(

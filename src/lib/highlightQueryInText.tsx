@@ -1,5 +1,11 @@
 import * as React from "react";
 
+/**
+ * App-wide search match mark: existing pink (ledger txn table / list rows) - same class everywhere.
+ */
+export const SEARCH_HIGHLIGHT_MARK_CN =
+  "rounded-sm bg-fuchsia-200 px-px text-inherit dark:bg-fuchsia-500/40";
+
 /** User-typed search substring ke liye regex escape. */
 export function escapeRegExpForHighlight(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -59,7 +65,7 @@ export function highlightQueryInText(text: string, query: string, opts?: { amoun
       parts.push(
         <mark
           key={`mk-${i}-${a}`}
-          className="rounded-sm bg-fuchsia-200 px-px text-inherit dark:bg-fuchsia-500/40"
+          className={SEARCH_HIGHLIGHT_MARK_CN}
         >
           {src.slice(a, b)}
         </mark>
@@ -71,4 +77,24 @@ export function highlightQueryInText(text: string, query: string, opts?: { amoun
   } catch {
     return src;
   }
+}
+
+/**
+ * Shared component: `<HighlightText text={name} query={searchTerm} />`.
+ * Case-insensitive, regex-safe, space-separated words highlighted separately; Devanagari works
+ * (plain substring match on NFC text). `amount` = tolerant of thousands commas ("1500" -> "1,500.00").
+ */
+export function HighlightText({
+  text,
+  query,
+  amount,
+}: {
+  text: string | number | null | undefined;
+  query?: string | null;
+  amount?: boolean;
+}): React.ReactElement {
+  const src = text == null ? "" : String(text);
+  const q = (query ?? "").trim();
+  if (!q || !src) return <>{src}</>;
+  return <>{highlightQueryInText(src.normalize("NFC"), q.normalize("NFC"), amount ? { amount: true } : undefined)}</>;
 }

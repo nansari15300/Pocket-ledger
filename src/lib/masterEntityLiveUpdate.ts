@@ -19,6 +19,7 @@ export function masterEntityProfileUiFields(row: Record<string, unknown> | null 
   return [
     String(row.name ?? ""),
     String(row.accountName ?? ""),
+    String(row.aliasName ?? ""),
     String(row.email ?? ""),
     String(row.phone ?? ""),
     String(row.accountType ?? ""),

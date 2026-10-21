@@ -7,6 +7,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { PermissionButton } from "@/components/permission";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
+import { getDisplayType } from "@/components/vouchers/transactionTableShared";
 import { Combobox } from "@/components/ui/combobox";
 import { ArrowLeft, Calendar as CalendarIcon, File, Printer, BarChart2, X, PanelRight, Search, Landmark, Wallet } from "lucide-react";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
@@ -15,9 +16,21 @@ import { format } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { mergePaymentAndLedgerJournalContraFlows } from "@/lib/reportStatementMoneyInOutExtras";
 import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
+import { ReportEntityMobileHeader } from "@/components/reports/ReportEntityMobileHeader";
 import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
+import { ReportNetBalanceInfoButton, type ReportStatementSummaryCardData } from "@/components/reports/ReportStatementSummaryCards";
+import { computeFilteredCardOpeningAndRows } from "@/lib/reportFilteredCardBalance";
+
+import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { mdc } from "@/lib/mobileDetailChrome";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -44,6 +57,7 @@ import {
 import { useSpendWiseBlinkMode } from "@/components/vouchers/transactionColumnVisibility";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { useReportMobileListMode } from "@/hooks/useReportMobileListMode";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import { calendarPanelClassName } from "@/lib/calendarChrome";
@@ -70,6 +84,13 @@ import { useReportList } from "@/contexts/ReportListContext";
 import { buildBankGroupReportEntity } from "@/lib/reportStatementGroupEntity";
 import { ReportStatementDesktopShell } from "@/components/reports/ReportStatementDesktopShell";
 import { AccountList } from "@/components/bank-cash/AccountList";
+import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccountDialog";
+import { CreateAccountGroupDialog } from "@/components/bank-cash/CreateAccountGroupDialog";
+import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
+import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
+import { collectBankAccountIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesBankLedger";
+import { resolveBankListGroupBucketId } from "@/lib/masterEntitySystemGroups";
+import { isSystemParentGroup } from "@/lib/system-groups";
 import { AccountGroupList } from "@/components/bank-cash/AccountGroupList";
 import { AccountDetails } from "@/components/bank-cash/AccountDetails";
 import { AccountGroupDetails } from "@/components/bank-cash/AccountGroupDetails";
@@ -80,35 +101,61 @@ const ReportSummaryCard = React.memo(function ReportSummaryCard({
   title,
   amount,
   color,
+  selected,
+  onClick,
 }: {
   title: string;
   amount: number;
   color: string;
+  selected?: boolean;
+  onClick?: () => void;
 }) {
   const { formatCurrency, formatCurrencyForPrint } = useDate();
-  const formatted = formatCurrency(amount, { showDrCr: title === "Balance" });
-  const titleStr = formatCurrencyForPrint(amount, { showDrCr: title === "Balance" });
-  return (
-    <Card className="px-2 py-1.5 w-fit flex-shrink-0 border rounded-lg overflow-hidden">
-      <div className="flex flex-col">
-        <p className="text-xs text-muted-foreground whitespace-nowrap">{title}</p>
-        <p className={cn("text-sm sm:text-base font-bold whitespace-nowrap tabular-nums", color)} title={titleStr}>
-          {formatted}
-        </p>
-      </div>
-    </Card>
+  const showDrCr = title.toLowerCase().includes("balance");
+  const formatted = formatCurrency(amount, { showDrCr });
+  const titleStr = formatCurrencyForPrint(amount, { showDrCr });
+    return (
+    <button type="button" aria-pressed={selected ?? false} data-pl-bank-report-balance-card="" onClick={onClick} className="flex h-12 w-max min-w-[100px] shrink-0 items-stretch rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <Card data-pl-bank-report-balance-card-surface="" data-pl-report-balance-card-surface="" data-pl-report-balance-card-selected={selected ? "true" : undefined} className={cn(
+        "pl-dashboard-tone-card h-12 min-h-12 w-max min-w-[100px] px-2 py-1.5 border rounded-lg overflow-visible",
+        selected ? "pl-dashboard-ribbon-sky border-blue-500" : "pl-dashboard-ribbon-emerald border-emerald-500"
+      )}>
+        <div className={cn("flex w-max min-w-full flex-col", title === "Net Balance" && "pr-4")}>
+          <p className="text-xs text-muted-foreground whitespace-nowrap">{title}</p>
+          <p className={cn("text-sm sm:text-base font-bold whitespace-nowrap tabular-nums", color)} title={titleStr}>
+            {formatted}
+          </p>
+        </div>
+      </Card>
+    </button>
   );
-}, (prev, next) => prev.title === next.title && prev.amount === next.amount && prev.color === next.color);
+}, (prev, next) =>
+  prev.title === next.title &&
+  prev.amount === next.amount &&
+  prev.color === next.color &&
+  prev.selected === next.selected &&
+  prev.onClick === next.onClick
+);
+
+function bankReportVoucherTypeLabel(transaction: any, context: string, contextId?: string) {
+  return getDisplayType(transaction, { context, contextId }).trim();
+}
+
+function bankReportVoucherAmount(transaction: any) {
+  const value = Number(transaction?.debit) || Number(transaction?.credit) || Number(transaction?.amount) || Number(transaction?.total) || 0;
+  return Math.abs(value);
+}
 
 export default function DesktopBankStatementPage() {
   const { processedAccounts, processedAccountGroups, vouchers, loading, journalAccountNames } = useFyScopedVouchers();
-  const { company } = useCompany();
+  const { company, effectiveNotificationSettings } = useCompany();
   const { can } = usePermissions();
   const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
+  const reportMobileList = useReportMobileListMode(isMobile, ["accountId","groupId"]);
   const { setReportListOpen } = useReportList();
   const reportsPathNorm = pathname?.replace(/\/+$/, "") ?? "";
   /** `/reports` hub: report list Sheet trigger header me — FAB footer/pager se alag clash na ho */
@@ -119,12 +166,15 @@ export default function DesktopBankStatementPage() {
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [transactionSearch, setTransactionSearch] = useState("");
+  const [balanceCardFilter, setBalanceCardFilter] = useState<string | null>(null);
+  const balanceCardsRowRef = useRef<HTMLDivElement | null>(null);
+  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
   const [view, setView] = useState<"list" | "chart">("list");
   const { spendWiseView, setSpendWiseView } = useBankSpendWiseView();
   const { spendWiseBlinkMode } = useSpendWiseBlinkMode();
   const { perspective: bankDrCrPerspective } = useBankLedgerDrCrPerspective();
 
-  const [listTab, setListTab] = useState<"accounts" | "groups">(() =>
+  const [listTab, setListTab] = useState<"accounts" | "groups" | "clearing">(() =>
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("groupId")
       ? "groups"
       : "accounts"
@@ -138,7 +188,7 @@ export default function DesktopBankStatementPage() {
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const fetchedUidsRef = useRef<Set<string>>(new Set());
 
-  const pageTitle = selectedGroup ? "Bank Group Report" : "Bank Account Report";
+  const pageTitle = selectedGroup ? "Bank Group Statement" : "Bank Account Statement";
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     try {
@@ -205,8 +255,9 @@ export default function DesktopBankStatementPage() {
       closeModalInUrl();
       return;
     }
+    if (reportMobileList.backToList()) return;
     router.back();
-  }, [isVoucherDialogOpen, isCalendarOpen, closeModalInUrl, router]);
+  }, [isVoucherDialogOpen, isCalendarOpen, closeModalInUrl, router, reportMobileList]);
 
   const handleEditVoucher = useCallback(
     (voucher: any) => {
@@ -272,6 +323,11 @@ export default function DesktopBankStatementPage() {
   const activeEntity = selectedAccount || groupReportEntity;
   const activeContext = selectedAccount ? "account" : "group";
 
+  useEffect(() => {
+    setBalanceCardFilter(null);
+    if (balanceCardsRowRef.current) balanceCardsRowRef.current.scrollLeft = 0;
+  }, [activeEntity?.id]);
+
   const {
     processedTransactions,
     openingBalanceForPeriod,
@@ -281,10 +337,12 @@ export default function DesktopBankStatementPage() {
     openingBalanceOutstanding,
     openingBalanceLinkedVoucherNos,
   } = useTransactions(activeEntity as any, activeContext, dateRange, undefined, processedAccounts, undefined, undefined, undefined, undefined, undefined, userNames);
+  const { processedTransactions: allTimeTransactions, closingBalance: allTimeNetBalance } = useTransactions(activeEntity as any, activeContext, undefined, undefined, processedAccounts, undefined, undefined, undefined, undefined, undefined, userNames);
 
-  const spendWiseEnabled = (company as any)?.spendWiseEnabled === true;
-  const spendWiseCanApply = !!selectedAccount && spendWiseEnabled;
-  // Group report par hamesha statement; toggle sirf jab single account + company flag ho.
+  // Desktop AccountDetails exposes the Spend wise toggle for a selected account
+  // without checking the company setting; keep the mobile report consistent.
+  const spendWiseCanApply = !!selectedAccount;
+  // Group report par hamesha statement; toggle sirf single account par available hai.
   const spendWiseActive = spendWiseCanApply && spendWiseView;
 
   const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
@@ -293,18 +351,67 @@ export default function DesktopBankStatementPage() {
     if (processedTransactions.length <= 10) return processedTransactions;
     return processedTransactions.slice(-10);
   }, [processedTransactions, hasDateFilter, isMobile]);
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(reportDisplayTransactions),
+    [reportDisplayTransactions]
+  );
+
+  const cardFilteredResult = useMemo(() => {
+    if (!balanceCardFilter) return null;
+    return computeFilteredCardOpeningAndRows({
+      allTimeTransactions,
+      periodTransactions: reportDisplayTransactions,
+      fromDate: hasDateFilter ? dateRange?.from : undefined,
+      filterKey: balanceCardFilter,
+      matchesFilter: (t: any) =>
+        bankReportVoucherTypeLabel(t, activeContext, activeEntity?.id) === balanceCardFilter,
+    });
+  }, [
+    balanceCardFilter,
+    allTimeTransactions,
+    reportDisplayTransactions,
+    hasDateFilter,
+    dateRange?.from,
+    activeContext,
+    activeEntity?.id,
+  ]);
+
+  const effectiveOpeningBalanceForPeriod = cardFilteredResult
+    ? cardFilteredResult.filteredOpening
+    : openingBalanceForPeriod;
+  const effectivePeriodDr = cardFilteredResult
+    ? cardFilteredResult.filteredPeriodDr
+    : periodDr;
+  const effectivePeriodCr = cardFilteredResult
+    ? cardFilteredResult.filteredPeriodCr
+    : periodCr;
+  const effectiveClosingBalance = cardFilteredResult
+    ? cardFilteredResult.filteredClosing
+    : closingBalance;
 
   const filteredReportTransactions = useMemo(() => {
-    if (!transactionSearch.trim()) return reportDisplayTransactions;
+    let list = cardFilteredResult
+      ? cardFilteredResult.recomputedRows
+      : reportDisplayTransactions;
+    if (!cardFilteredResult && balanceCardFilter) {
+      list = list.filter(
+        (transaction: any) =>
+          bankReportVoucherTypeLabel(transaction, activeContext, activeEntity?.id) === balanceCardFilter
+      );
+    }
+    if (unapprovedOnly) {
+      list = list.filter((t: any) => !t.isApproved && t.isApproved !== true);
+    }
+    if (!transactionSearch.trim()) return list;
     const q = transactionSearch.trim().toLowerCase();
-    return reportDisplayTransactions.filter((t: any) => {
+    return list.filter((t: any) => {
       const vno = (t.voucherNumber || "").toLowerCase();
       const narr = (t.narration || "").toLowerCase();
       const type = (typeof t.type === "string" ? t.type.replace(/_/g, " ") : "").toLowerCase();
       const amount = String(t.debit ?? t.credit ?? t.total ?? "").toLowerCase();
       return vno.includes(q) || narr.includes(q) || type.includes(q) || amount.includes(q);
     });
-  }, [reportDisplayTransactions, transactionSearch]);
+  }, [cardFilteredResult, reportDisplayTransactions, transactionSearch, unapprovedOnly, balanceCardFilter, activeContext, activeEntity?.id]);
 
   const baseTransactionsNoNotes = useMemo(
     () => filteredReportTransactions.filter((t: any) => t.type !== "note"),
@@ -348,11 +455,11 @@ export default function DesktopBankStatementPage() {
     [displayTableRows, activeBankDrCrPerspective]
   );
   const displayOpeningBalanceForPeriod = flipLedgerSignedBalance(
-    openingBalanceForPeriod,
+    effectiveOpeningBalanceForPeriod,
     activeBankDrCrPerspective
   );
-  const displayPeriodTotals = flipLedgerDrCr(periodDr, periodCr, activeBankDrCrPerspective);
-  const displayClosingBalance = flipLedgerSignedBalance(closingBalance, activeBankDrCrPerspective);
+  const displayPeriodTotals = flipLedgerDrCr(effectivePeriodDr, effectivePeriodCr, activeBankDrCrPerspective);
+  const displayClosingBalance = flipLedgerSignedBalance(effectiveClosingBalance, activeBankDrCrPerspective);
 
   const bankDepositWithdrawColumnLabels = useMemo(
     () =>
@@ -362,7 +469,7 @@ export default function DesktopBankStatementPage() {
     [selectedAccount, activeBankDrCrPerspective]
   );
 
-  const bankStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${spendWiseActive ? "sw" : "st"}|${activeBankDrCrPerspective}`;
+  const bankStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${unapprovedOnly}|${balanceCardFilter ?? "all"}|${spendWiseActive ? "sw" : "st"}|${activeBankDrCrPerspective}`;
   const {
     pagingMeta: bankStatementMobilePaging,
     pagerPage: bankReportPagerPage,
@@ -372,10 +479,10 @@ export default function DesktopBankStatementPage() {
   } = useStatementReportMobilePaging({
     filteredRows: displayTableRows,
     isMobile,
-    openingBalanceForPeriod,
-    periodDr,
-    periodCr,
-    closingBalance,
+    openingBalanceForPeriod: effectiveOpeningBalanceForPeriod,
+    periodDr: effectivePeriodDr,
+    periodCr: effectivePeriodCr,
+    closingBalance: effectiveClosingBalance,
     resetKey: bankStatementMobilePagingKey,
   });
 
@@ -400,13 +507,22 @@ export default function DesktopBankStatementPage() {
     bankStatementMobilePaging.closingForPage,
     activeBankDrCrPerspective
   );
+  const bankMobileOpeningPeriodStartDate = useMemo(() => {
+    const before = bankStatementMobilePaging.edges.before;
+    if (before > 0) {
+      const previous = displayTableRows[before - 1] as any;
+      const value = previous?.date?.toDate ? previous.date.toDate() : previous?.date;
+      const parsed = value ? new Date(value) : null;
+      return parsed && !Number.isNaN(parsed.getTime()) ? parsed : undefined;
+    }
+    return hasDateFilter ? dateRange?.from : undefined;
+  }, [bankStatementMobilePaging.edges.before, displayTableRows, hasDateFilter, dateRange?.from]);
 
   const summaryData = useMemo(() => {
     if (!activeEntity) return { sales: 0, purchases: 0, moneyIn: 0, moneyOut: 0 };
     const entityVouchers = processedTransactions;
     const pin = entityVouchers.filter((v: any) => v.type === "payment_in").reduce((sum: number, v: any) => sum + (v.amount || 0), 0);
     const pout = entityVouchers.filter((v: any) => v.type === "payment_out").reduce((sum: number, v: any) => sum + (v.amount || 0), 0);
-    // JRNL/Contra ledger Dr/Cr — summary chips Payment ke saath merge (statement rows se match).
     const { moneyIn, moneyOut } = mergePaymentAndLedgerJournalContraFlows(pin, pout, entityVouchers);
     return {
       sales: entityVouchers.filter((v: any) => v.type === "sale").reduce((sum: number, v: any) => sum + (v.total || 0), 0),
@@ -417,33 +533,83 @@ export default function DesktopBankStatementPage() {
   }, [processedTransactions, activeEntity]);
 
   const summaryCards = useMemo(
-    () => [
-      {
-        title: "Balance",
-        amount: selectedAccount
-          ? flipLedgerSignedBalance(closingBalance, bankDrCrPerspective)
-          : closingBalance,
-        color:
-          (selectedAccount
-            ? flipLedgerSignedBalance(closingBalance, bankDrCrPerspective)
-            : closingBalance) >= 0
-            ? "text-green-600"
-            : "text-red-600",
-      },
-      { title: "Sales", amount: summaryData.sales, color: "text-green-600" },
-      { title: "Purchases", amount: summaryData.purchases, color: "text-red-600" },
-      { title: "Money In", amount: summaryData.moneyIn, color: "text-green-600" },
-      { title: "Money Out", amount: summaryData.moneyOut, color: "text-red-600" },
-    ],
+    () => {
+      const balance = selectedAccount
+        ? flipLedgerSignedBalance(closingBalance, bankDrCrPerspective)
+        : closingBalance;
+      return [
+        { title: "Balance", amount: balance, color: balance >= 0 ? "text-green-600" : "text-red-600" },
+        { title: "Sales", amount: summaryData.sales, color: "text-green-600" },
+        { title: "Purchases", amount: summaryData.purchases, color: "text-red-600" },
+        { title: "Money In", amount: summaryData.moneyIn, color: "text-green-600" },
+        { title: "Money Out", amount: summaryData.moneyOut, color: "text-red-600" },
+      ];
+    },
+    [closingBalance, selectedAccount, bankDrCrPerspective, summaryData]
+  );
+
+  const mobileBalanceCards = useMemo(
+    () => {
+      const accountBalance = selectedAccount
+        ? flipLedgerSignedBalance(allTimeNetBalance, bankDrCrPerspective)
+        : allTimeNetBalance;
+      const voucherTypeTotals = new Map<string, number>();
+      for (const transaction of processedTransactions || []) {
+        const rawType = String((transaction as any)?.type ?? "").trim().toLowerCase();
+        if (!rawType || rawType === "opening_balance" || (transaction as any)?._ledgerOpeningPillLabel) continue;
+        const label = bankReportVoucherTypeLabel(transaction, activeContext, activeEntity?.id);
+        if (!label) continue;
+        voucherTypeTotals.set(label, (voucherTypeTotals.get(label) ?? 0) + bankReportVoucherAmount(transaction));
+      }
+      const voucherCards = [...voucherTypeTotals.entries()].map(([label, amount]) => {
+        const normalized = label.toLowerCase();
+        const color = /(purchase|payment out|money out|expense|salary|withdraw|tds purchase)/.test(normalized)
+          ? "text-red-600"
+          : "text-green-600";
+        const isTax = /(^|[^a-z])(tds|vat)([^a-z]|$)/.test(normalized);
+        return {
+          title: isTax ? `${label} Balance` : label,
+          amount,
+          color,
+          filterKey: label,
+          isTax,
+        };
+      });
+      const balanceCard = {
+        title: "Net Balance",
+        amount: accountBalance,
+        color: accountBalance >= 0 ? "text-green-600" : "text-red-600",
+        filterKey: null,
+      };
+      return [
+        balanceCard,
+        ...voucherCards.filter((card) => card.isTax),
+        ...voucherCards.filter((card) => !card.isTax),
+      ];
+    },
     [
       closingBalance,
-      summaryData.sales,
-      summaryData.purchases,
-      summaryData.moneyIn,
-      summaryData.moneyOut,
+      allTimeNetBalance,
       selectedAccount,
       bankDrCrPerspective,
+      processedTransactions,
+      activeContext,
+      activeEntity?.id,
     ]
+  );
+  const clickableSummaryCards = useMemo<ReportStatementSummaryCardData[]>(
+    () =>
+      mobileBalanceCards.map((card) => ({
+        title: card.title,
+        amount: card.amount,
+        color: card.color,
+        filterKey: card.filterKey,
+        selected: card.filterKey === null ? !balanceCardFilter : balanceCardFilter === card.filterKey,
+        onClick: () => {
+          setBalanceCardFilter(card.filterKey === null || balanceCardFilter === card.filterKey ? null : card.filterKey);
+        },
+      })),
+    [mobileBalanceCards, balanceCardFilter]
   );
 
   const handlePrint = () => {
@@ -533,7 +699,7 @@ export default function DesktopBankStatementPage() {
 
   const dateRangeLabel = useMemo(() => {
     // Party statement jaisa: bina range = "All Time" (UI); data ab bhi last-10 slice desktop par.
-    if (!hasDateFilter) return "All Time";
+    if (!hasDateFilter) return "Last 10 Txns";
     const from = dateRange!.from!;
     const to = dateRange!.to || from;
     const fromAD = format(from, "LLL dd, y");
@@ -582,6 +748,82 @@ export default function DesktopBankStatementPage() {
     );
   }, [processedAccountGroups, selectedGroup?.id]);
 
+  /* ---- Main Bank & Cash page parity: pink unapproved badge, Clearing A/c tab, total balance, + Add ---- */
+  const showApproveOnList =
+    can("approve_transactions") &&
+    effectiveNotificationSettings?.approve?.on !== false &&
+    effectiveNotificationSettings?.approve?.onList !== false;
+  const pendingApprovalByAccountId = useMemo(() => {
+    if (!showApproveOnList || !vouchers?.length || !processedAccounts?.length) return {} as Record<string, number>;
+    const accountIdSet = new Set(processedAccounts.map((a: Account) => a.id));
+    const map: Record<string, number> = {};
+    vouchers.forEach((v: any) => {
+      collectBankAccountIdsTouchedByUnapprovedVoucher(v, accountIdSet).forEach((id) => {
+        map[id] = (map[id] || 0) + 1;
+      });
+    });
+    return map;
+  }, [vouchers, showApproveOnList, processedAccounts]);
+  const pendingApprovalByAccountGroupId = useMemo(() => {
+    if (!showApproveOnList) return {} as Record<string, number>;
+    const map: Record<string, number> = {};
+    processedAccounts.forEach((a: any) => {
+      const n = pendingApprovalByAccountId[a.id] || 0;
+      if (!n) return;
+      const gid = resolveBankListGroupBucketId(a);
+      map[gid] = (map[gid] || 0) + n;
+    });
+    return map;
+  }, [processedAccounts, pendingApprovalByAccountId, showApproveOnList]);
+  const totalPendingApprovalVoucherCount = useMemo(() => {
+    if (!showApproveOnList || !vouchers?.length || !processedAccounts?.length) return 0;
+    const accountIdSet = new Set(processedAccounts.map((a: Account) => a.id));
+    let n = 0;
+    for (const v of vouchers as any[]) {
+      if (v?.isApproved === true) continue;
+      if (collectBankAccountIdsTouchedByUnapprovedVoucher(v, accountIdSet).size > 0) n += 1;
+    }
+    return n;
+  }, [vouchers, showApproveOnList, processedAccounts]);
+  const {
+    showOnlyEntities: showOnlyAccountsWithPendingApproval,
+    setShowOnlyEntities: setShowOnlyAccountsWithPendingApproval,
+    showOnlyGroups: showOnlyGroupsWithPendingApproval,
+    setShowOnlyGroups: setShowOnlyGroupsWithPendingApproval,
+  } = usePendingApprovalListFilter(totalPendingApprovalVoucherCount);
+  const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
+  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+
+  /** Accounts tab: clearing accounts sirf "Clearing A/c" tab me (main page jaisa). */
+  const accountsForReportListView = useMemo(() => {
+    const nonClearing = accountsForReportList.filter((a) => a.isClearing !== true || a.id === selectedAccount?.id);
+    if (!showOnlyAccountsWithPendingApproval || !showApproveOnList) return nonClearing;
+    return nonClearing.filter((a) => (pendingApprovalByAccountId[a.id] ?? 0) > 0 || a.id === selectedAccount?.id);
+  }, [accountsForReportList, showOnlyAccountsWithPendingApproval, showApproveOnList, pendingApprovalByAccountId, selectedAccount?.id]);
+  const clearingAccountsForReportList = useMemo(
+    () => accountsForReportList.filter((a) => a.isClearing === true),
+    [accountsForReportList]
+  );
+  const groupsForReportListView = useMemo(() => {
+    if (!showOnlyGroupsWithPendingApproval || !showApproveOnList) return groupsForReportList;
+    return groupsForReportList.filter((g) => (pendingApprovalByAccountGroupId[g.id] ?? 0) > 0 || g.id === selectedGroup?.id);
+  }, [groupsForReportList, showOnlyGroupsWithPendingApproval, showApproveOnList, pendingApprovalByAccountGroupId, selectedGroup?.id]);
+  const reportListDisplayTotalBalance = useMemo(() => {
+    if (listTab === "groups") {
+      return processedAccountGroups
+        .filter((g) => {
+          const anyG = g as AccountGroup & { isSystemReserved?: boolean; balanceMasked?: boolean };
+          const isSystemParent = anyG.isSystemReserved === true || isSystemParentGroup("account_groups", anyG.id);
+          return !anyG.balanceMasked && !isSystemParent;
+        })
+        .reduce((acc, g) => acc + (Number(g.balance) || 0), 0);
+    }
+    const sum = processedAccounts
+      .filter((a) => !a.isSpecial || canViewSpecial)
+      .reduce((acc, a) => acc + (Number(a.balance) || 0), 0);
+    return flipLedgerSignedBalance(sum, bankDrCrPerspective);
+  }, [listTab, processedAccountGroups, processedAccounts, canViewSpecial, bankDrCrPerspective]);
+
   const handleSelectAccountFromList = useCallback((account: Account) => {
     const newUrl = new URL(window.location.href);
     newUrl.searchParams.set("accountId", account.id);
@@ -589,7 +831,7 @@ export default function DesktopBankStatementPage() {
     window.history.pushState({}, "", newUrl);
     setSelectedAccount(account);
     setSelectedGroup(null);
-    setListTab("accounts");
+    setListTab((prev) => (prev === "clearing" && account.isClearing === true ? "clearing" : "accounts"));
   }, []);
 
   const handleSelectGroupFromList = useCallback((group: AccountGroup) => {
@@ -621,7 +863,62 @@ export default function DesktopBankStatementPage() {
     return <LoadingSpinner />;
   }
 
-  if (!isMobile) {
+  const mobileEntityTxnToolbar = (
+    <MobileEntityTxnToolbarRow placement="belowPager">
+      <MobileEntityTxnToolbarPicker>
+        <Combobox
+          options={selectedGroup ? groupReportOptions : accountReportOptions}
+          value={selectedGroup ? (selectedGroup?.id || "") : (selectedAccount?.id || "")}
+          onChange={(value) => {
+            if (selectedGroup) {
+              const group = processedAccountGroups.find((g) => g.id === value);
+              if (group) {
+                const newUrl = new URL(window.location.href);
+                newUrl.searchParams.set('groupId', group.id);
+                newUrl.searchParams.delete('accountId');
+                window.history.pushState({}, '', newUrl);
+                setSelectedGroup(group);
+                setSelectedAccount(null);
+              }
+            } else {
+              const entity = processedAccounts.find((a) => a.id === value);
+              if (entity) {
+                const newUrl = new URL(window.location.href);
+                newUrl.searchParams.set('accountId', entity.id);
+                newUrl.searchParams.delete('groupId');
+                window.history.pushState({}, '', newUrl);
+                setSelectedAccount(entity);
+                setSelectedGroup(null);
+              }
+            }
+          }}
+          placeholder={selectedGroup ? "Select a group" : "Select an account"}
+        />
+      </MobileEntityTxnToolbarPicker>
+      <MobileEntityTxnToolbarUnapprovedBadge
+        count={mobileUnapprovedTxnCount}
+        pressed={unapprovedOnly}
+        onToggle={() => {
+          setUnapprovedOnly((prev) => !prev);
+          setBankReportPagerPage(1);
+        }}
+      />
+      <MobileEntityTxnToolbarSearch>
+        <Search className={mdc.mobileTxnToolbarSearchIcon} />
+        <Input
+          placeholder="Search transactions"
+          className={mdc.mobileTxnToolbarSearchInput}
+          value={transactionSearch}
+          onChange={(e) => {
+            setTransactionSearch(e.target.value);
+            setBankReportPagerPage(1);
+          }}
+        />
+      </MobileEntityTxnToolbarSearch>
+    </MobileEntityTxnToolbarRow>
+  );
+
+  if (!isMobile || reportMobileList.showList) {
     const reportDetailView = selectedAccount ? (
       <AccountDetails
         account={selectedAccount}
@@ -632,6 +929,7 @@ export default function DesktopBankStatementPage() {
         dateRange={dateRange}
         onDateRangeChange={setDateRange}
         userNames={userNames}
+        reportSummaryCards={clickableSummaryCards}
       />
     ) : selectedGroup ? (
       <AccountGroupDetails
@@ -653,13 +951,85 @@ export default function DesktopBankStatementPage() {
 
     return (
       <ReportStatementDesktopShell
+        isMobile={isMobile}
         listChromeRouteKey="bank-cash"
         pageTitle={pageTitle}
         listTab={listTab}
         entityTabValue="accounts"
         groupTabValue="groups"
         entityTabLabel="Accounts"
-        onListTabChange={(tab) => setListTab(tab === "groups" ? "groups" : "accounts")}
+        onListTabChange={(tab) => setListTab(tab === "groups" ? "groups" : tab === "clearing" ? "clearing" : "accounts")}
+        balance={
+          <span className={cn("font-semibold", reportListDisplayTotalBalance >= 0 ? "text-green-600" : "text-red-600")}>
+            {formatCurrency(reportListDisplayTotalBalance, { showDrCr: true })}
+          </span>
+        }
+        searchRowExtras={
+          <>
+            {listTab === "accounts" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+              <PendingApprovalListFilterBadge
+                compact
+                count={totalPendingApprovalVoucherCount}
+                pressed={showOnlyAccountsWithPendingApproval}
+                onToggle={() => setShowOnlyAccountsWithPendingApproval((v) => !v)}
+                tooltipFilterHint={`Only accounts with pending approval - ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+                tooltipShowAllHint="Show all accounts (click)"
+                ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+                ariaLabelShowAll="Show all accounts"
+              />
+            ) : null}
+            {listTab === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+              <PendingApprovalListFilterBadge
+                compact
+                count={totalPendingApprovalVoucherCount}
+                pressed={showOnlyGroupsWithPendingApproval}
+                onToggle={() => setShowOnlyGroupsWithPendingApproval((v) => !v)}
+                tooltipFilterHint={`Only groups with pending approval - ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+                tooltipShowAllHint="Show all groups (click)"
+                ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+                ariaLabelShowAll="Show all groups"
+              />
+            ) : null}
+            {listTab === "groups" ? (
+              <CreateAccountGroupDialog onGroupCreated={() => {}} groups={processedAccountGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
+                <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
+                  + Add Group
+                </PermissionButton>
+              </CreateAccountGroupDialog>
+            ) : (
+              <CreateBankAccountDialog onAccountCreated={() => {}} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
+                <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateAccountOpen(true)}>
+                  + Add Account
+                </PermissionButton>
+              </CreateBankAccountDialog>
+            )}
+          </>
+        }
+        extraTabs={[
+          {
+            value: "clearing",
+            label: "Clearing A/c",
+            searchPlaceholder: "Search accounts...",
+            sectionLabel: (
+              <div className={mlc.sectionLabelRow}>
+                <Landmark className={mlc.sectionIcon} />
+                <span>Clearing A/c ({clearingAccountsForReportList.length})</span>
+              </div>
+            ),
+            list: (
+              <AccountList
+                accounts={clearingAccountsForReportList}
+                onSelectAccount={handleSelectAccountFromList}
+                selectedAccount={selectedAccount}
+                searchTerm={listSearchTerm}
+                pendingApprovalByAccountId={pendingApprovalByAccountId}
+                quickFilter={accountListQuickFilter}
+                onQuickFilterChange={setAccountListQuickFilter}
+                hideQuickFilterBar
+              />
+            ),
+          },
+        ]}
         listSearchTerm={listSearchTerm}
         onListSearchChange={setListSearchTerm}
         entitySearchPlaceholder="Search accounts..."
@@ -667,13 +1037,13 @@ export default function DesktopBankStatementPage() {
         entitySectionLabel={
           <div className={mlc.sectionLabelRow}>
             <Landmark className={mlc.sectionIcon} />
-            <span>Account ({accountsForReportList.length})</span>
+            <span>Accounts ({accountsForReportListView.length})</span>
           </div>
         }
         groupSectionLabel={
           <div className={mlc.sectionLabelRow}>
             <Wallet className={mlc.sectionIcon} />
-            <span>Account group ({groupsForReportList.length})</span>
+            <span>Account group ({groupsForReportListView.length})</span>
           </div>
         }
         entityQuickFilter={accountListQuickFilter}
@@ -684,10 +1054,11 @@ export default function DesktopBankStatementPage() {
         showSummary={!!activeEntity}
         entityList={
           <AccountList
-            accounts={accountsForReportList}
+            accounts={accountsForReportListView}
             onSelectAccount={handleSelectAccountFromList}
             selectedAccount={selectedAccount}
             searchTerm={listSearchTerm}
+            pendingApprovalByAccountId={pendingApprovalByAccountId}
             quickFilter={accountListQuickFilter}
             onQuickFilterChange={setAccountListQuickFilter}
             hideQuickFilterBar
@@ -695,10 +1066,12 @@ export default function DesktopBankStatementPage() {
         }
         groupList={
           <AccountGroupList
-            groups={groupsForReportList}
+            groups={groupsForReportListView}
             onSelectGroup={handleSelectGroupFromList}
             selectedGroup={selectedGroup}
             searchTerm={listSearchTerm}
+            pendingApprovalByGroupId={pendingApprovalByAccountGroupId}
+            pendingApprovalByMemberId={pendingApprovalByAccountId}
             quickFilter={groupListQuickFilter}
             onQuickFilterChange={setGroupListQuickFilter}
             hideQuickFilterBar
@@ -712,111 +1085,43 @@ export default function DesktopBankStatementPage() {
 
   return (
     <div className="h-full min-h-0 flex flex-col bg-gray-50 overflow-hidden">
-      <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 p-3 border-b bg-white">
-        {/* Row 1: title · naam · report-list (reports hub mobile) · avatar — voucher count pager me nahi dikhao (trimSummary). */}
-        <div className="flex items-center gap-2 min-w-0">
-          <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={handleReportBack}>
-            <ArrowLeft className="h-4 w-4" />
+            <ReportEntityMobileHeader
+        title={pageTitle}
+        entityName={activeEntity ? String((activeEntity as any).accountName ?? (activeEntity as any).name ?? "") : undefined}
+        closingBalance={closingBalance}
+        dateRangeLabel={dateRangeLabel}
+        hasDateFilter={hasDateFilter}
+        onBack={handleReportBack}
+        onClearDate={() => setDateRange(undefined)}
+        action={isReportsHubMobile ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 flex-shrink-0"
+            onClick={() => setReportListOpen(true)}
+            aria-label="Open report list"
+            title="Report list"
+          >
+            <PanelRight className="h-4 w-4" />
           </Button>
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <h1 className="shrink-0 text-base font-bold text-muted-foreground">{pageTitle}</h1>
-            {activeEntity ? (
-              <>
-                <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
-                  ·
-                </span>
-                <span
-                  className={cn(
-                    "min-w-0 truncate text-sm font-medium",
-                    masterDetailBalanceToneClass(closingBalance)
-                  )}
-                  title={String((activeEntity as any).accountName ?? (activeEntity as any).name ?? "")}
-                >
-                  {(activeEntity as any).accountName ?? (activeEntity as any).name}
-                </span>
-              </>
-            ) : null}
-          </div>
-          {isReportsHubMobile ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 flex-shrink-0"
-              onClick={() => setReportListOpen(true)}
-              aria-label="Open report list"
-              title="Report list"
-            >
-              <PanelRight className="h-4 w-4" />
-            </Button>
-          ) : null}
-          {activeEntity ? (
-            <div className="flex-shrink-0" aria-hidden>
-              {selectedAccount ? (
-                <ReportStatementHeaderAvatar
-                  kind="bank"
-                  displayName={String((activeEntity as any).accountName ?? (activeEntity as any).name ?? "")}
-                  fileUrl={selectedAccount.fileUrl}
-                  bankIsSpecial={!!selectedAccount.isSpecial}
-                />
-              ) : (
-                <ReportStatementHeaderAvatar
-                  kind="group"
-                  displayName={String((activeEntity as any).name ?? "")}
-                />
-              )}
-            </div>
-          ) : null}
-        </div>
-        <MobileDetailSummaryCollapsible className="gap-2">
-        <div className="flex justify-center items-center gap-2">
-          <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
-          {hasDateFilter && (
-            <Button variant="ghost" size="icon" className="h-6 w-6 flex-shrink-0" onClick={() => setDateRange(undefined)} title="Clear date filter">
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex-1 min-w-0">
-            <Combobox
-              options={accountReportOptions}
-              value={selectedAccount?.id || ""}
-              onChange={(value) => {
-                const account = processedAccounts.find((a) => a.id === value);
-                if (account) {
-                  const newUrl = new URL(window.location.href);
-                  newUrl.searchParams.set("accountId", account.id);
-                  newUrl.searchParams.delete("groupId");
-                  window.history.pushState({}, "", newUrl);
-                  setSelectedAccount(account);
-                  setSelectedGroup(null);
-                }
-              }}
-              placeholder="Select an account"
+        ) : undefined}
+        avatar={activeEntity ? (
+          selectedAccount ? (
+            <ReportStatementHeaderAvatar
+              kind="bank"
+              displayName={String((activeEntity as any).accountName ?? (activeEntity as any).name ?? "")}
+              fileUrl={selectedAccount.fileUrl}
+              bankIsSpecial={!!selectedAccount.isSpecial}
             />
-          </div>
-          <div className="flex-1 min-w-0">
-            <Combobox
-              options={groupReportOptions}
-              value={selectedGroup?.id || ""}
-              onChange={(value) => {
-                const group = processedAccountGroups.find((g) => g.id === value);
-                if (group) {
-                  const newUrl = new URL(window.location.href);
-                  newUrl.searchParams.set("groupId", group.id);
-                  newUrl.searchParams.delete("accountId");
-                  window.history.pushState({}, "", newUrl);
-                  setSelectedGroup(group);
-                  setSelectedAccount(null);
-                }
-              }}
-              placeholder="Select a group"
+          ) : (
+            <ReportStatementHeaderAvatar
+              kind="group"
+              displayName={String((activeEntity as any).name ?? "")}
             />
-          </div>
-        </div>
-        </MobileDetailSummaryCollapsible>
-      </header>
+          )
+        ) : undefined}
+      />
 
       <Drawer
         open={isCalendarOpen}
@@ -910,16 +1215,30 @@ export default function DesktopBankStatementPage() {
           </div>
         ) : (
           <>
-            <MobileDetailSummaryCollapsible>
-            <div className="flex flex-nowrap gap-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-              {summaryCards.map((card) => (
-                <ReportSummaryCard key={card.title} title={card.title} amount={card.amount} color={card.color} />
+            <MobileDetailSummaryCollapsible className="w-[calc(100%+2rem)] min-w-0 -mx-4">
+            <div key={activeEntity?.id ?? "no-entity"} ref={balanceCardsRowRef} data-pl-mobile-txn-balance-row="" data-pl-bank-report-balance-row="" className="box-border flex w-full min-w-0 flex-nowrap justify-start gap-2 px-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              {mobileBalanceCards.map((card) => (
+                <div key={`${card.filterKey ?? "account-balance"}-${card.title}`} className="relative flex h-12 w-max min-w-[100px] shrink-0 items-stretch">
+                  <ReportSummaryCard
+                    title={card.title}
+                    amount={card.amount}
+                    color={card.color}
+                    selected={card.filterKey === null ? !balanceCardFilter : balanceCardFilter === card.filterKey}
+                    onClick={() => {
+                      setBalanceCardFilter(
+                        card.filterKey === null || balanceCardFilter === card.filterKey ? null : card.filterKey
+                      );
+                      setBankReportPagerPage(1);
+                    }}
+                  />
+                  {card.filterKey === null ? <ReportNetBalanceInfoButton /> : null}
+                </div>
               ))}
             </div>
             </MobileDetailSummaryCollapsible>
 
             <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
-            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0" data-floating-button-scroll>
+            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0 pl-mobile-ledger-txn-scroll-pad" data-floating-button-scroll>
               {isMobile ? (
                 <div className="pb-4">
                   <TransactionsTable
@@ -929,8 +1248,27 @@ export default function DesktopBankStatementPage() {
                     contextId={activeEntity?.id}
                     forceBalanceMode="statement"
                     openingBalance={displayMobilePageOpening}
+                    booksOpeningBalance={
+                      balanceCardFilter
+                        ? undefined
+                        : selectedAccount
+                        ? flipLedgerSignedBalance(Number(selectedAccount.openingBalance) || 0, activeBankDrCrPerspective)
+                        : undefined
+                    }
+                    ledgerDateFilterActive={!spendWiseActive && (hasDateFilter || !!balanceCardFilter)}
+                    ledgerShowBookOpeningRow={
+                      !balanceCardFilter &&
+                      (bankReportRowsPerPage <= 0 || bankStatementMobilePaging.edges.before === 0)
+                    }
+                    ledgerTransactionsForFyOpening={balanceCardFilter ? displayTableRowsForPerspective : undefined}
+                    fyLedgerScopeOpeningBalance={balanceCardFilter ? displayOpeningBalanceForPeriod : undefined}
+                    openingBalancePeriodStartDate={bankMobileOpeningPeriodStartDate}
+                    dateRange={dateRange}
                     openingBalanceOutstanding={selectedAccount ? openingBalanceOutstanding : undefined}
                     openingBalanceLinkedVoucherNos={selectedAccount ? openingBalanceLinkedVoucherNos : undefined}
+                    openingBalanceNarration={selectedAccount?.openingBalanceNarration}
+                    openingBalanceAttachmentUrls={selectedAccount?.documentFileUrls}
+                    openingBalanceDate={selectedAccount?.openingBalanceDate}
                     blinkMode={spendWiseActive ? spendWiseBlinkMode : undefined}
                     userNames={userNames}
                     journalAccountNames={journalAccountNames}
@@ -939,14 +1277,6 @@ export default function DesktopBankStatementPage() {
                     periodDr={displayMobilePagePeriod.debit}
                     periodCr={displayMobilePagePeriod.credit}
                     closingBalance={displayMobilePageClosing}
-                    openingBalanceSearch={
-                      <Input
-                        placeholder="Search..."
-                        value={transactionSearch}
-                        onChange={(e) => setTransactionSearch(e.target.value)}
-                        className="h-8 w-32 max-w-[140px] text-sm"
-                      />
-                    }
                     {...bankDepositWithdrawColumnLabels}
                   />
                 </div>
@@ -958,6 +1288,20 @@ export default function DesktopBankStatementPage() {
                   contextId={activeEntity?.id}
                   forceBalanceMode="statement"
                   openingBalance={displayOpeningBalanceForPeriod}
+                  booksOpeningBalance={
+                    balanceCardFilter
+                      ? undefined
+                      : selectedAccount
+                      ? flipLedgerSignedBalance(Number(selectedAccount.openingBalance) || 0, activeBankDrCrPerspective)
+                      : undefined
+                  }
+                  openingBalanceDate={selectedAccount?.openingBalanceDate}
+                  ledgerDateFilterActive={!spendWiseActive && (hasDateFilter || !!balanceCardFilter)}
+                  ledgerShowBookOpeningRow={!balanceCardFilter}
+                  ledgerTransactionsForFyOpening={balanceCardFilter ? displayTableRowsForPerspective : undefined}
+                  fyLedgerScopeOpeningBalance={balanceCardFilter ? displayOpeningBalanceForPeriod : undefined}
+                  openingBalancePeriodStartDate={hasDateFilter ? dateRange?.from : undefined}
+                  dateRange={dateRange}
                   openingBalanceOutstanding={selectedAccount ? openingBalanceOutstanding : undefined}
                   openingBalanceLinkedVoucherNos={selectedAccount ? openingBalanceLinkedVoucherNos : undefined}
                   blinkMode={spendWiseActive ? spendWiseBlinkMode : undefined}
@@ -983,7 +1327,8 @@ export default function DesktopBankStatementPage() {
             {isMobile && view === "list" && (
               <MobileTransactionsPager
                 // Party report footer pager; bank: Showing/Trxn Of line hatayi (`trimSummary`)
-                className="flex-shrink-0 border-t bg-muted/25 mb-12"
+                className={mdc.ledgerTxnPagerOutside}
+                txnToolbar={mobileEntityTxnToolbar}
                 currentPage={bankReportPagerPage}
                 totalItems={displayTableRows.length}
                 rowsPerPage={bankReportRowsPerPage}
@@ -1005,7 +1350,7 @@ export default function DesktopBankStatementPage() {
         )}
       </main>
 
-      <footer className="flex items-stretch justify-around p-1.5 border-t bg-white gap-1 fixed bottom-0 left-0 right-0">
+      <footer data-pl-mobile-ledger-action-footer="" className="flex items-stretch justify-around p-1.5 border-t bg-white gap-1 fixed bottom-0 left-0 right-0">
         <PermissionButton permission="export_data" className="flex-1 flex flex-col items-center justify-center py-1 min-w-0 bg-green-500 hover:bg-green-600 text-white rounded-md" onClick={handlePrint}>
           <Printer className="w-4 h-4 mb-0" /> <span className="text-[10px] leading-tight">Print</span>
         </PermissionButton>
@@ -1017,11 +1362,7 @@ export default function DesktopBankStatementPage() {
           type="button"
           disabled={!spendWiseCanApply}
           title={
-            !spendWiseEnabled
-              ? "Company settings mein Spend wise enable karein"
-              : selectedGroup
-                ? "Group report: sirf statement"
-                : undefined
+            selectedGroup ? "Group report: sirf statement" : undefined
           }
           className={cn(
             "flex-1 flex flex-col items-center justify-center py-1 min-w-0 rounded-md",

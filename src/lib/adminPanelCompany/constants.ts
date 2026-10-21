@@ -14,6 +14,8 @@ export const ADMIN_PANEL_COMPANY_NAME = "Pocket Ledger Admin Panel Company";
 export const ADMIN_PANEL_COMPANY_LOCAL_ID = "pl-admin-panel-pocket-ledger-cloud";
 
 export const ADMIN_PANEL_COMPANY_MODE_SESSION_KEY = "pl_admin_panel_company_ledger_mode_v1";
+/** Company the SuperAdmin was on before opening Admin Panel Company — restore on Back to App. */
+export const ADMIN_PANEL_RETURN_COMPANY_SESSION_KEY = "pl_admin_panel_return_company_id_v1";
 
 /** Legacy combined gateway bank — hidden; use per-gateway ids below. */
 export const ADMIN_PANEL_SEED_GATEWAY_BANK_ID = "system-payment-gateway";

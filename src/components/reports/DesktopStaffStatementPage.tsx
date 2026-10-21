@@ -24,9 +24,26 @@ import { format } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { mergePaymentAndLedgerJournalContraFlows } from "@/lib/reportStatementMoneyInOutExtras";
 import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
+import { ReportEntityMobileHeader } from "@/components/reports/ReportEntityMobileHeader";
 import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
+import { computeFilteredCardOpeningAndRows } from "@/lib/reportFilteredCardBalance";
+import { buildPartyTdsReportSummaryCards, buildReportVoucherTypeCards, getReportVoucherTypeKey, insertReportCardsAfterNetBalance, makeMobileReportSummaryCards, reportVoucherMatchesSummaryCard, ReportStatementSummaryCardsRow } from "@/components/reports/ReportStatementSummaryCards";
+import { buildTaxNameById } from "@/lib/partyLedgerTdsView";
+import { summarizeStaffTdsBalances } from "@/lib/staffLedgerTdsView";
+import { mapTransactionsForStaffTaxPageView } from "@/lib/staffTaxDetailsLedger";
+import { getTaxTransactionAmounts } from "@/hooks/use-transactions";
+import { getTaxOppositeAccountIdsFromVoucher } from "@/lib/taxOppositeAccountFilter";
+
+import {
+  MobileEntityTxnToolbarPicker,
+  MobileEntityTxnToolbarRow,
+  MobileEntityTxnToolbarSearch,
+  MobileEntityTxnToolbarUnapprovedBadge,
+} from "@/components/entity/MobileEntityTxnToolbarRow";
+import { countLedgerUnapprovedTransactions } from "@/lib/ledgerPendingApproval";
+import { mdc } from "@/lib/mobileDetailChrome";
 import { buildStaffGroupReportEntity } from "@/lib/reportStatementGroupEntity";
 import {
   clearPlModalParentQueryBackup,
@@ -41,6 +58,13 @@ import { useCompany } from "@/hooks/useCompany";
 import { openPrintDirect, getPdfBlob, type Context } from "@/lib/printDirect";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesStaffLedger";
+import { resolveStaffListGroupBucketId } from "@/lib/masterEntitySystemGroups";
+import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
+import { CreateStaffGroupDialog } from "@/components/staff/CreateStaffGroupDialog";
+import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
+import { ReportListSearchExtras, ReportListTotalBalance, useReportListPendingApproval, useReportShowApproveOnList } from "@/components/reports/ReportListParityChrome";
+import { useReportMobileListMode } from "@/hooks/useReportMobileListMode";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import { calendarPanelClassName } from "@/lib/calendarChrome";
@@ -87,19 +111,23 @@ const ReportSummaryCard = React.memo(function ReportSummaryCard({
 }, (prev, next) => prev.title === next.title && prev.amount === next.amount && prev.color === next.color);
 
 export default function DesktopStaffStatementPage() {
-  const { processedStaff, processedStaffGroups, vouchers, loading, journalAccountNames } = useFyScopedVouchers();
+  const { processedStaff, processedStaffGroups, processedTaxes, vouchers, vouchersAll, loading, journalAccountNames } = useFyScopedVouchers();
   const { company } = useCompany();
   const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
+  const reportMobileList = useReportMobileListMode(isMobile, ["staffId","groupId"]);
   const calendarMonths = useCalendarMonths();
   const openingModalRef = useRef(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [transactionSearch, setTransactionSearch] = useState("");
+  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
+  const [balanceCardFilter, setBalanceCardFilter] = useState<string | null>(null);
+  const balanceCardsRowRef = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState<"list" | "chart">("list");
 
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
@@ -116,7 +144,7 @@ export default function DesktopStaffStatementPage() {
   const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
   const fetchedUidsRef = useRef<Set<string>>(new Set());
 
-  const pageTitle = selectedGroup ? "Staff Group Report" : "Staff Report";
+  const pageTitle = selectedGroup ? "Staff Group Statement" : "Staff Statement";
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     try {
@@ -183,8 +211,9 @@ export default function DesktopStaffStatementPage() {
       closeModalInUrl();
       return;
     }
+    if (reportMobileList.backToList()) return;
     router.back();
-  }, [isVoucherDialogOpen, isCalendarOpen, closeModalInUrl, router]);
+  }, [isVoucherDialogOpen, isCalendarOpen, closeModalInUrl, router, reportMobileList]);
 
   const handleEditVoucher = useCallback(
     (voucher: any) => {
@@ -244,6 +273,9 @@ export default function DesktopStaffStatementPage() {
   }, [selectedGroup, processedStaff, processedStaffGroups]);
 
   const activeEntity = selectedStaff || groupReportEntity;
+  useEffect(() => {
+    if (balanceCardsRowRef.current) balanceCardsRowRef.current.scrollLeft = 0;
+  }, [activeEntity?.id]);
   const activeContext = selectedStaff ? "staff" : "group";
 
   const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance } = useTransactions(
@@ -251,6 +283,29 @@ export default function DesktopStaffStatementPage() {
     activeContext,
     dateRange
   );
+  const { closingBalance: allTimeNetBalance, processedTransactions: allTimeTransactions } = useTransactions(activeEntity as any, activeContext, undefined);
+  const taxNameById = useMemo(() => buildTaxNameById(processedTaxes), [processedTaxes]);
+  const voucherByIdForTds = useMemo(() => {
+    const src = (vouchersAll?.length ? vouchersAll : vouchers) || [];
+    return new Map(src.map((v: { id?: string }) => [String(v.id ?? ""), v as Record<string, unknown>]));
+  }, [vouchers, vouchersAll]);
+  const staffTdsBalanceSummary = useMemo(() => {
+    if (!selectedStaff?.id) return null;
+    const taxPageRows = mapTransactionsForStaffTaxPageView(
+      Array.from(voucherByIdForTds.values()),
+      selectedStaff.id,
+      processedTaxes || [],
+      getTaxTransactionAmounts,
+      getTaxOppositeAccountIdsFromVoucher
+    );
+    return summarizeStaffTdsBalances(taxPageRows, {
+      staffId: selectedStaff.id,
+      processedTaxes: processedTaxes || [],
+      taxNameById,
+      voucherById: voucherByIdForTds,
+      includeSettlements: true,
+    });
+  }, [selectedStaff?.id, voucherByIdForTds, processedTaxes, taxNameById]);
 
   const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
   const reportDisplayTransactions = useMemo(() => {
@@ -258,20 +313,81 @@ export default function DesktopStaffStatementPage() {
     if (processedTransactions.length <= 10) return processedTransactions;
     return processedTransactions.slice(-10);
   }, [processedTransactions, hasDateFilter, isMobile]);
+  const mobileUnapprovedTxnCount = useMemo(
+    () => countLedgerUnapprovedTransactions(reportDisplayTransactions),
+    [reportDisplayTransactions]
+  );
+
+  const cardFilteredResult = useMemo(() => {
+    if (!balanceCardFilter) return null;
+    return computeFilteredCardOpeningAndRows({
+      allTimeTransactions,
+      periodTransactions: reportDisplayTransactions,
+      fromDate: hasDateFilter ? dateRange?.from : undefined,
+      filterKey: balanceCardFilter,
+      matchesFilter: (t: any) =>
+        balanceCardFilter.startsWith("summary:")
+          ? reportVoucherMatchesSummaryCard(
+              t,
+              balanceCardFilter.slice(8),
+              activeContext,
+              activeEntity?.id,
+              activeContext === "group" ? "staff" : undefined
+            )
+          : getReportVoucherTypeKey(
+              t,
+              activeContext,
+              activeEntity?.id,
+              activeContext === "group" ? "staff" : undefined
+            ) === balanceCardFilter,
+    });
+  }, [
+    balanceCardFilter,
+    allTimeTransactions,
+    reportDisplayTransactions,
+    hasDateFilter,
+    dateRange?.from,
+    activeContext,
+    activeEntity?.id,
+  ]);
+
+  const effectiveOpeningBalanceForPeriod = cardFilteredResult
+    ? cardFilteredResult.filteredOpening
+    : openingBalanceForPeriod;
+  const effectivePeriodDr = cardFilteredResult
+    ? cardFilteredResult.filteredPeriodDr
+    : periodDr;
+  const effectivePeriodCr = cardFilteredResult
+    ? cardFilteredResult.filteredPeriodCr
+    : periodCr;
+  const effectiveClosingBalance = cardFilteredResult
+    ? cardFilteredResult.filteredClosing
+    : closingBalance;
 
   const filteredReportTransactions = useMemo(() => {
-    if (!transactionSearch.trim()) return reportDisplayTransactions;
+    let list = cardFilteredResult
+      ? cardFilteredResult.recomputedRows
+      : reportDisplayTransactions;
+    if (!cardFilteredResult && balanceCardFilter) {
+      list = list.filter((t: any) => balanceCardFilter.startsWith("summary:")
+        ? reportVoucherMatchesSummaryCard(t, balanceCardFilter.slice(8), activeContext, activeEntity?.id, activeContext === "group" ? "staff" : undefined)
+        : getReportVoucherTypeKey(t, activeContext, activeEntity?.id, activeContext === "group" ? "staff" : undefined) === balanceCardFilter);
+    }
+    if (unapprovedOnly) {
+      list = list.filter((t: any) => !t.isApproved && t.isApproved !== true);
+    }
+    if (!transactionSearch.trim()) return list;
     const q = transactionSearch.trim().toLowerCase();
-    return reportDisplayTransactions.filter((t: any) => {
+    return list.filter((t: any) => {
       const vno = (t.voucherNumber || "").toLowerCase();
       const narr = (t.narration || "").toLowerCase();
       const type = (typeof t.type === "string" ? t.type.replace(/_/g, " ") : "").toLowerCase();
       const amount = String(t.debit ?? t.credit ?? t.total ?? "").toLowerCase();
       return vno.includes(q) || narr.includes(q) || type.includes(q) || amount.includes(q);
     });
-  }, [reportDisplayTransactions, transactionSearch]);
+  }, [cardFilteredResult, reportDisplayTransactions, transactionSearch, unapprovedOnly, balanceCardFilter, activeContext, activeEntity?.id]);
 
-  const staffStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}`;
+  const staffStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${unapprovedOnly}|${balanceCardFilter ?? "all"}`;
   const {
     pagingMeta: staffStatementMobilePaging,
     pagerPage: staffReportPagerPage,
@@ -281,10 +397,10 @@ export default function DesktopStaffStatementPage() {
   } = useStatementReportMobilePaging({
     filteredRows: filteredReportTransactions,
     isMobile,
-    openingBalanceForPeriod,
-    periodDr,
-    periodCr,
-    closingBalance,
+    openingBalanceForPeriod: effectiveOpeningBalanceForPeriod,
+    periodDr: effectivePeriodDr,
+    periodCr: effectivePeriodCr,
+    closingBalance: effectiveClosingBalance,
     resetKey: staffStatementMobilePagingKey,
   });
 
@@ -323,6 +439,14 @@ export default function DesktopStaffStatementPage() {
       { title: "Money Out", amount: summaryData.moneyOut, color: "text-red-600" },
     ],
     [closingBalance, summaryData.addSalary, summaryData.moneyIn, summaryData.moneyOut]
+  );
+  const mobileSummaryCards = useMemo(() => insertReportCardsAfterNetBalance([
+    ...summaryCards.map((card) => card.title === "Balance" ? { ...card, amount: allTimeNetBalance, color: allTimeNetBalance >= 0 ? "text-green-600" : "text-red-600" } : card),
+    ...buildReportVoucherTypeCards(processedTransactions, activeContext, activeEntity?.id, activeContext === "group" ? "staff" : undefined, summaryCards.map((card) => card.title)),
+  ], buildPartyTdsReportSummaryCards(staffTdsBalanceSummary, { staffSalaryTds: true })), [summaryCards, processedTransactions, activeContext, activeEntity?.id, allTimeNetBalance, staffTdsBalanceSummary]);
+  const clickableSummaryCards = useMemo(
+    () => makeMobileReportSummaryCards(mobileSummaryCards, balanceCardFilter, setBalanceCardFilter, processedTransactions, activeContext, activeEntity?.id, activeContext === "group" ? "staff" : undefined),
+    [mobileSummaryCards, balanceCardFilter, processedTransactions, activeContext, activeEntity?.id]
   );
 
   const handlePrint = () => {
@@ -455,7 +579,7 @@ export default function DesktopStaffStatementPage() {
 
   const dateRangeLabel = useMemo(() => {
     // Entity report header row-2 — Party statement jaisa "All Time"; last-10 desktop slice alag logic.
-    if (!hasDateFilter) return "All Time";
+    if (!hasDateFilter) return "Last 10 Txns";
     const from = dateRange!.from!;
     const to = dateRange!.to || from;
     const fromAD = format(from, "LLL dd, y");
@@ -524,13 +648,134 @@ export default function DesktopStaffStatementPage() {
     />
   );
 
+  /* ---- Main Staff list page parity: header total, pink unapproved badge, + Add ---- */
+  const reportShowApproveOnList = useReportShowApproveOnList();
+  const reportPending = useReportListPendingApproval({
+    enabled: reportShowApproveOnList,
+    vouchers,
+    entities: processedStaff as any[],
+    collect: (v, ids) => collectStaffIdsTouchedByUnapprovedVoucher(v, ids),
+    bucket: (e: any) => resolveStaffListGroupBucketId(e),
+  });
+  const {
+    showOnlyEntities: reportOnlyPendingEntities,
+    setShowOnlyEntities: setReportOnlyPendingEntities,
+    showOnlyGroups: reportOnlyPendingGroups,
+    setShowOnlyGroups: setReportOnlyPendingGroups,
+  } = usePendingApprovalListFilter(reportPending.total);
+  const [isReportCreateEntityOpen, setIsReportCreateEntityOpen] = useState(false);
+  const [isReportCreateGroupOpen, setIsReportCreateGroupOpen] = useState(false);
+  const reportEntitiesView = useMemo(
+    () =>
+      !reportOnlyPendingEntities || !reportShowApproveOnList
+        ? processedStaff
+        : processedStaff.filter((e: any) => (reportPending.byId[e.id] ?? 0) > 0),
+    [processedStaff, reportOnlyPendingEntities, reportShowApproveOnList, reportPending]
+  );
+  const reportGroupsView = useMemo(
+    () =>
+      !reportOnlyPendingGroups || !reportShowApproveOnList
+        ? processedStaffGroups
+        : processedStaffGroups.filter((g: any) => (reportPending.byGroupId[g.id] ?? 0) > 0),
+    [processedStaffGroups, reportOnlyPendingGroups, reportShowApproveOnList, reportPending]
+  );
+  const reportListTotalBalance = useMemo(
+    () =>
+      processedStaff.reduce((acc: number, s: any) => acc + (Number(s.balance) || 0), 0),
+    [processedStaff]
+  );
+
   if (loading && !activeEntity) {
     return <LoadingSpinner />;
   }
 
-  if (!isMobile) {
+  const mobileEntityTxnToolbar = (
+    <MobileEntityTxnToolbarRow placement="belowPager">
+      <MobileEntityTxnToolbarPicker>
+        <Combobox
+          options={selectedGroup ? groupReportOptions : staffReportOptions}
+          value={selectedGroup ? (selectedGroup?.id || "") : (selectedStaff?.id || "")}
+          onChange={(value) => {
+            if (selectedGroup) {
+              const group = processedStaffGroups.find((g) => g.id === value);
+              if (group) {
+                const newUrl = new URL(window.location.href);
+                newUrl.searchParams.set('groupId', group.id);
+                newUrl.searchParams.delete('staffId');
+                window.history.pushState({}, '', newUrl);
+                setSelectedGroup(group);
+                setSelectedStaff(null);
+              }
+            } else {
+              const entity = processedStaff.find((p) => p.id === value);
+              if (entity) {
+                const newUrl = new URL(window.location.href);
+                newUrl.searchParams.set('staffId', entity.id);
+                newUrl.searchParams.delete('groupId');
+                window.history.pushState({}, '', newUrl);
+                setSelectedStaff(entity);
+                setSelectedGroup(null);
+              }
+            }
+          }}
+          placeholder={selectedGroup ? "Select a group" : "Select a staff"}
+        />
+      </MobileEntityTxnToolbarPicker>
+      <MobileEntityTxnToolbarUnapprovedBadge
+        count={mobileUnapprovedTxnCount}
+        pressed={unapprovedOnly}
+        onToggle={() => {
+          setUnapprovedOnly((prev) => !prev);
+          setStaffReportPagerPage(1);
+        }}
+      />
+      <MobileEntityTxnToolbarSearch>
+        <Search className={mdc.mobileTxnToolbarSearchIcon} />
+        <Input
+          placeholder="Search transactions"
+          className={mdc.mobileTxnToolbarSearchInput}
+          value={transactionSearch}
+          onChange={(e) => {
+            setTransactionSearch(e.target.value);
+            setStaffReportPagerPage(1);
+          }}
+        />
+      </MobileEntityTxnToolbarSearch>
+    </MobileEntityTxnToolbarRow>
+  );
+
+  if (!isMobile || reportMobileList.showList) {
     return (
       <ReportStatementDesktopShell
+        isMobile={isMobile}
+        balance={<ReportListTotalBalance value={reportListTotalBalance} format={formatCurrency} />}
+        searchRowExtras={
+          <ReportListSearchExtras
+            show={reportShowApproveOnList}
+            count={reportPending.total}
+            isGroupsTab={listTab === "groups"}
+            entityPressed={reportOnlyPendingEntities}
+            onEntityToggle={() => setReportOnlyPendingEntities((v) => !v)}
+            groupPressed={reportOnlyPendingGroups}
+            onGroupToggle={() => setReportOnlyPendingGroups((v) => !v)}
+            entityNoun="staff"
+            addButton={
+              listTab === "groups" ? (
+              <CreateStaffGroupDialog onGroupCreated={() => {}} isOpen={isReportCreateGroupOpen} onOpenChange={setIsReportCreateGroupOpen} groups={processedStaffGroups}>
+                <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsReportCreateGroupOpen(true)}>
+                  + Add Group
+                </PermissionButton>
+              </CreateStaffGroupDialog>
+              ) : (
+              <CreateStaffDialog onStaffCreated={() => {}} groups={processedStaffGroups} isOpen={isReportCreateEntityOpen} onOpenChange={setIsReportCreateEntityOpen}>
+                <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsReportCreateEntityOpen(true)}>
+                  + Add {STAFF_ENTITY_LABEL}
+                </PermissionButton>
+              </CreateStaffDialog>
+              )
+            }
+          />
+        }
         listChromeRouteKey="staff"
         pageTitle={pageTitle}
         listTab={listTab}
@@ -545,24 +790,25 @@ export default function DesktopStaffStatementPage() {
         entitySectionLabel={
           <div className={mlc.sectionLabelRow}>
             <User className={mlc.sectionIcon} />
-            <span>{STAFF_ENTITY_LABEL} ({processedStaff.length})</span>
+            <span>{STAFF_ENTITY_LABEL} ({reportEntitiesView.length})</span>
           </div>
         }
         groupSectionLabel={
           <div className={mlc.sectionLabelRow}>
             <Users className={mlc.sectionIcon} />
-            <span>Staff group ({processedStaffGroups.length})</span>
+            <span>Staff group ({reportGroupsView.length})</span>
           </div>
         }
         entityQuickFilter={staffListQuickFilter}
         groupQuickFilter={groupListQuickFilter}
         onEntityQuickFilterChange={setStaffListQuickFilter}
         onGroupQuickFilterChange={setGroupListQuickFilter}
-        summaryCards={summaryCards}
+        summaryCards={clickableSummaryCards}
         showSummary={!!activeEntity}
         entityList={
           <StaffList
-            staff={processedStaff}
+            staff={reportEntitiesView}
+            pendingApprovalByStaffId={reportPending.byId}
             onSelectStaff={handleSelectStaffFromList}
             selectedStaff={selectedStaff}
             searchTerm={listSearchTerm}
@@ -573,7 +819,9 @@ export default function DesktopStaffStatementPage() {
         }
         groupList={
           <StaffGroupList
-            groups={processedStaffGroups}
+            groups={reportGroupsView}
+            pendingApprovalByGroupId={reportPending.byGroupId}
+            pendingApprovalByMemberId={reportPending.byId}
             onSelectGroup={handleSelectGroupFromList}
             selectedGroup={selectedGroup}
             searchTerm={listSearchTerm}
@@ -595,6 +843,8 @@ export default function DesktopStaffStatementPage() {
               onDateRangeChange={setDateRange}
               userNames={userNames}
               context="report"
+              reportCardFilter={balanceCardFilter}
+              reportSummaryCards={clickableSummaryCards}
               mobileFooterVariant="report"
               onSelectStaff={handleEmbeddedStaffChange}
             />
@@ -623,90 +873,26 @@ export default function DesktopStaffStatementPage() {
 
   return (
     <div className="h-full min-h-0 flex flex-col bg-gray-50 overflow-hidden">
-      <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 p-3 border-b bg-white">
-        <div className="flex items-center gap-2 min-w-0">
-          <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={handleReportBack}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <h1 className="shrink-0 text-base font-bold text-muted-foreground">{pageTitle}</h1>
-            {activeEntity?.name ? (
-              <>
-                <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
-                  ·
-                </span>
-                <span
-                  className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
-                  title={activeEntity.name}
-                >
-                  {activeEntity.name}
-                </span>
-              </>
-            ) : null}
-          </div>
-          {activeEntity?.name ? (
-            <div className="flex-shrink-0" aria-hidden>
-              {selectedStaff ? (
-                <ReportStatementHeaderAvatar
-                  kind="staff"
-                  displayName={activeEntity.name}
-                  fileUrl={selectedStaff.fileUrl}
-                />
-              ) : (
-                <ReportStatementHeaderAvatar kind="group" displayName={activeEntity.name} />
-              )}
-            </div>
-          ) : null}
-        </div>
-        <MobileDetailSummaryCollapsible className="gap-2">
-        <div className="flex justify-center items-center gap-2">
-          <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
-          {hasDateFilter && (
-            <Button variant="ghost" size="icon" className="h-6 w-6 flex-shrink-0" onClick={() => setDateRange(undefined)} title="Clear date filter">
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex-1 min-w-0">
-            <Combobox
-              options={staffReportOptions}
-              value={selectedStaff?.id || ""}
-              onChange={(value) => {
-                const staff = processedStaff.find((p) => p.id === value);
-                if (staff) {
-                  const newUrl = new URL(window.location.href);
-                  newUrl.searchParams.set("staffId", staff.id);
-                  newUrl.searchParams.delete("groupId");
-                  window.history.pushState({}, "", newUrl);
-                  setSelectedStaff(staff);
-                  setSelectedGroup(null);
-                }
-              }}
-              placeholder="Select a staff"
+            <ReportEntityMobileHeader
+        title={pageTitle}
+        entityName={activeEntity?.name}
+        closingBalance={closingBalance}
+        dateRangeLabel={dateRangeLabel}
+        hasDateFilter={hasDateFilter}
+        onBack={handleReportBack}
+        onClearDate={() => setDateRange(undefined)}
+        avatar={activeEntity?.name ? (
+          selectedStaff ? (
+            <ReportStatementHeaderAvatar
+              kind="staff"
+              displayName={activeEntity.name}
+              fileUrl={selectedStaff.fileUrl}
             />
-          </div>
-          <div className="flex-1 min-w-0">
-            <Combobox
-              options={groupReportOptions}
-              value={selectedGroup?.id || ""}
-              onChange={(value) => {
-                const group = processedStaffGroups.find((g) => g.id === value);
-                if (group) {
-                  const newUrl = new URL(window.location.href);
-                  newUrl.searchParams.set("groupId", group.id);
-                  newUrl.searchParams.delete("staffId");
-                  window.history.pushState({}, "", newUrl);
-                  setSelectedGroup(group);
-                  setSelectedStaff(null);
-                }
-              }}
-              placeholder="Select a group"
-            />
-          </div>
-        </div>
-        </MobileDetailSummaryCollapsible>
-      </header>
+          ) : (
+            <ReportStatementHeaderAvatar kind="group" displayName={activeEntity.name} />
+          )
+        ) : undefined}
+      />
 
       <Drawer
         open={isCalendarOpen}
@@ -803,16 +989,14 @@ export default function DesktopStaffStatementPage() {
           </div>
         ) : (
           <>
-            <MobileDetailSummaryCollapsible>
-            <div className="flex flex-nowrap gap-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-              {summaryCards.map((card) => (
-                <ReportSummaryCard key={card.title} title={card.title} amount={card.amount} color={card.color} />
-              ))}
+            <MobileDetailSummaryCollapsible className="w-[calc(100%+2rem)] min-w-0 -mx-4">
+            <div key={activeEntity?.id ?? "no-entity"} ref={balanceCardsRowRef} data-pl-mobile-txn-balance-row="" data-pl-bank-report-balance-row="" className="box-border flex w-full min-w-0 flex-nowrap justify-start gap-2 px-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <ReportStatementSummaryCardsRow cards={clickableSummaryCards} className="w-max min-w-0 flex-shrink-0 pt-0.5 pb-0 overflow-visible" />
             </div>
             </MobileDetailSummaryCollapsible>
 
             <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
-            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0" data-floating-button-scroll>
+            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0 pl-mobile-ledger-txn-scroll-pad" data-floating-button-scroll>
               {isMobile ? (
                 <div className="pb-4">
                   <TransactionsTable
@@ -820,6 +1004,14 @@ export default function DesktopStaffStatementPage() {
                     context={activeContext}
                     contextId={activeEntity?.id}
                     openingBalance={staffStatementMobilePaging.openingForPage}
+                    booksOpeningBalance={balanceCardFilter ? undefined : (activeEntity as any)?.openingBalance != null ? Number((activeEntity as any).openingBalance) : undefined}
+                    openingBalanceDate={(activeEntity as any)?.openingBalanceDate}
+                    ledgerDateFilterActive={hasDateFilter || !!balanceCardFilter}
+                    ledgerShowBookOpeningRow={!balanceCardFilter && (staffReportRowsPerPage <= 0 || staffStatementMobilePaging.edges.before === 0)}
+                    ledgerTransactionsForFyOpening={balanceCardFilter ? filteredReportTransactions : undefined}
+                    fyLedgerScopeOpeningBalance={balanceCardFilter ? effectiveOpeningBalanceForPeriod : undefined}
+                    openingBalancePeriodStartDate={staffStatementMobilePaging.openingPeriodStartDate ?? dateRange?.from}
+                    dateRange={dateRange}
                     userNames={userNames}
                     journalAccountNames={journalAccountNames}
                     onRowClick={handleEditVoucher}
@@ -827,14 +1019,6 @@ export default function DesktopStaffStatementPage() {
                     periodDr={staffStatementMobilePaging.periodDrForPage}
                     periodCr={staffStatementMobilePaging.periodCrForPage}
                     closingBalance={staffStatementMobilePaging.closingForPage}
-                    openingBalanceSearch={
-                      <Input
-                        placeholder="Search..."
-                        value={transactionSearch}
-                        onChange={(e) => setTransactionSearch(e.target.value)}
-                        className="h-8 w-32 max-w-[140px] text-sm"
-                      />
-                    }
                   />
                 </div>
               ) : (
@@ -842,7 +1026,18 @@ export default function DesktopStaffStatementPage() {
                   transactions={filteredReportTransactions}
                   context={activeContext}
                   contextId={activeEntity?.id}
-                  openingBalance={openingBalanceForPeriod}
+                  openingBalance={effectiveOpeningBalanceForPeriod}
+                  booksOpeningBalance={balanceCardFilter ? undefined : (activeEntity as any)?.openingBalance != null ? Number((activeEntity as any).openingBalance) : undefined}
+                  openingBalanceDate={(activeEntity as any)?.openingBalanceDate}
+                  ledgerDateFilterActive={hasDateFilter || !!balanceCardFilter}
+                  ledgerShowBookOpeningRow={!balanceCardFilter}
+                  ledgerTransactionsForFyOpening={balanceCardFilter ? filteredReportTransactions : undefined}
+                  fyLedgerScopeOpeningBalance={balanceCardFilter ? effectiveOpeningBalanceForPeriod : undefined}
+                  periodDr={effectivePeriodDr}
+                  periodCr={effectivePeriodCr}
+                  closingBalance={effectiveClosingBalance}
+                  openingBalancePeriodStartDate={dateRange?.from}
+                  dateRange={dateRange}
                   userNames={userNames}
                   journalAccountNames={journalAccountNames}
                   onRowClick={handleEditVoucher}
@@ -860,7 +1055,8 @@ export default function DesktopStaffStatementPage() {
             </div>
             {isMobile && view === "list" && (
               <MobileTransactionsPager
-                className="flex-shrink-0 border-t bg-muted/25 mb-12"
+                className={mdc.ledgerTxnPagerOutside}
+                txnToolbar={mobileEntityTxnToolbar}
                 currentPage={staffReportPagerPage}
                 totalItems={filteredReportTransactions.length}
                 rowsPerPage={staffReportRowsPerPage}
@@ -881,7 +1077,7 @@ export default function DesktopStaffStatementPage() {
         )}
       </main>
 
-      <footer className="flex items-stretch justify-around p-1.5 border-t bg-white gap-1 fixed bottom-0 left-0 right-0">
+      <footer data-pl-mobile-ledger-action-footer="" className="flex items-stretch justify-around p-1.5 border-t bg-white gap-1 fixed bottom-0 left-0 right-0">
         <PermissionButton
           permission="export_data"
           className="flex-1 flex flex-col items-center justify-center py-1 min-w-0 bg-green-500 hover:bg-green-600 text-white rounded-md"

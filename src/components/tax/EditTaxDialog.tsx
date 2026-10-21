@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
-import { doc, updateDoc, serverTimestamp, onSnapshot, query, collection } from "firebase/firestore";
+import { doc, updateDoc, serverTimestamp, Timestamp, onSnapshot, query, collection } from "firebase/firestore";
 import {
   uploadEntityAvatarAndDocumentsRemote,
   syncEntityAttachmentsAfterSave,
@@ -94,6 +94,7 @@ import { useVouchers } from "@/hooks/useVouchers";
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Account name must be at least 2 characters." }),
+  aliasName: z.string().optional(),
   phone: z.string().optional(),
   whatsapp: z.boolean().optional(),
   rate: z.number().min(0, "Tax rate cannot be negative.").max(100, "Tax rate cannot be over 100."),
@@ -193,6 +194,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
     defaultValues: {
       name: tax.name,
+      aliasName: (((tax as unknown) as { aliasName?: string }).aliasName) || "",
       phone: tax.phone ?? "",
       whatsapp: tax.whatsapp === true,
       rate: tax.rate,
@@ -220,6 +222,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
       }
       form.reset({
         name: tax.name,
+        aliasName: (((tax as unknown) as { aliasName?: string }).aliasName) || "",
         rate: tax.rate,
         openingBalance: tax.openingBalance || 0,
         openingBalanceDate: finalDate,
@@ -347,6 +350,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
         const narrationClean = values.openingBalanceNarration?.trim() || null;
         const updatePayload = {
           name: values.name,
+          aliasName: (values.aliasName ?? "").trim(),
           phone: values.phone?.trim() || null,
           whatsapp: values.whatsapp === true,
           rate: values.rate,
@@ -376,7 +380,13 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
             credit: taxRefSnap.credit,
             isDeleted: false,
           };
-          const payload: Record<string, unknown> = { ...base, ...updatePayload, id: taxRefSnap.id, companyId };
+          const payload: Record<string, unknown> = {
+            ...base,
+            ...updatePayload,
+            id: taxRefSnap.id,
+            companyId,
+            updatedAt: Timestamp.now(),
+          };
           await upsertCompanyDocInBrowserDb(companyId, "taxes", taxRefSnap.id, payload);
           const persisted =
             (await getCompanyDocFromBrowserDb(companyId, "taxes", taxRefSnap.id)) ?? payload;
@@ -424,8 +434,13 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           });
         }
 
-        const taxRef = doc(firestore, `companies/${companyId}/taxes`, taxRefSnap.id);
-        await updateDoc(taxRef, updatePayload);
+        const { persistMasterEntityUpdate } = await import("@/lib/masterEntityUpdatePersist");
+        await persistMasterEntityUpdate({
+          companyId,
+          collection: "taxes",
+          docId: taxRefSnap.id,
+          patch: updatePayload,
+        });
         await syncEntityAttachmentsAfterSave(companyId);
 
         await finalizeMasterOpeningBalanceSideEffects({
@@ -661,7 +676,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                   entityId={tax.id}
                   mode="edit"
                   nameField={
-                    <FormField
+                    <div className="space-y-2"><FormField
                       control={form.control}
                       name="name"
                       render={({ field }: any) => (
@@ -673,7 +688,19 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                           <FormMessage />
                         </FormItem>
                       )}
-                    />
+                    /><FormField
+                      control={form.control}
+                      name="aliasName"
+                      render={({ field }: any) => (
+                        <FormItem>
+                          <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                          <FormControl>
+                            <Input placeholder="Other name on bills / short name" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    /></div>
                   }
                 />
                 <MasterFormTwoColGrid>

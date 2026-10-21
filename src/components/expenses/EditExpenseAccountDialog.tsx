@@ -34,7 +34,7 @@ import { compressImageForCompany, attachmentImageStillTooLargeToastFields, useIm
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
-import { doc, updateDoc, serverTimestamp, onSnapshot, query, collection } from "firebase/firestore";
+import { doc, updateDoc, serverTimestamp, Timestamp, onSnapshot, query, collection } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { MasterDeleteConfirmAlertDialog } from "@/components/common/MasterDeleteConfirmAlertDialog";
@@ -105,6 +105,7 @@ function normalizeExpenseAccountEditGroupId(
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Account name must be at least 2 characters." }),
+  aliasName: z.string().optional(),
   phone: z.string().optional(),
   whatsapp: z.boolean().optional(),
   groupId: z.string().optional(),
@@ -204,6 +205,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
     defaultValues: {
       name: account.name,
+      aliasName: (((account as unknown) as { aliasName?: string }).aliasName) || "",
       phone: account.phone ?? "",
       whatsapp: account.whatsapp === true,
       groupId: normalizeExpenseAccountEditGroupId(account.groupId, account.type),
@@ -230,6 +232,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
       }
       form.reset({
         name: account.name,
+        aliasName: (((account as unknown) as { aliasName?: string }).aliasName) || "",
         phone: account.phone ?? "",
         whatsapp: account.whatsapp === true,
         groupId: normalizeExpenseAccountEditGroupId(account.groupId, account.type),
@@ -360,6 +363,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
         const narrationClean = values.openingBalanceNarration?.trim() || null;
         const updatePayload = {
           name: values.name,
+          aliasName: (values.aliasName ?? "").trim(),
           phone: values.phone?.trim() || null,
           whatsapp: values.whatsapp === true,
           groupId: values.groupId || null,
@@ -387,7 +391,13 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
             isDeleted: false,
             type: accountRefSnap.type,
           };
-          const payload: Record<string, unknown> = { ...base, ...updatePayload, id: accountRefSnap.id, companyId };
+          const payload: Record<string, unknown> = {
+            ...base,
+            ...updatePayload,
+            id: accountRefSnap.id,
+            companyId,
+            updatedAt: Timestamp.now(),
+          };
           await upsertCompanyDocInBrowserDb(companyId, "expense_accounts", accountRefSnap.id, payload);
           const persisted =
             (await getCompanyDocFromBrowserDb(companyId, "expense_accounts", accountRefSnap.id)) ?? payload;
@@ -436,8 +446,13 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           });
         }
 
-        const accountRef = doc(firestore, `companies/${companyId}/expense_accounts`, accountRefSnap.id);
-        await updateDoc(accountRef, updatePayload);
+        const { persistMasterEntityUpdate } = await import("@/lib/masterEntityUpdatePersist");
+        await persistMasterEntityUpdate({
+          companyId,
+          collection: "expense_accounts",
+          docId: accountRefSnap.id,
+          patch: updatePayload,
+        });
 
         await finalizeMasterOpeningBalanceSideEffects({
           company,
@@ -689,7 +704,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                 entityId={account.id}
                 mode="edit"
                 nameField={
-                  <FormField
+                  <div className="space-y-2"><FormField
                     control={form.control}
                     name="name"
                     render={({ field }: any) => (
@@ -701,7 +716,19 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                         <FormMessage />
                       </FormItem>
                     )}
-                  />
+                  /><FormField
+                    control={form.control}
+                    name="aliasName"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                        <FormControl>
+                          <Input placeholder="Other name on bills / short name" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  /></div>
                 }
               />
               <MasterFormTwoColGrid>

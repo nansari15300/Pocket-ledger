@@ -14,6 +14,8 @@ export type PendingApprovalListFilterBadgeProps = {
   ariaLabelShowAll: string;
   /** List search row: h-9 badge search row ko lamba na kare */
   compact?: boolean;
+  /** Optional extra classes (e.g. min width for a roomier box). */
+  className?: string;
 };
 
 /** Master list: search aur + Add ke beech pink count — click se sirf pending wale rows (party page pattern) */
@@ -26,6 +28,7 @@ export function PendingApprovalListFilterBadge({
   ariaLabelFilter,
   ariaLabelShowAll,
   compact = false,
+  className,
 }: PendingApprovalListFilterBadgeProps) {
   if (count <= 0) return null;
 
@@ -45,6 +48,8 @@ export function PendingApprovalListFilterBadge({
               pressed
                 ? "border-pink-600 bg-pink-600 text-white shadow-sm"
                 : "border-pink-200 bg-pink-100 text-pink-900 hover:bg-pink-200/90 dark:border-pink-800 dark:bg-pink-950/60 dark:text-pink-100 dark:hover:bg-pink-900/50"
+              ,
+              className
             )}
             aria-pressed={pressed}
             aria-label={pressed ? ariaLabelShowAll : ariaLabelFilter}

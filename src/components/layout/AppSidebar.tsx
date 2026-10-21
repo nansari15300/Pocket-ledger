@@ -915,10 +915,10 @@ export function AppSidebar() {
                           <button
                             type="button"
                             className="w-full text-left appearance-none bg-transparent p-0 border-0 cursor-pointer"
-                            onClick={() => navigateSidebarHref("/admin/company")}
+                            onClick={() => navigateSidebarHref("/admin")}
                           >
                             <SidebarMenuButton
-                              isActive={pathname.startsWith("/admin".replace(/\/$/, ""))}
+                              isActive={pathname === "/admin" || pathname.startsWith("/admin/")}
                               tooltip="Admin Panel"
                               data-theme-nav="admin"
                             >
@@ -929,11 +929,11 @@ export function AppSidebar() {
                         ) : (
                           <Link
                             prefetch={false}
-                            href={appNavHref("/admin/company")}
-                            onClick={(e) => onNavLinkClick(e, "/admin/company")}
+                            href={appNavHref("/admin")}
+                            onClick={(e) => onNavLinkClick(e, "/admin")}
                           >
                             <SidebarMenuButton
-                              isActive={pathname.startsWith("/admin/company")}
+                              isActive={pathname === "/admin" || pathname.startsWith("/admin/")}
                               tooltip="Admin Panel"
                               data-theme-nav="admin"
                             >

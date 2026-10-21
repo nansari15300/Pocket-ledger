@@ -6,7 +6,9 @@ import { useCompany } from "@/hooks/useCompany";
 import {
   isAdminPanelCompanyLedgerMode,
   isAdminPanelCompanyLocalId,
+  resolveAppCompanyIdAfterAdminPanel,
 } from "@/lib/adminPanelCompany/ledgerMode";
+import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import {
   ensureAdminPanelCompanyCloud,
   selectAdminPanelCompanyInApp,
@@ -56,6 +58,13 @@ export function AdminPanelCompanyLedgerBootstrap() {
     window.addEventListener("pl-admin-panel-company-mode", onMode);
     return () => window.removeEventListener("pl-admin-panel-company-mode", onMode);
   }, []);
+
+  useEffect(() => {
+    if (isAdminPanelCompanyLedgerMode()) return;
+    if (!isAdminPanelCompanyLocalId(companyId)) return;
+    const next = resolveAppCompanyIdAfterAdminPanel(readSelectedCompanyId());
+    if (next && next !== companyId) setCompanyId(next);
+  }, [companyId, setCompanyId]);
 
   return null;
 }

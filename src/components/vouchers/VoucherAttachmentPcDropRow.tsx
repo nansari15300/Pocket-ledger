@@ -3,9 +3,11 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { AttachmentPcDropWrap } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import {
-  appendCompressedVoucherAttachmentsToState,
+  appendCompressedVoucherAttachmentsToState as __frozenAppendAttachments,
   type VoucherAttachmentToastFn,
 } from "@/lib/appendCompressedVoucherAttachments";
+import { ocrWrapAppend } from "@/modules/ocr";
+const appendCompressedVoucherAttachmentsToState = ocrWrapAppend(__frozenAppendAttachments);
 
 type Limits = {
   maxFileCount: number;

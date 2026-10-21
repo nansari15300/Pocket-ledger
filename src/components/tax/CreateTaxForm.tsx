@@ -89,6 +89,7 @@ function createLocalEntityId(prefix: string): string {
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Tax name must be at least 2 characters." }),
+  aliasName: z.string().optional(),
   phone: z.string().optional(),
   whatsapp: z.boolean().optional(),
   rate: z.number().min(0, "Tax rate cannot be negative.").max(100, "Tax rate cannot be over 100."),
@@ -106,6 +107,7 @@ export function CreateTaxForm({
   groups,
   onNestedDialogOpenChange,
   prefillName,
+  prefillRate,
 }: {
   onTaxCreated?: (
     isSaveAndNew: boolean,
@@ -116,6 +118,8 @@ export function CreateTaxForm({
   groups: TaxGroup[];
   onNestedDialogOpenChange?: (open: boolean) => void;
   prefillName?: string;
+  /** OCR: e.g. 13 from the bill's VAT % */
+  prefillRate?: number;
 }) {
   const [isLoading, setIsLoading] = useState(false);
   const isCompressing = useImageCompressionProcessing();
@@ -144,7 +148,7 @@ export function CreateTaxForm({
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
     defaultValues: {
-      name: "",
+      name: "", aliasName: "",
       rate: 0,
       openingBalance: 0,
       groupId: getDefaultSystemGroupId("tax"),
@@ -158,7 +162,8 @@ export function CreateTaxForm({
     if (prefillName && prefillName.trim()) {
       form.setValue("name", prefillName.trim());
     }
-  }, [prefillName, form]);
+    if (typeof prefillRate === "number" && prefillRate > 0) form.setValue("rate", prefillRate);
+  }, [prefillName, prefillRate, form]);
 
   React.useEffect(() => {
     const handlePrefillName = (event: Event) => {
@@ -251,7 +256,7 @@ export function CreateTaxForm({
       if (avatarInputRef.current) avatarInputRef.current.value = "";
       if (docsInputRef.current) docsInputRef.current.value = "";
       form.reset({
-        name: "",
+        name: "", aliasName: "",
         rate: 0,
         openingBalance: 0,
         openingBalanceDate: undefined,
@@ -366,6 +371,7 @@ export function CreateTaxForm({
         const payload = {
           id: localId,
           name: values.name.trim(),
+          aliasName: (values.aliasName ?? "").trim(),
           phone: values.phone?.trim() || null,
           whatsapp: values.whatsapp === true,
           rate: values.rate,
@@ -393,7 +399,7 @@ export function CreateTaxForm({
         });
         if (saveAndNew) {
           form.reset({
-            name: "",
+            name: "", aliasName: "",
             rate: 0,
             openingBalance: 0,
             openingBalanceDate: undefined,
@@ -405,6 +411,7 @@ export function CreateTaxForm({
         const newTax = {
           id: localId,
           name: values.name.trim(),
+          aliasName: (values.aliasName ?? "").trim(),
           rate: values.rate,
           balance: values.openingBalance || 0,
           companyId,
@@ -433,6 +440,7 @@ export function CreateTaxForm({
         const restoredTax = {
           id: duplicateDecision.restoredId,
           name: values.name.trim(),
+          aliasName: (values.aliasName ?? "").trim(),
           rate: values.rate,
           balance: values.openingBalance || 0,
           companyId,
@@ -477,6 +485,7 @@ export function CreateTaxForm({
       const interCompanyAccountNo = await interCompanyAcNoForNewEntity("tax");
       await setDoc(taxRef, {
         name: values.name.trim(),
+        aliasName: (values.aliasName ?? "").trim(),
         phone: values.phone?.trim() || null,
         whatsapp: values.whatsapp === true,
         rate: values.rate,
@@ -513,7 +522,7 @@ export function CreateTaxForm({
 
       if (saveAndNew) {
         form.reset({
-          name: "",
+          name: "", aliasName: "",
           rate: 0,
           openingBalance: 0,
           openingBalanceDate: undefined,
@@ -526,6 +535,7 @@ export function CreateTaxForm({
       const newTax = {
         id: newTaxId,
         name: values.name.trim(),
+        aliasName: (values.aliasName ?? "").trim(),
         rate: values.rate,
         balance: values.openingBalance || 0,
         companyId,
@@ -561,6 +571,7 @@ export function CreateTaxForm({
           const payload: Record<string, unknown> = {
             id: localId,
             name: values.name.trim(),
+            aliasName: (values.aliasName ?? "").trim(),
             rate: values.rate,
             openingBalance: values.openingBalance || 0,
             openingBalanceDate: values.openingBalanceDate || null,
@@ -591,7 +602,7 @@ export function CreateTaxForm({
           });
           if (saveAndNew) {
             form.reset({
-              name: "",
+              name: "", aliasName: "",
               rate: 0,
               openingBalance: 0,
               openingBalanceDate: undefined,
@@ -636,7 +647,7 @@ export function CreateTaxForm({
               entityKind="tax"
               mode="create"
               nameField={
-                <FormField
+                <div className="space-y-2"><FormField
                   control={form.control}
                   name="name"
                   render={({ field }: any) => (
@@ -648,7 +659,19 @@ export function CreateTaxForm({
                       <FormMessage />
                     </FormItem>
                   )}
-                />
+                /><FormField
+                  control={form.control}
+                  name="aliasName"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                      <FormControl>
+                        <Input placeholder="Other name on bills / short name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                /></div>
               }
             />
             <MasterFormTwoColGrid>

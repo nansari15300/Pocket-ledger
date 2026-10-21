@@ -768,7 +768,7 @@ export function CreatePaymentInForm({
                       control={form.control}
                       name="partyId"
                       render={({ field }: any) => (
-                        <FormItem>
+                        <FormItem data-ocr-field="party">
                           <Combobox
                             options={mapPartiesForVoucherCombobox(processedPartiesForSelection)}
                             value={field.value}
@@ -867,7 +867,7 @@ export function CreatePaymentInForm({
                   control={form.control}
                   name="accountId"
                   render={({ field }: any) => (
-                    <FormItem>
+                    <FormItem data-ocr-field="account">
                        <div className="flex justify-between items-baseline">
                         <FormLabel>To Bank/Cash Account</FormLabel>
                         {accountBalance !== null && accountBalance !== undefined && <FormLabel className="text-xs text-muted-foreground">Balance: {formatCurrency(accountBalance)}</FormLabel>}
@@ -932,7 +932,7 @@ export function CreatePaymentInForm({
                   control={form.control}
                   name="date"
                   render={({ field }: any) => (
-                    <FormItem className="flex flex-col">
+                    <FormItem data-ocr-field="date" className="flex flex-col">
                       <FormLabel>Date</FormLabel>
                       <div className={VOUCHER_PC_DATE_ROW}>
                            {(dateSystem === 'BS' || dateSystem === 'Both') && (
@@ -971,7 +971,7 @@ export function CreatePaymentInForm({
                 control={form.control}
                 name="amount"
                 render={({ field }: any) => (
-                  <FormItem>
+                  <FormItem data-ocr-field="amount">
                     <FormLabel>Amount Received</FormLabel>
                     <FormControl>
                       <Input type="number" {...field} />
@@ -985,7 +985,7 @@ export function CreatePaymentInForm({
                 control={form.control}
                 name="narration"
                 render={({ field }: any) => (
-                  <FormItem>
+                  <FormItem data-ocr-field="bill-no">
                     <FormLabel>Narration</FormLabel>
                     <FormControl>
                       {/* Narration: PC static dialog me resize + scroll */}

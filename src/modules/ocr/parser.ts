@@ -1,0 +1,844 @@
+/**
+ * Rule-based bill parser (spec §4–§7). STRICT: a field is "fill" only when format validation
+ * (and the cross-check where one applies) passes; otherwise "flag" (shown, not filled) or absent.
+ *
+ * Layout model: full lines (tables / totals) + gap-split SEGMENTS (key: value pairs). Two-column
+ * headers ("Address : Inaruwa      Nepali Date : 2083/07/01") become separate segments, so a label's
+ * value always stops at the next column.
+ */
+import { bsToAd, getBSMonthDays } from "@/lib/bs-date";
+import { amountsInLine, fixDigitConfusions, normalizeName, normalizeOcrLine, parseStrictAmount } from "./normalize";
+import { bestUniqueMatch, nameScore, namesOf } from "./fuzzy";
+import { devanagariToRoman, nameSkeleton } from "./translit";
+import { isOcrSelectableParty } from "./types";
+import type { OcrIdentifiers } from "./identifiers";
+import type {
+  OcrItemLike,
+  OcrLineItem,
+  OcrParsedBill,
+  OcrPartyLike,
+  OcrRawResult,
+  OcrVoucherKind,
+  OcrWord,
+} from "./types";
+
+type L = { text: string; conf: number; rel: number; y: number; words: OcrWord[] };
+type Seg = { text: string; conf: number; rel: number; y: number; x0: number; x1: number; h: number; line: number };
+
+const RX = {
+  dateLabel: /\b(invoice\s*date|bill\s*date|nepali\s*date|miti|dated|date)\b|मिति|दिनांक|तारीख/i,
+  dueLabel: /\b(due\s*date)\b|भुक्तानी\s*मिति|अन्तिम\s*मिति/i,
+  printLabel: /\bprint(ed)?\s*(time|date)|\btime\b/i,
+  panLabel: /\b(pan|vat)\s*(reg\.?)?\s*(no\.?|number)?\b|स्थायी\s*लेखा|स्था\.?\s*ले\.?\s*नं|प्यान|भ्याट/i,
+  buyerLabel: /\b(buyer|customer|bill\s*to|purchaser|party\s*name|m\/s|sold\s*to)\b|क्रेता|ग्राहक/i,
+  sellerLabel: /\b(seller|supplier|vendor)\b|विक्रेता/i,
+  billLabel: /\b(bill|invoice|inv|receipt|ref)\s*(no|number|#)\.?|बिल\s*(नं|नम्बर)|रसिद\s*नं|बीजक\s*सं/i,
+  phoneLabel: /\b(phone|ph|tel|mobile|mob|contact)\b|फोन|मोबाइल/i,
+  addressLabel: /\b(address|addr)\b|ठेगाना/i,
+  payMode: /\b(mode\s*of\s*payment|payment\s*mode|paid\s*by|payment\s*method)\b/i,
+  grand: /\b(grand\s*(total|amount)|net\s*(amount|total|payable)|total\s*amount|bill\s*amount|invoice\s*total)\b|कुल\s*जम्मा|कुल\s*रकम|कुल\s*योग/i,
+  plainTotal: /\b(sub\s*-?\s*)?total\b(?!\s*(packages?|qty|quantity|amount|items?|in\s*words))/gi,
+  taxable: /\b(taxable\s*(amount|value|total)?|sub\s*-?\s*total|amount\s*before\s*tax)\b|करयोग्य\s*रकम/i,
+  vat: /(\b\d{1,2}(\.\d+)?\s*%\s*)?\bvat\b(?!\s*(no|reg|number))|मू\.?\s*अ\.?\s*क\.?|मूल्य\s*अभिवृद्धि\s*कर/i,
+  discount: /\bdiscount\b|छुट|छूट/i,
+  tds: /\btds\b|अग्रिम\s*कर\s*कट्टी|स्रोतमा\s*कर\s*कट्टी/i,
+  roundOff: /\bround\s*-?\s*off\b/i,
+  rowStop: /\b(total|sub\s*-?\s*total|discount|taxable|vat|grand|amount\s*in\s*words)\b|जम्मा/i,
+  head: {
+    sn: /^(s\.?\s*n\.?|sn|sl\.?)$|क्र\.?\s*सं/i,
+    desc: /\b(particulars|description|item|details|goods)\b|विवरण/i,
+    qty: /^\W*(q\.?\s*t?\.?\s*y|qnty|quantity)\W*$|परिमाण|मात्रा/i,
+    unit: /^\W*(unit|uom)\W*$|इकाई/i,
+    rate: /^\W*(rate|price)\W*$|दर/i,
+    amount: /^\W*(amount|amt|total)\W*$|रकम|राशि/i,
+  },
+};
+
+const UNIT_MAP: [RegExp, string][] = [
+  [/^l\.?t?r?\.?s?$|^lit(re|er)?s?$|^lr$/i, "Ltr"],
+  [/^pcs?\.?$|^nos?\.?$|^piece?s?$/i, "Pcs"],
+  [/^kgs?\.?$/i, "Kg"],
+  [/^(g|gm|gms)\.?$/i, "Gm"],
+  [/^mtrs?\.?$|^m$/i, "Mtr"],
+  [/^(box|bag|set|pkt|doz|dozen|ft)\.?$/i, ""],
+  [/^(पिस|केजी|लिटर|थान|बोरा)$/, ""],
+];
+const UNIT_CANON = ["ltr", "lr", "pcs", "pc", "nos", "kg", "kgs", "gm", "mtr", "box", "bag", "set", "pkt", "doz"];
+function lev(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+function normUnit(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const t = raw.replace(/[|\]\[}{]/g, "").trim();
+  for (const [re, v] of UNIT_MAP) if (re.test(t)) return v || t;
+  // one OCR slip (Wr / Lt / Pc5): accept only a UNIQUE known unit at edit distance 1
+  if (t.length >= 2) {
+    const near = UNIT_CANON.filter((u) => Math.abs(u.length - t.length) <= 1 && lev(u, t.toLowerCase()) === 1);
+    if (near.length >= 1) {
+      const mapped = new Set(near.map((u) => normUnit(u)));
+      if (mapped.size === 1) return [...mapped][0];
+    }
+  }
+  return undefined;
+}
+
+function f<T>(value: T, status: "fill" | "flag", confidence: number, note?: string) {
+  return { value, status, confidence, note };
+}
+
+/* -------------------------------- LAYOUT -------------------------------- */
+function buildSegments(lines: L[], pageW: number): Seg[] {
+  const segs: Seg[] = [];
+  lines.forEach((l, li) => {
+    const ws = [...l.words].sort((a, b) => a.x0 - b.x0);
+    if (!ws.length) {
+      segs.push({ text: l.text, conf: l.conf, rel: l.rel, y: l.y, x0: 0, x1: pageW, h: 0, line: li });
+      return;
+    }
+    const charW = ws.reduce((a, w) => a + (w.x1 - w.x0), 0) / Math.max(1, ws.reduce((a, w) => a + w.text.length, 0));
+    const gap = Math.max(pageW * 0.045, charW * 4);
+    let cur: OcrWord[] = [ws[0]];
+    const flush = () => {
+      const text = normalizeOcrLine(cur.map((w) => w.text).join(" ").replace(/[|]/g, " "));
+      if (text.trim())
+        segs.push({
+          text,
+          conf: cur.reduce((a, w) => a + w.conf, 0) / cur.length / 100,
+          rel: l.rel,
+          y: l.y,
+          x0: cur[0].x0,
+          x1: cur[cur.length - 1].x1,
+          h: Math.max(...cur.map((w) => w.y1 - w.y0)),
+          line: li,
+        });
+    };
+    for (let i = 1; i < ws.length; i++) {
+      if (ws[i].x0 - ws[i - 1].x1 > gap) {
+        flush();
+        cur = [];
+      }
+      cur.push(ws[i]);
+    }
+    flush();
+  });
+  return segs;
+}
+
+/** Value after a label inside a segment; if empty, the next segment to the right on the same line. */
+function valueAfter(segs: Seg[], i: number, re: RegExp): string {
+  const s = segs[i];
+  const m = re.exec(s.text);
+  let v = m ? s.text.slice(m.index + m[0].length) : "";
+  v = v.replace(/^[\s:.;#-]+/, "").trim();
+  if (!v) {
+    const next = segs.filter((x) => x.line === s.line && x.x0 > s.x1).sort((a, b) => a.x0 - b.x0)[0];
+    v = next ? next.text.replace(/^[\s:.;#-]+/, "").trim() : "";
+  }
+  return v;
+}
+
+/* ---------------------------------- DATE ---------------------------------- */
+type DateCand = { date: Date | null; ambiguous: boolean };
+
+function dateCandidates(text: string): DateCand[] {
+  const out: DateCand[] = [];
+  const now = new Date();
+  const min = new Date(now.getTime() - 400 * 864e5);
+  const max = new Date(now.getTime() + 7 * 864e5);
+  const inRange = (d: Date) => d >= min && d <= max;
+  let m: RegExpExecArray | null;
+  const ymd = /\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b/g;
+  while ((m = ymd.exec(text))) {
+    const y = +m[1], mo = +m[2], d = +m[3];
+    if (mo < 1 || mo > 12 || d < 1) continue;
+    if (y >= 2070 && y <= 2099) {
+      const days = getBSMonthDays(y)?.[mo - 1];
+      if (!days || d > days) continue;
+      try {
+        const ad = bsToAd({ y, m: mo, d });
+        out.push({ date: inRange(ad) ? ad : null, ambiguous: !inRange(ad) });
+      } catch {
+        /* out of BS table */
+      }
+    } else if (y >= 2010 && y <= 2045) {
+      const ad = new Date(y, mo - 1, d, 0, 0, 0, 0);
+      if (ad.getMonth() !== mo - 1) continue;
+      out.push({ date: inRange(ad) ? ad : null, ambiguous: !inRange(ad) });
+    }
+  }
+  const dmy = /\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b/g;
+  while ((m = dmy.exec(text))) {
+    const a = +m[1], b = +m[2], y = +m[3];
+    if (y < 2010 || y > 2045) continue;
+    if (a <= 12 && b <= 12 && a !== b) {
+      out.push({ date: null, ambiguous: true });
+      continue;
+    }
+    const ad = new Date(y, b - 1, a, 0, 0, 0, 0);
+    if (ad.getMonth() !== b - 1) continue;
+    out.push({ date: inRange(ad) ? ad : null, ambiguous: !inRange(ad) });
+  }
+  return out;
+}
+
+/* --------------------------------- AMOUNTS -------------------------------- */
+/** First amount AFTER the label (same line), bottom-most labeled line wins. */
+function amountAfterLabel(lines: L[], re: RegExp, exclude?: RegExp): { value: number; conf: number } | null {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].text;
+    if (exclude && exclude.test(t)) continue;
+    const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    const ms = [...t.matchAll(g)];
+    if (!ms.length) continue;
+    const last = ms[ms.length - 1];
+    const tail = t.slice((last.index ?? 0) + last[0].length).replace(/\b\d+(\.\d+)?\s*%/g, " ");
+    const nums = amountsInLine(tail);
+    if (nums.length) return { value: nums[0], conf: lines[i].conf };
+  }
+  return null;
+}
+
+/* -------------------------------- LINE ITEMS ------------------------------ */
+type Col = "sn" | "desc" | "qty" | "unit" | "rate" | "amount";
+const NUM_ONLY = /^[\d,]+(\.\d+)?$/;
+
+/** Any 3 numbers on a line with qty x rate ~= amount (rounded-qty tolerance), description = text before them. */
+function tripletRow(words: string[]): OcrLineItem | null {
+  const toks = words.map((t) => t.replace(/[|\]\[}{()]/g, "")).filter(Boolean);
+  // OCR often drops the decimal point on low-res photos ("175.20000" -> "17520000"):
+  // a dot-less token also yields v/10^k candidates; qty x rate = amount picks the right one.
+  const nums: { i: number; v: number; shifted: boolean; k: number }[] = [];
+  // typical decimals printed on this line (e.g. "11,504.16000" -> 5): a restored decimal is likely the same width
+  const decs = toks.filter((t) => /^[\d,]+\.\d+$/.test(t)).map((t) => t.split(".")[1].length);
+  const D = decs.length ? Math.max(...decs) : 2;
+  toks.forEach((t, i) => {
+    if (NUM_ONLY.test(t)) {
+      const v = parseStrictAmount(t);
+      if (v != null && v > 0) {
+        nums.push({ i, v, shifted: false, k: 0 });
+        const digits = t.replace(/,/g, "");
+        if (!digits.includes(".") && digits.length >= 4)
+          for (let k = 1; k <= 6 && k < digits.length; k++) nums.push({ i, v: Number(digits) / 10 ** k, shifted: true, k });
+      }
+    }
+  });
+  if (nums.length < 3) return null;
+  let best: { q: (typeof nums)[0]; r: (typeof nums)[0]; a: (typeof nums)[0]; err: number /* rank score */ } | null = null;
+  for (let x = 0; x < nums.length; x++)
+    for (let y = x + 1; y < nums.length; y++)
+      for (let z = y + 1; z < nums.length; z++) {
+        const [q, r, a] = [nums[x], nums[y], nums[z]];
+        if (q.i === r.i || r.i === a.i || q.i === a.i) continue;
+        if (a.v < 1 || q.v > 1e6) continue;
+        const err = Math.abs(q.v * r.v - a.v);
+        // rank: later amount column, fewer recovered decimals, smaller error
+        const shifts = +q.shifted + +r.shifted + +a.shifted;
+        const width = [q, r, a].filter((n) => n.shifted).reduce((acc, n) => acc + Math.min(Math.abs(n.k - D), Math.abs(n.k - 2)), 0);
+        const score = a.i * 100 - shifts * 10 - width * 3 - err;
+        if (err <= Math.max(0.6, 0.005 * a.v) && (!best || score > best.err)) best = { q, r, a, err: score };
+      }
+  if (!best) return null;
+  const firstAlpha = toks.findIndex((t) => /[A-Za-z\u0900-\u097F]{2,}/.test(t));
+  const descToks = firstAlpha >= 0 && firstAlpha < best.q.i ? toks.slice(firstAlpha, best.q.i) : [];
+  const between = toks.slice(best.q.i + 1, best.r.i).find((t) => !NUM_ONLY.test(t));
+  return { description: descToks.join(" ").trim() || "Item", quantity: best.q.v, unit: normUnit(between), rate: best.r.v, amount: best.a.v };
+}
+
+function scanTripletRows(lines: L[], from: number, dbg: (m: string) => void): OcrLineItem[] {
+  const rows: OcrLineItem[] = [];
+  for (let i = from; i < lines.length; i++) {
+    if (i > from && RX.rowStop.test(lines[i].text) && rows.length) break;
+    const r = tripletRow(lines[i].words.map((w) => w.text));
+    if (r) {
+      rows.push(r);
+      dbg(`Row (qty x rate = amount scan) line ${i}: ${r.description} ${r.quantity} ${r.unit ?? ""} x ${r.rate} = ${r.amount}`);
+    }
+  }
+  return rows;
+}
+
+/** Single item row: printed "Total Qty/Packages" confirms the quantity (fixes 656.6 x 17.52 vs 65.66 x 175.20). */
+function confirmQtyFromTotals(lines: L[], rows: OcrLineItem[], dbg: (m: string) => void) {
+  if (rows.length !== 1) return;
+  const line = lines.find((l) => /total\s*(packages?|qty|quantity|pcs)/i.test(l.text));
+  if (!line) return;
+  const m = /(packages?|qty|quantity|pcs)\W*([\d,]+\.\d+|\d+)/i.exec(line.text);
+  const tq = m ? Number(m[2].replace(/,/g, "")) : NaN;
+  if (!(tq > 0)) return;
+  const r = rows[0];
+  // Printed Total Qty is AUTHORITATIVE (keeps 3 decimals, e.g. 65.663 not 65.66) when it fits amount / rate.
+  for (const c of [tq, Math.floor(tq * 100) / 100, Math.round(tq * 100) / 100]) {
+    if (Math.abs(c - r.quantity) < 0.0005) return; // already exact
+    const rate = Math.abs(c * r.rate - r.amount) <= 0.05 ? r.rate : Math.round((r.amount / c) * 100) / 100;
+    if (Math.abs(c * rate - r.amount) <= Math.max(0.6, 0.005 * r.amount)) {
+      dbg(`Row "${r.description}": qty ${r.quantity} x ${r.rate} -> ${c} x ${rate} (confirmed by "${line.text.trim()}")`);
+      rows[0] = { ...r, quantity: c, rate };
+      return;
+    }
+  }
+}
+
+function parseLineItems(lines: L[], dbg: (m: string) => void): { rows: OcrLineItem[]; flagged: number } | null {
+  const out = parseLineItemsInner(lines, dbg);
+  if (out?.rows.length) confirmQtyFromTotals(lines, out.rows, dbg);
+  return out;
+}
+
+const TOTALS_RX = /\b(sub\s*total|total|taxable|vat|tax|discount|grand|round|in\s*words|amount\s*in)\b/i;
+
+function scanRateAmountRows(lines: L[], from: number, dbg: (m: string) => void): OcrLineItem[] {
+  const tq = totalsQty(lines);
+  const out: OcrLineItem[] = [];
+  for (const l of lines.slice(from)) {
+    const t = normalizeOcrLine(l.text);
+    if (TOTALS_RX.test(t) || /\b(pan|vat\s*no|invoice|bill\s*no|date|mob|phone|tel)\b/i.test(t)) continue;
+    const m = /^(.*?[A-Za-z][^\d]*?)[\s=:|-]*([\d,]+(?:\.\d+)?)\s*[|\s]\s*([\d,]+(?:\.\d+)?)\s*\|?\s*$/.exec(t);
+    if (!m) continue;
+    const desc = m[1].replace(/[\s=:|-]+$/, "").trim();
+    if (desc.replace(/[^A-Za-z]/g, "").length < 3) continue;
+    const rate = Number(m[2].replace(/,/g, ""));
+    const amount = Math.round(Number(m[3].replace(/,/g, "")) * 100) / 100;
+    if (!(rate > 0) || !(amount > 0) || rate > amount) continue;
+    let q: number | null = null;
+    let how = "";
+    if (tq && Math.abs(tq * rate - amount) <= Math.max(0.05, 0.0005 * amount)) { q = tq; how = "Total Qty line"; }
+    else {
+      const c = Math.round((amount / rate) * 1000) / 1000;
+      if (Math.abs(c * rate - amount) <= 0.05) { q = c; how = "amount / rate"; }
+    }
+    if (q == null) {
+      dbg(`Row "${l.text}": rate ${rate} / amount ${amount} but qty could not be confirmed`);
+      continue;
+    }
+    out.push({ description: desc, quantity: q, rate, amount });
+    dbg(`Row "${l.text}": no qty column; ${q} x ${rate} = ${amount} (qty from ${how})`);
+  }
+  return out;
+}
+
+function parseLineItemsInner(lines: L[], dbg: (m: string) => void): { rows: OcrLineItem[]; flagged: number } | null {
+  const res = parseLineItemsByHeader(lines, dbg);
+  if (res && res.rows.length) return res;
+  // Fallback: header missing/misread or every row rejected - scan for qty x rate = amount lines
+  const startAt = res?.head ?? 0;
+  const rows = scanTripletRows(lines, startAt, dbg);
+  if (rows.length) return { rows, flagged: 0 };
+  // Fallback 2: row printed with only RATE and AMOUNT (qty column lost, e.g. "Diesel <HSD> = 175.20000 | 11,504.16000").
+  // Qty comes from the printed Total Qty/Packages (authoritative) or amount / rate when that is a clean 3-decimal number.
+  const pair = scanRateAmountRows(lines, startAt, dbg);
+  if (pair.length) return { rows: pair, flagged: 0 };
+  dbg("Line items: no line with qty x rate = amount found");
+  return res ? { rows: [], flagged: res.flagged } : null;
+}
+
+function totalsQty(lines: L[]): number | null {
+  const line = lines.find((l) => /total\s*(packages?|qty|quantity|pcs)/i.test(l.text));
+  const m = line ? /(packages?|qty|quantity|pcs)\W*([\d,]+\.\d+|\d+)/i.exec(line.text) : null;
+  const v = m ? Number(m[2].replace(/,/g, "")) : NaN;
+  return v > 0 ? v : null;
+}
+
+function recoverQtyRate(rateTok: string, amount: number, tq: number | null): { q: number; r: number; how: string } | null {
+  const tol = Math.max(0.6, 0.005 * amount);
+  const digits = rateTok.replace(/[^\d.]/g, "");
+  const cands: { r: number; k: number }[] = [];
+  if (digits) {
+    if (digits.includes(".")) cands.push({ r: Number(digits), k: 0 });
+    else for (let k = 0; k <= 6 && k < digits.length; k++) cands.push({ r: Number(digits) / 10 ** k, k });
+  }
+  if (!cands.length) return null; // no rate column read -> not an item row
+  if (tq) {
+    const r = Math.round((amount / tq) * 100) / 100;
+    if (Math.abs(tq * r - amount) <= tol && cands.some((c) => Math.abs(c.r - r) < 0.01))
+      return { q: tq, r, how: "Total Qty line" };
+  }
+  let best: { q: number; r: number; score: number } | null = null;
+  for (const c of cands) {
+    if (!(c.r > 0)) continue;
+    const q = Math.round((amount / c.r) * 1000) / 1000;
+    if (!(q > 0) || q > 1e5 || Math.abs(q * c.r - amount) > tol) continue;
+    const clean = Math.abs(q - Math.round(q * 100) / 100) * c.r <= tol; // qty with <= 2-3 decimals
+    if (!clean) continue;
+    const score = -Math.abs(c.k - 5) - Math.abs(c.k - 2) * 0.1;
+    if (!best || score > best.score) best = { q, r: c.r, score };
+  }
+  return best ? { q: best.q, r: best.r, how: "qty = amount / rate" } : null;
+}
+
+function parseLineItemsByHeader(lines: L[], dbg: (m: string) => void): { rows: OcrLineItem[]; flagged: number; head: number } | null {
+  let head = -1;
+  let cols: { col: Col; cx: number; x0: number }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const found: { col: Col; cx: number; x0: number }[] = [];
+    for (const w of lines[i].words) {
+      const t = w.text.replace(/[|\]\[}{]/g, "");
+      for (const c of Object.keys(RX.head) as Col[]) {
+        if (RX.head[c].test(t) && !found.some((x) => x.col === c)) found.push({ col: c, cx: (w.x0 + w.x1) / 2, x0: w.x0 });
+      }
+    }
+    const score = found.filter((x) => x.col !== "sn").length;
+    if (score >= 3 && found.some((x) => x.col === "amount")) {
+      head = i;
+      cols = found;
+      break;
+    }
+  }
+  if (head < 0) {
+    dbg("Line items: no table header (need >=3 of Description / Qty / Unit / Rate|Price / Amount)");
+    return null;
+  }
+  dbg(`Line items: header at line ${head}: ${cols.map((c) => c.col).join(", ")}`);
+  const desc = cols.find((c) => c.col === "desc");
+  const numCols = cols.filter((c) => c.col !== "desc" && c.col !== "sn");
+  const rows: OcrLineItem[] = [];
+  let flagged = 0;
+  for (let i = head + 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (RX.rowStop.test(l.text)) break;
+    const words = l.words.map((w) => ({ ...w, text: w.text.replace(/[|\]\[}{]/g, "") })).filter((w) => w.text);
+    if (!words.some((w) => /\d/.test(w.text))) continue;
+    const cell: Partial<Record<Col, string[]>> = {};
+    const descWords: string[] = [];
+    const rightWords: string[] = [];
+    for (const w of words) {
+      const cx = (w.x0 + w.x1) / 2;
+      const isNum = NUM_ONLY.test(w.text);
+      // nearest numeric column (by centre); words left of the first numeric column belong to description
+      const firstNumX = Math.min(...numCols.map((c) => c.cx)) - (desc ? Math.abs(Math.min(...numCols.map((c) => c.cx)) - desc.cx) / 2 : 0);
+      if (cx < firstNumX) {
+        descWords.push(w.text);
+        continue;
+      }
+      rightWords.push(w.text);
+      let best = numCols[0];
+      for (const c of numCols) if (Math.abs(c.cx - cx) < Math.abs(best.cx - cx)) best = c;
+      if (best.col === "unit" && isNum) {
+        // numbers never go to Unit: pick nearest numeric column instead
+        const alt = numCols.filter((c) => c.col !== "unit").sort((a, b) => Math.abs(a.cx - cx) - Math.abs(b.cx - cx))[0];
+        if (alt) best = alt;
+      }
+      (cell[best.col] ??= []).push(w.text);
+    }
+    // description: drop S.N ("1."), HSN codes (6-8 digits) at the start
+    // description: drop leading S.N / HSN tokens (pure digits, dots, OCR'd column bars like "1.|27101930")
+    let k0 = 0;
+    while (k0 < descWords.length && /^[\d.,)|lI]+$/.test(descWords[k0]) && /\d/.test(descWords[k0])) k0++;
+    const description = descWords.slice(k0).join(" ").trim();
+    let fbDesc: string | null = null;
+    let qty = cell.qty?.length ? parseStrictAmount(cell.qty.join("")) : null;
+    let rate = cell.rate?.length ? parseStrictAmount(cell.rate.join("")) : null;
+    let amount = cell.amount?.length ? parseStrictAmount(cell.amount.join("")) : null;
+    let unit = normUnit(cell.unit?.join(""));
+    const okRow = (q: number | null, r: number | null, a: number | null) =>
+      q != null && r != null && a != null && q > 0 && r > 0 && Math.abs(q * r - a) <= Math.max(0.6, 0.005 * a);
+    if (!okRow(qty, rate, amount)) {
+      // Fallback when a header word was missed/misread: column ORDER Qty [Unit] Rate Amount, validated by qty x rate = amount
+      const nums: number[] = [];
+      let unitTok: string | undefined;
+      const firstAlpha = words.findIndex((w) => /[A-Za-z\u0900-\u097F]{2,}/.test(w.text));
+      const after = firstAlpha >= 0 ? words.slice(firstAlpha).map((w) => w.text) : rightWords;
+      const firstNum = after.findIndex((t) => NUM_ONLY.test(t));
+      const descFb = firstNum > 0 ? after.slice(0, firstNum).join(" ") : "";
+      for (const t of firstNum >= 0 ? after.slice(firstNum) : []) {
+        if (NUM_ONLY.test(t)) {
+          const v = parseStrictAmount(t);
+          if (v != null) nums.push(v);
+        } else if (nums.length === 1 && !unitTok) unitTok = t;
+      }
+      if (nums.length >= 3) {
+        const [q, r, a] = nums.slice(-3);
+        if (okRow(q, r, a)) {
+          qty = q; rate = r; amount = a;
+          if (descFb) fbDesc = descFb;
+          unit = unit ?? normUnit(unitTok);
+          dbg(`Row "${description}": columns taken by order (qty x rate = amount verified)`);
+        }
+      }
+    }
+    if (qty == null || rate == null || amount == null || !(qty > 0) || !(rate > 0)) {
+      const t = tripletRow(words.map((w) => w.text));
+      if (t) {
+        rows.push({ ...t, description: description || t.description, unit: unit ?? t.unit });
+        dbg(`Row "${l.text}": columns incomplete; recovered ${t.quantity} x ${t.rate} = ${t.amount}`);
+        continue;
+      }
+      // qty unreadable (e.g. "es66"): qty = amount / rate, rate decimal restored if needed, confirmed by Total Qty when printed
+      if (amount != null && amount >= 1) {
+        const rec = recoverQtyRate(cell.rate?.join("") ?? "", amount, totalsQty(lines));
+        if (rec) {
+          rows.push({ description: description || "Item", quantity: rec.q, unit, rate: rec.r, amount });
+          dbg(`Row "${l.text}": qty unreadable; recovered ${rec.q} x ${rec.r} = ${amount} (${rec.how})`);
+          continue;
+        }
+      }
+      const numericCells = [qty, rate, amount].filter((x) => x != null).length;
+      if (numericCells < 2) {
+        dbg(`Row "${l.text}": ignored (not an item row - ${numericCells} number column(s))`);
+        continue;
+      }
+      dbg(`Row "${l.text}": missing qty/rate/amount (qty=${qty} rate=${rate} amount=${amount})`);
+      flagged++;
+      continue;
+    }
+    if (Math.abs(qty * rate - amount) > Math.max(0.6, 0.005 * amount)) {
+      const t = tripletRow(words.map((w) => w.text));
+      if (t) {
+        rows.push({ ...t, description: description || t.description, unit: unit ?? t.unit });
+        dbg(`Row "${description}": ${qty} x ${rate} != ${amount}; recovered ${t.quantity} x ${t.rate} = ${t.amount} (decimal point restored)`);
+        continue;
+      }
+      dbg(`Row "${description}": ${qty} x ${rate} != ${amount}`);
+      flagged++;
+      continue;
+    }
+    rows.push({ description: fbDesc || description || "Item", quantity: qty, unit, rate, amount });
+  }
+  return { rows, flagged, head: head + 1 };
+}
+
+/* ---------------------------------- MAIN ---------------------------------- */
+export type ParseContext = {
+  kind: OcrVoucherKind;
+  parties: readonly OcrPartyLike[];
+  items: readonly OcrItemLike[];
+  ownPan?: string | null;
+  ownName?: string | null;
+};
+
+const localYmd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+export function parseBill(raw: OcrRawResult, ctx: ParseContext): OcrParsedBill {
+  const H = raw.pageHeight || 1;
+  const W = raw.pageWidth || Math.max(1, ...raw.lines.flatMap((l) => (l.words ?? []).map((w) => w.x1)));
+  const lines: L[] = raw.lines
+    .map((l) => ({ text: normalizeOcrLine(l.text.replace(/[|]/g, " ")), conf: l.confidence / 100, rel: l.y / H, y: l.y, words: l.words ?? [] }))
+    .filter((l) => l.text);
+  const segs = buildSegments(lines, W);
+  const out: OcrParsedBill = { debug: [] };
+  const dbg = (m: string) => out.debug!.push(m);
+  const own = (ctx.ownPan || "").replace(/\D/g, "");
+  const ownName = ctx.ownName ? normalizeName(ctx.ownName) : "";
+
+  /* ---- Blocks: where is OUR company, where is the counter-party ---- */
+  const isOwnSeg = (s: Seg) =>
+    (own.length === 9 && s.text.replace(/(\d)[\s-](?=\d)/g, "$1").includes(own)) ||
+    (ownName.length >= 4 && normalizeName(s.text).includes(ownName));
+  const buyerLabelSeg = segs.find((s) => RX.buyerLabel.test(s.text));
+  const buyerY = buyerLabelSeg?.y ?? null;
+  const ownSeg = segs.find(isOwnSeg);
+  let ourSide: "seller" | "buyer" | null = null;
+  if (ownSeg) {
+    if (buyerY != null) ourSide = ownSeg.y >= buyerY - 2 ? "buyer" : "seller";
+    else ourSide = RX.sellerLabel.test(ownSeg.text) || ownSeg.rel <= 0.2 ? "seller" : "buyer";
+  }
+  // Counter-party block: purchase -> seller (above the buyer block); sale -> buyer block
+  const counterSide: "seller" | "buyer" = ourSide ? (ourSide === "buyer" ? "seller" : "buyer") : ctx.kind === "purchase" ? "seller" : "buyer";
+  const sellerTop = buyerY != null ? (s: Seg) => s.y < buyerY - 2 : (s: Seg) => s.rel <= 0.3;
+  const counterSegs = segs.filter((s) => (counterSide === "seller" ? sellerTop(s) : !sellerTop(s) && s.rel < 0.6)).filter((s) => !isOwnSeg(s));
+  dbg(`Layout: ${lines.length} lines, ${segs.length} segments; our company = ${ourSide ?? "not found"}; counter-party block = ${counterSide} (${counterSegs.length} segments)`);
+
+  /* ---- Date / due date (labeled segment value) ---- */
+  let dateCand: DateCand | null = null;
+  for (let i = 0; i < segs.length && !dateCand; i++) {
+    const s = segs[i];
+    if (!RX.dateLabel.test(s.text) || RX.dueLabel.test(s.text) || RX.printLabel.test(s.text)) continue;
+    const c = dateCandidates(valueAfter(segs, i, RX.dateLabel));
+    if (c.length) dateCand = c.find((x) => x.date && !x.ambiguous) ?? c[0];
+  }
+  if (dateCand?.date && !dateCand.ambiguous) out.date = f(dateCand.date, "fill", 0.95);
+  else if (dateCand) out.date = f(dateCand.date ?? new Date(NaN), "flag", 0.5, "Date ambiguous / out of range");
+  else {
+    const all = segs.filter((s) => s.rel <= 0.4 && !RX.printLabel.test(s.text)).flatMap((s) => dateCandidates(s.text));
+    const uniq = new Set(all.map((c) => c.date?.getTime() ?? "x"));
+    if (all.length && uniq.size === 1 && all[0].date && !all[0].ambiguous) out.date = f(all[0].date, "fill", 0.9);
+    else if (all.length) out.date = f(all[0].date ?? new Date(NaN), "flag", 0.5, "Several dates without label");
+  }
+  if (!out.date) dbg("Date: no BS/AD date found");
+  else dbg(`Date: ${out.date.status} ${localYmd(out.date.value)}${out.date.note ? ` (${out.date.note})` : ""}`);
+  const dueIdx = segs.findIndex((s) => RX.dueLabel.test(s.text));
+  if (dueIdx >= 0) {
+    const c = dateCandidates(valueAfter(segs, dueIdx, RX.dueLabel))[0];
+    if (c?.date && !c.ambiguous) {
+      const ok = !out.date?.value || c.date >= out.date.value;
+      out.dueDate = f(c.date, ok ? "fill" : "flag", ok ? 0.92 : 0.5, ok ? undefined : "Due date before bill date");
+    }
+  }
+
+  /* ---- Counter-party PAN ---- */
+  const panIn = (txt: string) => txt.replace(/(\d)[\s-](?=\d)/g, "$1").match(/(?<!\d)\d{9}(?!\d)/)?.[0] ?? null;
+  const pans: string[] = [];
+  segs.forEach((s, i) => {
+    if (!RX.panLabel.test(s.text)) return;
+    const p = panIn(valueAfter(segs, i, RX.panLabel)) ?? panIn(s.text);
+    if (p && p !== own && counterSegs.includes(s) && !pans.includes(p)) pans.push(p);
+  });
+  if (!pans.length) {
+    // label-less 9-digit number in the counter block (not a phone)
+    counterSegs.forEach((s) => {
+      const p = panIn(s.text);
+      if (p && p !== own && !RX.phoneLabel.test(s.text) && !pans.includes(p)) pans.push(p);
+    });
+  }
+  const pan = pans.length === 1 ? pans[0] : null;
+  if (pan) out.pan = f(pan, "fill", 0.95);
+  dbg(pans.length ? `PAN (counter-party): ${pans.join(", ")}${pan ? "" : " - ambiguous"}` : "PAN: no counter-party PAN found");
+
+  /* ---- Counter-party name ---- */
+  let partyName: { text: string; conf: number; seg?: Seg } | null = null;
+  if (counterSide === "seller") {
+    const cands = counterSegs.filter(
+      (s) =>
+        /\p{L}{3,}/u.test(s.text) &&
+        !RX.panLabel.test(s.text) && !RX.billLabel.test(s.text) && !RX.dateLabel.test(s.text) &&
+        !RX.phoneLabel.test(s.text) && !RX.addressLabel.test(s.text) &&
+        !/invoice|bill|tax|estimate|receipt|<<|>>|quotation/i.test(s.text) &&
+        (s.text.match(/\p{L}+/gu) ?? []).length >= 2
+    );
+    const big = cands.sort((a, b) => b.h - a.h || a.y - b.y)[0];
+    if (big) partyName = { text: big.text, conf: big.conf, seg: big };
+  } else {
+    const i = segs.findIndex((s) => RX.buyerLabel.test(s.text) && !isOwnSeg(s));
+    if (i >= 0) {
+      const v = valueAfter(segs, i, RX.buyerLabel);
+      if (v) partyName = { text: v, conf: segs[i].conf, seg: segs[i] };
+    }
+  }
+  if (partyName) out.partyName = f(partyName.text, "flag", partyName.conf);
+
+  /* ---- Identifiers (counter-party block only) ---- */
+  const ids: OcrIdentifiers = { pan: pan ?? undefined, phones: [], emails: [], bankAccountNos: [] };
+  const blockText = counterSegs.map((s) => s.text).join("\n");
+  for (const m of blockText.matchAll(/(?<![\d])(?:\+?977[\s-]?)?(9[678]\d{8})(?!\d)/g)) if (!ids.phones.includes(m[1])) ids.phones.push(m[1]);
+  for (const s of counterSegs.filter((x) => RX.phoneLabel.test(x.text))) {
+    for (const m of s.text.matchAll(/(?<![\d])(0\d{1,2})[\s-]{0,2}(\d{6,7})(?!\d)/g)) {
+      const v = `${m[1]}-${m[2]}`;
+      if (!ids.phones.includes(v)) ids.phones.push(v);
+    }
+  }
+  for (const m of blockText.matchAll(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g)) ids.emails.push(m[0].toLowerCase());
+  if (counterSide === "seller") {
+    const labeled = counterSegs.findIndex((s) => RX.addressLabel.test(s.text));
+    if (labeled >= 0) ids.address = valueAfter(counterSegs, labeled, RX.addressLabel) || undefined;
+    else if (partyName?.seg) {
+      const below = counterSegs
+        .filter((s) => s.y > partyName!.seg!.y && !RX.phoneLabel.test(s.text) && !RX.panLabel.test(s.text) && !/@/.test(s.text) && /\p{L}{3,}/u.test(s.text))
+        .sort((a, b) => a.y - b.y)[0];
+      if (below) ids.address = below.text;
+    }
+  } else {
+    const i = segs.findIndex((s, k) => RX.addressLabel.test(s.text) && !sellerTop(s) && k >= 0);
+    if (i >= 0) ids.address = valueAfter(segs, i, RX.addressLabel) || undefined;
+  }
+  if (ids.address) ids.address = ids.address.replace(/\s*-\s+(?=\d)/g, "-").replace(/\s+,/g, ",").replace(/[\s:;,|.\-]+$/, "").trim();
+  for (const s of counterSegs) {
+    if (!/\b(a\/?c|acc(?:oun)?t)\s*(no|number|#)?\b|खाता\s*नं/i.test(s.text)) continue;
+    const m = s.text.replace(/(\d)[\s-](?=\d)/g, "$1").match(/(?<!\d)\d{8,20}(?!\d)/);
+    if (m) ids.bankAccountNos.push(m[0]);
+  }
+  const contact = counterSegs.find((s) => /\b(contact\s*person|attn\.?|prop(?:rietor)?\.?)\b|सम्पर्क\s*व्यक्ति|प्रोप्राइटर/i.test(s.text));
+  if (contact) ids.contactPerson = contact.text.replace(/^.*?(person|attn\.?|prop(?:rietor)?\.?|व्यक्ति|प्रोप्राइटर)\s*[:.-]?\s*/i, "").slice(0, 60);
+  const pm = segs.findIndex((s) => RX.payMode.test(s.text));
+  if (pm >= 0) {
+    const v = valueAfter(segs, pm, RX.payMode).split(/\s{2,}/)[0].trim();
+    if (v) out.paymentMode = ids.paymentMode = v;
+  }
+  out.identifiers = ids;
+  dbg(`Identifiers: name="${partyName?.text ?? "-"}" PAN=${ids.pan ?? "-"} phones=${ids.phones.join("/") || "-"} address="${ids.address ?? "-"}" payment=${ids.paymentMode ?? "-"}`);
+
+  /* ---- Party match: PAN exact, then strict fuzzy name ---- */
+  // system ledgers that ride along in the party list (Sales/Purchase Account, Owner's Capital, Opening Balance) are never a bill party
+  const pool = ctx.parties.filter(isOcrSelectableParty);
+  // 1) PAN / VAT No exact (highest priority, regardless of name). Own company PAN never selects a party.
+  const ownPanD = String(ctx.ownPan ?? "").replace(/\D/g, "");
+  const panOf = (p: (typeof pool)[number]) => [p.pan, p.panNo, p.vatNo].map((x) => String(x ?? "").replace(/\D/g, "")).filter(Boolean);
+  if (pan && pan !== ownPanD) {
+    const hits = pool.filter((p) => panOf(p).includes(pan));
+    if (hits.length === 1) { out.partyId = f(hits[0].id, "fill", 0.99); dbg(`Party: "${hits[0].name}" by PAN ${pan}`); }
+    else if (hits.length > 1) out.partyId = f("", "flag", 0.5, "Several parties share this PAN");
+  }
+  // 2) Phone (last 10 digits, counter-party block only) - strong signal when unique
+  if (!out.partyId && ids.phones.length) {
+    const tail = (x: unknown) => String(x ?? "").replace(/\D/g, "").slice(-10);
+    const billPh = new Set(ids.phones.map(tail).filter((x) => x.length >= 7));
+    const hits = pool.filter((p) => [p.phone, p.mobile].map(tail).some((x) => x.length >= 7 && billPh.has(x)));
+    if (hits.length === 1) { out.partyId = f(hits[0].id, "fill", 0.97); dbg(`Party: "${hits[0].name}" by phone`); }
+  }
+  if (!out.partyId && partyName) {
+    const best = bestUniqueMatch(normalizeName(partyName.text), pool, (p) => namesOf(p).map(normalizeName), 0.95, 0.1);
+    if (best) out.partyId = f(best.item.id, "fill", best.score);
+  }
+  // Alias / script-insensitive pass: bill name vs party name + Alias Name by sound skeleton
+  // (Roman bill <-> Devanagari alias, minor spelling drift). Stricter: unique, long enough.
+  if (!out.partyId && partyName) {
+    // transliterate BEFORE normalizeName (it strips Devanagari vowel marks as non-letters)
+    const sk = (x: string) => nameSkeleton(normalizeName(devanagariToRoman(x)));
+    const q = sk(partyName.text);
+    if (q.replace(/ /g, "").length >= 5) {
+      const best = bestUniqueMatch(q, pool, (p) => namesOf(p).map(sk).filter((x) => x.replace(/ /g, "").length >= 3), 0.9, 0.1);
+      if (best) {
+        out.partyId = f(best.item.id, "fill", Math.min(best.score, 0.95));
+        dbg(`Party: matched "${best.item.name}" by name/alias sound (${Math.round(best.score * 100)}%)`);
+      }
+    }
+  }
+  {
+    // TEMP debug (Copy all): party candidates + best name/alias scores
+    const qn = partyName ? normalizeName(partyName.text) : "";
+    const top = qn
+      ? pool
+          .map((p) => ({ n: p.name, a: p.aliasName ?? "", s: Math.max(0, ...namesOf(p).map((x) => nameScore(qn, normalizeName(x)))), k: Math.max(0, ...namesOf(p).map((x) => nameScore(nameSkeleton(normalizeName(devanagariToRoman(qn))), nameSkeleton(normalizeName(devanagariToRoman(x)))))) }))
+          .sort((a, b) => Math.max(b.s, b.k) - Math.max(a.s, a.k))
+          .slice(0, 3)
+      : [];
+    dbg(`Party candidates: ${ctx.parties.length} received, ${pool.length} active, ${pool.filter((p) => (p.aliasName ?? "").trim()).length} with alias; query "${qn || "-"}"; best: ${top.map((t) => `${t.n}${t.a ? ` [alias "${t.a}"]` : ""} name ${Math.round(t.s * 100)}% / sound ${Math.round(t.k * 100)}%`).join("; ") || "-"}; picked ${out.partyId?.value ?? "none"}`);
+  }
+  if (!out.partyId) dbg(pan ? `Party: no account has PAN ${pan}; name "${partyName?.text ?? "-"}" had no unique match >= 95%` : `Party: no PAN; name "${partyName?.text ?? "-"}" had no unique match >= 95%`);
+
+  /* ---- Bill no (OCR digit confusions fixed per part: B3 -> 83) ---- */
+  for (let i = 0; i < segs.length; i++) {
+    if (!RX.billLabel.test(segs[i].text)) continue;
+    const v = valueAfter(segs, i, RX.billLabel);
+    const tok = /^[A-Za-z0-9][A-Za-z0-9\-/]{0,24}/.exec(v)?.[0];
+    if (tok && /\d/.test(tok) && !/^\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}$/.test(tok)) {
+      const fixed = tok.split(/([-/])/).map(fixDigitConfusions).join("").toUpperCase();
+      out.billNo = f(fixed, "fill", segs[i].conf);
+      break;
+    }
+  }
+  if (!out.billNo) dbg("Bill No: no Bill/Invoice No label with a value");
+
+  /* ---- Amounts ---- */
+  const grand = amountAfterLabel(lines, RX.grand);
+  const plain = amountAfterLabel(lines, RX.plainTotal, /\bgrand\b|\btaxable\b|\bsub\s*-?\s*total\b/i);
+  const taxableL = amountAfterLabel(lines, RX.taxable);
+  const vat = amountAfterLabel(lines, RX.vat);
+  const disc = amountAfterLabel(lines, RX.discount);
+  const tds = amountAfterLabel(lines, RX.tds);
+  const round = amountAfterLabel(lines, RX.roundOff);
+  const altNums = new Set((raw.altText ?? "").split(/\r?\n/).flatMap((t) => amountsInLine(normalizeOcrLine(t))).map((n) => n.toFixed(2)));
+
+  const items = parseLineItems(lines, dbg);
+  const S = items?.rows.reduce((a, r) => a + r.amount, 0) ?? 0;
+  const discount = disc?.value ?? 0;
+  // Taxable base: item rows when parsed, else the printed Taxable / Total (never 0 -> would let VAT pose as grand total)
+  const taxable = S > 0 ? S - discount : taxableL?.value ?? plain?.value ?? 0;
+  let tax = vat?.value ?? 0;
+  // printed Taxable/Total missing -> derive taxable = grand - VAT (when both printed)
+  const derivedTaxable = !plain && !taxableL && grand && vat ? Math.round((grand.value - vat.value) * 100) / 100 : null;
+  // Printed "Total" with a dropped decimal point (e.g. "1150416" for 11,504.16): restore when it then equals the line sum
+  let plainValue = plain?.value ?? null;
+  if (plainValue != null && S > 0 && Math.abs(S - plainValue) > 1) {
+    for (const k of [1, 2, 3, 4, 5]) {
+      const v = Math.round((plainValue / 10 ** k) * 100) / 100;
+      if (Math.abs(v - S) <= 0.05) {
+        dbg(`Total ${plainValue} -> ${v} (decimal point restored)`);
+        plainValue = v;
+        break;
+      }
+    }
+  }
+  const check1 =
+    (plainValue == null || Math.abs(S - plainValue) <= 1) &&
+    (!taxableL || Math.abs(taxable - taxableL.value) <= 1) &&
+    (derivedTaxable == null || Math.abs(taxable - derivedTaxable) <= 1);
+  if (vat && taxable > 0 && Math.abs(vat.value - taxable * 0.13) > 1) {
+    for (const k of [2, 3, 4, 5]) {
+      const v = Math.round((vat.value / 10 ** k) * 100) / 100;
+      if (Math.abs(v - taxable * 0.13) <= 1) {
+        dbg(`VAT ${vat.value} -> ${v} (decimal point restored)`);
+        vat.value = v;
+        tax = v;
+        break;
+      }
+    }
+  }
+  const check2 = !vat || Math.abs(tax - Math.round(taxable * 0.13 * 100) / 100) <= 1;
+  const expected = Math.round((taxable + tax + (round?.value ?? 0)) * 100) / 100;
+  let grandValue = grand?.value ?? null;
+  let grandNote = "";
+  if (grandValue == null && taxable > 0 && expected > tax && altNums.has(expected.toFixed(2))) {
+    grandValue = expected;
+    grandNote = " (grand total read by 2nd OCR pass)";
+  }
+  // Unlabeled grand total: largest trailing money value on a line AFTER the VAT line that equals taxable + VAT (±0.05)
+  if (grandValue == null && taxable > 0 && tax > 0) {
+    const vi = lines.findIndex((l) => RX.vat.test(l.text));
+    let best: number | null = null;
+    for (const l of lines.slice(Math.max(0, vi))) {
+      const nums = amountsInLine(normalizeOcrLine(l.text));
+      const last = nums[nums.length - 1];
+      if (last != null && Math.abs(last - expected) <= 0.05 && (best == null || last > best)) best = last;
+    }
+    if (best != null) {
+      grandValue = best;
+      grandNote = " (unlabeled trailing amount = taxable + VAT)";
+    }
+  }
+  const check3 = grandValue != null && Math.abs(expected - grandValue) <= 1;
+  dbg(`Totals: S=${S.toFixed(2)} total=${plain?.value ?? "-"} taxable=${taxableL?.value ?? "-"} disc=${discount} vat=${vat?.value ?? "-"} grand=${grandValue ?? "-"}${grandNote} | check1(sum/taxable)=${check1} check2(VAT13%)=${check2} check3(grand)=${check3}`);
+  const reconciled = !!items && items.rows.length > 0 && items.flagged === 0 && check1 && check2 && check3;
+
+  if (items?.rows.length) {
+    const itemPool = ctx.items.filter((i) => !i.isDeleted);
+    items.rows = items.rows.map((r) => {
+      const n = normalizeName(r.description.replace(/<[^>]*>/g, " "));
+      const exact = itemPool.filter((i) => namesOf(i).some((x) => normalizeName(x) === n));
+      if (exact.length === 1) return { ...r, itemId: exact[0].id };
+      const best = bestUniqueMatch(n, itemPool, (i) => namesOf(i).map(normalizeName), 0.92, 0.08);
+      return best ? { ...r, itemId: best.item.id } : r;
+    });
+  }
+  if (reconciled) {
+    out.lineItems = f(items!.rows, "fill", 0.95);
+    if (taxableL ?? plain) out.subTotal = f((taxableL ?? plain)!.value, "fill", 0.95);
+    if (disc) out.discount = f(discount, "fill", 0.95);
+    if (vat) out.vat = f(tax, "fill", 0.95);
+    out.total = f(grandValue!, "fill", 0.97);
+  } else {
+    if (grandValue != null) out.total = f(grandValue, "flag", grand?.conf ?? 0.6, "Totals did not reconcile with line items");
+    if (items?.rows.length) out.lineItems = f(items.rows, "flag", 0.5, "Line items did not reconcile");
+    if (vat) out.vat = f(tax, "flag", vat.conf, "Not reconciled");
+    if (disc) out.discount = f(discount, "flag", disc.conf, "Not reconciled");
+  }
+  if (tds) out.tds = f(tds.value, "flag", tds.conf, "TDS is hint-only");
+
+  // Single amount (payments / contra / adjustment)
+  const recv = amountAfterLabel(lines, /\b(received|paid|amount\s*paid|amount\s*received|cheque\s*amount)\b|प्राप्त\s*रकम|भुक्तानी\s*रकम/i);
+  const cand = reconciled ? grandValue! : (grandValue ?? recv?.value ?? null);
+  if (cand != null && cand > 0) {
+    if (reconciled) out.amount = f(cand, "fill", 0.97);
+    else {
+      const seen = lines.reduce((n, l) => n + amountsInLine(l.text).filter((v) => Math.abs(v - cand) < 0.005).length, 0) + (altNums.has(cand.toFixed(2)) ? 1 : 0);
+      dbg(`Amount: candidate ${cand} seen ${seen} time(s) (need 2 unless totals reconcile)`);
+      out.amount = seen >= 2 ? f(cand, "fill", 0.92) : f(cand, "flag", 0.6, "Amount seen only once - not confirmed");
+    }
+  }
+
+  out.docType = detectDocType(lines, ourSide);
+  if (out.docType) dbg(`Document type: ${out.docType.type} (${out.docType.reason})`);
+  else dbg("Document type: not determined (own company PAN/name not found on bill)");
+  return out;
+}
+
+/** Bill type relative to OUR company: title keywords + which block our PAN/name is in. */
+function detectDocType(lines: L[], ourSide: "seller" | "buyer" | null): OcrParsedBill["docType"] {
+  const all = lines.map((l) => l.text).join("\n");
+  const title =
+    /credit\s*note|क्रेडिट\s*नोट/i.test(all) ? "credit_note"
+    : /debit\s*note|डेबिट\s*नोट/i.test(all) ? "debit_note"
+    : /\b(money\s*)?receipt\b|रसिद|भरपाई/i.test(all) ? "receipt"
+    : /payment\s*voucher|paid\s*to/i.test(all) ? "payment"
+    : /tax\s*invoice|invoice|\bbill\b|बीजक|बिल/i.test(all) ? "invoice"
+    : null;
+  if (!title) return undefined;
+  if (title === "credit_note" || title === "debit_note") return { type: title, confidence: 0.9, reason: `title "${title.replace("_", " ")}"` };
+  if (title === "payment") return { type: "payment_out", confidence: 0.8, reason: "payment voucher / paid to" };
+  if (!ourSide) return undefined;
+  const why = ourSide === "seller" ? "our company in seller/header block" : "our company in buyer (Party Name) block";
+  if (title === "receipt") return { type: ourSide === "seller" ? "payment_in" : "payment_out", confidence: 0.85, reason: `receipt; ${why}` };
+  return { type: ourSide === "seller" ? "sale" : "purchase", confidence: 0.9, reason: `invoice; ${why}` };
+}

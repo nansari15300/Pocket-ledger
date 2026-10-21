@@ -140,6 +140,7 @@ import {
   expandStaffLedgerTdsRows,
   summarizeStaffTdsBalances,
 } from "@/lib/staffLedgerTdsView";
+import { getReportVoucherTypeKey, ReportHeaderSummaryCards, reportTdsFilterSide, reportVoucherMatchesSummaryCard, type ReportStatementSummaryCardData } from "@/components/reports/ReportStatementSummaryCards";
 import {
   buildTaxNameById,
   ledgerTdsFooterColumnMenuKeys,
@@ -223,6 +224,8 @@ export function StaffDetails({
   onShowAll,
   isAllVouchersView,
   context,
+  reportCardFilter,
+  reportSummaryCards,
   onBack,
   onSelectStaff,
   transactions,
@@ -245,6 +248,8 @@ export function StaffDetails({
   onShowAll?: () => void;
   isAllVouchersView?: boolean;
   context?: string;
+  reportCardFilter?: string | null;
+  reportSummaryCards?: ReportStatementSummaryCardData[];
   userNames?: Record<string, string>;
   onBack?: () => void;
   onSelectStaff?: (staffId: string) => void;
@@ -667,8 +672,16 @@ export function StaffDetails({
 
   // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
-    () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
-    [processedTransactions, includeNotesInTable]
+    () => {
+      const base = includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note");
+      if (context !== "report" || !reportCardFilter || reportTdsFilterSide(reportCardFilter)) return base;
+      return base.filter((t: any) =>
+        reportCardFilter.startsWith("summary:")
+          ? reportVoucherMatchesSummaryCard(t, reportCardFilter.slice(8), "staff", staff.id)
+          : getReportVoucherTypeKey(t, "staff", staff.id) === reportCardFilter
+      );
+    },
+    [processedTransactions, includeNotesInTable, context, reportCardFilter, staff.id]
   );
 
   const taxNameById = useMemo(() => buildTaxNameById(processedTaxes), [processedTaxes]);
@@ -812,11 +825,16 @@ export function StaffDetails({
   }, [ledgerSplitMode, onLedgerSplitModeChange]);
 
   useEffect(() => {
+    if (context === "report") {
+      setLedgerSplitMode(reportTdsFilterSide(reportCardFilter) ? "tax" : "salary");
+      setShowTdsLinkedTrxn(true);
+      return;
+    }
     setLedgerSplitMode(
       companyId && staff.id && readStaffTdsLedgerMode(companyId, staff.id) ? "tax" : "salary"
     );
     setShowTdsLinkedTrxn(true);
-  }, [companyId, staff.id]);
+  }, [companyId, staff.id, context, reportCardFilter]);
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
@@ -1590,7 +1608,7 @@ export function StaffDetails({
           key={`staff-mobile-${staff.id}-${ledgerSplitMode}-${currentPage}-${rowsPerPage}`}
           transactions={mobileTransactionsToShow}
           context="staff"
-          contextId={staff.id}
+          contextId={staff.id}
           forceBalanceMode={taxDetailsMode ? "statement" : undefined}
           transactionCardSearchHighlight={mobileSearchTerm}
           openingBalance={hideBooksOpeningForSplit ? 0 : mobilePaginationMeta.openingForPage}
@@ -1955,6 +1973,10 @@ export function StaffDetails({
             <div className={LEDGER_HEADER_NAME_CARD_CN}>
               <h2 className={LEDGER_HEADER_TITLE_CN} title={staff.name}>{staff.name}</h2>
             </div>
+            {reportSummaryCards?.length ? (
+              <ReportHeaderSummaryCards cards={reportSummaryCards} />
+            ) : (
+            <>
             <button
               type="button"
               className={cn(LEDGER_HEADER_BALANCE_CARD_CN, "cursor-pointer")}
@@ -2070,6 +2092,8 @@ export function StaffDetails({
                 </PopoverContent>
               </Popover>
             ) : null}
+            </>
+            )}
           </div>
           <div className={LEDGER_HEADER_PILL_ROW_CN}>
                 <ReconciliationAccountButton accountId={staff.id} />
@@ -2223,7 +2247,7 @@ export function StaffDetails({
                   key={`staff-${staff.id}-${ledgerSplitMode}-${currentPage}-${rowsPerPage}`}
                   transactions={paginatedTransactions}
                   context="staff"
-                  contextId={staff.id}
+                  contextId={staff.id}
                   forceBalanceMode={taxDetailsMode ? "statement" : undefined}
                   openingBalance={hideBooksOpeningForSplit ? 0 : desktopPaginationMeta.openingForPage}
                   booksOpeningBalance={hideBooksOpeningForSplit ? 0 : masterStaffOpening}

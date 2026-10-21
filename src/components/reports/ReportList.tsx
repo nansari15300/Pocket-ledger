@@ -7,6 +7,7 @@ import type { Report } from "./report-data";
 import { reportCategoryDisplayName } from "@/lib/staffEntityDisplayName";
 import { FileText, Users, ReceiptText, TrendingUp } from "lucide-react";
 import Link from "next/link";
+import { HighlightText } from "@/lib/highlightQueryInText";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { masterListSelectedCn, masterListUnselectedCn } from "@/lib/listSelectionChrome";
 import { MASTER_LIST_GROUP_ICON_CN, masterListShellCn } from "@/lib/masterListChrome";
@@ -15,12 +16,18 @@ interface ReportListProps {
   reports: Report[];
   onSelectReport: (report: Report) => void;
   selectedReport?: Report | null;
+  /** Report id -> unapproved voucher count (pink badge, master list rows jaisa). */
+  pendingByReportId?: Record<string, number>;
+  /** Search box text - matching part of report name highlight. */
+  searchTerm?: string;
 }
 
 export function ReportList({
   reports,
   onSelectReport,
   selectedReport,
+  pendingByReportId,
+  searchTerm,
 }: ReportListProps) {
   // Report-specific icon mapping keeps Party/Bill/Income P&L entries visually distinct in list.
   const getReportIcon = (reportId: string) => {
@@ -65,8 +72,20 @@ export function ReportList({
                 const cardContent = (
                   <div className="pl-master-list-row grid-cols-1">
                     <div className="pl-master-list-row-leading">
-                      <div className={MASTER_LIST_GROUP_ICON_CN}>
-                        <ReportIcon className="h-4 w-4 shrink-0" />
+                      <div className="relative shrink-0">
+                        <div className={MASTER_LIST_GROUP_ICON_CN}>
+                          <ReportIcon className="h-4 w-4 shrink-0" />
+                        </div>
+                        {(pendingByReportId?.[report.id] ?? 0) > 0 && (
+                          /* Account/Staff list avatar jaisa pink diamond badge - icon ke top-right corner par */
+                          <span
+                            className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
+                            style={{ transform: "rotate(45deg) translate(25%, -25%)" }}
+                            aria-label={`${pendingByReportId?.[report.id]} pending approval`}
+                          >
+                            <span style={{ transform: "rotate(-45deg)" }}>{pendingByReportId?.[report.id]}</span>
+                          </span>
+                        )}
                       </div>
                       <p
                         className={cn(
@@ -74,7 +93,7 @@ export function ReportList({
                           isSelected ? "font-bold" : "font-medium"
                         )}
                       >
-                        {report.name}
+                        <HighlightText text={report.name} query={searchTerm} />
                       </p>
                     </div>
                   </div>

@@ -25,6 +25,7 @@ import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachm
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { MasterAliasSearchHint } from "@/components/entity/MasterAliasSearchHint";
 import { plHangEnsureLongTaskObserver, plHangStart } from "@/lib/plHangDiag";
 
 export function TaxList({ 
@@ -143,6 +144,7 @@ export function TaxList({
                               }
                             >
                               {highlightSearch ? highlightQueryInText(tax.name, highlightSearch) : tax.name}
+<MasterAliasSearchHint alias={(tax as { aliasName?: string }).aliasName} name={tax.name} search={highlightSearch} />
                             </MasterListNameTooltip>
                             {readMasterAccountFrozen(tax) ? (
                               <MasterAccountFreezeListBadge className="mt-0.5" />

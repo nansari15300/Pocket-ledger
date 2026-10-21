@@ -4,8 +4,9 @@ import {
   ADMIN_PANEL_COMPANY_LOCAL_ID,
   ADMIN_PANEL_COMPANY_MODE_SESSION_KEY,
   ADMIN_PANEL_COMPANY_NAME,
+  ADMIN_PANEL_RETURN_COMPANY_SESSION_KEY,
 } from "@/lib/adminPanelCompany/constants";
-import { writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
+import { readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { upsertLocalCompany } from "@/lib/localCompanyStore";
 import { BUMP_LOCAL_COMPANY_REGISTRY_EVENT } from "@/lib/applyStripePlanToLocalCompany";
 
@@ -22,8 +23,49 @@ export function isAdminPanelCompanyLedgerMode(): boolean {
   }
 }
 
+function rememberCompanyBeforeAdminPanelLedger(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const current = String(readSelectedCompanyId() || "").trim();
+    if (!current || current === ADMIN_PANEL_COMPANY_LOCAL_ID) return;
+    sessionStorage.setItem(ADMIN_PANEL_RETURN_COMPANY_SESSION_KEY, current);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function peekAdminPanelReturnCompanyId(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    const id = String(sessionStorage.getItem(ADMIN_PANEL_RETURN_COMPANY_SESSION_KEY) || "").trim();
+    return id && id !== ADMIN_PANEL_COMPANY_LOCAL_ID ? id : "";
+  } catch {
+    return "";
+  }
+}
+
+export function consumeAdminPanelReturnCompanyId(): string {
+  const id = peekAdminPanelReturnCompanyId();
+  try {
+    sessionStorage.removeItem(ADMIN_PANEL_RETURN_COMPANY_SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+  return id;
+}
+
+/** Boot / Back to App: never keep Admin Panel Company as the normal-app selection. */
+export function resolveAppCompanyIdAfterAdminPanel(stored: string | null | undefined): string {
+  const id = String(stored || "").trim();
+  if (!id) return peekAdminPanelReturnCompanyId();
+  if (!isAdminPanelCompanyLocalId(id)) return id;
+  if (isAdminPanelCompanyLedgerMode()) return id;
+  return peekAdminPanelReturnCompanyId();
+}
+
 export async function activateAdminPanelCompanyLedgerMode(ownerId: string, ownerEmail?: string | null): Promise<void> {
   if (typeof window === "undefined") return;
+  rememberCompanyBeforeAdminPanelLedger();
   sessionStorage.setItem(ADMIN_PANEL_COMPANY_MODE_SESSION_KEY, "1");
   await upsertLocalCompany({
     id: ADMIN_PANEL_COMPANY_LOCAL_ID,
@@ -40,7 +82,8 @@ export async function activateAdminPanelCompanyLedgerMode(ownerId: string, owner
     planId: "pro-plus",
     isOwned: true,
   });
-  writeSelectedCompanyId(ADMIN_PANEL_COMPANY_LOCAL_ID);
+  // Tab-only pin — do not overwrite global last-used (Back to App restores the previous company).
+  writeSelectedCompanyId(ADMIN_PANEL_COMPANY_LOCAL_ID, { userInitiated: false });
   window.dispatchEvent(
     new CustomEvent("pl-company-switched", { detail: { companyId: ADMIN_PANEL_COMPANY_LOCAL_ID } })
   );
@@ -48,12 +91,20 @@ export async function activateAdminPanelCompanyLedgerMode(ownerId: string, owner
   window.dispatchEvent(new Event(BUMP_LOCAL_COMPANY_REGISTRY_EVENT));
 }
 
-export function leaveAdminPanelCompanyLedgerMode(): void {
-  if (typeof window === "undefined") return;
+export function leaveAdminPanelCompanyLedgerMode(): string {
+  if (typeof window === "undefined") return "";
   try {
     sessionStorage.removeItem(ADMIN_PANEL_COMPANY_MODE_SESSION_KEY);
   } catch {
     /* ignore */
   }
+  const restoreId = consumeAdminPanelReturnCompanyId();
+  if (restoreId) {
+    writeSelectedCompanyId(restoreId, { userInitiated: true });
+    window.dispatchEvent(new CustomEvent("pl-company-switched", { detail: { companyId: restoreId } }));
+  } else if (isAdminPanelCompanyLocalId(readSelectedCompanyId())) {
+    writeSelectedCompanyId("", { userInitiated: false });
+  }
   window.dispatchEvent(new CustomEvent("pl-admin-panel-company-mode"));
+  return restoreId;
 }

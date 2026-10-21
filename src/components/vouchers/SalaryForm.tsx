@@ -1,4 +1,5 @@
 "use client";
+import { ocrAdapters, useVoucherOcr, VoucherOcrRefreshBar } from "@/modules/ocr";
 import { isPlaceholderNoneTax } from "@/lib/salePurchaseLineColumnLabels";
 import { shouldMoveVoucherConvertSourceToBin } from "@/lib/voucherEditConvert";
 import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
@@ -124,7 +125,11 @@ import type { Tax, TaxGroup } from "@/components/tax/types";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState as __frozenAppendAttachments, handleVoucherAttachmentInputChange as __frozenAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { ocrWrapAppend, ocrWrapInputChange } from "@/modules/ocr";
+/** OCR reads the ORIGINAL upload: frozen helpers wrapped at the call site only (helper code unchanged). */
+const appendCompressedVoucherAttachmentsToState = ocrWrapAppend(__frozenAppendAttachments);
+const handleVoucherAttachmentInputChange = ocrWrapInputChange(__frozenAttachmentInputChange);
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
@@ -524,6 +529,23 @@ export function SalaryForm({
   const form = useForm<SalaryFormValues>({
     resolver: zodResolver(formSchema) as Resolver<SalaryFormValues>,
     defaultValues: getInitialFormValues(voucher || defaultVoucherData, processedStaff, processedTaxes),
+  });
+
+  /* OCR (local, generic adapter): first attachment -> validated autofill; Auto Post saves UNAPPROVED. */
+  const ocr = useVoucherOcr({
+    adapter: ocrAdapters.salary(),
+    form: form as never,
+    files,
+    setFiles: setFiles as never,
+    ownName: ((company as { name?: string } | null)?.name) || null,
+    companyId: companyId,
+    ownPan: ((company as { pan?: string; panNumber?: string } | null)?.pan ?? (company as { panNumber?: string } | null)?.panNumber) || null,
+    parties: ([]) as never,
+    items: [],
+    taxes: (processedTaxes || []) as never,
+    autoPost: () => void handleFormSubmit({ preventDefault() {}, stopPropagation() {} } as unknown as React.FormEvent, { ocrAutoPost: true }),
+    isEditing: !!(voucher as { id?: string } | null | undefined)?.id,
+    disabled: !!editingDisabled,
   });
   
   const [savedVoucherIdRef, setSavedVoucherIdRef] = useState<string | null>(voucher?.id || null);
@@ -1698,7 +1720,7 @@ export function SalaryForm({
   
 
   // Validated `data` — nested mobile date + `getValues()` से date miss न हो
-  function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; approveAfterSave?: boolean; print?: boolean } = {}) {
+  function handleFormSubmit(e: React.FormEvent, options: { ocrAutoPost?: boolean; saveAndNew?: boolean; approveAfterSave?: boolean; print?: boolean } = {}) {
     e?.preventDefault?.();
     void form.handleSubmit(
       async (data) => {
@@ -2345,7 +2367,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                             render={({ field: dateField }: any) => (
                               <>
                                 {hasDateBS && (
-                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                                     <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
                                     <div className="min-w-0 w-full overflow-hidden">
                                       <BsDatePicker
@@ -2360,7 +2382,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                   </FormItem>
                                 )}
                                 {hasDateAD && (
-                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                                     <FormLabel className="text-xs truncate">Date</FormLabel>
                                     <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
                                       <PopoverTrigger asChild>
@@ -2431,7 +2453,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                       control={form.control}
                       name="date"
                       render={({ field }: any) => (
-                        <FormItem className="flex flex-col">
+                        <FormItem data-ocr-field="date" className="flex flex-col">
                           <FormLabel>Date</FormLabel>
                           <div className={VOUCHER_PC_DATE_ROW}>
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
@@ -2667,7 +2689,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                   control={form.control} 
                                   name={`lineItems.${index}.taxAccountId`} 
                                   render={({ field }: any) => (
-                                    <FormItem>
+                                    <FormItem data-ocr-field="tax">
                                       <div className="flex items-center justify-between gap-1 flex-wrap">
                                         <FormLabel className={cn("text-xs", taxLineNeedsCopyChip(index) && "text-red-600 font-semibold")}>Tax</FormLabel>
                                         {taxLineNeedsCopyChip(index) && (
@@ -2971,7 +2993,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                 <TableCell><FormField control={form.control} name={`lineItems.${index}.salary`} render={({ field }: any) => (<FormItem><FormControl><Input type="number" value={field.value || ''} onChange={(e) => { const value = e.target.value === '' ? '' : parseFloat(e.target.value) || 0; field.onChange(value); }} onBlur={field.onBlur} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/></TableCell>
                                  <TableCell className="min-w-[10.5rem] w-auto max-w-none align-top">
                                     <FormField control={form.control} name={`lineItems.${index}.taxAccountId`} render={({ field }: any) => (
-                                        <FormItem>
+                                        <FormItem data-ocr-field="tax">
                                             {/* Tax combo: chhota minimum, zyada jagah table/layout flexibly de sakta hai. */}
                                             <div className="flex items-start gap-2 min-w-0 w-full">
                                               <div className="min-w-0 flex-1 [&_button]:h-9">
@@ -3163,6 +3185,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                           className="mb-2"
                         />
                       )}
+                      <VoucherOcrRefreshBar ocr={ocr} />
                       <RestrictedFileUploader>
                         <div className="flex flex-wrap gap-4">
                           {files.map((file, index) => (
@@ -3239,7 +3262,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                       control={form.control}
                       name="narration"
                       render={({ field }: any) => (
-                        <FormItem className="min-w-0">
+                        <FormItem data-ocr-field="bill-no" className="min-w-0">
                           <FormLabel>Overall Narration</FormLabel>
                           <FormControl>
                             {/* Overall narration: PC static me lambi text ke liye resize + scroll */}

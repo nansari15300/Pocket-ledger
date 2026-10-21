@@ -1,4 +1,6 @@
 "use client";
+import { VoucherMasterEditHost } from "@/components/vouchers/VoucherMasterEditHost";
+import { VoucherOcrHeaderToggles, OCR_SWITCH_EVENT } from "@/modules/ocr";
 import dynamic from "next/dynamic";
 
 import React, { useState, useEffect, useMemo, Suspense, useCallback, useRef } from "react";
@@ -1287,6 +1289,19 @@ function VoucherDialogContent({
     return [activeTab];
   }, [restrictConvertWhenLinked, activeTab, isEditing, copySaveTargetCompanyId]);
 
+  /* OCR: bill type differs from the open voucher -> user confirmed "Switch to X voucher" (attachment handed over by the OCR module). */
+  useEffect(() => {
+    const onSwitch = (ev: Event) => {
+      const next = (ev as CustomEvent<{ type?: string }>).detail?.type as VoucherType | undefined;
+      if (!next || !(next in formMap)) return;
+      if (isEditing) { toast.error("OCR: voucher type can be switched only for a new voucher"); return; }
+      if (restrictedEnabledTabs !== null && !restrictedEnabledTabs.includes(next)) { toast.error(`OCR: switching to ${next} is not allowed here`); return; }
+      setActiveTab(next);
+    };
+    window.addEventListener(OCR_SWITCH_EVENT, onSwitch);
+    return () => window.removeEventListener(OCR_SWITCH_EVENT, onSwitch);
+  }, [isEditing, restrictedEnabledTabs]);
+
   /** Copy mode: tab switch par mismatch recount — cashflow quartet + sale/journal pairs. */
   useEffect(() => {
     const inCashflowQuartet = (t: VoucherType) => (CASHFLOW_QUARTET as readonly string[]).includes(t);
@@ -1405,7 +1420,8 @@ function VoucherDialogContent({
             </Select>
             ) : null}
             {/* Mobile: date selector — desktop par sirf purple ribbon (tab strip duplicate hata diya). */}
-            <VoucherDialogDateSystemSwitcher className="ml-auto" />
+            <VoucherOcrHeaderToggles className="ml-auto max-w-[45vw] overflow-x-auto" />
+            <VoucherDialogDateSystemSwitcher />
           </div>
         ) : (
           <Tabs
@@ -1416,13 +1432,14 @@ function VoucherDialogContent({
             }}
             className="w-full"
           >
-            <TabsList className="h-auto flex-wrap justify-start bg-transparent p-0 gap-1 py-1">
+            <TabsList data-ocr-field="voucher-type" className="h-auto flex-wrap justify-start bg-transparent p-0 gap-1 py-1">
               {tabKeys.map((key) => {
                 const disabled = restrictedEnabledTabs !== null && !restrictedEnabledTabs.includes(key);
                 return (
                   <TabsTrigger 
                     key={key} 
                     value={key}
+                    data-ocr-anchor={`voucher-type-${key}`}
                     disabled={disabled}
                     className={cn(
                       // Desktop tabs: pill width ~2× (px-4→px-8 + min-w) taaki Sale/Purchase wagaira zyada readable.
@@ -4383,6 +4400,7 @@ export function AddVoucherDialog(props: any) {
                   </div>
                   <div className="flex shrink-0 flex-row items-center justify-end justify-self-end self-center gap-[10px]">
                     {interCompanyPayModeHeaderBadge}
+                    <VoucherOcrHeaderToggles />
                     <VoucherDialogDateSystemSwitcher />
                     {interCompanyRibbonCompanyReadOnly ? (
                       <span
@@ -4417,6 +4435,7 @@ export function AddVoucherDialog(props: any) {
                   </div>
                   <div className="ml-auto flex shrink-0 items-center gap-[10px]">
                     {interCompanyPayModeHeaderBadge}
+                    <VoucherOcrHeaderToggles />
                     <VoucherDialogDateSystemSwitcher />
                     {interCompanyRibbonCompanyReadOnly ? (
                       <span
@@ -4904,6 +4923,7 @@ export function AddVoucherDialog(props: any) {
   );
 
   return (
+    <VoucherMasterEditHost>
     <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange} modal={dialogRootModal}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       {isDesktop ? (
@@ -5565,5 +5585,6 @@ export function AddVoucherDialog(props: any) {
         </DialogContent>
       </Dialog>
     </Dialog>
+    </VoucherMasterEditHost>
   );
 }

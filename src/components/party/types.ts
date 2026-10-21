@@ -2,6 +2,8 @@
 export type Party = {
   id: string;
   name: string;
+  /** Optional other name (bills / OCR / combobox search). */
+  aliasName?: string;
   openingBalance: number;
   openingBalanceDate?: any;
   openingBalanceNarration?: string;
@@ -46,6 +48,7 @@ export type Party = {
 export type Group = {
   id: string;
   name: string;
+  aliasName?: string;
   companyId: string;
   parentId?: string;
   debit: number;

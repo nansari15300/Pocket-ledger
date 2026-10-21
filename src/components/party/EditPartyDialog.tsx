@@ -122,6 +122,7 @@ const formSchema = z.object({
       message: "Select account type.",
     }),
   name: z.string().min(2, { message: "Party name must be at least 2 characters." }),
+  aliasName: z.string().optional(),
   email: z.string().email({ message: "Please enter a valid email." }).optional().or(z.literal("")),
   phone: z.string().optional(),
   whatsapp: z.boolean().optional(),
@@ -230,6 +231,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           processedGroups
         ) ?? PARTY_SYSTEM_CREDITORS_ID) as typeof PARTY_SYSTEM_DEBTORS_ID | typeof PARTY_SYSTEM_CREDITORS_ID,
         name: party.name,
+        aliasName: (((party as unknown) as { aliasName?: string }).aliasName) || "",
         email: party.email || "",
         phone: party.phone || "",
         whatsapp: party.whatsapp === true,
@@ -343,6 +345,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         processedGroups
       ) ?? PARTY_SYSTEM_CREDITORS_ID) as typeof PARTY_SYSTEM_DEBTORS_ID | typeof PARTY_SYSTEM_CREDITORS_ID,
       name: party.name,
+      aliasName: (((party as unknown) as { aliasName?: string }).aliasName) || "",
       email: party.email || "",
       phone: party.phone || "",
       whatsapp: party.whatsapp === true,
@@ -453,6 +456,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         /** Firestore `undefined` field skip / local mirror — explicit payload (EditAccountDialog jaisa) */
         const updatePayload: Record<string, unknown> = {
           name: values.name,
+          aliasName: (values.aliasName ?? "").trim(),
           address: values.address ?? "",
           phone: values.phone ?? "",
           whatsapp: values.whatsapp === true,
@@ -492,7 +496,13 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             credit: partyRefSnap.credit ?? 0,
             isDeleted: false,
           };
-          const payload: Record<string, unknown> = { ...base, ...updatePayload, id: partyRefSnap.id, companyId };
+          const payload: Record<string, unknown> = {
+            ...base,
+            ...updatePayload,
+            id: partyRefSnap.id,
+            companyId,
+            updatedAt: Timestamp.now(),
+          };
           await upsertCompanyDocInBrowserDb(companyId, "parties", partyRefSnap.id, payload);
           const persisted =
             (await getCompanyDocFromBrowserDb(companyId, "parties", partyRefSnap.id)) ?? payload;
@@ -543,8 +553,13 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           });
         }
 
-        const partyRef = doc(firestore, `companies/${companyId}/parties`, partyRefSnap.id);
-        await updateDoc(partyRef, updatePayload);
+        const { persistMasterEntityUpdate } = await import("@/lib/masterEntityUpdatePersist");
+        await persistMasterEntityUpdate({
+          companyId,
+          collection: "parties",
+          docId: partyRefSnap.id,
+          patch: updatePayload,
+        });
         await syncEntityAttachmentsAfterSave(companyId);
 
         await finalizeMasterOpeningBalanceSideEffects({
@@ -845,7 +860,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                   entityId={party.id}
                   mode="edit"
                   nameField={
-                    <FormField
+                    <div className="space-y-2"><FormField
                       control={form.control}
                       name="name"
                       render={({ field }: any) => (
@@ -857,7 +872,19 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                           <FormMessage />
                         </FormItem>
                       )}
-                    />
+                    /><FormField
+                      control={form.control}
+                      name="aliasName"
+                      render={({ field }: any) => (
+                        <FormItem>
+                          <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                          <FormControl>
+                            <Input placeholder="Other name on bills / short name" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    /></div>
                   }
                 />
               <MasterFormTwoColGrid>

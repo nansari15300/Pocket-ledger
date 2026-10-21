@@ -122,7 +122,9 @@ export type EntitlementKey =
   /** EXE LAN server (Settings → Server) — share local companies on network. */
   | "allowLocalAppServer"
   /** Plan-wise: freeze party / bank / staff / tax master accounts. */
-  | "masterAccountFreezeEnabled";
+  | "masterAccountFreezeEnabled"
+  /** Plan-wise: local OCR voucher autofill (Add Voucher). Missing/undefined = enabled. */
+  | "ocrVoucherAutofillEnabled";
 
 export type Entitlements = Record<EntitlementKey, number | boolean>;
 
@@ -302,6 +304,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxGoogleDriveSyncUsers: 0,
       allowLocalAppServer: false,
       masterAccountFreezeEnabled: false,
+      ocrVoucherAutofillEnabled: true,
     },
     features: [
       "Unlimited local (offline) companies",
@@ -367,6 +370,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxGoogleDriveSyncUsers: 5,
       allowLocalAppServer: true,
       masterAccountFreezeEnabled: true,
+      ocrVoucherAutofillEnabled: true,
     },
     features: [
       "1 online company + unlimited offline",
@@ -433,6 +437,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxGoogleDriveSyncUsers: 50, // = maxUsersLocal
       allowLocalAppServer: true,
       masterAccountFreezeEnabled: true,
+      ocrVoucherAutofillEnabled: true,
     },
     features: [
       "3 online companies + unlimited offline",
@@ -498,6 +503,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxGoogleDriveSyncUsers: 100, // = maxUsersLocal
       allowLocalAppServer: true,
       masterAccountFreezeEnabled: true,
+      ocrVoucherAutofillEnabled: true,
     },
     features: [
       "10 online companies + unlimited offline",

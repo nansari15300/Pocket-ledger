@@ -152,6 +152,7 @@ import {
   type OpeningBalanceLedgerAccountRow,
 } from "@/lib/reports/openingBalanceLedgerAccounts";
 import { OpeningBalanceMasterEditHost } from "@/components/reports/OpeningBalanceMasterEditHost";
+import { getReportVoucherTypeKey, ReportHeaderSummaryCards, reportTdsFilterSide, reportVoucherMatchesSummaryCard, type ReportStatementSummaryCardData } from "@/components/reports/ReportStatementSummaryCards";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
@@ -308,6 +309,8 @@ export function PartyDetails({
   userNames,
   onBack,
   context,
+  reportCardFilter,
+  reportSummaryCards,
   /** Jab PartyDetails kisi report ke andar ho: dropdown se party badle bina `/party` par na jao */
   onEmbeddedPartyChange,
   /** Reports / dashboard txn-count: PrintÂ·ExcelÂ·Bill wiseÂ·DateÂ·Chart footer (party page Receive/Pay hide). */
@@ -336,6 +339,9 @@ export function PartyDetails({
   userNames?: Record<string, string>;
   onBack?: () => void;
   context?: string;
+  /** Report details card strip — Sale/Pur TDS + Sales/Purchases filters. */
+  reportCardFilter?: string | null;
+  reportSummaryCards?: ReportStatementSummaryCardData[];
   onEmbeddedPartyChange?: (partyId: string) => void;
   mobileFooterVariant?: "ledger" | "report";
   icGroupMemberParties?: Party[];
@@ -996,18 +1002,30 @@ export function PartyDetails({
   
   // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
-    () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
-    [processedTransactions, includeNotesInTable]
+    () => {
+      const base = includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note");
+      if (context !== "report" || !reportCardFilter || reportTdsFilterSide(reportCardFilter)) return base;
+      return base.filter((t: any) =>
+        reportCardFilter.startsWith("summary:")
+          ? reportVoucherMatchesSummaryCard(t, reportCardFilter.slice(8), "party", party.id)
+          : getReportVoucherTypeKey(t, "party", party.id) === reportCardFilter
+      );
+    },
+    [processedTransactions, includeNotesInTable, context, reportCardFilter, party.id]
   );
   const statusFilteredTransactions = useMemo(
     () => filterByStatus(displayTransactions, statusFilter),
     [displayTransactions, statusFilter]
   );
 
-  const [tdsLedgerViewMode, setTdsLedgerViewMode] = useState<PartyTdsLedgerViewMode>(() =>
-    companyId && party?.id ? readPartyTdsLedgerViewMode(companyId, party.id) : "account"
-  );
+  const [tdsLedgerViewMode, setTdsLedgerViewMode] = useState<PartyTdsLedgerViewMode>(() => {
+    if (context === "report") {
+      return reportTdsFilterSide(reportCardFilter) ?? "account";
+    }
+    return companyId && party?.id ? readPartyTdsLedgerViewMode(companyId, party.id) : "account";
+  });
   const tdsLedgerOnly = tdsLedgerViewMode !== "account";
+  const reportTypeFilterActive = context === "report" && !!reportCardFilter && !tdsLedgerOnly;
   /** Party TDS balance page never offers bill-wise: force statement. */
   const balanceMode: typeof balanceModeRaw = tdsLedgerOnly ? "statement" : balanceModeRaw;
   /** Party TDS details: show entity-wise linked settlement payments/journals. */
@@ -1095,11 +1113,16 @@ export function PartyDetails({
   const partyTdsHasSale = partyTdsBalanceSummary.saleTds > 0;
   const partyTdsHasPur = partyTdsBalanceSummary.purchaseTds > 0;
   useEffect(() => {
+    if (context === "report") {
+      setTdsLedgerViewMode(reportTdsFilterSide(reportCardFilter) ?? "account");
+      setShowTdsLinkedTrxn(true);
+      return;
+    }
     setTdsLedgerViewMode(
       companyId && party.id ? readPartyTdsLedgerViewMode(companyId, party.id) : "account"
     );
     setShowTdsLinkedTrxn(true);
-  }, [companyId, party.id]);
+  }, [companyId, party.id, context, reportCardFilter]);
 
   // Sort state: footer dropdown â€” sirf current page par apply (paging hook); list chronological rahe
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
@@ -1941,7 +1964,7 @@ export function PartyDetails({
               openingBalanceAttachmentUrls={party.documentFileUrls}
               openingBalanceDate={(party as any).openingBalanceDate}
               ledgerDateFilterActive={hasLedgerDateFilter}
-              ledgerShowBookOpeningRow={!tdsLedgerOnly && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
+              ledgerShowBookOpeningRow={!tdsLedgerOnly && !reportTypeFilterActive && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
               hideLedgerOpeningRows={tdsLedgerOnly}
               openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               dateRange={dateRange}
@@ -2347,6 +2370,10 @@ export function PartyDetails({
                   </div>
                 )}
               </div>
+              {reportSummaryCards?.length ? (
+                <ReportHeaderSummaryCards cards={reportSummaryCards} />
+              ) : (
+              <>
               <button
                 type="button"
                 className={cn(LEDGER_HEADER_BALANCE_CARD_CN, "cursor-pointer")}
@@ -2457,6 +2484,8 @@ export function PartyDetails({
                   </PopoverContent>
                 </Popover>
               ) : null}
+              </>
+              )}
             </div>
             {/* Cluster: action pills â€” same gap-1.5 as identity cluster */}
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
@@ -2638,7 +2667,7 @@ export function PartyDetails({
               openingBalanceAttachmentUrls={party.documentFileUrls}
               openingBalanceDate={(party as any).openingBalanceDate}
               ledgerDateFilterActive={hasLedgerDateFilter}
-              ledgerShowBookOpeningRow={!tdsLedgerOnly && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
+              ledgerShowBookOpeningRow={!tdsLedgerOnly && !reportTypeFilterActive && (rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0)}
               hideLedgerOpeningRows={tdsLedgerOnly}
               openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               dateRange={dateRange}

@@ -64,6 +64,7 @@ import { MasterPdfAsImageToggle } from "@/components/common/EntityProfileDocumen
 
 const schema = z.object({
   name: z.string().min(2, "Item name must be at least 2 characters."),
+  aliasName: z.string().optional(),
   unit: z.string().optional(),
   hsCode: z.string().optional(),
   date: z.date().optional(),
@@ -105,6 +106,7 @@ export function CreateFinishedGoodForm({
     resolver: zodResolver(schema) as Resolver<FormValues>,
     defaultValues: {
       name: prefillName,
+      aliasName: "",
       unit: "",
       hsCode: "",
       date: undefined,
@@ -157,7 +159,7 @@ export function CreateFinishedGoodForm({
       setDatePopoverOpen(false);
       return;
     }
-    form.reset({ name: prefillName || "", unit: "", hsCode: "", date: undefined });
+    form.reset({ name: prefillName || "", aliasName: "", unit: "", hsCode: "", date: undefined });
     setFiles([]);
     newUnitsThisSessionRef.current = new Set();
   }, [isOpen]);
@@ -250,6 +252,7 @@ export function CreateFinishedGoodForm({
       const unitTrimmed = values.unit?.trim() || null;
       const submissionData = {
         name: values.name.trim(),
+        aliasName: (values.aliasName ?? "").trim(),
         type: "finished_good",
         hsCode: values.hsCode?.trim() || null,
         ownerId: user.uid,
@@ -332,6 +335,7 @@ export function CreateFinishedGoodForm({
         <Form {...form}>
           <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-[1fr_140px] gap-4">
+              <div className="space-y-2">
               <FormField
                 control={form.control}
                 name="name"
@@ -345,6 +349,20 @@ export function CreateFinishedGoodForm({
                   </FormItem>
                 )}
               />
+              <FormField
+                control={form.control}
+                name="aliasName"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                    <FormControl>
+                      <Input placeholder="Other name on bills / short name" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              </div>
               <FormField
                 control={form.control}
                 name="unit"

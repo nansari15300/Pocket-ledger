@@ -288,7 +288,12 @@ export function scheduleFormAttachmentEditCleanup(params: {
     // Restore orphan: docs me `local:` tha, bucket me `{localId}_*` — pending empty hone par bhi bytes hatao.
     if (localIds.length > 0) {
       try {
-        await deleteFirebaseStorageObjectsByLocalFileIds(cid, localIds, params.entityId);
+        await deleteFirebaseStorageObjectsByLocalFileIds(
+          cid,
+          localIds,
+          params.entityId,
+          params.voucherType
+        );
       } catch (e) {
         console.warn("[formAttachmentEditHelper] Storage delete by local id failed", e);
         trace.traceStorageDeleteUrlResult({
@@ -390,60 +395,64 @@ async function deletePlServerHostAttachmentsBestEffort(
   }
 }
 
-/** `pocket-ledger|voucher-files/{companyId}/**` me `{localId}_*` objects delete (restore leftover). */
+/** Known path pe `deleteObject` — poori company tree `list()` mat. */
 async function deleteFirebaseStorageObjectsByLocalFileIds(
   companyId: string,
   localIds: readonly string[],
-  entityId?: string
+  entityId?: string,
+  voucherType?: string
 ): Promise<void> {
   const cid = String(companyId || "").trim();
   const ids = [...new Set(localIds.map((x) => String(x || "").trim()).filter(Boolean))];
   if (!cid || !ids.length) return;
   const trace = await import("@/lib/attachmentDeleteTrace");
-  const { ref, list, deleteObject } = await import("firebase/storage");
+  const { ref, deleteObject } = await import("firebase/storage");
   const { storage } = await import("@/lib/firebase");
-  const roots = [`pocket-ledger/${cid}`, `voucher-files/${cid}`, `companies/${cid}`];
+  const { getLocalFileRefMeta } = await import("@/lib/localPendingFiles");
+  const {
+    buildPendingAttachmentStorageObjectPath,
+    buildStoragePathPrefixCandidates,
+    pocketLedgerCompanyRoot,
+  } = await import("@/lib/firebaseStoragePaths");
 
-  async function walk(prefix: string, depth: number): Promise<void> {
-    if (depth > 5) return;
-    let pageToken: string | undefined;
-    do {
-      const page = await list(ref(storage, prefix), {
-        maxResults: 200,
-        ...(pageToken ? { pageToken } : {}),
-      });
-      for (const item of page.items) {
-        const leaf = item.fullPath.split("/").pop() || "";
-        if (!ids.some((id) => leaf.startsWith(`${id}_`))) continue;
-        try {
-          await deleteObject(item);
-          trace.traceStorageDeleteUrlResult({
-            phase: "local_id_walk",
-            companyId: cid,
-            entityId,
-            storagePath: item.fullPath,
-            outcome: "deleted",
-            detail: { localIdPrefix: leaf.split("_")[0] },
-          });
-        } catch (e) {
-          const code = (e as { code?: string })?.code || "";
-          trace.traceStorageDeleteUrlResult({
-            phase: "local_id_walk",
-            companyId: cid,
-            entityId,
-            storagePath: item.fullPath,
-            outcome: code === "storage/object-not-found" ? "not_found" : "failed",
-            error: e,
-          });
-          console.warn("[formAttachmentEditHelper] delete by localId failed", item.fullPath, e);
-        }
-      }
-      for (const sub of page.prefixes) {
-        await walk(sub.fullPath, depth + 1);
-      }
-      pageToken = page.nextPageToken;
-    } while (pageToken);
+  const prefixes = new Set<string>();
+  const namesById = new Map<string, string[]>();
+  for (const id of ids) {
+    const names = new Set<string>(["file"]);
+    try {
+      const meta = await getLocalFileRefMeta(`${LOCAL_FILE_PREFIX}${id}`);
+      const fn = String(meta?.fileName || "").trim();
+      if (fn) names.add(fn);
+      const p = String(meta?.storagePathPrefix || "").trim();
+      if (p) prefixes.add(p.replace(/\/+$/, ""));
+    } catch {
+      /* pending already gone */
+    }
+    namesById.set(id, [...names]);
   }
+
+  const vt = String(voucherType || "").trim();
+  for (const usePocketLedger of [true, false]) {
+    prefixes.add(
+      buildStoragePathPrefixCandidates({
+        companyId: cid,
+        usePocketLedger,
+        collectionName: "vouchers",
+        fieldKey: "fileUrls",
+        voucherType: vt || "journal",
+      })[0] || ""
+    );
+    prefixes.add(
+      buildStoragePathPrefixCandidates({
+        companyId: cid,
+        usePocketLedger,
+        collectionName: "vouchers",
+        fieldKey: "unassignedFile",
+        voucherType: vt || "journal",
+      })[0] || ""
+    );
+  }
+  prefixes.add(`${pocketLedgerCompanyRoot(cid)}/unassigned`);
 
   trace.traceStorageDeleteBatchStart({
     companyId: cid,
@@ -453,19 +462,38 @@ async function deleteFirebaseStorageObjectsByLocalFileIds(
     urlCount: ids.length,
   });
 
-  for (const root of roots) {
-    try {
-      await walk(root, 0);
-    } catch (e) {
-      trace.traceStorageDeleteUrlResult({
-        phase: "local_id_walk",
-        companyId: cid,
-        entityId,
-        storagePath: root,
-        outcome: "failed",
-        error: e,
-        detail: { note: "list prefix failed" },
-      });
+  for (const prefix of prefixes) {
+    if (!prefix) continue;
+    for (const id of ids) {
+      for (const fileName of namesById.get(id) || ["file"]) {
+        const storagePath = buildPendingAttachmentStorageObjectPath({
+          storagePathPrefix: prefix,
+          pendingFileId: id,
+          fileName,
+        });
+        try {
+          await deleteObject(ref(storage, storagePath));
+          trace.traceStorageDeleteUrlResult({
+            phase: "local_id_walk",
+            companyId: cid,
+            entityId,
+            storagePath,
+            outcome: "deleted",
+            detail: { localIdPrefix: id, note: "exact path" },
+          });
+        } catch (e) {
+          const code = (e as { code?: string })?.code || "";
+          if (code === "storage/object-not-found") continue;
+          trace.traceStorageDeleteUrlResult({
+            phase: "local_id_walk",
+            companyId: cid,
+            entityId,
+            storagePath,
+            outcome: "failed",
+            error: e,
+          });
+        }
+      }
     }
   }
 }
@@ -486,7 +514,8 @@ async function deleteFirebaseStorageObjectsByVoucherIdPrefix(
   const typeHint = String(voucherType || "").trim();
   const voucherTypes = typeHint
     ? [typeHint]
-    : ["sale", "purchase", "journal", "payment_in", "payment_out", "contra", "receipt", "expense", "direct_income", "direct_expense"];
+    : [];
+  if (!voucherTypes.length) return;
   const { ref, list, deleteObject } = await import("firebase/storage");
   const { storage } = await import("@/lib/firebase");
   const rootPrefix = usePocketLedger ? `pocket-ledger/${cid}/vouchers` : `voucher-files/${cid}`;
@@ -494,6 +523,7 @@ async function deleteFirebaseStorageObjectsByVoucherIdPrefix(
   for (const vt of voucherTypes) {
     const folder = `${rootPrefix}/${vt}`;
     let pageToken: string | undefined;
+    let pages = 0;
     do {
       let page;
       try {
@@ -504,6 +534,8 @@ async function deleteFirebaseStorageObjectsByVoucherIdPrefix(
       } catch {
         break;
       }
+      pages += 1;
+      if (pages > 3) break;
       for (const item of page.items) {
         const leaf = item.fullPath.split("/").pop() || "";
         if (!leaf.startsWith(`${vid}_`)) continue;

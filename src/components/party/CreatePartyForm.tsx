@@ -105,6 +105,7 @@ const formSchema = z
       message: "Select account type.",
     }),
     name: z.string().min(2, "Party name is required."),
+    aliasName: z.string().optional(),
     groupId: z.string().optional(),
     openingBalance: z.coerce.number(),
     openingBalanceDate: z.date().optional(),
@@ -153,7 +154,10 @@ export function CreatePartyForm({
   onPartyCreated,
   onNestedDialogOpenChange,
   onCloseDialogRequest,
+  initialValues,
 }: {
+  /** Optional prefill (e.g. OCR bill: name / PAN / phone / email / address). */
+  initialValues?: { name?: string; pan?: string; phone?: string; email?: string; address?: string; /** OCR: e.g. Sundry Creditors for a purchase bill */ accountTypeId?: string; /** OCR: raw bill name when it differs from the cleaned name */ aliasName?: string };
   onPartyCreated?: (isSaveAndNew: boolean, newId: string) => void;
   onNestedDialogOpenChange?: (open: boolean) => void;
   /** "Create Party" (not Save & New): dialog band turant; save background; files snapshot se */
@@ -204,17 +208,18 @@ export function CreatePartyForm({
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
     defaultValues: {
-      accountType: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID,
-      name: "",
-      address: "",
-      phone: "",
-      email: "",
-      pan: "",
+      accountType: (initialValues?.accountTypeId || PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID) as "sundry_debtors" | "sundry_creditors",
+      name: initialValues?.name ?? "",
+      aliasName: initialValues?.aliasName ?? "",
+      address: initialValues?.address ?? "",
+      phone: initialValues?.phone ?? "",
+      email: initialValues?.email ?? "",
+      pan: initialValues?.pan ?? "",
       openingBalanceNarration: "",
       password: "",
       confirmPassword: "",
       openingBalance: 0,
-      groupId: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID,
+      groupId: initialValues?.accountTypeId || PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID,
     },
     mode: "onChange",
   });
@@ -517,6 +522,7 @@ export function CreatePartyForm({
         const payload: Record<string, unknown> = {
           id: localId,
           name: values.name,
+          aliasName: (values.aliasName ?? "").trim(),
           address: values.address,
           phone: values.phone,
           whatsapp: values.whatsapp === true,
@@ -545,7 +551,7 @@ export function CreatePartyForm({
           description: showSyncHint ? "Background" : values.name,
         });
         if (saveAndNew) {
-          form.reset({ accountType: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID, name: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID });
+          form.reset({ accountType: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID, name: "", aliasName: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID });
           removeAvatar();
           setDocumentFiles([]);
         }
@@ -610,6 +616,7 @@ export function CreatePartyForm({
       const interCompanyAccountNo = await interCompanyAcNoForNewEntity("party");
       await setDoc(partyRef, {
         name: values.name,
+        aliasName: (values.aliasName ?? "").trim(),
         address: values.address,
         phone: values.phone,
         whatsapp: values.whatsapp === true,
@@ -643,7 +650,7 @@ export function CreatePartyForm({
       sonnerToast.success("Saved", { duration: PARTY_TOAST_OK_MS, description: values.name });
 
       if (saveAndNew) {
-        form.reset({ accountType: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID, name: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID });
+        form.reset({ accountType: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID, name: "", aliasName: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID });
         removeAvatar();
         setDocumentFiles([]);
       }
@@ -681,6 +688,7 @@ export function CreatePartyForm({
           const payload: Record<string, unknown> = {
             id: localId,
             name: values.name,
+            aliasName: (values.aliasName ?? "").trim(),
             address: values.address,
             phone: values.phone,
             whatsapp: values.whatsapp === true,
@@ -712,7 +720,7 @@ export function CreatePartyForm({
             description: showSyncHint ? "Background" : values.name,
           });
           if (saveAndNew) {
-            form.reset({ accountType: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID, name: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID });
+            form.reset({ accountType: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID, name: "", aliasName: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: PARTY_FORM_DEFAULT_ACCOUNT_TYPE_ID });
             removeAvatar();
             setDocumentFiles([]);
           }
@@ -781,7 +789,7 @@ export function CreatePartyForm({
           entityKind="party"
           mode="create"
           nameField={
-            <FormField
+            <div className="space-y-2"><FormField
               control={form.control}
               name="name"
               render={({ field }: any) => (
@@ -793,7 +801,19 @@ export function CreatePartyForm({
                   <FormMessage />
                 </FormItem>
               )}
-            />
+            /><FormField
+              control={form.control}
+              name="aliasName"
+              render={({ field }: any) => (
+                <FormItem>
+                  <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                  <FormControl>
+                    <Input placeholder="Other name on bills / short name" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            /></div>
           }
         />
         

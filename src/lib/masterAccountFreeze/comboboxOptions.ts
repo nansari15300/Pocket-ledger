@@ -9,6 +9,12 @@ export type VoucherComboboxOption = {
   disabled?: boolean;
   triggerLabel?: string;
   isSpecial?: boolean;
+  /** Alias Name (searchable secondary text in Combobox). */
+  aliasText?: string;
+};
+const aliasOfRow = (row: unknown): string | undefined => {
+  const a = (row as { aliasName?: unknown } | null)?.aliasName;
+  return typeof a === "string" && a.trim() ? a.trim() : undefined;
 };
 
 function mapMasterRowsForVoucherCombobox<T extends ComboboxRow>(
@@ -19,6 +25,7 @@ function mapMasterRowsForVoucherCombobox<T extends ComboboxRow>(
     value: row.id,
     label: row.isFrozen ? `${labelOf(row)} (${MASTER_ACCOUNT_FREEZE_LIST_LABEL})` : labelOf(row),
     disabled: row.isFrozen === true,
+    ...(aliasOfRow(row) ? { aliasText: aliasOfRow(row) } : {}),
   }));
 }
 
@@ -27,6 +34,8 @@ export function withMasterAccountFreezeComboboxOption<T extends MasterAccountFre
   row: T,
   option: VoucherComboboxOption
 ): VoucherComboboxOption {
+  const al = option.aliasText ?? aliasOfRow(row);
+  if (al && !option.aliasText) option = { ...option, aliasText: al };
   if (row.isFrozen !== true) return option;
   const label = option.label.includes(MASTER_ACCOUNT_FREEZE_LIST_LABEL)
     ? option.label

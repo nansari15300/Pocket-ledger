@@ -11,10 +11,8 @@ import { mlc } from "@/lib/mobileListChrome";
 import { cn } from "@/lib/utils";
 import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import type { MasterDetailListRouteKey } from "@/lib/masterDetailListPath";
-import {
-  ReportStatementSummaryCardsGrid,
-  type ReportStatementSummaryCardData,
-} from "@/components/reports/ReportStatementSummaryCards";
+import { type ReportStatementSummaryCardData } from "@/components/reports/ReportStatementSummaryCards";
+import { ReportLedgerTxnDetailPane } from "@/components/reports/ReportLedgerTxnDetailPane";
 import { REPORT_LIST_SEARCH_INPUT_CN } from "@/components/reports/ReportRegisterListSearchRow";
 
 export type ReportStatementDesktopShellProps = {
@@ -42,6 +40,20 @@ export type ReportStatementDesktopShellProps = {
   groupList: React.ReactNode;
   detailView: React.ReactNode;
   footer?: React.ReactNode;
+  /** Mobile: main master page jaisa full-screen list (row tap -> ledger statement). */
+  isMobile?: boolean;
+  /** Main master page jaisa header total balance (e.g. Bank & Cash / Parties). */
+  balance?: React.ReactNode;
+  /** Search ke baad: pink unapproved badge + "+ Add …" button (main list page parity). */
+  searchRowExtras?: React.ReactNode;
+  /** Entity/Groups ke alawa extra tabs (e.g. "Clearing A/c", "IC / Ac"). */
+  extraTabs?: Array<{
+    value: string;
+    label: React.ReactNode;
+    sectionLabel: React.ReactNode;
+    list: React.ReactNode;
+    searchPlaceholder?: string;
+  }>;
 };
 
 /** Party Statement PC layout — tabs + master list + ledger detail (shared by all entity reports). */
@@ -64,17 +76,26 @@ export function ReportStatementDesktopShell({
   groupQuickFilter,
   onEntityQuickFilterChange,
   onGroupQuickFilterChange,
-  summaryCards,
-  showSummary,
+  summaryCards: _summaryCards,
+  showSummary: _showSummary,
   entityList,
   groupList,
   detailView,
   footer,
+  balance = null,
+  isMobile = false,
+  searchRowExtras,
+  extraTabs,
 }: ReportStatementDesktopShellProps) {
+  const activeExtraTab = extraTabs?.find((t) => t.value === listTab);
   const reportListTabs = (
     <Tabs
       value={listTab}
-      onValueChange={(value) => onListTabChange(value === groupTabValue ? groupTabValue : entityTabValue)}
+      onValueChange={(value) =>
+        onListTabChange(
+          value === groupTabValue || extraTabs?.some((t) => t.value === value) ? value : entityTabValue
+        )
+      }
       className="w-full"
     >
       <TabsList listChrome>
@@ -84,6 +105,11 @@ export function ReportStatementDesktopShell({
         <TabsTrigger listChrome value={groupTabValue} className="flex-1">
           {groupTabLabel}
         </TabsTrigger>
+        {extraTabs?.map((t) => (
+          <TabsTrigger key={t.value} listChrome value={t.value} className="flex-1">
+            {t.label}
+          </TabsTrigger>
+        ))}
       </TabsList>
     </Tabs>
   );
@@ -93,7 +119,13 @@ export function ReportStatementDesktopShell({
       <div className={mlc.searchWrap}>
         <Search className={mlc.searchIcon} />
         <Input
-          placeholder={listTab === groupTabValue ? groupSearchPlaceholder : entitySearchPlaceholder}
+          placeholder={
+            activeExtraTab
+              ? activeExtraTab.searchPlaceholder ?? entitySearchPlaceholder
+              : listTab === groupTabValue
+                ? groupSearchPlaceholder
+                : entitySearchPlaceholder
+          }
           listChrome
           listChromeSearch
           className={REPORT_LIST_SEARCH_INPUT_CN}
@@ -102,26 +134,25 @@ export function ReportStatementDesktopShell({
           autoComplete="off"
         />
       </div>
+      {searchRowExtras}
     </div>
   );
 
-  const reportSectionLabel = listTab === groupTabValue ? groupSectionLabel : entitySectionLabel;
+  const reportSectionLabel = activeExtraTab
+    ? activeExtraTab.sectionLabel
+    : listTab === groupTabValue
+      ? groupSectionLabel
+      : entitySectionLabel;
 
   /** Search row jaisa vertical inset — cards/tabs dono par same band chrome. */
   const reportListBandChrome = cn(mlc.searchRow, "box-border !gap-0");
-  const reportSummaryBandChrome = cn(mlc.searchRow, "box-border !gap-0 !px-3");
-
-  const reportListTopSummary = showSummary ? (
-    <div className={reportSummaryBandChrome}>
-      <ReportStatementSummaryCardsGrid cards={summaryCards} />
-    </div>
-  ) : null;
 
   const reportListTabsRow = <div className={reportListBandChrome}>{reportListTabs}</div>;
 
   const reportListView = (
     <MasterListViewShell
-      isMobile={false}
+      isMobile={isMobile}
+      tabs={isMobile ? reportListTabs : undefined}
       searchRow={reportSearchRow}
       sectionLabel={reportSectionLabel}
       quickFilter={listTab === groupTabValue ? groupQuickFilter : entityQuickFilter}
@@ -146,6 +177,18 @@ export function ReportStatementDesktopShell({
         >
           {groupList}
         </div>
+        {extraTabs?.map((t) => (
+          <div
+            key={t.value}
+            className={cn(
+              "absolute inset-0 flex h-full min-h-0 flex-col overflow-hidden",
+              listTab !== t.value && "pointer-events-none hidden"
+            )}
+            aria-hidden={listTab !== t.value}
+          >
+            {t.list}
+          </div>
+        ))}
       </div>
     </MasterListViewShell>
   );
@@ -155,18 +198,16 @@ export function ReportStatementDesktopShell({
       <ResponsiveMasterDetail
         listChromeRouteKey={listChromeRouteKey}
         title={pageTitle}
-        balance={null}
+        balance={balance}
         listHeaderLeading={<ReportShowListButton />}
         tabsRowClassName="!min-h-0 !border-b-0 !p-0"
-        tabs={
-          <div className="flex min-w-0 flex-col">
-            {reportListTopSummary}
-            {reportListTabsRow}
-          </div>
-        }
+        tabs={isMobile ? undefined : reportListTabsRow}
         listView={reportListView}
-        detailView={detailView}
-        isMobile={false}
+        detailView={<ReportLedgerTxnDetailPane>{detailView}</ReportLedgerTxnDetailPane>}
+        isMobile={isMobile}
+        mobileListOnly={isMobile}
+        mobileTabsDocked={isMobile}
+        hasSelectedItem={false}
       />
       {footer}
     </>

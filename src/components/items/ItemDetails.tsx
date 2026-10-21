@@ -102,6 +102,7 @@ import {
   LEDGER_TXN_PAGE_ROOT_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { LedgerTxnScrollColumn } from "@/components/vouchers/LedgerTxnScrollColumn";
+import { ReportHeaderSummaryCards, type ReportStatementSummaryCardData } from "@/components/reports/ReportStatementSummaryCards";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdCalendar from "@/components/ui/ad-calendar";
 import { format, startOfDay } from "date-fns";
@@ -232,6 +233,7 @@ export default function ItemDetails({
   dateRange: dateRangeProp,
   onDateRangeChange,
   hideMobilePeriodLabelRow = false,
+  reportSummaryCards,
 }: {
   item?: Item;
   onItemUpdated: (updated?: Partial<Item>) => void;
@@ -247,6 +249,7 @@ export default function ItemDetails({
   dateRange?: DateRange;
   onDateRangeChange?: (dateRange: DateRange | undefined) => void;
   hideMobilePeriodLabelRow?: boolean;
+  reportSummaryCards?: ReportStatementSummaryCardData[];
 }) {
   const { formatDate, formatDateBS, formatCurrency: formatMoney, dateSystem, formatCurrencyForPrint } = useDate();
   const { company, companyId } = useCompany(); 
@@ -1147,6 +1150,9 @@ export default function ItemDetails({
             <div className={LEDGER_HEADER_NAME_CARD_CN}>
               <h1 className={LEDGER_HEADER_TITLE_CN} title={currentItem.name}>{currentItem.name}</h1>
             </div>
+            {reportSummaryCards?.length ? (
+              <ReportHeaderSummaryCards cards={reportSummaryCards} />
+            ) : (
             <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
               <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
                 <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
@@ -1155,6 +1161,7 @@ export default function ItemDetails({
                 </span>
               </div>
             </div>
+            )}
             {stockView === 'qty' && unitOptions.length > 0 && setItemDisplayUnit && (
               <Select value={displayUnitSelectValue} onValueChange={handleUnitChange}>
                 <SelectTrigger className="h-8 px-2 w-fit gap-1 text-xs bg-muted/50 border border-transparent flex-shrink-0 focus:ring-1 focus:ring-inset focus:ring-ring focus:ring-offset-0">

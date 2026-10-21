@@ -25,6 +25,7 @@ import {
 import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows"
 import { masterListShellCn, masterListRowUnselectedCn, MASTER_LIST_AVATAR_CN, MASTER_LIST_AVATAR_FALLBACK_CN } from "@/lib/masterListChrome";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { MasterAliasSearchHint } from "@/components/entity/MasterAliasSearchHint";
 
 interface ExpenseAccountListProps {
   accounts: ExpenseAccount[];
@@ -173,6 +174,7 @@ export function ExpenseAccountList({
                             }
                           >
                             {highlightSearch ? highlightQueryInText(account.name, highlightSearch) : account.name}
+<MasterAliasSearchHint alias={(account as { aliasName?: string }).aliasName} name={account.name} search={highlightSearch} />
                           </MasterListNameTooltip>
                           {readMasterAccountFrozen(account) ? (
                             <MasterAccountFreezeListBadge className="mt-0.5" />

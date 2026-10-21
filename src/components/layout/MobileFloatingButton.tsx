@@ -19,12 +19,17 @@ function isCompanySelectOrCreatePath(pathname: string | null): boolean {
 
 export function MobileFloatingButton() {
   const pathname = usePathname();
+  const searchParams = useLocationSearchParams();
   const isMobile = useIsMobile();
   const { visibleCard } = useDashboard();
   /** Recent tab: fixed violet strip (Change date / Unapproved) + footer — `bottom-20` par FAB Unapproved par chadh jata tha. */
   const isDashboardPath = (pathname?.replace(/\/+$/, "") || "") === "/dashboard";
   const liftFabAboveRecentStrip =
     isMobile && isDashboardPath && visibleCard === "recent-transactions";
+  const normalizedPathname = pathname?.replace(/\/+$/, "") || "/";
+  const isSelectedReportPage =
+    normalizedPathname.startsWith("/reports/") ||
+    (normalizedPathname === "/reports" && Boolean(searchParams.get("report")));
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [showButton, setShowButton] = useState(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -139,7 +144,7 @@ export function MobileFloatingButton() {
         className={cn(
           "fixed left-1/2 -translate-x-1/2 z-50",
           "transition-[opacity,bottom] duration-300",
-          !liftFabAboveRecentStrip && "bottom-[calc(5rem+10px)]",
+          !liftFabAboveRecentStrip && !isSelectedReportPage && "bottom-[calc(5rem+10px)]",
           showButton ? "opacity-100" : "opacity-0 pointer-events-none"
         )}
         style={
@@ -148,6 +153,12 @@ export function MobileFloatingButton() {
                 // ~footer (38px) + 2-row strip (~74px reserve) + chhota gap — Unapproved / row clear
                 bottom: "calc(8.5rem + 10px + env(safe-area-inset-bottom, 0px))",
               }
+            : isSelectedReportPage
+              ? {
+                  // Action footer + pager + txn toolbar + 2px gap — FAB clears the full report footer stack.
+                  bottom:
+                    "calc(var(--pl-mobile-ledger-action-footer-h, 2.875rem) + var(--pl-mobile-txn-footer-row-h, 2.625rem) + var(--pl-mobile-txn-toolbar-h, 2.625rem) + 2px)",
+                }
             : undefined
         }
       >

@@ -106,6 +106,7 @@ const formSchema = z.object({
     message: "Account type is required.",
   }),
   name: z.string().min(2, { message: "Staff name must be at least 2 characters." }),
+  aliasName: z.string().optional(),
   email: z.string().optional(),
   phone: z.string().optional(),
   whatsapp: z.boolean().optional(),
@@ -134,7 +135,7 @@ function staffPersistFields(values: Pick<FormValues, "groupId" | "accountType">)
 function staffFormResetDefaults(accountType: StaffAccountTypeId = STAFF_FORM_DEFAULT_ACCOUNT_TYPE_ID) {
   return {
     accountType,
-    name: "",
+    name: "", aliasName: "",
     email: "",
     phone: "",
     address: "",
@@ -204,7 +205,7 @@ export function CreateStaffForm({
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
     defaultValues: {
       accountType: STAFF_FORM_DEFAULT_ACCOUNT_TYPE_ID,
-      name: "",
+      name: "", aliasName: "",
       email: "",
       phone: "",
       address: "",
@@ -762,7 +763,7 @@ export function CreateStaffForm({
               entityKind="staff"
               mode="create"
               nameField={
-                <FormField
+                <div className="space-y-2"><FormField
                   control={form.control}
                   name="name"
                   render={({ field }: any) => (
@@ -774,7 +775,19 @@ export function CreateStaffForm({
                       <FormMessage />
                     </FormItem>
                   )}
-                />
+                /><FormField
+                  control={form.control}
+                  name="aliasName"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                      <FormControl>
+                        <Input placeholder="Other name on bills / short name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                /></div>
               }
             />
             <MasterFormTwoColGrid>

@@ -1,6 +1,7 @@
 
 "use client";
 
+import { NESTED_LEDGER_MASTER_EDIT_CONTENT_CN, NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN } from "@/lib/nestedLedgerMasterEditPresentation";
 import { Loader2, Trash2 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { doc, updateDoc } from "firebase/firestore";
@@ -44,21 +45,31 @@ import {
 
 const systemGroupIds = new Set(["sundry_debtors", "sundry_creditors"]);
 
-export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDeleted, children, hasAccounts }: {
+export function EditGroupDialog({ group, isOpen: controlledIsOpen, onOpenChange: controlledOnOpenChange, allGroups, onGroupUpdated, onGroupDeleted, children, hasAccounts }: {
   group: Group;
   allGroups: Group[];
   onGroupUpdated: () => void;
   onGroupDeleted: () => void;
-  children: React.ReactNode;
+  children?: React.ReactNode;
+  /** External open (e.g. combobox pencil): controlled + nested above voucher dialog. */
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
   hasAccounts?: boolean;
 }) {
   const [isLoading, setIsLoading] = useState(false);
-  const [isOpen, setIsOpen] = useState(false);
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const externallyControlled = controlledIsOpen !== undefined;
+  const isOpen = externallyControlled ? !!controlledIsOpen : internalIsOpen;
+  const setIsOpen = (o: boolean) => {
+    if (!externallyControlled) setInternalIsOpen(o);
+    controlledOnOpenChange?.(o);
+  };
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [systemBranch, setSystemBranch] = useState(PARTY_ENTITY_GROUP_PRESET.defaultBranch);
   const [parentPathIds, setParentPathIds] = useState<string[]>([]);
   const [childPathIds, setChildPathIds] = useState<string[]>([]);
   const [groupName, setGroupName] = useState("");
+  const [aliasName, setAliasName] = useState("");
   const formResetKey = isOpen ? `edit-${group.id}` : "edit-closed";
   const { toast } = useToast();
   const { user } = useAuth();
@@ -87,6 +98,7 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
         { legacyParentIds: PARTY_ENTITY_GROUP_PRESET.legacyParentIds }
       );
       setGroupName(liveGroup.name || "");
+      setAliasName(String((liveGroup as { aliasName?: string }).aliasName ?? ""));
       setSystemBranch(decoded.systemBranch);
       setParentPathIds(decoded.parentPathIds);
       setChildPathIds([]);
@@ -188,6 +200,7 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
             id: gid,
             companyId,
             name: editedName,
+            aliasName: aliasName.trim(),
             parentId: resolvedParentId,
           };
           await upsertCompanyDocInBrowserDb(companyId, "groups", gid, payload);
@@ -200,6 +213,7 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
         const groupRef = doc(firestore, `companies/${companyId}/groups`, gid);
         await updateDoc(groupRef, {
           name: editedName,
+          aliasName: aliasName.trim(),
           parentId: resolvedParentId,
         });
 
@@ -299,8 +313,8 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
   return (
     <>
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogTrigger asChild>{children}</DialogTrigger>
-        <DialogContent className="sm:max-w-md">
+        {children ? <DialogTrigger asChild>{children}</DialogTrigger> : null}
+        <DialogContent overlayClassName={externallyControlled ? NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN : undefined} className={["sm:max-w-md", externallyControlled ? NESTED_LEDGER_MASTER_EDIT_CONTENT_CN : ""].join(" ")}>
           <DialogHeader>
             <DialogTitle>Edit Group</DialogTitle>
             <DialogDescription>
@@ -352,6 +366,10 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
                 ) : null
               }
             />
+            <div className="space-y-1 pt-2">
+              <label htmlFor="group-alias-name" className="text-sm font-medium">Alias Name <span className="text-xs font-normal text-muted-foreground">(optional)</span></label>
+              <input id="group-alias-name" value={aliasName} onChange={(e) => setAliasName(e.target.value)} placeholder="Other name (e.g. as printed on bills)" className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+            </div>
             <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
                 <DialogClose asChild>
                   <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>

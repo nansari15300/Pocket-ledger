@@ -1,5 +1,6 @@
 "use client";
 
+import { ocrAdapters, useVoucherOcr, VoucherOcrRefreshBar } from "@/modules/ocr";
 import { STAFF_ENTITY_LABEL, STAFF_ENTITY_SEARCH_PLACEHOLDER } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
@@ -22,7 +23,11 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Loader2, Trash2, CalendarIcon, PlusCircle, CheckCircle, History, Printer } from "lucide-react";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
 import { FilePreview } from "./FilePreview";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState as __frozenAppendAttachments, handleVoucherAttachmentInputChange as __frozenAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { ocrWrapAppend, ocrWrapInputChange } from "@/modules/ocr";
+/** OCR reads the ORIGINAL upload: frozen helpers wrapped at the call site only (helper code unchanged). */
+const appendCompressedVoucherAttachmentsToState = ocrWrapAppend(__frozenAppendAttachments);
+const handleVoucherAttachmentInputChange = ocrWrapInputChange(__frozenAttachmentInputChange);
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
@@ -229,6 +234,23 @@ export function CreateNoteForm({
     resolver: zodResolver(formSchema),
     defaultValues: getInitialFormValues(voucher?.context || initialContext, voucher?.entityId || initialEntityId),
     mode: "onChange", // Run validation on change so Save enables when form is valid
+  });
+
+  /* OCR (local, generic adapter): first attachment -> validated autofill; Auto Post saves UNAPPROVED. */
+  const ocr = useVoucherOcr({
+    adapter: ocrAdapters.note(),
+    form: form as never,
+    files,
+    setFiles: setFiles as never,
+    ownName: ((company as { name?: string } | null)?.name) || null,
+    companyId: companyId,
+    ownPan: ((company as { pan?: string; panNumber?: string } | null)?.pan ?? (company as { panNumber?: string } | null)?.panNumber) || null,
+    parties: ([]) as never,
+    items: [],
+    taxes: ([]) as never,
+    autoPost: () => void handleFormSubmit({ preventDefault() {}, stopPropagation() {} } as unknown as React.FormEvent, { ocrAutoPost: true }),
+    isEditing: !!(voucher as { id?: string } | null | undefined)?.id,
+    disabled: !!editingDisabled,
   });
 
   const { isDirty: _isFormFieldsDirty, isValid: isFormValid } = form.formState;
@@ -518,7 +540,7 @@ export function CreateNoteForm({
   };
 
   // Validated `data` — nested mobile date + `getValues()` से miss न हो
-  function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; saveAndPrint?: boolean; approveAfterSave?: boolean } = {}) {
+  function handleFormSubmit(e: React.FormEvent, options: { ocrAutoPost?: boolean; saveAndNew?: boolean; saveAndPrint?: boolean; approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
     void form.handleSubmit(
       async (data) => {
@@ -905,7 +927,7 @@ export function CreateNoteForm({
                             render={({ field: dateField }: any) => (
                               <>
                                 {hasDateBS && (
-                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                                     <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
                                     <div className="min-w-0 w-full overflow-hidden">
                                       <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" />
@@ -913,7 +935,7 @@ export function CreateNoteForm({
                                   </FormItem>
                                 )}
                                 {hasDateAD && (
-                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                                     <FormLabel className="text-xs truncate">Date</FormLabel>
                                     <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
                                       <PopoverTrigger asChild>
@@ -983,7 +1005,7 @@ export function CreateNoteForm({
                       control={form.control} 
                       name="date" 
                       render={({ field }: any) => (
-                        <FormItem className="flex flex-col">
+                        <FormItem data-ocr-field="date" className="flex flex-col">
                           <FormLabel>Date</FormLabel>
                           <div className={VOUCHER_PC_DATE_ROW}>
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
@@ -1092,6 +1114,7 @@ export function CreateNoteForm({
                       className="mb-2"
                     />
                   )}
+                  <VoucherOcrRefreshBar ocr={ocr} />
                   <RestrictedFileUploader>
                     <div className="flex flex-wrap gap-4">
                       {files.map((file, idx) => (
@@ -1164,7 +1187,7 @@ export function CreateNoteForm({
                   </RestrictedFileUploader>
                 </div>
                 <FormField control={form.control} name="content" render={({ field }: any) => (
-                  <FormItem className="min-w-0">
+                  <FormItem data-ocr-field="bill-no" className="min-w-0">
                     <FormLabel>Narration</FormLabel>
                     <FormControl>
                       {/* resize-y + max-h: static PC dialog me lambi narration scroll / drag se poori dikhe */}

@@ -449,7 +449,7 @@ function StaffPageContent() {
   }, [processedStaff, showOnlyStaffWithPendingApproval, showApproveOnList, pendingApprovalByStaffId]);
   const filteredStaffListCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
-    return staffForStaffList.filter((s) => s.name && s.name.toLowerCase().includes(searchLower)).length;
+    return staffForStaffList.filter((s) => (s.name && s.name.toLowerCase().includes(searchLower)) || String((s as { aliasName?: string }).aliasName || "").toLowerCase().includes(searchLower || "\u0000")).length;
   }, [staffForStaffList, searchTerm]);
 
   const processedStaffRef = useRef(processedStaff);

@@ -210,34 +210,40 @@ export function PendingRestoreCloudPushManager() {
     };
   }, [runUploadIfLeader]);
 
-  // Banner gayab + bucket pe files + docs me `local:` — one-shot Storage→HTTPS heal.
+  // Banner gayab + bucket pe files + docs me `local:` — session me ek baar (miss pe LIST storm mat).
   useEffect(() => {
     const cid = String(company?.id || "").trim();
     if (authLoading || !user?.uid || !cid) return;
     if (readPendingRestoreCloudPush()?.companyId === cid) return;
+    const healSessionKey = `pl_storage_heal_tried_v1_${cid}`;
     if (healTriedRef.current === cid) return;
+    try {
+      if (typeof sessionStorage !== "undefined" && sessionStorage.getItem(healSessionKey) === "1") {
+        healTriedRef.current = cid;
+        return;
+      }
+    } catch {
+      /* private mode */
+    }
     if (typeof navigator !== "undefined" && !navigator.onLine) return;
+
+    healTriedRef.current = cid;
+    try {
+      sessionStorage.setItem(healSessionKey, "1");
+    } catch {
+      /* ignore */
+    }
 
     let cancelled = false;
     void (async () => {
       try {
         const { canSyncCompanyToServer } = await import("@/lib/localVoucherOutbox");
-        if (!(await canSyncCompanyToServer(cid))) {
-          healTriedRef.current = cid;
-          return;
-        }
+        if (!(await canSyncCompanyToServer(cid))) return;
         const { companyHasStuckLocalAttachmentRefs, relinkLocalAttachmentsFromFirebaseStorage } =
           await import("@/lib/relinkLocalAttachmentsFromStorage");
-        if (!(await companyHasStuckLocalAttachmentRefs(cid))) {
-          healTriedRef.current = cid;
-          return;
-        }
+        if (!(await companyHasStuckLocalAttachmentRefs(cid))) return;
         const result = await relinkLocalAttachmentsFromFirebaseStorage(cid);
         if (cancelled) return;
-        // Success ya koi stuck ref nahi bacha → dubara mat chalao; miss pe next company-switch/reload pe retry.
-        if (result.relinked > 0 || result.missed === 0) {
-          healTriedRef.current = cid;
-        }
         if (result.relinked <= 0) return;
         toast({
           title: "Attachment links fixed",
@@ -251,7 +257,7 @@ export function PendingRestoreCloudPushManager() {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, user?.uid, company, toast]);
+  }, [authLoading, user?.uid, company?.id, toast]);
 
   return null;
 }

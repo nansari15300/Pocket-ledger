@@ -445,7 +445,7 @@ function IncomeExpensePageContent() {
   const filteredExpenseAccountListCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
     return expenseAccountsForList.filter(
-      (a) => a.name && a.name.toLowerCase().includes(searchLower)
+      (a) => (a.name && a.name.toLowerCase().includes(searchLower)) || String((a as { aliasName?: string }).aliasName || "").toLowerCase().includes(searchLower || "\u0000")
     ).length;
   }, [expenseAccountsForList, searchTerm]);
 

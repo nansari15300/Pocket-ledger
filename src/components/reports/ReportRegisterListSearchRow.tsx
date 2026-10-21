@@ -1,5 +1,7 @@
 "use client";
 
+import type React from "react";
+
 import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
 import { mlc } from "@/lib/mobileListChrome";
@@ -14,9 +16,11 @@ type Props = {
   value: string;
   onChange: (value: string) => void;
   className?: string;
+  /** Search ke baad (e.g. pink unapproved badge) - master list search row jaisa. */
+  trailing?: React.ReactNode;
 };
 
-export function ReportRegisterListSearchRow({ placeholder, value, onChange, className }: Props) {
+export function ReportRegisterListSearchRow({ placeholder, value, onChange, className, trailing }: Props) {
   return (
     <div className={cn(mlc.searchRow, className)}>
       <div className={mlc.searchWrap}>
@@ -31,6 +35,7 @@ export function ReportRegisterListSearchRow({ placeholder, value, onChange, clas
           autoComplete="off"
         />
       </div>
+      {trailing}
     </div>
   );
 }

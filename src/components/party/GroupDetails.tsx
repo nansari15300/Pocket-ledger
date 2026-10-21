@@ -80,6 +80,7 @@ import { mergeLedgerUserDisplayNameMaps } from "@/lib/ledgerUserColumnDisplay";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
+import { ReportHeaderSummaryCards, type ReportStatementSummaryCardData } from "@/components/reports/ReportStatementSummaryCards";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { mdc, mdcMobileTxnBalanceRowData, mdcMobileTxnDateRowData, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
 import { ledgerMasterDateRangeLabel } from "@/lib/ledgerMasterDefaultView";
@@ -257,6 +258,7 @@ export function GroupDetails({
   icGroupMemberFilterId = null,
   groupMemberFilterId = null,
   hideMobilePeriodLabelRow = false,
+  reportSummaryCards,
 }: {
   group: Group;
   allGroups: Group[];
@@ -272,6 +274,7 @@ export function GroupDetails({
   icGroupMemberFilterId?: string | null;
   groupMemberFilterId?: string | null;
   hideMobilePeriodLabelRow?: boolean;
+  reportSummaryCards?: ReportStatementSummaryCardData[];
 }) {
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { balanceMode, setBalanceMode } = useBalanceMode();
@@ -1724,6 +1727,9 @@ export function GroupDetails({
                 }
               />
             </div>
+            {reportSummaryCards?.length ? (
+              <ReportHeaderSummaryCards cards={reportSummaryCards} />
+            ) : (
             <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
               <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
                 <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
@@ -1736,6 +1742,7 @@ export function GroupDetails({
                 </div>
               </div>
             </div>
+            )}
           </div>
           <div className={LEDGER_HEADER_PILL_ROW_CN}>
               <LedgerHeaderPrintButton variant="chromePill" onClick={handlePrint} />

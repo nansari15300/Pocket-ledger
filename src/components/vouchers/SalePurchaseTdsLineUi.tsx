@@ -152,7 +152,7 @@ export function SalePurchaseTdsLineUi({
                 value={field.value}
                 disabled={disabled}
                 onChange={(val, newName) => onTdsComboboxChange(field.onChange, val, newName)}
-                placeholder={tdsPlaceholder}
+                placeholder="Select"
                 addNewLabel={addNewLabel}
                 triggerClassName="text-xs min-w-0"
                 {...SALE_PURCHASE_LINE_DESKTOP_COMBOBOX_PROPS}
@@ -244,7 +244,7 @@ export function SalePurchaseTdsLineUi({
                     value={field.value}
                     disabled={disabled}
                     onChange={(val, newName) => onTdsComboboxChange(field.onChange, val, newName)}
-                    placeholder={tdsPlaceholder}
+                    placeholder="Select"
                     addNewLabel={addNewLabel}
                     {...SALE_PURCHASE_LINE_TAX_COMBOBOX_PROPS}
                   />

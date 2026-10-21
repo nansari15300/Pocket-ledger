@@ -1,6 +1,7 @@
 
 "use client";
 
+import { registerMasterAliases } from "@/lib/masterAliasIndex";
 import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo, useRef, useCallback, startTransition } from "react";
 import { usePathname } from "next/navigation";
 // Full collection queries: web cloud bhi pura voucher list (no orderBy/limit window).
@@ -3821,6 +3822,12 @@ export const VoucherProvider = ({
   const processedTaxGroups = useMemo(() => processGroups(taxGroups, processedTaxes), [taxGroups, processedTaxes, processGroups]);
   const processedItemGroups = useMemo(() => processGroups(itemGroups, processedItems), [itemGroups, processedItems, processGroups]);
   const processedExpenseGroups = useMemo(() => processGroups(expenseGroups, processedExpenseAccounts), [expenseGroups, processedExpenseAccounts, processGroups]);
+
+  // Alias Name search in every master Combobox (see src/lib/masterAliasIndex.ts) - registered synchronously during render.
+  useMemo(() => {
+    for (const rows of [processedParties, processedStaff, processedAccounts, processedTaxes, processedExpenseAccounts, processedItems,
+      groups, staffGroups, accountGroups, taxGroups, itemGroups, expenseGroups] as ReadonlyArray<unknown>[]) registerMasterAliases(rows);
+  }, [processedParties, processedStaff, processedAccounts, processedTaxes, processedExpenseAccounts, processedItems, groups, staffGroups, accountGroups, taxGroups, itemGroups, expenseGroups]);
 
   // Pre-load names from collections (available immediately) so transactions show names, not UIDs
   const journalAccountNamesMerged = useMemo(() => {

@@ -7,6 +7,7 @@ import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 export type StatementReportMobilePagingMeta = {
   pageTransactions: any[];
   openingForPage: number;
+  openingPeriodStartDate?: Date;
   periodDrForPage: number;
   periodCrForPage: number;
   closingForPage: number;
@@ -60,6 +61,7 @@ export function useStatementReportMobilePaging({
       return {
         pageTransactions: list,
         openingForPage: openingBalanceForPeriod,
+        openingPeriodStartDate: undefined,
         periodDrForPage: periodDr,
         periodCrForPage: periodCr,
         closingForPage: closingBalance,
@@ -72,6 +74,9 @@ export function useStatementReportMobilePaging({
     const start = Math.max(0, end - rp);
     const pageTransactions = list.slice(start, Math.max(start, end));
     const previousTx = start > 0 ? list[start - 1] : null;
+    const previousDateValue = previousTx?.date?.toDate ? previousTx.date.toDate() : previousTx?.date;
+    const previousDate = previousDateValue ? new Date(previousDateValue) : undefined;
+    const openingPeriodStartDate = previousDate && !Number.isNaN(previousDate.getTime()) ? previousDate : undefined;
     const previousRunningBalance =
       previousTx != null
         ? typeof previousTx.balance === "number"
@@ -89,6 +94,7 @@ export function useStatementReportMobilePaging({
     return {
       pageTransactions,
       openingForPage,
+      openingPeriodStartDate,
       periodDrForPage,
       periodCrForPage,
       closingForPage: openingForPage + periodDrForPage - periodCrForPage,

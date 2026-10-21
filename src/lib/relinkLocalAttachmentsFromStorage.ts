@@ -5,7 +5,7 @@
  * Storage se HTTPS resolve karke SQLite + Firestore patch.
  */
 
-import { ref, list, getDownloadURL, type StorageReference } from "firebase/storage";
+import { ref, getDownloadURL } from "firebase/storage";
 import { doc, setDoc, getDoc } from "firebase/firestore";
 import { firestore, storage } from "@/lib/firebase";
 import { COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS } from "@/lib/firestoreToLocalCompanyPull";
@@ -28,7 +28,6 @@ import {
   buildStoragePathPrefix,
   buildStoragePathPrefixCandidates,
   companyUsesPocketLedgerStorage,
-  safeStorageFileName,
   type CompanyStorageLayoutRow,
 } from "@/lib/firebaseStoragePaths";
 import { yieldToMain } from "@/lib/yieldToMain";
@@ -150,116 +149,29 @@ async function collectLocalRefsFromSqlite(
   return hits;
 }
 
-async function findDownloadUrlUnderPrefix(
+/** Exact object GET only — folder `list()` Class A storm (heal retry) band. */
+async function findDownloadUrlAtExactPath(
   prefix: string,
   localId: string,
-  fileName?: string,
-  opts?: { recursive?: boolean; depth?: number }
+  fileName?: string
 ): Promise<string | null> {
   const p = String(prefix || "").replace(/\/+$/, "");
   const id = String(localId || "").trim();
   if (!p || !id) return null;
-  const depth = opts?.depth ?? 0;
-  const recursive = opts?.recursive === true;
-  const wantName = fileName ? safeStorageFileName(fileName).toLowerCase() : "";
-
-  if (fileName && depth === 0) {
+  const names = [...new Set([String(fileName || "").trim(), "file"].filter(Boolean))];
+  for (const name of names) {
     try {
       const exact = buildPendingAttachmentStorageObjectPath({
         storagePathPrefix: p,
         pendingFileId: id,
-        fileName,
+        fileName: name,
       });
       return await getDownloadURL(ref(storage, exact));
     } catch {
-      /* try list */
+      /* next name / prefix */
     }
   }
-
-  const needle = `${id}_`;
-  /** Restore orphan leaf: `{otherUuid}_{originalName}` jab doc me purana local: id atka ho. */
-  const leafMatchesOriginalName = (leaf: string): boolean => {
-    if (!wantName) return false;
-    const lower = leaf.toLowerCase();
-    if (lower.endsWith(`_${wantName}`)) return true;
-    // Timestamp-style edit upload: `{ms}_{name}`
-    if (/^\d+_/.test(lower) && lower.slice(lower.indexOf("_") + 1) === wantName) return true;
-    // UUID_ prefix + original name
-    const uuidLeaf =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_(.+)$/i.exec(leaf);
-    if (uuidLeaf && String(uuidLeaf[1] || "").toLowerCase() === wantName) return true;
-    return false;
-  };
-
-  try {
-    let pageToken: string | undefined;
-    let filenameFallback: string | null = null;
-    do {
-      const page = await list(ref(storage, p) as StorageReference, {
-        maxResults: 200,
-        ...(pageToken ? { pageToken } : {}),
-      });
-      for (const item of page.items) {
-        const leaf = item.fullPath.split("/").pop() || "";
-        // Pending upload leaf: `{localFileId}_{originalName}` — NOT voucher id.
-        if (leaf.startsWith(needle)) {
-          try {
-            return await getDownloadURL(item);
-          } catch {
-            /* next */
-          }
-        }
-        if (!filenameFallback && leafMatchesOriginalName(leaf)) {
-          try {
-            filenameFallback = await getDownloadURL(item);
-          } catch {
-            /* next */
-          }
-        }
-      }
-      if (recursive && depth < 4) {
-        for (const sub of page.prefixes) {
-          const found = await findDownloadUrlUnderPrefix(sub.fullPath, id, fileName, {
-            recursive: true,
-            depth: depth + 1,
-          });
-          if (found) return found;
-        }
-      }
-      pageToken = page.nextPageToken;
-    } while (pageToken);
-    if (filenameFallback) return filenameFallback;
-  } catch {
-    /* prefix missing / permission */
-  }
   return null;
-}
-
-async function findLoneOrphanDownloadUrlUnderPrefix(prefix: string): Promise<string | null> {
-  const p = String(prefix || "").replace(/\/+$/, "");
-  if (!p) return null;
-  const found: string[] = [];
-  try {
-    let pageToken: string | undefined;
-    do {
-      const page = await list(ref(storage, p) as StorageReference, {
-        maxResults: 200,
-        ...(pageToken ? { pageToken } : {}),
-      });
-      for (const item of page.items) {
-        try {
-          found.push(await getDownloadURL(item));
-          if (found.length > 1) return null;
-        } catch {
-          /* next */
-        }
-      }
-      pageToken = page.nextPageToken;
-    } while (pageToken);
-  } catch {
-    return null;
-  }
-  return found.length === 1 ? found[0]! : null;
 }
 
 async function resolveHttpsForLocalId(
@@ -285,28 +197,13 @@ async function resolveHttpsForLocalId(
     hit.storagePathPrefix,
     ...candidatePrefixes,
     inferStoragePathPrefix(collectionName, docRow, fsCompanyId, hit.field, false),
-    // Company root deep scan — sale/payment_in/… nested under pocket-ledger/{companyId}
-    `pocket-ledger/${fsCompanyId}`,
-    `voucher-files/${fsCompanyId}`,
-    `companies/${fsCompanyId}`,
   ].filter(Boolean);
   const seen = new Set<string>();
   for (const prefix of prefixes) {
     if (seen.has(prefix)) continue;
     seen.add(prefix);
-    const deep = prefix === `pocket-ledger/${fsCompanyId}` || prefix === `voucher-files/${fsCompanyId}`;
-    const url = await findDownloadUrlUnderPrefix(prefix, hit.localId, fileName, { recursive: deep });
+    const url = await findDownloadUrlAtExactPath(prefix, hit.localId, fileName);
     if (url) return url;
-  }
-  // Last resort (filename missing): type folder me sirf 1 object → stuck local: se bind.
-  // Filename present ho to galat lone orphan se delete-ke-baad revive mat karo.
-  if (!fileName) {
-    for (const typePrefix of candidatePrefixes) {
-      if (!typePrefix || seen.has(`lone:${typePrefix}`)) continue;
-      seen.add(`lone:${typePrefix}`);
-      const lone = await findLoneOrphanDownloadUrlUnderPrefix(typePrefix);
-      if (lone) return lone;
-    }
   }
   return null;
 }

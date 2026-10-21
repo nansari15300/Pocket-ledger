@@ -399,7 +399,7 @@ function TaxPageContent() {
   }, [processedTaxes, showOnlyTaxesWithPendingApproval, showApproveOnList, pendingApprovalByTaxId]);
   const filteredTaxListCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
-    return taxesForTaxList.filter((t) => t.name && t.name.toLowerCase().includes(searchLower)).length;
+    return taxesForTaxList.filter((t) => (t.name && t.name.toLowerCase().includes(searchLower)) || String((t as { aliasName?: string }).aliasName || "").toLowerCase().includes(searchLower || "\u0000")).length;
   }, [taxesForTaxList, searchTerm]);
   
   const userNamesRef = useRef(userNames);

@@ -1,6 +1,7 @@
 
 "use client";
 
+import { NESTED_LEDGER_MASTER_EDIT_CONTENT_CN, NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN } from "@/lib/nestedLedgerMasterEditPresentation";
 import { Loader2 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { doc, updateDoc } from "firebase/firestore";
@@ -67,7 +68,7 @@ export function EditStaffGroupDialog({
   allGroups: StaffGroup[];
   onGroupUpdated: () => void;
   onGroupDeleted: () => void;
-  children: React.ReactNode;
+  children?: React.ReactNode;
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
   hasAccounts?: boolean;
@@ -79,6 +80,7 @@ export function EditStaffGroupDialog({
   const [parentPathIds, setParentPathIds] = useState<string[]>([]);
   const [childPathIds, setChildPathIds] = useState<string[]>([]);
   const [groupName, setGroupName] = useState("");
+  const [aliasName, setAliasName] = useState("");
   const dialogOpen = isOpen !== undefined ? isOpen : internalIsOpen;
   const setDialogOpen = onOpenChange ?? setInternalIsOpen;
   const formResetKey = dialogOpen ? `edit-${group.id}` : "edit-closed";
@@ -119,6 +121,7 @@ export function EditStaffGroupDialog({
           ? LOAN_LIABILITY_GROUP_ID
           : decoded.systemBranch;
       setGroupName(liveGroup.name || "");
+      setAliasName(String((liveGroup as { aliasName?: string }).aliasName ?? ""));
       setSystemBranch(branch);
       setParentPathIds(decoded.parentPathIds);
       setChildPathIds([]);
@@ -208,6 +211,7 @@ export function EditStaffGroupDialog({
         const groupRef = doc(firestore, `companies/${companyId}/staff_groups`, gid);
         await updateDoc(groupRef, {
           name: editedName,
+          aliasName: aliasName.trim(),
           parentId: resolvedParentId,
         });
         toast({ title: "Group Updated!", description: `"${editedName}" has been successfully updated.` });
@@ -319,8 +323,8 @@ export function EditStaffGroupDialog({
   return (
     <>
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogTrigger asChild>{children}</DialogTrigger>
-        <DialogContent className="sm:max-w-md">
+        {children ? <DialogTrigger asChild>{children}</DialogTrigger> : null}
+        <DialogContent overlayClassName={isOpen !== undefined ? NESTED_LEDGER_MASTER_EDIT_OVERLAY_CN : undefined} className={["sm:max-w-md", isOpen !== undefined ? NESTED_LEDGER_MASTER_EDIT_CONTENT_CN : ""].join(" ")}>
           <DialogHeader>
             <DialogTitle>Edit Staff Group</DialogTitle>
             <DialogDescription>
@@ -355,6 +359,10 @@ export function EditStaffGroupDialog({
                 ) : null
               }
             />
+            <div className="space-y-1 pt-2">
+              <label htmlFor="group-alias-name" className="text-sm font-medium">Alias Name <span className="text-xs font-normal text-muted-foreground">(optional)</span></label>
+              <input id="group-alias-name" value={aliasName} onChange={(e) => setAliasName(e.target.value)} placeholder="Other name (e.g. as printed on bills)" className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+            </div>
             <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
               <DialogClose asChild>
                 <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>

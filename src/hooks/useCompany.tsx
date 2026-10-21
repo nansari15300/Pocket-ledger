@@ -118,6 +118,7 @@ import { clearSelectedCompanyId, pinBootSelectedCompanyId, readSelectedCompanyId
 import {
   isAdminPanelCompanyLedgerMode,
   isAdminPanelCompanyLocalId,
+  resolveAppCompanyIdAfterAdminPanel,
 } from "@/lib/adminPanelCompany/ledgerMode";
 import { shouldSuppressTransientCompanyClear, shouldDeferMissingCompanyRedirectNative } from "@/lib/apkLedgerRouteShield";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
@@ -1303,7 +1304,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   useLayoutEffect(() => {
     try {
       // Multi-tab: prefer this tab's saved company so refresh does not jump to another tab's company.
-      const storedCompanyId = readSelectedCompanyId();
+      const storedCompanyId = resolveAppCompanyIdAfterAdminPanel(readSelectedCompanyId());
       if (storedCompanyId && storedCompanyId.trim()) {
         const pinned = storedCompanyId.trim();
         bootPinnedCompanyIdRef.current = pinned;
@@ -3477,7 +3478,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     if (loading || authLoading) return;
     if (!user) return;
     try {
-      const persisted = readSelectedCompanyId()?.trim();
+      const persisted = resolveAppCompanyIdAfterAdminPanel(readSelectedCompanyId())?.trim();
       if (persisted) {
         if (readDriveOAuthReturnGrace(persisted)) {
           setCompanyId(persisted);
@@ -3528,7 +3529,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           // Fast SQLite/local writes: persisted company id turant hai, React `companyId` ek frame baad hydrate — stale null avoid
           try {
             if (companyIdLiveRef.current) return;
-            const redo = readSelectedCompanyId()?.trim();
+            const redo = resolveAppCompanyIdAfterAdminPanel(readSelectedCompanyId())?.trim();
             if (redo) {
               setCompanyIdState(redo);
               plNavDbg("useCompany.persistedHydrate.microtask", { hint: plNavDbgIdHint(redo) });
@@ -3540,7 +3541,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
         try {
             // Refresh recovery must use per-tab company first, otherwise another tab's last selection wins.
-            const storedCompanyId = readSelectedCompanyId();
+            const storedCompanyId = resolveAppCompanyIdAfterAdminPanel(readSelectedCompanyId());
             const stored = storedCompanyId?.trim();
             const bootPinned = bootPinnedCompanyIdRef.current?.trim();
             if (!stored && bootPinned) {

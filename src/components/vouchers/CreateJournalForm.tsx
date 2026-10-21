@@ -1,4 +1,5 @@
 "use client";
+import { ocrAdapters, useVoucherOcr, VoucherOcrRefreshBar } from "@/modules/ocr";
 import { STAFF_ENTITY_LABEL, STAFF_ENTITY_TYPE_KEY, STAFF_ENTITY_SEARCH_PLACEHOLDER, STAFF_ENTITY_ADD_BUTTON, staffEntityDisplayLabel } from "@/lib/staffEntityDisplayName";
 
 import * as React from "react";
@@ -111,7 +112,11 @@ import type { Staff } from "@/components/staff/types";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState as __frozenAppendAttachments, handleVoucherAttachmentInputChange as __frozenAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { ocrWrapAppend, ocrWrapInputChange } from "@/modules/ocr";
+/** OCR reads the ORIGINAL upload: frozen helpers wrapped at the call site only (helper code unchanged). */
+const appendCompressedVoucherAttachmentsToState = ocrWrapAppend(__frozenAppendAttachments);
+const handleVoucherAttachmentInputChange = ocrWrapInputChange(__frozenAttachmentInputChange);
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
@@ -557,6 +562,23 @@ export function CreateJournalForm({
   const form = useForm<JournalFormValues>({
     resolver: zodResolver(formSchema) as Resolver<JournalFormValues>,
     defaultValues: getInitialFormValues(voucher),
+  });
+
+  /* OCR (local, generic adapter): first attachment -> validated autofill; Auto Post saves UNAPPROVED. */
+  const ocr = useVoucherOcr({
+    adapter: ocrAdapters.journal(),
+    form: form as never,
+    files,
+    setFiles: setFiles as never,
+    ownName: ((ctxCompany as { name?: string } | null)?.name) || null,
+    companyId: ctxCompanyId,
+    ownPan: ((ctxCompany as { pan?: string; panNumber?: string } | null)?.pan ?? (ctxCompany as { panNumber?: string } | null)?.panNumber) || null,
+    parties: (processedPartiesForSelection || []) as never,
+    items: [],
+    taxes: (processedTaxes || []) as never,
+    autoPost: () => void handleFormSubmit({ preventDefault() {}, stopPropagation() {} } as unknown as React.FormEvent, { ocrAutoPost: true }),
+    isEditing: !!(voucher as { id?: string } | null | undefined)?.id,
+    disabled: !!editingDisabled,
   });
 
   const { fields, remove, update } = useFieldArray({
@@ -1803,7 +1825,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   // Validated `data` से save — nested mobile `date` + `getValues()` से date miss न हो
   const handleFormSubmit = useCallback(
-    (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
+    (e: React.FormEvent, options: { ocrAutoPost?: boolean; saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
       e.preventDefault();
       gateConvertSubmit(() => {
         void form.handleSubmit(
@@ -2756,7 +2778,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             render={({ field: dateField }: any) => (
                               <>
                                 {hasDateBS && (
-                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                                     <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
                                     <div className="min-w-0 w-full overflow-hidden">
                                       <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" />
@@ -2764,7 +2786,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   </FormItem>
                                 )}
                                 {hasDateAD && (
-                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormItem data-ocr-field="date" className="min-w-0 w-full overflow-hidden">
                                     <FormLabel className="text-xs truncate">Date</FormLabel>
                                     <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
                                       <PopoverTrigger asChild>
@@ -2829,7 +2851,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       control={form.control}
                       name="date"
                       render={({ field }: any) => (
-                        <FormItem className="flex flex-col">
+                        <FormItem data-ocr-field="date" className="flex flex-col">
                           <FormLabel>Date</FormLabel>
                           <div className={VOUCHER_PC_DATE_ROW}>
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
@@ -3335,6 +3357,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     className="mb-2"
                   />
                 )}
+                <VoucherOcrRefreshBar ocr={ocr} />
                 <RestrictedFileUploader>
                   <div className="flex flex-wrap gap-4">
                       {files.map((file, index) => (
@@ -3406,7 +3429,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 control={form.control}
                 name="narration"
                 render={({ field }: any) => (
-                  <FormItem className="min-w-0">
+                  <FormItem data-ocr-field="bill-no" className="min-w-0">
                     <FormLabel>Overall Narration</FormLabel>
                     <FormControl>
                       {/* Overall narration: static dialog me bhi poora text — resize + scroll */}

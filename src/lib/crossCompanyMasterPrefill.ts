@@ -94,6 +94,7 @@ export function partyPrefillPartsFromPartyRow(row: Record<string, unknown>): {
 export function bankPrefillPartsFromRow(row: Record<string, unknown>): {
   defaults: {
     accountName: string;
+    aliasName: string;
     accountType: "Bank" | "Cash";
     openingBalance: number;
     openingBalanceDate?: Date;
@@ -123,6 +124,7 @@ export function bankPrefillPartsFromRow(row: Record<string, unknown>): {
   return {
     defaults: {
       accountName: String(row.accountName ?? "").trim(),
+      aliasName: String(row.aliasName ?? "").trim(),
       accountType,
       openingBalance: Number(row.openingBalance ?? 0) || 0,
       openingBalanceDate: toJsDateMaybe(row.openingBalanceDate),

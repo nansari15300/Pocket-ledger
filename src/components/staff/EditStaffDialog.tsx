@@ -117,6 +117,7 @@ const formSchema = z.object({
     message: "Account type is required.",
   }),
   name: z.string().min(2, { message: "Staff name must be at least 2 characters." }),
+  aliasName: z.string().optional(),
   email: z.string().optional(),
   phone: z.string().optional(),
   whatsapp: z.boolean().optional(),
@@ -228,6 +229,7 @@ export function EditStaffDialog({
     defaultValues: {
       accountType: staffAccountTypeFromRow(staff as Staff & { isLoanAccount?: boolean }),
       name: staff.name,
+      aliasName: (((staff as unknown) as { aliasName?: string }).aliasName) || "",
       email: staff.email || "",
       phone: staff.phone || "",
       whatsapp: staff.whatsapp === true,
@@ -264,6 +266,7 @@ export function EditStaffDialog({
       form.reset({
         accountType: staffAccountTypeFromRow(staff as Staff & { isLoanAccount?: boolean }),
         name: staff.name,
+        aliasName: (((staff as unknown) as { aliasName?: string }).aliasName) || "",
         email: staff.email || "",
         phone: staff.phone || "",
         whatsapp: staff.whatsapp === true,
@@ -416,6 +419,7 @@ export function EditStaffDialog({
             ...base,
             id: staffRefSnap.id,
             name: values.name,
+            aliasName: (values.aliasName ?? "").trim(),
             email: values.email ?? "",
             phone: values.phone ?? "",
             whatsapp: values.whatsapp === true,
@@ -484,29 +488,35 @@ export function EditStaffDialog({
           });
         }
 
-        const staffRef = doc(firestore, `companies/${companyId}/staff`, staffRefSnap.id);
-        await updateDoc(staffRef, {
-          name: values.name,
-          email: values.email ?? "",
-          phone: values.phone ?? "",
-          whatsapp: values.whatsapp === true,
-          address: values.address ?? "",
-          salary: values.salary,
-          salaryPeriod: values.salaryPeriod,
-          openingBalance: newOpeningBalance,
-          openingBalanceDate: values.openingBalanceDate || null,
-          openingBalanceNarration: narrationClean,
-          fileUrl,
-          documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
-          ...attachmentLockFieldsForFinalUrls(documentFileUrls, {
-            existingLockedPdfFileUrls: readLockedPdfFileUrlsFromRow(
-              staff as unknown as Record<string, unknown>
-            ),
-            canUnlockLockedPdf: can("unlock_locked_pdf"),
-          }),
-          groupId: normalizeStaffGroupIdForStorage(values.groupId, values.accountType),
-          isLoanAccount: values.accountType === LOAN_LIABILITY_GROUP_ID,
-          updatedAt: serverTimestamp(),
+        const { persistMasterEntityUpdate } = await import("@/lib/masterEntityUpdatePersist");
+        await persistMasterEntityUpdate({
+          companyId,
+          collection: "staff",
+          docId: staffRefSnap.id,
+          patch: {
+            name: values.name,
+            aliasName: (values.aliasName ?? "").trim(),
+            email: values.email ?? "",
+            phone: values.phone ?? "",
+            whatsapp: values.whatsapp === true,
+            address: values.address ?? "",
+            salary: values.salary,
+            salaryPeriod: values.salaryPeriod,
+            openingBalance: newOpeningBalance,
+            openingBalanceDate: values.openingBalanceDate || null,
+            openingBalanceNarration: narrationClean,
+            fileUrl,
+            documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+            ...attachmentLockFieldsForFinalUrls(documentFileUrls, {
+              existingLockedPdfFileUrls: readLockedPdfFileUrlsFromRow(
+                staff as unknown as Record<string, unknown>
+              ),
+              canUnlockLockedPdf: can("unlock_locked_pdf"),
+            }),
+            groupId: normalizeStaffGroupIdForStorage(values.groupId, values.accountType),
+            isLoanAccount: values.accountType === LOAN_LIABILITY_GROUP_ID,
+            updatedAt: serverTimestamp(),
+          },
         });
         await syncEntityAttachmentsAfterSave(companyId);
 
@@ -579,6 +589,7 @@ export function EditStaffDialog({
             isDeleted: false,
             ownerId: user?.uid ?? "local_guest_user",
             name: staff.name,
+            aliasName: (((staff as unknown) as { aliasName?: string }).aliasName) || "",
           };
           const payload: Record<string, unknown> = {
             ...base,
@@ -809,7 +820,7 @@ export function EditStaffDialog({
                   entityId={staff.id}
                   mode="edit"
                   nameField={
-                    <FormField
+                    <div className="space-y-2"><FormField
                       control={form.control}
                       name="name"
                       render={({ field }: any) => (
@@ -821,7 +832,19 @@ export function EditStaffDialog({
                           <FormMessage />
                         </FormItem>
                       )}
-                    />
+                    /><FormField
+                      control={form.control}
+                      name="aliasName"
+                      render={({ field }: any) => (
+                        <FormItem>
+                          <FormLabel>Alias Name <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                          <FormControl>
+                            <Input placeholder="Other name on bills / short name" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    /></div>
                   }
                 />
                 <FormField

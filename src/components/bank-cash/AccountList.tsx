@@ -29,6 +29,7 @@ import {
 import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import { useCompany } from "@/hooks/useCompany";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { MasterAliasSearchHint } from "@/components/entity/MasterAliasSearchHint";
 import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
 import { useBankLedgerDrCrPerspective } from "@/hooks/useBankLedgerDrCrPerspective";
 import { flipLedgerSignedBalance } from "@/lib/bankLedgerDrCrPerspective";
@@ -88,7 +89,7 @@ export function AccountList({
         .filter(account => {
             if (account.isSpecial && !canViewSpecialAccount) return false;
             const label = bankAccountDisplayName(account);
-            if (!label || !masterEntityTextMatchesSearch(label, searchTerm)) return false;
+            if (!label || !(masterEntityTextMatchesSearch(label, searchTerm) || masterEntityTextMatchesSearch((account as { aliasName?: string }).aliasName || "\u0000", searchTerm))) return false;
             const bal = Number(account.balance || 0);
             // Footer quick filters: list short/filter from same control on mobile + desktop.
             if (quickFilter === "dr") return bal > 0;
@@ -201,6 +202,7 @@ export function AccountList({
                       }
                     >
                       {highlightSearch ? highlightQueryInText(displayName, highlightSearch) : displayName}
+<MasterAliasSearchHint alias={(account as { aliasName?: string }).aliasName} name={displayName} search={highlightSearch} />
                     </MasterListNameTooltip>
                     {readMasterAccountFrozen(account) ? (
                       <MasterAccountFreezeListBadge className="mt-0.5" />
